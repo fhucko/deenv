@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="DeEnv.Tests/DeEnv.Tests.csproj" />
+  <Project Path="DeEnv/DeEnv.csproj" />
+</Solution>

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>DeEnv</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.TypeScript.MSBuild" Version="5.8.3" PrivateAssets="All" />
+    <PackageReference Include="GenHTTP.Core" Version="10.5.3" />
+    <PackageReference Include="GenHTTP.Modules.Layouting" Version="10.5.3" />
+    <PackageReference Include="GenHTTP.Modules.Functional" Version="10.5.3" />
+    <PackageReference Include="GenHTTP.Modules.Websockets" Version="10.5.3" />
+    <PackageReference Include="GenHTTP.Modules.Practices" Version="10.5.3" />
+  </ItemGroup>
+
+  <!-- Registering tsconfig.json as a project item makes Microsoft.TypeScript.MSBuild treat
+       instance.ts as "covered by a tsconfig" and compile via `tsc -p tsconfig.json`
+       (tsconfig is the single source of truth). Without this, the package falls back to
+       file-list mode — passing the .ts on the CLI, which makes tsc ignore tsconfig and apply
+       its ES5 target default. tsconfig.json is therefore required here; do not add
+       <TypeScript*> properties to this csproj. -->
+  <ItemGroup>
+    <Content Include="tsconfig.json" />
+  </ItemGroup>
+
+</Project>

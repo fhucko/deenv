@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>DeEnv.Tests</RootNamespace>
+    <!-- Generate .feature.cs into obj/ so the default **/*.cs glob doesn't double-include them -->
+    <ReqnrollUseIntermediateOutputPathForCodeBehind>true</ReqnrollUseIntermediateOutputPathForCodeBehind>
+    <!-- Required for dotnet test with .NET 10 SDK + Microsoft.Testing.Platform -->
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Reqnroll.TUnit" Version="3.3.4" />
+    <PackageReference Include="Microsoft.Playwright" Version="1.60.0" />
+    <PackageReference Include="TUnit.Assertions" Version="1.49.0" />
+    <PackageReference Include="TUnit.Engine" Version="1.3.25" />
+  </ItemGroup>
+
+  <!-- GenHTTP (host types for TestInstanceServer) flows transitively from the DeEnv reference. -->
+  <ItemGroup>
+    <ProjectReference Include="..\DeEnv\DeEnv.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,55 @@
+using DeEnv.Instance;
+using DeEnv.Storage;
+using GenHTTP.Api.Content;
+using GenHTTP.Api.Protocol;
+using GenHTTP.Modules.IO;
+
+namespace DeEnv.Http;
+
+// GenHTTP handler for everything that isn't the WebSocket:
+//   /js              → the embedded client script
+//   anything else     → server-rendered HTML for that node path
+public sealed class ContentHandler : IHandler
+{
+    private readonly SsrRenderer _renderer;
+
+    public ContentHandler(IInstanceStore store, InstanceDescription description)
+    {
+        _renderer = new SsrRenderer(store, description);
+    }
+
+    public ValueTask PrepareAsync() => ValueTask.CompletedTask;
+
+    public ValueTask<IResponse?> HandleAsync(IRequest request)
+    {
+        var remaining = request.Target.GetRemaining();
+        var path = remaining.IsRoot ? "/" : "/" + remaining.ToString().Trim('/');
+
+        IResponse response = path == "/js"
+            ? request.Respond()
+                     .Content(ClientScript.Js)
+                     .Type(ContentType.ApplicationJavaScript)
+                     .Build()
+            : request.Respond()
+                     .Content(_renderer.Render(path))
+                     .Type(ContentType.TextHtml)
+                     .Build();
+
+        return new ValueTask<IResponse?>(response);
+    }
+}
+
+// Minimal builder so the handler can be added to a Layout via the IHandlerBuilder overload.
+public sealed class ContentHandlerBuilder : IHandlerBuilder
+{
+    private readonly IInstanceStore _store;
+    private readonly InstanceDescription _description;
+
+    public ContentHandlerBuilder(IInstanceStore store, InstanceDescription description)
+    {
+        _store = store;
+        _description = description;
+    }
+
+    public IHandler Build() => new ContentHandler(_store, _description);
+}

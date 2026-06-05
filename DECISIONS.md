@@ -3,6 +3,43 @@
 Key decisions and *why*. Future-you needs the reasoning, not just the
 conclusion.
 
+## HTTP layer: GenHTTP (pure-C# embeddable server), not ASP.NET Core
+
+**Milestone 1 originally used minimal-API `WebApplication` (Kestrel/ASP.NET
+Core).** It was swapped for **GenHTTP** (`GenHTTP.Core` + modules, v10.5.x), a
+lightweight embeddable web server written in pure C# with no ASP.NET Core
+dependency. Reason: ASP.NET Core was judged too heavy for what the instance
+needs — three routes and a WebSocket.
+
+This is a conscious deviation from CLAUDE.md ground rule 5 (which named
+`HttpListener` or minimal-API `WebApplication`). GenHTTP was chosen over raw
+`HttpListener` because it gives a real handler/routing/content API while
+staying light, and its **native WebSocket module** (not the legacy Fleck one)
+keeps the dependency surface small.
+
+Key implementation notes:
+- **WebSocket uses `Websocket.Functional()`** (GenHTTP's native impl), NOT
+  `Websocket.Create()` (legacy, Fleck-based, obsolete, removed in GenHTTP 11).
+  Functional avoids pulling in Fleck.
+- **Raw UTF-8 frames** are read/written directly (`frame.Data` /
+  `frame.Connection.WriteAsync(bytes, FrameType.Text, true, ct)`) so the JSON
+  payload goes on the wire verbatim — GenHTTP's typed `WritePayloadAsync<T>`
+  would JSON-wrap a string and break the client's `JSON.parse`.
+- **The transport is request/response**: one inbound text frame →
+  `WsHandler.ProcessMessage(string)` → one outbound text frame. `WsHandler` is
+  transport-agnostic (no raw-socket loop), so the same dispatch logic would
+  survive another transport swap.
+- **`.Defaults(secureUpgrade: false, strictTransport: false)`** — we serve
+  plain HTTP; leaving secure-upgrade on risks HTTP→HTTPS redirects.
+- **Client JS is embedded** as an assembly resource
+  (`DeEnv.Instance.instance.js`), served at `/js/instance.js`. No `wwwroot`,
+  no static-file middleware, no test-side file copying — the JS rides inside
+  `DeEnv.dll`, so the in-process test host serves it for free.
+- The handler tree is built once in `InstanceApp.Build(...)` and shared by
+  both the real host (`Program.cs`) and the test host (`TestInstanceServer`).
+
+The storage-interface seam is unaffected; this is purely the transport layer.
+
 ## Storage: plain JSON file now, real engine later, render-coupled engine eventually
 
 **Milestone 1:** storage is a plain JSON file, written by simple rewrite.

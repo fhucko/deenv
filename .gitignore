@@ -1,0 +1,18 @@
+## .NET build output
+bin/
+obj/
+
+## TypeScript compiled output (build artifact — never edit by hand; embedded as a resource)
+DeEnv/Instance/instance.js
+*.js.map
+
+## Instance runtime data
+instance-data.json
+
+## VS / Rider
+.vs/
+.idea/
+*.user
+
+## NuGet
+*.nupkg
