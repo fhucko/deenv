@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using DeEnv.Instance;
 using DeEnv.Storage;
@@ -54,40 +55,36 @@ public sealed class SsrRenderer
 
         switch (node)
         {
-            case BoolValue b:
-                AppendBoolRoot(sb, path, b);
-                break;
             case ObjectValue obj:
                 AppendObjectForm(sb, path, typeInfo.Type, obj);
                 break;
             default:
-                sb.AppendLine($"<p>{Escape(node.ToString() ?? "")}</p>");
+                // Base-typed leaf node (the root, or a `dictionary of <base>` entry).
+                AppendLeafForm(sb, path, node);
                 break;
         }
     }
 
-    // ── bool root (checkbox) ──────────────────────────────────────────────────
+    // ── leaf form (one input + Save → `write`) ─────────────────────────────────
 
-    private static void AppendBoolRoot(StringBuilder sb, NodePath path, BoolValue b)
+    private static void AppendLeafForm(StringBuilder sb, NodePath path, NodeValue value)
     {
         var pathAttr = Escape(path.ToString());
-        var checkedAttr = b.Value ? " checked" : "";
-        sb.AppendLine($"""
-            <form id="node-form" data-path="{pathAttr}">
-              <label>
-                <input type="checkbox" id="node-bool"{checkedAttr} data-path="{pathAttr}">
-                Db
-              </label>
-            </form>
-        """);
+        var label = path.IsRoot ? "Db" : Escape(Humanize(path.Segments[^1]));
+        sb.AppendLine($"""<form id="node-form" data-kind="leaf" data-path="{pathAttr}">""");
+        sb.AppendLine($"  <div class=\"field\"><label>{label}</label>");
+        AppendInput(sb, pathAttr, value);
+        sb.AppendLine("  </div>");
+        sb.AppendLine("""  <div class="actions"><button type="submit">Save</button></div>""");
+        sb.AppendLine("</form>");
     }
 
-    // ── object form ───────────────────────────────────────────────────────────
+    // ── object form (Save → `writeObject`) ─────────────────────────────────────
 
     private void AppendObjectForm(StringBuilder sb, NodePath path, TypeDefinition type, ObjectValue obj)
     {
         var pathAttr = Escape(path.ToString());
-        sb.AppendLine($"""<form id="node-form" data-path="{pathAttr}">""");
+        sb.AppendLine($"""<form id="node-form" data-kind="object" data-path="{pathAttr}">""");
         sb.AppendLine($"  <h2>{Escape(type.Name)}</h2>");
 
         foreach (var prop in type.Props ?? [])
@@ -96,50 +93,48 @@ public sealed class SsrRenderer
                 continue;
 
             var fieldPath = path.Field(prop.Name);
-            sb.AppendLine($"  <div class=\"field\">");
-            sb.AppendLine($"    <label>{Escape(prop.Name)}</label>");
 
             if (prop.Cardinality == Cardinality.Dictionary && fieldVal is DictionaryValue dictVal)
             {
-                var entryType = _desc.FindType(prop.TypeName);
-                AppendDictionaryTable(sb, fieldPath, prop, entryType, dictVal);
+                // The dictionary renders its own navigable list title (see AppendDictionaryTable).
+                sb.AppendLine("  <div class=\"field\">");
+                AppendDictionaryTable(sb, fieldPath, Humanize(prop.Name), prop.TypeName, prop.KeyGeneration, dictVal);
+                sb.AppendLine("  </div>");
             }
             else
             {
-                AppendFieldInput(sb, fieldPath, prop, fieldVal);
+                sb.AppendLine($"  <div class=\"field\">");
+                sb.AppendLine($"    <label>{Escape(Humanize(prop.Name))}</label>");
+                AppendInput(sb, Escape(fieldPath.ToString()), fieldVal, prop.Name);
+                sb.AppendLine("  </div>");
             }
-
-            sb.AppendLine("  </div>");
         }
 
-        sb.AppendLine("""
-              <div class="actions">
-                <button type="submit">Save</button>
-              </div>
-            </form>
-        """);
+        sb.AppendLine("""  <div class="actions"><button type="submit">Save</button></div>""");
+        sb.AppendLine("</form>");
     }
 
-    private static void AppendFieldInput(StringBuilder sb, NodePath fieldPath, PropDefinition prop, NodeValue value)
+    // Renders a single value input. `fieldName` (when set) lets the client collect
+    // it into a writeObject `fields` map by name.
+    private static void AppendInput(StringBuilder sb, string pathAttr, NodeValue value, string? fieldName = null)
     {
-        var pathAttr = Escape(fieldPath.ToString());
+        var fieldAttr = fieldName is null ? "" : $" data-field=\"{Escape(fieldName)}\"";
         switch (value)
         {
             case BoolValue b:
-                var checkedAttr = b.Value ? " checked" : "";
-                sb.AppendLine($"""    <input type="checkbox" data-path="{pathAttr}"{checkedAttr}>""");
+                sb.AppendLine($"""    <input type="checkbox" data-path="{pathAttr}"{fieldAttr}{(b.Value ? " checked" : "")}>""");
                 break;
             case TextValue t:
-                sb.AppendLine($"""    <input type="text" data-path="{pathAttr}" value="{Escape(t.Text)}">""");
+                sb.AppendLine($"""    <input type="text" data-path="{pathAttr}"{fieldAttr} value="{Escape(t.Text)}">""");
                 break;
             case IntValue i:
-                sb.AppendLine($"""    <input type="number" data-path="{pathAttr}" value="{i.Value}">""");
+                sb.AppendLine($"""    <input type="number" data-path="{pathAttr}"{fieldAttr} value="{i.Value}">""");
                 break;
             case DecimalValue d:
-                sb.AppendLine($"""    <input type="number" step="any" data-path="{pathAttr}" value="{d.Value}">""");
+                sb.AppendLine($"""    <input type="number" step="any" data-path="{pathAttr}"{fieldAttr} value="{d.Value.ToString(CultureInfo.InvariantCulture)}">""");
                 break;
             case DateValue d:
-                sb.AppendLine($"""    <input type="date" data-path="{pathAttr}" value="{d.Value:yyyy-MM-dd}">""");
+                sb.AppendLine($"""    <input type="date" data-path="{pathAttr}"{fieldAttr} value="{d.Value:yyyy-MM-dd}">""");
                 break;
             default:
                 sb.AppendLine($"""    <span data-path="{pathAttr}">{Escape(value.ToString() ?? "")}</span>""");
@@ -151,23 +146,39 @@ public sealed class SsrRenderer
 
     private void AppendDictionary(StringBuilder sb, NodePath path, ResolvedTypeInfo typeInfo, DictionaryValue dictVal)
     {
-        var entryType = _desc.FindType(typeInfo.Type.Name);
-        AppendDictionaryTable(sb, path, null, entryType, dictVal);
+        var title = path.IsRoot ? "Db" : Humanize(path.Segments[^1]);
+        AppendDictionaryTable(sb, path, title, typeInfo.Type.Name,
+            typeInfo.KeyGeneration ?? KeyGeneration.Manual, dictVal);
     }
 
-    private static void AppendDictionaryTable(
+    private void AppendDictionaryTable(
         StringBuilder sb,
         NodePath dictPath,
-        PropDefinition? prop,
-        TypeDefinition? entryType,
+        string title,
+        string elementTypeName,
+        KeyGeneration keyGen,
         DictionaryValue dictVal)
     {
-        var cols = entryType?.Props?.Select(p => p.Name).ToList() ?? [];
+        var entryType = _desc.FindType(elementTypeName);   // null when the element is a base type
+        var cols = entryType?.Props?.Where(p => p.Cardinality != Cardinality.Dictionary)
+                                    .Select(p => p.Name).ToList() ?? [];
+        var isObjectEntry = entryType is { BaseType: BaseType.Object };
+
+        var dictPathAttr = Escape(dictPath.ToString());
+        var keyGenAttr = keyGen == KeyGeneration.Auto ? "auto" : "manual";
+
+        // Navigable list title (links to the dictionary's own page).
+        sb.AppendLine($"<h3 class=\"list-title\"><a href=\"{dictPathAttr}\">{Escape(title)}</a></h3>");
+
         sb.AppendLine("<table>");
         sb.AppendLine("  <thead><tr>");
         sb.AppendLine("    <th>Key</th>");
-        foreach (var col in cols)
-            sb.AppendLine($"    <th>{Escape(col)}</th>");
+        if (isObjectEntry)
+            foreach (var col in cols)
+                sb.AppendLine($"    <th>{Escape(Humanize(col))}</th>");
+        else
+            sb.AppendLine("    <th>Value</th>");
+        sb.AppendLine("    <th></th>");
         sb.AppendLine("  </tr></thead>");
         sb.AppendLine("  <tbody>");
         foreach (var (key, entryVal) in dictVal.Entries)
@@ -177,7 +188,7 @@ public sealed class SsrRenderer
             var entryUrl = Escape(entryPath.ToString());
             sb.AppendLine($"    <tr data-nav=\"{entryUrl}\">");
             sb.AppendLine($"      <td><a href=\"{entryUrl}\">{Escape(keyStr)}</a></td>");
-            if (entryVal is ObjectValue objVal)
+            if (isObjectEntry && entryVal is ObjectValue objVal)
             {
                 foreach (var col in cols)
                 {
@@ -185,10 +196,16 @@ public sealed class SsrRenderer
                     sb.AppendLine($"      <td>{Escape(cell)}</td>");
                 }
             }
+            else
+            {
+                sb.AppendLine($"      <td>{Escape(DisplayValue(entryVal))}</td>");
+            }
+            sb.AppendLine($"      <td><button type=\"button\" data-delentry=\"{dictPathAttr}\" data-key=\"{Escape(keyStr)}\">Delete</button></td>");
             sb.AppendLine("    </tr>");
         }
         sb.AppendLine("  </tbody>");
         sb.AppendLine("</table>");
+        sb.AppendLine($"<button type=\"button\" data-newentry=\"{dictPathAttr}\" data-keygen=\"{keyGenAttr}\">New</button>");
     }
 
     // ── not found ─────────────────────────────────────────────────────────────
@@ -214,12 +231,31 @@ public sealed class SsrRenderer
         <head>
           <meta charset="utf-8">
           <title>{Escape(title)}</title>
+          <style>{Css}</style>
           <script type="module" src="/js"></script>
         </head>
         <body>
         {body}
         </body>
         </html>
+        """;
+
+    private const string Css = """
+        body { font-family: system-ui, Arial, sans-serif; margin: 2rem; color: #222; }
+        h2 { font-size: 1.6rem; margin: 0 0 1rem; }
+        nav.breadcrumbs { margin-bottom: 1rem; color: #666; }
+        .field { margin: 0.5rem 0; }
+        .field > label { display: inline-block; min-width: 10rem; font-weight: 600; }
+        table { border-collapse: collapse; margin: 0.25rem 0 0.75rem; }
+        th, td { border: 1px solid #bbb; padding: 0.4rem 0.8rem; text-align: left; }
+        th { background: #f3f3f3; }
+        .list-title { font-size: 1.3rem; margin: 1.25rem 0 0.5rem; }
+        .list-title a { text-decoration: none; color: #1a56b8; }
+        .list-title a:hover { text-decoration: underline; }
+        .actions { margin-top: 1rem; }
+        button { margin-right: 0.4rem; }
+        .create-form { border: 1px solid #bbb; padding: 0.75rem 1rem; margin: 0.5rem 0; background: #fafafa; }
+        .create-form .error { color: #b00; }
         """;
 
     private static string Breadcrumbs(NodePath path)
@@ -248,8 +284,9 @@ public sealed class SsrRenderer
     {
         BoolValue b  => b.Value ? "✓" : "",
         TextValue t  => t.Text,
-        IntValue i   => i.Value.ToString(),
-        DecimalValue d => d.Value.ToString(),
+        IntValue i   => i.Value.ToString(CultureInfo.InvariantCulture),
+        DecimalValue d => d.Value.ToString(CultureInfo.InvariantCulture),
+        DateValue d  => d.Value.ToString("yyyy-MM-dd"),
         _ => v.ToString() ?? ""
     };
 
@@ -269,4 +306,25 @@ public sealed class SsrRenderer
 
     private static string Escape(string s) =>
         System.Net.WebUtility.HtmlEncode(s);
+
+    // "companyName" -> "Company name", "shipped" -> "Shipped", "key_type" -> "Key type".
+    internal static string Humanize(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return name;
+        var sb = new StringBuilder(name.Length + 4);
+        for (var i = 0; i < name.Length; i++)
+        {
+            var c = name[i];
+            if (c is '_' or '-')
+            {
+                sb.Append(' ');
+                continue;
+            }
+            if (char.IsUpper(c) && i > 0 && (char.IsLower(name[i - 1]) || char.IsDigit(name[i - 1])))
+                sb.Append(' ');
+            sb.Append(char.ToLowerInvariant(c));
+        }
+        var s = sb.ToString().Trim();
+        return s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
+    }
 }

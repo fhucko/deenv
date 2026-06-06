@@ -17,9 +17,18 @@ Feature: Bool-root instance
     Then the checkbox is checked
 
   @milestone-1 @single-user @persistence
-  Scenario: A checked value survives a reload
+  Scenario: A saved value survives a reload
+    Given an instance whose Db is a bool with value false
+    When I navigate to the root URL "/"
+    And I click the checkbox
+    And I save
+    And I reload
+    Then the checkbox is checked
+
+  @milestone-1 @single-user @persistence
+  Scenario: An unsaved change does not persist
     Given an instance whose Db is a bool with value false
     When I navigate to the root URL "/"
     And I click the checkbox
     And I reload
-    Then the checkbox is checked
+    Then the checkbox is unchecked

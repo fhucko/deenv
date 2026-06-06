@@ -59,5 +59,24 @@ public static class InstanceDescriptionLoader
             && prop.CardinalityRaw != "dictionary")
             throw new InvalidOperationException(
                 $"Prop '{prop.Name}' on type '{typeName}' has invalid cardinality '{prop.CardinalityRaw}'.");
+
+        // keyGeneration is only meaningful on dictionary props.
+        if (prop.KeyGenerationRaw != null)
+        {
+            if (prop.Cardinality != Cardinality.Dictionary)
+                throw new InvalidOperationException(
+                    $"Prop '{prop.Name}' on type '{typeName}' has keyGeneration but is not a dictionary.");
+            if (prop.KeyGenerationRaw != "auto" && prop.KeyGenerationRaw != "manual")
+                throw new InvalidOperationException(
+                    $"Prop '{prop.Name}' on type '{typeName}' has invalid keyGeneration '{prop.KeyGenerationRaw}'.");
+        }
+
+        // 'auto' keys are auto-incremented, so they require a numeric (int) keyType.
+        if (prop.Cardinality == Cardinality.Dictionary
+            && prop.KeyGeneration == KeyGeneration.Auto
+            && prop.EffectiveKeyType != "int")
+            throw new InvalidOperationException(
+                $"Prop '{prop.Name}' on type '{typeName}' uses keyGeneration 'auto' which requires keyType 'int', " +
+                $"but keyType is '{prop.EffectiveKeyType}'.");
     }
 }

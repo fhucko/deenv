@@ -5,7 +5,8 @@ namespace DeEnv.Instance;
 public record ResolvedTypeInfo(
     TypeDefinition Type,
     Cardinality Cardinality,
-    string? KeyTypeName);
+    string? KeyTypeName,
+    KeyGeneration? KeyGeneration = null);
 
 public sealed class TypeResolver
 {
@@ -25,6 +26,7 @@ public sealed class TypeResolver
         var currentType = db;
         var currentCardinality = Cardinality.Single;
         string? currentKeyTypeName = null;
+        KeyGeneration? currentKeyGeneration = null;
 
         foreach (var segment in path.Segments)
         {
@@ -33,6 +35,7 @@ public sealed class TypeResolver
                 // Segment is a dictionary key — descend into the entry.
                 currentCardinality = Cardinality.Single;
                 currentKeyTypeName = null;
+                currentKeyGeneration = null;
             }
             else if (currentType.BaseType == BaseType.Object)
             {
@@ -45,9 +48,16 @@ public sealed class TypeResolver
 
                 currentType = resolved;
                 currentCardinality = prop.Cardinality;
-                currentKeyTypeName = prop.Cardinality == Cardinality.Dictionary
-                    ? prop.KeyTypeName ?? "text"
-                    : null;
+                if (prop.Cardinality == Cardinality.Dictionary)
+                {
+                    currentKeyTypeName = prop.EffectiveKeyType;
+                    currentKeyGeneration = prop.KeyGeneration;
+                }
+                else
+                {
+                    currentKeyTypeName = null;
+                    currentKeyGeneration = null;
+                }
             }
             else
             {
@@ -55,7 +65,7 @@ public sealed class TypeResolver
             }
         }
 
-        return new ResolvedTypeInfo(currentType, currentCardinality, currentKeyTypeName);
+        return new ResolvedTypeInfo(currentType, currentCardinality, currentKeyTypeName, currentKeyGeneration);
     }
 
     private TypeDefinition? ResolveTypeName(string name)

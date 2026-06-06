@@ -6,15 +6,30 @@ public enum BaseType { Bool, Int, Decimal, Text, Date, DateTime, Object }
 
 public enum Cardinality { Single, Dictionary }
 
+// How a dictionary's entry keys are produced.
+public enum KeyGeneration { Auto, Manual }
+
 public record PropDefinition(
     [property: JsonPropertyName("name")]    string Name,
     [property: JsonPropertyName("type")]    string TypeName,
     [property: JsonPropertyName("cardinality")] string? CardinalityRaw = null,
     [property: JsonPropertyName("keyType")] string? KeyTypeName = null,
+    [property: JsonPropertyName("keyGeneration")] string? KeyGenerationRaw = null,
     [property: JsonPropertyName("nullable")] bool Nullable = false)
 {
     public Cardinality Cardinality =>
         CardinalityRaw == "dictionary" ? Cardinality.Dictionary : Cardinality.Single;
+
+    // Effective key type for a dictionary prop (text when unspecified).
+    public string EffectiveKeyType => KeyTypeName ?? "text";
+
+    // auto/manual; defaults to auto for numeric (int) keys, manual otherwise.
+    public KeyGeneration KeyGeneration => KeyGenerationRaw switch
+    {
+        "auto"   => KeyGeneration.Auto,
+        "manual" => KeyGeneration.Manual,
+        _        => EffectiveKeyType == "int" ? KeyGeneration.Auto : KeyGeneration.Manual
+    };
 }
 
 public record TypeDefinition(

@@ -65,11 +65,13 @@ model change).
 ## Rendering: one form per type
 
 Traversal granularity is **one form per type instance**:
-- A **bool root** renders as just a **checkbox** (no field label) — the
+- A **bool root** (or any base-typed leaf node) renders as a one-field form —
+  a single **checkbox**/input plus a Save button. The bool root is the
   simplest valid instance.
 - An **object** renders as a form of its fields.
 - A field that is a **dictionary** renders as an **HTML table**; each row
-  links to that entry's form by key.
+  links to that entry's form by key, with a **New** control to create entries
+  and a per-row **delete** control.
 - Leaf fields render as form inputs.
 
 The whole app is: forms for objects, tables for dictionaries, click a row to
@@ -115,12 +117,21 @@ under normal viewing. The URL works; only dictionaries force a new page.
   background save-on-change.
 
 **Save behavior:**
-- **Toggles save immediately** — a bool checkbox (and toggle-like flags such
-  as "active") save on change, in the background, no full reload.
-- **Object forms use explicit save** — multi-field records (the CRM/eshop
-  case) are filled and committed together via a Save button. This pairs
-  naturally with the future stale-version conflict flow (see DECISIONS.md):
-  immediate per-field save would fight optimistic concurrency.
+- **Explicit Save on every node** — there is no immediate save-on-change.
+  Every editable node (an object form, *and* a single-value leaf such as a
+  bool/text/number) is committed with a Save button. bool checkboxes are
+  ordinary form inputs like any other field. This is one consistent
+  interaction instead of a toggle/form split, and it pairs naturally with the
+  future stale-version conflict flow (see DECISIONS.md) — explicit Save is the
+  natural version-commit unit, whereas immediate per-field save would fight
+  optimistic concurrency. (Decided in Milestone 2; supersedes the earlier
+  "toggles save immediately" rule.)
+
+**Creating dictionary entries** is a transient client-side form, not a
+navigable node: clicking "New" opens a blank form (with a key input for
+manual-key dictionaries), and the entry is created only on that form's Save.
+There is no create URL, so a URL only ever addresses an entry that exists
+(and an entry whose key happens to be `new` is unaffected).
 
 **Far future (deferred):**
 - **Predictive prefetching + client-side caching** — loading data for nodes

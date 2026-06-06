@@ -1,165 +1,224 @@
 // Client-side instance driver.
-// Connects over WebSocket, handles checkbox save-on-change and client-side navigation.
+// Navigation is plain SSR (links). The WebSocket carries all mutations
+// (write / writeObject / addEntry / removeEntry) as request/response pairs,
+// and fetches a blank entry template for the transient "create" form.
 
 type NodeData =
-  | { kind: 'bool';       value: boolean }
-  | { kind: 'int';        value: number }
-  | { kind: 'decimal';    value: number }
-  | { kind: 'text';       value: string }
-  | { kind: 'date';       value: string }
-  | { kind: 'datetime';   value: string }
-  | { kind: 'object';     fields: Record<string, NodeData> }
+  | { kind: 'bool';     value: boolean }
+  | { kind: 'int';      value: number }
+  | { kind: 'decimal';  value: number }
+  | { kind: 'text';     value: string }
+  | { kind: 'date';     value: string }
+  | { kind: 'datetime'; value: string }
+  | { kind: 'object';   fields: Record<string, NodeData> }
   | { kind: 'dictionary'; entries: Array<{ key: NodeData; value: NodeData }> };
 
-type ReadResponse  = { op: 'read';  path: string; data?: NodeData; notFound?: boolean };
-type WriteResponse = { op: 'write'; path: string; ok?: boolean; error?: string };
-type ServerMessage = ReadResponse | WriteResponse | { error: string };
+type Reply = Record<string, unknown> & { id?: number; error?: string };
+
+// ── WebSocket request/response layer ───────────────────────────────────────────
 
 const ws = new WebSocket(`ws://${window.location.host}/ws`);
+let nextId = 1;
+const pending = new Map<number, (reply: Reply) => void>();
 
-ws.addEventListener('open', () => {
-    attachHandlers();
+const ready = new Promise<void>(resolve => {
+    ws.addEventListener('open', () => resolve());
 });
 
 ws.addEventListener('message', (event: MessageEvent<string>) => {
-    const msg = JSON.parse(event.data) as ServerMessage;
-    if ('error' in msg && !('op' in msg)) {
-        console.error('Server error:', msg.error);
-        return;
-    }
-    if (msg.op === 'read') {
-        if (msg.notFound) {
-            window.location.href = msg.path; // fall back to SSR
-        } else if (msg.data) {
-            applyNavigation(msg.path, msg.data);
-        }
+    const reply = JSON.parse(event.data) as Reply;
+    if (typeof reply.id === 'number' && pending.has(reply.id)) {
+        pending.get(reply.id)!(reply);
+        pending.delete(reply.id);
     }
 });
 
-// ── handler attachment ────────────────────────────────────────────────────────
-
-function attachHandlers(): void {
-    // Bool checkboxes: save immediately on change.
-    document.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-path]').forEach(cb => {
-        cb.addEventListener('change', () => {
-            const path = cb.dataset['path'] ?? '/';
-            ws.send(JSON.stringify({ op: 'write', path, value: cb.checked }));
-        });
-    });
-
-    // Dictionary table rows: navigate on click (client-side).
-    document.querySelectorAll<HTMLTableRowElement>('tr[data-nav]').forEach(row => {
-        row.addEventListener('click', (e: MouseEvent) => {
-            if ((e.target as HTMLElement).tagName === 'A') return;
-            const path = row.dataset['nav']!;
-            ws.send(JSON.stringify({ op: 'read', path }));
-        });
-    });
-
-    // Object forms: save on submit.
-    document.querySelectorAll<HTMLFormElement>('form[id="node-form"]').forEach(form => {
-        form.addEventListener('submit', (e: SubmitEvent) => {
-            e.preventDefault();
-            saveForm(form);
-        });
+async function call(message: Record<string, unknown>): Promise<Reply> {
+    await ready;
+    const id = nextId++;
+    return new Promise<Reply>(resolve => {
+        pending.set(id, resolve);
+        ws.send(JSON.stringify({ ...message, id }));
     });
 }
 
-// ── form save ─────────────────────────────────────────────────────────────────
+// ── handler attachment (runs on first paint and after client renders) ──────────
 
-function saveForm(form: HTMLFormElement): void {
-    form.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-path]').forEach(el => {
-        if (!(el instanceof HTMLInputElement)) return;
-        const path = el.dataset['path']!;
-        let value: unknown;
-        if (el.type === 'checkbox') {
-            value = el.checked;
-        } else if (el.type === 'number') {
-            value = el.valueAsNumber;
-        } else {
-            value = el.value;
+function attachHandlers(root: ParentNode = document): void {
+    root.querySelectorAll<HTMLFormElement>('form#node-form').forEach(form => {
+        if (form.dataset['wired']) return;
+        form.dataset['wired'] = '1';
+        form.addEventListener('submit', e => { e.preventDefault(); void saveForm(form); });
+    });
+
+    root.querySelectorAll<HTMLButtonElement>('button[data-newentry]').forEach(btn => {
+        if (btn.dataset['wired']) return;
+        btn.dataset['wired'] = '1';
+        btn.addEventListener('click', () => void openCreateForm(btn));
+    });
+
+    root.querySelectorAll<HTMLButtonElement>('button[data-delentry]').forEach(btn => {
+        if (btn.dataset['wired']) return;
+        btn.dataset['wired'] = '1';
+        btn.addEventListener('click', () => void deleteEntry(btn));
+    });
+}
+
+ready.then(() => attachHandlers());
+
+// ── reading inputs ─────────────────────────────────────────────────────────────
+
+function readInput(el: HTMLInputElement): unknown {
+    if (el.type === 'checkbox') return el.checked;
+    if (el.type === 'number')   return el.valueAsNumber;
+    return el.value; // text, date (yyyy-mm-dd string)
+}
+
+// Collect a writeObject `fields` map from inputs carrying data-field.
+function collectFields(scope: ParentNode): Record<string, unknown> {
+    const fields: Record<string, unknown> = {};
+    scope.querySelectorAll<HTMLInputElement>('input[data-field]').forEach(el => {
+        fields[el.dataset['field']!] = readInput(el);
+    });
+    return fields;
+}
+
+// ── save (existing node) ───────────────────────────────────────────────────────
+
+async function saveForm(form: HTMLFormElement): Promise<void> {
+    const path = form.dataset['path'] ?? '/';
+    if (form.dataset['kind'] === 'leaf') {
+        const input = form.querySelector<HTMLInputElement>('input[data-path]');
+        if (!input) return;
+        await call({ op: 'write', path, value: readInput(input) });
+    } else {
+        await call({ op: 'writeObject', path, fields: collectFields(form) });
+    }
+}
+
+// ── delete entry ─────────────────────────────────────────────────────────────
+
+async function deleteEntry(btn: HTMLButtonElement): Promise<void> {
+    const path = btn.dataset['delentry']!;
+    const key = btn.dataset['key']!;
+    const reply = await call({ op: 'removeEntry', path, key });
+    if (reply.error) { alert(reply.error); return; }
+    location.reload();
+}
+
+// ── create entry (transient client form) ───────────────────────────────────────
+
+async function openCreateForm(btn: HTMLButtonElement): Promise<void> {
+    const dictPath = btn.dataset['newentry']!;
+    const keyGen = btn.dataset['keygen'] === 'manual' ? 'manual' : 'auto';
+
+    const reply = await call({ op: 'newEntryTemplate', path: dictPath });
+    if (reply.error) { alert(reply.error); return; }
+    const template = reply['template'] as NodeData;
+
+    const form = document.createElement('form');
+    form.className = 'create-form';
+    form.innerHTML = createFormHtml(template, keyGen);
+
+    // open=false → Save: create and return to the list. open=true → Save & open:
+    // create and navigate to the new entry.
+    async function submit(open: boolean): Promise<void> {
+        const value = buildValue(template, form);
+        const msg: Record<string, unknown> = { op: 'addEntry', path: dictPath, value };
+        if (keyGen === 'manual') {
+            const keyInput = form.querySelector<HTMLInputElement>('input[name="__key"]');
+            msg['key'] = keyInput?.value ?? '';
         }
-        ws.send(JSON.stringify({ op: 'write', path, value }));
-    });
+        const res = await call(msg);
+        if (res.error) { showCreateError(form, String(res.error)); return; }
+        if (open) location.href = joinPath(dictPath, String(res['key']));
+        else location.reload();
+    }
+
+    form.addEventListener('submit', e => { e.preventDefault(); void submit(false); });
+    form.querySelector<HTMLButtonElement>('button[data-save]')!
+        .addEventListener('click', e => { e.preventDefault(); void submit(false); });
+    form.querySelector<HTMLButtonElement>('button[data-saveopen]')!
+        .addEventListener('click', e => { e.preventDefault(); void submit(true); });
+    form.querySelector<HTMLButtonElement>('button[data-cancel]')!
+        .addEventListener('click', () => form.remove());
+
+    (btn.parentNode ?? document.querySelector('main'))!.insertBefore(form, btn);
 }
 
-// ── client-side navigation ────────────────────────────────────────────────────
-
-function applyNavigation(path: string, data: NodeData): void {
-    history.pushState(null, '', path);
-    const main = document.querySelector('main');
-    if (!main) return;
-    renderInto(main, path, data);
-    attachHandlers();
+function createFormHtml(template: NodeData, keyGen: 'auto' | 'manual'): string {
+    const keyRow = keyGen === 'manual'
+        ? `<div class="field"><label>Key</label><input type="text" name="__key"></div>`
+        : '';
+    let body = '';
+    if (template.kind === 'object') {
+        for (const [name, v] of Object.entries(template.fields)) {
+            // Dictionary fields are navigation boundaries — created empty and edited
+            // after navigating in, so they don't belong on the create form.
+            if (v.kind === 'dictionary') continue;
+            body += `<div class="field"><label>${escapeHtml(humanize(name))}</label>${inputHtml(name, v)}</div>`;
+        }
+    } else {
+        body = `<div class="field"><label>Value</label>${inputHtml('__value', template)}</div>`;
+    }
+    return `<h3>New</h3>${keyRow}${body}` +
+        `<div class="actions">` +
+        `<button type="submit" data-save>Save</button>` +
+        `<button type="button" data-saveopen>Save &amp; open</button>` +
+        `<button type="button" data-cancel>Cancel</button></div>` +
+        `<p class="error" hidden></p>`;
 }
 
-window.addEventListener('popstate', () => {
-    ws.send(JSON.stringify({ op: 'read', path: window.location.pathname }));
-});
-
-// ── client-side rendering ─────────────────────────────────────────────────────
-
-function renderInto(container: Element, path: string, data: NodeData): void {
+function inputHtml(name: string, data: NodeData): string {
+    const n = escapeHtml(name);
     switch (data.kind) {
-        case 'bool':
-            container.innerHTML = boolHtml(path, data.value);
-            break;
-        case 'object':
-            container.innerHTML = objectHtml(path, data.fields);
-            break;
-        case 'dictionary':
-            container.innerHTML = dictionaryHtml(path, data.entries);
-            break;
-        default:
-            container.innerHTML = `<p>${escapeHtml(String(data.value))}</p>`;
+        case 'bool':    return `<input type="checkbox" name="${n}"${data.value ? ' checked' : ''}>`;
+        case 'int':     return `<input type="number" name="${n}" value="${data.value}">`;
+        case 'decimal': return `<input type="number" step="any" name="${n}" value="${data.value}">`;
+        case 'date':    return `<input type="date" name="${n}" value="${escapeHtml(data.value)}">`;
+        default:        return `<input type="text" name="${n}" value="${escapeHtml(String('value' in data ? data.value : ''))}">`;
     }
 }
 
-function boolHtml(path: string, value: boolean): string {
-    const checked = value ? ' checked' : '';
-    const p = escapeHtml(path);
-    return `<form id="node-form" data-path="${p}">
-  <label>
-    <input type="checkbox" id="node-bool"${checked} data-path="${p}">
-    Db
-  </label>
-</form>`;
-}
-
-function objectHtml(path: string, fields: Record<string, NodeData>): string {
-    const p = escapeHtml(path);
-    const rows = Object.entries(fields).map(([name, val]) => {
-        const fieldPath = `${path}/${name}`.replace('//', '/');
-        return `<div class="field"><label>${escapeHtml(name)}</label>${fieldHtml(fieldPath, val)}</div>`;
-    }).join('\n');
-    return `<form id="node-form" data-path="${p}">${rows}<div class="actions"><button type="submit">Save</button></div></form>`;
-}
-
-function fieldHtml(path: string, data: NodeData): string {
-    const p = escapeHtml(path);
-    if (data.kind === 'bool') {
-        const checked = data.value ? ' checked' : '';
-        return `<input type="checkbox" data-path="${p}"${checked}>`;
+// Build the addEntry `value` (object field-map or a single base value) from the form.
+function buildValue(template: NodeData, form: HTMLFormElement): unknown {
+    if (template.kind === 'object') {
+        const fields: Record<string, unknown> = {};
+        for (const name of Object.keys(template.fields)) {
+            const input = form.querySelector<HTMLInputElement>(`[name="${cssEscape(name)}"]`);
+            if (input) fields[name] = readInput(input);
+        }
+        return fields;
     }
-    if (data.kind === 'dictionary') {
-        return dictionaryHtml(path, data.entries);
-    }
-    const v = escapeHtml(String('value' in data ? data.value : ''));
-    return `<input type="text" data-path="${p}" value="${v}">`;
+    const input = form.querySelector<HTMLInputElement>('[name="__value"]')!;
+    return readInput(input);
 }
 
-function dictionaryHtml(path: string, entries: Array<{ key: NodeData; value: NodeData }>): string {
-    const rows = entries.map(({ key, value }) => {
-        const keyStr = escapeHtml(String('value' in key ? key.value : ''));
-        const entryPath = escapeHtml(`${path}/${keyStr}`.replace('//', '/'));
-        const cellContent = value.kind === 'object'
-            ? Object.values(value.fields).map(f => `<td>${escapeHtml(String('value' in f ? f.value : ''))}</td>`).join('')
-            : `<td>${escapeHtml(String('value' in value ? value.value : ''))}</td>`;
-        return `<tr data-nav="${entryPath}"><td><a href="${entryPath}">${keyStr}</a></td>${cellContent}</tr>`;
-    }).join('\n');
-    return `<table><tbody>${rows}</tbody></table>`;
+function showCreateError(form: HTMLElement, message: string): void {
+    const p = form.querySelector<HTMLParagraphElement>('p.error');
+    if (p) { p.textContent = message; p.hidden = false; }
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────────────
+
+function joinPath(dictPath: string, key: string): string {
+    return (dictPath.endsWith('/') ? dictPath : dictPath + '/') + key;
+}
+
+// "companyName" -> "Company name" (mirrors the server-side Humanize).
+function humanize(name: string): string {
+    const spaced = name
+        .replace(/[_-]+/g, ' ')
+        .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+        .toLowerCase()
+        .trim();
+    return spaced.length === 0 ? spaced : spaced[0].toUpperCase() + spaced.slice(1);
 }
 
 function escapeHtml(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function cssEscape(s: string): string {
+    return s.replace(/["\\]/g, '\\$&');
 }

@@ -39,6 +39,44 @@ public class InstanceContext
         }
         """);
 
+    // Milestone 2 CRM-with-orders instance: objects, nested dictionaries,
+    // every base type, and both auto (int) + manual (text) key generation.
+    public static InstanceDescription CrmDb() =>
+        InstanceDescriptionLoader.Load("""
+        {
+          "types": [
+            {
+              "name": "Db",
+              "baseType": "object",
+              "props": [
+                { "name": "companyName", "type": "text" },
+                { "name": "settings",  "type": "text",     "cardinality": "dictionary", "keyType": "text", "keyGeneration": "manual" },
+                { "name": "customers", "type": "Customer", "cardinality": "dictionary", "keyType": "int",  "keyGeneration": "auto" }
+              ]
+            },
+            {
+              "name": "Customer",
+              "baseType": "object",
+              "props": [
+                { "name": "name",   "type": "text" },
+                { "name": "email",  "type": "text" },
+                { "name": "active", "type": "bool" },
+                { "name": "orders", "type": "Order", "cardinality": "dictionary", "keyType": "int", "keyGeneration": "auto" }
+              ]
+            },
+            {
+              "name": "Order",
+              "baseType": "object",
+              "props": [
+                { "name": "date",    "type": "date" },
+                { "name": "total",   "type": "decimal" },
+                { "name": "shipped", "type": "bool" }
+              ]
+            }
+          ]
+        }
+        """);
+
     // ── storage ───────────────────────────────────────────────────────────────
 
     public string DataFilePath { get; set; } = Path.GetTempFileName();

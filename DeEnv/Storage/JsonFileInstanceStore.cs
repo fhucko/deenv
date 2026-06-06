@@ -27,16 +27,59 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     public NodeValue? ReadNode(NodePath path)
     {
-        var typeInfo = _resolver.ResolveType(path);
-        if (typeInfo == null) return null;
+        var rootType = _desc.Db;
+        if (rootType == null) return null;
 
         var root = LoadRoot();
         if (root == null) return null;
 
-        var node = Navigate(root, path);
-        if (node == null) return null;
+        // Walk the type tree and the JSON together. This distinguishes a missing
+        // *field* (schema-valid but unmaterialized → return its default, e.g. an
+        // empty dictionary) from a missing dictionary *key* (entry absent → null).
+        JsonNode? curJson = root;
+        var curType = rootType;
+        var curCardinality = Cardinality.Single;
+        string? curKeyType = null;
 
-        return ToNodeValue(node, typeInfo.Type, typeInfo.Cardinality, typeInfo.KeyTypeName);
+        foreach (var seg in path.Segments)
+        {
+            if (curCardinality == Cardinality.Dictionary)
+            {
+                // Segment is a dictionary key.
+                if (curJson is JsonObject dictObj && dictObj.TryGetPropertyValue(seg, out var entry) && entry != null)
+                    curJson = entry;
+                else
+                    return null; // missing key → not found
+                curCardinality = Cardinality.Single;
+                curKeyType = null;
+            }
+            else if (curType.BaseType == BaseType.Object)
+            {
+                // Segment is a field name.
+                var prop = curType.Props?.FirstOrDefault(p => p.Name == seg);
+                if (prop == null) return null; // unknown field
+
+                curType = ResolveTypeDef(prop.TypeName);
+                curCardinality = prop.Cardinality;
+                curKeyType = prop.Cardinality == Cardinality.Dictionary ? prop.EffectiveKeyType : null;
+
+                // Descend the JSON; a missing field leaves curJson null (defaulted below).
+                curJson = curJson is JsonObject obj && obj.TryGetPropertyValue(seg, out var child)
+                    ? child : null;
+            }
+            else
+            {
+                return null; // can't navigate into a leaf
+            }
+        }
+
+        if (curJson != null)
+            return ToNodeValue(curJson, curType, curCardinality, curKeyType);
+
+        // Schema-valid but absent in storage → default value for the resolved type.
+        return curCardinality == Cardinality.Dictionary
+            ? new DictionaryValue(new Dictionary<NodeValue, NodeValue>())
+            : BuildDefault(curType);
     }
 
     // ── write leaf ────────────────────────────────────────────────────────────
@@ -57,7 +100,100 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         SaveRoot(root);
     }
 
+    // ── write object ──────────────────────────────────────────────────────────
+
+    public void WriteObject(NodePath path, ObjectValue value)
+    {
+        var root = LoadRoot() ?? NewJsonObject();
+
+        JsonObject target;
+        if (path.IsRoot)
+        {
+            target = root as JsonObject
+                ?? throw new InvalidOperationException("Root is not a JSON object.");
+        }
+        else
+        {
+            EnsureParent(root, path);
+            var parent = Navigate(root, ParentPath(path)) as JsonObject
+                ?? throw new InvalidOperationException($"Parent of {path} is not a JSON object.");
+            var last = path.Segments[^1];
+            if (parent[last] is not JsonObject existing)
+            {
+                existing = new JsonObject();
+                parent[last] = existing;
+            }
+            target = existing;
+        }
+
+        // Write only the supplied fields (the form's leaf fields); dictionary
+        // fields are not in `value.Fields`, so they are left untouched.
+        foreach (var (field, v) in value.Fields)
+            target[field] = ToJsonNode(v);
+
+        SaveRoot(root);
+    }
+
     // ── dictionary ────────────────────────────────────────────────────────────
+
+    public NodeValue NewEntryTemplate(NodePath dictPath)
+    {
+        var typeInfo = _resolver.ResolveType(dictPath)
+            ?? throw new InvalidOperationException($"Path {dictPath} does not resolve.");
+        if (typeInfo.Cardinality != Cardinality.Dictionary)
+            throw new InvalidOperationException($"{dictPath} is not a dictionary.");
+        return BuildDefault(typeInfo.Type);
+    }
+
+    public NodeValue CreateEntry(NodePath dictPath, NodeValue value)
+    {
+        var key = NextKey(dictPath);
+        WriteDictionaryEntry(dictPath, key, value);
+        return key;
+    }
+
+    public void CreateEntry(NodePath dictPath, NodeValue key, NodeValue value)
+    {
+        if (EntryExists(dictPath, key))
+            throw new InvalidOperationException(
+                $"An entry with key '{KeyToString(key)}' already exists at {dictPath}.");
+        WriteDictionaryEntry(dictPath, key, value);
+    }
+
+    private bool EntryExists(NodePath dictPath, NodeValue key)
+    {
+        var root = LoadRoot();
+        if (root == null) return false;
+        return Navigate(root, dictPath) is JsonObject dict && dict.ContainsKey(KeyToString(key));
+    }
+
+    // Default value of a type, with object fields recursively defaulted and
+    // dictionary fields starting empty. Used for the create-entry template.
+    private NodeValue BuildDefault(TypeDefinition type)
+    {
+        if (type.BaseType != BaseType.Object)
+            return DefaultBase(type.BaseType);
+
+        var fields = new Dictionary<string, NodeValue>();
+        foreach (var prop in type.Props ?? [])
+        {
+            fields[prop.Name] = prop.Cardinality == Cardinality.Dictionary
+                ? new DictionaryValue(new Dictionary<NodeValue, NodeValue>())
+                : BuildDefault(ResolveTypeDef(prop.TypeName));
+        }
+        return new ObjectValue(fields);
+    }
+
+    private static NodeValue DefaultBase(BaseType bt) => bt switch
+    {
+        BaseType.Bool     => new BoolValue(false),
+        BaseType.Int      => new IntValue(0),
+        BaseType.Decimal  => new DecimalValue(0m),
+        BaseType.Text     => new TextValue(""),
+        BaseType.Date     => new DateValue(DateOnly.FromDateTime(DateTime.Today)),
+        BaseType.DateTime => new DateTimeValue(DateTimeOffset.Now),
+        _ => throw new InvalidOperationException($"No base default for {bt}")
+    };
 
     public void WriteDictionaryEntry(NodePath path, NodeValue key, NodeValue value)
     {

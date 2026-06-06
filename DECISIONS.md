@@ -107,11 +107,14 @@ cache is client state we own. Revisit when caching is actually built.
 Primary early use cases are custom eshop and CRM — multi-user domains where
 records are edited concurrently. Decisions:
 
-- **Entities carry a version stamp from Milestone 1 onward.** It increments
-  on each save. Nothing reads it yet (Milestone 1 is single-user, so no
-  conflicts are possible), but it is the exact hook optimistic concurrency
-  needs later. Cheap now; adding it later would mean migrating existing data.
-  Same "cheap seam now, swap later" discipline as the storage interface.
+- **Version stamp: deferred (revised in Milestone 2).** Originally planned as a
+  per-entity stamp "from Milestone 1 onward," it was never built and has been
+  **deferred to the multi-user / optimistic-concurrency milestone**. Reason:
+  *where* the version belongs is genuinely unresolved — a per-object stamp
+  resets when the whole DB is replaced (so a whole-DB version is needed too),
+  and which granularity optimistic concurrency wants is a decision best made
+  with that milestone's full context. Nothing reads a version yet, so there is
+  no cost to deferring; the stored file shape carries no version field today.
 
 - **Concurrency model is optimistic, designed at the multi-user milestone.**
   No locking by default. Users edit freely; conflicts are detected at *save*
@@ -128,9 +131,13 @@ records are edited concurrently. Decisions:
   "decrement-if-available" operations at the storage layer, not form-level
   locking or last-write-wins. Lands in the storage-engine milestones.
 
-- **Save UX:** toggles (bool checkbox, "active" flags) save immediately in
-  the background. Multi-field object forms use explicit Save, which pairs
-  with the optimistic stale-version flow above.
+- **Save UX (revised in Milestone 2): explicit Save on every node.** There is
+  no immediate save-on-change; every editable node — object forms *and* single
+  leaf values, including bool checkboxes — commits via a Save button. This is
+  one consistent interaction (no toggle/form split) and is the natural
+  version-commit unit for the future optimistic stale-version flow, whereas
+  immediate per-field saving would fight it. Supersedes the earlier "toggles
+  save immediately" rule.
 
 None of the multi-user concurrency machinery is built in Milestone 1 — only
 the version stamp exists now. The rest is designed when multi-user arrives.

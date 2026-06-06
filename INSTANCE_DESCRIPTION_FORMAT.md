@@ -29,20 +29,33 @@ shape. (See "Why no aliases" below.)
 
 ## Prop
 
-| Field         | Required | Default      | Meaning                                                         |
-| ------------- | -------- | ------------ | --------------------------------------------------------------- |
-| `name`        | yes      | —            | Field name within the object.                                   |
-| `type`        | yes      | —            | Name of a type defined in `types`.                              |
-| `cardinality` | no       | `single`     | `single` or `dictionary`.                                       |
-| `nullability` | no       | `non-null`   | `non-null` or `nullable`.                                       |
+| Field           | Required        | Default            | Meaning                                                         |
+| --------------- | --------------- | ------------------ | --------------------------------------------------------------- |
+| `name`          | yes             | —                  | Field name within the object.                                   |
+| `type`          | yes             | —                  | A base type name, or the name of a type defined in `types`.     |
+| `cardinality`   | no              | `single`           | `single` or `dictionary`.                                       |
+| `keyType`       | dictionary only | `text`             | Base type of the dictionary's keys.                             |
+| `keyGeneration` | dictionary only | derived (see below)| `auto` or `manual`.                                             |
+| `nullability`   | no              | `non-null`         | `non-null` or `nullable`.                                       |
 
-Omit `cardinality` and `nullability` when they take the default. Read
-literally: anything not stated is single and non-null.
+Omit `cardinality`, `keyType`, `keyGeneration`, and `nullability` when they
+take the default. Read literally: anything not stated is single and non-null.
 
 ## Dictionary keys
 
-Dictionary keys are **`text`** in Milestone 1. (Per-dictionary key types
-and key-field designation are deferred.)
+A dictionary prop declares its key type (`keyType`) and how keys are produced
+(`keyGeneration`):
+
+- `keyType` — any base type (`text`, `int`, …). Defaults to `text`.
+- `keyGeneration`:
+  - **`auto`** — keys are auto-incremented by the platform (next = max + 1).
+    Requires a numeric `keyType` (`int`). The create form has no key field.
+  - **`manual`** — the user supplies the key when creating an entry. Works with
+    any `keyType`. The create form includes a key field.
+  - Default: `auto` when `keyType` is `int`, otherwise `manual`.
+
+(Key-field designation — using one of the entry's own fields as its key — is
+still deferred.)
 
 ## Worked examples
 

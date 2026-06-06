@@ -27,4 +27,15 @@
     <Content Include="tsconfig.json" />
   </ItemGroup>
 
+  <!-- The compiled instance.js (a gitignored build output) is embedded as an assembly
+       resource and served at /js (logical name DeEnv.Instance.instance.js). instance.js
+       lives in the source tree and persists across builds; on a brand-new clone it appears
+       after the first TypeScript compile, so a fresh checkout needs one build to populate it
+       before the embed picks it up. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Instance\instance.js" />
+    <None Remove="Instance\instance.js" />
+    <Content Remove="Instance\instance.js" />
+  </ItemGroup>
+
 </Project>
