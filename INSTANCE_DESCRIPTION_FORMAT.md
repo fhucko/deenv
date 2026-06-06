@@ -36,9 +36,9 @@ shape. (See "Why no aliases" below.)
 | `cardinality`   | no              | `single`           | `single` or `dictionary`.                                       |
 | `keyType`       | dictionary only | `text`             | Base type of the dictionary's keys.                             |
 | `keyGeneration` | dictionary only | derived (see below)| `auto` or `manual`.                                             |
-| `nullability`   | no              | `non-null`         | `non-null` or `nullable`.                                       |
+| `nullable`      | no              | `false`            | Boolean. `true` makes the field nullable; omit for non-null.    |
 
-Omit `cardinality`, `keyType`, `keyGeneration`, and `nullability` when they
+Omit `cardinality`, `keyType`, `keyGeneration`, and `nullable` when they
 take the default. Read literally: anything not stated is single and non-null.
 
 ## Dictionary keys
@@ -112,10 +112,22 @@ would be sugar over it. **Deferred** as a future convenience; not built now.
 
 ## Validation rules a loader must enforce
 
-- Exactly one type named `Db` exists.
-- Every prop's `type` resolves to a type in `types`.
+A malformed document is rejected at load time with a clear, specific error
+(`SchemaValidationException`) naming the offending type or prop — never an
+obscure failure deeper in the renderer or storage.
+
+- Type names are unique. (This also forbids a second `Db` — a duplicate `Db`
+  is just a duplicate name, not a special case.)
+- A root type named `Db` exists.
+- `baseType` is one of the known base types
+  (`bool`, `int`, `decimal`, `text`, `date`, `datetime`, `object`).
+- Every prop's `type` resolves to a base type or a type in `types`.
 - `props` is present iff `baseType` is `object`.
-- `cardinality` and `nullability` only appear on props, never on type
+- Prop names are unique within a type.
+- `cardinality` and `nullable` only appear on props, never on type
   definitions.
-- `cardinality` is `single` or `dictionary`. `nullability` is `non-null` or
-  `nullable`. No other values.
+- `cardinality` is `single` or `dictionary`. `nullable` is a boolean. No other
+  values.
+- A dictionary's `keyType` is a known base type; `keyGeneration` is `auto` or
+  `manual`, only on dictionary props, and `auto` requires `keyType` `int`.
+- The document is syntactically valid JSON.

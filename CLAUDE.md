@@ -23,8 +23,9 @@ where developers design data visually and use it as objects. Full mission in
 
 ## Ground rules — important
 
-1. **Build the current milestone only.** Per ROADMAP.md, the current
-   milestone is **Milestone 1: the instance with a single-boolean Db**.
+1. **Build the current milestone only.** Per ROADMAP.md, Milestones 1 and 2
+   are done; the current milestone is **Milestone 3: the validated JSON schema
+   document** (the instance is defined by a validated schema document on disk).
    Later milestones are out of scope unless explicitly asked.
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
@@ -86,7 +87,9 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
-Milestone 1: the instance running a single-boolean Db — UI,
-object layer, and plain-JSON storage behind a storage interface — with the
-value persisting across reloads. Specced by the feature files in
-`features/`. The instance is hardcoded; no schema designer or IDE yet.
+Milestone 3: the instance is defined by a **validated JSON schema document**
+on disk (`DeEnv/instance.schema.json`), loaded via
+`InstanceDescriptionLoader.LoadFile` and validated with clear errors
+(`SchemaValidationException`). Specced by `DeEnv.Tests\Features\Schema.feature`.
+Still hand-written — no schema designer yet (that is Milestone 4). Storage
+remains plain JSON behind the storage interface; no SQLite/versioning yet.

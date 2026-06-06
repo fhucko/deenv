@@ -13,6 +13,14 @@ public class InstanceContext
 
     public InstanceDescription? Description { get; set; }
 
+    // ── schema document loading (milestone 3) ──────────────────────────────────
+
+    // Raw document text under test, the result of loading it, and any error raised.
+    public string? SchemaJson { get; set; }
+    public InstanceDescription? LoadedDescription { get; set; }
+    public Exception? LoadError { get; set; }
+    public string? SchemaFilePath { get; set; }
+
     public static InstanceDescription BoolDb() =>
         InstanceDescriptionLoader.Load("""{ "types": [{ "name": "Db", "baseType": "bool" }] }""");
 
@@ -39,43 +47,13 @@ public class InstanceContext
         }
         """);
 
-    // Milestone 2 CRM-with-orders instance: objects, nested dictionaries,
-    // every base type, and both auto (int) + manual (text) key generation.
+    // Milestone 2 CRM-with-orders instance: objects, nested dictionaries, every
+    // base type, and both auto (int) + manual (text) key generation. Loaded from
+    // the committed schema document (the single source of truth), shipped to the
+    // test output by the csproj — see DeEnv/instance.schema.json.
     public static InstanceDescription CrmDb() =>
-        InstanceDescriptionLoader.Load("""
-        {
-          "types": [
-            {
-              "name": "Db",
-              "baseType": "object",
-              "props": [
-                { "name": "companyName", "type": "text" },
-                { "name": "settings",  "type": "text",     "cardinality": "dictionary", "keyType": "text", "keyGeneration": "manual" },
-                { "name": "customers", "type": "Customer", "cardinality": "dictionary", "keyType": "int",  "keyGeneration": "auto" }
-              ]
-            },
-            {
-              "name": "Customer",
-              "baseType": "object",
-              "props": [
-                { "name": "name",   "type": "text" },
-                { "name": "email",  "type": "text" },
-                { "name": "active", "type": "bool" },
-                { "name": "orders", "type": "Order", "cardinality": "dictionary", "keyType": "int", "keyGeneration": "auto" }
-              ]
-            },
-            {
-              "name": "Order",
-              "baseType": "object",
-              "props": [
-                { "name": "date",    "type": "date" },
-                { "name": "total",   "type": "decimal" },
-                { "name": "shipped", "type": "bool" }
-              ]
-            }
-          ]
-        }
-        """);
+        InstanceDescriptionLoader.LoadFile(
+            Path.Combine(AppContext.BaseDirectory, "instance.schema.json"));
 
     // ── storage ───────────────────────────────────────────────────────────────
 

@@ -23,4 +23,10 @@
     <ProjectReference Include="..\DeEnv\DeEnv.csproj" />
   </ItemGroup>
 
+  <!-- Ship the same committed schema document to the test output so CrmDb() loads the
+       single source of truth (DeEnv/instance.schema.json) rather than a duplicated string. -->
+  <ItemGroup>
+    <Content Include="..\DeEnv\instance.schema.json" Link="instance.schema.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
