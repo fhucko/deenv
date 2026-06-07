@@ -54,12 +54,20 @@ the versioning diffs, the language eventually compiles against.
 
 Done when: instances are defined by a validated JSON schema document.
 
-## Milestone 4 — The visual schema designer
+## Milestone 4 — The schema designer  ← DONE (delivered as self-hosting)
 
-A web canvas to create tables, columns, and relationships visually,
-outputting the Milestone 3 JSON document.
+Originally scoped as a bespoke web canvas. **Delivered instead by self-hosting**:
+the designer is the instance runtime running a hand-written meta-schema
+(`DeEnv/meta.schema.json`), so a schema is authored as ordinary data through the
+existing generic UI. A bridge (`DeEnv/Designer/SchemaBridge.cs`) projects that
+data into a canonical `instance.schema.json` (validated by the normal loader) and
+the instance runs it. A `--mode` switch (VS launch profiles
+Instance / Designer / Export) flips between authoring, exporting, and running.
+The pretty card-grid surface and an in-app "Run" action are intentionally left to
+later milestones (UI customization, and the computation/language milestone) — see
+DECISIONS.md.
 
-Done when: a user can design a schema with no code and run it.
+Done when: a user can design a schema with no code and run it. ✓
 
 ## Milestone 5 — Schema versioning
 

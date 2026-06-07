@@ -102,6 +102,56 @@ single-machine consistency question reappears in miniature (an edited node
 may also be cached inside another view). Tractable while single-user; the
 cache is client state we own. Revisit when caching is actually built.
 
+## Milestone 4 — the schema designer is self-hosted, not a separate tool
+
+**The roadmap's M4 ("a web canvas to create tables, columns, and relationships
+visually") was delivered as self-hosting rather than a bespoke designer UI.** The
+designer *is* the instance runtime running a hand-written **meta-schema**
+(`DeEnv/meta.schema.json`): a `Db` holding `types` (a dictionary of `MetaType`),
+each `MetaType` holding `props` (a dictionary of `MetaProp`). You author a schema
+as ordinary data through the generic nested-dictionary UI that already exists.
+
+Reasoning:
+- **A schema document maps directly onto the existing instance model** —
+  objects + base fields + dictionaries-of-objects — so the designer's data layer
+  needs no new engine. M2/M3 already render and CRUD exactly this shape.
+- **A dedicated card-grid designer would be throwaway.** Making it *look* like a
+  designer (card grid, dropdowns, inline validation) is the future **UI
+  customization** pillar (VISION "user-controlled rendering"); building a one-off
+  now would be replaced when that lands. The generic UI is accepted as the M4
+  authoring surface.
+- **The instance runtime stays untouched.** Only the composition root
+  (`Program.cs`) changed. The renderer, WebSocket handler, storage, loader, and
+  `instance.ts` are not modified — the designer reuses them verbatim.
+
+**The bridge (`DeEnv/Designer/SchemaBridge.cs`)** projects the designer's node
+data into a canonical schema document and **validates it with the normal loader**
+(`InstanceDescriptionLoader.Load`), then publishes it as `instance.schema.json`
+and resets the instance data. `Project` is pure (testable without a server);
+`Export` does the file orchestration. It lives *beside* the runtime, not inside
+it.
+
+**An explicit `order` (int) field** on `MetaType`/`MetaProp` future-proofs
+prop/type **ordering**: auto-int keys only encode immutable creation order, so an
+explicit field is what makes reordering (and insert-between) possible. The
+projection sorts by `order` then key and strips `order` from the output. Works
+today as a plain number input; later drag-drop just writes the same field — no
+schema or projection change.
+
+**Mode switching is configuration, not code branches.** `Program.cs` reads a
+`--mode` arg (`instance` | `designer` | `export`); `instance`/`designer` share the
+identical hosting block with different schema+data files, and `export` runs the
+bridge and exits. Visual Studio launch profiles (`Properties/launchSettings.json`:
+**Instance / Designer / Export schema (bridge)**) drive it from the run-button
+dropdown.
+
+**Deliberately NOT built (still future):**
+- **UI customization** — a real card-grid/drag-drop designer surface.
+- **An in-app "Run" button** — turning designer data into a running instance from
+  *inside* the app is the first action/effect primitive, i.e. the
+  computation/custom-language milestone. Export stays an external VS mode until
+  then; the same `Project` function gets reused behind an action when it arrives.
+
 ## Concurrency, saving, and locking (eshop/CRM)
 
 Primary early use cases are custom eshop and CRM — multi-user domains where

@@ -23,10 +23,10 @@ where developers design data visually and use it as objects. Full mission in
 
 ## Ground rules — important
 
-1. **Build the current milestone only.** Per ROADMAP.md, Milestones 1 and 2
-   are done; the current milestone is **Milestone 3: the validated JSON schema
-   document** (the instance is defined by a validated schema document on disk).
-   Later milestones are out of scope unless explicitly asked.
+1. **Build the current milestone only.** Per ROADMAP.md, Milestones 1–4 are
+   done (M4 delivered as self-hosting — see DECISIONS.md). The next milestone is
+   **Milestone 5: schema versioning** (snapshot the JSON schema document and diff
+   snapshots). Later milestones are out of scope unless explicitly asked.
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
    custom language, the render-coupled storage engine, and the multi-device
@@ -87,9 +87,15 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
-Milestone 3: the instance is defined by a **validated JSON schema document**
-on disk (`DeEnv/instance.schema.json`), loaded via
-`InstanceDescriptionLoader.LoadFile` and validated with clear errors
-(`SchemaValidationException`). Specced by `DeEnv.Tests\Features\Schema.feature`.
-Still hand-written — no schema designer yet (that is Milestone 4). Storage
-remains plain JSON behind the storage interface; no SQLite/versioning yet.
+Milestones 1–4 are done. The next milestone is **Milestone 5: schema
+versioning** (snapshot the JSON schema document and diff snapshots) — not yet
+started.
+
+Milestone 4 was delivered as **self-hosting** (see DECISIONS.md): the designer is
+the instance runtime running a hand-written meta-schema (`DeEnv/meta.schema.json`),
+and `DeEnv/Designer/SchemaBridge.cs` projects the designed data into a canonical
+`instance.schema.json` (validated by `InstanceDescriptionLoader.Load`). A `--mode`
+switch (VS launch profiles Instance / Designer / Export) flips between authoring,
+exporting, and running; the instance runtime itself is untouched. Specced by
+`DeEnv.Tests\Features\Bridge.feature`. Storage remains plain JSON behind the
+storage interface; no SQLite/versioning yet.

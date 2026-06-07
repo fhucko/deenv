@@ -1,12 +1,20 @@
 {
   "profiles": {
-    "DeEnv": {
+    "Instance": {
       "commandName": "Project",
+      "commandLineArgs": "--mode instance",
       "launchBrowser": true,
-      "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
-      },
-      "applicationUrl": "https://localhost:60239;http://localhost:60240"
+      "launchUrl": "http://localhost:8080"
+    },
+    "Designer": {
+      "commandName": "Project",
+      "commandLineArgs": "--mode designer",
+      "launchBrowser": true,
+      "launchUrl": "http://localhost:8080"
+    },
+    "Export schema (bridge)": {
+      "commandName": "Project",
+      "commandLineArgs": "--mode export"
     }
   }
 }

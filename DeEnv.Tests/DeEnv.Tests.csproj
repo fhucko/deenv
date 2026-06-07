@@ -27,6 +27,7 @@
        single source of truth (DeEnv/instance.schema.json) rather than a duplicated string. -->
   <ItemGroup>
     <Content Include="..\DeEnv\instance.schema.json" Link="instance.schema.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\DeEnv\meta.schema.json" Link="meta.schema.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -8,6 +8,7 @@ DeEnv/Instance/instance.js
 
 ## Instance runtime data
 instance-data.json
+designer-data.json
 
 ## VS / Rider
 .vs/

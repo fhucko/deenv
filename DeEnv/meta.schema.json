@@ -1,0 +1,33 @@
+{
+  "types": [
+    {
+      "name": "Db",
+      "baseType": "object",
+      "props": [
+        { "name": "types", "type": "MetaType", "cardinality": "dictionary", "keyType": "int", "keyGeneration": "auto" }
+      ]
+    },
+    {
+      "name": "MetaType",
+      "baseType": "object",
+      "props": [
+        { "name": "name",     "type": "text" },
+        { "name": "baseType", "type": "text" },
+        { "name": "order",    "type": "int" },
+        { "name": "props",    "type": "MetaProp", "cardinality": "dictionary", "keyType": "int", "keyGeneration": "auto" }
+      ]
+    },
+    {
+      "name": "MetaProp",
+      "baseType": "object",
+      "props": [
+        { "name": "name",          "type": "text" },
+        { "name": "type",          "type": "text" },
+        { "name": "cardinality",   "type": "text" },
+        { "name": "keyType",       "type": "text" },
+        { "name": "keyGeneration", "type": "text" },
+        { "name": "order",         "type": "int" }
+      ]
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+using DeEnv.Designer;
 using DeEnv.Http;
 using DeEnv.Instance;
 using DeEnv.Storage;
@@ -6,21 +7,42 @@ using GenHTTP.Modules.Layouting;
 using GenHTTP.Modules.Practices;
 using GenHTTP.Modules.Websockets;
 
-// ── Instance description ──────────────────────────────────────────────────────
+// ── Run mode ───────────────────────────────────────────────────────────────────
+//
+// Selected by a `--mode` arg (set per Visual Studio launch profile — see
+// Properties/launchSettings.json). The instance runtime is untouched: modes only
+// pick which schema + data files it runs on.
+//
+//   instance  → run instance.schema.json + instance-data.json  (the built app)
+//   designer  → run meta.schema.json     + designer-data.json  (author schemas as data)
+//   export    → project designer data into instance.schema.json, then exit (the bridge)
 
-// Milestone 3: the instance is defined by a validated JSON schema document on
-// disk (copied next to the executable by the build), not a hardcoded string.
-var schemaPath = Path.Combine(AppContext.BaseDirectory, "instance.schema.json");
+var baseDir = AppContext.BaseDirectory;
+var instanceSchema = Path.Combine(baseDir, "instance.schema.json");
+var instanceData   = Path.Combine(baseDir, "instance-data.json");
+var metaSchema     = Path.Combine(baseDir, "meta.schema.json");
+var designerData   = Path.Combine(baseDir, "designer-data.json");
+
+var mode = ModeArg(args);
+
+if (mode == "export")
+{
+    SchemaBridge.Export(metaSchema, designerData, instanceSchema, instanceData);
+    Console.WriteLine($"Exported designer schema → {instanceSchema} (instance data reset).");
+    return;
+}
+
+var (schemaPath, dataPath) = mode == "designer"
+    ? (metaSchema, designerData)
+    : (instanceSchema, instanceData);
+
+// ── Host the instance runtime on the selected schema + data ────────────────────
+
 var description = InstanceDescriptionLoader.LoadFile(schemaPath);
+IInstanceStore store = new JsonFileInstanceStore(dataPath, description);
+var app = InstanceApp.Build(store, description);
 
-// ── Storage ───────────────────────────────────────────────────────────────────
-
-var dataFile = Path.Combine(AppContext.BaseDirectory, "instance-data.json");
-IInstanceStore store = new JsonFileInstanceStore(dataFile, description);
-
-// ── HTTP layer (GenHTTP, pure-C# engine — no ASP.NET Core) ─────────────────────
-
-var app = DeEnv.Http.InstanceApp.Build(store, description);
+Console.WriteLine($"Running in '{mode}' mode on {schemaPath}.");
 
 await Host.Create()
           .Handler(app)
@@ -28,3 +50,13 @@ await Host.Create()
           .Defaults(secureUpgrade: false, strictTransport: false)
           .Port(8080)
           .RunAsync();
+
+// Parse `--mode <value>`; defaults to "instance". Unknown values fall through to
+// the instance branch above.
+static string ModeArg(string[] args)
+{
+    for (var i = 0; i < args.Length - 1; i++)
+        if (args[i] is "--mode" or "-m")
+            return args[i + 1].ToLowerInvariant();
+    return "instance";
+}
