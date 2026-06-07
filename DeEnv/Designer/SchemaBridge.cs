@@ -89,6 +89,58 @@ public static class SchemaBridge
         File.WriteAllText(targetDataPath, "");
     }
 
+    // TEMPORARY (testing scaffolding — not a product feature; remove later):
+    // reverse of the bridge — seed the designer's data from an existing schema
+    // document so Designer mode opens on the current instance schema rather than a
+    // blank slate while we try the designer out. Only seeds when the designer has no
+    // types yet, so it never clobbers designed-but-unexported edits.
+    public static void SeedDesignerData(string metaSchemaPath, string designerDataPath, string sourceSchemaPath)
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(metaSchemaPath);
+        var designer = new JsonFileInstanceStore(designerDataPath, meta);
+
+        if (designer.ReadNode(NodePath.Root) is ObjectValue root
+            && root.Fields.TryGetValue("types", out var existing)
+            && existing is DictionaryValue { Entries.Count: > 0 })
+            return; // already has designed data — leave it alone
+
+        var source = InstanceDescriptionLoader.LoadFile(sourceSchemaPath);
+        var typesPath = NodePath.Root.Field("types");
+        var typeKey = 1;
+
+        foreach (var type in source.AllTypes)
+        {
+            designer.WriteDictionaryEntry(typesPath, new IntValue(typeKey),
+                new ObjectValue(new Dictionary<string, NodeValue>
+                {
+                    ["name"]     = new TextValue(type.Name),
+                    ["baseType"] = new TextValue(type.BaseTypeRaw),
+                    ["order"]    = new IntValue(typeKey * 10)
+                }));
+
+            var propsPath = typesPath.Key(typeKey.ToString()).Field("props");
+            var propKey = 1;
+            foreach (var prop in type.Props ?? [])
+            {
+                var fields = new Dictionary<string, NodeValue>
+                {
+                    ["name"]  = new TextValue(prop.Name),
+                    ["type"]  = new TextValue(prop.TypeName),
+                    ["order"] = new IntValue(propKey * 10)
+                };
+                if (prop.Cardinality == Cardinality.Dictionary)
+                {
+                    fields["cardinality"]   = new TextValue("dictionary");
+                    fields["keyType"]       = new TextValue(prop.EffectiveKeyType);
+                    fields["keyGeneration"] = new TextValue(prop.KeyGeneration == KeyGeneration.Auto ? "auto" : "manual");
+                }
+                designer.WriteDictionaryEntry(propsPath, new IntValue(propKey), new ObjectValue(fields));
+                propKey++;
+            }
+            typeKey++;
+        }
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────
 
     // Object entries of a dictionary node, sorted by the `order` field then by key

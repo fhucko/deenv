@@ -36,6 +36,12 @@ var (schemaPath, dataPath) = mode == "designer"
     ? (metaSchema, designerData)
     : (instanceSchema, instanceData);
 
+// TEMPORARY (testing scaffolding — remove later): first run of Designer mode opens
+// on the current instance schema instead of a blank slate (no-op once the designer
+// has its own types).
+if (mode == "designer")
+    SchemaBridge.SeedDesignerData(metaSchema, designerData, instanceSchema);
+
 // ── Host the instance runtime on the selected schema + data ────────────────────
 
 var description = InstanceDescriptionLoader.LoadFile(schemaPath);
