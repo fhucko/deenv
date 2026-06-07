@@ -14,6 +14,49 @@ The goal is to make building and running a database-backed app approachable
 for developers who find today's cloud overwhelming: design an app, and have
 it run, without a DevOps degree.
 
+## Who uses this
+
+There is **one operator** — the person driving the tool. They must be
+*technically literate*, but they need not be a professional developer. The
+dividing line is **data-model literacy**: the operator understands entities,
+fields, types, and relationships ("this links to that"). They are *not*
+assumed to write app code, configure servers, or write SQL. Templates and
+(later) AI domain expertise lower that floor over time, but do not remove it.
+
+Two operator profiles:
+
+- **Professional developers** — indie hackers on their own product,
+  freelancers, agencies.
+- **Technically-minded non-developers** — sysadmins, data analysts, power
+  users, technical founders, ops people. This group is the heart of the
+  "without a DevOps degree" promise: not being a full developer should not
+  stop you from getting a real database-backed app running.
+
+Common situations the single operator is in:
+
+1. **Solo / own product** — building a SaaS or side project alone. Wants
+   speed and to not fight infrastructure.
+2. **Freelancer + client, live design** — the operator drives the tool while
+   a client supplies domain knowledge across the table (e.g. designing a
+   custom ERP for an eshop backend on the spot). The client never touches the
+   tool, so the design must be *legible enough to narrate*. Templates and
+   domain hints earn their keep here.
+3. **Internal / business tooling** — an admin panel, ops dashboard, or
+   workflow tool for the operator's own team. Requirements shift once people
+   use it, so cheap schema iteration matters more than upfront polish.
+4. **Agency / repeat patterns** — the same shapes (eshop, booking, CRM,
+   inventory) rebuilt per client with a ~20% twist. Templates are the
+   economic argument, not a nicety.
+5. **Prototype / MVP** — throwaway-or-grow validation; get a real running app
+   fast, harden later if it survives.
+
+**Where code fits.** The operator designs *data*, not code. When code is
+needed, a developer writes it. Later, AI assistance lets the
+non-developer operators (e.g. sysadmins) produce that code too, with the
+option of **developer review** before it ships. The operator stays
+data-model-literate; the coding burden moves from "developer only" to
+"AI-assisted operator, developer-reviewed" over time.
+
 ## Pillars of the full vision
 
 1. **Visual data design.** Design a database schema on a canvas — tables,
