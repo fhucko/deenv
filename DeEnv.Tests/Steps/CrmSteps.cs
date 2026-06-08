@@ -13,6 +13,11 @@ namespace DeEnv.Tests.Steps;
 [Binding]
 public sealed class CrmSteps(InstanceContext ctx)
 {
+    // Maps scenario key ("1") → assigned identity, so navigation steps can
+    // build the correct URL (/customers/<id>) without hardcoding ids.
+    private readonly Dictionary<string, int> _customerIds = new();
+    private readonly Dictionary<string, int> _orderIds    = new();
+
     // ── Given (instance + seed data) ───────────────────────────────────────────
 
     [Given("a CRM instance")]
@@ -26,30 +31,28 @@ public sealed class CrmSteps(InstanceContext ctx)
     [Given(@"a customer {string} with name {string} email {string} active {word}")]
     public void GivenCustomer(string key, string name, string email, string active)
     {
-        ctx.Store!.WriteDictionaryEntry(
-            NodePath.Root.Field("customers"),
-            new IntValue(int.Parse(key)),
-            new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"]   = new TextValue(name),
-                ["email"]  = new TextValue(email),
-                ["active"] = new BoolValue(bool.Parse(active))
-            }));
+        var id = ctx.Store!.CreateObject("Customer", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"]   = new TextValue(name),
+            ["email"]  = new TextValue(email),
+            ["active"] = new BoolValue(bool.Parse(active))
+        }));
+        ctx.Store!.AddToSet(NodePath.Root.Field("customers"), id);
+        _customerIds[key] = id;
     }
 
     [Given(@"an order {string} of customer {string} with total {string}")]
     public void GivenOrder(string orderKey, string customerKey, string total)
     {
-        var orders = NodePath.Root.Field("customers").Key(customerKey).Field("orders");
-        ctx.Store!.WriteDictionaryEntry(
-            orders,
-            new IntValue(int.Parse(orderKey)),
-            new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["date"]    = new DateValue(DateOnly.FromDateTime(DateTime.Today)),
-                ["total"]   = new DecimalValue(decimal.Parse(total, CultureInfo.InvariantCulture)),
-                ["shipped"] = new BoolValue(false)
-            }));
+        var ordersPath = NodePath.Root.Field("customers").Key(_customerIds[customerKey].ToString()).Field("orders");
+        var id = ctx.Store!.CreateObject("Order", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["date"]    = new DateValue(DateOnly.FromDateTime(DateTime.Today)),
+            ["total"]   = new DecimalValue(decimal.Parse(total, CultureInfo.InvariantCulture)),
+            ["shipped"] = new BoolValue(false)
+        }));
+        ctx.Store!.AddToSet(ordersPath, id);
+        _orderIds[orderKey] = id;
     }
 
     [Given(@"a setting {string} with value {string}")]
@@ -57,6 +60,24 @@ public sealed class CrmSteps(InstanceContext ctx)
     {
         ctx.Store!.WriteDictionaryEntry(
             NodePath.Root.Field("settings"), new TextValue(key), new TextValue(value));
+    }
+
+    // ── When (navigate to seeded customer/order by scenario key) ──────────────
+
+    [When(@"I navigate to the customer {string}")]
+    public async Task WhenNavigateToCustomerAsync(string key)
+    {
+        await ctx.EnsureServerAndBrowserAsync();
+        await ctx.Page!.GotoAsync(ctx.BaseUrl + "/customers/" + _customerIds[key]);
+    }
+
+    [When(@"I navigate to the order {string} of customer {string}")]
+    public async Task WhenNavigateToOrderAsync(string orderKey, string customerKey)
+    {
+        await ctx.EnsureServerAndBrowserAsync();
+        await ctx.Page!.GotoAsync(ctx.BaseUrl
+            + "/customers/" + _customerIds[customerKey]
+            + "/orders/" + _orderIds[orderKey]);
     }
 
     // ── When (edit + save) ─────────────────────────────────────────────────────

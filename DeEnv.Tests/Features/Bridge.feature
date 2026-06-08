@@ -22,15 +22,15 @@ Feature: Schema bridge (self-hosted designer)
     And the exported type "Db" has a prop "notes"
 
   @milestone-4 @single-user
-  Scenario: The bridge projects a relationship to another type
+  Scenario: The bridge projects a set relationship to another type
     Given a designer instance
     And a designed type "Db" with base type "object"
     And a designed type "Item" with base type "object"
     And the type "Item" has a prop "label" of type "text"
-    And the type "Db" has a dictionary prop "items" of type "Item" with key type "int" and key generation "auto"
+    And the type "Db" has a set prop "items" of type "Item"
     When the design is exported
     Then the exported document loads successfully
-    And the exported type "Db" has a dictionary prop "items" of type "Item"
+    And the exported type "Db" has a set prop "items" of type "Item"
 
   @milestone-4 @single-user
   Scenario: Exporting an invalid design is rejected and writes nothing

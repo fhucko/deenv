@@ -4,14 +4,15 @@
 // and fetches a blank entry template for the transient "create" form.
 
 type NodeData =
-  | { kind: 'bool';     value: boolean }
-  | { kind: 'int';      value: number }
-  | { kind: 'decimal';  value: number }
-  | { kind: 'text';     value: string }
-  | { kind: 'date';     value: string }
-  | { kind: 'datetime'; value: string }
-  | { kind: 'object';   fields: Record<string, NodeData> }
-  | { kind: 'dictionary'; entries: Array<{ key: NodeData; value: NodeData }> };
+  | { type: 'bool';     value: boolean }
+  | { type: 'int';      value: number }
+  | { type: 'decimal';  value: number }
+  | { type: 'text';     value: string }
+  | { type: 'date';     value: string }
+  | { type: 'datetime'; value: string }
+  | { type: 'object';   typeName?: string; id?: number; fields?: Record<string, NodeData> }
+  | { type: 'set';      members: Record<string, NodeData> }
+  | { type: 'dictionary'; entries: Array<{ key: NodeData; value: NodeData }> };
 
 type Reply = Record<string, unknown> & { id?: number; error?: string };
 
@@ -151,7 +152,6 @@ async function deleteEntry(btn: HTMLButtonElement): Promise<void> {
 
 async function openCreateForm(btn: HTMLButtonElement): Promise<void> {
     const dictPath = btn.dataset['newentry']!;
-    const keyGen = btn.dataset['keygen'] === 'manual' ? 'manual' : 'auto';
 
     const reply = await call({ op: 'newEntryTemplate', path: dictPath });
     if (reply.error) { alert(reply.error); return; }
@@ -163,20 +163,17 @@ async function openCreateForm(btn: HTMLButtonElement): Promise<void> {
         return;
     }
 
+    // Dictionary: a manual key plus the entry value.
     const form = document.createElement('form');
     form.className = 'create-form';
-    form.innerHTML = createFormHtml(template, keyGen);
+    form.innerHTML = createFormHtml(template);
 
     // open=false → Save: create and return to the list. open=true → Save & open:
     // create and navigate to the new entry.
     async function submit(open: boolean): Promise<void> {
         const value = buildValue(template, form);
-        const msg: Record<string, unknown> = { op: 'addEntry', path: dictPath, value };
-        if (keyGen === 'manual') {
-            const keyInput = form.querySelector<HTMLInputElement>('input[name="__key"]');
-            msg['key'] = keyInput?.value ?? '';
-        }
-        const res = await call(msg);
+        const keyInput = form.querySelector<HTMLInputElement>('input[name="__key"]');
+        const res = await call({ op: 'addEntry', path: dictPath, key: keyInput?.value ?? '', value });
         if (res.error) { showCreateError(form, String(res.error)); return; }
         if (open) location.href = joinPath(dictPath, String(res['key']));
         else location.reload();
@@ -205,9 +202,9 @@ function openSetCreateForm(
     form.className = 'create-form';
 
     let newFields = '';
-    if (template.kind === 'object')
+    if (template.type === 'object' && template.fields)
         for (const [name, v] of Object.entries(template.fields)) {
-            if (v.kind === 'dictionary') continue;
+            if (v.type === 'dictionary' || v.type === 'set' || v.type === 'object') continue;
             newFields += `<div class="field"><label>${escapeHtml(humanize(name))}</label>${inputHtml(name, v)}</div>`;
         }
 
@@ -266,16 +263,16 @@ function openSetCreateForm(
     if (editor) updateRefMode(editor);
 }
 
-function createFormHtml(template: NodeData, keyGen: 'auto' | 'manual'): string {
-    const keyRow = keyGen === 'manual'
-        ? `<div class="field"><label>Key</label><input type="text" name="__key"></div>`
-        : '';
+// Dictionary create form: a manual key plus the entry value (object fields, or a
+// single scalar value).
+function createFormHtml(template: NodeData): string {
+    const keyRow = `<div class="field"><label>Key</label><input type="text" name="__key"></div>`;
     let body = '';
-    if (template.kind === 'object') {
+    if (template.type === 'object' && template.fields) {
         for (const [name, v] of Object.entries(template.fields)) {
-            // Dictionary fields are navigation boundaries — created empty and edited
-            // after navigating in, so they don't belong on the create form.
-            if (v.kind === 'dictionary') continue;
+            // Collection / reference fields are navigation boundaries — created empty
+            // and edited after navigating in, so they don't belong on the create form.
+            if (v.type === 'dictionary' || v.type === 'set' || v.type === 'object') continue;
             body += `<div class="field"><label>${escapeHtml(humanize(name))}</label>${inputHtml(name, v)}</div>`;
         }
     } else {
@@ -291,7 +288,7 @@ function createFormHtml(template: NodeData, keyGen: 'auto' | 'manual'): string {
 
 function inputHtml(name: string, data: NodeData): string {
     const n = escapeHtml(name);
-    switch (data.kind) {
+    switch (data.type) {
         case 'bool':    return `<input type="checkbox" name="${n}"${data.value ? ' checked' : ''}>`;
         case 'int':     return `<input type="number" name="${n}" value="${data.value}">`;
         case 'decimal': return `<input type="number" step="any" name="${n}" value="${data.value}">`;
@@ -302,7 +299,7 @@ function inputHtml(name: string, data: NodeData): string {
 
 // Build the addEntry `value` (object field-map or a single base value) from the form.
 function buildValue(template: NodeData, form: HTMLFormElement): unknown {
-    if (template.kind === 'object') {
+    if (template.type === 'object' && template.fields) {
         const fields: Record<string, unknown> = {};
         for (const name of Object.keys(template.fields)) {
             const input = form.querySelector<HTMLInputElement>(`[name="${cssEscape(name)}"]`);

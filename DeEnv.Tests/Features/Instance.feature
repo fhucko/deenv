@@ -15,8 +15,3 @@ Feature: Instance
     When I open it
     Then the checkbox is unchecked
 
-  @milestone-future @multi-instance
-  Scenario: More than one instance can be served
-    Given two separate single-bool instances
-    When both are started
-    Then each instance keeps its own independent value

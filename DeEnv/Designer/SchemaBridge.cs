@@ -45,9 +45,8 @@ public static class SchemaBridge
                         };
                         // Omit empty optionals — a single-cardinality prop must not
                         // emit "cardinality":"" (the loader rejects that).
-                        AddIfPresent(propObj, "cardinality",   TextField(prop, "cardinality"));
-                        AddIfPresent(propObj, "keyType",       TextField(prop, "keyType"));
-                        AddIfPresent(propObj, "keyGeneration", TextField(prop, "keyGeneration"));
+                        AddIfPresent(propObj, "cardinality", TextField(prop, "cardinality"));
+                        AddIfPresent(propObj, "keyType",     TextField(prop, "keyType"));
                         props.Add(propObj);
                     }
                 }
@@ -101,59 +100,60 @@ public static class SchemaBridge
 
         if (designer.ReadNode(NodePath.Root) is ObjectValue root
             && root.Fields.TryGetValue("types", out var existing)
-            && existing is DictionaryValue { Entries.Count: > 0 })
+            && existing is SetValue { Members.Count: > 0 })
             return; // already has designed data — leave it alone
 
         var source = InstanceDescriptionLoader.LoadFile(sourceSchemaPath);
         var typesPath = NodePath.Root.Field("types");
-        var typeKey = 1;
+        var typeOrder = 1;
 
         foreach (var type in source.AllTypes)
         {
-            designer.WriteDictionaryEntry(typesPath, new IntValue(typeKey),
+            var typeId = designer.CreateObject("MetaType",
                 new ObjectValue(new Dictionary<string, NodeValue>
                 {
                     ["name"]     = new TextValue(type.Name),
                     ["baseType"] = new TextValue(type.BaseTypeRaw),
-                    ["order"]    = new IntValue(typeKey * 10)
+                    ["order"]    = new IntValue(typeOrder * 10)
                 }));
+            designer.AddToSet(typesPath, typeId);
 
-            var propsPath = typesPath.Key(typeKey.ToString()).Field("props");
-            var propKey = 1;
+            var propsPath = typesPath.Key(typeId.ToString()).Field("props");
+            var propOrder = 1;
             foreach (var prop in type.Props ?? [])
             {
                 var fields = new Dictionary<string, NodeValue>
                 {
                     ["name"]  = new TextValue(prop.Name),
                     ["type"]  = new TextValue(prop.TypeName),
-                    ["order"] = new IntValue(propKey * 10)
+                    ["order"] = new IntValue(propOrder * 10)
                 };
+                if (prop.Cardinality != Cardinality.Single)
+                    fields["cardinality"] = new TextValue(prop.Cardinality == Cardinality.Set ? "set" : "dictionary");
                 if (prop.Cardinality == Cardinality.Dictionary)
-                {
-                    fields["cardinality"]   = new TextValue("dictionary");
-                    fields["keyType"]       = new TextValue(prop.EffectiveKeyType);
-                    fields["keyGeneration"] = new TextValue(prop.KeyGeneration == KeyGeneration.Auto ? "auto" : "manual");
-                }
-                designer.WriteDictionaryEntry(propsPath, new IntValue(propKey), new ObjectValue(fields));
-                propKey++;
+                    fields["keyType"] = new TextValue(prop.EffectiveKeyType);
+
+                var propId = designer.CreateObject("MetaProp", new ObjectValue(fields));
+                designer.AddToSet(propsPath, propId);
+                propOrder++;
             }
-            typeKey++;
+            typeOrder++;
         }
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────
 
-    // Object entries of a dictionary node, sorted by the `order` field then by key
-    // (key as a stable tiebreak / fallback when order is absent or equal).
-    private static IEnumerable<ObjectValue> OrderedObjects(NodeValue? dict)
+    // Member objects of a set node, sorted by the `order` field then by identity
+    // (identity as a stable tiebreak / fallback when order is absent or equal).
+    private static IEnumerable<ObjectValue> OrderedObjects(NodeValue? set)
     {
-        if (dict is not DictionaryValue dv)
+        if (set is not SetValue sv)
             return [];
 
-        return dv.Entries
+        return sv.Members
             .Where(e => e.Value is ObjectValue)
-            .Select(e => (obj: (ObjectValue)e.Value, order: IntField((ObjectValue)e.Value, "order"), key: KeyInt(e.Key)))
-            .OrderBy(x => x.order).ThenBy(x => x.key)
+            .Select(e => (obj: (ObjectValue)e.Value, order: IntField((ObjectValue)e.Value, "order"), id: e.Key))
+            .OrderBy(x => x.order).ThenBy(x => x.id)
             .Select(x => x.obj);
     }
 
@@ -162,8 +162,6 @@ public static class SchemaBridge
 
     private static int IntField(ObjectValue o, string name) =>
         o.Fields.TryGetValue(name, out var v) && v is IntValue i ? i.Value : 0;
-
-    private static int KeyInt(NodeValue key) => key is IntValue i ? i.Value : 0;
 
     private static void AddIfPresent(JsonObject obj, string key, string value)
     {

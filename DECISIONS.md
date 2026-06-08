@@ -172,10 +172,14 @@ remove+add (identity, not name, is matched) — which is why versioning can wait
   known multi-device future, the int space will later be partitioned into
   **reserved ranges per node** — no central-counter assumption is baked in now,
   same spirit as the storage-interface seam.
-- **Stored as a metadata envelope, separate from props** (e.g.
-  `{ "id": 5, "fields": { …props } }`), because identity is metadata, not a
-  field. This is a real storage-format evolution — the store, loader, and
-  `NodeValue` start carrying an id.
+- **Stored as a tagged envelope in a per-type extent** (e.g.
+  `{ "type":"object","typeName":"Customer","id":5,"fields":{ "name":{"type":"text","value":"Ada"} } }`),
+  because identity is metadata, not a field. Every value — scalars and object
+  references alike — is a tagged object (`{ "type":"…", … }`); there are no raw
+  bare values. The `root` is an object reference into `extents.Db`
+  (`{ "type":"object","typeName":"Db","id":1 }`), or a scalar tagged value for a
+  scalar Db. This is a real storage-format evolution; the format is now uniform
+  and the legacy dual-mode path is gone.
 
 **References, no ownership (object graph).** "There is no owner, just like in
 C#." A `Dictionary<int,Customer>` doesn't *own* its customers; it holds
@@ -223,11 +227,12 @@ pick an existing object of the type or mint a new one into the extent.
 **storage reconception** — normalized per-type extents, an identity-addressed
 graph, and GC — which touches the storage foundation earlier than M6 planned.
 That was flagged and chosen deliberately. It is sizeable; build it in thin
-slices. **First slice:** identity + one type's extent + a **set** of references +
-identity addressing + pick-or-create + GC, with scalar dictionaries left
-untouched. Proven by "the same object via two references is one object" and
-"dropping the last reference collects it." Migrating every collection to sets and
-teaching the designer/meta-schema to author refs/sets are follow-up slices.
+slices. **Slice 1** (`93d972e`): identity + per-type extents + a **set** of
+references + identity addressing + pick-or-create + GC. **Slice 2** (`5a1392f`):
+all `dict<Object> auto-int` props migrated to sets; uniform tagged value format
+everywhere (no dual-mode); `keyGeneration`/auto retired; `kind`→`type` on the
+wire. Proven by "the same object via two references is one object" and "dropping
+the last reference collects it." Remaining: teaching the designer to author sets/refs.
 
 ## Schema versioning is postponed (was Milestone 5)
 

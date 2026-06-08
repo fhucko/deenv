@@ -5,8 +5,7 @@ namespace DeEnv.Instance;
 public record ResolvedTypeInfo(
     TypeDefinition Type,
     Cardinality Cardinality,
-    string? KeyTypeName,
-    KeyGeneration? KeyGeneration = null);
+    string? KeyTypeName);
 
 public sealed class TypeResolver
 {
@@ -26,7 +25,6 @@ public sealed class TypeResolver
         var currentType = db;
         var currentCardinality = Cardinality.Single;
         string? currentKeyTypeName = null;
-        KeyGeneration? currentKeyGeneration = null;
 
         foreach (var segment in path.Segments)
         {
@@ -36,7 +34,6 @@ public sealed class TypeResolver
                 // identity. Either way, descend into the (single) element.
                 currentCardinality = Cardinality.Single;
                 currentKeyTypeName = null;
-                currentKeyGeneration = null;
             }
             else if (currentType.BaseType == BaseType.Object)
             {
@@ -49,17 +46,8 @@ public sealed class TypeResolver
 
                 currentType = resolved;
                 currentCardinality = prop.Cardinality;
-                if (prop.Cardinality == Cardinality.Dictionary)
-                {
-                    currentKeyTypeName = prop.EffectiveKeyType;
-                    currentKeyGeneration = prop.KeyGeneration;
-                }
-                else
-                {
-                    // Single (incl. a single object reference) and Set carry no key info.
-                    currentKeyTypeName = null;
-                    currentKeyGeneration = null;
-                }
+                // Only a dictionary carries a key type; single and set do not.
+                currentKeyTypeName = prop.Cardinality == Cardinality.Dictionary ? prop.EffectiveKeyType : null;
             }
             else
             {
@@ -67,7 +55,7 @@ public sealed class TypeResolver
             }
         }
 
-        return new ResolvedTypeInfo(currentType, currentCardinality, currentKeyTypeName, currentKeyGeneration);
+        return new ResolvedTypeInfo(currentType, currentCardinality, currentKeyTypeName);
     }
 
     private TypeDefinition? ResolveTypeName(string name)

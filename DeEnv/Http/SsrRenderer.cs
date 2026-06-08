@@ -136,7 +136,7 @@ public sealed class SsrRenderer
             {
                 // The dictionary renders its own navigable list title (see AppendDictionaryTable).
                 sb.AppendLine("  <div class=\"field\">");
-                AppendDictionaryTable(sb, fieldPath, Humanize(prop.Name), prop.TypeName, prop.KeyGeneration, dictVal);
+                AppendDictionaryTable(sb, fieldPath, Humanize(prop.Name), prop.TypeName, dictVal);
                 sb.AppendLine("  </div>");
             }
             else if (fieldVal is SetValue setVal)
@@ -199,8 +199,7 @@ public sealed class SsrRenderer
     private void AppendDictionary(StringBuilder sb, NodePath path, ResolvedTypeInfo typeInfo, DictionaryValue dictVal)
     {
         var title = path.IsRoot ? "Db" : Humanize(path.Segments[^1]);
-        AppendDictionaryTable(sb, path, title, typeInfo.Type.Name,
-            typeInfo.KeyGeneration ?? KeyGeneration.Manual, dictVal);
+        AppendDictionaryTable(sb, path, title, typeInfo.Type.Name, dictVal);
     }
 
     private void AppendDictionaryTable(
@@ -208,16 +207,15 @@ public sealed class SsrRenderer
         NodePath dictPath,
         string title,
         string elementTypeName,
-        KeyGeneration keyGen,
         DictionaryValue dictVal)
     {
         var entryType = _desc.FindType(elementTypeName);   // null when the element is a base type
-        var cols = entryType?.Props?.Where(p => p.Cardinality != Cardinality.Dictionary)
-                                    .Select(p => p.Name).ToList() ?? [];
+        var cols = entryType?.Props?
+            .Where(p => p.Cardinality == Cardinality.Single && !_desc.IsObjectType(p.TypeName))
+            .Select(p => p.Name).ToList() ?? [];
         var isObjectEntry = entryType is { BaseType: BaseType.Object };
 
         var dictPathAttr = Escape(dictPath.ToString());
-        var keyGenAttr = keyGen == KeyGeneration.Auto ? "auto" : "manual";
 
         // Navigable list title (links to the dictionary's own page).
         sb.AppendLine($"<h3 class=\"list-title\"><a href=\"{dictPathAttr}\">{Escape(title)}</a></h3>");
@@ -257,7 +255,7 @@ public sealed class SsrRenderer
         }
         sb.AppendLine("  </tbody>");
         sb.AppendLine("</table>");
-        sb.AppendLine($"<button type=\"button\" data-newentry=\"{dictPathAttr}\" data-keygen=\"{keyGenAttr}\">New</button>");
+        sb.AppendLine($"<button type=\"button\" data-newentry=\"{dictPathAttr}\" data-collection=\"dictionary\">New</button>");
     }
 
     // ── set table (members keyed by their own identity) ─────────────────────────

@@ -157,10 +157,16 @@ public sealed class WsHandler
             ["op"]   = "newEntryTemplate",
             ["path"] = pathStr,
             ["template"] = SerializeNodeValue(_store.NewEntryTemplate(path)),
-            ["collection"] = "dictionary",
-            ["keyGeneration"] = (typeInfo.KeyGeneration ?? KeyGeneration.Manual) == KeyGeneration.Auto
-                ? "auto" : "manual"
+            ["collection"] = "dictionary"
         };
+        // A dictionary of objects offers pick-existing candidates alongside the key.
+        if (typeInfo.Type.BaseType == BaseType.Object)
+        {
+            var candidates = new JsonArray();
+            foreach (var (id, obj) in _store.ReadExtent(typeInfo.Type.Name))
+                candidates.Add(new JsonObject { ["id"] = id, ["label"] = LabelOf(obj) });
+            response["candidates"] = candidates;
+        }
         return response.ToJsonString(_jsonOpts);
     }
 
@@ -188,22 +194,12 @@ public sealed class WsHandler
 
         if (!root.TryGetProperty("value", out var valueEl))
             return Error("Missing 'value' in addEntry message.");
+        if (!root.TryGetProperty("key", out var keyEl) || keyEl.GetString() is not { } keyStr || keyStr.Length == 0)
+            return Error("A dictionary entry requires a non-empty 'key'.");
 
         var value = DeserializeValue(valueEl, typeInfo.Type);
-        var keyGen = typeInfo.KeyGeneration ?? KeyGeneration.Manual;
-
-        NodeValue key;
-        if (keyGen == KeyGeneration.Auto)
-        {
-            key = _store.CreateEntry(path, value);
-        }
-        else
-        {
-            if (!root.TryGetProperty("key", out var keyEl) || keyEl.GetString() is not { } keyStr || keyStr.Length == 0)
-                return Error("Manual-key dictionary requires a non-empty 'key'.");
-            key = ParseKey(keyStr, typeInfo.KeyTypeName ?? "text");
-            _store.CreateEntry(path, key, value); // throws on duplicate → caught as { error }
-        }
+        var key = ParseKey(keyStr, typeInfo.KeyTypeName ?? "text");
+        _store.CreateEntry(path, key, value); // throws on duplicate → caught as { error }
 
         var response = new JsonObject
         {
@@ -307,15 +303,17 @@ public sealed class WsHandler
 
     internal static JsonNode SerializeNodeValue(NodeValue node) => node switch
     {
-        BoolValue b      => new JsonObject { ["kind"] = "bool",     ["value"] = b.Value },
-        IntValue i       => new JsonObject { ["kind"] = "int",      ["value"] = i.Value },
-        DecimalValue d   => new JsonObject { ["kind"] = "decimal",  ["value"] = d.Value },
-        TextValue t      => new JsonObject { ["kind"] = "text",     ["value"] = t.Text },
-        DateValue d      => new JsonObject { ["kind"] = "date",     ["value"] = d.Value.ToString("yyyy-MM-dd") },
-        DateTimeValue dt => new JsonObject { ["kind"] = "datetime", ["value"] = dt.Value.ToString("O") },
+        BoolValue b      => new JsonObject { ["type"] = "bool",     ["value"] = b.Value },
+        IntValue i       => new JsonObject { ["type"] = "int",      ["value"] = i.Value },
+        DecimalValue d   => new JsonObject { ["type"] = "decimal",  ["value"] = d.Value },
+        TextValue t      => new JsonObject { ["type"] = "text",     ["value"] = t.Text },
+        DateValue d      => new JsonObject { ["type"] = "date",     ["value"] = d.Value.ToString("yyyy-MM-dd") },
+        DateTimeValue dt => new JsonObject { ["type"] = "datetime", ["value"] = dt.Value.ToString("O") },
 
         ObjectValue obj  => SerializeObject(obj),
         DictionaryValue dv => SerializeDictionary(dv),
+        SetValue sv      => SerializeSet(sv),
+        ReferenceValue r => new JsonObject { ["type"] = "object", ["typeName"] = r.TypeName, ["id"] = r.TargetId },
 
         _ => throw new InvalidOperationException($"Unhandled NodeValue type: {node.GetType().Name}")
     };
@@ -325,7 +323,15 @@ public sealed class WsHandler
         var fields = new JsonObject();
         foreach (var (k, v) in obj.Fields)
             fields[k] = SerializeNodeValue(v);
-        return new JsonObject { ["kind"] = "object", ["fields"] = fields };
+        return new JsonObject { ["type"] = "object", ["fields"] = fields };
+    }
+
+    private static JsonObject SerializeSet(SetValue sv)
+    {
+        var members = new JsonObject();
+        foreach (var (id, v) in sv.Members)
+            members[id.ToString()] = SerializeNodeValue(v);
+        return new JsonObject { ["type"] = "set", ["members"] = members };
     }
 
     private static JsonObject SerializeDictionary(DictionaryValue dv)
@@ -339,7 +345,7 @@ public sealed class WsHandler
                 ["value"] = SerializeNodeValue(v)
             });
         }
-        return new JsonObject { ["kind"] = "dictionary", ["entries"] = entries };
+        return new JsonObject { ["type"] = "dictionary", ["entries"] = entries };
     }
 
     // ── NodeValue deserialization ─────────────────────────────────────────────

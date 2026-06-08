@@ -14,8 +14,3 @@ Feature: Boolean persistence
     When the instance is stopped and started again
     Then reading the stored value returns checked
 
-  @milestone-future @durability
-  Scenario: A write either fully happens or not at all
-    Given a single-boolean instance with value unchecked
-    When a write of checked is interrupted before it completes
-    Then reading the stored value returns unchecked

@@ -14,7 +14,7 @@ Feature: Schema document
             "baseType": "object",
             "props": [
               { "name": "companyName", "type": "text" },
-              { "name": "customers", "type": "Customer", "cardinality": "dictionary", "keyType": "int", "keyGeneration": "auto" }
+              { "name": "customers", "type": "Customer", "cardinality": "set" }
             ]
           },
           {
@@ -128,40 +128,6 @@ Feature: Schema document
     Then loading is rejected with an error mentioning "props"
 
   @milestone-3 @single-user
-  Scenario: An auto-keyed dictionary with a non-int key type is rejected
-    Given the schema document:
-      """
-      {
-        "types": [
-          {
-            "name": "Db",
-            "baseType": "object",
-            "props": [ { "name": "items", "type": "text", "cardinality": "dictionary", "keyType": "text", "keyGeneration": "auto" } ]
-          }
-        ]
-      }
-      """
-    When the document is loaded
-    Then loading is rejected with an error mentioning "auto"
-
-  @milestone-3 @single-user
-  Scenario: keyGeneration on a non-dictionary prop is rejected
-    Given the schema document:
-      """
-      {
-        "types": [
-          {
-            "name": "Db",
-            "baseType": "object",
-            "props": [ { "name": "label", "type": "text", "keyGeneration": "manual" } ]
-          }
-        ]
-      }
-      """
-    When the document is loaded
-    Then loading is rejected with an error mentioning "keyGeneration"
-
-  @milestone-3 @single-user
   Scenario: Duplicate prop names within a type are rejected
     Given the schema document:
       """
@@ -189,6 +155,23 @@ Feature: Schema document
       """
     When the document is loaded
     Then loading is rejected with an error mentioning "JSON"
+
+  @milestone-5 @single-user
+  Scenario: A set prop with a scalar element type is rejected
+    Given the schema document:
+      """
+      {
+        "types": [
+          {
+            "name": "Db",
+            "baseType": "object",
+            "props": [ { "name": "tags", "type": "text", "cardinality": "set" } ]
+          }
+        ]
+      }
+      """
+    When the document is loaded
+    Then loading is rejected with an error mentioning "set"
 
   @milestone-3 @single-user
   Scenario: The instance is defined by a schema document file

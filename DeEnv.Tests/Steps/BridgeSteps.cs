@@ -23,8 +23,6 @@ public sealed class BridgeSteps(InstanceContext ctx)
     private string _exportedSchemaPath = "";
     private string _exportedDataPath = "";
     private readonly Dictionary<string, int> _typeKeys = new();
-    private int _nextTypeKey = 1;
-    private int _nextPropKey = 1;
 
     // Meta-schema load + export results.
     private InstanceDescription? _metaLoaded;
@@ -75,33 +73,30 @@ public sealed class BridgeSteps(InstanceContext ctx)
     [Given("a designed type {string} with base type {string}")]
     public void GivenDesignedType(string name, string baseType)
     {
-        var key = _nextTypeKey++;
-        _typeKeys[name] = key;
-        _designer!.WriteDictionaryEntry(
-            NodePath.Root.Field("types"),
-            new IntValue(key),
-            new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"]     = new TextValue(name),
-                ["baseType"] = new TextValue(baseType),
-                ["order"]    = new IntValue(0)
-            }));
+        var id = _designer!.CreateObject("MetaType", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"]     = new TextValue(name),
+            ["baseType"] = new TextValue(baseType),
+            ["order"]    = new IntValue(0)
+        }));
+        _designer!.AddToSet(NodePath.Root.Field("types"), id);
+        _typeKeys[name] = id;
     }
 
     [Given("the type {string} has a prop {string} of type {string}")]
     public void GivenProp(string typeName, string propName, string propType) =>
-        AddProp(typeName, propName, propType, "", "", "", order: 0);
+        AddProp(typeName, propName, propType, "", "", order: 0);
 
     [Given("the type {string} has a prop {string} of type {string} with order {int}")]
     public void GivenPropWithOrder(string typeName, string propName, string propType, int order) =>
-        AddProp(typeName, propName, propType, "", "", "", order);
+        AddProp(typeName, propName, propType, "", "", order);
 
-    [Given("the type {string} has a dictionary prop {string} of type {string} with key type {string} and key generation {string}")]
-    public void GivenDictionaryProp(string typeName, string propName, string propType, string keyType, string keyGen) =>
-        AddProp(typeName, propName, propType, "dictionary", keyType, keyGen, order: 0);
+    [Given("the type {string} has a set prop {string} of type {string}")]
+    public void GivenSetProp(string typeName, string propName, string propType) =>
+        AddProp(typeName, propName, propType, "set", "", order: 0);
 
     private void AddProp(string typeName, string propName, string propType,
-        string cardinality, string keyType, string keyGen, int order)
+        string cardinality, string keyType, int order)
     {
         var propsPath = NodePath.Root.Field("types").Key(_typeKeys[typeName].ToString()).Field("props");
         var fields = new Dictionary<string, NodeValue>
@@ -111,12 +106,11 @@ public sealed class BridgeSteps(InstanceContext ctx)
             ["order"] = new IntValue(order)
         };
         if (cardinality.Length > 0)
-        {
-            fields["cardinality"]   = new TextValue(cardinality);
-            fields["keyType"]       = new TextValue(keyType);
-            fields["keyGeneration"] = new TextValue(keyGen);
-        }
-        _designer!.WriteDictionaryEntry(propsPath, new IntValue(_nextPropKey++), new ObjectValue(fields));
+            fields["cardinality"] = new TextValue(cardinality);
+        if (keyType.Length > 0)
+            fields["keyType"] = new TextValue(keyType);
+        var id = _designer!.CreateObject("MetaProp", new ObjectValue(fields));
+        _designer!.AddToSet(propsPath, id);
     }
 
     // ── When: export ────────────────────────────────────────────────────────────
@@ -165,6 +159,15 @@ public sealed class BridgeSteps(InstanceContext ctx)
     {
         var prop = _exported!.FindType(typeName)?.Props?.FirstOrDefault(p => p.Name == propName);
         await Assert.That(prop).IsNotNull();
+    }
+
+    [Then("the exported type {string} has a set prop {string} of type {string}")]
+    public async Task ThenExportedSetPropAsync(string typeName, string propName, string elemType)
+    {
+        var prop = _exported!.FindType(typeName)?.Props?.FirstOrDefault(p => p.Name == propName);
+        await Assert.That(prop).IsNotNull();
+        await Assert.That(prop!.Cardinality).IsEqualTo(Cardinality.Set);
+        await Assert.That(prop.TypeName).IsEqualTo(elemType);
     }
 
     [Then("the exported type {string} has a dictionary prop {string} of type {string}")]

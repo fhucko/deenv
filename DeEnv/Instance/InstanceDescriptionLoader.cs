@@ -109,29 +109,10 @@ public static class InstanceDescriptionLoader
                 throw new SchemaValidationException(
                     $"Prop '{prop.Name}' on type '{typeName}' is a set of '{prop.TypeName}', " +
                     $"but a set's element type must be an object type.");
-            if (prop.KeyTypeName != null || prop.KeyGenerationRaw != null)
+            if (prop.KeyTypeName != null)
                 throw new SchemaValidationException(
-                    $"Prop '{prop.Name}' on type '{typeName}' is a set and cannot declare keyType/keyGeneration " +
+                    $"Prop '{prop.Name}' on type '{typeName}' is a set and cannot declare keyType " +
                     $"(set members are keyed by their own identity).");
         }
-
-        // keyGeneration is only meaningful on dictionary props.
-        if (prop.KeyGenerationRaw != null)
-        {
-            if (prop.Cardinality != Cardinality.Dictionary)
-                throw new SchemaValidationException(
-                    $"Prop '{prop.Name}' on type '{typeName}' has keyGeneration but is not a dictionary.");
-            if (prop.KeyGenerationRaw != "auto" && prop.KeyGenerationRaw != "manual")
-                throw new SchemaValidationException(
-                    $"Prop '{prop.Name}' on type '{typeName}' has invalid keyGeneration '{prop.KeyGenerationRaw}'.");
-        }
-
-        // 'auto' keys are auto-incremented, so they require a numeric (int) keyType.
-        if (prop.Cardinality == Cardinality.Dictionary
-            && prop.KeyGeneration == KeyGeneration.Auto
-            && prop.EffectiveKeyType != "int")
-            throw new SchemaValidationException(
-                $"Prop '{prop.Name}' on type '{typeName}' uses keyGeneration 'auto' which requires keyType 'int', " +
-                $"but keyType is '{prop.EffectiveKeyType}'.");
     }
 }

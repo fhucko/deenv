@@ -9,7 +9,7 @@ Feature: Editing fields with explicit Save
 
   @milestone-2 @single-user
   Scenario: Edit a customer's text fields and save
-    When I navigate to "/customers/1"
+    When I navigate to the customer "1"
     And I set the "name" field to "Acme Corp"
     And I set the "email" field to "info@acme.com"
     And I save
@@ -20,7 +20,7 @@ Feature: Editing fields with explicit Save
   @milestone-2 @single-user
   Scenario: Edit decimal and date on a nested order
     Given an order "1" of customer "1" with total "10"
-    When I navigate to "/customers/1/orders/1"
+    When I navigate to the order "1" of customer "1"
     And I set the "total" field to "99.5"
     And I set the "date" field to "2026-02-03"
     And I save
@@ -30,7 +30,7 @@ Feature: Editing fields with explicit Save
 
   @milestone-2 @single-user
   Scenario: An unsaved edit does not persist
-    When I navigate to "/customers/1"
+    When I navigate to the customer "1"
     And I set the "name" field to "Temporary"
     And I reload
     Then the "name" field shows "Acme"

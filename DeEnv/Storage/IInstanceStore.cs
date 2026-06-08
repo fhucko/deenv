@@ -13,15 +13,11 @@ public interface IInstanceStore
     // untouched (they are navigation boundaries). Used by object-form Save.
     void WriteObject(NodePath path, ObjectValue value);
 
-    // Build a default-valued entry for the dictionary's element type WITHOUT
-    // persisting it. Used to render the "new entry" form. Entries may be any type.
-    NodeValue NewEntryTemplate(NodePath dictPath);
+    // Build a default-valued entry for the dictionary's (or set's) element type
+    // WITHOUT persisting it. Used to render the "new entry" form.
+    NodeValue NewEntryTemplate(NodePath path);
 
-    // Create a dictionary entry under an auto-generated (auto-incremented) key.
-    // Returns the new key. Only valid for numeric (auto) key generation.
-    NodeValue CreateEntry(NodePath dictPath, NodeValue value);
-
-    // Create a dictionary entry under a caller-supplied key (manual key generation).
+    // Create a dictionary entry under a caller-supplied (manual) key.
     // Throws if an entry with that key already exists.
     void CreateEntry(NodePath dictPath, NodeValue key, NodeValue value);
 
@@ -32,11 +28,7 @@ public interface IInstanceStore
     // Remove a dictionary entry. No-op if key is absent.
     void RemoveDictionaryEntry(NodePath path, NodeValue key);
 
-    // Generate the next key for a dictionary at path.
-    // Numeric keyType: IntValue(max + 1), or IntValue(1) if empty.
-    NodeValue NextKey(NodePath path);
-
-    // ── object model (extent-mode schemas: identity, references, sets, GC) ──────
+    // ── object model (identity, references, sets, GC) ───────────────────────────
 
     // Mint a new object of `typeName` into its per-type extent and return its
     // intrinsic identity. The object is not yet referenced (link it before GC).

@@ -1,5 +1,5 @@
-using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using DeEnv.Instance;
 using DeEnv.Storage;
 using DeEnv.Tests.TestSupport;
 using Reqnroll;
@@ -8,21 +8,12 @@ using TUnit.Assertions.Extensions;
 
 namespace DeEnv.Tests.Steps;
 
-// Steps for the Milestone 5 first slice (ObjectModel.feature).
+// Steps for the Milestone 5 object model scenarios (ObjectModel.feature).
 //
-// Seeding and introspection probe the target on-disk shape directly (see
-// DECISIONS.md): a per-type extent of identity-enveloped objects, plus a root
-// whose set/reference fields hold references (ids) into the extents:
-//
-//   {
-//     "extents": { "Person": { "7": { "id": 7, "fields": { "name": "Ada" } } } },
-//     "root":    { "id": 1, "fields": { "people": { "7": { "ref": 7 } },
-//                                       "lead":   { "ref": 7 } } }
-//   }
-//
+// Seeding goes through the store API (CreateObject/AddToSet/SetReference) so
+// the step definitions stay independent of the on-disk JSON format.
 // Mutations during a scenario (create / pick / remove) go through the running
-// app (UI + WebSocket), so they exercise the real identity/extent/GC behavior;
-// only the assertions read the file the server wrote.
+// app (UI + WebSocket), exercising the real identity/extent/GC behavior.
 [Binding]
 public sealed class ObjectModelSteps(InstanceContext ctx)
 {
@@ -43,19 +34,19 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
     [Given(@"a person {string} in the extent referenced by the set {string}")]
     public void GivenPersonInSet(string name, string setName)
     {
-        var doc = Doc();
-        var id = MintPerson(doc, name);
-        AddToSet(doc, setName, id);
-        Save(doc);
+        var id = ctx.Store!.CreateObject("Person", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name)
+        }));
+        ctx.Store!.AddToSet(NodePath.Root.Field(setName), id);
+        _idByName[name] = id;
     }
 
     [Given(@"the single reference {string} references the person {string}")]
     public void GivenSingleReference(string refName, string name)
     {
-        var doc = Doc();
-        var id = _idByName.TryGetValue(name, out var known) ? known : FindPersonId(doc, name);
-        SetReference(doc, refName, id);
-        Save(doc);
+        var id = _idByName.TryGetValue(name, out var known) ? known : FindPersonId(name);
+        ctx.Store!.SetReference(NodePath.Root.Field(refName), id);
     }
 
     // ── When ────────────────────────────────────────────────────────────────────
@@ -157,80 +148,19 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
         await Assert.That(await ctx.Page.ContentAsync()).Contains("Not found");
     }
 
-    // ── target-shape helpers (test-only probe of the on-disk format) ─────────────
+    // ── helpers ──────────────────────────────────────────────────────────────────
 
-    private JsonObject Doc()
+    private int ExtentCount(string typeName) =>
+        ctx.Store!.ReadExtent(typeName).Count;
+
+    private int FindPersonId(string name)
     {
-        var text = File.Exists(ctx.DataFilePath) ? File.ReadAllText(ctx.DataFilePath) : "";
-        if (!string.IsNullOrWhiteSpace(text) && JsonNode.Parse(text) is JsonObject existing
-            && existing["extents"] is not null)
-            return existing;
-
-        return new JsonObject
-        {
-            ["extents"] = new JsonObject(),
-            ["root"] = new JsonObject
-            {
-                ["id"] = 1,
-                ["fields"] = new JsonObject(),
-            },
-        };
-    }
-
-    private int MintPerson(JsonObject doc, string name)
-    {
-        var extents = (JsonObject)doc["extents"]!;
-        if (extents["Person"] is not JsonObject people)
-        {
-            people = new JsonObject();
-            extents["Person"] = people;
-        }
-
-        var id = people.Count == 0 ? 1 : people.Select(kv => int.Parse(kv.Key)).Max() + 1;
-        people[id.ToString()] = new JsonObject
-        {
-            ["id"] = id,
-            ["fields"] = new JsonObject { ["name"] = name },
-        };
-        _idByName[name] = id;
-        return id;
-    }
-
-    private static void AddToSet(JsonObject doc, string setName, int id)
-    {
-        var fields = (JsonObject)((JsonObject)doc["root"]!)["fields"]!;
-        if (fields[setName] is not JsonObject set)
-        {
-            set = new JsonObject();
-            fields[setName] = set;
-        }
-        set[id.ToString()] = new JsonObject { ["ref"] = id };
-    }
-
-    private static void SetReference(JsonObject doc, string refName, int id)
-    {
-        var fields = (JsonObject)((JsonObject)doc["root"]!)["fields"]!;
-        fields[refName] = new JsonObject { ["ref"] = id };
-    }
-
-    private void Save(JsonObject doc) =>
-        File.WriteAllText(ctx.DataFilePath, doc.ToJsonString());
-
-    private int ExtentCount(string typeName)
-    {
-        var doc = Doc();
-        return ((JsonObject)doc["extents"]!)[typeName] is JsonObject ext ? ext.Count : 0;
-    }
-
-    private int FindPersonId(JsonObject doc, string name)
-    {
-        if (((JsonObject)doc["extents"]!)["Person"] is JsonObject people)
-            foreach (var (key, node) in people)
-                if (node?["fields"]?["name"]?.GetValue<string>() == name)
-                    return int.Parse(key);
+        foreach (var (id, obj) in ctx.Store!.ReadExtent("Person"))
+            if (obj.Fields.TryGetValue("name", out var v) && v is TextValue t && t.Text == name)
+                return id;
         throw new InvalidOperationException($"No person named '{name}' in the extent.");
     }
 
     private int IdOf(string name) =>
-        _idByName.TryGetValue(name, out var id) ? id : FindPersonId(Doc(), name);
+        _idByName.TryGetValue(name, out var id) ? id : FindPersonId(name);
 }
