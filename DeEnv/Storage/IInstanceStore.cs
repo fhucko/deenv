@@ -35,4 +35,28 @@ public interface IInstanceStore
     // Generate the next key for a dictionary at path.
     // Numeric keyType: IntValue(max + 1), or IntValue(1) if empty.
     NodeValue NextKey(NodePath path);
+
+    // ── object model (extent-mode schemas: identity, references, sets, GC) ──────
+
+    // Mint a new object of `typeName` into its per-type extent and return its
+    // intrinsic identity. The object is not yet referenced (link it before GC).
+    int CreateObject(string typeName, ObjectValue fields);
+
+    // Add an existing object (by identity) as a member of the set at setPath.
+    void AddToSet(NodePath setPath, int id);
+
+    // Drop a member reference from the set at setPath, then collect unreachable
+    // objects (mark-sweep from the root).
+    void RemoveFromSet(NodePath setPath, int id);
+
+    // Point a single object-typed prop at an object (or clear it with null),
+    // then collect unreachable objects.
+    void SetReference(NodePath fieldPath, int? id);
+
+    // All objects currently in a type's extent, by identity. Used for the
+    // pick-existing candidate list.
+    IReadOnlyDictionary<int, ObjectValue> ReadExtent(string typeName);
+
+    // Resolve a bare reference (the /~/{id} route). Null if no object has that id.
+    (string TypeName, ObjectValue Fields)? ReadById(int id);
 }

@@ -96,9 +96,24 @@ public static class InstanceDescriptionLoader
 
         if (prop.CardinalityRaw != null
             && prop.CardinalityRaw != "single"
-            && prop.CardinalityRaw != "dictionary")
+            && prop.CardinalityRaw != "dictionary"
+            && prop.CardinalityRaw != "set")
             throw new SchemaValidationException(
                 $"Prop '{prop.Name}' on type '{typeName}' has invalid cardinality '{prop.CardinalityRaw}'.");
+
+        // A set is a collection of object references keyed by member identity, so
+        // its element type must be an object type and it carries no key fields.
+        if (prop.Cardinality == Cardinality.Set)
+        {
+            if (BaseTypeNames.Contains(prop.TypeName))
+                throw new SchemaValidationException(
+                    $"Prop '{prop.Name}' on type '{typeName}' is a set of '{prop.TypeName}', " +
+                    $"but a set's element type must be an object type.");
+            if (prop.KeyTypeName != null || prop.KeyGenerationRaw != null)
+                throw new SchemaValidationException(
+                    $"Prop '{prop.Name}' on type '{typeName}' is a set and cannot declare keyType/keyGeneration " +
+                    $"(set members are keyed by their own identity).");
+        }
 
         // keyGeneration is only meaningful on dictionary props.
         if (prop.KeyGenerationRaw != null)

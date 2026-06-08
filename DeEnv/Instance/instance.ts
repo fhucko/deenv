@@ -62,6 +62,25 @@ function attachHandlers(root: ParentNode = document): void {
         btn.dataset['wired'] = '1';
         btn.addEventListener('click', () => void deleteEntry(btn));
     });
+
+    // Reference editor: the mode buttons switch between pick-existing and create-new.
+    root.querySelectorAll<HTMLButtonElement>('[data-ref] button[data-mode]').forEach(btn => {
+        if (btn.dataset['wired']) return;
+        btn.dataset['wired'] = '1';
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            const editor = btn.closest<HTMLElement>('[data-ref]');
+            if (editor) { editor.dataset['current'] = btn.dataset['mode']!; updateRefMode(editor); }
+        });
+    });
+    root.querySelectorAll<HTMLElement>('[data-ref]').forEach(updateRefMode);
+}
+
+// Show only the section for the active mode (existing vs new).
+function updateRefMode(editor: HTMLElement): void {
+    const mode = editor.dataset['current'] ?? 'existing';
+    editor.querySelector<HTMLElement>('.ref-existing')?.style.setProperty('display', mode === 'existing' ? '' : 'none');
+    editor.querySelector<HTMLElement>('.ref-new')?.style.setProperty('display', mode === 'new' ? '' : 'none');
 }
 
 ready.then(() => attachHandlers());
@@ -91,9 +110,31 @@ async function saveForm(form: HTMLFormElement): Promise<void> {
         const input = form.querySelector<HTMLInputElement>('input[data-path]');
         if (!input) return;
         await call({ op: 'write', path, value: readInput(input) });
+    } else if (form.dataset['kind'] === 'reference') {
+        await saveReference(form, path);
     } else {
         await call({ op: 'writeObject', path, fields: collectFields(form) });
     }
+}
+
+// Save a reference field: point at the picked existing object, or mint a new one.
+async function saveReference(form: HTMLFormElement, path: string): Promise<void> {
+    const editor = form.querySelector<HTMLElement>('[data-ref]');
+    const mode = editor?.dataset['current'] ?? 'existing';
+    let msg: Record<string, unknown>;
+    if (mode === 'new') {
+        const fields: Record<string, unknown> = {};
+        editor!.querySelectorAll<HTMLInputElement>('.ref-new input[name]').forEach(el => {
+            fields[el.getAttribute('name')!] = readInput(el);
+        });
+        msg = { op: 'setReference', path, value: fields };
+    } else {
+        const sel = editor!.querySelector<HTMLSelectElement>('select[data-pick]');
+        msg = { op: 'setReference', path, refId: Number(sel?.value) };
+    }
+    const reply = await call(msg);
+    if (reply.error) { alert(reply.error); return; }
+    location.reload();
 }
 
 // ── delete entry ─────────────────────────────────────────────────────────────
@@ -115,6 +156,12 @@ async function openCreateForm(btn: HTMLButtonElement): Promise<void> {
     const reply = await call({ op: 'newEntryTemplate', path: dictPath });
     if (reply.error) { alert(reply.error); return; }
     const template = reply['template'] as NodeData;
+
+    if (btn.dataset['collection'] === 'set') {
+        openSetCreateForm(btn, dictPath, template,
+            (reply['candidates'] as Array<{ id: number; label: string }>) ?? []);
+        return;
+    }
 
     const form = document.createElement('form');
     form.className = 'create-form';
@@ -144,6 +191,79 @@ async function openCreateForm(btn: HTMLButtonElement): Promise<void> {
         .addEventListener('click', () => form.remove());
 
     (btn.parentNode ?? document.querySelector('main'))!.insertBefore(form, btn);
+}
+
+// Create form for a set: pick an existing object of the element type, or create
+// a new one (minted into the extent and linked into the set).
+function openSetCreateForm(
+    btn: HTMLButtonElement,
+    setPath: string,
+    template: NodeData,
+    candidates: Array<{ id: number; label: string }>,
+): void {
+    const form = document.createElement('form');
+    form.className = 'create-form';
+
+    let newFields = '';
+    if (template.kind === 'object')
+        for (const [name, v] of Object.entries(template.fields)) {
+            if (v.kind === 'dictionary') continue;
+            newFields += `<div class="field"><label>${escapeHtml(humanize(name))}</label>${inputHtml(name, v)}</div>`;
+        }
+
+    const options = candidates
+        .map(c => `<option value="${c.id}">${escapeHtml(c.label)}</option>`)
+        .join('');
+
+    form.innerHTML =
+        `<h3>New</h3>` +
+        `<div data-ref data-current="new">` +
+        `<div class="ref-toggle">` +
+        `<button type="button" data-mode="existing">Use existing</button>` +
+        `<button type="button" data-mode="new">Create new</button></div>` +
+        `<div class="ref-existing"><select data-pick>${options}</select></div>` +
+        `<div class="ref-new">${newFields}</div>` +
+        `</div>` +
+        `<div class="actions">` +
+        `<button type="submit" data-save>Save</button>` +
+        `<button type="button" data-saveopen>Save &amp; open</button>` +
+        `<button type="button" data-cancel>Cancel</button></div>` +
+        `<p class="error" hidden></p>`;
+
+    form.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(modeBtn => {
+        modeBtn.addEventListener('click', e => {
+            e.preventDefault();
+            const editor = form.querySelector<HTMLElement>('[data-ref]');
+            if (editor) { editor.dataset['current'] = modeBtn.dataset['mode']!; updateRefMode(editor); }
+        });
+    });
+
+    async function submit(open: boolean): Promise<void> {
+        const mode = form.querySelector<HTMLElement>('[data-ref]')?.dataset['current'] ?? 'new';
+        let msg: Record<string, unknown>;
+        if (mode === 'existing') {
+            const sel = form.querySelector<HTMLSelectElement>('select[data-pick]');
+            msg = { op: 'addEntry', path: setPath, refId: Number(sel?.value) };
+        } else {
+            msg = { op: 'addEntry', path: setPath, value: buildValue(template, form) };
+        }
+        const res = await call(msg);
+        if (res.error) { showCreateError(form, String(res.error)); return; }
+        if (open) location.href = joinPath(setPath, String(res['key']));
+        else location.reload();
+    }
+
+    form.addEventListener('submit', e => { e.preventDefault(); void submit(false); });
+    form.querySelector<HTMLButtonElement>('button[data-save]')!
+        .addEventListener('click', e => { e.preventDefault(); void submit(false); });
+    form.querySelector<HTMLButtonElement>('button[data-saveopen]')!
+        .addEventListener('click', e => { e.preventDefault(); void submit(true); });
+    form.querySelector<HTMLButtonElement>('button[data-cancel]')!
+        .addEventListener('click', () => form.remove());
+
+    (btn.parentNode ?? document.querySelector('main'))!.insertBefore(form, btn);
+    const editor = form.querySelector<HTMLElement>('[data-ref]');
+    if (editor) updateRefMode(editor);
 }
 
 function createFormHtml(template: NodeData, keyGen: 'auto' | 'manual'): string {

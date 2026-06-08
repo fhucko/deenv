@@ -21,6 +21,11 @@ public sealed class SsrRenderer
     public string Render(string urlPath)
     {
         var nodePath = ParsePath(urlPath);
+
+        // id-route: /~/{id} follows a bare reference to its object in the extent.
+        if (nodePath.Segments.Count >= 1 && nodePath.Segments[0] == "~")
+            return RenderIdRoute(urlPath, nodePath);
+
         var typeInfo = _resolver.ResolveType(nodePath);
 
         if (typeInfo == null)
@@ -45,11 +50,44 @@ public sealed class SsrRenderer
         return Layout(PageTitle(path), body.ToString());
     }
 
+    // id-route page: render the object form for whatever object carries this id.
+    private string RenderIdRoute(string urlPath, NodePath path)
+    {
+        if (path.Segments.Count < 2 || !int.TryParse(path.Segments[1], out var id))
+            return NotFoundPage(urlPath, path);
+
+        var hit = _store.ReadById(id);
+        if (hit == null) return NotFoundPage(urlPath, path);
+
+        var type = _desc.FindType(hit.Value.TypeName);
+        if (type == null) return NotFoundPage(urlPath, path);
+
+        var body = new StringBuilder();
+        body.AppendLine(Breadcrumbs(path));
+        body.AppendLine("<main>");
+        AppendObjectForm(body, path, type, hit.Value.Fields);
+        body.AppendLine("</main>");
+        return Layout(PageTitle(path), body.ToString());
+    }
+
     private void AppendNodeContent(StringBuilder sb, NodePath path, ResolvedTypeInfo typeInfo, NodeValue node)
     {
         if (typeInfo.Cardinality == Cardinality.Dictionary && node is DictionaryValue dictVal)
         {
             AppendDictionary(sb, path, typeInfo, dictVal);
+            return;
+        }
+
+        if (node is SetValue setVal)
+        {
+            var title = path.IsRoot ? "Db" : Humanize(path.Segments[^1]);
+            AppendSetTable(sb, path, title, typeInfo.Type.Name, setVal);
+            return;
+        }
+
+        if (node is ReferenceValue refVal)
+        {
+            AppendReferenceEditor(sb, path, refVal);
             return;
         }
 
@@ -99,6 +137,20 @@ public sealed class SsrRenderer
                 // The dictionary renders its own navigable list title (see AppendDictionaryTable).
                 sb.AppendLine("  <div class=\"field\">");
                 AppendDictionaryTable(sb, fieldPath, Humanize(prop.Name), prop.TypeName, prop.KeyGeneration, dictVal);
+                sb.AppendLine("  </div>");
+            }
+            else if (fieldVal is SetValue setVal)
+            {
+                sb.AppendLine("  <div class=\"field\">");
+                AppendSetTable(sb, fieldPath, Humanize(prop.Name), prop.TypeName, setVal);
+                sb.AppendLine("  </div>");
+            }
+            else if (fieldVal is ReferenceValue)
+            {
+                // A single reference renders as a link to its own editor/target page.
+                sb.AppendLine("  <div class=\"field\">");
+                sb.AppendLine($"    <label>{Escape(Humanize(prop.Name))}</label>");
+                sb.AppendLine($"    <a href=\"{Escape(fieldPath.ToString())}\">{Escape(Humanize(prop.Name))}</a>");
                 sb.AppendLine("  </div>");
             }
             else
@@ -206,6 +258,115 @@ public sealed class SsrRenderer
         sb.AppendLine("  </tbody>");
         sb.AppendLine("</table>");
         sb.AppendLine($"<button type=\"button\" data-newentry=\"{dictPathAttr}\" data-keygen=\"{keyGenAttr}\">New</button>");
+    }
+
+    // ── set table (members keyed by their own identity) ─────────────────────────
+
+    private void AppendSetTable(StringBuilder sb, NodePath setPath, string title, string elementTypeName, SetValue setVal)
+    {
+        var entryType = _desc.FindType(elementTypeName);
+        var cols = entryType?.Props?
+            .Where(p => p.Cardinality == Cardinality.Single && !_desc.IsObjectType(p.TypeName))
+            .Select(p => p.Name).ToList() ?? [];
+
+        var setPathAttr = Escape(setPath.ToString());
+
+        sb.AppendLine($"<h3 class=\"list-title\"><a href=\"{setPathAttr}\">{Escape(title)}</a></h3>");
+        sb.AppendLine("<table>");
+        sb.AppendLine("  <thead><tr>");
+        sb.AppendLine("    <th>Id</th>");
+        foreach (var col in cols)
+            sb.AppendLine($"    <th>{Escape(Humanize(col))}</th>");
+        sb.AppendLine("    <th></th>");
+        sb.AppendLine("  </tr></thead>");
+        sb.AppendLine("  <tbody>");
+        foreach (var (id, member) in setVal.Members)
+        {
+            var entryUrl = Escape(setPath.Key(id.ToString()).ToString());
+            sb.AppendLine($"    <tr data-nav=\"{entryUrl}\">");
+            sb.AppendLine($"      <td><a href=\"{entryUrl}\">{id}</a></td>");
+            if (member is ObjectValue objVal)
+                foreach (var col in cols)
+                {
+                    var cell = objVal.Fields.TryGetValue(col, out var fv) ? DisplayValue(fv) : "";
+                    sb.AppendLine($"      <td>{Escape(cell)}</td>");
+                }
+            sb.AppendLine($"      <td><button type=\"button\" data-delentry=\"{setPathAttr}\" data-key=\"{id}\">Delete</button></td>");
+            sb.AppendLine("    </tr>");
+        }
+        sb.AppendLine("  </tbody>");
+        sb.AppendLine("</table>");
+        sb.AppendLine($"<button type=\"button\" data-newentry=\"{setPathAttr}\" data-collection=\"set\">New</button>");
+    }
+
+    // ── reference editor (pick existing or create new) ──────────────────────────
+
+    private void AppendReferenceEditor(StringBuilder sb, NodePath path, ReferenceValue refVal)
+    {
+        var pathAttr = Escape(path.ToString());
+        var typeName = refVal.TypeName;
+        var type = _desc.FindType(typeName);
+
+        sb.AppendLine($"""<form id="node-form" data-kind="reference" data-path="{pathAttr}">""");
+        sb.AppendLine($"  <h2>{Escape(typeName)}</h2>");
+        sb.AppendLine($"""  <div data-ref data-type="{Escape(typeName)}" data-current="existing">""");
+
+        // Mode toggle stays outside the toggled sections so both buttons are always clickable.
+        sb.AppendLine("    <div class=\"ref-toggle\">");
+        sb.AppendLine("""      <button type="button" data-mode="existing">Use existing</button>""");
+        sb.AppendLine("""      <button type="button" data-mode="new">Create new</button>""");
+        sb.AppendLine("    </div>");
+
+        sb.AppendLine("    <div class=\"ref-existing\">");
+        sb.AppendLine("      <select data-pick>");
+        foreach (var (id, obj) in _store.ReadExtent(typeName))
+            sb.AppendLine($"        <option value=\"{id}\">{Escape(LabelOf(obj))}</option>");
+        sb.AppendLine("      </select>");
+        sb.AppendLine("    </div>");
+
+        sb.AppendLine("    <div class=\"ref-new\">");
+        foreach (var prop in type?.Props ?? [])
+            if (prop.Cardinality == Cardinality.Single && !_desc.IsObjectType(prop.TypeName))
+            {
+                sb.AppendLine($"      <label>{Escape(Humanize(prop.Name))}</label>");
+                AppendNamedInput(sb, prop.Name, ResolveBaseType(prop.TypeName));
+            }
+        sb.AppendLine("    </div>");
+
+        sb.AppendLine("  </div>");
+        sb.AppendLine("""  <div class="actions"><button type="submit">Save</button></div>""");
+        sb.AppendLine("</form>");
+    }
+
+    private static void AppendNamedInput(StringBuilder sb, string name, BaseType bt)
+    {
+        var n = Escape(name);
+        var html = bt switch
+        {
+            BaseType.Bool     => $"""<input type="checkbox" name="{n}">""",
+            BaseType.Int      => $"""<input type="number" name="{n}" value="0">""",
+            BaseType.Decimal  => $"""<input type="number" step="any" name="{n}" value="0">""",
+            BaseType.Date     => $"""<input type="date" name="{n}">""",
+            _                 => $"""<input type="text" name="{n}" value="">"""
+        };
+        sb.AppendLine($"      {html}");
+    }
+
+    private static BaseType ResolveBaseType(string name) => name switch
+    {
+        "bool"     => BaseType.Bool,
+        "int"      => BaseType.Int,
+        "decimal"  => BaseType.Decimal,
+        "date"     => BaseType.Date,
+        "datetime" => BaseType.DateTime,
+        _          => BaseType.Text
+    };
+
+    private static string LabelOf(ObjectValue obj)
+    {
+        foreach (var (_, v) in obj.Fields)
+            if (v is TextValue t) return t.Text;
+        return "";
     }
 
     // ── not found ─────────────────────────────────────────────────────────────

@@ -19,3 +19,13 @@ public sealed record ObjectValue(
 // Record structural equality means IntValue(42) works as a dictionary key.
 public sealed record DictionaryValue(
     IReadOnlyDictionary<NodeValue, NodeValue> Entries) : NodeValue;
+
+// Set node: object identity → the resolved member object. A set holds references
+// (ids) into a per-type extent; reads resolve them to the member object so the
+// member is addressable by its own identity (the int key).
+public sealed record SetValue(
+    IReadOnlyDictionary<int, NodeValue> Members) : NodeValue;
+
+// A single object-typed prop: a reference into an extent. TargetId is null when
+// the reference is unset (nothing chosen yet).
+public sealed record ReferenceValue(int? TargetId, string TypeName) : NodeValue;

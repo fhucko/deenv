@@ -47,6 +47,7 @@ public sealed class WsHandler
                 "newEntryTemplate" => HandleNewEntryTemplate(path, pathStr),
                 "addEntry"         => HandleAddEntry(path, pathStr, root),
                 "removeEntry"      => HandleRemoveEntry(path, pathStr, root),
+                "setReference"     => HandleSetReference(path, pathStr, root),
                 _                  => Error($"Unknown op '{op}'")
             };
             return WithId(result, id);
@@ -128,19 +129,47 @@ public sealed class WsHandler
     private string HandleNewEntryTemplate(NodePath path, string pathStr)
     {
         var typeInfo = _resolver.ResolveType(path);
-        if (typeInfo == null || typeInfo.Cardinality != Cardinality.Dictionary)
+        if (typeInfo == null)
+            return Error($"Path '{pathStr}' does not resolve.");
+
+        if (typeInfo.Cardinality == Cardinality.Set)
+        {
+            var candidates = new JsonArray();
+            foreach (var (id, obj) in _store.ReadExtent(typeInfo.Type.Name))
+                candidates.Add(new JsonObject { ["id"] = id, ["label"] = LabelOf(obj) });
+
+            var setResponse = new JsonObject
+            {
+                ["op"]         = "newEntryTemplate",
+                ["path"]       = pathStr,
+                ["template"]   = SerializeNodeValue(_store.NewEntryTemplate(path)),
+                ["collection"] = "set",
+                ["candidates"] = candidates
+            };
+            return setResponse.ToJsonString(_jsonOpts);
+        }
+
+        if (typeInfo.Cardinality != Cardinality.Dictionary)
             return Error($"Path '{pathStr}' is not a dictionary.");
 
-        var template = _store.NewEntryTemplate(path);
         var response = new JsonObject
         {
             ["op"]   = "newEntryTemplate",
             ["path"] = pathStr,
-            ["template"] = SerializeNodeValue(template),
+            ["template"] = SerializeNodeValue(_store.NewEntryTemplate(path)),
+            ["collection"] = "dictionary",
             ["keyGeneration"] = (typeInfo.KeyGeneration ?? KeyGeneration.Manual) == KeyGeneration.Auto
                 ? "auto" : "manual"
         };
         return response.ToJsonString(_jsonOpts);
+    }
+
+    // Label for a candidate object: its first text field, else empty.
+    private static string LabelOf(ObjectValue obj)
+    {
+        foreach (var (_, v) in obj.Fields)
+            if (v is TextValue t) return t.Text;
+        return "";
     }
 
     // ── addEntry (create on the create-form Save) ──────────────────────────────
@@ -148,7 +177,13 @@ public sealed class WsHandler
     private string HandleAddEntry(NodePath path, string pathStr, JsonElement root)
     {
         var typeInfo = _resolver.ResolveType(path);
-        if (typeInfo == null || typeInfo.Cardinality != Cardinality.Dictionary)
+        if (typeInfo == null)
+            return Error($"Path '{pathStr}' does not resolve.");
+
+        if (typeInfo.Cardinality == Cardinality.Set)
+            return HandleAddSetMember(path, pathStr, typeInfo, root);
+
+        if (typeInfo.Cardinality != Cardinality.Dictionary)
             return Error($"Path '{pathStr}' is not a dictionary.");
 
         if (!root.TryGetProperty("value", out var valueEl))
@@ -185,14 +220,86 @@ public sealed class WsHandler
     private string HandleRemoveEntry(NodePath path, string pathStr, JsonElement root)
     {
         var typeInfo = _resolver.ResolveType(path);
-        if (typeInfo == null || typeInfo.Cardinality != Cardinality.Dictionary)
-            return Error($"Path '{pathStr}' is not a dictionary.");
+        if (typeInfo == null)
+            return Error($"Path '{pathStr}' does not resolve.");
         if (!root.TryGetProperty("key", out var keyEl) || keyEl.GetString() is not { } keyStr)
             return Error("Missing 'key' in removeEntry message.");
 
-        _store.RemoveDictionaryEntry(path, ParseKey(keyStr, typeInfo.KeyTypeName ?? "text"));
+        if (typeInfo.Cardinality == Cardinality.Set)
+        {
+            if (!int.TryParse(keyStr, out var memberId))
+                return Error("Set member key must be an integer identity.");
+            _store.RemoveFromSet(path, memberId);
+        }
+        else if (typeInfo.Cardinality == Cardinality.Dictionary)
+        {
+            _store.RemoveDictionaryEntry(path, ParseKey(keyStr, typeInfo.KeyTypeName ?? "text"));
+        }
+        else
+        {
+            return Error($"Path '{pathStr}' is not a dictionary or set.");
+        }
 
         var response = new JsonObject { ["op"] = "removeEntry", ["path"] = pathStr, ["ok"] = true };
+        return response.ToJsonString(_jsonOpts);
+    }
+
+    // ── set members + references (object model) ─────────────────────────────────
+
+    private string HandleAddSetMember(NodePath path, string pathStr, ResolvedTypeInfo typeInfo, JsonElement root)
+    {
+        int id;
+        if (root.TryGetProperty("refId", out var refEl) && refEl.ValueKind == JsonValueKind.Number)
+        {
+            id = refEl.GetInt32();
+            _store.AddToSet(path, id); // link an existing object
+        }
+        else if (root.TryGetProperty("value", out var valueEl))
+        {
+            var obj = (ObjectValue)DeserializeValue(valueEl, typeInfo.Type);
+            id = _store.CreateObject(typeInfo.Type.Name, obj); // mint a new object…
+            _store.AddToSet(path, id);                         // …then link it
+        }
+        else
+        {
+            return Error("addEntry on a set requires 'refId' (existing) or 'value' (new).");
+        }
+
+        var response = new JsonObject
+        {
+            ["op"]  = "addEntry",
+            ["path"] = pathStr,
+            ["ok"]  = true,
+            ["key"] = id.ToString()
+        };
+        return response.ToJsonString(_jsonOpts);
+    }
+
+    private string HandleSetReference(NodePath path, string pathStr, JsonElement root)
+    {
+        var typeInfo = _resolver.ResolveType(path);
+        if (typeInfo == null || typeInfo.Cardinality != Cardinality.Single || typeInfo.Type.BaseType != BaseType.Object)
+            return Error($"Path '{pathStr}' is not a single reference.");
+
+        if (root.TryGetProperty("refId", out var refEl) && refEl.ValueKind == JsonValueKind.Number)
+        {
+            _store.SetReference(path, refEl.GetInt32());           // point at an existing object
+        }
+        else if (root.TryGetProperty("value", out var valueEl))
+        {
+            var obj = (ObjectValue)DeserializeValue(valueEl, typeInfo.Type);
+            _store.SetReference(path, _store.CreateObject(typeInfo.Type.Name, obj)); // mint + point
+        }
+        else if (root.TryGetProperty("clear", out _))
+        {
+            _store.SetReference(path, null);
+        }
+        else
+        {
+            return Error("setReference requires 'refId', 'value', or 'clear'.");
+        }
+
+        var response = new JsonObject { ["op"] = "setReference", ["path"] = pathStr, ["ok"] = true };
         return response.ToJsonString(_jsonOpts);
     }
 

@@ -30,9 +30,10 @@ public sealed class TypeResolver
 
         foreach (var segment in path.Segments)
         {
-            if (currentCardinality == Cardinality.Dictionary)
+            if (currentCardinality == Cardinality.Dictionary || currentCardinality == Cardinality.Set)
             {
-                // Segment is a dictionary key — descend into the entry.
+                // Segment addresses a member: a dictionary key, or a set member's
+                // identity. Either way, descend into the (single) element.
                 currentCardinality = Cardinality.Single;
                 currentKeyTypeName = null;
                 currentKeyGeneration = null;
@@ -55,6 +56,7 @@ public sealed class TypeResolver
                 }
                 else
                 {
+                    // Single (incl. a single object reference) and Set carry no key info.
                     currentKeyTypeName = null;
                     currentKeyGeneration = null;
                 }

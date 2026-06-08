@@ -9,6 +9,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private readonly string _filePath;
     private readonly InstanceDescription _desc;
     private readonly TypeResolver _resolver;
+    private readonly bool _usesExtents;
     private readonly JsonSerializerOptions _writeOpts = new() { WriteIndented = true };
 
     public JsonFileInstanceStore(string filePath, InstanceDescription desc)
@@ -16,6 +17,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         _filePath = filePath;
         _desc = desc;
         _resolver = new TypeResolver(desc);
+        _usesExtents = desc.UsesExtents;
 
         // Initialize the file if it doesn't exist OR if it's empty
         // (Path.GetTempFileName creates a 0-byte file that must be treated as uninitialized).
@@ -27,6 +29,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     public NodeValue? ReadNode(NodePath path)
     {
+        if (_usesExtents) return ReadNodeExtent(path);
+
         var rootType = _desc.Db;
         if (rootType == null) return null;
 
@@ -86,6 +90,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     public void WriteLeaf(NodePath path, NodeValue value)
     {
+        if (_usesExtents) { WriteLeafExtent(path, value); return; }
+
         if (path.IsRoot)
         {
             SaveRoot(ToJsonNode(value));
@@ -104,6 +110,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     public void WriteObject(NodePath path, ObjectValue value)
     {
+        if (_usesExtents) { WriteObjectExtent(path, value); return; }
+
         var root = LoadRoot() ?? NewJsonObject();
 
         JsonObject target;
@@ -140,8 +148,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         var typeInfo = _resolver.ResolveType(dictPath)
             ?? throw new InvalidOperationException($"Path {dictPath} does not resolve.");
-        if (typeInfo.Cardinality != Cardinality.Dictionary)
-            throw new InvalidOperationException($"{dictPath} is not a dictionary.");
+        if (typeInfo.Cardinality != Cardinality.Dictionary && typeInfo.Cardinality != Cardinality.Set)
+            throw new InvalidOperationException($"{dictPath} is not a dictionary or set.");
         return BuildDefault(typeInfo.Type);
     }
 
@@ -393,6 +401,342 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         };
     }
 
+    // ── object model (extent mode) ──────────────────────────────────────────────
+    //
+    // Storage shape: { "extents": { "<Type>": { "<id>": { "id": id, "fields": {…} } } },
+    //                  "root": { "id": 1, "fields": {…} } }
+    // A set field holds { "<id>": { "ref": id } }; a single object-typed prop holds
+    // { "ref": id } (or null). Reads resolve references; lifetime is mark-sweep GC.
+
+    private JsonObject LoadDoc()
+    {
+        var text = File.Exists(_filePath) ? File.ReadAllText(_filePath) : "";
+        var doc = (string.IsNullOrWhiteSpace(text) ? null : JsonNode.Parse(text)) as JsonObject
+                  ?? new JsonObject();
+        if (doc["extents"] is not JsonObject) doc["extents"] = new JsonObject();
+        if (doc["root"] is not JsonObject root)
+            doc["root"] = new JsonObject { ["id"] = 1, ["fields"] = new JsonObject() };
+        else if (root["fields"] is not JsonObject)
+            root["fields"] = new JsonObject();
+        return doc;
+    }
+
+    private void SaveDoc(JsonObject doc) => File.WriteAllText(_filePath, doc.ToJsonString(_writeOpts));
+
+    private static JsonObject Extents(JsonObject doc) => (JsonObject)doc["extents"]!;
+    private static JsonObject RootFields(JsonObject doc) => (JsonObject)((JsonObject)doc["root"]!)["fields"]!;
+
+    private static JsonObject? ExtentEnvelope(JsonObject doc, string typeName, int id) =>
+        Extents(doc)[typeName] is JsonObject pool && pool[id.ToString()] is JsonObject env ? env : null;
+
+    private static JsonObject? ExtentEnvelopeAnyType(JsonObject doc, int id)
+    {
+        foreach (var (_, pool) in Extents(doc))
+            if (pool is JsonObject p && p[id.ToString()] is JsonObject env)
+                return env;
+        return null;
+    }
+
+    private static JsonObject EnvFields(JsonObject env) => (JsonObject)env["fields"]!;
+
+    private bool IsReferenceProp(PropDefinition prop) =>
+        prop.Cardinality == Cardinality.Single && _desc.IsObjectType(prop.TypeName);
+
+    // ── read ──
+
+    private NodeValue? ReadNodeExtent(NodePath path)
+    {
+        if (path.Segments.Count > 0 && path.Segments[0] == "~") return null; // id-route handled by renderer
+
+        var doc = LoadDoc();
+        var curFields = RootFields(doc);
+        var curType = _desc.Db;
+        if (curType == null) return null;
+
+        var segs = path.Segments;
+        for (var i = 0; i < segs.Count; i++)
+        {
+            var prop = curType.Props?.FirstOrDefault(p => p.Name == segs[i]);
+            if (prop == null) return null;
+            var elemType = ResolveTypeDef(prop.TypeName);
+            var last = i == segs.Count - 1;
+
+            if (prop.Cardinality == Cardinality.Set)
+            {
+                var setNode = curFields[prop.Name] as JsonObject;
+                if (last) return BuildSetValue(doc, setNode, prop.TypeName, elemType);
+
+                var memberId = segs[i + 1];
+                var mid = (setNode?[memberId] as JsonObject)?["ref"]?.GetValue<int>();
+                if (mid is null) return null;
+                var env = ExtentEnvelope(doc, prop.TypeName, mid.Value);
+                if (env == null) return null;
+                if (i + 1 == segs.Count - 1) return BuildResolvedObject(doc, EnvFields(env), elemType);
+                curFields = EnvFields(env); curType = elemType; i++; continue;
+            }
+
+            if (IsReferenceProp(prop))
+            {
+                var id = (curFields[prop.Name] as JsonObject)?["ref"]?.GetValue<int>();
+                if (id is null) return last ? new ReferenceValue(null, prop.TypeName) : null;
+                var env = ExtentEnvelope(doc, prop.TypeName, id.Value);
+                if (env == null) return last ? new ReferenceValue(null, prop.TypeName) : null;
+                if (last) return BuildResolvedObject(doc, EnvFields(env), elemType);
+                curFields = EnvFields(env); curType = elemType; continue;
+            }
+
+            // scalar single
+            if (!last) return null;
+            var v = curFields[prop.Name];
+            return v != null ? LeafFromJson(v, elemType.BaseType) : DefaultBase(elemType.BaseType);
+        }
+
+        return BuildResolvedObject(doc, curFields, curType);
+    }
+
+    private ObjectValue BuildResolvedObject(JsonObject doc, JsonObject fields, TypeDefinition type)
+    {
+        var map = new Dictionary<string, NodeValue>();
+        foreach (var prop in type.Props ?? [])
+        {
+            var elemType = ResolveTypeDef(prop.TypeName);
+            if (prop.Cardinality == Cardinality.Set)
+                map[prop.Name] = BuildSetValue(doc, fields[prop.Name] as JsonObject, prop.TypeName, elemType);
+            else if (IsReferenceProp(prop))
+                map[prop.Name] = new ReferenceValue((fields[prop.Name] as JsonObject)?["ref"]?.GetValue<int>(), prop.TypeName);
+            else if (prop.Cardinality == Cardinality.Single)
+            {
+                var v = fields[prop.Name];
+                map[prop.Name] = v != null ? LeafFromJson(v, elemType.BaseType) : DefaultBase(elemType.BaseType);
+            }
+            // dictionaries do not occur in extent-mode schemas (this slice)
+        }
+        return new ObjectValue(map);
+    }
+
+    private SetValue BuildSetValue(JsonObject doc, JsonObject? setNode, string typeName, TypeDefinition elemType)
+    {
+        var members = new Dictionary<int, NodeValue>();
+        if (setNode != null)
+            foreach (var (k, v) in setNode)
+                if ((v as JsonObject)?["ref"]?.GetValue<int>() is int id
+                    && ExtentEnvelope(doc, typeName, id) is { } env)
+                    members[int.Parse(k)] = BuildResolvedObject(doc, EnvFields(env), elemType);
+        return new SetValue(members);
+    }
+
+    private static NodeValue LeafFromJson(JsonNode node, BaseType bt) => bt switch
+    {
+        BaseType.Bool     => new BoolValue(node.GetValue<bool>()),
+        BaseType.Int      => new IntValue(node.GetValue<int>()),
+        BaseType.Decimal  => new DecimalValue(node.GetValue<decimal>()),
+        BaseType.Text     => new TextValue(node.GetValue<string>()),
+        BaseType.Date     => new DateValue(DateOnly.Parse(node.GetValue<string>())),
+        BaseType.DateTime => new DateTimeValue(DateTimeOffset.Parse(node.GetValue<string>())),
+        _ => throw new InvalidOperationException($"No leaf for base type {bt}")
+    };
+
+    // ── walk to an object's fields (following references), for writes ──
+
+    private (JsonObject Fields, TypeDefinition Type)? WalkToObject(JsonObject doc, NodePath path)
+    {
+        var curFields = RootFields(doc);
+        var curType = _desc.Db;
+        if (curType == null) return null;
+
+        var segs = path.Segments;
+        for (var i = 0; i < segs.Count; i++)
+        {
+            var prop = curType.Props?.FirstOrDefault(p => p.Name == segs[i]);
+            if (prop == null) return null;
+            var elemType = ResolveTypeDef(prop.TypeName);
+
+            if (prop.Cardinality == Cardinality.Set)
+            {
+                if (i + 1 >= segs.Count) return null; // the set itself is not an object
+                var setNode = curFields[prop.Name] as JsonObject;
+                var mid = (setNode?[segs[i + 1]] as JsonObject)?["ref"]?.GetValue<int>();
+                if (mid is null) return null;
+                var env = ExtentEnvelope(doc, prop.TypeName, mid.Value);
+                if (env == null) return null;
+                curFields = EnvFields(env); curType = elemType; i++; continue;
+            }
+
+            if (IsReferenceProp(prop))
+            {
+                var id = (curFields[prop.Name] as JsonObject)?["ref"]?.GetValue<int>();
+                if (id is null) return null;
+                var env = ExtentEnvelope(doc, prop.TypeName, id.Value);
+                if (env == null) return null;
+                curFields = EnvFields(env); curType = elemType; continue;
+            }
+
+            return null; // a scalar is not an object
+        }
+        return (curFields, curType);
+    }
+
+    private void WriteObjectExtent(NodePath path, ObjectValue value)
+    {
+        var doc = LoadDoc();
+        var target = WalkToObject(doc, path);
+        if (target == null) throw new InvalidOperationException($"Path {path} is not a writable object.");
+
+        foreach (var prop in target.Value.Type.Props ?? [])
+            if (prop.Cardinality == Cardinality.Single && !_desc.IsObjectType(prop.TypeName)
+                && value.Fields.TryGetValue(prop.Name, out var v))
+                target.Value.Fields[prop.Name] = ToJsonNode(v);
+
+        SaveDoc(doc);
+    }
+
+    private void WriteLeafExtent(NodePath path, NodeValue value)
+    {
+        if (path.IsRoot) throw new InvalidOperationException("Cannot write a leaf at the root in extent mode.");
+        var doc = LoadDoc();
+        var parent = WalkToObject(doc, ParentPath(path))
+            ?? throw new InvalidOperationException($"Parent of {path} is not an object.");
+        parent.Fields[path.Segments[^1]] = ToJsonNode(value);
+        SaveDoc(doc);
+    }
+
+    // ── object-graph mutations ──
+
+    public int CreateObject(string typeName, ObjectValue fields)
+    {
+        RequireExtents();
+        var doc = LoadDoc();
+        if (Extents(doc)[typeName] is not JsonObject pool)
+        {
+            pool = new JsonObject();
+            Extents(doc)[typeName] = pool;
+        }
+
+        var id = NextId(doc);
+        var type = _desc.FindType(typeName)
+            ?? throw new InvalidOperationException($"Unknown type '{typeName}'.");
+        var fjson = new JsonObject();
+        foreach (var prop in type.Props ?? [])
+        {
+            if (prop.Cardinality == Cardinality.Set)
+                fjson[prop.Name] = new JsonObject();
+            else if (prop.Cardinality == Cardinality.Single && !_desc.IsObjectType(prop.TypeName)
+                     && fields.Fields.TryGetValue(prop.Name, out var v))
+                fjson[prop.Name] = ToJsonNode(v);
+        }
+
+        pool[id.ToString()] = new JsonObject { ["id"] = id, ["fields"] = fjson };
+        SaveDoc(doc);
+        return id;
+    }
+
+    public void AddToSet(NodePath setPath, int id)
+    {
+        RequireExtents();
+        var doc = LoadDoc();
+        var parent = WalkToObject(doc, ParentPath(setPath))
+            ?? throw new InvalidOperationException($"Parent of {setPath} is not an object.");
+        var field = setPath.Segments[^1];
+        if (parent.Fields[field] is not JsonObject set)
+        {
+            set = new JsonObject();
+            parent.Fields[field] = set;
+        }
+        set[id.ToString()] = new JsonObject { ["ref"] = id };
+        SaveDoc(doc);
+    }
+
+    public void RemoveFromSet(NodePath setPath, int id)
+    {
+        RequireExtents();
+        var doc = LoadDoc();
+        var parent = WalkToObject(doc, ParentPath(setPath));
+        if (parent?.Fields[setPath.Segments[^1]] is JsonObject set)
+            set.Remove(id.ToString());
+        CollectGarbage(doc);
+        SaveDoc(doc);
+    }
+
+    public void SetReference(NodePath fieldPath, int? id)
+    {
+        RequireExtents();
+        var doc = LoadDoc();
+        var parent = WalkToObject(doc, ParentPath(fieldPath))
+            ?? throw new InvalidOperationException($"Parent of {fieldPath} is not an object.");
+        parent.Fields[fieldPath.Segments[^1]] = id is null ? null : new JsonObject { ["ref"] = id.Value };
+        CollectGarbage(doc);
+        SaveDoc(doc);
+    }
+
+    public IReadOnlyDictionary<int, ObjectValue> ReadExtent(string typeName)
+    {
+        RequireExtents();
+        var doc = LoadDoc();
+        var map = new Dictionary<int, ObjectValue>();
+        if (Extents(doc)[typeName] is JsonObject pool && _desc.FindType(typeName) is { } type)
+            foreach (var (k, env) in pool)
+                if (env is JsonObject e)
+                    map[int.Parse(k)] = BuildResolvedObject(doc, EnvFields(e), type);
+        return map;
+    }
+
+    public (string TypeName, ObjectValue Fields)? ReadById(int id)
+    {
+        RequireExtents();
+        var doc = LoadDoc();
+        foreach (var (typeName, pool) in Extents(doc))
+            if (pool is JsonObject p && p[id.ToString()] is JsonObject env && _desc.FindType(typeName) is { } type)
+                return (typeName, BuildResolvedObject(doc, EnvFields(env), type));
+        return null;
+    }
+
+    private void RequireExtents()
+    {
+        if (!_usesExtents)
+            throw new NotSupportedException("Object-model operations require a schema that uses sets/references.");
+    }
+
+    private static int NextId(JsonObject doc)
+    {
+        var max = ((JsonObject)doc["root"]!)["id"]?.GetValue<int>() ?? 1;
+        foreach (var (_, pool) in Extents(doc))
+            if (pool is JsonObject p)
+                foreach (var (k, _) in p)
+                    if (int.TryParse(k, out var n) && n > max) max = n;
+        return max + 1;
+    }
+
+    // Mark-sweep from the root: any object no reference can reach is collected.
+    private static void CollectGarbage(JsonObject doc)
+    {
+        var visited = new HashSet<int>();
+
+        void Mark(JsonNode? node)
+        {
+            switch (node)
+            {
+                case JsonObject o when o.Count == 1 && o["ref"] is JsonValue rv && rv.TryGetValue<int>(out var id):
+                    if (visited.Add(id) && ExtentEnvelopeAnyType(doc, id) is { } env)
+                        Mark(EnvFields(env));
+                    break;
+                case JsonObject o:
+                    foreach (var (_, v) in o) Mark(v);
+                    break;
+                case JsonArray a:
+                    foreach (var v in a) Mark(v);
+                    break;
+            }
+        }
+
+        Mark(RootFields(doc));
+
+        foreach (var (_, pool) in Extents(doc))
+            if (pool is JsonObject p)
+                foreach (var key in p.Select(kv => kv.Key).ToList())
+                    if (int.TryParse(key, out var n) && !visited.Contains(n))
+                        p.Remove(key);
+    }
+
     // ── file I/O ──────────────────────────────────────────────────────────────
 
     private JsonNode? LoadRoot()
@@ -409,6 +753,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         var db = _desc.Db;
         if (db == null) return "null";
+        if (_usesExtents) return """{"extents":{},"root":{"id":1,"fields":{}}}""";
         return db.BaseType == BaseType.Bool ? "false" : "{}";
     }
 

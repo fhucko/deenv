@@ -47,6 +47,33 @@ public class InstanceContext
         }
         """);
 
+    // Milestone 5 object-graph instance: one extent type (Person), a set of
+    // references into it (people), and a single object-typed reference (lead).
+    // `set` cardinality and the single-object-prop-as-reference are exactly what
+    // this milestone introduces.
+    public static InstanceDescription ObjectGraphDb() =>
+        InstanceDescriptionLoader.Load("""
+        {
+          "types": [
+            {
+              "name": "Db",
+              "baseType": "object",
+              "props": [
+                { "name": "people", "type": "Person", "cardinality": "set" },
+                { "name": "lead",   "type": "Person" }
+              ]
+            },
+            {
+              "name": "Person",
+              "baseType": "object",
+              "props": [
+                { "name": "name", "type": "text" }
+              ]
+            }
+          ]
+        }
+        """);
+
     // Milestone 2 CRM-with-orders instance: objects, nested dictionaries, every
     // base type, and both auto (int) + manual (text) key generation. Loaded from
     // the committed schema document (the single source of truth), shipped to the
@@ -70,4 +97,23 @@ public class InstanceContext
     public IPlaywright? Playwright { get; set; }
     public IBrowser? Browser { get; set; }
     public IPage? Page { get; set; }
+
+    // Lazily start the in-process server and a headless browser. Idempotent, so
+    // any step that drives the page can call it (not just "I navigate to …").
+    public async Task EnsureServerAndBrowserAsync()
+    {
+        if (Server == null)
+        {
+            Server = new TestInstanceServer();
+            await Server.StartAsync(Description!, DataFilePath);
+            Store = Server.Store;
+        }
+
+        if (Browser == null)
+        {
+            Playwright = await Microsoft.Playwright.Playwright.CreateAsync();
+            Browser = await Playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+            Page = await Browser.NewPageAsync(new BrowserNewPageOptions { BaseURL = BaseUrl });
+        }
+    }
 }

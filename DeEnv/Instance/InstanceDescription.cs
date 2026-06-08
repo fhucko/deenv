@@ -4,7 +4,7 @@ namespace DeEnv.Instance;
 
 public enum BaseType { Bool, Int, Decimal, Text, Date, DateTime, Object }
 
-public enum Cardinality { Single, Dictionary }
+public enum Cardinality { Single, Dictionary, Set }
 
 // How a dictionary's entry keys are produced.
 public enum KeyGeneration { Auto, Manual }
@@ -17,8 +17,12 @@ public record PropDefinition(
     [property: JsonPropertyName("keyGeneration")] string? KeyGenerationRaw = null,
     [property: JsonPropertyName("nullable")] bool Nullable = false)
 {
-    public Cardinality Cardinality =>
-        CardinalityRaw == "dictionary" ? Cardinality.Dictionary : Cardinality.Single;
+    public Cardinality Cardinality => CardinalityRaw switch
+    {
+        "dictionary" => Cardinality.Dictionary,
+        "set"        => Cardinality.Set,
+        _            => Cardinality.Single
+    };
 
     // Effective key type for a dictionary prop (text when unspecified).
     public string EffectiveKeyType => KeyTypeName ?? "text";
@@ -59,4 +63,11 @@ public record InstanceDescription(
 
     public TypeDefinition? FindType(string name) =>
         AllTypes.FirstOrDefault(t => t.Name == name);
+
+    public bool IsObjectType(string name) => FindType(name)?.BaseType == BaseType.Object;
+
+    // True once any prop is a `set`: the schema is an object graph (per-type
+    // extents, identity, references) rather than a pure containment tree.
+    public bool UsesExtents =>
+        AllTypes.Any(t => t.Props?.Any(p => p.Cardinality == Cardinality.Set) ?? false);
 }
