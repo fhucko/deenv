@@ -161,6 +161,23 @@ public sealed class BridgeSteps(InstanceContext ctx)
         await Assert.That(prop).IsNotNull();
     }
 
+    [Then("the exported type {string} has a single reference prop {string} of type {string}")]
+    public async Task ThenExportedSingleReferencePropAsync(string typeName, string propName, string refType)
+    {
+        var prop = _exported!.FindType(typeName)?.Props?.FirstOrDefault(p => p.Name == propName);
+        await Assert.That(prop).IsNotNull();
+        await Assert.That(prop!.Cardinality).IsEqualTo(Cardinality.Single);
+        await Assert.That(prop.TypeName).IsEqualTo(refType);
+        await Assert.That(_exported!.IsObjectType(prop.TypeName)).IsTrue();
+    }
+
+    [Then("a reference link {string} is present")]
+    public async Task ThenReferenceLinkPresentAsync(string fieldName)
+    {
+        var count = await ctx.Page!.Locator($"a[href='/{fieldName}']").CountAsync();
+        await Assert.That(count).IsGreaterThanOrEqualTo(1);
+    }
+
     [Then("the exported type {string} has a set prop {string} of type {string}")]
     public async Task ThenExportedSetPropAsync(string typeName, string propName, string elemType)
     {

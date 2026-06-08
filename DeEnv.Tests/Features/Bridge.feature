@@ -49,6 +49,29 @@ Feature: Schema bridge (self-hosted designer)
     When the design is exported
     Then the exported type "Db" lists prop "beta" before "alpha"
 
+  @milestone-5 @single-user
+  Scenario: The bridge projects a single reference to another type
+    Given a designer instance
+    And a designed type "Db" with base type "object"
+    And a designed type "Person" with base type "object"
+    And the type "Person" has a prop "name" of type "text"
+    And the type "Db" has a prop "lead" of type "Person"
+    When the design is exported
+    Then the exported document loads successfully
+    And the exported type "Db" has a single reference prop "lead" of type "Person"
+
+  @milestone-5 @single-user
+  Scenario: A designed schema with a reference runs as an instance
+    Given a designer instance
+    And a designed type "Db" with base type "object"
+    And a designed type "Person" with base type "object"
+    And the type "Person" has a prop "name" of type "text"
+    And the type "Db" has a prop "lead" of type "Person"
+    When the design is exported
+    And an instance is started from the exported schema
+    Then I see a form for "Db"
+    And a reference link "lead" is present
+
   @milestone-4 @single-user
   Scenario: A designed schema runs as an instance after export
     Given a designer instance
