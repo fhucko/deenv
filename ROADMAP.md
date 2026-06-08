@@ -69,12 +69,40 @@ DECISIONS.md.
 
 Done when: a user can design a schema with no code and run it. ✓
 
-## Milestone 5 — Schema versioning
+## Milestone 5 — The object model (identity, references, sets)  ← CURRENT
 
-Git-style versioning by snapshotting the JSON schema document and diffing
-snapshots.
+Give the data a real object model. Today it is a pure containment *tree*:
+a prop is a scalar, an inline object, or a dictionary that *owns* its
+children. There is no way for one entity to point at another by identity.
+This milestone makes it an **object graph**, the C# way:
 
-Done when: schema changes can be saved as versions and diffed.
+- **Intrinsic identity** on every non-constant (objects and dictionaries;
+  scalars are value types, no identity). Monotonic `int`, stored as metadata
+  separate from props. No schema change — identity is intrinsic to being a
+  non-constant.
+- **References, no ownership.** Objects live in **per-type extents** (a flat
+  id-keyed pool per type); a single object-typed prop *is* a reference, and
+  object-typed collection entries hold references too. The same object can be
+  referenced from many places and is one object.
+- **Sets.** A `set` is a collection of objects keyed by their **own
+  identity** — replacing the surrogate-keyed `dict<Object> auto-int`.
+  Dictionaries stay for genuine maps where the **key is meaningful data you
+  chose** (e.g. scalar `settings`). Three shapes: single / set / dictionary.
+- **Addressing keeps the existing navigation** — a URL is a walk through the
+  graph: set → member identity, dictionary → key, single → field; with an
+  id-route fallback for following a bare reference.
+- **Lifetime by GC** — mark-sweep reachability from the root collects objects
+  no reference can reach.
+- **UI:** a reference field / set offers pick-existing-or-create-new.
+
+First slice: identity + one type's extent + a set of references + identity
+addressing + pick-or-create + GC, proven by "the same object via two
+references is one object" and "dropping the last reference collects it."
+Migrating all collections to sets, and teaching the designer/meta-schema to
+author refs/sets, are follow-up slices.
+
+Done when: data is an object graph — objects have identity, are referenced
+(not owned), collected into sets, and shared references resolve to one object.
 
 ## Milestone 6 — Real storage engine (interim)
 
@@ -102,6 +130,15 @@ Done when: loading/preloading decisions are driven by render intent.
 
 ## Future milestones (NOT scoped — do not build yet)
 
+- **Schema versioning (postponed).** Git-style versioning of the schema —
+  but *not* via bespoke snapshot/diff code now. Planned to be built **in the
+  environment itself, after the computation/language milestone** (versioning
+  is behavior-shaped, and the runtime has no computation primitive yet). It
+  also rides the storage foundation M6 reshapes and is the sibling of
+  data-level temporal versioning below — do them together on a real store.
+  The one reusable piece already designed is the **structural,
+  identity-based diff** (renames are exact, because non-constants now carry
+  identity — see Milestone 5), not the line-based kind.
 - **Real-time / multi-user.** "Other users see a notification" — push, live
   sync, presence. Concurrency handled in C# (single server). Many milestones
   away.

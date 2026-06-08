@@ -152,6 +152,102 @@ dropdown.
   computation/custom-language milestone. Export stays an external VS mode until
   then; the same `Project` function gets reused behind an action when it arrives.
 
+## Milestone 5 — the object model (identity, references, sets, no ownership, GC)
+
+**M5 was redirected from schema versioning to giving the data a real object
+model.** Today the data is a pure containment *tree*: a prop is a scalar, an
+inline object, or a dictionary that *owns* its children. There is no way for one
+entity to point at another. This milestone makes it a C#-style **object graph**.
+(The redirect path: versioning → computation → references → identity-first →
+this. See "Schema versioning is postponed" below.)
+
+**Intrinsic identity on non-constants.** We draw C#'s value-vs-reference line:
+scalars (`bool/int/decimal/text/date/datetime`) are value types with no identity;
+**objects and dictionaries carry an intrinsic identity.** Identity is *not* a
+schema-declared per-prop thing — it is intrinsic to being a non-constant, so the
+schema is unchanged. This is the key enabler and it pays off twice: references
+need it, and it makes a future *structural* schema diff able to tell rename from
+remove+add (identity, not name, is matched) — which is why versioning can wait.
+- **Format: monotonic `int`** (GUIDs rejected as ugly). To stay honest about the
+  known multi-device future, the int space will later be partitioned into
+  **reserved ranges per node** — no central-counter assumption is baked in now,
+  same spirit as the storage-interface seam.
+- **Stored as a metadata envelope, separate from props** (e.g.
+  `{ "id": 5, "fields": { …props } }`), because identity is metadata, not a
+  field. This is a real storage-format evolution — the store, loader, and
+  `NodeValue` start carrying an id.
+
+**References, no ownership (object graph).** "There is no owner, just like in
+C#." A `Dictionary<int,Customer>` doesn't *own* its customers; it holds
+references to objects on the heap. So:
+- Objects live in **per-type extents** — a flat id-keyed pool per type.
+- **A single object-typed prop *is* a reference**, and object-typed collection
+  entries hold references too. Verified safe to repurpose the single+object-type
+  combination: today the renderer routes such a prop to `AppendInput`, which has
+  no `ObjectValue` case, so it renders a dead `<span>` — nothing meaningfully
+  embeds a single object today, so this breaks nothing.
+- **No `relation`/`target` schema fields.** The prop's **type is the candidate
+  source**; intrinsic identity makes "all objects of type T" enumerable
+  (type→id index). Candidate pool = all objects of that type (sufficient now).
+- The same object can be referenced from many places and is genuinely *one*
+  object — that shared-object identity is the proof the model works.
+
+**Sets — and auto-int dictionaries of objects retire.** With intrinsic identity,
+a `dict<Object> auto-int` key is a redundant surrogate id. Three collection
+shapes, split by *what supplies the key*:
+- **set** — objects keyed by their **own identity** (no surrogate). Replaces
+  every auto-int dict-of-objects. URL segment = the object's id.
+- **dictionary** — a genuine map where the **key is meaningful data you chose**
+  (e.g. `settings`, scalar values). **Kept.** `keyGeneration: auto` largely
+  retires.
+- **single** — one.
+
+**Addressing keeps today's navigation.** A URL is a **walk through the graph
+from the root**, not an ownership path. Each collection addresses a slot by what
+identifies it there: **set → member identity** (`/customers/7`), **dictionary →
+key** (`/settings/europe`), **single → field name**. The same object may be
+reachable by multiple routes (it's a graph) — there is no single canonical URL;
+an **id-route fallback** (`/~/42`) follows a bare reference not reached through a
+named collection. A dict-of-objects entry is addressed by its key; the object's
+identity stays internal.
+
+**Lifetime by GC** (chosen over explicit-destroy + dangling). No owner ⇒ delete
+splits into *unlink* (drop a reference) vs *destroy*. Lifetime is **mark-sweep
+reachability GC from the root (`Db`)**: an object no reference can reach is
+collected.
+
+**UI: pick-existing-or-create-new.** A reference field / set "New" lets the user
+pick an existing object of the type or mint a new one into the extent.
+
+**Scope honesty (ground rule 10).** This grew from "a reference feature" into a
+**storage reconception** — normalized per-type extents, an identity-addressed
+graph, and GC — which touches the storage foundation earlier than M6 planned.
+That was flagged and chosen deliberately. It is sizeable; build it in thin
+slices. **First slice:** identity + one type's extent + a **set** of references +
+identity addressing + pick-or-create + GC, with scalar dictionaries left
+untouched. Proven by "the same object via two references is one object" and
+"dropping the last reference collects it." Migrating every collection to sets and
+teaching the designer/meta-schema to author refs/sets are follow-up slices.
+
+## Schema versioning is postponed (was Milestone 5)
+
+**Git-style schema versioning is no longer next**, and will not be built as
+bespoke snapshot/diff C# now. It will be implemented **in the environment itself,
+after a computation/language milestone exists.** Reasoning:
+- **It is behavior-shaped, not data-shaped.** M4 could self-host because
+  *designing a schema is data* and the runtime already edits data. Versioning is
+  *behavior* — commit, hash, walk a parent DAG, diff — and there is no
+  computation/effect primitive yet. "Do it in itself" therefore depends on that
+  primitive existing.
+- **It rides the storage foundation M6 reshapes,** and is the sibling of the
+  future *data-level temporal versioning* — cleaner to do both together on a real
+  store than to build a throwaway JSON-snapshot git on plain files now.
+- **The one reusable piece is the diff,** not the store: a **structural,
+  identity-based** schema diff (over the designer data, which is identity-keyed),
+  so renames are exact rather than line-based remove+add. That design survives;
+  the snapshot/branch/merge machinery waits. Branches and 3-way structural merge
+  are themselves later sub-milestones.
+
 ## Concurrency, saving, and locking (eshop/CRM)
 
 Primary early use cases are custom eshop and CRM — multi-user domains where

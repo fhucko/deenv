@@ -24,9 +24,12 @@ where developers design data visually and use it as objects. Full mission in
 ## Ground rules — important
 
 1. **Build the current milestone only.** Per ROADMAP.md, Milestones 1–4 are
-   done (M4 delivered as self-hosting — see DECISIONS.md). The next milestone is
-   **Milestone 5: schema versioning** (snapshot the JSON schema document and diff
-   snapshots). Later milestones are out of scope unless explicitly asked.
+   done (M4 delivered as self-hosting — see DECISIONS.md). The current milestone is
+   **Milestone 5: the object model** — intrinsic `int` identity on non-constants,
+   references (no ownership; per-type extents), sets, identity/key addressing, and
+   GC. **Schema versioning was postponed** (to be self-hosted after a computation
+   milestone — see DECISIONS.md / ROADMAP.md). Later milestones are out of scope
+   unless explicitly asked.
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
    custom language, the render-coupled storage engine, and the multi-device
@@ -87,9 +90,20 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
-Milestones 1–4 are done. The next milestone is **Milestone 5: schema
-versioning** (snapshot the JSON schema document and diff snapshots) — not yet
-started.
+Milestones 1–4 are done. The current milestone is **Milestone 5: the object
+model** — give the data a C#-style object graph: intrinsic `int` identity on
+non-constants (objects and dictionaries; scalars have none), **references with no
+ownership** (objects live in per-type extents; a single object-typed prop *is* a
+reference), **sets** (collections keyed by a member's own identity, replacing
+surrogate-keyed `dict<Object> auto-int`; dictionaries stay for meaningful keyed
+maps), addressing that keeps today's navigation (set → identity, dict → key,
+single → field), and **GC** (mark-sweep from the root). UI offers
+pick-existing-or-create-new. This is a deliberate storage reconception
+(normalized per-type extents, identity-addressed) flagged under ground rule 10 —
+cut thin slices. First slice + full rationale in DECISIONS.md / ROADMAP.md.
+**Schema versioning was postponed** — to be self-hosted after a computation
+milestone; the reusable piece already designed is the structural identity-based
+schema diff.
 
 Milestone 4 was delivered as **self-hosting** (see DECISIONS.md): the designer is
 the instance runtime running a hand-written meta-schema (`DeEnv/meta.schema.json`),
