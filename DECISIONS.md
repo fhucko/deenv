@@ -434,6 +434,29 @@ full ASP.NET MVC. Desktop wrapper is a later option.
 
 VERIFY-ON-CLEAN-MACHINE prerequisite: __________ (fill in after testing).
 
+## C# is the kernel — app logic belongs in the app
+
+The guiding principle for what lives in C# vs. in the app: **C# does as little as possible.** Everything that can be expressed in DeEnv — using its data model, code, and designers — belongs there, not in C#. This extends the M4 self-hosting insight to the whole system.
+
+**What is structurally impossible to express inside DeEnv (irreducible C# layer):**
+- TLS termination — bytes on the wire, before the app can speak
+- Cryptographic primitives — password hashing, token signing (need native code)
+- The session token check — "is this request authenticated" must happen before app-level code runs
+- File system, network, process — the OS boundary
+
+**What belongs in the app, not in C#:**
+- Login flows, registration, password reset
+- User model, roles, permissions
+- Auth provider integrations (OAuth, SAML, etc.)
+- Session data model and issuance logic
+- Permission and visibility rules (filter expressions over the object model)
+- Devops workflows, instance management, versioning logic
+- The dev environment itself (schema designer, instance creator — extending M4 self-hosting)
+
+**Implication for security timing.** The thin C# layer (TLS + session token validation) can be built as an early hardening slice — it is small and well-defined. The auth model above it (login page, user schema, session management, OAuth integrations) requires the code milestone to exist first, because auth logic is behavior, not data. Build the seam early; fill the app side later.
+
+**The dev environment is also self-hosted.** Schema versioning, instance management, devops workflows, and the designer itself are built in DeEnv using its own primitives. Only the irreducible OS/transport boundary stays in C#.
+
 ## Testing: BDD with Gherkin
 
 Behavior is specced in Gherkin `.feature` files first, then made to pass.
