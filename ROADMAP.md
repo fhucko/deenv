@@ -104,32 +104,11 @@ author refs/sets, are follow-up slices.
 Done when: data is an object graph — objects have identity, are referenced
 (not owned), collected into sets, and shared references resolve to one object.
 
-## Milestone 6 — Real storage engine (interim)
-
-Move storage off the plain JSON file onto SQLite or Postgres — gaining
-durability, crash recovery, indexing, and isolation without building them.
-Swapped in behind the storage interface from Milestone 1. The custom
-object-oriented data layer sits on top.
-
-Done when: instances persist through a proper ACID engine, single machine.
-
-## Milestone 7 — Render-coupled storage engine
-
-The custom storage engine co-designed with the renderer (Vision pillar 5).
-It uses knowledge of what the UI is about to render to drive loading and
-preloading. Swapped in behind the same storage interface.
-
-Why here and not earlier: a render-aware engine needs (a) a *correct*
-storage layer to build on — correctness before cleverness — and (b) a
-renderer rich enough to have interesting load patterns (lists, relationships,
-views). Neither exists until the milestones above are done. See DECISIONS.md.
-
-Done when: loading/preloading decisions are driven by render intent.
-
 ---
 
 ## Future milestones (NOT scoped — do not build yet)
 
+- **Custom storage engine from scratch (M6).** Replace the plain JSON file with a bespoke storage engine built ground-up — no SQLite, no Postgres. Gains durability, crash recovery, and indexing on our own terms. Swapped in behind the storage interface from Milestone 1; the object layer sits on top. A render-coupled variant (M7) that co-designs loading/preloading with the renderer follows once there is a correct engine and a renderer rich enough to have interesting load patterns.
 - **Schema versioning (postponed).** Git-style versioning of the schema —
   but *not* via bespoke snapshot/diff code now. Planned to be built **in the
   environment itself, after the computation/language milestone** (versioning
