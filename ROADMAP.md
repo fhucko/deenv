@@ -108,32 +108,38 @@ Done when: data is an object graph — objects have identity, are referenced
 
 ## Future milestones (NOT scoped — do not build yet)
 
-- **Custom storage engine from scratch (M6).** Replace the plain JSON file with a bespoke storage engine built ground-up — no SQLite, no Postgres. Gains durability, crash recovery, and indexing on our own terms. Swapped in behind the storage interface from Milestone 1; the object layer sits on top. A render-coupled variant (M7) that co-designs loading/preloading with the renderer follows once there is a correct engine and a renderer rich enough to have interesting load patterns.
-- **Schema versioning (postponed).** Git-style versioning of the schema —
-  but *not* via bespoke snapshot/diff code now. Planned to be built **in the
-  environment itself, after the computation/language milestone** (versioning
-  is behavior-shaped, and the runtime has no computation primitive yet). It
-  also rides the storage foundation M6 reshapes and is the sibling of
-  data-level temporal versioning below — do them together on a real store.
-  The one reusable piece already designed is the **structural,
-  identity-based diff** (renames are exact, because non-constants now carry
-  identity — see Milestone 5), not the line-based kind.
-- **Real-time / multi-user.** "Other users see a notification" — push, live
-  sync, presence. Concurrency handled in C# (single server). Many milestones
-  away.
-- **Custom language.** Waits until there is a platform to host it.
-- **Multi-device / distributed runtime + distributed ACID.** The hardest
-  part of the mission. Architecture, designed for when reached — not bolted
-  on. An in-process C# lock does NOT solve cross-machine coordination.
-- **Predictive prefetching + client-side caching.** Loading data the
-  current view implies you'll visit next. This is VISION pillar 5 (the
-  render-coupled engine) arriving early — keep it out of early milestones.
+- **Custom storage engine.** Replace the plain JSON file with a bespoke
+  engine built ground-up — no SQLite, no Postgres. The storage API is not
+  yet designed; it must eventually support data filtering at fetch time and
+  be render-coupled: the engine participates in rendering so it can determine
+  exactly what data to load, preload, and cache — including for custom UIs.
+  Swapped in behind the storage interface seam from Milestone 1.
+
+- **Custom language.** An interpreted language for expressing behaviour and
+  UI logic. No host platform required — it starts interpreted. Stored
+  internally as a JSON object tree; presented as editable text only when the
+  user is editing it.
+
+- **UI customization.** User-controlled rendering, powered by the custom
+  language.
+
+- **Schema versioning.** Git-style versioning of the schema, built inside
+  the environment itself using the language milestone (versioning is
+  behaviour-shaped). The structural identity-based diff is already designed —
+  renames are exact because non-constants carry identity (Milestone 5).
+
+- **Real-time / multi-user.** Live notifications for data changes on
+  currently viewed data, with update and conflict resolution. Structural
+  (schema) change notifications and conflict resolution. Target state: the
+  app in the browser never needs a reload.
+
 - **Data-level temporal versioning.** Full history of live data; view the db
-  at any past moment. Reshapes storage to never-overwrite. Data-level
-  counterpart to schema versioning (Milestone 5). Late — changes the storage
-  foundation; the storage interface seam keeps it possible.
-- **UI customization + auto-tabs.** User-controlled rendering; auto-tabbing
-  deep single-page forms. Presentation layer over the model.
+  at any past moment. Reshapes storage to never-overwrite.
+
+- **Multi-device / distributed runtime + distributed ACID.** The hardest
+  part of the mission. An in-process C# lock does not solve cross-machine
+  coordination.
+
 - **Desktop wrapper.**
 
 These are real and they stay in the vision. They are simply not next.
