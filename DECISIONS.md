@@ -63,21 +63,18 @@ operations like "node at path P as of time T"). Exact signatures are TBD in
 code — propose them in plan mode against something concrete. This interface
 is what makes every later storage swap safe.
 
-**Milestone 6 — interim real engine:** move to SQLite or Postgres, gaining
-durability, crash recovery, indexing, and isolation for free rather than
-building them. Swapped in behind the storage interface.
-
-**Milestone 7 — render-coupled engine (Vision pillar 5):** a custom storage
-engine *is* a real goal — but a specific kind: one co-designed with the
-renderer, using knowledge of what the UI will render to drive load/preload.
-That coupling is the value; a general-purpose engine cannot do it. It is a
-*late* milestone for two reasons:
-- Correctness before cleverness. The hard parts (durability, recovery,
-  indexing, concurrency) don't get easier for being render-coupled. The
-  smart loading layer assumes correct storage underneath it already exists.
-- It needs a renderer to couple to. With a one-boolean UI there is nothing
-  to be smart about. The engine is only *designable* once the renderer has
-  real load patterns (lists, relationships, views).
+**Custom storage engine — the only storage milestone.** A bespoke engine
+built ground-up, render-coupled from the start — no SQLite/Postgres interim
+step. The plain JSON file stays until the real-time / multi-user milestone,
+where a lightweight concurrent safety fix (write-lock / atomic rename) is
+added inline. A full custom engine is deferred until after the language, UI
+customization, schema versioning, and real-time milestones, because:
+- It needs a renderer rich enough to couple to. The engine's value is knowing
+  what the UI is about to render — that signal only becomes meaningful once
+  lists, relationships, custom UIs, and real-time views exist.
+- The API is not yet designed. It must support data filtering at fetch time
+  and participate in rendering to determine what to load, preload, and cache,
+  including for custom UIs.
 
 ## Rendering: SSR first paint, then client-side, prefetch deferred
 
@@ -332,14 +329,22 @@ hides it. The user writes object code; the transport is the platform's job.
 Generated APIs are `async` where an operation genuinely cannot be
 synchronous — pretending otherwise creates worse bugs later.
 
-## Custom language waits
+## Custom language
 
 A custom language is not just a parser — it's a type checker, runtime,
 debugger, standard library, editor tooling, and docs. Building it now also
 means no existing ecosystem helps. Early milestones use **TypeScript** for
-generated code, inheriting its editor and debugger for free. The custom
-language is designed later, once there is a platform to host it and real
-users to inform it.
+generated code, inheriting its editor and debugger for free.
+
+**The language starts interpreted — no host platform required.** The earlier
+"waits until there is a platform" framing is retired: interpretation is the
+platform. It is stored internally as a JSON object tree (the same model the
+rest of the environment uses); presented as editable text only when the user
+is editing it. The milestone is placed before UI customization and schema
+versioning because both depend on the language being present.
+
+What remains deferred: a compiled target, a type checker, a standard library,
+and editor tooling. Those come once real users can inform them.
 
 ## Tool stack and project structure
 

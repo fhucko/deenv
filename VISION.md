@@ -89,8 +89,8 @@ data-model-literate; the coding burden moves from "developer only" to
    engines cannot. (Late milestone — see ROADMAP.md and DECISIONS.md.)
 
 6. **Custom language.** A purpose-built developer language for an immersive,
-   full experience. (Late milestone. Waits until there is a platform to host
-   it. See DECISIONS.md.)
+   full experience. Starts interpreted — no host platform required.
+   (See DECISIONS.md.)
 
 7. **Multi-device / distributed runtime.** The system can be configured to
    run across multiple machines, scaling on ordinary VPSes, the way cloud

@@ -108,17 +108,11 @@ Done when: data is an object graph — objects have identity, are referenced
 
 ## Future milestones (NOT scoped — do not build yet)
 
-- **Custom storage engine.** Replace the plain JSON file with a bespoke
-  engine built ground-up — no SQLite, no Postgres. The storage API is not
-  yet designed; it must eventually support data filtering at fetch time and
-  be render-coupled: the engine participates in rendering so it can determine
-  exactly what data to load, preload, and cache — including for custom UIs.
-  Swapped in behind the storage interface seam from Milestone 1.
-
 - **Custom language.** An interpreted language for expressing behaviour and
-  UI logic. No host platform required — it starts interpreted. Stored
-  internally as a JSON object tree; presented as editable text only when the
-  user is editing it.
+  UI logic. Starts interpreted — no host platform required. Stored internally
+  as a JSON object tree; presented as editable text only when the user is
+  editing it. Enables schema versioning to be built inside the environment
+  and powers UI customization.
 
 - **UI customization.** User-controlled rendering, powered by the custom
   language.
@@ -130,11 +124,21 @@ Done when: data is an object graph — objects have identity, are referenced
 
 - **Real-time / multi-user.** Live notifications for data changes on
   currently viewed data, with update and conflict resolution. Structural
-  (schema) change notifications and conflict resolution. Target state: the
-  app in the browser never needs a reload.
+  (schema) change notifications and conflict resolution — requires schema
+  versioning for structural conflict resolution. Storage gets a lightweight
+  concurrent safety fix (write-lock / atomic rename) inline as part of this
+  milestone. Target state: the app in the browser never needs a reload.
+
+- **Custom storage engine.** The only storage milestone. A bespoke engine
+  built ground-up — no SQLite, no Postgres. API TBD; must support data
+  filtering at fetch time and be render-coupled: the engine participates in
+  rendering to determine exactly what to load, preload, and cache — including
+  for custom UIs. Deferred until the renderer has real load patterns to
+  couple to.
 
 - **Data-level temporal versioning.** Full history of live data; view the db
-  at any past moment. Reshapes storage to never-overwrite.
+  at any past moment. Reshapes storage to never-overwrite. Depends on the
+  custom storage engine.
 
 - **Multi-device / distributed runtime + distributed ACID.** The hardest
   part of the mission. An in-process C# lock does not solve cross-machine
