@@ -355,6 +355,59 @@ versioning because both depend on the language being present.
 What remains deferred: a compiled target, a type checker, a standard library,
 and editor tooling. Those come once real users can inform them.
 
+## Language execution model: client/server, three states, and action queuing
+
+**No server/client distinction for the user.** The language looks the same
+everywhere. The runtime routes execution; the user never specifies where
+something runs.
+
+**Two kinds of operations:**
+
+- *Expressions* (conditions, filters, computed values) — pure and deterministic
+  over their inputs. Run anywhere; client and server always agree given the same
+  data. Apparent disagreements are data-staleness conflicts, not expression
+  conflicts — handled by the real-time conflict model, not the language.
+
+- *Actions* (mutations, effects) — the client executes optimistically; the
+  server is authoritative. If the action needs data not in the client working
+  set (not loaded, or security-sensitive), it runs server-side instead — to
+  avoid loading data to the client just to run a computation, and to keep
+  sensitive data off the client.
+
+**Client three states:**
+
+Every loaded object set exists in three simultaneous states on the client:
+
+1. *Server data* — last server-confirmed state, updated by real-time pushes.
+2. *Client before* — snapshot at the moment the client first diverged from the
+   server (the fork point). Stays fixed while an editing session is open.
+3. *Client after* — current optimistic state; accumulates all local action
+   results.
+
+All three are needed for proper conflict resolution:
+- `server data ≠ client before` → a concurrent server change is detected
+- 3-way merge: base = client before, ours = client after, theirs = server data
+- Auto-merge when different fields were changed on each side; surface a
+  resolution UI when the same field was changed on both sides
+- `client before` is the clean rollback target if the user abandons changes
+
+**Local change journal:**
+
+The client journals every field change made by client-side actions at field
+granularity. Used for rollback on server rejection (replay in reverse to reach
+`client before`) and for the 3-way merge (makes `client after` inspectable
+field by field).
+
+**Action queue — parallel by default, serial when dependent:**
+
+Multiple actions can be in-flight simultaneously. They are parallel by default:
+both accumulate field-level changes into `client after`. The runtime serializes
+only when a data dependency is detected — B reads a field A wrote, or both
+write the same field. On server rejection of one action, only actions that
+depended on it need rollback or replay; independent parallel actions are
+unaffected. If a conflict resolution UI is open, new actions are blocked until
+the conflict is resolved — you cannot queue on an unresolved base.
+
 ## Tool stack and project structure
 
 Web-first: **C# backend, TypeScript front-end.** C# stays where it's strong;
