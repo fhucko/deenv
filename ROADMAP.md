@@ -112,7 +112,8 @@ Done when: data is an object graph — objects have identity, are referenced
   UI logic. Starts interpreted — no host platform required. Stored internally
   as a JSON object tree; presented as editable text only when the user is
   editing it. Enables schema versioning to be built inside the environment
-  and powers UI customization.
+  and powers UI customization, including filter expressions on data in custom
+  UI views.
 
 - **UI customization.** User-controlled rendering, powered by the custom
   language.

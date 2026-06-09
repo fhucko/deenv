@@ -343,6 +343,15 @@ rest of the environment uses); presented as editable text only when the user
 is editing it. The milestone is placed before UI customization and schema
 versioning because both depend on the language being present.
 
+**Known uses the language must cover:**
+- Filter expressions on data in custom UI views (e.g. `task.done == true`
+  narrows a list to matching objects). This is the first concrete surface —
+  a filter predicate evaluates against the object model and returns a
+  filtered set.
+- UI rendering logic (what to show, how to lay it out).
+- Schema versioning behaviour (commit, diff, walk history) — built inside
+  the environment.
+
 What remains deferred: a compiled target, a type checker, a standard library,
 and editor tooling. Those come once real users can inform them.
 
