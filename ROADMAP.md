@@ -50,7 +50,7 @@ Done when: an instance can be defined with multiple fields and runs.
 
 Promote that description into a clean, declarative **JSON schema document**
 (tables, columns, types, relationships) — the format the generator reads,
-the versioning diffs, the language eventually compiles against.
+the versioning diffs, what code eventually compiles against.
 
 Done when: instances are defined by a validated JSON schema document.
 
@@ -64,7 +64,7 @@ data into a canonical `instance.schema.json` (validated by the normal loader) an
 the instance runs it. A `--mode` switch (VS launch profiles
 Instance / Designer / Export) flips between authoring, exporting, and running.
 The pretty card-grid surface and an in-app "Run" action are intentionally left to
-later milestones (UI customization, and the computation/language milestone) — see
+later milestones (UI customization, and the code milestone) — see
 DECISIONS.md.
 
 Done when: a user can design a schema with no code and run it. ✓
@@ -108,18 +108,16 @@ Done when: data is an object graph — objects have identity, are referenced
 
 ## Future milestones (NOT scoped — do not build yet)
 
-- **Custom language.** An interpreted language for expressing behaviour and
-  UI logic. Starts interpreted — no host platform required. Stored internally
-  as a JSON object tree; presented as editable text only when the user is
-  editing it. Enables schema versioning to be built inside the environment
-  and powers UI customization, including filter expressions on data in custom
-  UI views.
+- **Code.** An interpreted code layer for expressing behaviour and UI logic.
+  No host platform required — starts interpreted. Stored internally as a JSON
+  object tree; presented as editable text only when the user is editing it.
+  Enables schema versioning to be built inside the environment and powers UI
+  customization, including filter expressions on data in custom UI views.
 
-- **UI customization.** User-controlled rendering, powered by the custom
-  language.
+- **UI customization.** User-controlled rendering, powered by code.
 
 - **Schema versioning.** Git-style versioning of the schema, built inside
-  the environment itself using the language milestone (versioning is
+  the environment itself using the code milestone (versioning is
   behaviour-shaped). The structural identity-based diff is already designed —
   renames are exact because non-constants carry identity (Milestone 5).
 

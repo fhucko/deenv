@@ -67,7 +67,7 @@ is what makes every later storage swap safe.
 built ground-up, render-coupled from the start — no SQLite/Postgres interim
 step. The plain JSON file stays until the real-time / multi-user milestone,
 where a lightweight concurrent safety fix (write-lock / atomic rename) is
-added inline. A full custom engine is deferred until after the language, UI
+added inline. A full custom engine is deferred until after the code milestone, UI
 customization, schema versioning, and real-time milestones, because:
 - It needs a renderer rich enough to couple to. The engine's value is knowing
   what the UI is about to render — that signal only becomes meaningful once
@@ -146,7 +146,7 @@ dropdown.
 - **UI customization** — a real card-grid/drag-drop designer surface.
 - **An in-app "Run" button** — turning designer data into a running instance from
   *inside* the app is the first action/effect primitive, i.e. the
-  computation/custom-language milestone. Export stays an external VS mode until
+  code milestone. Export stays an external VS mode until
   then; the same `Project` function gets reused behind an action when it arrives.
 
 ## Milestone 5 — the object model (identity, references, sets, no ownership, GC)
@@ -235,7 +235,7 @@ the last reference collects it." Remaining: teaching the designer to author sets
 
 **Git-style schema versioning is no longer next**, and will not be built as
 bespoke snapshot/diff C# now. It will be implemented **in the environment itself,
-after a computation/language milestone exists.** Reasoning:
+after a code milestone exists.** Reasoning:
 - **It is behavior-shaped, not data-shaped.** M4 could self-host because
   *designing a schema is data* and the runtime already edits data. Versioning is
   *behavior* — commit, hash, walk a parent DAG, diff — and there is no
@@ -329,21 +329,21 @@ hides it. The user writes object code; the transport is the platform's job.
 Generated APIs are `async` where an operation genuinely cannot be
 synchronous — pretending otherwise creates worse bugs later.
 
-## Custom language
+## Code
 
-A custom language is not just a parser — it's a type checker, runtime,
-debugger, standard library, editor tooling, and docs. Building it now also
-means no existing ecosystem helps. Early milestones use **TypeScript** for
-generated code, inheriting its editor and debugger for free.
+Code is not just a parser — it's a type checker, runtime, debugger, standard
+library, editor tooling, and docs. Building it now also means no existing
+ecosystem helps. Early milestones use **TypeScript** for generated code,
+inheriting its editor and debugger for free.
 
-**The language starts interpreted — no host platform required.** The earlier
-"waits until there is a platform" framing is retired: interpretation is the
-platform. It is stored internally as a JSON object tree (the same model the
-rest of the environment uses); presented as editable text only when the user
-is editing it. The milestone is placed before UI customization and schema
-versioning because both depend on the language being present.
+**Code starts interpreted — no host platform required.** The earlier "waits
+until there is a platform" framing is retired: interpretation is the platform.
+Stored internally as a JSON object tree (the same model the rest of the
+environment uses); presented as editable text only when the user is editing
+it. The milestone is placed before UI customization and schema versioning
+because both depend on code being present.
 
-**Known uses the language must cover:**
+**Known uses code must cover:**
 - Filter expressions on data in custom UI views (e.g. `task.done == true`
   narrows a list to matching objects). This is the first concrete surface —
   a filter predicate evaluates against the object model and returns a
@@ -355,18 +355,17 @@ versioning because both depend on the language being present.
 What remains deferred: a compiled target, a type checker, a standard library,
 and editor tooling. Those come once real users can inform them.
 
-## Language execution model: client/server, three states, and action queuing
+## Code execution model: client/server, three states, and action queuing
 
-**No server/client distinction for the user.** The language looks the same
-everywhere. The runtime routes execution; the user never specifies where
-something runs.
+**No server/client distinction for the user.** Code looks the same everywhere.
+The runtime routes execution; the user never specifies where something runs.
 
 **Two kinds of operations:**
 
 - *Expressions* (conditions, filters, computed values) — pure and deterministic
   over their inputs. Run anywhere; client and server always agree given the same
   data. Apparent disagreements are data-staleness conflicts, not expression
-  conflicts — handled by the real-time conflict model, not the language.
+  conflicts — handled by the real-time conflict model, not by code.
 
 - *Actions* (mutations, effects) — the client executes optimistically; the
   server is authoritative. If the action needs data not in the client working

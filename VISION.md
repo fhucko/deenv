@@ -88,9 +88,8 @@ data-model-literate; the coding burden moves from "developer only" to
    value — this is not reinventing SQLite, it is doing something existing
    engines cannot. (Late milestone — see ROADMAP.md and DECISIONS.md.)
 
-6. **Custom language.** A purpose-built developer language for an immersive,
-   full experience. Starts interpreted — no host platform required.
-   (See DECISIONS.md.)
+6. **Code.** A purpose-built code layer for an immersive, full experience.
+   Starts interpreted — no host platform required. (See DECISIONS.md.)
 
 7. **Multi-device / distributed runtime.** The system can be configured to
    run across multiple machines, scaling on ordinary VPSes, the way cloud
