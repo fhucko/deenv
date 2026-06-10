@@ -82,6 +82,128 @@ public class InstanceContext
         InstanceDescriptionLoader.LoadFile(
             Path.Combine(AppContext.BaseDirectory, "instance.schema.json"));
 
+    // Code milestone: a hand-written `ui` component over a Task set. The render fn
+    // exercises element/text, a bound text field, a bound checkbox, foreach, if/else,
+    // and where/orderBy collection functions — the full Stage-2 SSR surface.
+    public static InstanceDescription TasksUiDb() =>
+        InstanceDescriptionLoader.Load(TasksUiJson);
+
+    // The rendered HTML from the code-owned UI (Stage 2 SSR), under test.
+    public string? RenderedHtml { get; set; }
+
+    private const string TasksUiJson = """
+    {
+      "types": [
+        { "name": "Db", "baseType": "object",
+          "props": [ { "name": "tasks", "type": "Task", "cardinality": "set" } ] },
+        { "name": "Task", "baseType": "object",
+          "props": [
+            { "name": "title",    "type": "text" },
+            { "name": "done",     "type": "bool" },
+            { "name": "priority", "type": "int"  }
+          ] }
+      ],
+      "ui": {
+        "vars": [
+          { "name": "path",  "value": { "type": "text", "value": "/" } },
+          { "name": "title", "value": { "type": "text", "value": "Tasks" } }
+        ],
+        "render": {
+          "type": "fn",
+          "params": [],
+          "body": { "type": "block", "statements": [ { "type": "return", "value":
+            { "type": "tag", "name": "main", "attributes": [], "children": [
+              { "type": "tag", "name": "h1", "attributes": [],
+                "children": [ { "type": "symbol", "name": "title" } ] },
+
+              { "type": "tag", "name": "section",
+                "attributes": [ { "name": "id", "value": { "type": "text", "value": "all" } } ],
+                "children": [
+                  { "type": "foreach",
+                    "item": { "name": "t" },
+                    "collection": { "type": "call",
+                      "fn": { "type": "infixOp", "op": "objectProp",
+                        "left": { "type": "infixOp", "op": "objectProp",
+                          "left": { "type": "symbol", "name": "db" },
+                          "right": { "type": "symbol", "name": "tasks" } },
+                        "right": { "type": "symbol", "name": "orderBy" } },
+                      "params": [ { "type": "fn", "params": [ { "name": "x" } ],
+                        "body": { "type": "block", "statements": [ { "type": "return", "value":
+                          { "type": "infixOp", "op": "objectProp",
+                            "left": { "type": "symbol", "name": "x" },
+                            "right": { "type": "symbol", "name": "priority" } } } ] } } ] },
+                    "body": [
+                      { "type": "tag", "name": "div",
+                        "attributes": [ { "name": "class", "value": { "type": "text", "value": "task" } } ],
+                        "children": [
+                          { "type": "tag", "name": "input",
+                            "attributes": [
+                              { "name": "type",  "value": { "type": "text", "value": "text" } },
+                              { "name": "value", "value": { "type": "infixOp", "op": "objectProp",
+                                "left": { "type": "symbol", "name": "t" },
+                                "right": { "type": "symbol", "name": "title" } } }
+                            ], "children": [] },
+                          { "type": "tag", "name": "input",
+                            "attributes": [
+                              { "name": "type",    "value": { "type": "text", "value": "checkbox" } },
+                              { "name": "checked", "value": { "type": "infixOp", "op": "objectProp",
+                                "left": { "type": "symbol", "name": "t" },
+                                "right": { "type": "symbol", "name": "done" } } }
+                            ], "children": [] },
+                          { "type": "if",
+                            "condition": { "type": "infixOp", "op": "objectProp",
+                              "left": { "type": "symbol", "name": "t" },
+                              "right": { "type": "symbol", "name": "done" } },
+                            "body": [ { "type": "tag", "name": "span",
+                              "attributes": [ { "name": "class", "value": { "type": "text", "value": "status" } } ],
+                              "children": [ { "type": "text", "value": "done" } ] } ],
+                            "elseBody": [ { "type": "tag", "name": "span",
+                              "attributes": [ { "name": "class", "value": { "type": "text", "value": "status" } } ],
+                              "children": [ { "type": "text", "value": "open" } ] } ] }
+                        ] }
+                    ] }
+                ] },
+
+              { "type": "tag", "name": "section",
+                "attributes": [ { "name": "id", "value": { "type": "text", "value": "open" } } ],
+                "children": [
+                  { "type": "foreach",
+                    "item": { "name": "t" },
+                    "collection": { "type": "call",
+                      "fn": { "type": "infixOp", "op": "objectProp",
+                        "left": { "type": "call",
+                          "fn": { "type": "infixOp", "op": "objectProp",
+                            "left": { "type": "infixOp", "op": "objectProp",
+                              "left": { "type": "symbol", "name": "db" },
+                              "right": { "type": "symbol", "name": "tasks" } },
+                            "right": { "type": "symbol", "name": "where" } },
+                          "params": [ { "type": "fn", "params": [ { "name": "x" } ],
+                            "body": { "type": "block", "statements": [ { "type": "return", "value":
+                              { "type": "infixOp", "op": "equals",
+                                "left": { "type": "infixOp", "op": "objectProp",
+                                  "left": { "type": "symbol", "name": "x" },
+                                  "right": { "type": "symbol", "name": "done" } },
+                                "right": { "type": "bool", "value": false } } } ] } } ] },
+                        "right": { "type": "symbol", "name": "orderBy" } },
+                      "params": [ { "type": "fn", "params": [ { "name": "x" } ],
+                        "body": { "type": "block", "statements": [ { "type": "return", "value":
+                          { "type": "infixOp", "op": "objectProp",
+                            "left": { "type": "symbol", "name": "x" },
+                            "right": { "type": "symbol", "name": "priority" } } } ] } } ] },
+                    "body": [
+                      { "type": "tag", "name": "span",
+                        "attributes": [ { "name": "class", "value": { "type": "text", "value": "open-title" } } ],
+                        "children": [ { "type": "infixOp", "op": "objectProp",
+                          "left": { "type": "symbol", "name": "t" },
+                          "right": { "type": "symbol", "name": "title" } } ] }
+                    ] }
+                ] }
+            ] } } ] }
+        }
+      }
+    }
+    """;
+
     // ── storage ───────────────────────────────────────────────────────────────
 
     public string DataFilePath { get; set; } = Path.GetTempFileName();

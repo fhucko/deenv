@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DeEnv.Code;
+using DeEnv.Instance;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TUnit.Core;
@@ -14,7 +15,7 @@ namespace DeEnv.Tests.Code;
 // AST shape a hand-written instance.schema.json carries.
 public sealed class ConformanceTests
 {
-    private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
+    private static readonly JsonSerializerOptions JsonOpts = SchemaJson.Options;
 
     private sealed record Suite(Case[] Cases);
     public sealed record Case(string Name, JsonElement Expr, Expectation Expect);

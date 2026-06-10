@@ -20,7 +20,7 @@ public static class DbBridge
     // Load the Db root object graph as a runtime ExecObject (IsInDb = true).
     public static ExecObject LoadRoot(IInstanceStore store, InstanceDescription desc, ExecContext context)
     {
-        var db = desc.Db ?? throw new InvalidOperationException("No Db type in the schema.");
+        var db = desc.Db() ?? throw new InvalidOperationException("No Db type in the schema.");
         if (store.ReadNode(NodePath.Root) is not ObjectValue root)
             throw new InvalidOperationException("Db root is not an object.");
         var loaded = new Dictionary<int, ExecObject>();
@@ -40,7 +40,7 @@ public static class DbBridge
         foreach (var prop in type.Props ?? [])
         {
             var fieldPath = path.Field(prop.Name);
-            var elemType = ResolveType(prop.TypeName, desc);
+            var elemType = ResolveType(prop.Type, desc);
 
             switch (prop.Cardinality)
             {
@@ -72,7 +72,7 @@ public static class DbBridge
                     break;
 
                 default:
-                    if (desc.IsObjectType(prop.TypeName))
+                    if (desc.IsObjectType(prop.Type))
                     {
                         // Single object-typed prop: a reference into the extent.
                         if (ov.Fields.TryGetValue(prop.Name, out var f)
@@ -133,5 +133,5 @@ public static class DbBridge
     };
 
     private static TypeDefinition? ResolveType(string name, InstanceDescription desc) =>
-        desc.FindType(name) ?? new TypeDefinition(name, name);
+        desc.FindType(name) ?? BaseTypes.Leaf(name);
 }

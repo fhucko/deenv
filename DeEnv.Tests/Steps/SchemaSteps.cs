@@ -61,8 +61,8 @@ public sealed class SchemaSteps(InstanceContext ctx)
     [Then("the root type is named {string}")]
     public async Task ThenRootTypeNamedAsync(string name)
     {
-        await Assert.That(ctx.LoadedDescription!.Db).IsNotNull();
-        await Assert.That(ctx.LoadedDescription!.Db!.Name).IsEqualTo(name);
+        await Assert.That(ctx.LoadedDescription!.Db()).IsNotNull();
+        await Assert.That(ctx.LoadedDescription!.Db()!.Name).IsEqualTo(name);
     }
 
     [Then("loading is rejected with an error mentioning {string}")]

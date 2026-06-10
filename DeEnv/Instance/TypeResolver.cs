@@ -9,9 +9,6 @@ public record ResolvedTypeInfo(
 
 public sealed class TypeResolver
 {
-    private static readonly HashSet<string> BaseTypeNames =
-        ["bool", "int", "decimal", "text", "date", "datetime"];
-
     private readonly InstanceDescription _desc;
 
     public TypeResolver(InstanceDescription desc) => _desc = desc;
@@ -19,7 +16,7 @@ public sealed class TypeResolver
     // Returns type info at the given path, or null if the path doesn't resolve.
     public ResolvedTypeInfo? ResolveType(NodePath path)
     {
-        var db = _desc.Db;
+        var db = _desc.Db();
         if (db == null) return null;
 
         var currentType = db;
@@ -41,13 +38,13 @@ public sealed class TypeResolver
                 var prop = currentType.Props?.FirstOrDefault(p => p.Name == segment);
                 if (prop == null) return null;
 
-                var resolved = ResolveTypeName(prop.TypeName);
+                var resolved = ResolveTypeName(prop.Type);
                 if (resolved == null) return null;
 
                 currentType = resolved;
                 currentCardinality = prop.Cardinality;
                 // Only a dictionary carries a key type; single and set do not.
-                currentKeyTypeName = prop.Cardinality == Cardinality.Dictionary ? prop.EffectiveKeyType : null;
+                currentKeyTypeName = prop.Cardinality == Cardinality.Dictionary ? (prop.KeyType ?? "text") : null;
             }
             else
             {
@@ -60,8 +57,8 @@ public sealed class TypeResolver
 
     private TypeDefinition? ResolveTypeName(string name)
     {
-        if (BaseTypeNames.Contains(name))
-            return new TypeDefinition(name, name); // synthetic leaf TypeDefinition
+        if (BaseTypes.IsName(name))
+            return BaseTypes.Leaf(name); // synthetic leaf TypeDefinition
 
         return _desc.FindType(name);
     }

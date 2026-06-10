@@ -142,7 +142,7 @@ public sealed class CodeExecutor
 
     private IExecValue ExecuteInfixOp(CodeInfixOp codeInfixOp, ExecScope scope, ExecContext context)
     {
-        if (codeInfixOp.Type == CodeInfixOpType.ObjectProp)
+        if (codeInfixOp.Op == CodeInfixOpType.ObjectProp)
         {
             if (codeInfixOp.Right is not CodeSymbol member)
                 throw new CodeRuntimeException("Object-prop access expects a symbol on the right.");
@@ -164,7 +164,7 @@ public sealed class CodeExecutor
 
         var left = ExecuteValue(codeInfixOp.Left, scope, context);
         var right = ExecuteValue(codeInfixOp.Right, scope, context);
-        return codeInfixOp.Type switch
+        return codeInfixOp.Op switch
         {
             CodeInfixOpType.Add             => new ExecInt { Value = AsInt(left) + AsInt(right) },
             CodeInfixOpType.Subtract        => new ExecInt { Value = AsInt(left) - AsInt(right) },
@@ -179,7 +179,7 @@ public sealed class CodeExecutor
             CodeInfixOpType.MoreThanOrEqual => new ExecBool { Value = AsInt(left) >= AsInt(right) },
             CodeInfixOpType.And             => new ExecBool { Value = AsBool(left) && AsBool(right) },
             CodeInfixOpType.Or              => new ExecBool { Value = AsBool(left) || AsBool(right) },
-            _ => throw new NotImplementedException($"Infix op {codeInfixOp.Type}"),
+            _ => throw new NotImplementedException($"Infix op {codeInfixOp.Op}"),
         };
     }
 
@@ -199,6 +199,17 @@ public sealed class CodeExecutor
             ExecSysFunction sysFn => CallSysFunction(sysFn, codeCall.Params, scope, context),
             _ => throw new CodeRuntimeException("Target of a call is not a function."),
         };
+    }
+
+    // Invoke a function with already-evaluated arguments in a child of `scope`.
+    // Used by the SSR renderer to call the render fn (no args) over a prepared
+    // top scope (db + ui vars + functions).
+    public IExecValue InvokeFunction(CodeFunction fn, IReadOnlyList<IExecValue> args, ExecScope scope, ExecContext context)
+    {
+        var callScope = new ExecScope { Parent = scope };
+        for (var i = 0; i < args.Count && i < fn.Params.Length; i++)
+            callScope.Items[fn.Params[i].Name] = new ExecScopeItem { Value = args[i], IsReadOnly = true };
+        return ExecuteBlock(fn.Body, callScope, context) ?? new ExecNothing();
     }
 
     private IExecValue CallFunction(ExecFunction fn, ICodeValue[] args, ExecScope scope, ExecContext context)

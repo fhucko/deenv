@@ -167,8 +167,8 @@ public sealed class BridgeSteps(InstanceContext ctx)
         var prop = _exported!.FindType(typeName)?.Props?.FirstOrDefault(p => p.Name == propName);
         await Assert.That(prop).IsNotNull();
         await Assert.That(prop!.Cardinality).IsEqualTo(Cardinality.Single);
-        await Assert.That(prop.TypeName).IsEqualTo(refType);
-        await Assert.That(_exported!.IsObjectType(prop.TypeName)).IsTrue();
+        await Assert.That(prop.Type).IsEqualTo(refType);
+        await Assert.That(_exported!.IsObjectType(prop.Type)).IsTrue();
     }
 
     [Then("a reference link {string} is present")]
@@ -184,7 +184,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
         var prop = _exported!.FindType(typeName)?.Props?.FirstOrDefault(p => p.Name == propName);
         await Assert.That(prop).IsNotNull();
         await Assert.That(prop!.Cardinality).IsEqualTo(Cardinality.Set);
-        await Assert.That(prop.TypeName).IsEqualTo(elemType);
+        await Assert.That(prop.Type).IsEqualTo(elemType);
     }
 
     [Then("the exported type {string} has a dictionary prop {string} of type {string}")]
@@ -193,7 +193,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
         var prop = _exported!.FindType(typeName)?.Props?.FirstOrDefault(p => p.Name == propName);
         await Assert.That(prop).IsNotNull();
         await Assert.That(prop!.Cardinality).IsEqualTo(Cardinality.Dictionary);
-        await Assert.That(prop.TypeName).IsEqualTo(elemType);
+        await Assert.That(prop.Type).IsEqualTo(elemType);
     }
 
     [Then("the exported type {string} lists prop {string} before {string}")]

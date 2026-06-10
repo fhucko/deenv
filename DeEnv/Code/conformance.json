@@ -19,44 +19,44 @@
     {
       "name": "arithmetic precedence (2*3+4)",
       "expr": {
-        "type": "infixOp", "op": "Add",
-        "left": { "type": "infixOp", "op": "Multiply", "left": { "type": "int", "value": 2 }, "right": { "type": "int", "value": 3 } },
+        "type": "infixOp", "op": "add",
+        "left": { "type": "infixOp", "op": "multiply", "left": { "type": "int", "value": 2 }, "right": { "type": "int", "value": 3 } },
         "right": { "type": "int", "value": 4 }
       },
       "expect": { "kind": "int", "value": 10 }
     },
     {
       "name": "comparison (3 > 1)",
-      "expr": { "type": "infixOp", "op": "MoreThan", "left": { "type": "int", "value": 3 }, "right": { "type": "int", "value": 1 } },
+      "expr": { "type": "infixOp", "op": "moreThan", "left": { "type": "int", "value": 3 }, "right": { "type": "int", "value": 1 } },
       "expect": { "kind": "bool", "value": true }
     },
     {
       "name": "text equality",
-      "expr": { "type": "infixOp", "op": "Equals", "left": { "type": "text", "value": "a" }, "right": { "type": "text", "value": "a" } },
+      "expr": { "type": "infixOp", "op": "equals", "left": { "type": "text", "value": "a" }, "right": { "type": "text", "value": "a" } },
       "expect": { "kind": "bool", "value": true }
     },
     {
       "name": "logical and (false)",
       "expr": {
-        "type": "infixOp", "op": "And",
-        "left": { "type": "infixOp", "op": "Equals", "left": { "type": "int", "value": 1 }, "right": { "type": "int", "value": 1 } },
-        "right": { "type": "infixOp", "op": "LessThan", "left": { "type": "int", "value": 2 }, "right": { "type": "int", "value": 1 } }
+        "type": "infixOp", "op": "and",
+        "left": { "type": "infixOp", "op": "equals", "left": { "type": "int", "value": 1 }, "right": { "type": "int", "value": 1 } },
+        "right": { "type": "infixOp", "op": "lessThan", "left": { "type": "int", "value": 2 }, "right": { "type": "int", "value": 1 } }
       },
       "expect": { "kind": "bool", "value": false }
     },
     {
       "name": "logical or (true)",
       "expr": {
-        "type": "infixOp", "op": "Or",
-        "left": { "type": "infixOp", "op": "Equals", "left": { "type": "int", "value": 1 }, "right": { "type": "int", "value": 1 } },
-        "right": { "type": "infixOp", "op": "LessThan", "left": { "type": "int", "value": 2 }, "right": { "type": "int", "value": 1 } }
+        "type": "infixOp", "op": "or",
+        "left": { "type": "infixOp", "op": "equals", "left": { "type": "int", "value": 1 }, "right": { "type": "int", "value": 1 } },
+        "right": { "type": "infixOp", "op": "lessThan", "left": { "type": "int", "value": 2 }, "right": { "type": "int", "value": 1 } }
       },
       "expect": { "kind": "bool", "value": true }
     },
     {
       "name": "object prop access",
       "expr": {
-        "type": "infixOp", "op": "ObjectProp",
+        "type": "infixOp", "op": "objectProp",
         "left": { "type": "object", "props": [ { "name": "n", "value": { "type": "int", "value": 7 } } ] },
         "right": { "type": "symbol", "name": "n" }
       },
@@ -70,7 +70,7 @@
           "type": "fn",
           "params": [ { "name": "n" } ],
           "body": { "type": "block", "statements": [
-            { "type": "return", "value": { "type": "infixOp", "op": "Add", "left": { "type": "symbol", "name": "n" }, "right": { "type": "int", "value": 1 } } }
+            { "type": "return", "value": { "type": "infixOp", "op": "add", "left": { "type": "symbol", "name": "n" }, "right": { "type": "int", "value": 1 } } }
           ] }
         },
         "params": [ { "type": "int", "value": 41 } ]

@@ -375,14 +375,14 @@ public sealed class WsHandler
         {
             if (prop.Cardinality == Cardinality.Dictionary) continue;
             if (el.TryGetProperty(prop.Name, out var fe))
-                fields[prop.Name] = DeserializeValue(fe, ResolveTypeDef(prop.TypeName));
+                fields[prop.Name] = DeserializeValue(fe, ResolveTypeDef(prop.Type));
         }
         return new ObjectValue(fields);
     }
 
     private TypeDefinition ResolveTypeDef(string name) =>
-        name is "bool" or "int" or "decimal" or "text" or "date" or "datetime"
-            ? new TypeDefinition(name, name)
+        BaseTypes.IsName(name)
+            ? BaseTypes.Leaf(name)
             : _desc.FindType(name) ?? throw new InvalidOperationException($"Unknown type '{name}'.");
 
     private static NodeValue ParseKey(string key, string keyType) => keyType switch

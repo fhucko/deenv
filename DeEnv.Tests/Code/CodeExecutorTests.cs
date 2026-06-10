@@ -19,9 +19,9 @@ public sealed class CodeExecutorTests
     private static CodeBool Bool(bool v) => new() { Value = v };
     private static CodeSymbol Sym(string n) => new() { Name = n };
     private static CodeInfixOp Op(CodeInfixOpType t, ICodeValue l, ICodeValue r) =>
-        new() { Type = t, Left = l, Right = r };
+        new() { Op = t, Left = l, Right = r };
     private static CodeInfixOp Prop(ICodeValue target, string name) =>
-        new() { Type = CodeInfixOpType.ObjectProp, Left = target, Right = Sym(name) };
+        new() { Op = CodeInfixOpType.ObjectProp, Left = target, Right = Sym(name) };
 
     private static IExecValue Eval(ICodeValue v, ExecScope? scope = null) =>
         new CodeExecutor().ExecuteValue(v, scope ?? new ExecScope(), new ExecContext());

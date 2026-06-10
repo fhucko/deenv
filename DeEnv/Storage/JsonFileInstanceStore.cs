@@ -41,7 +41,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         if (path.Segments.Count > 0 && path.Segments[0] == "~") return null; // id-route → renderer
 
         var doc = LoadDoc();
-        var db = _desc.Db;
+        var db = _desc.Db();
         if (db == null) return null;
 
         if (doc["root"] is not JsonObject rootVal) return null;
@@ -59,7 +59,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         {
             var prop = curType.Props?.FirstOrDefault(p => p.Name == segs[i]);
             if (prop == null) return null;
-            var elemType = ResolveTypeDef(prop.TypeName);
+            var elemType = ResolveTypeDef(prop.Type);
             var last = i == segs.Count - 1;
 
             switch (prop.Cardinality)
@@ -78,7 +78,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 case Cardinality.Dictionary:
                 {
                     var dictNode = curFields[prop.Name] as JsonObject;
-                    if (last) return BuildDictionary(doc, dictNode, elemType, prop.EffectiveKeyType);
+                    if (last) return BuildDictionary(doc, dictNode, elemType, (prop.KeyType ?? "text"));
 
                     var entry = (dictNode?["entries"] as JsonObject)?[segs[i + 1]] as JsonObject;
                     if (entry == null) return null;
@@ -93,14 +93,14 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 }
                 default: // Single
                 {
-                    if (_desc.IsObjectType(prop.TypeName))
+                    if (_desc.IsObjectType(prop.Type))
                     {
                         // A single object-typed prop is a reference.
                         if (curFields[prop.Name] is not JsonObject refVal
                             || refVal["id"]?.GetValue<int>() is not int id)
-                            return last ? new ReferenceValue(null, prop.TypeName) : null;
+                            return last ? new ReferenceValue(null, prop.Type) : null;
                         var rf = FieldsOf(doc, refVal);
-                        if (rf == null) return last ? new ReferenceValue(null, prop.TypeName) : null;
+                        if (rf == null) return last ? new ReferenceValue(null, prop.Type) : null;
                         if (last) return BuildObject(doc, rf, elemType);
                         curFields = rf; curType = elemType; continue;
                     }
@@ -120,18 +120,18 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         var map = new Dictionary<string, NodeValue>();
         foreach (var prop in type.Props ?? [])
         {
-            var elemType = ResolveTypeDef(prop.TypeName);
+            var elemType = ResolveTypeDef(prop.Type);
             switch (prop.Cardinality)
             {
                 case Cardinality.Set:
                     map[prop.Name] = BuildSetValue(doc, fields[prop.Name] as JsonObject, elemType);
                     break;
                 case Cardinality.Dictionary:
-                    map[prop.Name] = BuildDictionary(doc, fields[prop.Name] as JsonObject, elemType, prop.EffectiveKeyType);
+                    map[prop.Name] = BuildDictionary(doc, fields[prop.Name] as JsonObject, elemType, (prop.KeyType ?? "text"));
                     break;
                 default:
-                    if (_desc.IsObjectType(prop.TypeName))
-                        map[prop.Name] = new ReferenceValue((fields[prop.Name] as JsonObject)?["id"]?.GetValue<int>(), prop.TypeName);
+                    if (_desc.IsObjectType(prop.Type))
+                        map[prop.Name] = new ReferenceValue((fields[prop.Name] as JsonObject)?["id"]?.GetValue<int>(), prop.Type);
                     else
                     {
                         var v = fields[prop.Name] as JsonObject;
@@ -198,7 +198,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             ?? throw new InvalidOperationException($"Path {path} is not a writable object.");
 
         foreach (var prop in target.Type.Props ?? [])
-            if (prop.Cardinality == Cardinality.Single && !_desc.IsObjectType(prop.TypeName)
+            if (prop.Cardinality == Cardinality.Single && !_desc.IsObjectType(prop.Type)
                 && value.Fields.TryGetValue(prop.Name, out var v))
                 target.Fields[prop.Name] = ToTagged(v);
 
@@ -208,7 +208,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // Walk to the fields of the object a path lands on (following set/dict/refs).
     private (JsonObject Fields, TypeDefinition Type)? WalkToObjectFields(JsonObject doc, NodePath path)
     {
-        var db = _desc.Db;
+        var db = _desc.Db();
         if (db == null || doc["root"] is not JsonObject rootVal
             || rootVal["type"]?.GetValue<string>() != "object")
             return null;
@@ -222,7 +222,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         {
             var prop = curType.Props?.FirstOrDefault(p => p.Name == segs[i]);
             if (prop == null) return null;
-            var elemType = ResolveTypeDef(prop.TypeName);
+            var elemType = ResolveTypeDef(prop.Type);
 
             if (prop.Cardinality == Cardinality.Set)
             {
@@ -240,7 +240,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 if (ef == null) return null;
                 curFields = ef; curType = elemType; i++; continue;
             }
-            if (_desc.IsObjectType(prop.TypeName))
+            if (_desc.IsObjectType(prop.Type))
             {
                 if (curFields[prop.Name] is not JsonObject refVal) return null;
                 var rf = FieldsOf(doc, refVal);
@@ -439,10 +439,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 fjson[prop.Name] = new JsonObject { ["type"] = "set", ["members"] = new JsonObject() };
             else if (prop.Cardinality == Cardinality.Dictionary)
                 fjson[prop.Name] = new JsonObject { ["type"] = "dictionary", ["entries"] = new JsonObject() };
-            else if (!_desc.IsObjectType(prop.TypeName))
+            else if (!_desc.IsObjectType(prop.Type))
                 fjson[prop.Name] = provided.Fields.TryGetValue(prop.Name, out var v)
                     ? ToTagged(v)
-                    : DefaultTagged(ResolveTypeDef(prop.TypeName).BaseType);
+                    : DefaultTagged(ResolveTypeDef(prop.Type).BaseType);
             // single object props start unset (absent)
         }
         return fjson;
@@ -553,10 +553,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 fields[prop.Name] = new SetValue(new Dictionary<int, NodeValue>());
             else if (prop.Cardinality == Cardinality.Dictionary)
                 fields[prop.Name] = new DictionaryValue(new Dictionary<NodeValue, NodeValue>());
-            else if (_desc.IsObjectType(prop.TypeName))
-                fields[prop.Name] = new ReferenceValue(null, prop.TypeName);
+            else if (_desc.IsObjectType(prop.Type))
+                fields[prop.Name] = new ReferenceValue(null, prop.Type);
             else
-                fields[prop.Name] = DefaultBase(ResolveTypeDef(prop.TypeName).BaseType);
+                fields[prop.Name] = DefaultBase(ResolveTypeDef(prop.Type).BaseType);
         }
         return new ObjectValue(fields);
     }
@@ -575,8 +575,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private static JsonObject DefaultTagged(BaseType bt) => ToTagged(DefaultBase(bt));
 
     private TypeDefinition ResolveTypeDef(string name) =>
-        name is "bool" or "int" or "decimal" or "text" or "date" or "datetime"
-            ? new TypeDefinition(name, name)
+        BaseTypes.IsName(name)
+            ? BaseTypes.Leaf(name)
             : _desc.FindType(name) ?? throw new InvalidOperationException($"Unknown type '{name}'.");
 
     private static NodeValue ParseKey(string key, string keyType) => keyType switch
@@ -610,7 +610,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private JsonObject BuildInitialDoc()
     {
         var extents = new JsonObject();
-        var db = _desc.Db;
+        var db = _desc.Db();
         if (db is { BaseType: BaseType.Object })
             extents["Db"] = new JsonObject
             {
@@ -624,7 +624,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     private JsonNode InitialRootNode()
     {
-        var db = _desc.Db;
+        var db = _desc.Db();
         return db is { BaseType: BaseType.Object }
             ? ObjectRef("Db", 1)
             : DefaultTagged(db?.BaseType ?? BaseType.Bool);

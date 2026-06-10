@@ -2,8 +2,8 @@
 bin/
 obj/
 
-## TypeScript compiled output (build artifact — never edit by hand; embedded as a resource)
-DeEnv/Instance/instance.js
+## TypeScript compiled output (build artifact — never edit by hand; authored as .ts)
+DeEnv/Instance/*.js
 *.js.map
 
 ## Instance runtime data

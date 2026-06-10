@@ -103,7 +103,7 @@ Feature: Schema document
       { "types": [ { "name": "Db", "baseType": "money" } ] }
       """
     When the document is loaded
-    Then loading is rejected with an error mentioning "money"
+    Then loading is rejected with an error mentioning "baseType"
 
   @milestone-3 @single-user
   Scenario: An object type with no props is rejected

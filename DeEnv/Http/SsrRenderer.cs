@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using DeEnv.Code;
 using DeEnv.Instance;
 using DeEnv.Storage;
 
@@ -20,6 +21,11 @@ public sealed class SsrRenderer
 
     public string Render(string urlPath)
     {
+        // Code owns all routing when a `ui` section exists; the generic auto-form
+        // below is the fallback only when there is no `ui`.
+        if (_desc.Ui != null)
+            return RenderUi(urlPath);
+
         var nodePath = ParsePath(urlPath);
 
         // id-route: /~/{id} follows a bare reference to its object in the extent.
@@ -36,6 +42,132 @@ public sealed class SsrRenderer
             return NotFoundPage(urlPath, nodePath);
 
         return Page(urlPath, nodePath, typeInfo, node);
+    }
+
+    // ── code-owned UI (the `ui` section) ────────────────────────────────────────
+
+    // Execute the render fn over a prepared top scope and serialize the resulting
+    // tag tree to HTML. A runtime error on first paint becomes an SSR error page.
+    private string RenderUi(string urlPath)
+    {
+        var context = new ExecContext();
+        try
+        {
+            var (result, title) = ExecuteRender(urlPath, context);
+            var body = new StringBuilder();
+            SerializeChild(result, body);
+            return Layout(title, body.ToString());
+        }
+        catch (CodeRuntimeException ex)
+        {
+            return Layout("Error", $"<main><h1>Error</h1><p>{Escape(ex.Message)}</p></main>");
+        }
+    }
+
+    private (IExecTagChild Result, string Title) ExecuteRender(string urlPath, ExecContext context)
+    {
+        var ui = _desc.Ui!;
+        var exec = new CodeExecutor(_store);
+        var scope = new ExecScope();
+
+        // db root (the object graph), read-only at the top.
+        var db = DbBridge.LoadRoot(_store, _desc, context);
+        scope.Items["db"] = new ExecScopeItem { Value = db, IsReadOnly = true };
+
+        // UI/session state. Reset on reload, so the first-paint value is the
+        // authored initializer — except `path`, which is the requested URL (routing).
+        foreach (var v in ui.Vars ?? [])
+        {
+            var value = v.Value == null ? new ExecNull() : exec.ExecuteValue(v.Value, scope, context);
+            scope.Items[v.Name] = new ExecScopeItem { Value = value, IsReadOnly = false };
+        }
+        if (scope.Items.ContainsKey("path"))
+            scope.Items["path"] = new ExecScopeItem { Value = new ExecText { Value = urlPath }, IsReadOnly = false };
+
+        // Shared + UI functions (close over the same top scope → mutual recursion).
+        foreach (var f in _desc.Common?.Functions ?? []) DefineFunction(f, scope);
+        foreach (var f in ui.Functions ?? []) DefineFunction(f, scope);
+
+        var renderFn = ui.Render ?? throw new CodeRuntimeException("The 'ui' section has no render function.");
+        var result = exec.InvokeFunction(renderFn, [], scope, context);
+
+        if (result is not IExecTagChild child)
+            throw new CodeRuntimeException("The render function did not return a renderable value.");
+
+        var title = scope.Items.TryGetValue("title", out var t) && t.Value is ExecText titleText
+            ? titleText.Value
+            : "DeEnv";
+        return (child, title);
+    }
+
+    private static void DefineFunction(CodeFunction fn, ExecScope scope)
+    {
+        if (fn.Name == null) return;
+        scope.Items[fn.Name] = new ExecScopeItem
+        {
+            Value = new ExecFunction { Function = fn, Scope = scope },
+            IsReadOnly = true,
+        };
+    }
+
+    // HTML void elements: rendered without a closing tag or children.
+    private static readonly HashSet<string> VoidElements =
+        ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
+
+    private void SerializeChild(IExecTagChild child, StringBuilder sb)
+    {
+        switch (child)
+        {
+            case ExecTag tag:
+                SerializeTag(tag, sb);
+                break;
+            case ExecArray arr:
+                // foreach / where / orderBy flatten into the child stream.
+                foreach (var item in arr.Items) SerializeChild(item.Value, sb);
+                break;
+            case ExecText text:
+                sb.Append(Escape(text.Value));
+                break;
+            case ExecInt i:
+                sb.Append(Escape(i.Value.ToString(CultureInfo.InvariantCulture)));
+                break;
+            case ExecBool b:
+                sb.Append(b.Value ? "true" : "false");
+                break;
+            // null / nothing / functions render nothing.
+        }
+    }
+
+    private void SerializeTag(ExecTag tag, StringBuilder sb)
+    {
+        sb.Append('<').Append(tag.Name);
+        foreach (var (name, value) in tag.Attributes)
+            AppendCodeAttribute(sb, name, value);
+        sb.Append('>');
+
+        if (VoidElements.Contains(tag.Name)) return;
+
+        foreach (var child in tag.Children) SerializeChild(child, sb);
+        sb.Append("</").Append(tag.Name).Append('>');
+    }
+
+    // Only scalar attribute values become HTML attributes. Function values (event
+    // handlers like onClick) and objects/arrays/null are wired on the client, not
+    // serialized. A bool attribute follows HTML semantics: present iff true.
+    private static void AppendCodeAttribute(StringBuilder sb, string name, IExecValue value)
+    {
+        switch (value)
+        {
+            case ExecText t:
+                sb.Append(' ').Append(name).Append("=\"").Append(Escape(t.Value)).Append('"');
+                break;
+            case ExecInt i:
+                sb.Append(' ').Append(name).Append("=\"").Append(i.Value.ToString(CultureInfo.InvariantCulture)).Append('"');
+                break;
+            case ExecBool b:
+                if (b.Value) sb.Append(' ').Append(name);
+                break;
+        }
     }
 
     // ── page layout ───────────────────────────────────────────────────────────
@@ -136,13 +268,13 @@ public sealed class SsrRenderer
             {
                 // The dictionary renders its own navigable list title (see AppendDictionaryTable).
                 sb.AppendLine("  <div class=\"field\">");
-                AppendDictionaryTable(sb, fieldPath, Humanize(prop.Name), prop.TypeName, dictVal);
+                AppendDictionaryTable(sb, fieldPath, Humanize(prop.Name), prop.Type, dictVal);
                 sb.AppendLine("  </div>");
             }
             else if (fieldVal is SetValue setVal)
             {
                 sb.AppendLine("  <div class=\"field\">");
-                AppendSetTable(sb, fieldPath, Humanize(prop.Name), prop.TypeName, setVal);
+                AppendSetTable(sb, fieldPath, Humanize(prop.Name), prop.Type, setVal);
                 sb.AppendLine("  </div>");
             }
             else if (fieldVal is ReferenceValue)
@@ -211,7 +343,7 @@ public sealed class SsrRenderer
     {
         var entryType = _desc.FindType(elementTypeName);   // null when the element is a base type
         var cols = entryType?.Props?
-            .Where(p => p.Cardinality == Cardinality.Single && !_desc.IsObjectType(p.TypeName))
+            .Where(p => p.Cardinality == Cardinality.Single && !_desc.IsObjectType(p.Type))
             .Select(p => p.Name).ToList() ?? [];
         var isObjectEntry = entryType is { BaseType: BaseType.Object };
 
@@ -264,7 +396,7 @@ public sealed class SsrRenderer
     {
         var entryType = _desc.FindType(elementTypeName);
         var cols = entryType?.Props?
-            .Where(p => p.Cardinality == Cardinality.Single && !_desc.IsObjectType(p.TypeName))
+            .Where(p => p.Cardinality == Cardinality.Single && !_desc.IsObjectType(p.Type))
             .Select(p => p.Name).ToList() ?? [];
 
         var setPathAttr = Escape(setPath.ToString());
@@ -324,10 +456,10 @@ public sealed class SsrRenderer
 
         sb.AppendLine("    <div class=\"ref-new\">");
         foreach (var prop in type?.Props ?? [])
-            if (prop.Cardinality == Cardinality.Single && !_desc.IsObjectType(prop.TypeName))
+            if (prop.Cardinality == Cardinality.Single && !_desc.IsObjectType(prop.Type))
             {
                 sb.AppendLine($"      <label>{Escape(Humanize(prop.Name))}</label>");
-                AppendNamedInput(sb, prop.Name, ResolveBaseType(prop.TypeName));
+                AppendNamedInput(sb, prop.Name, ResolveBaseType(prop.Type));
             }
         sb.AppendLine("    </div>");
 

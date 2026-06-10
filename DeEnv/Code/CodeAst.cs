@@ -68,6 +68,11 @@ public sealed class CodeFunction : ICodeStatement, ICodeValue
     public required CodeFunctionParam[] Params { get; set; }
     public required CodeBlock Body { get; set; }
     public int Id { get; set; }
+
+    // Marks a function that runs only on the server (never shipped to the client).
+    // The missing-value path forces such a function server-side. Used Stage 4+ for
+    // secret logic (e.g. password hashing); parsed/validated now.
+    public bool ServerOnly { get; set; }
 }
 
 public sealed class CodeFunctionParam
@@ -147,8 +152,7 @@ public sealed class CodeObjectProp
 
 public sealed class CodeInfixOp : ICodeValue
 {
-    [JsonPropertyName("op"), JsonConverter(typeof(JsonStringEnumConverter))]
-    public required CodeInfixOpType Type { get; set; }
+    public required CodeInfixOpType Op { get; set; }
     public required ICodeValue Left { get; set; }
     public required ICodeValue Right { get; set; }
 }

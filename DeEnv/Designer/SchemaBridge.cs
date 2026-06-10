@@ -107,13 +107,13 @@ public static class SchemaBridge
         var typesPath = NodePath.Root.Field("types");
         var typeOrder = 1;
 
-        foreach (var type in source.AllTypes)
+        foreach (var type in source.AllTypes())
         {
             var typeId = designer.CreateObject("MetaType",
                 new ObjectValue(new Dictionary<string, NodeValue>
                 {
                     ["name"]     = new TextValue(type.Name),
-                    ["baseType"] = new TextValue(type.BaseTypeRaw),
+                    ["baseType"] = new TextValue(JsonNamingPolicy.CamelCase.ConvertName(type.BaseType.ToString())),
                     ["order"]    = new IntValue(typeOrder * 10)
                 }));
             designer.AddToSet(typesPath, typeId);
@@ -125,13 +125,13 @@ public static class SchemaBridge
                 var fields = new Dictionary<string, NodeValue>
                 {
                     ["name"]  = new TextValue(prop.Name),
-                    ["type"]  = new TextValue(prop.TypeName),
+                    ["type"]  = new TextValue(prop.Type),
                     ["order"] = new IntValue(propOrder * 10)
                 };
                 if (prop.Cardinality != Cardinality.Single)
                     fields["cardinality"] = new TextValue(prop.Cardinality == Cardinality.Set ? "set" : "dictionary");
                 if (prop.Cardinality == Cardinality.Dictionary)
-                    fields["keyType"] = new TextValue(prop.EffectiveKeyType);
+                    fields["keyType"] = new TextValue((prop.KeyType ?? "text"));
 
                 var propId = designer.CreateObject("MetaProp", new ObjectValue(fields));
                 designer.AddToSet(propsPath, propId);
