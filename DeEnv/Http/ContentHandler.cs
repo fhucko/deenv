@@ -25,15 +25,21 @@ public sealed class ContentHandler : IHandler
         var remaining = request.Target.GetRemaining();
         var path = remaining.IsRoot ? "/" : "/" + remaining.ToString().Trim('/');
 
-        IResponse response = path == "/js"
-            ? request.Respond()
+        IResponse response = path switch
+        {
+            "/js" => request.Respond()
                      .Content(ClientScript.Js)
                      .Type(ContentType.ApplicationJavaScript)
-                     .Build()
-            : request.Respond()
+                     .Build(),
+            "/ui-js" => request.Respond()
+                     .Content(ClientScript.UiJs)
+                     .Type(ContentType.ApplicationJavaScript)
+                     .Build(),
+            _ => request.Respond()
                      .Content(_renderer.Render(path))
                      .Type(ContentType.TextHtml)
-                     .Build();
+                     .Build(),
+        };
 
         return new ValueTask<IResponse?>(response);
     }

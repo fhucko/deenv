@@ -39,10 +39,17 @@
     <None Include="meta.schema.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Compiled TypeScript clients, embedded and served: instance.js (generic auto-form,
+       /js) and the code-owned UI bundle (codeExec+dt+ui+init, concatenated at /ui-js).
+       All are gitignored build outputs that appear after the first TS compile. -->
   <ItemGroup>
     <EmbeddedResource Include="Instance\instance.js" />
-    <None Remove="Instance\instance.js" />
-    <Content Remove="Instance\instance.js" />
+    <EmbeddedResource Include="Instance\codeExec.js" />
+    <EmbeddedResource Include="Instance\dt.js" />
+    <EmbeddedResource Include="Instance\ui.js" />
+    <EmbeddedResource Include="Instance\init.js" />
+    <None Remove="Instance\*.js" />
+    <Content Remove="Instance\*.js" />
   </ItemGroup>
 
 </Project>

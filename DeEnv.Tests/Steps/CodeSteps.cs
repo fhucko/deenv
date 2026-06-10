@@ -64,27 +64,31 @@ public sealed class CodeSteps(InstanceContext ctx)
     }
 
     // ── Then ──────────────────────────────────────────────────────────────────
+    //
+    // Assertions are scoped to the rendered <body> — the visible first paint — not the
+    // whole document, so the <head>'s window.initData/initUi data island (which carries
+    // the same field values) does not pollute substring counts or ordering.
 
     [Then("the rendered HTML contains {string}")]
     public async Task ThenHtmlContains(string fragment)
     {
         await Assert.That(ctx.RenderedHtml).IsNotNull();
-        await Assert.That(ctx.RenderedHtml!).Contains(fragment);
+        await Assert.That(RenderedBody()).Contains(fragment);
     }
 
     [Then("the rendered HTML does not contain {string}")]
     public async Task ThenHtmlDoesNotContain(string fragment)
     {
         await Assert.That(ctx.RenderedHtml).IsNotNull();
-        await Assert.That(ctx.RenderedHtml!.Contains(fragment)).IsFalse();
+        await Assert.That(RenderedBody().Contains(fragment)).IsFalse();
     }
 
     [Then("the rendered HTML contains {string} before {string}")]
     public async Task ThenHtmlContainsInOrder(string first, string second)
     {
-        var html = ctx.RenderedHtml!;
-        var i = html.IndexOf(first, StringComparison.Ordinal);
-        var j = html.IndexOf(second, StringComparison.Ordinal);
+        var body = RenderedBody();
+        var i = body.IndexOf(first, StringComparison.Ordinal);
+        var j = body.IndexOf(second, StringComparison.Ordinal);
         await Assert.That(i).IsGreaterThanOrEqualTo(0);
         await Assert.That(j).IsGreaterThan(i);
     }
@@ -92,7 +96,16 @@ public sealed class CodeSteps(InstanceContext ctx)
     [Then("the rendered HTML contains {string} exactly {int} times")]
     public async Task ThenHtmlContainsCount(string fragment, int count)
     {
-        await Assert.That(Occurrences(ctx.RenderedHtml!, fragment)).IsEqualTo(count);
+        await Assert.That(Occurrences(RenderedBody(), fragment)).IsEqualTo(count);
+    }
+
+    // The content between <body> and </body> of the rendered page.
+    private string RenderedBody()
+    {
+        var html = ctx.RenderedHtml!;
+        var start = html.IndexOf("<body>", StringComparison.Ordinal);
+        var end = html.IndexOf("</body>", StringComparison.Ordinal);
+        return start < 0 || end < 0 ? html : html[(start + "<body>".Length)..end];
     }
 
     private static int Occurrences(string haystack, string needle)

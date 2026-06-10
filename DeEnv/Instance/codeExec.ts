@@ -55,7 +55,7 @@ interface ExecArray { type: "array"; items: ExecArrayItem[]; id: number; isInDb:
 interface ExecArrayItem { id: number; value: ExecValue; }
 interface ExecFunction { type: "fn"; fn: CodeFunction; scope: ExecScope; }
 interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
-interface ExecTag { type: "tag"; name: string; attributes: { [name: string]: ExecResult }; children: ExecTagChild[]; }
+interface ExecTag { type: "tag"; name: string; attributes: { [name: string]: ExecResult }; children: ExecTagChild[]; key?: number; }
 
 interface ExecScope { items: { [name: string]: ExecScopeItem }; parent: ExecScope | null; }
 interface ExecScopeItem { value: ExecValue; isReadOnly: boolean; }
@@ -313,9 +313,14 @@ function executeTagForEach(codeTagForEach: CodeTagForEach, scope: ExecScope, con
     if (array.type !== "array") throw new Error("foreach target is not a collection.");
     const children: ExecTagChild[] = [];
     for (const item of array.items) {
+        // Identity key for DOM reconciliation: the member object's intrinsic id, so a
+        // row's element (and its input focus/state) moves with the object on reorder.
+        const key = item.value.type === "object" ? item.value.id : item.id;
         const itemScope: ExecScope = { parent: scope, items: {} };
         itemScope.items[codeTagForEach.item.name] = { value: item.value, isReadOnly: true };
-        children.push(...executeTagChildren(codeTagForEach.body, itemScope, context));
+        const produced = executeTagChildren(codeTagForEach.body, itemScope, context);
+        for (const c of produced) if (c.type === "tag" && c.key == null) c.key = key;
+        children.push(...produced);
     }
     return children;
 }

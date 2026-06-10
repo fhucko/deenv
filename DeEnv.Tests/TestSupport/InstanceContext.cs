@@ -204,6 +204,78 @@ public class InstanceContext
     }
     """;
 
+    // Code milestone, Stage 3: a tiny interactive `ui` over an Item set, ordered by a
+    // text field bound two-way (so typing reorders the list — exercising identity-keyed
+    // reconciliation) plus a transient new-item form (a name var + add button).
+    public static InstanceDescription InteractiveUiDb() =>
+        InstanceDescriptionLoader.Load(InteractiveUiJson);
+
+    private const string InteractiveUiJson = """
+    {
+      "types": [
+        { "name": "Db", "baseType": "object",
+          "props": [ { "name": "items", "type": "Item", "cardinality": "set" } ] },
+        { "name": "Item", "baseType": "object",
+          "props": [ { "name": "name", "type": "text" } ] }
+      ],
+      "ui": {
+        "vars": [
+          { "name": "path",    "value": { "type": "text", "value": "/" } },
+          { "name": "newName", "value": { "type": "text", "value": "" } }
+        ],
+        "render": {
+          "type": "fn", "params": [],
+          "body": { "type": "block", "statements": [ { "type": "return", "value":
+            { "type": "tag", "name": "main", "attributes": [], "children": [
+              { "type": "tag", "name": "input", "attributes": [
+                { "name": "class", "value": { "type": "text", "value": "new-name" } },
+                { "name": "value", "value": { "type": "symbol", "name": "newName" } }
+              ], "children": [] },
+              { "type": "tag", "name": "button", "attributes": [
+                { "name": "class", "value": { "type": "text", "value": "add" } },
+                { "name": "onClick", "value": { "type": "fn", "params": [],
+                  "body": { "type": "block", "statements": [
+                    { "type": "call",
+                      "fn": { "type": "infixOp", "op": "objectProp",
+                        "left": { "type": "infixOp", "op": "objectProp",
+                          "left": { "type": "symbol", "name": "db" },
+                          "right": { "type": "symbol", "name": "items" } },
+                        "right": { "type": "symbol", "name": "add" } },
+                      "params": [ { "type": "object", "props": [
+                        { "name": "name", "value": { "type": "symbol", "name": "newName" } }
+                      ] } ] },
+                    { "type": "assign", "target": { "type": "symbol", "name": "newName" },
+                      "value": { "type": "text", "value": "" } }
+                  ] } } }
+              ], "children": [ { "type": "text", "value": "Add" } ] },
+              { "type": "foreach", "item": { "name": "i" },
+                "collection": { "type": "call",
+                  "fn": { "type": "infixOp", "op": "objectProp",
+                    "left": { "type": "infixOp", "op": "objectProp",
+                      "left": { "type": "symbol", "name": "db" },
+                      "right": { "type": "symbol", "name": "items" } },
+                    "right": { "type": "symbol", "name": "orderBy" } },
+                  "params": [ { "type": "fn", "params": [ { "name": "x" } ],
+                    "body": { "type": "block", "statements": [ { "type": "return", "value":
+                      { "type": "infixOp", "op": "objectProp",
+                        "left": { "type": "symbol", "name": "x" },
+                        "right": { "type": "symbol", "name": "name" } } } ] } } ] },
+                "body": [
+                  { "type": "tag", "name": "div", "attributes": [], "children": [
+                    { "type": "tag", "name": "input", "attributes": [
+                      { "name": "class", "value": { "type": "text", "value": "name" } },
+                      { "name": "value", "value": { "type": "infixOp", "op": "objectProp",
+                        "left": { "type": "symbol", "name": "i" },
+                        "right": { "type": "symbol", "name": "name" } } }
+                    ], "children": [] }
+                  ] }
+                ] }
+            ] } } ] }
+        }
+      }
+    }
+    """;
+
     // ── storage ───────────────────────────────────────────────────────────────
 
     public string DataFilePath { get; set; } = Path.GetTempFileName();

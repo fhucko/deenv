@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using DeEnv.Code;
 using DeEnv.Instance;
 using DeEnv.Storage;
@@ -53,10 +55,20 @@ public sealed class SsrRenderer
         var context = new ExecContext();
         try
         {
-            var (result, title) = ExecuteRender(urlPath, context);
+            var (result, title, scope) = ExecuteRender(urlPath, context);
             var body = new StringBuilder();
             SerializeChild(result, body);
-            return Layout(title, body.ToString());
+
+            // First-paint state for the client: the db graph + session vars as data,
+            // and the ui/common AST so the client re-defines the same functions.
+            var initData = ClientState.Serialize(scope).ToJsonString();
+            var initUi = new JsonObject
+            {
+                ["ui"] = JsonSerializer.SerializeToNode(_desc.Ui, SchemaJson.Options),
+                ["common"] = _desc.Common is null ? null : JsonSerializer.SerializeToNode(_desc.Common, SchemaJson.Options),
+            }.ToJsonString();
+
+            return UiLayout(title, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi));
         }
         catch (CodeRuntimeException ex)
         {
@@ -64,7 +76,11 @@ public sealed class SsrRenderer
         }
     }
 
-    private (IExecTagChild Result, string Title) ExecuteRender(string urlPath, ExecContext context)
+    // Neutralise "</script>" (and any "<") so an embedded JSON literal can't break out
+    // of the inline <script> element.
+    private static string ScriptSafe(string json) => json.Replace("<", "\\u003c");
+
+    private (IExecTagChild Result, string Title, ExecScope Scope) ExecuteRender(string urlPath, ExecContext context)
     {
         var ui = _desc.Ui!;
         var exec = new CodeExecutor(_store);
@@ -97,8 +113,23 @@ public sealed class SsrRenderer
         var title = scope.Items.TryGetValue("title", out var t) && t.Value is ExecText titleText
             ? titleText.Value
             : "DeEnv";
-        return (child, title);
+        return (child, title, scope);
     }
+
+    // Page shell for a code-owned UI: the SSR body is the first paint; the deferred
+    // bundle hydrates and takes over rendering from window.initUi / window.initData.
+    private static string UiLayout(string title, string body, string initData, string initUi) => $$"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <title>{{Escape(title)}}</title>
+          <script>window.initData={{initData}};window.initUi={{initUi}};</script>
+          <script defer src="/ui-js"></script>
+        </head>
+        <body>{{body}}</body>
+        </html>
+        """;
 
     private static void DefineFunction(CodeFunction fn, ExecScope scope)
     {
