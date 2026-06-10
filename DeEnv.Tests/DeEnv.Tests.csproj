@@ -28,8 +28,11 @@
   <ItemGroup>
     <Content Include="..\DeEnv\instance.schema.json" Link="instance.schema.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\DeEnv\meta.schema.json" Link="meta.schema.json" CopyToOutputDirectory="PreserveNewest" />
-    <!-- Shared Code-interpreter conformance cases (run by C# now, by TypeScript in Stage 3). -->
+    <!-- Shared Code-interpreter conformance cases (run by C# and by the TypeScript twin). -->
     <Content Include="..\DeEnv\Code\conformance.json" Link="conformance.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The compiled TypeScript twin interpreter, run against the same cases by TsConformanceTests
+         (a build output of DeEnv's TS compile — present after DeEnv builds). -->
+    <Content Include="..\DeEnv\Instance\codeExec.js" Link="codeExec.js" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
