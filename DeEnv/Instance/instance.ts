@@ -2,6 +2,8 @@
 // Navigation is plain SSR (links). The WebSocket carries all mutations
 // (write / writeObject / addEntry / removeEntry) as request/response pairs,
 // and fetches a blank entry template for the transient "create" form.
+// Filter expressions (Milestone 6): typed into .set-filter inputs; evaluated
+// client-side for scalar-only predicates, server-side via filterSet WS op otherwise.
 
 type NodeData =
   | { type: 'bool';     value: boolean }
@@ -75,6 +77,7 @@ function attachHandlers(root: ParentNode = document): void {
         });
     });
     root.querySelectorAll<HTMLElement>('[data-ref]').forEach(updateRefMode);
+    attachFilterHandlers(root);
 }
 
 // Show only the section for the active mode (existing vs new).
@@ -314,6 +317,232 @@ function buildValue(template: NodeData, form: HTMLFormElement): unknown {
 function showCreateError(form: HTMLElement, message: string): void {
     const p = form.querySelector<HTMLParagraphElement>('p.error');
     if (p) { p.textContent = message; p.hidden = false; }
+}
+
+// ── filter expression (Milestone 6) ─────────────────────────────────────────────
+
+type ExprNode =
+  | { type: 'literal'; value: unknown }
+  | { type: 'field';   path: string[] }
+  | { type: 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte'; left: ExprNode; right: ExprNode }
+  | { type: 'and' | 'or'; left: ExprNode; right: ExprNode }
+  | { type: 'not'; operand: ExprNode };
+
+// Recursive-descent parser mirroring ExpressionParser.cs.
+// Precedence (lowest first): or → and → not → comparison → primary
+function parseExpr(text: string): ExprNode {
+    let pos = 0;
+    const t = text.trim();
+
+    function skipWs(): void {
+        while (pos < t.length && /\s/.test(t[pos])) pos++;
+    }
+
+    function tryConsume(token: string): boolean {
+        skipWs();
+        if (t.startsWith(token, pos)) { pos += token.length; return true; }
+        return false;
+    }
+
+    function readIdent(): string {
+        const start = pos;
+        while (pos < t.length && /\w/.test(t[pos])) pos++;
+        if (pos === start) throw new SyntaxError(`Expected identifier at position ${pos}.`);
+        return t.slice(start, pos);
+    }
+
+    function parsePrimary(): ExprNode {
+        skipWs();
+        if (pos >= t.length) throw new SyntaxError('Unexpected end of expression.');
+        const ch = t[pos];
+        if (ch === '(') {
+            pos++;
+            const inner = parseOr();
+            skipWs();
+            if (t[pos] !== ')') throw new SyntaxError("Expected ')'.");
+            pos++;
+            return inner;
+        }
+        if (ch === "'") {
+            pos++;
+            let s = '';
+            while (pos < t.length && t[pos] !== "'") s += t[pos++];
+            if (pos >= t.length) throw new SyntaxError('Unterminated string literal.');
+            pos++;
+            return { type: 'literal', value: s };
+        }
+        if (/\d/.test(ch)) {
+            let s = '';
+            while (pos < t.length && /\d/.test(t[pos])) s += t[pos++];
+            return { type: 'literal', value: parseInt(s, 10) };
+        }
+        if (/[a-zA-Z_]/.test(ch)) {
+            const ident = readIdent();
+            if (ident === 'true')  return { type: 'literal', value: true };
+            if (ident === 'false') return { type: 'literal', value: false };
+            const path = [ident];
+            while (pos < t.length && t[pos] === '.') { pos++; path.push(readIdent()); }
+            return { type: 'field', path };
+        }
+        throw new SyntaxError(`Unexpected character '${ch}' at position ${pos}.`);
+    }
+
+    function parseComparison(): ExprNode {
+        const left = parsePrimary();
+        if (tryConsume('=='))  return { type: 'eq',  left, right: parsePrimary() };
+        if (tryConsume('!='))  return { type: 'neq', left, right: parsePrimary() };
+        if (tryConsume('>='))  return { type: 'gte', left, right: parsePrimary() };
+        if (tryConsume('<='))  return { type: 'lte', left, right: parsePrimary() };
+        if (tryConsume('>'))   return { type: 'gt',  left, right: parsePrimary() };
+        if (tryConsume('<'))   return { type: 'lt',  left, right: parsePrimary() };
+        return left;
+    }
+
+    function parseNot(): ExprNode {
+        if (tryConsume('!')) return { type: 'not', operand: parseNot() };
+        return parseComparison();
+    }
+
+    function parseAnd(): ExprNode {
+        let node = parseNot();
+        while (tryConsume('&&')) node = { type: 'and', left: node, right: parseNot() };
+        return node;
+    }
+
+    function parseOr(): ExprNode {
+        let node = parseAnd();
+        while (tryConsume('||')) node = { type: 'or', left: node, right: parseAnd() };
+        return node;
+    }
+
+    const result = parseOr();
+    skipWs();
+    if (pos < t.length) throw new SyntaxError(`Unexpected text at position ${pos}: '${t.slice(pos)}'.`);
+    return result;
+}
+
+// Evaluate an AST node against a member's scalar data (from data-member JSON).
+// Returns true/false for predicates, or the raw field value for field nodes.
+function evalExpr(node: ExprNode, data: Record<string, unknown>): unknown {
+    switch (node.type) {
+        case 'literal': return node.value;
+        case 'field': {
+            let cur: unknown = data;
+            for (const seg of node.path) {
+                if (cur == null || typeof cur !== 'object') return undefined;
+                if (!(seg in (cur as object))) throw new Error(`Unknown field '${seg}'.`);
+                cur = (cur as Record<string, unknown>)[seg];
+            }
+            return cur;
+        }
+        case 'eq': {
+            const l = evalExpr(node.left, data), r = evalExpr(node.right, data);
+            return l != null && r != null && l === r;
+        }
+        case 'neq': {
+            const l = evalExpr(node.left, data), r = evalExpr(node.right, data);
+            return l != null && r != null && l !== r;
+        }
+        case 'gt': { const c = ordCmp(evalExpr(node.left, data), evalExpr(node.right, data)); return c !== null && c > 0; }
+        case 'lt': { const c = ordCmp(evalExpr(node.left, data), evalExpr(node.right, data)); return c !== null && c < 0; }
+        case 'gte': { const c = ordCmp(evalExpr(node.left, data), evalExpr(node.right, data)); return c !== null && c >= 0; }
+        case 'lte': { const c = ordCmp(evalExpr(node.left, data), evalExpr(node.right, data)); return c !== null && c <= 0; }
+        case 'and': return evalExpr(node.left, data) === true && evalExpr(node.right, data) === true;
+        case 'or':  return evalExpr(node.left, data) === true || evalExpr(node.right, data) === true;
+        case 'not': return evalExpr(node.operand, data) !== true;
+    }
+}
+
+function ordCmp(l: unknown, r: unknown): number | null {
+    if (typeof l === 'number' && typeof r === 'number') return l < r ? -1 : l > r ? 1 : 0;
+    if (typeof l === 'string' && typeof r === 'string') return l < r ? -1 : l > r ? 1 : 0;
+    return null;
+}
+
+// Collect the first path segment from every FieldNode in the tree.
+function collectFirstSegments(node: ExprNode): Set<string> {
+    const segs = new Set<string>();
+    function walk(n: ExprNode): void {
+        switch (n.type) {
+            case 'field':   segs.add(n.path[0]); return;
+            case 'literal': return;
+            case 'not':     walk(n.operand); return;
+            default:        walk(n.left); walk(n.right);
+        }
+    }
+    walk(node);
+    return segs;
+}
+
+function attachFilterHandlers(root: ParentNode): void {
+    root.querySelectorAll<HTMLInputElement>('.set-filter input').forEach(input => {
+        if (input.dataset['wired']) return;
+        input.dataset['wired'] = '1';
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        input.addEventListener('input', () => {
+            if (timer !== null) clearTimeout(timer);
+            timer = setTimeout(() => { void applyFilter(input); }, 300);
+        });
+    });
+}
+
+async function applyFilter(input: HTMLInputElement): Promise<void> {
+    const filterDiv = input.closest<HTMLElement>('.set-filter');
+    if (!filterDiv) return;
+    const table = filterDiv.nextElementSibling as HTMLTableElement | null;
+    if (!table || table.tagName.toLowerCase() !== 'table') return;
+
+    const rows = Array.from(table.querySelectorAll<HTMLTableRowElement>('tbody tr[data-id]'));
+    const text = input.value.trim();
+
+    if (text === '') {
+        rows.forEach(tr => { tr.hidden = false; });
+        input.classList.remove('filter-error');
+        return;
+    }
+
+    let ast: ExprNode;
+    try {
+        ast = parseExpr(text);
+        input.classList.remove('filter-error');
+    } catch {
+        input.classList.add('filter-error');
+        return;
+    }
+
+    const segments = collectFirstSegments(ast);
+    const sampleData = rows.length > 0 && rows[0].dataset['member']
+        ? JSON.parse(rows[0].dataset['member']!) as Record<string, unknown>
+        : {};
+    const clientSide = [...segments].every(s => s in sampleData);
+
+    if (clientSide) {
+        const results: boolean[] = [];
+        try {
+            for (const tr of rows) {
+                const data = tr.dataset['member']
+                    ? JSON.parse(tr.dataset['member']!) as Record<string, unknown>
+                    : {};
+                const result = evalExpr(ast, data);
+                if (typeof result !== 'boolean') {
+                    input.classList.add('filter-error');
+                    return;
+                }
+                results.push(result);
+            }
+        } catch {
+            input.classList.add('filter-error');
+            return;
+        }
+        rows.forEach((tr, i) => { tr.hidden = !results[i]; });
+    } else {
+        const h3 = filterDiv.previousElementSibling;
+        const path = h3?.querySelector('a')?.getAttribute('href') ?? '/';
+        const reply = await call({ op: 'filterSet', path, expression: text });
+        if (reply.error) { input.classList.add('filter-error'); return; }
+        const matchingIds = new Set(((reply['matchingIds'] as number[]) ?? []).map(String));
+        rows.forEach(tr => { tr.hidden = !matchingIds.has(tr.dataset['id'] ?? ''); });
+    }
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────────

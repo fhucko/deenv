@@ -82,6 +82,29 @@ public class InstanceContext
         InstanceDescriptionLoader.LoadFile(
             Path.Combine(AppContext.BaseDirectory, "instance.schema.json"));
 
+    // Milestone 6 filter-expression instance: a Db with a set of Tasks, each
+    // having scalar fields (title, done, priority) and a reference to a Person
+    // (assignee). Scalar-field filters are evaluated client-side; assignee.name
+    // traverses a reference and is routed to the server via filterSet.
+    public static InstanceDescription FilterTaskDb() =>
+        InstanceDescriptionLoader.Load("""
+        {
+          "types": [
+            { "name": "Db", "baseType": "object",
+              "props": [{ "name": "tasks", "type": "Task", "cardinality": "set" }] },
+            { "name": "Task", "baseType": "object",
+              "props": [
+                { "name": "title",    "type": "text" },
+                { "name": "done",     "type": "bool" },
+                { "name": "priority", "type": "int"  },
+                { "name": "assignee", "type": "Person" }
+              ] },
+            { "name": "Person", "baseType": "object",
+              "props": [{ "name": "name", "type": "text" }] }
+          ]
+        }
+        """);
+
     // ── storage ───────────────────────────────────────────────────────────────
 
     public string DataFilePath { get; set; } = Path.GetTempFileName();

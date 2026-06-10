@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DeEnv.Code;
 using DeEnv.Instance;
 using DeEnv.Storage;
 
@@ -48,6 +49,7 @@ public sealed class WsHandler
                 "addEntry"         => HandleAddEntry(path, pathStr, root),
                 "removeEntry"      => HandleRemoveEntry(path, pathStr, root),
                 "setReference"     => HandleSetReference(path, pathStr, root),
+                "filterSet"        => HandleFilterSet(path, pathStr, root),
                 _                  => Error($"Unknown op '{op}'")
             };
             return WithId(result, id);
@@ -296,6 +298,36 @@ public sealed class WsHandler
         }
 
         var response = new JsonObject { ["op"] = "setReference", ["path"] = pathStr, ["ok"] = true };
+        return response.ToJsonString(_jsonOpts);
+    }
+
+    // ── filterSet (evaluate expression server-side over a set) ────────────────
+
+    private string HandleFilterSet(NodePath path, string pathStr, JsonElement root)
+    {
+        if (!root.TryGetProperty("expression", out var exprEl) || exprEl.GetString() is not { } exprText)
+            return Error("Missing 'expression' in filterSet message.");
+
+        var node = _store.ReadNode(path);
+        if (node is not SetValue setVal)
+            return Error($"Path '{pathStr}' does not resolve to a set.");
+
+        ExpressionNode ast;
+        try { ast = ExpressionParser.Parse(exprText); }
+        catch (FormatException ex) { return Error($"Parse error: {ex.Message}"); }
+
+        var matchingIds = new JsonArray();
+        foreach (var (id, member) in setVal.Members)
+        {
+            if (member is not ObjectValue obj) continue;
+            var result = ExpressionEvaluator.EvaluateAsBool(ast, obj, _store);
+            if (!result.HasValue)
+                return Error("Filter expression does not evaluate to a boolean.");
+            if (result.Value)
+                matchingIds.Add(id);
+        }
+
+        var response = new JsonObject { ["op"] = "filterSet", ["matchingIds"] = matchingIds };
         return response.ToJsonString(_jsonOpts);
     }
 

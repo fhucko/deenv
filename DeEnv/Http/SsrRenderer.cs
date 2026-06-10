@@ -270,6 +270,7 @@ public sealed class SsrRenderer
         var setPathAttr = Escape(setPath.ToString());
 
         sb.AppendLine($"<h3 class=\"list-title\"><a href=\"{setPathAttr}\">{Escape(title)}</a></h3>");
+        sb.AppendLine("<div class=\"set-filter\"><input type=\"text\" placeholder=\"Filter...\" /></div>");
         sb.AppendLine("<table>");
         sb.AppendLine("  <thead><tr>");
         sb.AppendLine("    <th>Id</th>");
@@ -281,12 +282,15 @@ public sealed class SsrRenderer
         foreach (var (id, member) in setVal.Members)
         {
             var entryUrl = Escape(setPath.Key(id.ToString()).ToString());
-            sb.AppendLine($"    <tr data-nav=\"{entryUrl}\">");
+            var memberJson = member is ObjectValue objVal
+                ? Escape(BuildMemberJson(objVal, cols))
+                : "{}";
+            sb.AppendLine($"    <tr data-nav=\"{entryUrl}\" data-id=\"{id}\" data-member=\"{memberJson}\">");
             sb.AppendLine($"      <td><a href=\"{entryUrl}\">{id}</a></td>");
-            if (member is ObjectValue objVal)
+            if (member is ObjectValue objVal2)
                 foreach (var col in cols)
                 {
-                    var cell = objVal.Fields.TryGetValue(col, out var fv) ? DisplayValue(fv) : "";
+                    var cell = objVal2.Fields.TryGetValue(col, out var fv) ? DisplayValue(fv) : "";
                     sb.AppendLine($"      <td>{Escape(cell)}</td>");
                 }
             sb.AppendLine($"      <td><button type=\"button\" data-delentry=\"{setPathAttr}\" data-key=\"{id}\">Delete</button></td>");
@@ -295,6 +299,26 @@ public sealed class SsrRenderer
         sb.AppendLine("  </tbody>");
         sb.AppendLine("</table>");
         sb.AppendLine($"<button type=\"button\" data-newentry=\"{setPathAttr}\" data-collection=\"set\">New</button>");
+    }
+
+    private static string BuildMemberJson(ObjectValue obj, IReadOnlyList<string> cols)
+    {
+        var dict = new Dictionary<string, object?>();
+        foreach (var col in cols)
+        {
+            if (!obj.Fields.TryGetValue(col, out var fv)) continue;
+            dict[col] = fv switch
+            {
+                BoolValue b      => (object?)b.Value,
+                IntValue i       => (object?)i.Value,
+                DecimalValue d   => (object?)d.Value,
+                TextValue t      => (object?)t.Text,
+                DateValue d      => (object?)d.Value.ToString("yyyy-MM-dd"),
+                DateTimeValue dt => (object?)dt.Value.ToString("O"),
+                _                => null
+            };
+        }
+        return System.Text.Json.JsonSerializer.Serialize(dict);
     }
 
     // ── reference editor (pick existing or create new) ──────────────────────────
@@ -415,6 +439,9 @@ public sealed class SsrRenderer
         button { margin-right: 0.4rem; }
         .create-form { border: 1px solid #bbb; padding: 0.75rem 1rem; margin: 0.5rem 0; background: #fafafa; }
         .create-form .error { color: #b00; }
+        .set-filter { margin: 0.25rem 0 0.5rem; }
+        .set-filter input { padding: 0.25rem 0.5rem; width: 20rem; }
+        .set-filter input.filter-error { border-color: #b00; outline-color: #b00; }
         """;
 
     private static string Breadcrumbs(NodePath path)
