@@ -17,3 +17,7 @@ designer-data.json
 
 ## NuGet
 *.nupkg
+
+## Prototype reference (untracked, not part of the build)
+/app14/
+/app15/
