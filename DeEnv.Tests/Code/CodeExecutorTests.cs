@@ -152,7 +152,7 @@ public sealed class CodeExecutorTests
         Run(scope, exec, ctx, new CodeVarDec { Name = "arr", Value = arr });
         var filtered = new CodeCall { Fn = Prop(Sym("arr"), "where"), Params = [predicate] };
         var ordered = new CodeCall { Fn = Prop(filtered, "orderBy"), Params = [keySelector] };
-        var result = (ExecList)exec.ExecuteValue(ordered, scope, ctx);
+        var result = (ExecArray)exec.ExecuteValue(ordered, scope, ctx);
 
         var ps = result.Items.Select(i => ((ExecInt)((ExecObject)i.Value).Props["p"]).Value).ToList();
         await Assert.That(ps).IsEquivalentTo(new[] { 2, 3 });
@@ -179,7 +179,7 @@ public sealed class CodeExecutorTests
 
         Run(scope, exec, ctx, new CodeVarDec { Name = "arr", Value = arr });
         var where = new CodeCall { Fn = Prop(Sym("arr"), "where"), Params = [predicate] };
-        var result = (ExecList)exec.ExecuteValue(where, scope, ctx);
+        var result = (ExecArray)exec.ExecuteValue(where, scope, ctx);
 
         var entry = ctx.Memo.Values.Single(e => e.Key.StartsWith("where:"));
         await Assert.That(ReferenceEquals(entry.Result, result)).IsTrue();

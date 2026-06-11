@@ -48,7 +48,7 @@ public sealed class ConformanceTests
                 break;
             case "intList":
             {
-                var got = ((IExecCollection)result).Items.Select(i => ((ExecInt)i.Value).Value);
+                var got = ((ExecArray)result).Items.Select(i => ((ExecInt)i.Value).Value);
                 var want = c.Expect.Value.EnumerateArray().Select(e => e.GetInt32());
                 await Assert.That(string.Join(",", got)).IsEqualTo(string.Join(",", want));
                 break;

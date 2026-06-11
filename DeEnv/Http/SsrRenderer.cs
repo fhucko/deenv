@@ -165,7 +165,7 @@ public sealed class SsrRenderer
             case ExecTag tag:
                 SerializeTag(tag, sb);
                 break;
-            case IExecCollection coll:
+            case ExecArray coll:
                 // foreach / where / orderBy flatten into the child stream.
                 foreach (var item in coll.Items) SerializeChild(item.Value, sb);
                 break;

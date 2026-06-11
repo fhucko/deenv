@@ -50,9 +50,12 @@ interface ExecBool { type: "bool"; value: boolean; }
 interface ExecText { type: "text"; value: string; }
 interface ExecNull { type: "null"; }
 interface ExecNothing { type: "nothing"; }
-interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id: number; isInDb: boolean; }
-interface ExecArray { type: "array"; items: ExecArrayItem[]; id: number; isInDb: boolean; }
-interface ExecArrayItem { id: number; value: ExecValue; }
+interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id: number; }
+// The Code array — one collection shape for every kind, identical on server, wire, and
+// client. A positive id ⇒ persisted (a db set/dict); a negative id ⇒ transient (a list
+// literal or where/orderBy result). ElementTypeName is the member type (set/dict only).
+interface ExecArray { type: "array"; kind: "set" | "dict" | "list"; items: ExecArrayItem[]; id: number; elementTypeName?: string; }
+interface ExecArrayItem { key: number; value: ExecValue; }
 interface ExecFunction { type: "fn"; fn: CodeFunction; scope: ExecScope; }
 interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
 interface ExecTag { type: "tag"; name: string; attributes: { [name: string]: ExecResult }; children: ExecTagChild[]; key?: number; }
@@ -134,14 +137,14 @@ function executeValue(value: CodeValue, scope: ExecScope, context: ExecContext):
 }
 
 function executeArray(codeArray: CodeArray, scope: ExecScope, context: ExecContext): ExecArray {
-    const items: ExecArrayItem[] = codeArray.items.map(p => ({ id: --context.lastId.value, value: executeValue(p, scope, context).value }));
-    return { type: "array", items, id: --context.lastId.value, isInDb: false };
+    const items: ExecArrayItem[] = codeArray.items.map(p => ({ key: --context.lastId.value, value: executeValue(p, scope, context).value }));
+    return { type: "array", kind: "list", items, id: --context.lastId.value };
 }
 
 function executeObject(codeObject: CodeObject, scope: ExecScope, context: ExecContext): ExecObject {
     const props: { [name: string]: ExecValue } = {};
     for (const prop of codeObject.props) props[prop.name] = executeValue(prop.value, scope, context).value;
-    return { type: "object", props, id: --context.lastId.value, isInDb: false };
+    return { type: "object", props, id: --context.lastId.value };
 }
 
 function executeSymbol(codeSymbol: CodeSymbol, scope: ExecScope): ExecResult {
@@ -249,7 +252,8 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
         setValue: p => {
             left.props[right.name] = p;
             invalidateProp(left.id, right.name);
-            if (left.isInDb) { propValueChange(left.id, right.name, p); setIsDb(p); }
+            // A positive id ⇒ the object is server-backed, so persist the change.
+            if (left.id > 0) propValueChange(left.id, right.name, p);
         },
     };
 }
@@ -282,10 +286,12 @@ function invokeLambda(fn: ExecFunction, arg: ExecValue, context: ExecContext): E
 }
 
 function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext): void {
-    const item: ExecArrayItem = { id: --context.lastId.value, value };
+    // A set member is keyed by its object identity; other kinds get a transient key.
+    const key = arr.kind === "set" && value.type === "object" ? value.id : --context.lastId.value;
+    const item: ExecArrayItem = { key, value };
     arr.items.push(item);
     invalidateMember(arr.id);
-    if (arr.isInDb) { sendArrayItemAdd(arr.id, item.id, value); setIsDb(item.value); }
+    if (arr.id > 0) sendArrayItemAdd(arr.id, item.key, value);
 }
 
 function removeFromCollection(arr: ExecArray, value: ExecValue): void {
@@ -294,7 +300,7 @@ function removeFromCollection(arr: ExecArray, value: ExecValue): void {
     if (index < 0) return;
     const item = arr.items.splice(index, 1)[0];
     invalidateMember(arr.id);
-    if (arr.isInDb) sendArrayItemRemove(arr.id, item.id);
+    if (arr.id > 0) sendArrayItemRemove(arr.id, item.key);
 }
 
 function whereCollection(arr: ExecArray, predicate: ExecFunction, context: ExecContext): ExecArray {
@@ -303,7 +309,7 @@ function whereCollection(arr: ExecArray, predicate: ExecFunction, context: ExecC
         const r = invokeLambda(predicate, item.value, context);
         return r.type === "bool" && r.value;
     });
-    return { type: "array", items, id: --context.lastId.value, isInDb: false };
+    return { type: "array", kind: "list", items, id: --context.lastId.value };
 }
 
 function orderByCollection(arr: ExecArray, keySelector: ExecFunction, context: ExecContext): ExecArray {
@@ -312,7 +318,7 @@ function orderByCollection(arr: ExecArray, keySelector: ExecFunction, context: E
         .map(item => ({ item, key: invokeLambda(keySelector, item.value, context) }))
         .sort((a, b) => compareExec(a.key, b.key))
         .map(p => p.item);
-    return { type: "array", items, id: --context.lastId.value, isInDb: false };
+    return { type: "array", kind: "list", items, id: --context.lastId.value };
 }
 
 function compareExec(x: ExecValue, y: ExecValue): number {
@@ -409,7 +415,7 @@ function executeTagForEach(codeTagForEach: CodeTagForEach, scope: ExecScope, con
     for (const item of array.items) {
         // Identity key for DOM reconciliation: the member object's intrinsic id, so a
         // row's element (and its input focus/state) moves with the object on reorder.
-        const key = item.value.type === "object" ? item.value.id : item.id;
+        const key = item.value.type === "object" ? item.value.id : item.key;
         const itemScope: ExecScope = { parent: scope, items: {} };
         itemScope.items[codeTagForEach.item.name] = { value: item.value, isReadOnly: true };
         const produced = executeTagChildren(codeTagForEach.body, itemScope, context);
@@ -423,18 +429,6 @@ function findScope(symbol: CodeSymbol, scope: ExecScope): ExecScope {
     if (scope.items[symbol.name]) return scope;
     if (scope.parent !== null) return findScope(symbol, scope.parent);
     throw new Error(`Variable ${symbol.name} not found`);
-}
-
-function setIsDb(value: ExecValue): void {
-    if (value.type === "object") {
-        if (value.isInDb) return;
-        value.isInDb = true;
-        for (const prop of Object.values(value.props)) setIsDb(prop);
-    } else if (value.type === "array") {
-        if (value.isInDb) return;
-        value.isInDb = true;
-        for (const item of value.items) setIsDb(item.value);
-    }
 }
 
 // WebSocket mutation sends — wired in Stage 4; no-ops here so local two-way binding

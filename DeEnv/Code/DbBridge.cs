@@ -3,13 +3,14 @@ using DeEnv.Storage;
 
 namespace DeEnv.Code;
 
-// The boundary between the Code runtime and the M5 store. Loads the persisted
-// object graph (extents, references, sets) into runtime ExecObjects/ExecArrays,
-// and converts a transient ExecObject back to an ObjectValue when it is persisted.
+// The boundary between the Code runtime and the M5 store — the *only* place a
+// collection changes shape. Loads the persisted object graph (extents, references,
+// sets) into runtime ExecObjects/ExecArrays, and converts a transient ExecObject
+// back to an ObjectValue when it is persisted.
 //
 // Object identity is preserved: a set member's intrinsic id becomes both the
-// ExecObject.Id and the ExecArrayItem.Id (identity-keyed), and an object reached
-// by two references resolves to one ExecObject (shared via the `loaded` map).
+// ExecObject.Id and the ExecItem.Key (identity-keyed), and an object reached by
+// two references resolves to one ExecObject (shared via the `loaded` map).
 //
 // Dictionaries are not yet loaded (later slice); scalars, sets, and single object
 // references are.
@@ -17,7 +18,7 @@ public static class DbBridge
 {
     private const int RootId = 1; // M5 seeds the Db root object at extent id 1.
 
-    // Load the Db root object graph as a runtime ExecObject (IsInDb = true).
+    // Load the Db root object graph as a runtime ExecObject (positive id ⇒ in db).
     public static ExecObject LoadRoot(IInstanceStore store, InstanceDescription desc, ExecContext context)
     {
         var db = desc.Db() ?? throw new InvalidOperationException("No Db type in the schema.");
@@ -34,7 +35,7 @@ public static class DbBridge
     {
         if (loaded.TryGetValue(id, out var existing)) return existing;
 
-        var obj = new ExecObject { Props = [], Id = id, TypeName = type.Name, IsInDb = true };
+        var obj = new ExecObject { Props = [], Id = id, TypeName = type.Name };
         loaded[id] = obj;
 
         foreach (var prop in type.Props ?? [])
@@ -55,15 +56,16 @@ public static class DbBridge
                             if (memberVal is ObjectValue memberOv)
                                 items.Add(new ExecItem
                                 {
-                                    Id = memberId,
+                                    Key = memberId,
                                     Value = LoadObject(memberOv, elemType!, memberId,
                                         fieldPath.Key(memberId.ToString()), store, desc, loaded, context),
                                 });
                     }
-                    obj.Props[prop.Name] = new ExecSet
+                    obj.Props[prop.Name] = new ExecArray
                     {
                         Items = items,
                         Id = setId,
+                        Kind = ArrayKind.Set,
                         ElementTypeName = elemType!.Name,
                     };
                     break;

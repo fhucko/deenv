@@ -10,8 +10,8 @@ interface DtObjectRef { type: "object"; id: number; }
 interface DtArrayRef { type: "array"; id: number; }
 
 interface DtScopeValue { isReadOnly: boolean; value: DtValue; }
-interface ServerDtObject { isInDb: boolean; props: { [name: string]: DtValue }; }
-interface ServerDtArray { isInDb: boolean; items: { id: number; value: DtValue }[]; }
+interface ServerDtObject { props: { [name: string]: DtValue }; }
+interface ServerDtArray { kind: "set" | "dict" | "list"; elementTypeName?: string; items: { key: number; value: DtValue }[]; }
 
 interface ServerDtState {
     leaves: { objects: { [id: number]: ServerDtObject }; arrays: { [id: number]: ServerDtArray } };
@@ -39,25 +39,25 @@ function mergeState(dtState: ServerDtState): void {
             case "simple":
                 return value.value;
             case "object":
-                return objects[value.id] ?? (objects[value.id] = { type: "object", id: value.id, props: {}, isInDb: false });
+                return objects[value.id] ?? (objects[value.id] = { type: "object", id: value.id, props: {} });
             case "array":
-                return arrays[value.id] ?? (arrays[value.id] = { type: "array", id: value.id, items: [], isInDb: false });
+                return arrays[value.id] ?? (arrays[value.id] = { type: "array", id: value.id, kind: "list", items: [] });
         }
     }
 
     for (const [idText, dtObj] of Object.entries(dtState.leaves.objects)) {
         const id = Number(idText);
-        const obj = objects[id] ?? (objects[id] = { type: "object", id, props: {}, isInDb: dtObj.isInDb });
-        obj.isInDb = dtObj.isInDb;
+        const obj = objects[id] ?? (objects[id] = { type: "object", id, props: {} });
         for (const [name, value] of Object.entries(dtObj.props)) obj.props[name] = fromDtValue(value);
     }
 
     for (const [idText, dtArr] of Object.entries(dtState.leaves.arrays)) {
         const id = Number(idText);
-        const arr = arrays[id] ?? (arrays[id] = { type: "array", id, items: [], isInDb: dtArr.isInDb });
-        arr.isInDb = dtArr.isInDb;
+        const arr = arrays[id] ?? (arrays[id] = { type: "array", id, kind: dtArr.kind, items: [], elementTypeName: dtArr.elementTypeName });
+        arr.kind = dtArr.kind;
+        arr.elementTypeName = dtArr.elementTypeName;
         for (const item of dtArr.items)
-            if (!arr.items.some(p => p.id === item.id)) arr.items.push({ id: item.id, value: fromDtValue(item.value) });
+            if (!arr.items.some(p => p.key === item.key)) arr.items.push({ key: item.key, value: fromDtValue(item.value) });
     }
 
     // Keep client-minted (transient) ids below every shipped id, so a new object/array

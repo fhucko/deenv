@@ -1,10 +1,13 @@
 namespace DeEnv.Code;
 
 // Runtime values produced by the interpreter. Adapted onto the M5 object model:
-// objects carry their TypeName and an intrinsic Id; a db-backed set (ExecSet) is a
-// mutable, persistent, identity-keyed collection, distinct from a transient ordered
-// list (ExecList — a where/orderBy result or an array literal). `ExecObject.IsInDb`
-// marks an object as persisted vs a not-yet-saved transient.
+// objects carry their TypeName and an intrinsic Id; collections are a single
+// kind-tagged ExecArray — the *Code array* — used byte-for-byte the same on the
+// server, the wire, and the client (no per-side collection type, no transform).
+//
+// Identity is the id sign: a positive Id means persisted (a db extent/set id),
+// a negative Id means transient (a render-local literal/result, not yet saved).
+// So "is this in the db?" is simply `Id > 0` — there is no separate flag.
 
 public interface IExecTagChild;
 
@@ -48,41 +51,33 @@ public sealed class ExecObject : IExecValue
     public required Dictionary<string, IExecValue> Props { get; set; }
     public required int Id { get; set; }
     public string? TypeName { get; set; }
-    public bool IsInDb { get; set; }
     object IExecValue.Value => this;
 }
 
-// A runtime collection of items: a db-backed set or a transient ordered list. The two
-// share iteration (foreach, where/orderBy) but differ in identity and persistence.
-public interface IExecCollection : IExecValue
-{
-    int Id { get; }
-    List<ExecItem> Items { get; }
-}
+// How a Code array behaves: a db-backed identity-keyed set, a keyed dictionary, or a
+// transient ordered list (a where/orderBy result or an array literal). All three are
+// the same ExecArray shape; only iteration/mutation semantics differ by kind.
+public enum ArrayKind { Set, Dict, List }
 
-// A db-backed set: identity-keyed, persistent, addressed by its stable intrinsic Id.
-// (No path — a set can be reached by many reference paths, but has one identity.)
-// add/remove write through IInstanceStore by id; ElementTypeName is the member type.
-public sealed class ExecSet : IExecCollection
+// A Code array: one collection type for every kind. A db set/dict has a positive,
+// persistent Id (its stable intrinsic identity — a single set may be reached by many
+// reference paths but has one Id); a list has a render-local negative Id. add/remove
+// on a set write through IInstanceStore by Id; ElementTypeName is the member type
+// (set/dict only) used when persisting a freshly-created member.
+public sealed class ExecArray : IExecValue
 {
     public required int Id { get; set; }
+    public required ArrayKind Kind { get; set; }
     public required List<ExecItem> Items { get; set; }
     public string? ElementTypeName { get; set; }
     object IExecValue.Value => this;
 }
 
-// A transient ordered list: a where/orderBy result or an array literal. Not persisted;
-// its Id is a render-local (negative) id.
-public sealed class ExecList : IExecCollection
-{
-    public required int Id { get; set; }
-    public required List<ExecItem> Items { get; set; }
-    object IExecValue.Value => this;
-}
-
+// One (key, value) pair in a Code array. Key is the item's identity within the array:
+// a set member's intrinsic object id, a dict key, or a list ordinal.
 public sealed class ExecItem
 {
-    public required int Id { get; set; }
+    public required int Key { get; set; }
     public required IExecValue Value { get; set; }
 }
 
@@ -96,7 +91,7 @@ public sealed class ExecFunction : IExecValue
 // A built-in collection method (add / remove / where / orderBy) bound to its target.
 public sealed class ExecSysFunction : IExecValue
 {
-    public required IExecCollection Target { get; set; }
+    public required ExecArray Target { get; set; }
     public required string Method { get; set; }
     object IExecValue.Value => this;
 }
@@ -137,7 +132,7 @@ public sealed class ExecContext
     // Leaf accesses (made in output position — DepStack empty): the displayed data
     // shipped to the client. Inside a computation, reads become dependencies instead.
     public HashSet<(ExecObject, string?)> AccessedObjectProps { get; set; } = [];
-    public HashSet<(IExecCollection, ExecItem?)> AccessedItems { get; set; } = [];
+    public HashSet<(ExecArray, ExecItem?)> AccessedItems { get; set; } = [];
 
     // ── memoization (Stage 4) ────────────────────────────────────────────────────
     // Computation results captured while rendering, keyed by (function, args), for

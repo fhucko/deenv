@@ -113,8 +113,9 @@ ExecContext {
 ```
 {
   "leaves": {                       // displayed object/array data, by id
-    "objects": { "<id>": { "isInDb": bool, "props": { "<name>": DtValue } } },
-    "arrays":  { "<id>": { "isInDb": bool, "items": [ { "id": int, "value": DtValue } ] } }
+    "objects": { "<id>": { "props": { "<name>": DtValue } } },
+    "arrays":  { "<id>": { "kind": "set"|"dict"|"list", "elementTypeName": string?,
+                           "items": [ { "key": int, "value": DtValue } ] } }
   },
   "scope": { "<key>": { "isReadOnly": bool, "value": DtValue } },
   "cache": [

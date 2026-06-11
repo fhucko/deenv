@@ -37,7 +37,7 @@ public static class ClientState
         JsonObject DtValue(IExecValue value) => value switch
         {
             ExecObject o => ObjectRef(o),
-            IExecCollection a => CollectionRef(a),
+            ExecArray a => CollectionRef(a),
             ExecInt i => Simple(new JsonObject { ["type"] = "int", ["value"] = i.Value }),
             ExecBool b => Simple(new JsonObject { ["type"] = "bool", ["value"] = b.Value }),
             ExecText t => Simple(new JsonObject { ["type"] = "text", ["value"] = t.Value }),
@@ -49,7 +49,7 @@ public static class ClientState
             if (seenObjects.Add(o.Id))
             {
                 var props = new JsonObject();
-                objects[o.Id.ToString()] = new JsonObject { ["isInDb"] = o.IsInDb, ["props"] = props };
+                objects[o.Id.ToString()] = new JsonObject { ["props"] = props };
                 if (accessedProps.TryGetValue(o, out var names))
                     foreach (var name in names)
                         if (o.Props.TryGetValue(name, out var pv)) props[name] = DtValue(pv);
@@ -57,15 +57,20 @@ public static class ClientState
             return new JsonObject { ["type"] = "object", ["id"] = o.Id };
         }
 
-        JsonObject CollectionRef(IExecCollection a)
+        JsonObject CollectionRef(ExecArray a)
         {
             if (seenArrays.Add(a.Id))
             {
                 var items = new JsonArray();
-                arrays[a.Id.ToString()] = new JsonObject { ["isInDb"] = a is ExecSet, ["items"] = items };
+                arrays[a.Id.ToString()] = new JsonObject
+                {
+                    ["kind"] = a.Kind.ToString().ToLowerInvariant(),
+                    ["elementTypeName"] = a.ElementTypeName,
+                    ["items"] = items,
+                };
                 foreach (var item in a.Items)
                     if (accessedItems.Contains(item))
-                        items.Add(new JsonObject { ["id"] = item.Id, ["value"] = DtValue(item.Value) });
+                        items.Add(new JsonObject { ["key"] = item.Key, ["value"] = DtValue(item.Value) });
             }
             return new JsonObject { ["type"] = "array", ["id"] = a.Id };
         }
