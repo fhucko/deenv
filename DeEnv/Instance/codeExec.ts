@@ -452,6 +452,9 @@ function executeTagIf(codeTagIf: CodeTagIf, scope: ExecScope, context: ExecConte
 function executeTagForEach(codeTagForEach: CodeTagForEach, scope: ExecScope, context: ExecContext): ExecTagChild[] {
     const array = executeValue(codeTagForEach.collection, scope, context).value;
     if (array.type !== "array") throw new Error("foreach target is not a collection.");
+    // Inside a computation (a memoized page fn), iterating observes membership:
+    // an add/remove to the collection must invalidate the cached result.
+    recordMember(array.id);
     const children: ExecTagChild[] = [];
     for (const item of array.items) {
         // Identity key for DOM reconciliation: the member object's intrinsic id, so a

@@ -136,7 +136,13 @@ public sealed class CodeExecutor
 
     private static void OnValueAccessed(ExecContext context, IExecValue value)
     {
-        if (context.DepStack.Count > 0) return; // inside a computation → a dep, not a leaf
+        if (context.DepStack.Count > 0)
+        {
+            // Inside a computation: a pending leaf — promoted only if the result is tags.
+            if (value is ExecObject o) context.LeafStack.Peek().Props.Add((o, null));
+            else if (value is ExecArray c) context.LeafStack.Peek().Items.Add((c, null));
+            return;
+        }
         if (value is ExecObject obj) context.AccessedObjectProps.Add((obj, null));
         else if (value is ExecArray coll) context.AccessedItems.Add((coll, null));
     }
@@ -159,9 +165,14 @@ public sealed class CodeExecutor
                 throw new CodeRuntimeException($"Unknown field '{member.Name}'.");
 
             // DepStack empty → output position: a displayed leaf. Non-empty → inside a
-            // computation: a dependency (never shipped as data).
+            // computation: a dependency, plus a pending leaf (shipped only if the
+            // computation's result is a tag tree — i.e. it IS display).
             if (context.DepStack.Count == 0) context.AccessedObjectProps.Add((obj, member.Name));
-            else context.DepStack.Peek().Props.Add(new PropDep(obj.Id, member.Name));
+            else
+            {
+                context.DepStack.Peek().Props.Add(new PropDep(obj.Id, member.Name));
+                context.LeafStack.Peek().Props.Add((obj, member.Name));
+            }
             OnValueAccessed(context, value);
             return value;
         }
@@ -238,11 +249,13 @@ public sealed class CodeExecutor
     public static IExecValue Memoize(string key, ExecContext context, Func<IExecValue> compute)
     {
         var deps = new Deps();
+        var leaves = new LeafFrame();
         var lastIdBefore = context.LastId.Value;
         context.DepStack.Push(deps);
+        context.LeafStack.Push(leaves);
         IExecValue result;
         try { result = compute(); }
-        finally { context.DepStack.Pop(); }
+        finally { context.DepStack.Pop(); context.LeafStack.Pop(); }
 
         // An identity-creating computation — its result is a transient OBJECT minted
         // inside it (`getNewUser()`-style factory) — is not pure: caching it would hand
@@ -252,7 +265,29 @@ public sealed class CodeExecutor
         if (!(result is ExecObject { Id: < 0 } o && o.Id < lastIdBefore))
             context.Memo[key] = new CacheEntry { Key = key, Result = result, Deps = deps };
         if (context.DepStack.Count > 0) context.DepStack.Peek().Merge(deps);
+
+        // A tag-valued result IS display: its result cannot ship (the client re-renders
+        // it), so everything it read becomes a displayed leaf. A value result ships, so
+        // its reads stay private dependencies and the pending leaves are dropped.
+        if (ContainsTags(result)) PromoteLeaves(context, leaves);
         return result;
+    }
+
+    private static bool ContainsTags(IExecValue result) =>
+        result is ExecTag || (result is ExecArray a && a.Items.Any(i => i.Value is ExecTag));
+
+    private static void PromoteLeaves(ExecContext context, LeafFrame leaves)
+    {
+        if (context.LeafStack.Count > 0)
+        {
+            // Still inside an outer computation: bubble up (promoted iff IT is tags too).
+            var parent = context.LeafStack.Peek();
+            parent.Props.UnionWith(leaves.Props);
+            parent.Items.UnionWith(leaves.Items);
+            return;
+        }
+        context.AccessedObjectProps.UnionWith(leaves.Props);
+        context.AccessedItems.UnionWith(leaves.Items);
     }
 
     private static string MemoKey(string callee, IReadOnlyList<IExecValue> args) =>
@@ -409,10 +444,14 @@ public sealed class CodeExecutor
     {
         var collection = ExecuteValue(codeForEach.Collection, scope, context) as ExecArray
             ?? throw new CodeRuntimeException("foreach target is not a collection.");
+        // Inside a computation, iterating observes membership (an add/remove changes
+        // the output) and each item is a pending leaf of the surrounding tag fn.
+        RecordMembership(collection, context);
         var children = new List<IExecTagChild>();
         foreach (var item in collection.Items)
         {
             if (context.DepStack.Count == 0) context.AccessedItems.Add((collection, item));
+            else context.LeafStack.Peek().Items.Add((collection, item));
             OnValueAccessed(context, item.Value);
             var itemScope = new ExecScope { Parent = scope };
             itemScope.Items[codeForEach.Item.Name] = new ExecScopeItem { Value = item.Value, IsReadOnly = true };

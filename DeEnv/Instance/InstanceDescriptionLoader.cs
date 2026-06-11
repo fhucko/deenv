@@ -21,6 +21,7 @@ public static class InstanceDescriptionLoader
             throw new SchemaValidationException("Schema document is not valid JSON: deserialized to null.");
 
         Validate(desc);
+        ValidateInitialData(desc);
         CodeValidator.Validate(desc);
         CodeIds.Assign(desc); // number every CodeFunction for stable memo-cache keys
         return desc;
@@ -72,6 +73,65 @@ public static class InstanceDescriptionLoader
                     $"Type '{type.Name}' has props but baseType is not 'object'.");
             }
         }
+    }
+
+    // initialData structure: known types, declared fields, exactly one Db entry,
+    // globally-unique positive ids, and set members / single refs pointing at
+    // existing entries of the right type.
+    private static void ValidateInitialData(InstanceDescription desc)
+    {
+        if (desc.InitialData?.Extents is not { } seed) return;
+
+        var ids = new HashSet<int>();
+        foreach (var (typeName, pool) in seed)
+        {
+            if (desc.FindType(typeName) is null)
+                throw new SchemaValidationException($"initialData references unknown type '{typeName}'.");
+            foreach (var idText in pool.Keys)
+            {
+                if (!int.TryParse(idText, out var id) || id <= 0)
+                    throw new SchemaValidationException(
+                        $"initialData id '{idText}' in '{typeName}' is not a positive integer.");
+                if (!ids.Add(id))
+                    throw new SchemaValidationException(
+                        $"initialData id {id} is used more than once (ids are global).");
+            }
+        }
+
+        if (!seed.TryGetValue("Db", out var dbPool) || dbPool.Count != 1)
+            throw new SchemaValidationException("initialData must contain exactly one 'Db' entry (the root).");
+
+        foreach (var (typeName, pool) in seed)
+        {
+            var type = desc.FindType(typeName)!;
+            foreach (var (idText, fields) in pool)
+            {
+                if (fields.ValueKind != System.Text.Json.JsonValueKind.Object)
+                    throw new SchemaValidationException(
+                        $"initialData entry '{typeName}/{idText}' must be an object of fields.");
+                foreach (var field in fields.EnumerateObject())
+                {
+                    var prop = type.Props?.FirstOrDefault(p => p.Name == field.Name)
+                        ?? throw new SchemaValidationException(
+                            $"initialData entry '{typeName}/{idText}' has unknown field '{field.Name}'.");
+
+                    if (prop.Cardinality == Cardinality.Set)
+                        foreach (var m in field.Value.EnumerateArray())
+                            RequireRef(seed, prop.Type, m.GetInt32(), $"{typeName}/{idText}.{field.Name}");
+                    else if (prop.Cardinality == Cardinality.Single && desc.IsObjectType(prop.Type))
+                        RequireRef(seed, prop.Type, field.Value.GetInt32(), $"{typeName}/{idText}.{field.Name}");
+                }
+            }
+        }
+    }
+
+    private static void RequireRef(
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, System.Text.Json.JsonElement>> seed,
+        string typeName, int id, string where)
+    {
+        if (!seed.TryGetValue(typeName, out var pool) || !pool.ContainsKey(id.ToString()))
+            throw new SchemaValidationException(
+                $"initialData '{where}' references id {id}, but '{typeName}' has no entry with that id.");
     }
 
     private static void ValidateProp(PropDefinition prop, string typeName, HashSet<string> typeNames)

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DeEnv.Code;
 
 namespace DeEnv.Instance;
@@ -36,7 +37,15 @@ public record InstanceUi(
 // marked server-only (CodeFunction.ServerOnly) so it is never shipped to the client.
 public record InstanceCommon(IReadOnlyList<CodeFunction>? Functions = null);
 
+// The hand-authored seed: normalized extents, applied by the store on first run only.
+// Each pool maps an authored id to the object's fields in friendly form — plain JSON
+// scalars, sets as arrays of member ids, single object refs as bare ids. Must contain
+// exactly one Db entry (the root). nextId is computed above the highest authored id.
+public record InstanceInitialData(
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, JsonElement>>? Extents = null);
+
 public record InstanceDescription(
     IReadOnlyList<TypeDefinition>? Types = null,
     InstanceUi? Ui = null,
-    InstanceCommon? Common = null);
+    InstanceCommon? Common = null,
+    InstanceInitialData? InitialData = null);

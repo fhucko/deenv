@@ -125,19 +125,31 @@ public sealed class LastId
     public int Value { get; set; }
 }
 
+// Reads made inside an in-flight computation, kept by instance. If the computation's
+// result turns out to be a tag tree (a page fn — its result cannot ship, the client
+// re-renders it), these reads ARE displayed data and get promoted to leaves; if the
+// result is a value (it ships), they stay dependencies only — private.
+public sealed class LeafFrame
+{
+    public HashSet<(ExecObject, string?)> Props { get; } = [];
+    public HashSet<(ExecArray, ExecItem?)> Items { get; } = [];
+}
+
 public sealed class ExecContext
 {
     public LastId LastId { get; set; } = new();
 
     // Leaf accesses (made in output position — DepStack empty): the displayed data
-    // shipped to the client. Inside a computation, reads become dependencies instead.
+    // shipped to the client. Inside a computation, reads become dependencies instead
+    // (plus pending leaves — see LeafFrame).
     public HashSet<(ExecObject, string?)> AccessedObjectProps { get; set; } = [];
     public HashSet<(ExecArray, ExecItem?)> AccessedItems { get; set; } = [];
 
     // ── memoization (Stage 4) ────────────────────────────────────────────────────
     // Computation results captured while rendering, keyed by (function, args), for
     // transfer; and the dependency stack — one Deps per in-flight computation, top is
-    // the running one. See MemoCache.cs / MEMO_CACHE_DESIGN.md.
+    // the running one (LeafStack moves in lockstep). See MemoCache.cs / MEMO_CACHE_DESIGN.md.
     public Dictionary<string, CacheEntry> Memo { get; } = [];
     public Stack<Deps> DepStack { get; } = new();
+    public Stack<LeafFrame> LeafStack { get; } = new();
 }

@@ -665,6 +665,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     private JsonObject BuildInitialDoc()
     {
+        if (_desc.InitialData?.Extents is { } seed)
+            return BuildSeededDoc(seed);
+
         var extents = new JsonObject();
         var doc = new JsonObject { ["extents"] = extents, ["nextId"] = 1, ["root"] = InitialRootNode() };
         var db = _desc.Db();
@@ -681,6 +684,93 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             };
         return doc;
     }
+
+    // First-run document from the schema's hand-authored initialData (normalized
+    // extents: plain scalars, sets as arrays of member ids, refs as bare ids — already
+    // validated by the loader). nextId starts above every authored id, so the set/dict
+    // ids minted here, and everything created later, never collide.
+    private JsonObject BuildSeededDoc(
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, System.Text.Json.JsonElement>> seed)
+    {
+        var extents = new JsonObject();
+        var doc = new JsonObject { ["extents"] = extents };
+
+        var maxId = 0;
+        foreach (var pool in seed.Values)
+            foreach (var idText in pool.Keys)
+                maxId = Math.Max(maxId, int.Parse(idText));
+        doc["nextId"] = maxId;
+
+        foreach (var (typeName, pool) in seed)
+        {
+            var type = _desc.FindType(typeName)!;
+            var poolJson = new JsonObject();
+            extents[typeName] = poolJson;
+            foreach (var (idText, fields) in pool)
+                poolJson[idText] = new JsonObject
+                {
+                    ["type"] = "object",
+                    ["typeName"] = typeName,
+                    ["id"] = int.Parse(idText),
+                    ["fields"] = SeededFieldsJson(doc, type, fields),
+                };
+        }
+
+        doc["root"] = ObjectRef("Db", int.Parse(seed["Db"].Keys.Single()));
+        return doc;
+    }
+
+    private JsonObject SeededFieldsJson(JsonObject doc, TypeDefinition type, System.Text.Json.JsonElement fields)
+    {
+        var fjson = new JsonObject();
+        foreach (var prop in type.Props ?? [])
+        {
+            System.Text.Json.JsonElement f = default;
+            var has = fields.TryGetProperty(prop.Name, out f);
+
+            switch (prop.Cardinality)
+            {
+                case Cardinality.Set:
+                {
+                    var members = new JsonObject();
+                    if (has)
+                        foreach (var m in f.EnumerateArray())
+                            members[m.GetInt32().ToString()] = ObjectRef(prop.Type, m.GetInt32());
+                    fjson[prop.Name] = new JsonObject { ["type"] = "set", ["id"] = MintId(doc), ["members"] = members };
+                    break;
+                }
+                case Cardinality.Dictionary:
+                    // Seeding dictionary entries: a later slice (dicts are not in the
+                    // Code runtime yet); the node still gets its intrinsic id.
+                    fjson[prop.Name] = new JsonObject { ["type"] = "dictionary", ["id"] = MintId(doc), ["entries"] = new JsonObject() };
+                    break;
+                default:
+                    if (_desc.IsObjectType(prop.Type))
+                    {
+                        if (has) fjson[prop.Name] = ObjectRef(prop.Type, f.GetInt32());
+                        // absent → unset reference
+                    }
+                    else
+                    {
+                        var bt = ResolveTypeDef(prop.Type).BaseType;
+                        fjson[prop.Name] = has ? SeededScalar(f, bt) : DefaultTagged(bt);
+                    }
+                    break;
+            }
+        }
+        return fjson;
+    }
+
+    private static JsonObject SeededScalar(System.Text.Json.JsonElement v, BaseType bt) => bt switch
+    {
+        BaseType.Bool     => ToTagged(new BoolValue(v.GetBoolean())),
+        BaseType.Int      => ToTagged(new IntValue(v.GetInt32())),
+        BaseType.Decimal  => ToTagged(new DecimalValue(v.GetDecimal())),
+        BaseType.Text     => ToTagged(new TextValue(v.GetString() ?? "")),
+        BaseType.Date     => ToTagged(new DateValue(DateOnly.Parse(v.GetString() ?? ""))),
+        BaseType.DateTime => ToTagged(new DateTimeValue(DateTimeOffset.Parse(v.GetString() ?? ""))),
+        _ => throw new InvalidOperationException($"No scalar seed for {bt}"),
+    };
 
     private JsonNode InitialRootNode()
     {
