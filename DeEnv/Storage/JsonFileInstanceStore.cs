@@ -205,6 +205,15 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         SaveDoc(doc);
     }
 
+    public void WriteField(int objectId, string prop, NodeValue value)
+    {
+        var doc = LoadDoc();
+        if (ExtentEntryById(doc, objectId)?["fields"] is not JsonObject fields)
+            throw new InvalidOperationException($"No object with id {objectId}.");
+        fields[prop] = ToTagged(value);
+        SaveDoc(doc);
+    }
+
     // Walk to the fields of the object a path lands on (following set/dict/refs).
     private (JsonObject Fields, TypeDefinition Type)? WalkToObjectFields(JsonObject doc, NodePath path)
     {

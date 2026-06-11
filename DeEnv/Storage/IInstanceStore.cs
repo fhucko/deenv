@@ -13,6 +13,11 @@ public interface IInstanceStore
     // untouched (they are navigation boundaries). Used by object-form Save.
     void WriteObject(NodePath path, ObjectValue value);
 
+    // Write a single leaf field on an extent object addressed by its intrinsic id.
+    // The Code runtime addresses objects by identity (not path); a two-way-bound
+    // prop write persists this way. Throws if no object carries the id.
+    void WriteField(int objectId, string prop, NodeValue value);
+
     // Build a default-valued entry for the dictionary's (or set's) element type
     // WITHOUT persisting it. Used to render the "new entry" form.
     NodeValue NewEntryTemplate(NodePath path);

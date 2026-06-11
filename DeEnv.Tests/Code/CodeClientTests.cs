@@ -104,6 +104,49 @@ public sealed class CodeClientTests
         });
     }
 
+    // ── persistence over the WebSocket (Stage 4b) ──────────────────────────────────
+
+    // Editing a two-way-bound field on a db object (id > 0) sends an objectPropChange
+    // over the WS; the server persists it through the store. The client already applied
+    // it optimistically, so persistence is what a reload would show.
+    [Test]
+    public async Task Editing_a_bound_db_field_persists_via_the_websocket()
+    {
+        var dataPath = Path.GetTempFileName();
+        await using var server = new TestInstanceServer();
+        await server.StartAsync(InstanceContext.InteractiveUiDb(), dataPath);
+        SeedItem(server.Store!, "a");
+        SeedItem(server.Store!, "b");
+
+        using var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
+        var page = await browser.NewPageAsync(new() { BaseURL = server.BaseUrl });
+        await page.GotoAsync("/");
+        await page.WaitForSelectorAsync("[data-key]");
+
+        // Rename "a" (row 0, ordered by name) → "z".
+        await page.Locator("input.name").Nth(0).FillAsync("z");
+
+        // The change reaches storage (poll: the WS round-trip is async).
+        await AssertEventuallyAsync(() =>
+            server.Store!.ReadExtent("Item").Values
+                .Any(o => o.Fields.TryGetValue("name", out var n) && n is TextValue { Text: "z" }));
+
+        try { File.Delete(dataPath); } catch { /* best-effort */ }
+    }
+
+    // Polls a condition until true or a timeout elapses (for async WS persistence).
+    private static async Task AssertEventuallyAsync(Func<bool> condition, int timeoutMs = 5000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition()) return;
+            await Task.Delay(50);
+        }
+        await Assert.That(condition()).IsTrue();
+    }
+
     // ── harness ─────────────────────────────────────────────────────────────────────
 
     private static async Task WithPageAsync(InstanceDescription desc, Action<IInstanceStore> seed, Func<IPage, Task> body)

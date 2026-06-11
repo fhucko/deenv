@@ -291,7 +291,7 @@ function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext)
     const item: ExecArrayItem = { key, value };
     arr.items.push(item);
     invalidateMember(arr.id);
-    if (arr.id > 0) sendArrayItemAdd(arr.id, item.key, value);
+    if (arr.id > 0) sendArrayItemAdd(arr.id, item.key, arr.elementTypeName, value);
 }
 
 function removeFromCollection(arr: ExecArray, value: ExecValue): void {
@@ -431,11 +431,25 @@ function findScope(symbol: CodeSymbol, scope: ExecScope): ExecScope {
     throw new Error(`Variable ${symbol.name} not found`);
 }
 
-// WebSocket mutation sends — wired in Stage 4; no-ops here so local two-way binding
-// and transient construction work without a server round-trip.
-function propValueChange(_objectId: number, _propName: string, _value: ExecValue): void { }
-function sendArrayItemAdd(_arrayId: number, _itemId: number, _value: ExecValue): void { }
-function sendArrayItemRemove(_arrayId: number, _itemId: number): void { }
+// WebSocket mutation sends — wired by ws.ts via setWsHooks (Stage 4b). Until then they
+// no-op, so local two-way binding and transient construction work without a server.
+interface WsHooks {
+    propChange(objectId: number, prop: string, value: ExecValue): void;
+    arrayAdd(arrayId: number, tempKey: number, typeName: string | undefined, value: ExecValue): void;
+    arrayRemove(arrayId: number, objectId: number): void;
+}
+let wsHooks: WsHooks | null = null;
+function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
+
+function propValueChange(objectId: number, propName: string, value: ExecValue): void {
+    wsHooks?.propChange(objectId, propName, value);
+}
+function sendArrayItemAdd(arrayId: number, itemKey: number, typeName: string | undefined, value: ExecValue): void {
+    wsHooks?.arrayAdd(arrayId, itemKey, typeName, value);
+}
+function sendArrayItemRemove(arrayId: number, objectId: number): void {
+    wsHooks?.arrayRemove(arrayId, objectId);
+}
 
 // ── conformance entry point ───────────────────────────────────────────────────────
 

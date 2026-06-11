@@ -25,6 +25,7 @@ function init(): void {
     // db + session vars arrive as data; the memoized computations arrive in the cache;
     // functions are re-defined from the AST so they close over this same top scope.
     setMemoCache(uiStatic.cache);
+    connectWs();
     mergeState(initData);
     const scope = uiStatic.state.scope;
     for (const fn of initUi.common?.functions ?? []) executeFunction(fn, scope);

@@ -16,6 +16,7 @@ public static class ClientScript
     private static readonly Lazy<string> _uiJs = new(() => string.Join("\n;\n",
         Read("DeEnv.Instance.codeExec.js"),
         Read("DeEnv.Instance.dt.js"),
+        Read("DeEnv.Instance.ws.js"),
         Read("DeEnv.Instance.ui.js"),
         Read("DeEnv.Instance.init.js")));
 

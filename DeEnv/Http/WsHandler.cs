@@ -48,6 +48,7 @@ public sealed class WsHandler
                 "addEntry"         => HandleAddEntry(path, pathStr, root),
                 "removeEntry"      => HandleRemoveEntry(path, pathStr, root),
                 "setReference"     => HandleSetReference(path, pathStr, root),
+                "objectPropChange" => HandleObjectPropChange(root),
                 _                  => Error($"Unknown op '{op}'")
             };
             return WithId(result, id);
@@ -297,6 +298,41 @@ public sealed class WsHandler
 
         var response = new JsonObject { ["op"] = "setReference", ["path"] = pathStr, ["ok"] = true };
         return response.ToJsonString(_jsonOpts);
+    }
+
+    // ── code-owned UI mutations (the Code runtime, identity-addressed) ──────────
+
+    // A two-way-bound prop write from the client: persist a single leaf field on the
+    // object with this intrinsic id. Fire-and-forget (the client already applied it
+    // optimistically); surgical recompute/delta is a later slice.
+    private string HandleObjectPropChange(JsonElement root)
+    {
+        if (!root.TryGetProperty("objectId", out var idEl) || idEl.ValueKind != JsonValueKind.Number)
+            return Error("objectPropChange requires a numeric 'objectId'.");
+        if (!root.TryGetProperty("prop", out var propEl) || propEl.GetString() is not { } prop)
+            return Error("objectPropChange requires 'prop'.");
+        if (!root.TryGetProperty("value", out var valEl))
+            return Error("objectPropChange requires 'value'.");
+
+        _store.WriteField(idEl.GetInt32(), prop, ExecLeaf(valEl));
+
+        var response = new JsonObject { ["op"] = "objectPropChange", ["ok"] = true };
+        return response.ToJsonString(_jsonOpts);
+    }
+
+    // A scalar as the client interpreter ships it: { "type": "int|bool|text", "value": … }.
+    private static NodeValue ExecLeaf(JsonElement el)
+    {
+        var type = el.TryGetProperty("type", out var t) ? t.GetString() : null;
+        var v = el.TryGetProperty("value", out var vv) ? vv : default;
+        return type switch
+        {
+            "int"  => new IntValue(v.ValueKind == JsonValueKind.String
+                ? int.Parse(v.GetString()!, System.Globalization.CultureInfo.InvariantCulture) : v.GetInt32()),
+            "bool" => new BoolValue(v.GetBoolean()),
+            "text" => new TextValue(v.GetString() ?? ""),
+            _ => throw new InvalidOperationException($"Unsupported value type '{type}'.")
+        };
     }
 
     // ── NodeValue serialization ───────────────────────────────────────────────

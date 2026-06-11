@@ -46,6 +46,7 @@
     <EmbeddedResource Include="Instance\instance.js" />
     <EmbeddedResource Include="Instance\codeExec.js" />
     <EmbeddedResource Include="Instance\dt.js" />
+    <EmbeddedResource Include="Instance\ws.js" />
     <EmbeddedResource Include="Instance\ui.js" />
     <EmbeddedResource Include="Instance\init.js" />
     <None Remove="Instance\*.js" />
