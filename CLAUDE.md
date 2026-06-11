@@ -23,13 +23,13 @@ where developers design data visually and use it as objects. Full mission in
 
 ## Ground rules — important
 
-1. **Build the current milestone only.** Per ROADMAP.md, Milestones 1–4 are
-   done (M4 delivered as self-hosting — see DECISIONS.md). The current milestone is
-   **Milestone 5: the object model** — intrinsic `int` identity on non-constants,
-   references (no ownership; per-type extents), sets, identity/key addressing, and
-   GC. **Schema versioning was postponed** (to be self-hosted after a computation
-   milestone — see DECISIONS.md / ROADMAP.md). Later milestones are out of scope
-   unless explicitly asked.
+1. **Build the current milestone only.** Per ROADMAP.md, Milestones 1–6 are
+   done (M4 delivered as self-hosting; M5 the object model: identity, extents,
+   references, sets, GC; M6 Code: reactive UI as hand-written AST — see
+   DECISIONS.md). **Schema versioning was postponed** (to be self-hosted on
+   top of Code — see DECISIONS.md / ROADMAP.md). The next milestone is chosen
+   from ROADMAP.md's future list when work resumes; later milestones are out
+   of scope unless explicitly asked.
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
    custom language, the render-coupled storage engine, and the multi-device
@@ -65,7 +65,10 @@ where developers design data visually and use it as objects. Full mission in
    real long-term pillar (Vision pillar 5), but a late milestone. For now,
    plain JSON behind the interface. See DECISIONS.md.
 
-9. **No custom language yet.** Generated/authored UI code is TypeScript.
+9. **No custom text syntax yet.** User code is hand-written JSON AST (the
+   schema document's `ui`/`common` sections), interpreted by twin C#/TS
+   interpreters kept in lockstep by a shared conformance suite. A text
+   syntax/parser, a type checker, and editor tooling are future layers.
 
 10. **Watch for hidden scope.** This project's main risk is breadth. A plain
     sentence ("other users see a notification") can contain an entire future
@@ -90,20 +93,26 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
-Milestones 1–4 are done. The current milestone is **Milestone 5: the object
-model** — give the data a C#-style object graph: intrinsic `int` identity on
-non-constants (objects and dictionaries; scalars have none), **references with no
-ownership** (objects live in per-type extents; a single object-typed prop *is* a
-reference), **sets** (collections keyed by a member's own identity, replacing
-surrogate-keyed `dict<Object> auto-int`; dictionaries stay for meaningful keyed
-maps), addressing that keeps today's navigation (set → identity, dict → key,
-single → field), and **GC** (mark-sweep from the root). UI offers
-pick-existing-or-create-new. This is a deliberate storage reconception
-(normalized per-type extents, identity-addressed) flagged under ground rule 10 —
-cut thin slices. First slice + full rationale in DECISIONS.md / ROADMAP.md.
-**Schema versioning was postponed** — to be self-hosted after a computation
-milestone; the reusable piece already designed is the structural identity-based
-schema diff.
+Milestones 1–6 are done; the next milestone has not been picked yet (see
+ROADMAP.md's future list — candidates include UI customization, schema
+versioning, real-time/multi-user).
+
+**Milestone 6 (Code) just landed** — user-authored behaviour and UI as
+hand-written JSON AST in the schema document (`ui`/`common` sections),
+interpreted by twin C#/TS interpreters (`DeEnv/Code/CodeExecutor.cs` /
+`DeEnv/Instance/codeExec.ts`) kept in lockstep by a shared conformance suite
+(`DeEnv/Code/conformance.json`). SSR renders the first paint; the client
+hydrates and takes over (identity-keyed reconciliation, two-way binding).
+Transfer/reactivity is a **memo cache**: computation results ship with
+dependency refs, never input values — privacy is structural, and the first
+paint never calls the server. Mutations persist over the WS against a
+per-client **warm session** (clientId, hello, 10s claim window) with a
+field-level **change journal** (rollback on server reject) and
+negative→real id remapping; hidden-dependency recomputes go through
+`refetch`. The schema document also carries a normalized **initialData**
+seed. The committed default instance (`DeEnv/instance.schema.json`) is the
+**todo app**, driven end-to-end by `TodoApp.feature`. Full decision record
+in DECISIONS.md ("Code milestone — how it was delivered").
 
 Milestone 4 was delivered as **self-hosting** (see DECISIONS.md): the designer is
 the instance runtime running a hand-written meta-schema (`DeEnv/meta.schema.json`),

@@ -69,7 +69,7 @@ DECISIONS.md.
 
 Done when: a user can design a schema with no code and run it. ✓
 
-## Milestone 5 — The object model (identity, references, sets)  ← CURRENT
+## Milestone 5 — The object model (identity, references, sets)  ← DONE
 
 Give the data a real object model. Today it is a pure containment *tree*:
 a prop is a scalar, an inline object, or a dictionary that *owns* its
@@ -102,17 +102,46 @@ Migrating all collections to sets, and teaching the designer/meta-schema to
 author refs/sets, are follow-up slices.
 
 Done when: data is an object graph — objects have identity, are referenced
-(not owned), collected into sets, and shared references resolve to one object.
+(not owned), collected into sets, and shared references resolve to one object. ✓
+
+## Milestone 6 — Code (reactive UI as AST)  ← DONE
+
+User-authored behaviour and UI, extracted from the app14/app15 prototype and
+adapted onto the M5 object model. All code is **hand-written AST** (JSON, in
+the schema document's `ui`/`common` sections) — no text parser yet. Two
+hand-maintained twin interpreters (C# server / TS client) kept in lockstep by
+a shared conformance suite. Delivered in stages (plan: cozy-humming-metcalfe):
+
+- **SSR + client runtime** — the render fn executes server-side for the first
+  paint, the client hydrates and takes over (identity-keyed DOM
+  reconciliation, two-way binding); code owns routing via a two-way `path`.
+- **The memo cache** — every computation boundary (fn call, where/orderBy) is
+  memoized with its result and **dependency refs (props / membership / vars),
+  never input values**, so privacy is structural: data read only inside a
+  value-returning computation never ships, with no annotation. First paint
+  never calls the server.
+- **WS mutations over a warm session** — SSR mints a per-client session
+  (clientId, 10s claim window, hello claims it); optimistic mutations persist
+  (prop change / set add+remove, negative→real id remap) and journal locally;
+  a server reject reverse-replays the journal (rollback); hidden-dependency
+  recomputes refetch over the client's warm graph.
+- **initialData** — a hand-authored normalized seed (extents, friendly form)
+  applied on first run.
+- **The todo app** — the committed default instance (`instance.schema.json`):
+  users → todoLists → items, selection drill-down, drafts, done-state,
+  page navigation — driven end-to-end by Gherkin/Playwright.
+
+Done when: the todo app — authored as data (types + ui AST + seed) — runs,
+persists, and reacts, with both interpreters conformant. ✓
 
 ---
 
 ## Future milestones (NOT scoped — do not build yet)
 
-- **Code.** An interpreted code layer for expressing behaviour and UI logic.
-  No host platform required — starts interpreted. Stored internally as a JSON
-  object tree; presented as editable text only when the user is editing it.
-  Enables schema versioning to be built inside the environment and powers UI
-  customization, including filter expressions on data in custom UI views.
+- **Code, next layers.** Text syntax + parser for hand-editing code (today:
+  hand-written AST); a full type-checker (today: structural validation);
+  derived-collection mutation semantics; dictionaries surfaced to the Code
+  runtime. Enables schema versioning to be built inside the environment.
 
 - **UI customization.** User-controlled rendering, powered by code.
 

@@ -407,6 +407,52 @@ depended on it need rollback or replay; independent parallel actions are
 unaffected. If a conflict resolution UI is open, new actions are blocked until
 the conflict is resolved — you cannot queue on an unresolved base.
 
+## Code milestone — how it was delivered (M6)
+
+Extracted from the app14/app15 prototype and adapted onto the M5 object model;
+the prototype folders were the port reference (untracked) and are deleted once
+the milestone lands. Key decisions made while landing it:
+
+- **Hand-written AST, no parser.** All code is JSON AST in the schema document
+  (`ui` + `common` sections), `"type"`-discriminated, camelCase via the shared
+  serializer options. Text syntax is a future layer.
+- **Twin interpreters, conformance-guarded.** The C# server interpreter
+  (`DeEnv/Code/CodeExecutor.cs`) and the TS client twin
+  (`DeEnv/Instance/codeExec.ts`) are hand-maintained; a shared suite
+  (`DeEnv/Code/conformance.json`) runs through both, so drift fails a test.
+- **One Code array.** A single kind-tagged runtime collection
+  (`ExecArray { id, kind: set|dict|list, items: [{key, value}] }`) is used
+  byte-for-byte the same on the server, the wire, and the client; the
+  storage↔runtime bridge (DbBridge) is the only shape boundary. "In db" is the
+  id sign (positive = persisted, negative = transient) — no flag.
+- **Privacy is structural — the memo cache.** Every computation boundary
+  (fn call, where/orderBy) is memoized by (function id, argument identities)
+  with its result and dependency REFS (object props, set membership, UI-state
+  vars) — never input values. Data read only inside a value-returning
+  computation never ships; no `sensitive` flag exists. A TAG-returning
+  computation is display, so its reads ship (rendering a field = choosing to
+  expose it). Identity-creating factories (result = transient object minted
+  inside) are never cached; event handlers bypass the cache (side effects).
+- **First paint never calls the server**; later, a stale or missing value
+  triggers a `refetch` — the server re-renders over the client's **warm
+  session** (minted at SSR under a `clientId`, shipped in the page, claimed
+  by the WS `hello` within a 10s window, else dropped and the refetch falls
+  back to a fresh load). Mutations mirror into the warm graph alongside the
+  durable store write. This per-client "server remembers what the client
+  sees" seam is the foundation the real-time milestone builds push on.
+- **Optimistic mutations are provisional.** Each is journaled (field-level,
+  with captured before-values) and sent with a correlation id; an error reply
+  reverse-replays the journal past the failed entry (rollback), an ok commits
+  it. This is the delivered core of the three-state model (server-data =
+  current state with the journal undone); the action queue and 3-way merge
+  stay with the real-time milestone.
+- **Drafts are client-owned.** A transient object in client state ships
+  complete and is never overwritten by a refetch; server re-render transients
+  mint below the client's id floor so negative ids never collide.
+- **initialData** — the schema document carries a hand-authored normalized
+  seed (extents; plain scalars, sets as id arrays, refs as bare ids) applied
+  by the store on first run. The committed default instance is the todo app.
+
 ## Tool stack and project structure
 
 Web-first: **C# backend, TypeScript front-end.** C# stays where it's strong;

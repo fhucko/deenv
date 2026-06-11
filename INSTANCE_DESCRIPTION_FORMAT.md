@@ -9,12 +9,45 @@ the type itself.
 
 ```json
 {
-  "types": [ /* type definitions */ ]
+  "types":       [ /* type definitions */ ],
+  "ui":          { /* optional: vars + functions + render fn (Code AST) */ },
+  "common":      { /* optional: shared functions (Code AST) */ },
+  "initialData": { /* optional: hand-authored seed, normalized extents */ }
 }
 ```
 
 The root is the type named **`Db`**. The root is implicitly **single** and
 **non-null** — these are rules, not fields, and need not be stated.
+
+Only `types` is required. When `ui` is present, code owns all routing and
+rendering (the generic auto-form is the no-`ui` fallback). The `ui`/`common`
+code is hand-written JSON AST (`"type"`-discriminated nodes, camelCase) — see
+the committed todo app (`DeEnv/instance.schema.json`) for the worked example
+of all three sections.
+
+## initialData
+
+A hand-authored seed the store applies on first run only (when the data file
+does not exist yet). Normalized extents in friendly form:
+
+```json
+"initialData": {
+  "extents": {
+    "Db":   { "1": { "users": [2] } },
+    "User": { "2": { "name": "User 1", "todoLists": [3] } },
+    "TodoList": { "3": { "name": "List 1", "items": [] } }
+  }
+}
+```
+
+- Each pool maps an **authored positive id** (globally unique) to the
+  object's fields.
+- Scalars are plain JSON values; a **set** is an array of member ids; a
+  **single object reference** is a bare id. Omitted scalars default; omitted
+  references stay unset. (Dictionary entries cannot be seeded yet.)
+- Exactly one `Db` entry — the root.
+- The id counter starts above the highest authored id, so later creations
+  never collide.
 
 ## Type definition
 
@@ -126,8 +159,15 @@ obscure failure deeper in the renderer or storage.
 - Prop names are unique within a type.
 - `cardinality` and `nullable` only appear on props, never on type
   definitions.
-- `cardinality` is `single` or `dictionary`. `nullable` is a boolean. No other
-  values.
-- A dictionary's `keyType` is a known base type; `keyGeneration` is `auto` or
-  `manual`, only on dictionary props, and `auto` requires `keyType` `int`.
+- `cardinality` is `single`, `set`, or `dictionary`. `nullable` is a boolean.
+  No other values.
+- A set's element type is an object type (members are keyed by their own
+  identity), and a set declares no `keyType`.
+- A dictionary's `keyType` is a known base type.
 - The document is syntactically valid JSON.
+- `initialData` (when present): types and fields exist, ids are unique
+  positive integers, set members / single refs point at existing entries of
+  the right type, and there is exactly one `Db` entry.
+- `ui`/`common` code (when present) passes structural validation: symbols
+  declared, assignments target writable symbols, two-way bindings target
+  assignable lvalues.
