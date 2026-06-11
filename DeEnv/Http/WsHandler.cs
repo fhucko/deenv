@@ -34,6 +34,7 @@ public sealed class WsHandler
     public string ProcessMessage(string json)
     {
         int? id = null;
+        var op = "?";
         try
         {
             using var doc = JsonDocument.Parse(json);
@@ -42,7 +43,7 @@ public sealed class WsHandler
             if (root.TryGetProperty("id", out var ide) && ide.ValueKind == JsonValueKind.Number)
                 id = ide.GetInt32();
 
-            var op = root.GetProperty("op").GetString() ?? "";
+            op = root.GetProperty("op").GetString() ?? "";
             var pathStr = root.TryGetProperty("path", out var pe) ? pe.GetString() ?? "/" : "/";
             var path = ParsePath(pathStr);
 
@@ -66,6 +67,9 @@ public sealed class WsHandler
         }
         catch (Exception ex)
         {
+            // The reply carries the reason to the client (reject → rollback); the log
+            // is the server-side record of it.
+            Console.Error.WriteLine($"WS '{op}' failed: {ex.Message}");
             return WithId(Error(ex.Message), id);
         }
     }
@@ -314,8 +318,10 @@ public sealed class WsHandler
     // ── code-owned UI mutations (the Code runtime, identity-addressed) ──────────
 
     // A two-way-bound prop write from the client: persist a single leaf field on the
-    // object with this intrinsic id. Fire-and-forget (the client already applied it
-    // optimistically); surgical recompute/delta is a later slice.
+    // object with this intrinsic id, after validating it against the schema — the
+    // object's type must declare the prop as a single scalar field, and the value
+    // must fit its declared base type. (The client already applied the change
+    // optimistically; a reject rolls it back.)
     private string HandleObjectPropChange(JsonElement root)
     {
         if (!root.TryGetProperty("objectId", out var idEl) || idEl.ValueKind != JsonValueKind.Number)
@@ -326,7 +332,15 @@ public sealed class WsHandler
             return Error("objectPropChange requires 'value'.");
 
         var objectId = idEl.GetInt32();
-        _store.WriteField(objectId, prop, ExecLeaf(valEl));
+        if (_store.ReadById(objectId) is not { } hit)
+            return Error($"No object with id {objectId}.");
+        var propDef = _desc.FindType(hit.TypeName)?.Props?.FirstOrDefault(p => p.Name == prop);
+        if (propDef is null)
+            return Error($"Type '{hit.TypeName}' has no field '{prop}'.");
+        if (propDef.Cardinality != Cardinality.Single || _desc.IsObjectType(propDef.Type))
+            return Error($"Field '{prop}' on '{hit.TypeName}' is not a scalar field.");
+
+        _store.WriteField(objectId, prop, LeafForType(valEl, BaseTypes.Parse(propDef.Type)));
 
         // Mirror into the warm graph so a later recompute sees the change.
         if (Session(root) is { } s && s.Objects.TryGetValue(objectId, out var obj))
@@ -432,20 +446,26 @@ public sealed class WsHandler
             return Error("arrayAdd requires a numeric 'setId'.");
         if (!root.TryGetProperty("typeName", out var tnEl) || tnEl.GetString() is not { } typeName)
             return Error("arrayAdd requires 'typeName'.");
-        if (_desc.FindType(typeName) is null)
+        if (_desc.FindType(typeName) is not { } typeDef)
             return Error($"Unknown type '{typeName}'.");
 
-        var value = root.TryGetProperty("value", out var valEl)
-            ? ExecObjectValue(valEl)
-            : new ObjectValue(new Dictionary<string, NodeValue>());
+        // The target set must exist and must declare exactly this element type.
         var setId = setEl.GetInt32();
+        var elementType = _store.SetElementType(setId);
+        if (elementType is null)
+            return Error($"No set with id {setId}.");
+        if (elementType != typeName)
+            return Error($"Set {setId} holds '{elementType}' members, not '{typeName}'.");
+
+        var value = root.TryGetProperty("value", out var valEl)
+            ? ExecObjectValue(valEl, typeDef)
+            : new ObjectValue(new Dictionary<string, NodeValue>());
         var id = _store.CreateObject(typeName, value);
         _store.AddToSet(setId, id);
 
         // The store minted the new object's collection props with their own intrinsic
         // ids; echo them so the client re-keys its transient arrays (else later adds
         // into them would silently not persist).
-        var typeDef = _desc.FindType(typeName)!;
         var minted = _store.ReadById(id);
         var collections = new JsonObject();
         foreach (var prop in typeDef.Props ?? [])
@@ -478,6 +498,8 @@ public sealed class WsHandler
 
         var setId = setEl.GetInt32();
         var objectId = objEl.GetInt32();
+        if (_store.SetElementType(setId) is null)
+            return Error($"No set with id {setId}.");
         _store.RemoveFromSet(setId, objectId);
 
         // Mirror into the warm graph: drop the member from the warm set.
@@ -488,28 +510,41 @@ public sealed class WsHandler
         return response.ToJsonString(_jsonOpts);
     }
 
-    // A new object's scalar props as the client ships them: { "props": { name: leaf } }.
-    private static ObjectValue ExecObjectValue(JsonElement el)
+    // A new object's scalar props as the client ships them ({ "props": { name: leaf } }),
+    // validated against the declared type: unknown or non-scalar fields are rejected,
+    // and each value must fit its prop's declared base type.
+    private ObjectValue ExecObjectValue(JsonElement el, TypeDefinition type)
     {
         var fields = new Dictionary<string, NodeValue>();
         if (el.TryGetProperty("props", out var props) && props.ValueKind == JsonValueKind.Object)
             foreach (var p in props.EnumerateObject())
-                fields[p.Name] = ExecLeaf(p.Value);
+            {
+                var propDef = type.Props?.FirstOrDefault(d => d.Name == p.Name)
+                    ?? throw new InvalidOperationException($"Type '{type.Name}' has no field '{p.Name}'.");
+                if (propDef.Cardinality != Cardinality.Single || _desc.IsObjectType(propDef.Type))
+                    throw new InvalidOperationException($"Field '{p.Name}' on '{type.Name}' is not a scalar field.");
+                fields[p.Name] = LeafForType(p.Value, BaseTypes.Parse(propDef.Type));
+            }
         return new ObjectValue(fields);
     }
 
-    // A scalar as the client interpreter ships it: { "type": "int|bool|text", "value": … }.
-    private static NodeValue ExecLeaf(JsonElement el)
+    // Convert a wire scalar ({ type, value }) to the prop's DECLARED base type. The
+    // wire's claimed type must agree: int/bool/text exactly; decimal/date/datetime
+    // arrive as the Code runtime's text projection (see DbBridge.ScalarToExec) and
+    // are parsed. Anything else is a type mismatch → reject.
+    private static NodeValue LeafForType(JsonElement el, BaseType declared)
     {
-        var type = el.TryGetProperty("type", out var t) ? t.GetString() : null;
+        var wireType = el.TryGetProperty("type", out var t) ? t.GetString() : null;
         var v = el.TryGetProperty("value", out var vv) ? vv : default;
-        return type switch
+        return (declared, wireType) switch
         {
-            "int"  => new IntValue(v.ValueKind == JsonValueKind.String
-                ? int.Parse(v.GetString()!, System.Globalization.CultureInfo.InvariantCulture) : v.GetInt32()),
-            "bool" => new BoolValue(v.GetBoolean()),
-            "text" => new TextValue(v.GetString() ?? ""),
-            _ => throw new InvalidOperationException($"Unsupported value type '{type}'.")
+            (BaseType.Int, "int")       => new IntValue(v.GetInt32()),
+            (BaseType.Bool, "bool")     => new BoolValue(v.GetBoolean()),
+            (BaseType.Text, "text")     => new TextValue(v.GetString() ?? ""),
+            (BaseType.Decimal, "text")  => new DecimalValue(decimal.Parse(v.GetString() ?? "", System.Globalization.CultureInfo.InvariantCulture)),
+            (BaseType.Date, "text")     => new DateValue(DateOnly.Parse(v.GetString() ?? "")),
+            (BaseType.DateTime, "text") => new DateTimeValue(DateTimeOffset.Parse(v.GetString() ?? "")),
+            _ => throw new InvalidOperationException($"A '{wireType}' value does not fit the declared '{declared}' field."),
         };
     }
 

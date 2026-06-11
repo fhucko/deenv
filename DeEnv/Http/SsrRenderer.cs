@@ -91,7 +91,14 @@ public sealed class SsrRenderer
         }
         catch (CodeRuntimeException ex)
         {
+            // A user-code error: its message belongs on the page.
             return Layout("Error", $"<main><h1>Error</h1><p>{Escape(ex.Message)}</p></main>");
+        }
+        catch (Exception ex)
+        {
+            // An engine bug: log the details, show nothing internal.
+            Console.Error.WriteLine($"SSR render of '{urlPath}' failed: {ex}");
+            return Layout("Error", "<main><h1>Error</h1><p>Internal error.</p></main>");
         }
     }
 
@@ -150,10 +157,11 @@ public sealed class SsrRenderer
 
         // Client-held session vars (a refetch) override their just-computed values, so the
         // re-render sees the same UI state the client has. Computed vars (e.g. a filtered
-        // list) are not shipped by the client and so recompute fresh here.
+        // list) are not shipped by the client and so recompute fresh here. Read-only items
+        // (db, functions) are never overridable.
         if (sessionVars != null)
             foreach (var (name, value) in sessionVars)
-                if (scope.Items.TryGetValue(name, out var it)) it.Value = value;
+                if (scope.Items.TryGetValue(name, out var it) && !it.IsReadOnly) it.Value = value;
 
         var renderFn = ui.Render ?? throw new CodeRuntimeException("The 'ui' section has no render function.");
         var result = exec.InvokeFunction(renderFn, [], scope, context);

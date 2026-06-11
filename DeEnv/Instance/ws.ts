@@ -151,6 +151,7 @@ function hasStaleEntry(): boolean {
 function sessionVars(): { [name: string]: object } {
     const out: { [name: string]: object } = {};
     for (const [name, item] of Object.entries(uiStatic.state.scope.items)) {
+        if (item.isReadOnly) continue; // db / functions are not session state
         const v = item.value;
         if (v.type === "int" || v.type === "bool" || v.type === "text") out[name] = scalarOf(v);
         else if (v.type === "object" && v.id > 0) out[name] = { type: "object", id: v.id };

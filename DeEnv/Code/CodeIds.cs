@@ -11,7 +11,6 @@ public static class CodeIds
 {
     public static void Assign(InstanceDescription desc)
     {
-        if (desc.Ui is not { } ui) return;
         var next = 0;
 
         void Walk(ICodeElement? node)
@@ -69,9 +68,11 @@ public static class CodeIds
             }
         }
 
-        foreach (var v in ui.Vars ?? []) Walk(v.Value);
-        foreach (var f in ui.Functions ?? []) Walk(f);
-        Walk(ui.Render);
+        // Common is walked even without a ui section, so a common-only document still
+        // gets distinct function ids (memo keys must never collide).
+        foreach (var v in desc.Ui?.Vars ?? []) Walk(v.Value);
+        foreach (var f in desc.Ui?.Functions ?? []) Walk(f);
+        Walk(desc.Ui?.Render);
         foreach (var f in desc.Common?.Functions ?? []) Walk(f);
     }
 }
