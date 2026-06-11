@@ -5,6 +5,7 @@
 
 declare const initUi: { ui: ClientUi; common?: ClientCommon };
 declare const initData: ServerDtState;
+declare const initClientId: string;
 
 interface ClientUi { vars?: unknown[]; functions?: CodeFunction[]; render: CodeFunction; }
 interface ClientCommon { functions?: CodeFunction[]; }
@@ -14,17 +15,20 @@ const uiStatic: {
     lastId: LastId;
     state: AppState;
     cache: Map<string, ClientCacheEntry>;
+    clientId: string;
 } = {
     renderFn: null as unknown as ExecFunction,
     lastId: { value: 0 },
     state: { objects: {}, arrays: {}, scope: { items: {}, parent: null }, localToServerIds: {}, serverToLocalIds: {} },
     cache: new Map(),
+    clientId: "",
 };
 
 function init(): void {
     // db + session vars arrive as data; the memoized computations arrive in the cache;
     // functions are re-defined from the AST so they close over this same top scope.
     setMemoCache(uiStatic.cache);
+    uiStatic.clientId = typeof initClientId === "string" ? initClientId : "";
     connectWs();
     mergeState(initData);
     const scope = uiStatic.state.scope;

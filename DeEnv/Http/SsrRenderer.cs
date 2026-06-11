@@ -13,12 +13,14 @@ public sealed class SsrRenderer
     private readonly IInstanceStore _store;
     private readonly InstanceDescription _desc;
     private readonly TypeResolver _resolver;
+    private readonly ClientSessionStore? _sessions;
 
-    public SsrRenderer(IInstanceStore store, InstanceDescription desc)
+    public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null)
     {
         _store = store;
         _desc = desc;
         _resolver = new TypeResolver(desc);
+        _sessions = sessions;
     }
 
     public string Render(string urlPath)
@@ -59,6 +61,14 @@ public sealed class SsrRenderer
             var body = new StringBuilder();
             SerializeChild(result, body);
 
+            // Mint a session over this render's warm db graph and ship its id, so the WS
+            // can recompute (and, later, push) over the very graph the client is viewing
+            // without a rebuild. See ClientSession.
+            var clientId = _sessions != null && scope.Items.TryGetValue("db", out var dbItem)
+                           && dbItem.Value is ExecObject warmDb
+                ? _sessions.Create(warmDb).Id
+                : "";
+
             // First-paint state: only what the client-run render accessed (access-scoped,
             // sensitive fields denied) + the client-facing AST. Server-only functions and
             // the var initializers (which may compute from withheld data) never ship — the
@@ -77,7 +87,7 @@ public sealed class SsrRenderer
                 ["common"] = clientCommon is null ? null : JsonSerializer.SerializeToNode(clientCommon, SchemaJson.Options),
             }.ToJsonString();
 
-            return UiLayout(title, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi));
+            return UiLayout(title, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi), clientId);
         }
         catch (CodeRuntimeException ex)
         {
@@ -91,24 +101,28 @@ public sealed class SsrRenderer
 
     // Re-render to a client-state payload ({ leaves, scope, cache }) without producing
     // HTML. Used by the WS `refetch` (Stage 4b): after a mutation the client re-asks for
-    // the entries it cannot recompute locally (hidden deps); the server re-runs the render
-    // over fresh storage with the client's session vars and returns authoritative state.
-    public JsonObject RenderState(string urlPath, IReadOnlyDictionary<string, IExecValue>? sessionVars)
+    // the entries it cannot recompute locally (hidden deps). The render runs over the
+    // session's warm db graph (kept in sync with the client's mutations) with the client's
+    // session vars, and returns authoritative state.
+    public JsonObject RenderState(string urlPath, IReadOnlyDictionary<string, IExecValue>? sessionVars, ExecObject? warmDb)
     {
         var context = new ExecContext();
-        var (_, _, scope) = ExecuteRender(urlPath, context, sessionVars);
+        var (_, _, scope) = ExecuteRender(urlPath, context, sessionVars, warmDb);
         return ClientState.Serialize(scope, context);
     }
 
     private (IExecTagChild Result, string Title, ExecScope Scope) ExecuteRender(
-        string urlPath, ExecContext context, IReadOnlyDictionary<string, IExecValue>? sessionVars = null)
+        string urlPath, ExecContext context, IReadOnlyDictionary<string, IExecValue>? sessionVars = null,
+        ExecObject? warmDb = null)
     {
         var ui = _desc.Ui!;
         var exec = new CodeExecutor(_store);
         var scope = new ExecScope();
 
-        // db root (the object graph), read-only at the top.
-        var db = DbBridge.LoadRoot(_store, _desc, context);
+        // db root (the object graph), read-only at the top. A recompute reuses the warm
+        // graph the session holds (already reflecting the client's mutations) instead of
+        // reloading from storage.
+        var db = warmDb ?? DbBridge.LoadRoot(_store, _desc, context);
         scope.Items["db"] = new ExecScopeItem { Value = db, IsReadOnly = true };
 
         // Functions first (close over the same top scope → mutual recursion) so var
@@ -150,13 +164,13 @@ public sealed class SsrRenderer
 
     // Page shell for a code-owned UI: the SSR body is the first paint; the deferred
     // bundle hydrates and takes over rendering from window.initUi / window.initData.
-    private static string UiLayout(string title, string body, string initData, string initUi) => $$"""
+    private static string UiLayout(string title, string body, string initData, string initUi, string clientId) => $$"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
           <meta charset="utf-8">
           <title>{{Escape(title)}}</title>
-          <script>window.initData={{initData}};window.initUi={{initUi}};</script>
+          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";</script>
           <script defer src="/ui-js"></script>
         </head>
         <body>{{body}}</body>

@@ -22,13 +22,13 @@ function connectWs(): void {
 
     setWsHooks({
         propChange: (objectId, prop, value) =>
-            wsSend({ op: "objectPropChange", objectId, prop, value: scalarOf(value) }),
+            wsSend({ op: "objectPropChange", clientId: uiStatic.clientId, objectId, prop, value: scalarOf(value) }),
         arrayAdd: (arrayId, tempKey, typeName, value) => {
             pendingAdds.set(tempKey, arrayId);
-            wsSend({ op: "arrayAdd", setId: arrayId, tempId: tempKey, typeName, value: objectOf(value) });
+            wsSend({ op: "arrayAdd", clientId: uiStatic.clientId, setId: arrayId, tempId: tempKey, typeName, value: objectOf(value) });
         },
         arrayRemove: (arrayId, objectId) =>
-            wsSend({ op: "arrayRemove", setId: arrayId, objectId }),
+            wsSend({ op: "arrayRemove", clientId: uiStatic.clientId, setId: arrayId, objectId }),
     });
 }
 
@@ -46,15 +46,16 @@ function onWsMessage(msg: { op?: string; tempId?: number; id?: number; state?: S
 
 // A mutation can leave a cache entry stale that the client cannot recompute — its
 // dependency was never shipped (private), or its function is server-only. When the
-// render finishes with such an entry still stale, re-ask the server, which recomputes
-// over fresh storage and returns authoritative state. (Entries whose deps are all
-// present were already recomputed locally with no round-trip — the first-paint invariant.)
+// render finishes with such an entry still stale, re-ask the server (by clientId), which
+// recomputes over the warm graph it kept for this client and returns authoritative state.
+// (Entries whose deps are all present were already recomputed locally with no round-trip
+// — the first-paint invariant.)
 let refetchInFlight = false;
 
 function maybeRefetch(): void {
     if (refetchInFlight || !hasStaleEntry()) return;
     refetchInFlight = true;
-    wsSend({ op: "refetch", path: location.pathname, vars: sessionVars() });
+    wsSend({ op: "refetch", clientId: uiStatic.clientId, path: location.pathname, vars: sessionVars() });
 }
 
 function hasStaleEntry(): boolean {

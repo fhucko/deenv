@@ -13,14 +13,21 @@ public sealed class WsHandler
     private readonly IInstanceStore _store;
     private readonly InstanceDescription _desc;
     private readonly TypeResolver _resolver;
+    private readonly ClientSessionStore? _sessions;
     private readonly JsonSerializerOptions _jsonOpts = new() { WriteIndented = false };
 
-    public WsHandler(IInstanceStore store, InstanceDescription desc)
+    public WsHandler(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null)
     {
         _store = store;
         _desc = desc;
         _resolver = new TypeResolver(desc);
+        _sessions = sessions;
     }
+
+    // The warm per-client session a code-UI message addresses (clientId minted at SSR).
+    private ClientSession? Session(JsonElement root) =>
+        _sessions != null && root.TryGetProperty("clientId", out var c) && c.GetString() is { } id
+            ? _sessions.Get(id) : null;
 
     // ── message dispatch ──────────────────────────────────────────────────────
 
@@ -317,7 +324,12 @@ public sealed class WsHandler
         if (!root.TryGetProperty("value", out var valEl))
             return Error("objectPropChange requires 'value'.");
 
-        _store.WriteField(idEl.GetInt32(), prop, ExecLeaf(valEl));
+        var objectId = idEl.GetInt32();
+        _store.WriteField(objectId, prop, ExecLeaf(valEl));
+
+        // Mirror into the warm graph so a later recompute sees the change.
+        if (Session(root) is { } s && s.Objects.TryGetValue(objectId, out var obj))
+            obj.Props[prop] = ExecValueFromWire(valEl);
 
         var response = new JsonObject { ["op"] = "objectPropChange", ["ok"] = true };
         return response.ToJsonString(_jsonOpts);
@@ -333,8 +345,20 @@ public sealed class WsHandler
             foreach (var v in vars.EnumerateObject())
                 sessionVars[v.Name] = ExecValueFromWire(v.Value);
 
-        var state = new SsrRenderer(_store, _desc).RenderState(pathStr, sessionVars);
+        // Recompute over the session's warm graph (already reflecting this client's
+        // mutations); falls back to a fresh load if there is no session.
+        var state = new SsrRenderer(_store, _desc).RenderState(pathStr, sessionVars, Session(root)?.Db);
         return new JsonObject { ["op"] = "refetch", ["state"] = state }.ToJsonString(_jsonOpts);
+    }
+
+    // A new set member's warm runtime object: its provided scalar props, its real id.
+    private static Code.ExecObject WarmObject(JsonElement value, string typeName, int id)
+    {
+        var props = new Dictionary<string, Code.IExecValue>();
+        if (value.TryGetProperty("props", out var p) && p.ValueKind == JsonValueKind.Object)
+            foreach (var prop in p.EnumerateObject())
+                props[prop.Name] = ExecValueFromWire(prop.Value);
+        return new Code.ExecObject { Props = props, Id = id, TypeName = typeName };
     }
 
     // A scalar session var as the client interpreter holds it: { "type", "value" }.
@@ -362,8 +386,17 @@ public sealed class WsHandler
         var value = root.TryGetProperty("value", out var valEl)
             ? ExecObjectValue(valEl)
             : new ObjectValue(new Dictionary<string, NodeValue>());
+        var setId = setEl.GetInt32();
         var id = _store.CreateObject(typeName, value);
-        _store.AddToSet(setEl.GetInt32(), id);
+        _store.AddToSet(setId, id);
+
+        // Mirror into the warm graph: a new member object, linked into the warm set.
+        if (Session(root) is { } s && s.Sets.TryGetValue(setId, out var set))
+        {
+            var obj = WarmObject(valEl, typeName, id);
+            set.Items.Add(new Code.ExecItem { Key = id, Value = obj });
+            s.Objects[id] = obj;
+        }
 
         var response = new JsonObject { ["op"] = "arrayAdd", ["id"] = id };
         if (root.TryGetProperty("tempId", out var te) && te.ValueKind == JsonValueKind.Number)
@@ -378,7 +411,13 @@ public sealed class WsHandler
         if (!root.TryGetProperty("objectId", out var objEl) || objEl.ValueKind != JsonValueKind.Number)
             return Error("arrayRemove requires a numeric 'objectId'.");
 
-        _store.RemoveFromSet(setEl.GetInt32(), objEl.GetInt32());
+        var setId = setEl.GetInt32();
+        var objectId = objEl.GetInt32();
+        _store.RemoveFromSet(setId, objectId);
+
+        // Mirror into the warm graph: drop the member from the warm set.
+        if (Session(root) is { } s && s.Sets.TryGetValue(setId, out var set))
+            set.Items.RemoveAll(i => i.Value is Code.ExecObject o && o.Id == objectId);
 
         var response = new JsonObject { ["op"] = "arrayRemove", ["ok"] = true };
         return response.ToJsonString(_jsonOpts);

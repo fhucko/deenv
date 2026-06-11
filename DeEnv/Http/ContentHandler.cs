@@ -13,9 +13,9 @@ public sealed class ContentHandler : IHandler
 {
     private readonly SsrRenderer _renderer;
 
-    public ContentHandler(IInstanceStore store, InstanceDescription description)
+    public ContentHandler(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions)
     {
-        _renderer = new SsrRenderer(store, description);
+        _renderer = new SsrRenderer(store, description, sessions);
     }
 
     public ValueTask PrepareAsync() => ValueTask.CompletedTask;
@@ -50,12 +50,14 @@ public sealed class ContentHandlerBuilder : IHandlerBuilder
 {
     private readonly IInstanceStore _store;
     private readonly InstanceDescription _description;
+    private readonly ClientSessionStore _sessions;
 
-    public ContentHandlerBuilder(IInstanceStore store, InstanceDescription description)
+    public ContentHandlerBuilder(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions)
     {
         _store = store;
         _description = description;
+        _sessions = sessions;
     }
 
-    public IHandler Build() => new ContentHandler(_store, _description);
+    public IHandler Build() => new ContentHandler(_store, _description, _sessions);
 }

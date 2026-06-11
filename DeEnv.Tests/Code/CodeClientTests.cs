@@ -209,16 +209,21 @@ public sealed class CodeClientTests
         try { File.Delete(dataPath); } catch { /* best-effort */ }
     }
 
-    // Polls a condition until true or a timeout elapses (for async WS persistence).
-    private static async Task AssertEventuallyAsync(Func<bool> condition, int timeoutMs = 5000)
+    // Polls a condition until true or a timeout elapses (for async WS persistence). An
+    // IOException is transient — the poller reads the store's JSON file while the server
+    // thread is mid-write — so it is swallowed and retried.
+    private static async Task AssertEventuallyAsync(Func<bool> condition, int timeoutMs = 8000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (DateTime.UtcNow < deadline)
         {
-            if (condition()) return;
+            try { if (condition()) return; }
+            catch (IOException) { /* store file mid-write on another thread — retry */ }
             await Task.Delay(50);
         }
-        await Assert.That(condition()).IsTrue();
+        bool final;
+        try { final = condition(); } catch (IOException) { final = false; }
+        await Assert.That(final).IsTrue();
     }
 
     // ── harness ─────────────────────────────────────────────────────────────────────

@@ -17,7 +17,10 @@ public static class InstanceApp
 {
     public static IHandlerBuilder Build(IInstanceStore store, InstanceDescription description)
     {
-        var ws = new WsHandler(store, description);
+        // One per-host session store, shared by the SSR path (mints sessions) and the WS
+        // path (recomputes over them). See ClientSession.
+        var sessions = new ClientSessionStore();
+        var ws = new WsHandler(store, description, sessions);
 
         // Native GenHTTP websocket (no Fleck). We read/write raw UTF-8 frames so the
         // JSON payload goes on the wire verbatim — no extra serialization wrapping.
@@ -32,6 +35,6 @@ public static class InstanceApp
 
         return Layout.Create()
             .Add("ws", websocket)
-            .Add(new ContentHandlerBuilder(store, description));
+            .Add(new ContentHandlerBuilder(store, description, sessions));
     }
 }
