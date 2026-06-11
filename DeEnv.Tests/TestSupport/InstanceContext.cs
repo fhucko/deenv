@@ -171,25 +171,17 @@ public class InstanceContext
                     "item": { "name": "t" },
                     "collection": { "type": "call",
                       "fn": { "type": "infixOp", "op": "objectProp",
-                        "left": { "type": "call",
-                          "fn": { "type": "infixOp", "op": "objectProp",
-                            "left": { "type": "infixOp", "op": "objectProp",
-                              "left": { "type": "symbol", "name": "db" },
-                              "right": { "type": "symbol", "name": "tasks" } },
-                            "right": { "type": "symbol", "name": "where" } },
-                          "params": [ { "type": "fn", "params": [ { "name": "x" } ],
-                            "body": { "type": "block", "statements": [ { "type": "return", "value":
-                              { "type": "infixOp", "op": "equals",
-                                "left": { "type": "infixOp", "op": "objectProp",
-                                  "left": { "type": "symbol", "name": "x" },
-                                  "right": { "type": "symbol", "name": "done" } },
-                                "right": { "type": "bool", "value": false } } } ] } } ] },
-                        "right": { "type": "symbol", "name": "orderBy" } },
+                        "left": { "type": "infixOp", "op": "objectProp",
+                          "left": { "type": "symbol", "name": "db" },
+                          "right": { "type": "symbol", "name": "tasks" } },
+                        "right": { "type": "symbol", "name": "where" } },
                       "params": [ { "type": "fn", "params": [ { "name": "x" } ],
                         "body": { "type": "block", "statements": [ { "type": "return", "value":
-                          { "type": "infixOp", "op": "objectProp",
-                            "left": { "type": "symbol", "name": "x" },
-                            "right": { "type": "symbol", "name": "priority" } } } ] } } ] },
+                          { "type": "infixOp", "op": "equals",
+                            "left": { "type": "infixOp", "op": "objectProp",
+                              "left": { "type": "symbol", "name": "x" },
+                              "right": { "type": "symbol", "name": "done" } },
+                            "right": { "type": "bool", "value": false } } } ] } } ] },
                     "body": [
                       { "type": "tag", "name": "span",
                         "attributes": [ { "name": "class", "value": { "type": "text", "value": "open-title" } } ],
@@ -276,11 +268,11 @@ public class InstanceContext
     }
     """;
 
-    // Code milestone, Stage 4a: a sensitive field (`salary`) and a server-only
-    // derivation. `highEarners` (server-only) filters by salary; its result is
-    // materialised into the `rich` var; render shows only the resulting names. So the
-    // client receives the high earners' names but never any salary, and never the
-    // non-earner rows (db.people is read only on the server).
+    // Code milestone, Stage 4: a private field (`salary`) by construction. `highEarners`
+    // filters by salary; its result is the `rich` var (a memoized computation), so salary
+    // is a dependency, never a leaf — the client gets the high earners' names but never any
+    // salary, and never the non-earner rows (db.people is read only inside the computation).
+    // No `sensitive` flag: "private" = "an input to a computation, never a rendered result".
     public static InstanceDescription SensitiveUiDb() =>
         InstanceDescriptionLoader.Load(SensitiveUiJson);
 
@@ -292,12 +284,12 @@ public class InstanceContext
         { "name": "Person", "baseType": "object",
           "props": [
             { "name": "name",   "type": "text" },
-            { "name": "salary", "type": "int", "sensitive": true }
+            { "name": "salary", "type": "int" }
           ] }
       ],
       "common": {
         "functions": [
-          { "type": "fn", "name": "highEarners", "serverOnly": true,
+          { "type": "fn", "name": "highEarners",
             "params": [ { "name": "people" } ],
             "body": { "type": "block", "statements": [ { "type": "return", "value":
               { "type": "call",
@@ -340,41 +332,6 @@ public class InstanceContext
       }
     }
     """;
-
-    // Same types as SensitiveUiDb, but the render reads the sensitive `salary`
-    // directly in client-run code — the data-transfer boundary rejects it at render.
-    public static InstanceDescription SensitiveLeakUiDb() =>
-        InstanceDescriptionLoader.Load("""
-        {
-          "types": [
-            { "name": "Db", "baseType": "object",
-              "props": [ { "name": "people", "type": "Person", "cardinality": "set" } ] },
-            { "name": "Person", "baseType": "object",
-              "props": [
-                { "name": "name",   "type": "text" },
-                { "name": "salary", "type": "int", "sensitive": true }
-              ] }
-          ],
-          "ui": {
-            "render": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
-              { "type": "return", "value":
-                { "type": "tag", "name": "main", "attributes": [], "children": [
-                  { "type": "foreach", "item": { "name": "p" },
-                    "collection": { "type": "infixOp", "op": "objectProp",
-                      "left": { "type": "symbol", "name": "db" },
-                      "right": { "type": "symbol", "name": "people" } },
-                    "body": [
-                      { "type": "tag", "name": "div", "attributes": [], "children": [
-                        { "type": "infixOp", "op": "objectProp",
-                          "left": { "type": "symbol", "name": "p" },
-                          "right": { "type": "symbol", "name": "salary" } }
-                      ] }
-                    ] }
-                ] } }
-            ] } }
-          }
-        }
-        """);
 
     // ── storage ───────────────────────────────────────────────────────────────
 

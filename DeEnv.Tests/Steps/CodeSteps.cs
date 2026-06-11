@@ -64,15 +64,6 @@ public sealed class CodeSteps(InstanceContext ctx)
         SeedPerson(store, "Bob", salary: 5);   // not an earner
     }
 
-    [Given("the leaky people instance seeded")]
-    public void GivenLeakyPeopleSeeded()
-    {
-        ctx.Description = InstanceContext.SensitiveLeakUiDb();
-        var store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
-        ctx.Store = store;
-        SeedPerson(store, "Ada", salary: 999);
-    }
-
     private static void SeedPerson(IInstanceStore store, string name, int salary)
     {
         var id = store.CreateObject("Person", new ObjectValue(new Dictionary<string, NodeValue>

@@ -63,7 +63,7 @@ public sealed class SsrRenderer
             // sensitive fields denied) + the client-facing AST. Server-only functions and
             // the var initializers (which may compute from withheld data) never ship — the
             // client re-defines client functions and reads var *values* from initData.
-            var initData = ClientState.Serialize(scope, context, _desc).ToJsonString();
+            var initData = ClientState.Serialize(scope, context).ToJsonString();
             var clientUi = new InstanceUi(
                 Vars: null,
                 Functions: _desc.Ui!.Functions?.Where(f => !f.ServerOnly).ToList(),
@@ -104,16 +104,16 @@ public sealed class SsrRenderer
         foreach (var f in _desc.Common?.Functions ?? []) DefineFunction(f, scope);
         foreach (var f in ui.Functions ?? []) DefineFunction(f, scope);
 
-        // UI/session state. Initializers run server-side with access recording
-        // suppressed (their inputs stay on the server; only the resulting value is
-        // shipped). `path` is the requested URL (routing).
-        context.Suppress++;
+        // UI/session state. Each initializer is a memoized computation (`var:<name>`),
+        // so its inputs become dependencies (not shipped) and only the resulting value
+        // is shipped in scope. `path` is the requested URL (routing).
         foreach (var v in ui.Vars ?? [])
         {
-            var value = v.Value == null ? new ExecNull() : exec.ExecuteValue(v.Value, scope, context);
+            var value = v.Value is { } init
+                ? CodeExecutor.Memoize($"var:{v.Name}", context, () => exec.ExecuteValue(init, scope, context))
+                : new ExecNull();
             scope.Items[v.Name] = new ExecScopeItem { Value = value, IsReadOnly = false };
         }
-        context.Suppress--;
         if (scope.Items.ContainsKey("path"))
             scope.Items["path"] = new ExecScopeItem { Value = new ExecText { Value = urlPath }, IsReadOnly = false };
 

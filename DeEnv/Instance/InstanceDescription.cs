@@ -13,12 +13,7 @@ public record PropDefinition(
     string Type,
     Cardinality Cardinality = Cardinality.Single,
     string? KeyType = null,
-    bool Nullable = false,
-    // A sensitive field never crosses the wire to the client (the data-transfer
-    // boundary denies it regardless of access); client-run code that reads it
-    // directly is rejected. Sensitive-derived UI must go through a server-only
-    // computation that ships only its result.
-    bool Sensitive = false);
+    bool Nullable = false);
 
 public record TypeDefinition(
     string Name,

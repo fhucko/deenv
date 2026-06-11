@@ -123,12 +123,6 @@ public sealed class ExecContext
     public List<ExecArray> CreatedArrays { get; set; } = [];
     public List<ExecObject> CreatedObjects { get; set; } = [];
 
-    // While > 0, data accesses are NOT recorded for client transfer. The renderer
-    // raises it around server-side computations (var initializers, server-only
-    // functions) so their inputs stay on the server — only the rendered (client-run)
-    // accesses are shipped. See SsrRenderer / ClientState.
-    public int Suppress { get; set; }
-
     // ── memoization (Stage 4) ────────────────────────────────────────────────────
     // Computation results captured while rendering, keyed by (function, args), for
     // transfer; and the dependency stack — one Deps per in-flight computation, top is

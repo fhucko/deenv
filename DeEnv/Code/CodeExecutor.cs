@@ -136,7 +136,7 @@ public sealed class CodeExecutor
 
     private static void OnValueAccessed(ExecContext context, IExecValue value)
     {
-        if (context.Suppress > 0) return; // server-side computation: not shipped
+        if (context.DepStack.Count > 0) return; // inside a computation → a dep, not a leaf
         if (value is ExecObject obj) context.AccessedObjectProps.Add((obj, null));
         else if (value is ExecArray arr) context.AccessedArrayItems.Add((arr, null));
     }
@@ -158,8 +158,10 @@ public sealed class CodeExecutor
             if (!obj.Props.TryGetValue(member.Name, out var value))
                 throw new CodeRuntimeException($"Unknown field '{member.Name}'.");
 
-            if (context.Suppress == 0) context.AccessedObjectProps.Add((obj, member.Name));
-            if (context.DepStack.Count > 0) context.DepStack.Peek().Props.Add(new PropDep(obj.Id, member.Name));
+            // DepStack empty → output position: a displayed leaf. Non-empty → inside a
+            // computation: a dependency (never shipped as data).
+            if (context.DepStack.Count == 0) context.AccessedObjectProps.Add((obj, member.Name));
+            else context.DepStack.Peek().Props.Add(new PropDep(obj.Id, member.Name));
             OnValueAccessed(context, value);
             return value;
         }
@@ -233,7 +235,7 @@ public sealed class CodeExecutor
     // Run `compute` as a memoized computation: capture its dependencies in a fresh
     // Deps, store the (key → result, deps) entry, and fold its deps into the caller's
     // (a caller transitively depends on what its callees read).
-    private static IExecValue Memoize(string key, ExecContext context, Func<IExecValue> compute)
+    public static IExecValue Memoize(string key, ExecContext context, Func<IExecValue> compute)
     {
         var deps = new Deps();
         context.DepStack.Push(deps);
@@ -399,7 +401,7 @@ public sealed class CodeExecutor
         var children = new List<IExecTagChild>();
         foreach (var item in array.Items)
         {
-            if (context.Suppress == 0) context.AccessedArrayItems.Add((array, item));
+            if (context.DepStack.Count == 0) context.AccessedArrayItems.Add((array, item));
             OnValueAccessed(context, item.Value);
             var itemScope = new ExecScope { Parent = scope };
             itemScope.Items[codeForEach.Item.Name] = new ExecScopeItem { Value = item.Value, IsReadOnly = true };

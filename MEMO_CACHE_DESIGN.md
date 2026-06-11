@@ -1,4 +1,24 @@
-# Memo cache — shape proposal (Stage 4, for review)
+# Memo cache — Stage 4
+
+**Status: IMPLEMENTED (4a).** The proposal below was approved and built across three slices
+(server memo+deps, wire format, client cache). Refinements made during the build:
+
+- `MemberDep` keys by the **collection's runtime array id** (recorded inside `where`/`orderBy`),
+  not a separate notion — avoids any shape change to `ExecArray`.
+- Each var initializer is itself a memoized computation (`var:<name>`), so its inputs become
+  deps, not leaves.
+- The `sensitive` flag is **deleted**; `salary` is private purely because it is an input to a
+  computation (a dep), never a rendered leaf. `server-only` no longer carries privacy meaning;
+  the `CodeValidator` server-only-ref check and the "render reads sensitive field" check were
+  removed (rendering a field is now the choice to expose it).
+- **4a limitation (resolved in 4b):** a client recompute that needs a *hidden* dependency can't
+  run (no inputs) → it reuses the stale result; the WS **refetch** lands in 4b. So 4a apps only
+  re-derive over *shipped* data. (TasksUiDb's Open list dropped its hidden-`priority` sort for
+  this reason; sorting/filtering by shown fields recomputes instantly.)
+
+The original proposal text follows.
+
+---
 
 **Status: PROPOSAL.** This is the concrete structure shapes for the memoization/dependency
 cache that replaces the `sensitive` flag and the access-scope counter (see plan Stage 4).

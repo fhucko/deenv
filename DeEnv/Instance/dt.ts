@@ -14,10 +14,12 @@ interface ServerDtObject { isInDb: boolean; props: { [name: string]: DtValue }; 
 interface ServerDtArray { isInDb: boolean; items: { id: number; value: DtValue }[]; }
 
 interface ServerDtState {
-    objects: { [id: number]: ServerDtObject };
-    arrays: { [id: number]: ServerDtArray };
+    leaves: { objects: { [id: number]: ServerDtObject }; arrays: { [id: number]: ServerDtArray } };
     scope: { [key: string]: DtScopeValue };
+    cache: ServerCacheEntry[];
 }
+
+interface ServerCacheEntry { key: string; result: DtValue; deps: CacheDeps; }
 
 interface AppState {
     objects: { [id: number]: ExecObject };
@@ -43,14 +45,14 @@ function mergeState(dtState: ServerDtState): void {
         }
     }
 
-    for (const [idText, dtObj] of Object.entries(dtState.objects)) {
+    for (const [idText, dtObj] of Object.entries(dtState.leaves.objects)) {
         const id = Number(idText);
         const obj = objects[id] ?? (objects[id] = { type: "object", id, props: {}, isInDb: dtObj.isInDb });
         obj.isInDb = dtObj.isInDb;
         for (const [name, value] of Object.entries(dtObj.props)) obj.props[name] = fromDtValue(value);
     }
 
-    for (const [idText, dtArr] of Object.entries(dtState.arrays)) {
+    for (const [idText, dtArr] of Object.entries(dtState.leaves.arrays)) {
         const id = Number(idText);
         const arr = arrays[id] ?? (arrays[id] = { type: "array", id, items: [], isInDb: dtArr.isInDb });
         arr.isInDb = dtArr.isInDb;
@@ -60,4 +62,8 @@ function mergeState(dtState: ServerDtState): void {
 
     for (const [key, value] of Object.entries(dtState.scope))
         scope.items[key] = { isReadOnly: value.isReadOnly, value: fromDtValue(value.value) };
+
+    // The memoized computation results + dependency refs, for reuse and invalidation.
+    for (const entry of dtState.cache ?? [])
+        uiStatic.cache.set(entry.key, { result: fromDtValue(entry.result), deps: entry.deps, stale: false });
 }

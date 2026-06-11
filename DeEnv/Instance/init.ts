@@ -13,15 +13,18 @@ const uiStatic: {
     renderFn: ExecFunction;
     lastId: LastId;
     state: AppState;
+    cache: Map<string, ClientCacheEntry>;
 } = {
     renderFn: null as unknown as ExecFunction,
     lastId: { value: 0 },
     state: { objects: {}, arrays: {}, scope: { items: {}, parent: null }, localToServerIds: {}, serverToLocalIds: {} },
+    cache: new Map(),
 };
 
 function init(): void {
-    // db + session vars arrive as data; functions are re-defined from the AST so they
-    // close over this same top scope (mutual recursion, like the server).
+    // db + session vars arrive as data; the memoized computations arrive in the cache;
+    // functions are re-defined from the AST so they close over this same top scope.
+    setMemoCache(uiStatic.cache);
     mergeState(initData);
     const scope = uiStatic.state.scope;
     for (const fn of initUi.common?.functions ?? []) executeFunction(fn, scope);

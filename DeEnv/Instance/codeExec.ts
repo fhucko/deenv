@@ -154,6 +154,82 @@ function executeSymbol(codeSymbol: CodeSymbol, scope: ExecScope): ExecResult {
 
 const collectionMethods = ["add", "remove", "where", "orderBy"];
 
+// ── memoization cache (Stage 4) ────────────────────────────────────────────────────
+// Mirrors the server (DeEnv/Code/MemoCache.cs). Computation boundaries (user-fn calls,
+// where/orderBy) memoize by the same (function, args) key. The client reuses a fresh
+// result, recomputes a stale one when its deps are present, and invalidates by
+// dependency on each mutation. memoCache is null when codeExec runs standalone
+// (conformance) → no caching, just compute.
+
+interface CacheDeps { props: { obj: number; prop: string }[]; members: number[]; }
+interface ClientCacheEntry { result: ExecValue; deps: CacheDeps; stale: boolean; }
+
+let memoCache: Map<string, ClientCacheEntry> | null = null;
+const depStack: CacheDeps[] = [];
+
+function setMemoCache(cache: Map<string, ClientCacheEntry>): void { memoCache = cache; }
+
+function recordProp(objId: number, prop: string): void {
+    if (depStack.length > 0) depStack[depStack.length - 1].props.push({ obj: objId, prop });
+}
+function recordMember(arrId: number): void {
+    if (depStack.length > 0) depStack[depStack.length - 1].members.push(arrId);
+}
+function mergeDeps(into: CacheDeps, from: CacheDeps): void {
+    into.props.push(...from.props);
+    into.members.push(...from.members);
+}
+
+function argKey(v: ExecValue): string {
+    switch (v.type) {
+        case "object": return "o" + v.id;
+        case "array": return "a" + v.id;
+        case "int": return "i" + v.value;
+        case "bool": return "b" + (v.value ? 1 : 0);
+        case "text": return "t" + v.value.length + ":" + v.value;
+        case "null": return "n";
+        default: return "?";
+    }
+}
+function memoKey(callee: string, args: ExecValue[]): string {
+    return args.length === 0 ? callee : callee + "|" + args.map(argKey).join(",");
+}
+
+function memoize(key: string, compute: () => ExecValue): ExecValue {
+    if (memoCache == null) return compute();
+    const existing = memoCache.get(key);
+    if (existing && !existing.stale) {
+        if (depStack.length > 0) mergeDeps(depStack[depStack.length - 1], existing.deps);
+        return existing.result;
+    }
+    const deps: CacheDeps = { props: [], members: [] };
+    depStack.push(deps);
+    try {
+        const result = compute();
+        memoCache.set(key, { result, deps, stale: false });
+        return result;
+    } catch (e) {
+        // A hidden dependency: can't recompute on the client. Reuse the stale result.
+        // (Stage 4b refetches from the server here.) Re-throw anything else.
+        if (existing != null && e instanceof Error && e.message === "Value not available") return existing.result;
+        throw e;
+    } finally {
+        depStack.pop();
+        if (depStack.length > 0) mergeDeps(depStack[depStack.length - 1], deps);
+    }
+}
+
+function invalidateProp(objId: number, prop: string): void {
+    if (memoCache == null) return;
+    for (const e of memoCache.values())
+        if (e.deps.props.some(d => d.obj === objId && d.prop === prop)) e.stale = true;
+}
+function invalidateMember(arrId: number): void {
+    if (memoCache == null) return;
+    for (const e of memoCache.values())
+        if (e.deps.members.includes(arrId)) e.stale = true;
+}
+
 function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: ExecContext): ExecResult {
     if (codeInfixOp.op !== "objectProp") return { value: executeInfixOpBasic(codeInfixOp, scope, context) };
 
@@ -167,10 +243,12 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
     if (left.type !== "object") throw new Error(`Cannot read '${right.name}' on a non-object.`);
     const value = left.props[right.name];
     if (value == null) throw new Error("Value not available");
+    recordProp(left.id, right.name);
     return {
         value,
         setValue: p => {
             left.props[right.name] = p;
+            invalidateProp(left.id, right.name);
             if (left.isInDb) { propValueChange(left.id, right.name, p); setIsDb(p); }
         },
     };
@@ -180,8 +258,14 @@ function collectionSysFunction(arr: ExecArray, method: string, context: ExecCont
     switch (method) {
         case "add": return { type: "sysFn", fn: args => { addToCollection(arr, args[0], context); return { type: "nothing" }; } };
         case "remove": return { type: "sysFn", fn: args => { removeFromCollection(arr, args[0]); return { type: "nothing" }; } };
-        case "where": return { type: "sysFn", fn: args => whereCollection(arr, asLambda(args[0]), context) };
-        case "orderBy": return { type: "sysFn", fn: args => orderByCollection(arr, asLambda(args[0]), context) };
+        case "where": return { type: "sysFn", fn: args => {
+            const lambda = asLambda(args[0]);
+            return memoize(`where:a${arr.id}:fn${lambda.fn.id}`, () => whereCollection(arr, lambda, context));
+        } };
+        case "orderBy": return { type: "sysFn", fn: args => {
+            const lambda = asLambda(args[0]);
+            return memoize(`orderBy:a${arr.id}:fn${lambda.fn.id}`, () => orderByCollection(arr, lambda, context));
+        } };
         default: throw new Error(`Unknown collection method '${method}'.`);
     }
 }
@@ -200,6 +284,7 @@ function invokeLambda(fn: ExecFunction, arg: ExecValue, context: ExecContext): E
 function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext): void {
     const item: ExecArrayItem = { id: --context.lastId.value, value };
     arr.items.push(item);
+    invalidateMember(arr.id);
     if (arr.isInDb) { sendArrayItemAdd(arr.id, item.id, value); setIsDb(item.value); }
 }
 
@@ -208,10 +293,12 @@ function removeFromCollection(arr: ExecArray, value: ExecValue): void {
         || (i.value.type === "object" && value.type === "object" && i.value.id === value.id));
     if (index < 0) return;
     const item = arr.items.splice(index, 1)[0];
+    invalidateMember(arr.id);
     if (arr.isInDb) sendArrayItemRemove(arr.id, item.id);
 }
 
 function whereCollection(arr: ExecArray, predicate: ExecFunction, context: ExecContext): ExecArray {
+    recordMember(arr.id);
     const items = arr.items.filter(item => {
         const r = invokeLambda(predicate, item.value, context);
         return r.type === "bool" && r.value;
@@ -220,6 +307,7 @@ function whereCollection(arr: ExecArray, predicate: ExecFunction, context: ExecC
 }
 
 function orderByCollection(arr: ExecArray, keySelector: ExecFunction, context: ExecContext): ExecArray {
+    recordMember(arr.id);
     const items = arr.items
         .map(item => ({ item, key: invokeLambda(keySelector, item.value, context) }))
         .sort((a, b) => compareExec(a.key, b.key))
@@ -271,10 +359,16 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));
     if (fn.type !== "fn") throw new Error("Target of a call is not a function.");
 
-    const callScope: ExecScope = { parent: fn.scope, items: {} };
-    for (let i = 0; i < codeCall.params.length; i++)
-        callScope.items[fn.fn.params[i].name] = { value: executeValue(codeCall.params[i], scope, context).value, isReadOnly: true };
-    return executeBlock(fn.fn.body, callScope, context);
+    // Args evaluate in the caller's context (their deps are the caller's); the body is
+    // memoized by (function id, arg identities), capturing its own deps.
+    const argVals = codeCall.params.map(p => executeValue(p, scope, context).value);
+    const closure = fn;
+    return memoize(memoKey("fn:" + closure.fn.id, argVals), () => {
+        const callScope: ExecScope = { parent: closure.scope, items: {} };
+        for (let i = 0; i < argVals.length; i++)
+            callScope.items[closure.fn.params[i].name] = { value: argVals[i], isReadOnly: true };
+        return executeBlock(closure.fn.body, callScope, context);
+    });
 }
 
 // ── tags (DOM-free; ui.ts renders the resulting ExecTag tree) ─────────────────────
