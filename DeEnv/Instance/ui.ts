@@ -22,9 +22,36 @@ function renderUi(): void {
         throw e;
     }
     updateChildren(document.body, [result]);
-    syncScopeText("path", v => history.replaceState(null, "", v));
+    syncPath();
     syncScopeText("title", v => { document.title = v; });
+    refreshErrorBanner();
     maybeRefetch(); // anything stale or missing → re-ask the server
+}
+
+// Routing writes real history entries: a code-driven `path` change pushes, so the
+// browser's back/forward buttons work; popstate (init.ts) writes the var back.
+function syncPath(): void {
+    const item = uiStatic.state.scope.items["path"];
+    if (item == null || item.value.type !== "text") return;
+    if (item.value.value !== location.pathname) history.pushState(null, "", item.value.value);
+}
+
+// The latest server-rejected mutation, surfaced as a dismissable banner. Re-appended
+// after each render (the body reconciler drops children it didn't produce); keyed so
+// the reconciler never repurposes the element for app content.
+function refreshErrorBanner(): void {
+    const existing = document.querySelector<HTMLElement>("[data-key='__error']");
+    if (uiStatic.lastError == null) { existing?.remove(); return; }
+    const banner = existing ?? document.createElement("div");
+    if (existing == null) {
+        banner.setAttribute("data-key", "__error");
+        banner.style.cssText =
+            "position:fixed;top:0;left:0;right:0;z-index:9999;padding:0.5rem 1rem;" +
+            "background:#b00020;color:#fff;font:14px system-ui,sans-serif;cursor:pointer;";
+        banner.onclick = () => { uiStatic.lastError = null; refreshErrorBanner(); };
+    }
+    banner.textContent = `Change rejected: ${uiStatic.lastError} — click to dismiss`;
+    document.body.appendChild(banner);
 }
 
 // Invoke a (no-arg) function — the render fn or an event handler — by running its

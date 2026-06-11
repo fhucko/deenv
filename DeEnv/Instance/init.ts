@@ -42,6 +42,16 @@ function init(): void {
     if (scope.items["path"] != null)
         scope.items["path"] = { value: { type: "text", value: location.pathname }, isReadOnly: false };
 
+    // Browser back/forward: write the location back into the path var and re-render.
+    window.addEventListener("popstate", () => {
+        const item = uiStatic.state.scope.items["path"];
+        if (item != null) {
+            item.value = { type: "text", value: location.pathname };
+            invalidateVar("path");
+            renderUi();
+        }
+    });
+
     renderUi();
 }
 

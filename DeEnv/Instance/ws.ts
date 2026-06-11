@@ -52,14 +52,29 @@ function rollbackJournal(msgId: number, error: string): void {
 // went into, so the reply can re-key item + object from negative to real.
 const pendingAdds = new Map<number, number>();
 
+let wsRetryDelay = 1000;
+
 function connectWs(): void {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     codeWs = new WebSocket(`${proto}//${location.host}/ws`);
     codeWs.onopen = () => {
+        wsRetryDelay = 1000;
         // Claim the warm session minted at SSR before anything else; if this arrives
         // past the claim window the session is gone and refetches do a full re-render.
         codeWs!.send(JSON.stringify({ op: "hello", clientId: uiStatic.clientId }));
         for (const m of codeWsOutbox.splice(0)) codeWs!.send(m);
+        maybeRefetch(); // resync after a reconnect (no-op on the first open)
+    };
+    codeWs.onclose = () => {
+        // The connection died: outcomes of in-flight mutations are unknown, so drop
+        // the journal (the optimistic state stands) and resync authoritatively once
+        // reconnected. Reconnects back off exponentially, capped at 10s.
+        journal.length = 0;
+        pendingAdds.clear();
+        refetchInFlight = false;
+        needsServerData = true;
+        setTimeout(connectWs, wsRetryDelay);
+        wsRetryDelay = Math.min(wsRetryDelay * 2, 10000);
     };
     codeWs.onmessage = ev => onWsMessage(JSON.parse(ev.data));
 

@@ -18,7 +18,8 @@ type Reply = Record<string, unknown> & { id?: number; error?: string };
 
 // ── WebSocket request/response layer ───────────────────────────────────────────
 
-const ws = new WebSocket(`ws://${window.location.host}/ws`);
+const ws = new WebSocket(
+    `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`);
 let nextId = 1;
 const pending = new Map<number, (reply: Reply) => void>();
 
