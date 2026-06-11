@@ -22,8 +22,11 @@ public sealed record DictionaryValue(
 
 // Set node: object identity → the resolved member object. A set holds references
 // (ids) into a per-type extent; reads resolve them to the member object so the
-// member is addressable by its own identity (the int key).
+// member is addressable by its own identity (the int key). The set itself carries
+// an intrinsic Id (it is a mutable container) so the runtime, cache, and mutations
+// can reference it stably across renders.
 public sealed record SetValue(
+    int Id,
     IReadOnlyDictionary<int, NodeValue> Members) : NodeValue;
 
 // A single object-typed prop: a reference into an extent. TargetId is null when

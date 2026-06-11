@@ -156,7 +156,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             foreach (var (k, v) in m)
                 if (v is JsonObject objRef && BuildObjectFromRef(doc, objRef, elemType) is { } obj)
                     members[int.Parse(k)] = obj;
-        return new SetValue(members);
+        return new SetValue(setNode?["id"]?.GetValue<int>() ?? 0, members);
     }
 
     private DictionaryValue BuildDictionary(JsonObject doc, JsonObject? dictNode, TypeDefinition elemType, string keyType)
@@ -416,7 +416,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             pool = new JsonObject();
             Extents(doc)[typeName] = pool;
         }
-        var id = NextId(doc);
+        var id = MintId(doc);
         var type = _desc.FindType(typeName)
             ?? throw new InvalidOperationException($"Unknown type '{typeName}'.");
         pool[id.ToString()] = new JsonObject
@@ -424,21 +424,22 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             ["type"] = "object",
             ["typeName"] = typeName,
             ["id"] = id,
-            ["fields"] = BuildFieldsJson(type, fields),
+            ["fields"] = BuildFieldsJson(doc, type, fields),
         };
         return id;
     }
 
-    // New object's stored fields: provided scalars, empty collections, unset refs.
-    private JsonObject BuildFieldsJson(TypeDefinition type, ObjectValue provided)
+    // New object's stored fields: provided scalars, empty collections (each with its
+    // own intrinsic id), unset refs.
+    private JsonObject BuildFieldsJson(JsonObject doc, TypeDefinition type, ObjectValue provided)
     {
         var fjson = new JsonObject();
         foreach (var prop in type.Props ?? [])
         {
             if (prop.Cardinality == Cardinality.Set)
-                fjson[prop.Name] = new JsonObject { ["type"] = "set", ["members"] = new JsonObject() };
+                fjson[prop.Name] = new JsonObject { ["type"] = "set", ["id"] = MintId(doc), ["members"] = new JsonObject() };
             else if (prop.Cardinality == Cardinality.Dictionary)
-                fjson[prop.Name] = new JsonObject { ["type"] = "dictionary", ["entries"] = new JsonObject() };
+                fjson[prop.Name] = new JsonObject { ["type"] = "dictionary", ["id"] = MintId(doc), ["entries"] = new JsonObject() };
             else if (!_desc.IsObjectType(prop.Type))
                 fjson[prop.Name] = provided.Fields.TryGetValue(prop.Name, out var v)
                     ? ToTagged(v)
@@ -459,7 +460,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         var field = path.Segments[^1];
         if (parent.Fields[field] is not JsonObject node || node[slot] is not JsonObject)
         {
-            node = new JsonObject { ["type"] = type, [slot] = new JsonObject() };
+            node = new JsonObject { ["type"] = type, ["id"] = MintId(doc), [slot] = new JsonObject() };
             parent.Fields[field] = node;
         }
         return (JsonObject)node[slot]!;
@@ -471,14 +472,24 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         return (parent?.Fields[path.Segments[^1]] as JsonObject)?[slot] as JsonObject;
     }
 
-    private static int NextId(JsonObject doc)
+    // Intrinsic ids come from one global counter shared by objects, sets and dicts, so
+    // every mutable thing has a unique stable id. Falls back to the max extent id for a
+    // legacy doc with no counter yet.
+    private static int MintId(JsonObject doc)
+    {
+        var next = (doc["nextId"]?.GetValue<int>() ?? ExtentMaxId(doc)) + 1;
+        doc["nextId"] = next;
+        return next;
+    }
+
+    private static int ExtentMaxId(JsonObject doc)
     {
         var max = 0;
         foreach (var (_, pool) in Extents(doc))
             if (pool is JsonObject p)
                 foreach (var (k, _) in p)
                     if (int.TryParse(k, out var n) && n > max) max = n;
-        return max + 1;
+        return max;
     }
 
     // Mark-sweep from the root: any object value reachable is kept; the rest swept.
@@ -550,7 +561,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         foreach (var prop in type.Props ?? [])
         {
             if (prop.Cardinality == Cardinality.Set)
-                fields[prop.Name] = new SetValue(new Dictionary<int, NodeValue>());
+                fields[prop.Name] = new SetValue(0, new Dictionary<int, NodeValue>()); // template; not stored
             else if (prop.Cardinality == Cardinality.Dictionary)
                 fields[prop.Name] = new DictionaryValue(new Dictionary<NodeValue, NodeValue>());
             else if (_desc.IsObjectType(prop.Type))
@@ -610,16 +621,20 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private JsonObject BuildInitialDoc()
     {
         var extents = new JsonObject();
+        var doc = new JsonObject { ["extents"] = extents, ["nextId"] = 1, ["root"] = InitialRootNode() };
         var db = _desc.Db();
         if (db is { BaseType: BaseType.Object })
+            // The root is id 1; its collection props get ids from the counter (which
+            // starts at 1, so they mint 2, 3, …) so every set/dict has a stable id.
             extents["Db"] = new JsonObject
             {
                 ["1"] = new JsonObject
                 {
-                    ["type"] = "object", ["typeName"] = "Db", ["id"] = 1, ["fields"] = new JsonObject(),
+                    ["type"] = "object", ["typeName"] = "Db", ["id"] = 1,
+                    ["fields"] = BuildFieldsJson(doc, db, new ObjectValue(new Dictionary<string, NodeValue>())),
                 },
             };
-        return new JsonObject { ["extents"] = extents, ["root"] = InitialRootNode() };
+        return doc;
     }
 
     private JsonNode InitialRootNode()

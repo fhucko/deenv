@@ -105,9 +105,9 @@ public sealed class CodeExecutor
     private ExecArray ExecuteArray(CodeArray codeArray, ExecScope scope, ExecContext context)
     {
         var items = codeArray.Items
-            .Select(p => new ExecArrayItem { Id = ++context.LastId.Value, Value = ExecuteValue(p, scope, context) })
+            .Select(p => new ExecArrayItem { Id = --context.LastId.Value, Value = ExecuteValue(p, scope, context) })
             .ToList();
-        var arr = new ExecArray { Items = items, Id = ++context.LastId.Value };
+        var arr = new ExecArray { Items = items, Id = --context.LastId.Value };
         context.CreatedArrays.Add(arr);
         return arr;
     }
@@ -117,7 +117,7 @@ public sealed class CodeExecutor
         var props = new Dictionary<string, IExecValue>();
         foreach (var prop in codeObject.Props)
             props[prop.Name] = ExecuteValue(prop.Value, scope, context);
-        var obj = new ExecObject { Props = props, Id = ++context.LastId.Value };
+        var obj = new ExecObject { Props = props, Id = --context.LastId.Value };
         context.CreatedObjects.Add(obj);
         return obj;
     }
@@ -335,7 +335,7 @@ public sealed class CodeExecutor
         var items = arr.Items
             .Where(item => InvokeLambda(predicate, item.Value, context) is ExecBool { Value: true })
             .ToList();
-        return new ExecArray { Items = items, Id = ++context.LastId.Value, IsInDb = false };
+        return new ExecArray { Items = items, Id = --context.LastId.Value, IsInDb = false };
     }
 
     private ExecArray OrderBy(ExecArray arr, ExecFunction keySelector, ExecContext context)
@@ -346,7 +346,7 @@ public sealed class CodeExecutor
             .OrderBy(p => p.key, ExecValueComparer.Instance)
             .Select(p => p.item)
             .ToList();
-        return new ExecArray { Items = items, Id = ++context.LastId.Value, IsInDb = false };
+        return new ExecArray { Items = items, Id = --context.LastId.Value, IsInDb = false };
     }
 
     private static int NextItemId(ExecArray arr) =>

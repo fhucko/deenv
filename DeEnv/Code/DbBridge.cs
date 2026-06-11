@@ -47,7 +47,10 @@ public static class DbBridge
                 case Cardinality.Set:
                 {
                     var items = new List<ExecArrayItem>();
+                    var setId = 0;
                     if (ov.Fields.TryGetValue(prop.Name, out var f) && f is SetValue set)
+                    {
+                        setId = set.Id; // the set's stored intrinsic id — stable across renders
                         foreach (var (memberId, memberVal) in set.Members)
                             if (memberVal is ObjectValue memberOv)
                                 items.Add(new ExecArrayItem
@@ -56,10 +59,11 @@ public static class DbBridge
                                     Value = LoadObject(memberOv, elemType!, memberId,
                                         fieldPath.Key(memberId.ToString()), store, desc, loaded, context),
                                 });
+                    }
                     obj.Props[prop.Name] = new ExecArray
                     {
                         Items = items,
-                        Id = ++context.LastId.Value,
+                        Id = setId,
                         IsInDb = true,
                         Path = fieldPath,
                         ElementTypeName = elemType!.Name,

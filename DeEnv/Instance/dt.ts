@@ -60,6 +60,13 @@ function mergeState(dtState: ServerDtState): void {
             if (!arr.items.some(p => p.id === item.id)) arr.items.push({ id: item.id, value: fromDtValue(item.value) });
     }
 
+    // Keep client-minted (transient) ids below every shipped id, so a new object/array
+    // can never reuse a server id (intrinsic positive, or server-derived negative).
+    let minId = uiStatic.lastId.value;
+    for (const id of Object.keys(objects)) minId = Math.min(minId, Number(id));
+    for (const id of Object.keys(arrays)) minId = Math.min(minId, Number(id));
+    uiStatic.lastId.value = minId;
+
     for (const [key, value] of Object.entries(dtState.scope))
         scope.items[key] = { isReadOnly: value.isReadOnly, value: fromDtValue(value.value) };
 
