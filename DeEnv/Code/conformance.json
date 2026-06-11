@@ -31,6 +31,31 @@
       "expect": { "kind": "bool", "value": true }
     },
     {
+      "name": "integer division truncates (7/2)",
+      "expr": { "type": "infixOp", "op": "divide", "left": { "type": "int", "value": 7 }, "right": { "type": "int", "value": 2 } },
+      "expect": { "kind": "int", "value": 3 }
+    },
+    {
+      "name": "integer division truncates toward zero (-7/2)",
+      "expr": { "type": "infixOp", "op": "divide", "left": { "type": "int", "value": -7 }, "right": { "type": "int", "value": 2 } },
+      "expect": { "kind": "int", "value": -3 }
+    },
+    {
+      "name": "modulo keeps the dividend's sign (-7%3)",
+      "expr": { "type": "infixOp", "op": "modulo", "left": { "type": "int", "value": -7 }, "right": { "type": "int", "value": 3 } },
+      "expect": { "kind": "int", "value": -1 }
+    },
+    {
+      "name": "return of a nothing-valued call exits the function",
+      "expr": { "type": "call", "params": [],
+        "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+          { "type": "return", "value": { "type": "call", "params": [],
+            "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [] } } } },
+          { "type": "return", "value": { "type": "int", "value": 5 } }
+        ] } } },
+      "expect": { "kind": "nothing", "value": null }
+    },
+    {
       "name": "text equality",
       "expr": { "type": "infixOp", "op": "equals", "left": { "type": "text", "value": "a" }, "right": { "type": "text", "value": "a" } },
       "expect": { "kind": "bool", "value": true }

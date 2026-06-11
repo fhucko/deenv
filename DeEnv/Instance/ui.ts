@@ -32,7 +32,7 @@ function renderUi(): void {
 // discriminator, so it must not be routed back through executeValue.)
 function callFunction(fn: ExecFunction, context: ExecContext): ExecValue {
     const callScope: ExecScope = { parent: fn.scope, items: {} };
-    return executeBlock(fn.fn.body, callScope, context);
+    return executeBlock(fn.fn.body, callScope, context) ?? { type: "nothing" };
 }
 
 function syncScopeText(name: string, apply: (v: string) => void): void {

@@ -5,7 +5,7 @@
 // shared conformance suite (DeEnv/Code/conformance.json), run here via runConformance.
 //
 // Authored as a global script (no import/export) so it can be injected and called
-// directly. Op codes are the camelCase CodeInfixOpType values (see enums.ts).
+// directly. Op codes are the camelCase CodeInfixOpType values (CodeAst.cs).
 
 // ── AST (mirrors DeEnv/Code/CodeAst.cs, "type"-discriminated, camelCase) ──────────
 
@@ -67,24 +67,27 @@ interface LastId { value: number; }
 
 // ── statements ────────────────────────────────────────────────────────────────────
 
-function executeStatement(statement: CodeStatement, scope: ExecScope, context: ExecContext): ExecValue {
+// A statement yields null when it does NOT return (mirroring the C# executor) —
+// `nothing` is a real returned value (a void call's result), so `return voidFn()`
+// must still exit the enclosing block.
+function executeStatement(statement: CodeStatement, scope: ExecScope, context: ExecContext): ExecValue | null {
     switch (statement.type) {
-        case "assign": executeAssignment(statement, scope, context); return { type: "nothing" };
+        case "assign": executeAssignment(statement, scope, context); return null;
         case "block": return executeBlock(statement, scope, context);
-        case "varDec": executeVarDec(statement, scope, context); return { type: "nothing" };
-        case "fn": executeFunction(statement, scope); return { type: "nothing" };
+        case "varDec": executeVarDec(statement, scope, context); return null;
+        case "fn": executeFunction(statement, scope); return null;
         case "return": return executeValue(statement.value, scope, context).value;
-        case "call": executeCall(statement, scope, context); return { type: "nothing" };
+        case "call": executeCall(statement, scope, context); return null;
         case "if": return executeIf(statement, scope, context);
         default: throw new Error("NotImplementedException");
     }
 }
 
-function executeIf(codeIf: CodeIf, scope: ExecScope, context: ExecContext): ExecValue {
+function executeIf(codeIf: CodeIf, scope: ExecScope, context: ExecContext): ExecValue | null {
     const condition = executeValue(codeIf.condition, scope, context).value;
     if (condition.type !== "bool") throw new Error("Result of if condition is not boolean.");
     const code = condition.value ? codeIf.body : codeIf.elseBody;
-    return code == null ? { type: "nothing" } : executeStatement(code, scope, context);
+    return code == null ? null : executeStatement(code, scope, context);
 }
 
 function executeFunction(fun: CodeFunction, scope: ExecScope): ExecFunction {
@@ -99,13 +102,13 @@ function executeVarDec(varDec: CodeVarDec, scope: ExecScope, context: ExecContex
     scope.items[varDec.name] = { value, isReadOnly: false };
 }
 
-function executeBlock(block: CodeBlock, scope: ExecScope, context: ExecContext): ExecValue {
+function executeBlock(block: CodeBlock, scope: ExecScope, context: ExecContext): ExecValue | null {
     const innerScope: ExecScope = { parent: scope, items: {} };
     for (const statement of block.statements) {
         const value = executeStatement(statement, innerScope, context);
-        if (value.type !== "nothing") return value;
+        if (value != null) return value;
     }
-    return { type: "nothing" };
+    return null;
 }
 
 function executeAssignment(assignment: CodeAssignment, scope: ExecScope, context: ExecContext): ExecValue {
@@ -322,7 +325,7 @@ function asLambda(value: ExecValue): ExecFunction {
 function invokeLambda(fn: ExecFunction, arg: ExecValue, context: ExecContext): ExecValue {
     const callScope: ExecScope = { parent: fn.scope, items: {} };
     if (fn.fn.params.length > 0) callScope.items[fn.fn.params[0].name] = { value: arg, isReadOnly: true };
-    return executeBlock(fn.fn.body, callScope, context);
+    return executeBlock(fn.fn.body, callScope, context) ?? { type: "nothing" };
 }
 
 function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext): void {
@@ -411,9 +414,9 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     const closure = fn;
     return memoize(memoKey("fn:" + closure.fn.id, argVals), context, () => {
         const callScope: ExecScope = { parent: closure.scope, items: {} };
-        for (let i = 0; i < argVals.length; i++)
+        for (let i = 0; i < argVals.length && i < closure.fn.params.length; i++)
             callScope.items[closure.fn.params[i].name] = { value: argVals[i], isReadOnly: true };
-        return executeBlock(closure.fn.body, callScope, context);
+        return executeBlock(closure.fn.body, callScope, context) ?? { type: "nothing" };
     });
 }
 
@@ -509,6 +512,7 @@ function runConformance(exprJson: string): string {
         case "text": return JSON.stringify({ kind: "text", value: result.value });
         case "bool": return JSON.stringify({ kind: "bool", value: result.value });
         case "array": return JSON.stringify({ kind: "intList", value: result.items.map(i => (i.value as ExecInt).value) });
+        case "nothing": return JSON.stringify({ kind: "nothing", value: null });
         default: throw new Error(`Non-scalar conformance result '${result.type}'.`);
     }
 }

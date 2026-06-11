@@ -55,6 +55,8 @@ public sealed class TsConformanceTests
                     await Assert.That(string.Join(",", got)).IsEqualTo(string.Join(",", want));
                     break;
                 }
+                case "nothing":
+                    break; // the kind comparison above is the whole assertion
                 default:
                     throw new InvalidOperationException($"Unknown expect kind '{c.Expect.Kind}' in case '{c.Name}'.");
             }

@@ -27,7 +27,12 @@ public static class CodeValidator
         // Top scope: db (read-only) + ui vars (writable) + all function names.
         var top = new Scope(null);
         top.Declare("db", writable: false);
-        foreach (var v in ui.Vars ?? []) top.Declare(v.Name, writable: true);
+        foreach (var v in ui.Vars ?? [])
+        {
+            if (top.IsDeclaredLocally(v.Name))
+                throw new SchemaValidationException($"Duplicate ui var '{v.Name}'.");
+            top.Declare(v.Name, writable: true);
+        }
         foreach (var f in ui.Functions ?? []) DeclareNamed(f, top);
         foreach (var f in desc.Common?.Functions ?? []) DeclareNamed(f, top);
 
@@ -44,7 +49,7 @@ public static class CodeValidator
 
     private static void DeclareNamed(CodeFunction fn, Scope scope)
     {
-        if (fn.Name != null) scope.Declare(fn.Name, writable: false);
+        if (fn.Name != null) scope.Declare(fn.Name, writable: false, arity: fn.Params.Length);
     }
 
     private static void ValidateFunction(CodeFunction fn, Scope parent)
@@ -69,6 +74,9 @@ public static class CodeValidator
                 break;
             case CodeVarDec varDec:
                 if (varDec.Value != null) ValidateValue(varDec.Value, scope);
+                // The executor throws on a same-scope redeclare; fail at load instead.
+                if (scope.IsDeclaredLocally(varDec.Name))
+                    throw new SchemaValidationException($"Variable '{varDec.Name}' is declared twice in the same block.");
                 scope.Declare(varDec.Name, writable: true);
                 break;
             case CodeFunction fn:
@@ -127,6 +135,13 @@ public static class CodeValidator
             case CodeCall call:
                 ValidateValue(call.Fn, scope);
                 foreach (var arg in call.Params) ValidateValue(arg, scope);
+                // Static arity check for a direct call of a NAMED function (vars
+                // holding functions have unknown arity and are checked at runtime).
+                if (call.Fn is CodeSymbol callee
+                    && scope.TryResolveArity(callee.Name, out var arity)
+                    && call.Params.Length != arity)
+                    throw new SchemaValidationException(
+                        $"'{callee.Name}' takes {arity} argument(s) but is called with {call.Params.Length}.");
                 break;
             case CodeFunction fn:
                 ValidateFunction(fn, scope);
@@ -187,20 +202,35 @@ public static class CodeValidator
         }
     }
 
-    // Lexical scope for validation: name → writable. Mirrors the executor's
-    // read-only rules (params/function-names/db read-only; vars/varDecs writable).
+    // Lexical scope for validation: name → (writable, arity for named functions).
+    // Mirrors the executor's read-only rules (params/function-names/db read-only;
+    // vars/varDecs writable).
     private sealed class Scope(CodeValidator.Scope? parent)
     {
-        private readonly Dictionary<string, bool> _items = [];
+        private readonly Dictionary<string, (bool Writable, int? Arity)> _items = [];
         private readonly Scope? _parent = parent;
 
-        public void Declare(string name, bool writable) => _items[name] = writable;
+        public void Declare(string name, bool writable, int? arity = null) => _items[name] = (writable, arity);
+
+        public bool IsDeclaredLocally(string name) => _items.ContainsKey(name);
 
         public bool TryResolve(string name, out bool writable)
         {
-            if (_items.TryGetValue(name, out writable)) return true;
+            if (_items.TryGetValue(name, out var item)) { writable = item.Writable; return true; }
             if (_parent != null) return _parent.TryResolve(name, out writable);
             writable = false;
+            return false;
+        }
+
+        public bool TryResolveArity(string name, out int arity)
+        {
+            if (_items.TryGetValue(name, out var item))
+            {
+                arity = item.Arity ?? 0;
+                return item.Arity != null;
+            }
+            if (_parent != null) return _parent.TryResolveArity(name, out arity);
+            arity = 0;
             return false;
         }
     }

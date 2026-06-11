@@ -53,6 +53,9 @@ public sealed class ConformanceTests
                 await Assert.That(string.Join(",", got)).IsEqualTo(string.Join(",", want));
                 break;
             }
+            case "nothing":
+                await Assert.That(result is ExecNothing).IsTrue();
+                break;
             default:
                 throw new InvalidOperationException($"Unknown expect kind '{c.Expect.Kind}' in case '{c.Name}'.");
         }

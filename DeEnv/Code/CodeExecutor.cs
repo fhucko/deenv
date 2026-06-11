@@ -237,7 +237,10 @@ public sealed class CodeExecutor
         return Memoize(MemoKey($"fn:{fn.Function.Id}", argVals), context, () =>
         {
             var callScope = new ExecScope { Parent = fn.Scope };
-            for (var i = 0; i < argVals.Length; i++)
+            // Bind min(args, params): extra args are ignored, missing params stay
+            // unbound (a later read fails with "Variable not found"). The validator
+            // catches static arity mismatches on named functions.
+            for (var i = 0; i < argVals.Length && i < fn.Function.Params.Length; i++)
                 callScope.Items[fn.Function.Params[i].Name] = new ExecScopeItem { Value = argVals[i], IsReadOnly = true };
             return ExecuteBlock(fn.Function.Body, callScope, context) ?? new ExecNothing();
         });
@@ -273,8 +276,12 @@ public sealed class CodeExecutor
         return result;
     }
 
-    private static bool ContainsTags(IExecValue result) =>
-        result is ExecTag || (result is ExecArray a && a.Items.Any(i => i.Value is ExecTag));
+    private static bool ContainsTags(IExecValue result) => result switch
+    {
+        ExecTag => true,
+        ExecArray a => a.Items.Any(i => ContainsTags(i.Value)), // nested arrays of tags too
+        _ => false,
+    };
 
     private static void PromoteLeaves(ExecContext context, LeafFrame leaves)
     {
