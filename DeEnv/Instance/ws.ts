@@ -17,7 +17,12 @@ const pendingAdds = new Map<number, number>();
 function connectWs(): void {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     codeWs = new WebSocket(`${proto}//${location.host}/ws`);
-    codeWs.onopen = () => { for (const m of codeWsOutbox.splice(0)) codeWs!.send(m); };
+    codeWs.onopen = () => {
+        // Claim the warm session minted at SSR before anything else; if this arrives
+        // past the claim window the session is gone and refetches do a full re-render.
+        codeWs!.send(JSON.stringify({ op: "hello", clientId: uiStatic.clientId }));
+        for (const m of codeWsOutbox.splice(0)) codeWs!.send(m);
+    };
     codeWs.onmessage = ev => onWsMessage(JSON.parse(ev.data));
 
     setWsHooks({

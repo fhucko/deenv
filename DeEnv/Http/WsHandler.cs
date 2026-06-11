@@ -55,6 +55,7 @@ public sealed class WsHandler
                 "addEntry"         => HandleAddEntry(path, pathStr, root),
                 "removeEntry"      => HandleRemoveEntry(path, pathStr, root),
                 "setReference"     => HandleSetReference(path, pathStr, root),
+                "hello"            => HandleHello(root),
                 "objectPropChange" => HandleObjectPropChange(root),
                 "arrayAdd"         => HandleArrayAdd(root),
                 "arrayRemove"      => HandleArrayRemove(root),
@@ -333,6 +334,15 @@ public sealed class WsHandler
 
         var response = new JsonObject { ["op"] = "objectPropChange", ["ok"] = true };
         return response.ToJsonString(_jsonOpts);
+    }
+
+    // The WS's first message on open: claims the warm session minted at SSR, keeping it
+    // past the claim window. If the hello arrives too late the session is already gone —
+    // `sessionAlive: false` — and later refetches fall back to a full re-render.
+    private string HandleHello(JsonElement root)
+    {
+        var alive = Session(root) != null;
+        return new JsonObject { ["op"] = "hello", ["sessionAlive"] = alive }.ToJsonString(_jsonOpts);
     }
 
     // Re-render the code UI over fresh storage with the client's session vars and return

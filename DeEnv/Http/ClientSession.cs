@@ -20,6 +20,12 @@ public sealed class ClientSession
     // without re-walking: object id → object, set id → set.
     public Dictionary<int, ExecObject> Objects { get; } = [];
     public Dictionary<int, ExecArray> Sets { get; } = [];
+
+    // A session is claimed by the client's WS (the `hello` on socket open). Until then
+    // it only survives the claim window; an unclaimed session is a render whose client
+    // never connected (crawler, closed tab, lost script) and is dropped.
+    public DateTime CreatedAt { get; } = DateTime.UtcNow;
+    public bool Claimed { get; set; }
 }
 
 public sealed class ClientSessionStore
@@ -28,8 +34,17 @@ public sealed class ClientSessionStore
     // are dropped first. (Connection-scoped eviction lands with the real-time milestone.)
     private const int Cap = 500;
 
+    // How long an UNCLAIMED session is kept: the gap between the SSR response and the
+    // page's WS hello. If the hello arrives later (or never), the session is gone and a
+    // refetch falls back to a full re-render from storage.
+    private static readonly TimeSpan DefaultClaimWindow = TimeSpan.FromSeconds(10);
+
+    private readonly TimeSpan _claimWindow;
     private readonly ConcurrentDictionary<string, ClientSession> _sessions = new();
     private readonly ConcurrentQueue<string> _order = new();
+
+    public ClientSessionStore(TimeSpan? claimWindow = null) =>
+        _claimWindow = claimWindow ?? DefaultClaimWindow;
 
     public ClientSession Create(ExecObject db)
     {
@@ -37,12 +52,42 @@ public sealed class ClientSessionStore
         Index(session);
         _sessions[session.Id] = session;
         _order.Enqueue(session.Id);
+        SweepExpired();
         while (_sessions.Count > Cap && _order.TryDequeue(out var old))
             _sessions.TryRemove(old, out _);
         return session;
     }
 
-    public ClientSession? Get(string id) => _sessions.TryGetValue(id, out var s) ? s : null;
+    // Look up a session by id — and claim it, since only the client's own WS knows the
+    // id. An unclaimed session past the claim window is expired: dropped, not returned.
+    public ClientSession? Get(string id)
+    {
+        if (!_sessions.TryGetValue(id, out var s)) return null;
+        if (!s.Claimed && DateTime.UtcNow - s.CreatedAt > _claimWindow)
+        {
+            _sessions.TryRemove(id, out _);
+            return null;
+        }
+        s.Claimed = true;
+        return s;
+    }
+
+    // Drop expired unclaimed sessions from the front of the creation-order queue (the
+    // oldest first; a claimed session stops the sweep — the cap still bounds those).
+    private void SweepExpired()
+    {
+        while (_order.TryPeek(out var id))
+        {
+            if (!_sessions.TryGetValue(id, out var s))
+            {
+                _order.TryDequeue(out _); // already evicted by the cap
+                continue;
+            }
+            if (s.Claimed || DateTime.UtcNow - s.CreatedAt <= _claimWindow) return;
+            _order.TryDequeue(out _);
+            _sessions.TryRemove(id, out _);
+        }
+    }
 
     // Walk the warm graph once, indexing every persisted object/set by its intrinsic id.
     private static void Index(ClientSession session)
