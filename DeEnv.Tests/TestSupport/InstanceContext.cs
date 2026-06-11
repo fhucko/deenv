@@ -75,10 +75,16 @@ public class InstanceContext
         """);
 
     // Milestone 2 CRM-with-orders instance: objects, nested dictionaries, every
-    // base type, and both auto (int) + manual (text) key generation. Loaded from
-    // the committed schema document (the single source of truth), shipped to the
-    // test output by the csproj — see DeEnv/instance.schema.json.
+    // base type, and both auto (int) + manual (text) key generation. Now a test
+    // fixture (crm.schema.json) — the committed default app became the todo app.
     public static InstanceDescription CrmDb() =>
+        InstanceDescriptionLoader.LoadFile(
+            Path.Combine(AppContext.BaseDirectory, "crm.schema.json"));
+
+    // The committed default app (DeEnv/instance.schema.json): the todo app — the
+    // Code milestone's end-to-end proof. Types + ui AST + initialData seed; tests
+    // drive the real single source of truth.
+    public static InstanceDescription TodoDb() =>
         InstanceDescriptionLoader.LoadFile(
             Path.Combine(AppContext.BaseDirectory, "instance.schema.json"));
 

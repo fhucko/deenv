@@ -104,9 +104,14 @@ public sealed class SsrRenderer
     // the entries it cannot recompute locally (hidden deps). The render runs over the
     // session's warm db graph (kept in sync with the client's mutations) with the client's
     // session vars, and returns authoritative state.
-    public JsonObject RenderState(string urlPath, IReadOnlyDictionary<string, IExecValue>? sessionVars, ExecObject? warmDb)
+    // `lastIdFloor` is the client's current transient-id counter: the re-render mints
+    // its transients below it, so shipped negative ids never collide with the drafts
+    // the client already holds.
+    public JsonObject RenderState(
+        string urlPath, IReadOnlyDictionary<string, IExecValue>? sessionVars, ExecObject? warmDb, int lastIdFloor = 0)
     {
         var context = new ExecContext();
+        context.LastId.Value = Math.Min(0, lastIdFloor);
         var (_, _, scope) = ExecuteRender(urlPath, context, sessionVars, warmDb);
         return ClientState.Serialize(scope, context);
     }

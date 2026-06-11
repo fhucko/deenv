@@ -113,8 +113,11 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }
     } else if (msg.op === "refetch" && msg.state != null) {
         refetchInFlight = false;
-        mergeState(msg.state);
-        for (const e of uiStatic.cache.values()) e.stale = false; // server truth: nothing stale now
+        mergeState(msg.state); // shipped entries arrive fresh (stale: false)
+        // Entries STILL stale were not shipped (client-local tag trees the server cannot
+        // refresh): delete them, so the next lookup recomputes over the merged data
+        // instead of reusing an outdated tree — and nothing stays stale to re-trigger.
+        for (const [key, e] of uiStatic.cache) if (e.stale) uiStatic.cache.delete(key);
         renderUi();
     }
 }
@@ -131,7 +134,10 @@ function maybeRefetch(): void {
     if (refetchInFlight || (!hasStaleEntry() && !needsServerData)) return;
     needsServerData = false;
     refetchInFlight = true;
-    wsSend({ op: "refetch", clientId: uiStatic.clientId, path: location.pathname, vars: sessionVars() });
+    // lastId: the server mints its re-render transients BELOW everything this client
+    // already holds, so shipped negative ids never collide with local drafts.
+    wsSend({ op: "refetch", clientId: uiStatic.clientId, path: location.pathname,
+        vars: sessionVars(), lastId: uiStatic.lastId.value });
 }
 
 function hasStaleEntry(): boolean {
@@ -179,6 +185,9 @@ function remapAddedId(arrayId: number, tempId: number, realId: number,
     }
     uiStatic.state.localToServerIds[tempId] = realId;
     uiStatic.state.serverToLocalIds[realId] = tempId;
+    // The re-keyed member changes what dependents render (row data-keys), so cached
+    // computations over this array must rebuild.
+    invalidateMember(arrayId);
     renderUi();
 }
 

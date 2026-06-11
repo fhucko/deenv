@@ -244,11 +244,10 @@ function memoize(key: string, context: ExecContext, compute: () => ExecValue): E
         return result;
     } catch (e) {
         if (e instanceof Error && e.message === "Value not available") {
-            // A dependency the server never shipped. Reuse the stale result if there is
-            // one; otherwise render nothing for this subtree and ask the server.
-            if (existing != null) return existing.result;
+            // A dependency the server never shipped: ask the server either way, and
+            // show the stale result (if any) until the refetch lands.
             needsServerData = true;
-            return { type: "nothing" };
+            return existing != null ? existing.result : { type: "nothing" };
         }
         throw e;
     } finally {

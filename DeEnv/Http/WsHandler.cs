@@ -361,8 +361,11 @@ public sealed class WsHandler
                     sessionVars[v.Name] = value;
 
         // Recompute over the session's warm graph (already reflecting this client's
-        // mutations); falls back to a fresh load if there is no session.
-        var state = new SsrRenderer(_store, _desc).RenderState(pathStr, sessionVars, session?.Db);
+        // mutations); falls back to a fresh load if there is no session. Transients
+        // mint below the client's id floor (no collisions with its local drafts).
+        var lastId = root.TryGetProperty("lastId", out var le) && le.ValueKind == JsonValueKind.Number
+            ? le.GetInt32() : 0;
+        var state = new SsrRenderer(_store, _desc).RenderState(pathStr, sessionVars, session?.Db, lastId);
         return new JsonObject { ["op"] = "refetch", ["state"] = state }.ToJsonString(_jsonOpts);
     }
 

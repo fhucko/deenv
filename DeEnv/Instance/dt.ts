@@ -67,8 +67,14 @@ function mergeState(dtState: ServerDtState): void {
     for (const id of Object.keys(arrays)) minId = Math.min(minId, Number(id));
     uiStatic.lastId.value = minId;
 
-    for (const [key, value] of Object.entries(dtState.scope))
+    for (const [key, value] of Object.entries(dtState.scope)) {
+        // A var currently holding a client-minted draft (a transient object being
+        // edited in a form) is client-held state: a server re-render recomputes its
+        // initializer to a fresh empty draft, which must not clobber the user's input.
+        const existing = scope.items[key];
+        if (existing && existing.value.type === "object" && existing.value.id < 0) continue;
         scope.items[key] = { isReadOnly: value.isReadOnly, value: fromDtValue(value.value) };
+    }
 
     // The memoized computation results + dependency refs, for reuse and invalidation.
     for (const entry of dtState.cache ?? [])

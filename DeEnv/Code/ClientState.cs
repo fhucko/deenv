@@ -50,9 +50,18 @@ public static class ClientState
             {
                 var props = new JsonObject();
                 objects[o.Id.ToString()] = new JsonObject { ["props"] = props };
-                if (accessedProps.TryGetValue(o, out var names))
+                if (o.Id < 0)
+                {
+                    // A transient is the client's own draft state: it ships complete —
+                    // the client owns it, and a refetch never refreshes it (the merge
+                    // skips draft vars), so a withheld prop could never arrive later.
+                    foreach (var (name, pv) in o.Props) props[name] = DtValue(pv);
+                }
+                else if (accessedProps.TryGetValue(o, out var names))
+                {
                     foreach (var name in names)
                         if (o.Props.TryGetValue(name, out var pv)) props[name] = DtValue(pv);
+                }
             }
             return new JsonObject { ["type"] = "object", ["id"] = o.Id };
         }

@@ -23,10 +23,12 @@
     <ProjectReference Include="..\DeEnv\DeEnv.csproj" />
   </ItemGroup>
 
-  <!-- Ship the same committed schema document to the test output so CrmDb() loads the
-       single source of truth (DeEnv/instance.schema.json) rather than a duplicated string. -->
+  <!-- Ship the committed default app (DeEnv/instance.schema.json — the todo app) so
+       TodoDb() drives the real single source of truth; crm.schema.json is the CRM
+       fixture the milestone-2/3 scenarios keep using. -->
   <ItemGroup>
     <Content Include="..\DeEnv\instance.schema.json" Link="instance.schema.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="crm.schema.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\DeEnv\meta.schema.json" Link="meta.schema.json" CopyToOutputDirectory="PreserveNewest" />
     <!-- Shared Code-interpreter conformance cases (run by C# and by the TypeScript twin). -->
     <Content Include="..\DeEnv\Code\conformance.json" Link="conformance.json" CopyToOutputDirectory="PreserveNewest" />

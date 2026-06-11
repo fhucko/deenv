@@ -1,32 +1,364 @@
 {
   "types": [
-    {
-      "name": "Db",
-      "baseType": "object",
+    { "name": "Db", "baseType": "object",
+      "props": [ { "name": "users", "type": "User", "cardinality": "set" } ] },
+    { "name": "User", "baseType": "object",
       "props": [
-        { "name": "companyName", "type": "text" },
-        { "name": "settings",  "type": "text",     "cardinality": "dictionary", "keyType": "text" },
-        { "name": "customers", "type": "Customer", "cardinality": "set" }
-      ]
-    },
-    {
-      "name": "Customer",
-      "baseType": "object",
+        { "name": "name", "type": "text" },
+        { "name": "todoLists", "type": "TodoList", "cardinality": "set" }
+      ] },
+    { "name": "TodoList", "baseType": "object",
       "props": [
-        { "name": "name",   "type": "text" },
-        { "name": "email",  "type": "text" },
-        { "name": "active", "type": "bool" },
-        { "name": "orders", "type": "Order", "cardinality": "set" }
-      ]
-    },
-    {
-      "name": "Order",
-      "baseType": "object",
+        { "name": "name", "type": "text" },
+        { "name": "items", "type": "TodoItem", "cardinality": "set" }
+      ] },
+    { "name": "TodoItem", "baseType": "object",
       "props": [
-        { "name": "date",    "type": "date" },
-        { "name": "total",   "type": "decimal" },
-        { "name": "shipped", "type": "bool" }
-      ]
+        { "name": "text", "type": "text" },
+        { "name": "checked", "type": "bool" }
+      ] }
+  ],
+
+  "initialData": {
+    "extents": {
+      "Db":       { "1": { "users": [2] } },
+      "User":     { "2": { "name": "User 1", "todoLists": [3] } },
+      "TodoList": { "3": { "name": "List 1", "items": [] } }
     }
-  ]
+  },
+
+  "ui": {
+    "vars": [
+      { "name": "path",  "value": { "type": "text", "value": "/" } },
+      { "name": "title", "value": { "type": "text", "value": "Todo list" } },
+      { "name": "selectedUser" },
+      { "name": "selectedList" },
+      { "name": "newUser", "value": { "type": "call", "fn": { "type": "symbol", "name": "getNewUser" }, "params": [] } },
+      { "name": "newList", "value": { "type": "call", "fn": { "type": "symbol", "name": "getNewList" }, "params": [] } },
+      { "name": "newItem", "value": { "type": "call", "fn": { "type": "symbol", "name": "getNewItem" }, "params": [] } }
+    ],
+
+    "functions": [
+
+      { "type": "fn", "name": "selectUser", "params": [ { "name": "user" } ],
+        "body": { "type": "block", "statements": [
+          { "type": "assign", "target": { "type": "symbol", "name": "selectedUser" }, "value": { "type": "symbol", "name": "user" } },
+          { "type": "assign", "target": { "type": "symbol", "name": "selectedList" }, "value": { "type": "null" } }
+        ] } },
+
+      { "type": "fn", "name": "getNewUser", "params": [],
+        "body": { "type": "block", "statements": [
+          { "type": "return", "value": { "type": "object", "props": [
+            { "name": "name", "value": { "type": "text", "value": "" } },
+            { "name": "todoLists", "value": { "type": "array", "items": [] } }
+          ] } }
+        ] } },
+
+      { "type": "fn", "name": "addNewUser", "params": [],
+        "body": { "type": "block", "statements": [
+          { "type": "call",
+            "fn": { "type": "infixOp", "op": "objectProp",
+              "left": { "type": "infixOp", "op": "objectProp",
+                "left": { "type": "symbol", "name": "db" },
+                "right": { "type": "symbol", "name": "users" } },
+              "right": { "type": "symbol", "name": "add" } },
+            "params": [ { "type": "symbol", "name": "newUser" } ] },
+          { "type": "assign", "target": { "type": "symbol", "name": "newUser" },
+            "value": { "type": "call", "fn": { "type": "symbol", "name": "getNewUser" }, "params": [] } }
+        ] } },
+
+      { "type": "fn", "name": "getNewList", "params": [],
+        "body": { "type": "block", "statements": [
+          { "type": "return", "value": { "type": "object", "props": [
+            { "name": "name", "value": { "type": "text", "value": "" } },
+            { "name": "items", "value": { "type": "array", "items": [] } }
+          ] } }
+        ] } },
+
+      { "type": "fn", "name": "addNewList", "params": [],
+        "body": { "type": "block", "statements": [
+          { "type": "call",
+            "fn": { "type": "infixOp", "op": "objectProp",
+              "left": { "type": "infixOp", "op": "objectProp",
+                "left": { "type": "symbol", "name": "selectedUser" },
+                "right": { "type": "symbol", "name": "todoLists" } },
+              "right": { "type": "symbol", "name": "add" } },
+            "params": [ { "type": "symbol", "name": "newList" } ] },
+          { "type": "assign", "target": { "type": "symbol", "name": "newList" },
+            "value": { "type": "call", "fn": { "type": "symbol", "name": "getNewList" }, "params": [] } }
+        ] } },
+
+      { "type": "fn", "name": "getNewItem", "params": [],
+        "body": { "type": "block", "statements": [
+          { "type": "return", "value": { "type": "object", "props": [
+            { "name": "text", "value": { "type": "text", "value": "" } },
+            { "name": "checked", "value": { "type": "bool", "value": false } }
+          ] } }
+        ] } },
+
+      { "type": "fn", "name": "addNewItem", "params": [],
+        "body": { "type": "block", "statements": [
+          { "type": "call",
+            "fn": { "type": "infixOp", "op": "objectProp",
+              "left": { "type": "infixOp", "op": "objectProp",
+                "left": { "type": "symbol", "name": "selectedList" },
+                "right": { "type": "symbol", "name": "items" } },
+              "right": { "type": "symbol", "name": "add" } },
+            "params": [ { "type": "symbol", "name": "newItem" } ] },
+          { "type": "assign", "target": { "type": "symbol", "name": "newItem" },
+            "value": { "type": "call", "fn": { "type": "symbol", "name": "getNewItem" }, "params": [] } }
+        ] } },
+
+      { "type": "fn", "name": "aboutPage", "params": [],
+        "body": { "type": "block", "statements": [
+          { "type": "return", "value": { "type": "tag", "name": "p",
+            "attributes": [ { "name": "class", "value": { "type": "text", "value": "about" } } ],
+            "children": [ { "type": "text", "value": "This is the about page" } ] } }
+        ] } },
+
+      { "type": "fn", "name": "usersPage", "params": [],
+        "body": { "type": "block", "statements": [
+          { "type": "return", "value": { "type": "tag", "name": "main",
+            "attributes": [ { "name": "class", "value": { "type": "text", "value": "users" } } ],
+            "children": [
+
+              { "type": "tag", "name": "h2", "attributes": [],
+                "children": [ { "type": "text", "value": "Users" } ] },
+
+              { "type": "tag", "name": "input", "attributes": [
+                  { "name": "class", "value": { "type": "text", "value": "new-user" } },
+                  { "name": "value", "value": { "type": "infixOp", "op": "objectProp",
+                    "left": { "type": "symbol", "name": "newUser" },
+                    "right": { "type": "symbol", "name": "name" } } }
+                ], "children": [] },
+              { "type": "tag", "name": "button", "attributes": [
+                  { "name": "class", "value": { "type": "text", "value": "add-user" } },
+                  { "name": "onClick", "value": { "type": "symbol", "name": "addNewUser" } }
+                ], "children": [ { "type": "text", "value": "Add user" } ] },
+
+              { "type": "foreach", "item": { "name": "user" },
+                "collection": { "type": "infixOp", "op": "objectProp",
+                  "left": { "type": "symbol", "name": "db" },
+                  "right": { "type": "symbol", "name": "users" } },
+                "body": [
+                  { "type": "tag", "name": "div",
+                    "attributes": [ { "name": "class", "value": { "type": "text", "value": "user-row" } } ],
+                    "children": [
+                      { "type": "tag", "name": "span", "attributes": [
+                          { "name": "class", "value": { "type": "text", "value": "user-name" } },
+                          { "name": "onClick", "value": { "type": "fn", "params": [],
+                            "body": { "type": "block", "statements": [
+                              { "type": "call", "fn": { "type": "symbol", "name": "selectUser" },
+                                "params": [ { "type": "symbol", "name": "user" } ] }
+                            ] } } }
+                        ],
+                        "children": [ { "type": "infixOp", "op": "objectProp",
+                          "left": { "type": "symbol", "name": "user" },
+                          "right": { "type": "symbol", "name": "name" } } ] },
+                      { "type": "tag", "name": "button", "attributes": [
+                          { "name": "class", "value": { "type": "text", "value": "remove-user" } },
+                          { "name": "onClick", "value": { "type": "fn", "params": [],
+                            "body": { "type": "block", "statements": [
+                              { "type": "call",
+                                "fn": { "type": "infixOp", "op": "objectProp",
+                                  "left": { "type": "infixOp", "op": "objectProp",
+                                    "left": { "type": "symbol", "name": "db" },
+                                    "right": { "type": "symbol", "name": "users" } },
+                                  "right": { "type": "symbol", "name": "remove" } },
+                                "params": [ { "type": "symbol", "name": "user" } ] }
+                            ] } } }
+                        ], "children": [ { "type": "text", "value": "Remove" } ] }
+                    ] }
+                ] },
+
+              { "type": "if",
+                "condition": { "type": "infixOp", "op": "notEquals",
+                  "left": { "type": "symbol", "name": "selectedUser" },
+                  "right": { "type": "null" } },
+                "body": [
+
+                  { "type": "tag", "name": "h2",
+                    "attributes": [ { "name": "class", "value": { "type": "text", "value": "selected-user" } } ],
+                    "children": [
+                      { "type": "text", "value": "User " },
+                      { "type": "infixOp", "op": "objectProp",
+                        "left": { "type": "symbol", "name": "selectedUser" },
+                        "right": { "type": "symbol", "name": "name" } }
+                    ] },
+
+                  { "type": "tag", "name": "input", "attributes": [
+                      { "name": "class", "value": { "type": "text", "value": "new-list" } },
+                      { "name": "value", "value": { "type": "infixOp", "op": "objectProp",
+                        "left": { "type": "symbol", "name": "newList" },
+                        "right": { "type": "symbol", "name": "name" } } }
+                    ], "children": [] },
+                  { "type": "tag", "name": "button", "attributes": [
+                      { "name": "class", "value": { "type": "text", "value": "add-list" } },
+                      { "name": "onClick", "value": { "type": "symbol", "name": "addNewList" } }
+                    ], "children": [ { "type": "text", "value": "Add list" } ] },
+
+                  { "type": "foreach", "item": { "name": "list" },
+                    "collection": { "type": "infixOp", "op": "objectProp",
+                      "left": { "type": "symbol", "name": "selectedUser" },
+                      "right": { "type": "symbol", "name": "todoLists" } },
+                    "body": [
+                      { "type": "tag", "name": "div",
+                        "attributes": [ { "name": "class", "value": { "type": "text", "value": "list-row" } } ],
+                        "children": [
+                          { "type": "tag", "name": "span", "attributes": [
+                              { "name": "class", "value": { "type": "text", "value": "list-name" } },
+                              { "name": "onClick", "value": { "type": "fn", "params": [],
+                                "body": { "type": "block", "statements": [
+                                  { "type": "assign", "target": { "type": "symbol", "name": "selectedList" },
+                                    "value": { "type": "symbol", "name": "list" } }
+                                ] } } }
+                            ],
+                            "children": [ { "type": "infixOp", "op": "objectProp",
+                              "left": { "type": "symbol", "name": "list" },
+                              "right": { "type": "symbol", "name": "name" } } ] },
+                          { "type": "tag", "name": "button", "attributes": [
+                              { "name": "class", "value": { "type": "text", "value": "remove-list" } },
+                              { "name": "onClick", "value": { "type": "fn", "params": [],
+                                "body": { "type": "block", "statements": [
+                                  { "type": "call",
+                                    "fn": { "type": "infixOp", "op": "objectProp",
+                                      "left": { "type": "infixOp", "op": "objectProp",
+                                        "left": { "type": "symbol", "name": "selectedUser" },
+                                        "right": { "type": "symbol", "name": "todoLists" } },
+                                      "right": { "type": "symbol", "name": "remove" } },
+                                    "params": [ { "type": "symbol", "name": "list" } ] }
+                                ] } } }
+                            ], "children": [ { "type": "text", "value": "Remove" } ] }
+                        ] }
+                    ] },
+
+                  { "type": "if",
+                    "condition": { "type": "infixOp", "op": "notEquals",
+                      "left": { "type": "symbol", "name": "selectedList" },
+                      "right": { "type": "null" } },
+                    "body": [
+
+                      { "type": "tag", "name": "h2",
+                        "attributes": [ { "name": "class", "value": { "type": "text", "value": "selected-list" } } ],
+                        "children": [
+                          { "type": "text", "value": "List " },
+                          { "type": "infixOp", "op": "objectProp",
+                            "left": { "type": "symbol", "name": "selectedList" },
+                            "right": { "type": "symbol", "name": "name" } }
+                        ] },
+
+                      { "type": "tag", "name": "input", "attributes": [
+                          { "name": "class", "value": { "type": "text", "value": "new-item" } },
+                          { "name": "value", "value": { "type": "infixOp", "op": "objectProp",
+                            "left": { "type": "symbol", "name": "newItem" },
+                            "right": { "type": "symbol", "name": "text" } } }
+                        ], "children": [] },
+                      { "type": "tag", "name": "button", "attributes": [
+                          { "name": "class", "value": { "type": "text", "value": "add-item" } },
+                          { "name": "onClick", "value": { "type": "symbol", "name": "addNewItem" } }
+                        ], "children": [ { "type": "text", "value": "Add item" } ] },
+
+                      { "type": "foreach", "item": { "name": "item" },
+                        "collection": { "type": "infixOp", "op": "objectProp",
+                          "left": { "type": "symbol", "name": "selectedList" },
+                          "right": { "type": "symbol", "name": "items" } },
+                        "body": [
+                          { "type": "tag", "name": "div",
+                            "attributes": [ { "name": "class", "value": { "type": "text", "value": "item-row" } } ],
+                            "children": [
+                              { "type": "tag", "name": "input", "attributes": [
+                                  { "name": "type", "value": { "type": "text", "value": "checkbox" } },
+                                  { "name": "class", "value": { "type": "text", "value": "item-check" } },
+                                  { "name": "checked", "value": { "type": "infixOp", "op": "objectProp",
+                                    "left": { "type": "symbol", "name": "item" },
+                                    "right": { "type": "symbol", "name": "checked" } } }
+                                ], "children": [] },
+                              { "type": "if",
+                                "condition": { "type": "infixOp", "op": "objectProp",
+                                  "left": { "type": "symbol", "name": "item" },
+                                  "right": { "type": "symbol", "name": "checked" } },
+                                "body": [
+                                  { "type": "tag", "name": "span",
+                                    "attributes": [ { "name": "class", "value": { "type": "text", "value": "item-done" } } ],
+                                    "children": [ { "type": "infixOp", "op": "objectProp",
+                                      "left": { "type": "symbol", "name": "item" },
+                                      "right": { "type": "symbol", "name": "text" } } ] }
+                                ],
+                                "elseBody": [
+                                  { "type": "tag", "name": "input", "attributes": [
+                                      { "name": "class", "value": { "type": "text", "value": "item-text" } },
+                                      { "name": "value", "value": { "type": "infixOp", "op": "objectProp",
+                                        "left": { "type": "symbol", "name": "item" },
+                                        "right": { "type": "symbol", "name": "text" } } }
+                                    ], "children": [] }
+                                ] },
+                              { "type": "tag", "name": "button", "attributes": [
+                                  { "name": "class", "value": { "type": "text", "value": "remove-item" } },
+                                  { "name": "onClick", "value": { "type": "fn", "params": [],
+                                    "body": { "type": "block", "statements": [
+                                      { "type": "call",
+                                        "fn": { "type": "infixOp", "op": "objectProp",
+                                          "left": { "type": "infixOp", "op": "objectProp",
+                                            "left": { "type": "symbol", "name": "selectedList" },
+                                            "right": { "type": "symbol", "name": "items" } },
+                                          "right": { "type": "symbol", "name": "remove" } },
+                                        "params": [ { "type": "symbol", "name": "item" } ] }
+                                    ] } } }
+                                ], "children": [ { "type": "text", "value": "Remove" } ] }
+                            ] }
+                        ] }
+                    ],
+                    "elseBody": [] }
+                ],
+                "elseBody": [] }
+            ] } }
+        ] } }
+    ],
+
+    "render": {
+      "type": "fn", "params": [],
+      "body": { "type": "block", "statements": [
+        { "type": "varDec", "name": "page", "value": null },
+        { "type": "if",
+          "condition": { "type": "infixOp", "op": "equals",
+            "left": { "type": "symbol", "name": "path" },
+            "right": { "type": "text", "value": "/about" } },
+          "body": { "type": "block", "statements": [
+            { "type": "assign", "target": { "type": "symbol", "name": "title" },
+              "value": { "type": "text", "value": "About" } },
+            { "type": "assign", "target": { "type": "symbol", "name": "page" },
+              "value": { "type": "symbol", "name": "aboutPage" } }
+          ] },
+          "elseBody": { "type": "block", "statements": [
+            { "type": "assign", "target": { "type": "symbol", "name": "title" },
+              "value": { "type": "text", "value": "Todo list" } },
+            { "type": "assign", "target": { "type": "symbol", "name": "page" },
+              "value": { "type": "symbol", "name": "usersPage" } }
+          ] } },
+        { "type": "return", "value": { "type": "tag", "name": "div", "attributes": [], "children": [
+          { "type": "tag", "name": "h1", "attributes": [],
+            "children": [ { "type": "text", "value": "Todo list" } ] },
+          { "type": "tag", "name": "nav", "attributes": [], "children": [
+            { "type": "tag", "name": "button", "attributes": [
+                { "name": "class", "value": { "type": "text", "value": "nav-users" } },
+                { "name": "onClick", "value": { "type": "fn", "params": [],
+                  "body": { "type": "block", "statements": [
+                    { "type": "assign", "target": { "type": "symbol", "name": "path" },
+                      "value": { "type": "text", "value": "/" } }
+                  ] } } }
+              ], "children": [ { "type": "text", "value": "Users" } ] },
+            { "type": "tag", "name": "button", "attributes": [
+                { "name": "class", "value": { "type": "text", "value": "nav-about" } },
+                { "name": "onClick", "value": { "type": "fn", "params": [],
+                  "body": { "type": "block", "statements": [
+                    { "type": "assign", "target": { "type": "symbol", "name": "path" },
+                      "value": { "type": "text", "value": "/about" } }
+                  ] } } }
+              ], "children": [ { "type": "text", "value": "About" } ] }
+          ] },
+          { "type": "call", "fn": { "type": "symbol", "name": "page" }, "params": [] }
+        ] } }
+      ] }
+    }
+  }
 }
