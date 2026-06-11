@@ -47,6 +47,10 @@ public interface IInstanceStore
     void AddToSet(int setId, int objectId);
     void RemoveFromSet(int setId, int objectId);
 
+    // The declared element type of the set carrying this intrinsic id, or null when
+    // no set does. Lets a mutation be validated against the schema before it lands.
+    string? SetElementType(int setId);
+
     // Drop a member reference from the set at setPath, then collect unreachable
     // objects (mark-sweep from the root).
     void RemoveFromSet(NodePath setPath, int id);
@@ -61,4 +65,9 @@ public interface IInstanceStore
 
     // Resolve a bare reference (the /~/{id} route). Null if no object has that id.
     (string TypeName, ObjectValue Fields)? ReadById(int id);
+
+    // Reinitialize the data to the schema's initial document (the initialData seed
+    // when the schema carries one, else the default empty root). Destructive; used
+    // by the designer bridge when publishing a new schema.
+    void Reset();
 }

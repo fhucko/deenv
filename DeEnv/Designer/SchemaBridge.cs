@@ -80,12 +80,12 @@ public static class SchemaBridge
         var json = Project(db);
 
         // Validate before writing: throws on an invalid design, leaving files as-is.
-        InstanceDescriptionLoader.Load(json);
+        var newDesc = InstanceDescriptionLoader.Load(json);
 
         File.WriteAllText(targetSchemaPath, json);
-        // Reset the instance's data: empty → the store reinitializes to the new
-        // schema's initial value on next start.
-        File.WriteAllText(targetDataPath, "");
+        // Reset the instance's data through the storage seam: reinitialize to the
+        // new schema's initial document immediately (no stale data until next start).
+        new JsonFileInstanceStore(targetDataPath, newDesc).Reset();
     }
 
     // TEMPORARY (testing scaffolding — not a product feature; remove later):

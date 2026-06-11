@@ -24,6 +24,12 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private readonly TypeResolver _resolver;
     private readonly System.Text.Json.JsonSerializerOptions _writeOpts = new() { WriteIndented = true };
 
+    // Every operation is load-file → mutate → rewrite-file; the lock makes each one
+    // atomic against concurrent connections in this process, and SaveDoc's
+    // write-temp-then-move keeps the file itself atomic for any reader. (Cross-process
+    // and cross-op transactional safety stay with the real-time milestone.)
+    private readonly object _sync = new();
+
     public JsonFileInstanceStore(string filePath, InstanceDescription desc)
     {
         _filePath = filePath;
@@ -37,6 +43,11 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // ── read ────────────────────────────────────────────────────────────────────
 
     public NodeValue? ReadNode(NodePath path)
+    {
+        lock (_sync) return ReadNodeCore(path);
+    }
+
+    private NodeValue? ReadNodeCore(NodePath path)
     {
         if (path.Segments.Count > 0 && path.Segments[0] == "~") return null; // id-route → renderer
 
@@ -171,12 +182,17 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     : LeafFromTagged(entry);
                 if (val != null) entries[ParseKey(k, keyType)] = val;
             }
-        return new DictionaryValue(entries);
+        return new DictionaryValue(dictNode?["id"]?.GetValue<int>() ?? 0, entries);
     }
 
     // ── write ─────────────────────────────────────────────────────────────────
 
     public void WriteLeaf(NodePath path, NodeValue value)
+    {
+        lock (_sync) WriteLeafCore(path, value);
+    }
+
+    private void WriteLeafCore(NodePath path, NodeValue value)
     {
         var doc = LoadDoc();
         if (path.IsRoot)
@@ -193,6 +209,11 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     public void WriteObject(NodePath path, ObjectValue value)
     {
+        lock (_sync) WriteObjectCore(path, value);
+    }
+
+    private void WriteObjectCore(NodePath path, ObjectValue value)
+    {
         var doc = LoadDoc();
         var target = WalkToObjectFields(doc, path)
             ?? throw new InvalidOperationException($"Path {path} is not a writable object.");
@@ -207,11 +228,14 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     public void WriteField(int objectId, string prop, NodeValue value)
     {
-        var doc = LoadDoc();
-        if (ExtentEntryById(doc, objectId)?["fields"] is not JsonObject fields)
-            throw new InvalidOperationException($"No object with id {objectId}.");
-        fields[prop] = ToTagged(value);
-        SaveDoc(doc);
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            if (ExtentEntryById(doc, objectId)?["fields"] is not JsonObject fields)
+                throw new InvalidOperationException($"No object with id {objectId}.");
+            fields[prop] = ToTagged(value);
+            SaveDoc(doc);
+        }
     }
 
     // Walk to the fields of the object a path lands on (following set/dict/refs).
@@ -265,51 +289,86 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     public int CreateObject(string typeName, ObjectValue fields)
     {
-        var doc = LoadDoc();
-        var id = MintObject(doc, typeName, fields);
-        SaveDoc(doc);
-        return id;
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            var id = MintObject(doc, typeName, fields);
+            SaveDoc(doc);
+            return id;
+        }
     }
 
     public void AddToSet(NodePath setPath, int id)
     {
-        var doc = LoadDoc();
-        var typeName = _resolver.ResolveType(setPath)?.Type.Name
-            ?? throw new InvalidOperationException($"{setPath} does not resolve.");
-        var set = EnsureCollection(doc, setPath, "set", "members");
-        set[id.ToString()] = ObjectRef(typeName, id);
-        SaveDoc(doc);
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            var typeName = _resolver.ResolveType(setPath)?.Type.Name
+                ?? throw new InvalidOperationException($"{setPath} does not resolve.");
+            var set = EnsureCollection(doc, setPath, "set", "members");
+            set[id.ToString()] = ObjectRef(typeName, id);
+            SaveDoc(doc);
+        }
     }
 
     public void RemoveFromSet(NodePath setPath, int id)
     {
-        var doc = LoadDoc();
-        if (CollectionNode(doc, setPath, "members") is { } members)
-            members.Remove(id.ToString());
-        CollectGarbage(doc);
-        SaveDoc(doc);
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            if (CollectionNode(doc, setPath, "members") is { } members)
+                members.Remove(id.ToString());
+            CollectGarbage(doc);
+            SaveDoc(doc);
+        }
     }
 
     // ── set ops by intrinsic id (a set is found by its own id, not a path) ──────────
 
     public void AddToSet(int setId, int objectId)
     {
-        var doc = LoadDoc();
-        var members = FindSetNode(doc, setId)?["members"] as JsonObject
-            ?? throw new InvalidOperationException($"No set with id {setId}.");
-        var typeName = ExtentEntryById(doc, objectId)?["typeName"]?.GetValue<string>()
-            ?? throw new InvalidOperationException($"No object with id {objectId}.");
-        members[objectId.ToString()] = ObjectRef(typeName, objectId);
-        SaveDoc(doc);
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            var members = FindSetNode(doc, setId)?["members"] as JsonObject
+                ?? throw new InvalidOperationException($"No set with id {setId}.");
+            var typeName = ExtentEntryById(doc, objectId)?["typeName"]?.GetValue<string>()
+                ?? throw new InvalidOperationException($"No object with id {objectId}.");
+            members[objectId.ToString()] = ObjectRef(typeName, objectId);
+            SaveDoc(doc);
+        }
     }
 
     public void RemoveFromSet(int setId, int objectId)
     {
-        var doc = LoadDoc();
-        if (FindSetNode(doc, setId)?["members"] is JsonObject members)
-            members.Remove(objectId.ToString());
-        CollectGarbage(doc);
-        SaveDoc(doc);
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            if (FindSetNode(doc, setId)?["members"] is JsonObject members)
+                members.Remove(objectId.ToString());
+            CollectGarbage(doc);
+            SaveDoc(doc);
+        }
+    }
+
+    // The declared element type of the set carrying this intrinsic id, or null when
+    // no set does. Lets a mutation be validated against the schema before it lands.
+    public string? SetElementType(int setId)
+    {
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            foreach (var (typeName, pool) in Extents(doc))
+                if (pool is JsonObject p && _desc.FindType(typeName) is { } type)
+                    foreach (var (_, env) in p)
+                        if (env is JsonObject e && e["fields"] is JsonObject fields)
+                            foreach (var prop in type.Props ?? [])
+                                if (prop.Cardinality == Cardinality.Set
+                                    && fields[prop.Name] is JsonObject node
+                                    && node["id"]?.GetValue<int>() == setId)
+                                    return prop.Type;
+            return null;
+        }
     }
 
     // Locate a set node by its intrinsic id (sets live in object fields, in extents).
@@ -328,41 +387,58 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     public void SetReference(NodePath fieldPath, int? id)
     {
-        var doc = LoadDoc();
-        var parent = WalkToObjectFields(doc, ParentPath(fieldPath))
-            ?? throw new InvalidOperationException($"Parent of {fieldPath} is not an object.");
-        var field = fieldPath.Segments[^1];
-        if (id is null)
-            parent.Fields.Remove(field);
-        else
+        lock (_sync)
         {
-            var typeName = _resolver.ResolveType(fieldPath)?.Type.Name
-                ?? throw new InvalidOperationException($"{fieldPath} does not resolve.");
-            parent.Fields[field] = ObjectRef(typeName, id.Value);
+            var doc = LoadDoc();
+            var parent = WalkToObjectFields(doc, ParentPath(fieldPath))
+                ?? throw new InvalidOperationException($"Parent of {fieldPath} is not an object.");
+            var field = fieldPath.Segments[^1];
+            if (id is null)
+                parent.Fields.Remove(field);
+            else
+            {
+                var typeName = _resolver.ResolveType(fieldPath)?.Type.Name
+                    ?? throw new InvalidOperationException($"{fieldPath} does not resolve.");
+                parent.Fields[field] = ObjectRef(typeName, id.Value);
+            }
+            CollectGarbage(doc);
+            SaveDoc(doc);
         }
-        CollectGarbage(doc);
-        SaveDoc(doc);
     }
 
     public IReadOnlyDictionary<int, ObjectValue> ReadExtent(string typeName)
     {
-        var doc = LoadDoc();
-        var map = new Dictionary<int, ObjectValue>();
-        if (Extents(doc)[typeName] is JsonObject pool && _desc.FindType(typeName) is { } type)
-            foreach (var (k, env) in pool)
-                if (env is JsonObject e && e["fields"] is JsonObject f)
-                    map[int.Parse(k)] = BuildObject(doc, f, type);
-        return map;
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            var map = new Dictionary<int, ObjectValue>();
+            if (Extents(doc)[typeName] is JsonObject pool && _desc.FindType(typeName) is { } type)
+                foreach (var (k, env) in pool)
+                    if (env is JsonObject e && e["fields"] is JsonObject f)
+                        map[int.Parse(k)] = BuildObject(doc, f, type);
+            return map;
+        }
     }
 
     public (string TypeName, ObjectValue Fields)? ReadById(int id)
     {
-        var doc = LoadDoc();
-        foreach (var (typeName, pool) in Extents(doc))
-            if (pool is JsonObject p && p[id.ToString()] is JsonObject env
-                && env["fields"] is JsonObject f && _desc.FindType(typeName) is { } type)
-                return (typeName, BuildObject(doc, f, type));
-        return null;
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            foreach (var (typeName, pool) in Extents(doc))
+                if (pool is JsonObject p && p[id.ToString()] is JsonObject env
+                    && env["fields"] is JsonObject f && _desc.FindType(typeName) is { } type)
+                    return (typeName, BuildObject(doc, f, type));
+            return null;
+        }
+    }
+
+    // Reinitialize the data file to the schema's initial document (the initialData
+    // seed when the schema carries one, else the default empty root). Used by the
+    // designer bridge when publishing a new schema.
+    public void Reset()
+    {
+        lock (_sync) WriteAtomic(InitialJson());
     }
 
     // ── dictionary entries (manual keys; values are scalars or object references) ──
@@ -378,20 +454,26 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     public void CreateEntry(NodePath dictPath, NodeValue key, NodeValue value)
     {
-        var doc = LoadDoc();
-        var entries = CollectionNode(doc, dictPath, "entries");
-        if (entries != null && entries.ContainsKey(KeyToString(key)))
-            throw new InvalidOperationException(
-                $"An entry with key '{KeyToString(key)}' already exists at {dictPath}.");
-        WriteDictionaryEntryInto(doc, dictPath, key, value);
-        SaveDoc(doc);
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            var entries = CollectionNode(doc, dictPath, "entries");
+            if (entries != null && entries.ContainsKey(KeyToString(key)))
+                throw new InvalidOperationException(
+                    $"An entry with key '{KeyToString(key)}' already exists at {dictPath}.");
+            WriteDictionaryEntryInto(doc, dictPath, key, value);
+            SaveDoc(doc);
+        }
     }
 
     public void WriteDictionaryEntry(NodePath path, NodeValue key, NodeValue value)
     {
-        var doc = LoadDoc();
-        WriteDictionaryEntryInto(doc, path, key, value);
-        SaveDoc(doc);
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            WriteDictionaryEntryInto(doc, path, key, value);
+            SaveDoc(doc);
+        }
     }
 
     private void WriteDictionaryEntryInto(JsonObject doc, NodePath path, NodeValue key, NodeValue value)
@@ -413,11 +495,14 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     public void RemoveDictionaryEntry(NodePath path, NodeValue key)
     {
-        var doc = LoadDoc();
-        if (CollectionNode(doc, path, "entries") is { } entries)
-            entries.Remove(KeyToString(key));
-        CollectGarbage(doc);
-        SaveDoc(doc);
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            if (CollectionNode(doc, path, "entries") is { } entries)
+                entries.Remove(KeyToString(key));
+            CollectGarbage(doc);
+            SaveDoc(doc);
+        }
     }
 
     // ── helpers: doc + extents ──────────────────────────────────────────────────
@@ -432,7 +517,15 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         return doc;
     }
 
-    private void SaveDoc(JsonObject doc) => File.WriteAllText(_filePath, doc.ToJsonString(_writeOpts));
+    // Write-temp-then-move: a reader never sees a half-written file.
+    private void SaveDoc(JsonObject doc) => WriteAtomic(doc.ToJsonString(_writeOpts));
+
+    private void WriteAtomic(string content)
+    {
+        var tmp = _filePath + ".tmp";
+        File.WriteAllText(tmp, content);
+        File.Move(tmp, _filePath, overwrite: true);
+    }
 
     private static JsonObject Extents(JsonObject doc) => (JsonObject)doc["extents"]!;
 
@@ -608,7 +701,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             if (prop.Cardinality == Cardinality.Set)
                 fields[prop.Name] = new SetValue(0, new Dictionary<int, NodeValue>()); // template; not stored
             else if (prop.Cardinality == Cardinality.Dictionary)
-                fields[prop.Name] = new DictionaryValue(new Dictionary<NodeValue, NodeValue>());
+                fields[prop.Name] = new DictionaryValue(0, new Dictionary<NodeValue, NodeValue>()); // template; not stored
             else if (_desc.IsObjectType(prop.Type))
                 fields[prop.Name] = new ReferenceValue(null, prop.Type);
             else

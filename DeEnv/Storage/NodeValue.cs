@@ -17,7 +17,11 @@ public sealed record ObjectValue(
 // Dictionary node: typed key → entry value.
 // Key is a NodeValue matching the prop's declared keyType.
 // Record structural equality means IntValue(42) works as a dictionary key.
+// Like a set, a dictionary is a mutable container and carries its intrinsic Id
+// (every mutable thing has one); the Code runtime will address it by Id when
+// dictionaries are surfaced there.
 public sealed record DictionaryValue(
+    int Id,
     IReadOnlyDictionary<NodeValue, NodeValue> Entries) : NodeValue;
 
 // Set node: object identity → the resolved member object. A set holds references
