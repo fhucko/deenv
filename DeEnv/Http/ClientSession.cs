@@ -23,8 +23,10 @@ public sealed class ClientSession
 
     // A session is claimed by the client's WS (the `hello` on socket open). Until then
     // it only survives the claim window; an unclaimed session is a render whose client
-    // never connected (crawler, closed tab, lost script) and is dropped.
+    // never connected (crawler, closed tab, lost script) and is dropped. A claimed
+    // session slides on activity (LastTouched) and expires when idle.
     public DateTime CreatedAt { get; } = DateTime.UtcNow;
+    public DateTime LastTouched { get; set; } = DateTime.UtcNow;
     public bool Claimed { get; set; }
 }
 
@@ -39,12 +41,21 @@ public sealed class ClientSessionStore
     // refetch falls back to a full re-render from storage.
     private static readonly TimeSpan DefaultClaimWindow = TimeSpan.FromSeconds(10);
 
+    // How long a CLAIMED session survives without any WS activity. An idle tab's warm
+    // graph is released; its next interaction refetches from storage (graceful, just
+    // slower). Eviction by the connection's own close lands with the real-time milestone.
+    private static readonly TimeSpan DefaultIdleTtl = TimeSpan.FromMinutes(30);
+
     private readonly TimeSpan _claimWindow;
+    private readonly TimeSpan _idleTtl;
     private readonly ConcurrentDictionary<string, ClientSession> _sessions = new();
     private readonly ConcurrentQueue<string> _order = new();
 
-    public ClientSessionStore(TimeSpan? claimWindow = null) =>
+    public ClientSessionStore(TimeSpan? claimWindow = null, TimeSpan? idleTtl = null)
+    {
         _claimWindow = claimWindow ?? DefaultClaimWindow;
+        _idleTtl = idleTtl ?? DefaultIdleTtl;
+    }
 
     public ClientSession Create(ExecObject db)
     {
@@ -59,21 +70,27 @@ public sealed class ClientSessionStore
     }
 
     // Look up a session by id — and claim it, since only the client's own WS knows the
-    // id. An unclaimed session past the claim window is expired: dropped, not returned.
+    // id. Expired (unclaimed past the claim window, or claimed but idle past the idle
+    // TTL) → dropped, not returned. Activity slides LastTouched.
     public ClientSession? Get(string id)
     {
         if (!_sessions.TryGetValue(id, out var s)) return null;
-        if (!s.Claimed && DateTime.UtcNow - s.CreatedAt > _claimWindow)
+        if (IsExpired(s))
         {
             _sessions.TryRemove(id, out _);
             return null;
         }
         s.Claimed = true;
+        s.LastTouched = DateTime.UtcNow;
         return s;
     }
 
-    // Drop expired unclaimed sessions from the front of the creation-order queue (the
-    // oldest first; a claimed session stops the sweep — the cap still bounds those).
+    private bool IsExpired(ClientSession s) => s.Claimed
+        ? DateTime.UtcNow - s.LastTouched > _idleTtl
+        : DateTime.UtcNow - s.CreatedAt > _claimWindow;
+
+    // Drop expired sessions from the front of the creation-order queue (the oldest
+    // first; a live session stops the sweep — the cap still bounds those).
     private void SweepExpired()
     {
         while (_order.TryPeek(out var id))
@@ -83,7 +100,7 @@ public sealed class ClientSessionStore
                 _order.TryDequeue(out _); // already evicted by the cap
                 continue;
             }
-            if (s.Claimed || DateTime.UtcNow - s.CreatedAt <= _claimWindow) return;
+            if (!IsExpired(s)) return;
             _order.TryDequeue(out _);
             _sessions.TryRemove(id, out _);
         }

@@ -39,6 +39,18 @@ public sealed class ClientSessionTests
     }
 
     [Test]
+    public async Task A_claimed_session_expires_when_idle()
+    {
+        var store = new ClientSessionStore(
+            claimWindow: TimeSpan.FromMilliseconds(50), idleTtl: TimeSpan.FromMilliseconds(100));
+        var session = store.Create(Db());
+
+        await Assert.That(store.Get(session.Id)).IsNotNull(); // claimed (activity)
+        await Task.Delay(300);
+        await Assert.That(store.Get(session.Id)).IsNull();    // idle past the TTL → released
+    }
+
+    [Test]
     public async Task A_late_hello_reports_the_session_gone_but_refetch_still_serves_state()
     {
         var desc = InstanceContext.RefetchUiDb();
