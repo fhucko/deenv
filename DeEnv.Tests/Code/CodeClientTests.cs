@@ -135,6 +135,42 @@ public sealed class CodeClientTests
         try { File.Delete(dataPath); } catch { /* best-effort */ }
     }
 
+    // Adding a transient object to a db set sends an arrayAdd; the server mints it into
+    // the extent, links it, and echoes the real id. The client re-keys its negative-id
+    // copy, so every rendered row ends up with a positive (real) data-key.
+    [Test]
+    public async Task Adding_a_set_member_persists_and_remaps_its_id()
+    {
+        var dataPath = Path.GetTempFileName();
+        await using var server = new TestInstanceServer();
+        await server.StartAsync(InstanceContext.InteractiveUiDb(), dataPath);
+        SeedItem(server.Store!, "a");
+        SeedItem(server.Store!, "b");
+
+        using var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
+        var page = await browser.NewPageAsync(new() { BaseURL = server.BaseUrl });
+        await page.GotoAsync("/");
+        await page.WaitForSelectorAsync("[data-key]");
+
+        await page.Locator("input.new-name").FillAsync("c");
+        await page.Locator("button.add").ClickAsync();
+
+        // The new member is minted into the extent and linked into the set.
+        await AssertEventuallyAsync(() =>
+            server.Store!.ReadExtent("Item").Values.Any(o => Name(o) == "c"));
+
+        // Negative→real id remap: every row now carries a positive (real) data-key.
+        await page.WaitForFunctionAsync(
+            "() => { const ks = [...document.querySelectorAll('[data-key]')].map(e => +e.getAttribute('data-key'));" +
+            " return ks.length === 3 && ks.every(k => k > 0); }");
+
+        try { File.Delete(dataPath); } catch { /* best-effort */ }
+    }
+
+    private static string? Name(ObjectValue o) =>
+        o.Fields.TryGetValue("name", out var n) && n is TextValue t ? t.Text : null;
+
     // Polls a condition until true or a timeout elapses (for async WS persistence).
     private static async Task AssertEventuallyAsync(Func<bool> condition, int timeoutMs = 5000)
     {

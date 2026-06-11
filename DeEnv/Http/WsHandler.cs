@@ -49,6 +49,8 @@ public sealed class WsHandler
                 "removeEntry"      => HandleRemoveEntry(path, pathStr, root),
                 "setReference"     => HandleSetReference(path, pathStr, root),
                 "objectPropChange" => HandleObjectPropChange(root),
+                "arrayAdd"         => HandleArrayAdd(root),
+                "arrayRemove"      => HandleArrayRemove(root),
                 _                  => Error($"Unknown op '{op}'")
             };
             return WithId(result, id);
@@ -318,6 +320,53 @@ public sealed class WsHandler
 
         var response = new JsonObject { ["op"] = "objectPropChange", ["ok"] = true };
         return response.ToJsonString(_jsonOpts);
+    }
+
+    // A new set member built on the client (its negative id is transient): mint a real
+    // object into the extent, link it into the set, and echo the negative→real id mapping
+    // so the client can re-key its optimistic copy.
+    private string HandleArrayAdd(JsonElement root)
+    {
+        if (!root.TryGetProperty("setId", out var setEl) || setEl.ValueKind != JsonValueKind.Number)
+            return Error("arrayAdd requires a numeric 'setId'.");
+        if (!root.TryGetProperty("typeName", out var tnEl) || tnEl.GetString() is not { } typeName)
+            return Error("arrayAdd requires 'typeName'.");
+        if (_desc.FindType(typeName) is null)
+            return Error($"Unknown type '{typeName}'.");
+
+        var value = root.TryGetProperty("value", out var valEl)
+            ? ExecObjectValue(valEl)
+            : new ObjectValue(new Dictionary<string, NodeValue>());
+        var id = _store.CreateObject(typeName, value);
+        _store.AddToSet(setEl.GetInt32(), id);
+
+        var response = new JsonObject { ["op"] = "arrayAdd", ["id"] = id };
+        if (root.TryGetProperty("tempId", out var te) && te.ValueKind == JsonValueKind.Number)
+            response["tempId"] = te.GetInt32();
+        return response.ToJsonString(_jsonOpts);
+    }
+
+    private string HandleArrayRemove(JsonElement root)
+    {
+        if (!root.TryGetProperty("setId", out var setEl) || setEl.ValueKind != JsonValueKind.Number)
+            return Error("arrayRemove requires a numeric 'setId'.");
+        if (!root.TryGetProperty("objectId", out var objEl) || objEl.ValueKind != JsonValueKind.Number)
+            return Error("arrayRemove requires a numeric 'objectId'.");
+
+        _store.RemoveFromSet(setEl.GetInt32(), objEl.GetInt32());
+
+        var response = new JsonObject { ["op"] = "arrayRemove", ["ok"] = true };
+        return response.ToJsonString(_jsonOpts);
+    }
+
+    // A new object's scalar props as the client ships them: { "props": { name: leaf } }.
+    private static ObjectValue ExecObjectValue(JsonElement el)
+    {
+        var fields = new Dictionary<string, NodeValue>();
+        if (el.TryGetProperty("props", out var props) && props.ValueKind == JsonValueKind.Object)
+            foreach (var p in props.EnumerateObject())
+                fields[p.Name] = ExecLeaf(p.Value);
+        return new ObjectValue(fields);
     }
 
     // A scalar as the client interpreter ships it: { "type": "int|bool|text", "value": … }.
