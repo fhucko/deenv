@@ -171,6 +171,44 @@ public sealed class CodeClientTests
     private static string? Name(ObjectValue o) =>
         o.Fields.TryGetValue("name", out var n) && n is TextValue t ? t.Text : null;
 
+    // A computation over a hidden field (the earners list filters by a private salary)
+    // cannot be re-derived on the client when membership changes — the existing members'
+    // salaries were never shipped. Adding a person makes the client refetch; the server
+    // recomputes over fresh storage and returns the authoritative earners list. (Adding a
+    // low earner does not produce an earner, proving the filter still runs server-side.)
+    [Test]
+    public async Task A_hidden_dependency_recomputes_on_the_server_via_refetch()
+    {
+        var dataPath = Path.GetTempFileName();
+        await using var server = new TestInstanceServer();
+        await server.StartAsync(InstanceContext.RefetchUiDb(), dataPath);
+        SeedPerson(server.Store!, "Ada", 999); // an earner (salary > 100), never shipped
+
+        using var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
+        var page = await browser.NewPageAsync(new() { BaseURL = server.BaseUrl });
+        await page.GotoAsync("/");
+        await page.WaitForSelectorAsync("[data-key]");
+
+        await Assert.That(await page.Locator(".earner").AllInnerTextsAsync()).IsEquivalentTo(new[] { "Ada" });
+
+        // Add a high earner: the client can't re-filter (Ada's salary is private) → refetch.
+        await page.Locator("button.add-rich").ClickAsync();
+        await page.WaitForFunctionAsync(
+            "() => [...document.querySelectorAll('.earner')].some(e => e.textContent === 'Rich')");
+
+        // Add a low earner: it joins the people list but the server filter keeps it out.
+        await page.Locator("button.add-poor").ClickAsync();
+        await page.WaitForFunctionAsync(
+            "() => [...document.querySelectorAll('.person')].some(e => e.textContent === 'Poor')");
+
+        var earners = await page.Locator(".earner").AllInnerTextsAsync();
+        await Assert.That(earners).Contains("Rich");
+        await Assert.That(earners).DoesNotContain("Poor");
+
+        try { File.Delete(dataPath); } catch { /* best-effort */ }
+    }
+
     // Polls a condition until true or a timeout elapses (for async WS persistence).
     private static async Task AssertEventuallyAsync(Func<bool> condition, int timeoutMs = 5000)
     {

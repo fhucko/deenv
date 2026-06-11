@@ -32,11 +32,45 @@ function connectWs(): void {
     });
 }
 
-function onWsMessage(msg: { op?: string; tempId?: number; id?: number }): void {
+function onWsMessage(msg: { op?: string; tempId?: number; id?: number; state?: ServerDtState }): void {
     if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.id === "number") {
         const arrayId = pendingAdds.get(msg.tempId);
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.id); }
+    } else if (msg.op === "refetch" && msg.state != null) {
+        refetchInFlight = false;
+        mergeState(msg.state);
+        for (const e of uiStatic.cache.values()) e.stale = false; // server truth: nothing stale now
+        renderUi();
     }
+}
+
+// A mutation can leave a cache entry stale that the client cannot recompute — its
+// dependency was never shipped (private), or its function is server-only. When the
+// render finishes with such an entry still stale, re-ask the server, which recomputes
+// over fresh storage and returns authoritative state. (Entries whose deps are all
+// present were already recomputed locally with no round-trip — the first-paint invariant.)
+let refetchInFlight = false;
+
+function maybeRefetch(): void {
+    if (refetchInFlight || !hasStaleEntry()) return;
+    refetchInFlight = true;
+    wsSend({ op: "refetch", path: location.pathname, vars: sessionVars() });
+}
+
+function hasStaleEntry(): boolean {
+    for (const e of uiStatic.cache.values()) if (e.stale) return true;
+    return false;
+}
+
+// The client-held scalar session vars (path, transient inputs, …) the server re-renders
+// with. Computed collections are not the client's to push, so only scalars go.
+function sessionVars(): { [name: string]: object } {
+    const out: { [name: string]: object } = {};
+    for (const [name, item] of Object.entries(uiStatic.state.scope.items)) {
+        const v = item.value;
+        if (v.type === "int" || v.type === "bool" || v.type === "text") out[name] = scalarOf(v);
+    }
+    return out;
 }
 
 // Re-key a just-persisted set member from its transient negative id to the real extent

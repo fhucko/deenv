@@ -89,7 +89,19 @@ public sealed class SsrRenderer
     // of the inline <script> element.
     private static string ScriptSafe(string json) => json.Replace("<", "\\u003c");
 
-    private (IExecTagChild Result, string Title, ExecScope Scope) ExecuteRender(string urlPath, ExecContext context)
+    // Re-render to a client-state payload ({ leaves, scope, cache }) without producing
+    // HTML. Used by the WS `refetch` (Stage 4b): after a mutation the client re-asks for
+    // the entries it cannot recompute locally (hidden deps); the server re-runs the render
+    // over fresh storage with the client's session vars and returns authoritative state.
+    public JsonObject RenderState(string urlPath, IReadOnlyDictionary<string, IExecValue>? sessionVars)
+    {
+        var context = new ExecContext();
+        var (_, _, scope) = ExecuteRender(urlPath, context, sessionVars);
+        return ClientState.Serialize(scope, context);
+    }
+
+    private (IExecTagChild Result, string Title, ExecScope Scope) ExecuteRender(
+        string urlPath, ExecContext context, IReadOnlyDictionary<string, IExecValue>? sessionVars = null)
     {
         var ui = _desc.Ui!;
         var exec = new CodeExecutor(_store);
@@ -116,6 +128,13 @@ public sealed class SsrRenderer
         }
         if (scope.Items.ContainsKey("path"))
             scope.Items["path"] = new ExecScopeItem { Value = new ExecText { Value = urlPath }, IsReadOnly = false };
+
+        // Client-held session vars (a refetch) override their just-computed values, so the
+        // re-render sees the same UI state the client has. Computed vars (e.g. a filtered
+        // list) are not shipped by the client and so recompute fresh here.
+        if (sessionVars != null)
+            foreach (var (name, value) in sessionVars)
+                if (scope.Items.TryGetValue(name, out var it)) it.Value = value;
 
         var renderFn = ui.Render ?? throw new CodeRuntimeException("The 'ui' section has no render function.");
         var result = exec.InvokeFunction(renderFn, [], scope, context);

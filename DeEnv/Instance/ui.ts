@@ -12,6 +12,7 @@ function renderUi(): void {
     updateChildren(document.body, [result]);
     syncScopeText("path", v => history.replaceState(null, "", v));
     syncScopeText("title", v => { document.title = v; });
+    maybeRefetch(); // any entry left stale (a hidden dep) → re-ask the server
 }
 
 // Invoke a (no-arg) function — the render fn or an event handler — by running its

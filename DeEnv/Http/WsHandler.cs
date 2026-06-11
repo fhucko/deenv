@@ -51,6 +51,7 @@ public sealed class WsHandler
                 "objectPropChange" => HandleObjectPropChange(root),
                 "arrayAdd"         => HandleArrayAdd(root),
                 "arrayRemove"      => HandleArrayRemove(root),
+                "refetch"          => HandleRefetch(pathStr, root),
                 _                  => Error($"Unknown op '{op}'")
             };
             return WithId(result, id);
@@ -321,6 +322,30 @@ public sealed class WsHandler
         var response = new JsonObject { ["op"] = "objectPropChange", ["ok"] = true };
         return response.ToJsonString(_jsonOpts);
     }
+
+    // Re-render the code UI over fresh storage with the client's session vars and return
+    // authoritative client state. The client calls this after a mutation leaves a cache
+    // entry it cannot recompute locally (a hidden dependency).
+    private string HandleRefetch(string pathStr, JsonElement root)
+    {
+        var sessionVars = new Dictionary<string, Code.IExecValue>();
+        if (root.TryGetProperty("vars", out var vars) && vars.ValueKind == JsonValueKind.Object)
+            foreach (var v in vars.EnumerateObject())
+                sessionVars[v.Name] = ExecValueFromWire(v.Value);
+
+        var state = new SsrRenderer(_store, _desc).RenderState(pathStr, sessionVars);
+        return new JsonObject { ["op"] = "refetch", ["state"] = state }.ToJsonString(_jsonOpts);
+    }
+
+    // A scalar session var as the client interpreter holds it: { "type", "value" }.
+    private static Code.IExecValue ExecValueFromWire(JsonElement el) =>
+        (el.TryGetProperty("type", out var t) ? t.GetString() : null) switch
+        {
+            "int"  => new Code.ExecInt { Value = el.GetProperty("value").GetInt32() },
+            "bool" => new Code.ExecBool { Value = el.GetProperty("value").GetBoolean() },
+            "text" => new Code.ExecText { Value = el.GetProperty("value").GetString() ?? "" },
+            _ => new Code.ExecNull(),
+        };
 
     // A new set member built on the client (its negative id is transient): mint a real
     // object into the extent, link it into the set, and echo the negative→real id mapping

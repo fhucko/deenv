@@ -333,6 +333,92 @@ public class InstanceContext
     }
     """;
 
+    // Code milestone, Stage 4b: a hidden-dependency recompute. `people` is rendered by
+    // name, but the earners list is `db.people.where(p => p.salary > 100)` — salary is
+    // read only inside the predicate, so it is a dependency, never shipped. Adding a
+    // person changes set membership (the client knows) but the client cannot re-filter
+    // (the existing members' salaries are private), so it refetches: the server recomputes
+    // over fresh storage and returns the authoritative earners list.
+    public static InstanceDescription RefetchUiDb() =>
+        InstanceDescriptionLoader.Load(RefetchUiJson);
+
+    private const string RefetchUiJson = """
+    {
+      "types": [
+        { "name": "Db", "baseType": "object",
+          "props": [ { "name": "people", "type": "Person", "cardinality": "set" } ] },
+        { "name": "Person", "baseType": "object",
+          "props": [
+            { "name": "name",   "type": "text" },
+            { "name": "salary", "type": "int" }
+          ] }
+      ],
+      "ui": {
+        "vars": [ { "name": "path", "value": { "type": "text", "value": "/" } } ],
+        "render": {
+          "type": "fn", "params": [],
+          "body": { "type": "block", "statements": [ { "type": "return", "value":
+            { "type": "tag", "name": "main", "attributes": [], "children": [
+              { "type": "tag", "name": "button", "attributes": [
+                { "name": "class", "value": { "type": "text", "value": "add-rich" } },
+                { "name": "onClick", "value": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+                  { "type": "call",
+                    "fn": { "type": "infixOp", "op": "objectProp",
+                      "left": { "type": "infixOp", "op": "objectProp",
+                        "left": { "type": "symbol", "name": "db" },
+                        "right": { "type": "symbol", "name": "people" } },
+                      "right": { "type": "symbol", "name": "add" } },
+                    "params": [ { "type": "object", "props": [
+                      { "name": "name",   "value": { "type": "text", "value": "Rich" } },
+                      { "name": "salary", "value": { "type": "int",  "value": 200 } }
+                    ] } ] }
+                ] } } }
+              ], "children": [ { "type": "text", "value": "Add rich" } ] },
+
+              { "type": "tag", "name": "button", "attributes": [
+                { "name": "class", "value": { "type": "text", "value": "add-poor" } },
+                { "name": "onClick", "value": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+                  { "type": "call",
+                    "fn": { "type": "infixOp", "op": "objectProp",
+                      "left": { "type": "infixOp", "op": "objectProp",
+                        "left": { "type": "symbol", "name": "db" },
+                        "right": { "type": "symbol", "name": "people" } },
+                      "right": { "type": "symbol", "name": "add" } },
+                    "params": [ { "type": "object", "props": [
+                      { "name": "name",   "value": { "type": "text", "value": "Poor" } },
+                      { "name": "salary", "value": { "type": "int",  "value": 50 } }
+                    ] } ] }
+                ] } } }
+              ], "children": [ { "type": "text", "value": "Add poor" } ] },
+
+              { "type": "foreach", "item": { "name": "p" },
+                "collection": { "type": "infixOp", "op": "objectProp",
+                  "left": { "type": "symbol", "name": "db" }, "right": { "type": "symbol", "name": "people" } },
+                "body": [ { "type": "tag", "name": "div",
+                  "attributes": [ { "name": "class", "value": { "type": "text", "value": "person" } } ],
+                  "children": [ { "type": "infixOp", "op": "objectProp",
+                    "left": { "type": "symbol", "name": "p" }, "right": { "type": "symbol", "name": "name" } } ] } ] },
+
+              { "type": "foreach", "item": { "name": "p" },
+                "collection": { "type": "call",
+                  "fn": { "type": "infixOp", "op": "objectProp",
+                    "left": { "type": "infixOp", "op": "objectProp",
+                      "left": { "type": "symbol", "name": "db" }, "right": { "type": "symbol", "name": "people" } },
+                    "right": { "type": "symbol", "name": "where" } },
+                  "params": [ { "type": "fn", "params": [ { "name": "x" } ], "body": { "type": "block", "statements": [ { "type": "return", "value":
+                    { "type": "infixOp", "op": "moreThan",
+                      "left": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "x" }, "right": { "type": "symbol", "name": "salary" } },
+                      "right": { "type": "int", "value": 100 } } } ] } } ] },
+                "body": [ { "type": "tag", "name": "div",
+                  "attributes": [ { "name": "class", "value": { "type": "text", "value": "earner" } } ],
+                  "children": [ { "type": "infixOp", "op": "objectProp",
+                    "left": { "type": "symbol", "name": "p" }, "right": { "type": "symbol", "name": "name" } } ] } ] }
+            ] } } ] }
+        }
+      }
+    }
+    """;
+
     // ── storage ───────────────────────────────────────────────────────────────
 
     public string DataFilePath { get; set; } = Path.GetTempFileName();
