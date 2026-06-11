@@ -125,7 +125,7 @@ public static class DbBridge
         _ => null, // objects/arrays/refs are not scalar fields
     };
 
-    private static IExecValue ScalarToExec(NodeValue? value) => value switch
+    public static IExecValue ScalarToExec(NodeValue? value) => value switch
     {
         IntValue i      => new ExecInt { Value = i.Value },
         TextValue t     => new ExecText { Value = t.Text },

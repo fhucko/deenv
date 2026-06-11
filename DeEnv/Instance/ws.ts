@@ -100,6 +100,7 @@ function connectWs(): void {
 }
 
 function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: number;
+                            collections?: { [prop: string]: { id: number; elementTypeName?: string } };
                             state?: ServerDtState; error?: string }): void {
     // Correlated accept/reject first: an error rolls the journal back, an ok commits.
     if (typeof msg.id === "number") {
@@ -109,7 +110,7 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
 
     if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
         const arrayId = pendingAdds.get(msg.tempId);
-        if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId); }
+        if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }
     } else if (msg.op === "refetch" && msg.state != null) {
         refetchInFlight = false;
         mergeState(msg.state);
@@ -127,7 +128,8 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
 let refetchInFlight = false;
 
 function maybeRefetch(): void {
-    if (refetchInFlight || !hasStaleEntry()) return;
+    if (refetchInFlight || (!hasStaleEntry() && !needsServerData)) return;
+    needsServerData = false;
     refetchInFlight = true;
     wsSend({ op: "refetch", clientId: uiStatic.clientId, path: location.pathname, vars: sessionVars() });
 }
@@ -137,26 +139,43 @@ function hasStaleEntry(): boolean {
     return false;
 }
 
-// The client-held scalar session vars (path, transient inputs, …) the server re-renders
-// with. Computed collections are not the client's to push, so only scalars go.
+// The client-held session vars the server re-renders with: scalars (path, transient
+// inputs, …) by value, persisted objects (the selection) as id-refs the server resolves
+// against the warm session graph. Transient objects and computed collections stay local.
 function sessionVars(): { [name: string]: object } {
     const out: { [name: string]: object } = {};
     for (const [name, item] of Object.entries(uiStatic.state.scope.items)) {
         const v = item.value;
         if (v.type === "int" || v.type === "bool" || v.type === "text") out[name] = scalarOf(v);
+        else if (v.type === "object" && v.id > 0) out[name] = { type: "object", id: v.id };
     }
     return out;
 }
 
 // Re-key a just-persisted set member from its transient negative id to the real extent
 // id: the array item's key, the member object's id, and the id maps. A positive id now
-// means future prop writes on it persist. A re-render refreshes the row's data-key.
-function remapAddedId(arrayId: number, tempId: number, realId: number): void {
+// means future prop writes on it persist. The store also minted the object's collection
+// props with their own intrinsic ids — re-key the transient arrays to them, so adds
+// into them persist too. A re-render refreshes the row's data-key.
+function remapAddedId(arrayId: number, tempId: number, realId: number,
+                      collections?: { [prop: string]: { id: number; elementTypeName?: string } }): void {
     const arr = uiStatic.state.arrays[arrayId];
     const item = arr?.items.find(i => i.key === tempId);
     if (item) {
         item.key = realId;
-        if (item.value.type === "object") item.value.id = realId;
+        if (item.value.type === "object") {
+            item.value.id = realId;
+            uiStatic.state.objects[realId] = item.value;
+            for (const [prop, coll] of Object.entries(collections ?? {})) {
+                const propArr = item.value.props[prop];
+                if (propArr?.type === "array") {
+                    propArr.id = coll.id;
+                    propArr.kind = "set";
+                    propArr.elementTypeName = coll.elementTypeName;
+                    uiStatic.state.arrays[coll.id] = propArr;
+                }
+            }
+        }
     }
     uiStatic.state.localToServerIds[tempId] = realId;
     uiStatic.state.serverToLocalIds[realId] = tempId;

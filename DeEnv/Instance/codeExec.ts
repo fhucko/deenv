@@ -113,6 +113,8 @@ function executeAssignment(assignment: CodeAssignment, scope: ExecScope, context
     const item = itemScope.items[assignment.target.name];
     if (item.isReadOnly) throw new Error(`Symbol ${assignment.target.name} is read only`);
     item.value = executeValue(assignment.value, scope, context).value;
+    // Assigning a top-scope UI-state var invalidates every cached computation that read it.
+    if (itemScope.parent === null) invalidateVar(assignment.target.name);
     return item.value;
 }
 
@@ -149,9 +151,17 @@ function executeObject(codeObject: CodeObject, scope: ExecScope, context: ExecCo
 
 function executeSymbol(codeSymbol: CodeSymbol, scope: ExecScope): ExecResult {
     const itemScope = findScope(codeSymbol, scope);
+    const item = itemScope.items[codeSymbol.name];
+    // A writable top-scope var read inside a computation is a dependency: assigning
+    // the var must invalidate the cached result. (Read-only items — db, functions —
+    // can never be reassigned, so they are not deps.)
+    if (itemScope.parent === null && !item.isReadOnly) recordVar(codeSymbol.name);
     return {
-        value: itemScope.items[codeSymbol.name].value,
-        setValue: p => { itemScope.items[codeSymbol.name].value = p; },
+        value: item.value,
+        setValue: p => {
+            item.value = p;
+            if (itemScope.parent === null) invalidateVar(codeSymbol.name);
+        },
     };
 }
 
@@ -164,11 +174,23 @@ const collectionMethods = ["add", "remove", "where", "orderBy"];
 // dependency on each mutation. memoCache is null when codeExec runs standalone
 // (conformance) → no caching, just compute.
 
-interface CacheDeps { props: { obj: number; prop: string }[]; members: number[]; }
+interface CacheDeps { props: { obj: number; prop: string }[]; members: number[]; vars: string[]; }
 interface ClientCacheEntry { result: ExecValue; deps: CacheDeps; stale: boolean; }
 
 let memoCache: Map<string, ClientCacheEntry> | null = null;
 const depStack: CacheDeps[] = [];
+
+// True while an event handler runs: handlers may be side-effecting (assignments,
+// factory calls), so their calls must never hit or fill the cache.
+let memoBypass = false;
+function runWithMemoBypass(f: () => void): void {
+    memoBypass = true;
+    try { f(); } finally { memoBypass = false; }
+}
+
+// A computation read data the server never shipped (and has no cached result):
+// the next maybeRefetch round-trips for authoritative state.
+let needsServerData = false;
 
 function setMemoCache(cache: Map<string, ClientCacheEntry>): void { memoCache = cache; }
 
@@ -178,9 +200,13 @@ function recordProp(objId: number, prop: string): void {
 function recordMember(arrId: number): void {
     if (depStack.length > 0) depStack[depStack.length - 1].members.push(arrId);
 }
+function recordVar(name: string): void {
+    if (depStack.length > 0) depStack[depStack.length - 1].vars.push(name);
+}
 function mergeDeps(into: CacheDeps, from: CacheDeps): void {
     into.props.push(...from.props);
     into.members.push(...from.members);
+    into.vars.push(...from.vars);
 }
 
 function argKey(v: ExecValue): string {
@@ -198,23 +224,32 @@ function memoKey(callee: string, args: ExecValue[]): string {
     return args.length === 0 ? callee : callee + "|" + args.map(argKey).join(",");
 }
 
-function memoize(key: string, compute: () => ExecValue): ExecValue {
-    if (memoCache == null) return compute();
+function memoize(key: string, context: ExecContext, compute: () => ExecValue): ExecValue {
+    if (memoCache == null || memoBypass) return compute();
     const existing = memoCache.get(key);
     if (existing && !existing.stale) {
         if (depStack.length > 0) mergeDeps(depStack[depStack.length - 1], existing.deps);
         return existing.result;
     }
-    const deps: CacheDeps = { props: [], members: [] };
+    const deps: CacheDeps = { props: [], members: [], vars: [] };
+    const lastIdBefore = context.lastId.value;
     depStack.push(deps);
     try {
         const result = compute();
-        memoCache.set(key, { result, deps, stale: false });
+        // An identity-creating computation — its result is a transient OBJECT minted
+        // inside it (a `getNewX()` factory) — is not pure: caching it would hand every
+        // caller the same mutable instance. (A derived array stays cacheable.)
+        if (!(result.type === "object" && result.id < 0 && result.id < lastIdBefore))
+            memoCache.set(key, { result, deps, stale: false });
         return result;
     } catch (e) {
-        // A hidden dependency: can't recompute on the client. Reuse the stale result.
-        // (Stage 4b refetches from the server here.) Re-throw anything else.
-        if (existing != null && e instanceof Error && e.message === "Value not available") return existing.result;
+        if (e instanceof Error && e.message === "Value not available") {
+            // A dependency the server never shipped. Reuse the stale result if there is
+            // one; otherwise render nothing for this subtree and ask the server.
+            if (existing != null) return existing.result;
+            needsServerData = true;
+            return { type: "nothing" };
+        }
         throw e;
     } finally {
         depStack.pop();
@@ -231,6 +266,11 @@ function invalidateMember(arrId: number): void {
     if (memoCache == null) return;
     for (const e of memoCache.values())
         if (e.deps.members.includes(arrId)) e.stale = true;
+}
+function invalidateVar(name: string): void {
+    if (memoCache == null) return;
+    for (const e of memoCache.values())
+        if (e.deps.vars.includes(name)) e.stale = true;
 }
 
 function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: ExecContext): ExecResult {
@@ -265,11 +305,11 @@ function collectionSysFunction(arr: ExecArray, method: string, context: ExecCont
         case "remove": return { type: "sysFn", fn: args => { removeFromCollection(arr, args[0]); return { type: "nothing" }; } };
         case "where": return { type: "sysFn", fn: args => {
             const lambda = asLambda(args[0]);
-            return memoize(`where:a${arr.id}:fn${lambda.fn.id}`, () => whereCollection(arr, lambda, context));
+            return memoize(`where:a${arr.id}:fn${lambda.fn.id}`, context, () => whereCollection(arr, lambda, context));
         } };
         case "orderBy": return { type: "sysFn", fn: args => {
             const lambda = asLambda(args[0]);
-            return memoize(`orderBy:a${arr.id}:fn${lambda.fn.id}`, () => orderByCollection(arr, lambda, context));
+            return memoize(`orderBy:a${arr.id}:fn${lambda.fn.id}`, context, () => orderByCollection(arr, lambda, context));
         } };
         default: throw new Error(`Unknown collection method '${method}'.`);
     }
@@ -370,7 +410,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     // memoized by (function id, arg identities), capturing its own deps.
     const argVals = codeCall.params.map(p => executeValue(p, scope, context).value);
     const closure = fn;
-    return memoize(memoKey("fn:" + closure.fn.id, argVals), () => {
+    return memoize(memoKey("fn:" + closure.fn.id, argVals), context, () => {
         const callScope: ExecScope = { parent: closure.scope, items: {} };
         for (let i = 0; i < argVals.length; i++)
             callScope.items[closure.fn.params[i].name] = { value: argVals[i], isReadOnly: true };

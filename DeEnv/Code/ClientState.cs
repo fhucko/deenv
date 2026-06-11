@@ -91,16 +91,22 @@ public static class ClientState
         var cache = new JsonArray();
         foreach (var (_, entry) in context.Memo)
         {
+            // A tag- or function-valued result (a page fn's rendered tree) has no wire
+            // form; the client recomputes it from the shipped data on first render.
+            if (entry.Result is ExecTag or ExecFunction or ExecSysFunction or ExecNothing) continue;
+
             var props = new JsonArray();
             foreach (var p in entry.Deps.Props) props.Add(new JsonObject { ["obj"] = p.ObjectId, ["prop"] = p.Prop });
             var members = new JsonArray();
             foreach (var m in entry.Deps.Members) members.Add(m.CollectionId);
+            var vars = new JsonArray();
+            foreach (var v in entry.Deps.Vars) vars.Add(v.Name);
 
             cache.Add(new JsonObject
             {
                 ["key"] = entry.Key,
                 ["result"] = DtValue(entry.Result),
-                ["deps"] = new JsonObject { ["props"] = props, ["members"] = members },
+                ["deps"] = new JsonObject { ["props"] = props, ["members"] = members, ["vars"] = vars },
             });
         }
 

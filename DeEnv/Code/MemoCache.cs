@@ -15,16 +15,23 @@ public readonly record struct PropDep(int ObjectId, string Prop);
 // collection's runtime array id (shipped in leaves, so server and client agree).
 public readonly record struct MemberDep(int CollectionId);
 
+// A read of a top-scope UI-state var (selectedUser, path, …) inside a computation:
+// assigning the var may change a dependent result. Vars are client-held, so this
+// invalidation is client-local — each client knows its own var writes.
+public readonly record struct VarDep(string Name);
+
 public sealed class Deps
 {
     public HashSet<PropDep> Props { get; } = [];
     public HashSet<MemberDep> Members { get; } = [];
+    public HashSet<VarDep> Vars { get; } = [];
 
     // A caller transitively depends on what its callees read.
     public void Merge(Deps other)
     {
         Props.UnionWith(other.Props);
         Members.UnionWith(other.Members);
+        Vars.UnionWith(other.Vars);
     }
 }
 

@@ -8,11 +8,23 @@
 
 function renderUi(): void {
     const context: ExecContext = { lastId: uiStatic.lastId };
-    const result = callFunction(uiStatic.renderFn, context);
+    let result: ExecValue;
+    try {
+        result = callFunction(uiStatic.renderFn, context);
+    } catch (e) {
+        // Unshipped data read outside any computation boundary: keep the current DOM
+        // and ask the server; the refetch reply re-renders with the data present.
+        if (e instanceof Error && e.message === "Value not available") {
+            needsServerData = true;
+            maybeRefetch();
+            return;
+        }
+        throw e;
+    }
     updateChildren(document.body, [result]);
     syncScopeText("path", v => history.replaceState(null, "", v));
     syncScopeText("title", v => { document.title = v; });
-    maybeRefetch(); // any entry left stale (a hidden dep) → re-ask the server
+    maybeRefetch(); // anything stale or missing → re-ask the server
 }
 
 // Invoke a (no-arg) function — the render fn or an event handler — by running its
@@ -125,7 +137,12 @@ function wireEvents(el: HTMLElement, tag: ExecTag): void {
     const onClick = tag.attributes["onClick"]?.value;
     if (onClick != null && onClick.type === "fn") {
         const fn = onClick;
-        el.onclick = () => { callFunction(fn, { lastId: uiStatic.lastId }); renderUi(); };
+        // Handlers may be side-effecting (assignments, factory calls): bypass the memo
+        // cache while one runs, so a repeated call never skips its effects.
+        el.onclick = () => {
+            runWithMemoBypass(() => callFunction(fn, { lastId: uiStatic.lastId }));
+            renderUi();
+        };
     } else {
         el.onclick = null;
     }

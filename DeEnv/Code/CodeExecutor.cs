@@ -121,9 +121,17 @@ public sealed class CodeExecutor
     private static IExecValue ExecuteSymbol(CodeSymbol codeSymbol, ExecScope scope, ExecContext context)
     {
         var itemScope = FindScope(codeSymbol.Name, scope);
-        var value = itemScope.Items[codeSymbol.Name].Value;
-        if (itemScope.Parent == null) OnValueAccessed(context, value);
-        return value;
+        var item = itemScope.Items[codeSymbol.Name];
+        if (itemScope.Parent == null)
+        {
+            // A writable top-scope var read inside a computation is a dependency:
+            // assigning the var must invalidate the cached result. (Read-only items —
+            // db, functions — can never be reassigned, so they are not deps.)
+            if (!item.IsReadOnly && context.DepStack.Count > 0)
+                context.DepStack.Peek().Vars.Add(new VarDep(codeSymbol.Name));
+            OnValueAccessed(context, item.Value);
+        }
+        return item.Value;
     }
 
     private static void OnValueAccessed(ExecContext context, IExecValue value)
@@ -230,12 +238,19 @@ public sealed class CodeExecutor
     public static IExecValue Memoize(string key, ExecContext context, Func<IExecValue> compute)
     {
         var deps = new Deps();
+        var lastIdBefore = context.LastId.Value;
         context.DepStack.Push(deps);
         IExecValue result;
         try { result = compute(); }
         finally { context.DepStack.Pop(); }
 
-        context.Memo[key] = new CacheEntry { Key = key, Result = result, Deps = deps };
+        // An identity-creating computation — its result is a transient OBJECT minted
+        // inside it (`getNewUser()`-style factory) — is not pure: caching it would hand
+        // every caller the same mutable instance. Never cache those. (A derived ARRAY
+        // — a where/orderBy result — is also freshly minted but pure in content, and
+        // stays cacheable.)
+        if (!(result is ExecObject { Id: < 0 } o && o.Id < lastIdBefore))
+            context.Memo[key] = new CacheEntry { Key = key, Result = result, Deps = deps };
         if (context.DepStack.Count > 0) context.DepStack.Peek().Merge(deps);
         return result;
     }
