@@ -408,7 +408,8 @@ public sealed class WsHandler
             s.Objects[id] = obj;
         }
 
-        var response = new JsonObject { ["op"] = "arrayAdd", ["id"] = id };
+        // `newId`, not `id` — the reply's `id` slot is the request correlation id.
+        var response = new JsonObject { ["op"] = "arrayAdd", ["newId"] = id };
         if (root.TryGetProperty("tempId", out var te) && te.ValueKind == JsonValueKind.Number)
             response["tempId"] = te.GetInt32();
         return response.ToJsonString(_jsonOpts);

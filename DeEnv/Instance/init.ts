@@ -16,12 +16,14 @@ const uiStatic: {
     state: AppState;
     cache: Map<string, ClientCacheEntry>;
     clientId: string;
+    lastError: string | null; // the latest server-rejected mutation's reason (Stage 5)
 } = {
     renderFn: null as unknown as ExecFunction,
     lastId: { value: 0 },
     state: { objects: {}, arrays: {}, scope: { items: {}, parent: null }, localToServerIds: {}, serverToLocalIds: {} },
     cache: new Map(),
     clientId: "",
+    lastError: null,
 };
 
 function init(): void {

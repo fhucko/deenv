@@ -1,14 +1,52 @@
-// WebSocket transport for the code-owned UI (Stage 4b). Wires the codeExec mutation
+// WebSocket transport for the code-owned UI (Stage 4b/5). Wires the codeExec mutation
 // hooks (setWsHooks) to the server so a two-way write reaches storage. Global script,
 // concatenated after codeExec/dt and before ui/init (see ClientScript.UiJs).
 //
-// objectPropChange / arrayAdd / arrayRemove persist a mutation; the client already
-// applied it optimistically, so these are fire-and-forget — except arrayAdd, whose
-// reply echoes the real extent id so the client re-keys its transient (negative-id)
-// copy. Surgical deltas/refetch are a later slice.
+// Optimistic mutations are PROVISIONAL (Stage 5). Each one is applied locally first,
+// journaled with what its undo needs (the 3-state model: server-data is the current
+// state with the journal undone, client-after is the current state, and each entry
+// holds its own client-before), and sent with a correlation id. The server's reply is
+// authoritative: ok → the entry commits (drops); error → reverse-replay the journal
+// back past the failed entry, drop it, and re-apply the rest.
 
 let codeWs: WebSocket | null = null;
 const codeWsOutbox: string[] = [];
+
+// ── the change journal (pending optimistic mutations, in send order) ──────────────
+
+interface JournalEntry {
+    msgId: number;
+    undo(): void;     // restore the captured before-state
+    redo(): void;     // re-apply after a rollback of an earlier entry (recaptures before)
+    onReject?(): void; // extra cleanup when this entry itself is the rejected one
+}
+const journal: JournalEntry[] = [];
+let nextWsMsgId = 1;
+
+// The reply for msgId was ok: the mutation is server-committed, the entry retires.
+function commitJournal(msgId: number): void {
+    const idx = journal.findIndex(e => e.msgId === msgId);
+    if (idx >= 0) journal.splice(idx, 1);
+}
+
+// The reply for msgId was an error: the server refused the mutation. Undo every pending
+// entry from the newest back to the failed one (restoring each captured before-value),
+// drop the failed entry, then re-apply the survivors in order — they are still pending
+// on the server and may yet be accepted. Their redo recaptures fresh before-values, so
+// a later rollback stays correct.
+function rollbackJournal(msgId: number, error: string): void {
+    const idx = journal.findIndex(e => e.msgId === msgId);
+    if (idx < 0) return;
+    for (let i = journal.length - 1; i >= idx; i--) journal[i].undo();
+    const [failed] = journal.splice(idx, 1);
+    failed.onReject?.();
+    for (let i = idx; i < journal.length; i++) journal[i].redo();
+    uiStatic.lastError = error;
+    console.error("Mutation rejected by the server:", error);
+    renderUi();
+}
+
+// ── connection ────────────────────────────────────────────────────────────────────
 
 // Set adds awaiting their real id: tempId (the negative client id) → the array it
 // went into, so the reply can re-key item + object from negative to real.
@@ -26,21 +64,52 @@ function connectWs(): void {
     codeWs.onmessage = ev => onWsMessage(JSON.parse(ev.data));
 
     setWsHooks({
-        propChange: (objectId, prop, value) =>
-            wsSend({ op: "objectPropChange", clientId: uiStatic.clientId, objectId, prop, value: scalarOf(value) }),
-        arrayAdd: (arrayId, tempKey, typeName, value) => {
-            pendingAdds.set(tempKey, arrayId);
-            wsSend({ op: "arrayAdd", clientId: uiStatic.clientId, setId: arrayId, tempId: tempKey, typeName, value: objectOf(value) });
+        propChange: (obj, prop, value, before) => {
+            const msgId = nextWsMsgId++;
+            journal.push({
+                msgId,
+                undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
+                redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
+            });
+            wsSend({ op: "objectPropChange", id: msgId, clientId: uiStatic.clientId,
+                objectId: obj.id, prop, value: scalarOf(value) });
         },
-        arrayRemove: (arrayId, objectId) =>
-            wsSend({ op: "arrayRemove", clientId: uiStatic.clientId, setId: arrayId, objectId }),
+        arrayAdd: (arr, item, typeName) => {
+            const msgId = nextWsMsgId++;
+            pendingAdds.set(item.key, arr.id);
+            journal.push({
+                msgId,
+                undo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
+                redo: () => { arr.items.push(item); invalidateMember(arr.id); },
+                onReject: () => pendingAdds.delete(item.key),
+            });
+            wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
+                setId: arr.id, tempId: item.key, typeName, value: objectOf(item.value) });
+        },
+        arrayRemove: (arr, item, index) => {
+            const msgId = nextWsMsgId++;
+            journal.push({
+                msgId,
+                undo: () => { arr.items.splice(Math.min(index, arr.items.length), 0, item); invalidateMember(arr.id); },
+                redo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
+            });
+            wsSend({ op: "arrayRemove", id: msgId, clientId: uiStatic.clientId,
+                setId: arr.id, objectId: item.key });
+        },
     });
 }
 
-function onWsMessage(msg: { op?: string; tempId?: number; id?: number; state?: ServerDtState }): void {
-    if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.id === "number") {
+function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: number;
+                            state?: ServerDtState; error?: string }): void {
+    // Correlated accept/reject first: an error rolls the journal back, an ok commits.
+    if (typeof msg.id === "number") {
+        if (msg.error != null) { rollbackJournal(msg.id, msg.error); return; }
+        commitJournal(msg.id);
+    }
+
+    if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
         const arrayId = pendingAdds.get(msg.tempId);
-        if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.id); }
+        if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId); }
     } else if (msg.op === "refetch" && msg.state != null) {
         refetchInFlight = false;
         mergeState(msg.state);

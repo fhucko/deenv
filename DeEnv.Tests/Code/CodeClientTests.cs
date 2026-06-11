@@ -132,6 +132,42 @@ public sealed class CodeClientTests
             server.Store!.ReadExtent("Item").Values
                 .Any(o => o.Fields.TryGetValue("name", out var n) && n is TextValue { Text: "z" }));
 
+        // Accepted: the reply commits the journal entry — the optimistic value stands
+        // (no double-apply, no rollback). Ordered by name, "z" is now the last row.
+        await Task.Delay(100);
+        await Assert.That(await page.Locator("input.name").Nth(1).InputValueAsync()).IsEqualTo("z");
+
+        try { File.Delete(dataPath); } catch { /* best-effort */ }
+    }
+
+    // Stage 5: optimistic mutations are provisional. Another client deletes a row
+    // out-of-band; this client (no cross-client push yet) still shows it and edits it.
+    // The server rejects the write (no object with that id), and the client reverse-
+    // replays its change journal — the input rolls back to the value before the edit.
+    [Test]
+    public async Task A_rejected_mutation_rolls_back_to_the_value_before()
+    {
+        var dataPath = Path.GetTempFileName();
+        await using var server = new TestInstanceServer();
+        await server.StartAsync(InstanceContext.InteractiveUiDb(), dataPath);
+        SeedItem(server.Store!, "a");
+        SeedItem(server.Store!, "b");
+
+        using var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
+        var page = await browser.NewPageAsync(new() { BaseURL = server.BaseUrl });
+        await page.GotoAsync("/");
+        await page.WaitForSelectorAsync("[data-key]");
+
+        // Out-of-band delete of "a" (GC sweeps it from the extent).
+        var aId = server.Store!.ReadExtent("Item").First(kv => Name(kv.Value) == "a").Key;
+        server.Store!.RemoveFromSet(NodePath.Root.Field("items"), aId);
+
+        // Optimistically rename the now-deleted row; the reject rolls it back to "a".
+        await page.Locator("input.name").Nth(0).FillAsync("aX");
+        await page.WaitForFunctionAsync(
+            "() => document.querySelector('input.name')?.value === 'a'");
+
         try { File.Delete(dataPath); } catch { /* best-effort */ }
     }
 

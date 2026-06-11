@@ -250,10 +250,11 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
     return {
         value,
         setValue: p => {
+            const before = left.props[right.name];
             left.props[right.name] = p;
             invalidateProp(left.id, right.name);
             // A positive id ⇒ the object is server-backed, so persist the change.
-            if (left.id > 0) propValueChange(left.id, right.name, p);
+            if (left.id > 0) propValueChange(left, right.name, p, before);
         },
     };
 }
@@ -291,7 +292,7 @@ function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext)
     const item: ExecArrayItem = { key, value };
     arr.items.push(item);
     invalidateMember(arr.id);
-    if (arr.id > 0) sendArrayItemAdd(arr.id, item.key, arr.elementTypeName, value);
+    if (arr.id > 0) sendArrayItemAdd(arr, item);
 }
 
 function removeFromCollection(arr: ExecArray, value: ExecValue): void {
@@ -300,7 +301,7 @@ function removeFromCollection(arr: ExecArray, value: ExecValue): void {
     if (index < 0) return;
     const item = arr.items.splice(index, 1)[0];
     invalidateMember(arr.id);
-    if (arr.id > 0) sendArrayItemRemove(arr.id, item.key);
+    if (arr.id > 0) sendArrayItemRemove(arr, item, index);
 }
 
 function whereCollection(arr: ExecArray, predicate: ExecFunction, context: ExecContext): ExecArray {
@@ -433,22 +434,24 @@ function findScope(symbol: CodeSymbol, scope: ExecScope): ExecScope {
 
 // WebSocket mutation sends — wired by ws.ts via setWsHooks (Stage 4b). Until then they
 // no-op, so local two-way binding and transient construction work without a server.
+// Each hook carries what a rollback needs (Stage 5): the live target reference, the
+// overwritten before-value, the removed item and its index.
 interface WsHooks {
-    propChange(objectId: number, prop: string, value: ExecValue): void;
-    arrayAdd(arrayId: number, tempKey: number, typeName: string | undefined, value: ExecValue): void;
-    arrayRemove(arrayId: number, objectId: number): void;
+    propChange(obj: ExecObject, prop: string, value: ExecValue, before: ExecValue): void;
+    arrayAdd(arr: ExecArray, item: ExecArrayItem, typeName: string | undefined): void;
+    arrayRemove(arr: ExecArray, item: ExecArrayItem, index: number): void;
 }
 let wsHooks: WsHooks | null = null;
 function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
 
-function propValueChange(objectId: number, propName: string, value: ExecValue): void {
-    wsHooks?.propChange(objectId, propName, value);
+function propValueChange(obj: ExecObject, propName: string, value: ExecValue, before: ExecValue): void {
+    wsHooks?.propChange(obj, propName, value, before);
 }
-function sendArrayItemAdd(arrayId: number, itemKey: number, typeName: string | undefined, value: ExecValue): void {
-    wsHooks?.arrayAdd(arrayId, itemKey, typeName, value);
+function sendArrayItemAdd(arr: ExecArray, item: ExecArrayItem): void {
+    wsHooks?.arrayAdd(arr, item, arr.elementTypeName);
 }
-function sendArrayItemRemove(arrayId: number, objectId: number): void {
-    wsHooks?.arrayRemove(arrayId, objectId);
+function sendArrayItemRemove(arr: ExecArray, item: ExecArrayItem, index: number): void {
+    wsHooks?.arrayRemove(arr, item, index);
 }
 
 // ── conformance entry point ───────────────────────────────────────────────────────
