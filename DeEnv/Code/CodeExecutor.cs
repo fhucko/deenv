@@ -296,8 +296,9 @@ public sealed class CodeExecutor
 
     private void AddToCollection(IExecCollection coll, IExecValue value)
     {
-        // Persist to a db set; a set member is keyed by its own object identity.
-        if (coll is ExecSet { Path: { } path, ElementTypeName: { } elemType } && _store != null && value is ExecObject obj)
+        // Persist to a db set (addressed by its intrinsic id); a set member is keyed
+        // by its own object identity.
+        if (coll is ExecSet { ElementTypeName: { } elemType } set && _store != null && value is ExecObject obj)
         {
             if (!obj.IsInDb)
             {
@@ -305,8 +306,8 @@ public sealed class CodeExecutor
                 obj.IsInDb = true;
                 obj.TypeName = elemType;
             }
-            _store.AddToSet(path, obj.Id);
-            coll.Items.Add(new ExecItem { Id = obj.Id, Value = obj });
+            _store.AddToSet(set.Id, obj.Id);
+            set.Items.Add(new ExecItem { Id = obj.Id, Value = obj });
         }
         else
         {
@@ -320,8 +321,8 @@ public sealed class CodeExecutor
             || (i.Value is ExecObject a && value is ExecObject b && a.Id == b.Id));
         if (item != null) coll.Items.Remove(item);
 
-        if (coll is ExecSet { Path: { } path } && _store != null && value is ExecObject obj && obj.IsInDb)
-            _store.RemoveFromSet(path, obj.Id);
+        if (coll is ExecSet set && _store != null && value is ExecObject obj && obj.IsInDb)
+            _store.RemoveFromSet(set.Id, obj.Id);
     }
 
     private ExecList Where(IExecCollection coll, ExecFunction predicate, ExecContext context)

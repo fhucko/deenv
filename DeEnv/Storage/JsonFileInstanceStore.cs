@@ -281,6 +281,42 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         SaveDoc(doc);
     }
 
+    // ── set ops by intrinsic id (a set is found by its own id, not a path) ──────────
+
+    public void AddToSet(int setId, int objectId)
+    {
+        var doc = LoadDoc();
+        var members = FindSetNode(doc, setId)?["members"] as JsonObject
+            ?? throw new InvalidOperationException($"No set with id {setId}.");
+        var typeName = ExtentEntryById(doc, objectId)?["typeName"]?.GetValue<string>()
+            ?? throw new InvalidOperationException($"No object with id {objectId}.");
+        members[objectId.ToString()] = ObjectRef(typeName, objectId);
+        SaveDoc(doc);
+    }
+
+    public void RemoveFromSet(int setId, int objectId)
+    {
+        var doc = LoadDoc();
+        if (FindSetNode(doc, setId)?["members"] is JsonObject members)
+            members.Remove(objectId.ToString());
+        CollectGarbage(doc);
+        SaveDoc(doc);
+    }
+
+    // Locate a set node by its intrinsic id (sets live in object fields, in extents).
+    private static JsonObject? FindSetNode(JsonObject doc, int setId)
+    {
+        foreach (var (_, pool) in Extents(doc))
+            if (pool is JsonObject p)
+                foreach (var (_, env) in p)
+                    if (env is JsonObject e && e["fields"] is JsonObject fields)
+                        foreach (var (_, fv) in fields)
+                            if (fv is JsonObject node && node["type"]?.GetValue<string>() == "set"
+                                && node["id"]?.GetValue<int>() == setId)
+                                return node;
+        return null;
+    }
+
     public void SetReference(NodePath fieldPath, int? id)
     {
         var doc = LoadDoc();

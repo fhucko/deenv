@@ -37,6 +37,11 @@ public interface IInstanceStore
     // Add an existing object (by identity) as a member of the set at setPath.
     void AddToSet(NodePath setPath, int id);
 
+    // Add/remove a member by the set's own intrinsic id (a set has one identity but
+    // may be reached by many paths). The Code runtime addresses sets this way.
+    void AddToSet(int setId, int objectId);
+    void RemoveFromSet(int setId, int objectId);
+
     // Drop a member reference from the set at setPath, then collect unreachable
     // objects (mark-sweep from the root).
     void RemoveFromSet(NodePath setPath, int id);

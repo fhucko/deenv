@@ -1,5 +1,3 @@
-using DeEnv.Storage;
-
 namespace DeEnv.Code;
 
 // Runtime values produced by the interpreter. Adapted onto the M5 object model:
@@ -62,13 +60,13 @@ public interface IExecCollection : IExecValue
     List<ExecItem> Items { get; }
 }
 
-// A db-backed set: identity-keyed, persistent, with a stable intrinsic Id. add/remove
-// write through IInstanceStore at Path.
+// A db-backed set: identity-keyed, persistent, addressed by its stable intrinsic Id.
+// (No path — a set can be reached by many reference paths, but has one identity.)
+// add/remove write through IInstanceStore by id; ElementTypeName is the member type.
 public sealed class ExecSet : IExecCollection
 {
     public required int Id { get; set; }
     public required List<ExecItem> Items { get; set; }
-    public NodePath? Path { get; set; }
     public string? ElementTypeName { get; set; }
     object IExecValue.Value => this;
 }

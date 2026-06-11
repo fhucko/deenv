@@ -64,7 +64,6 @@ public static class DbBridge
                     {
                         Items = items,
                         Id = setId,
-                        Path = fieldPath,
                         ElementTypeName = elemType!.Name,
                     };
                     break;
