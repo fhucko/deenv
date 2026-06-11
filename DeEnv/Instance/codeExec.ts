@@ -455,6 +455,7 @@ function runConformance(exprJson: string): string {
         case "int": return JSON.stringify({ kind: "int", value: result.value });
         case "text": return JSON.stringify({ kind: "text", value: result.value });
         case "bool": return JSON.stringify({ kind: "bool", value: result.value });
+        case "array": return JSON.stringify({ kind: "intList", value: result.items.map(i => (i.value as ExecInt).value) });
         default: throw new Error(`Non-scalar conformance result '${result.type}'.`);
     }
 }

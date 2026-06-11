@@ -48,6 +48,13 @@ public sealed class TsConformanceTests
                 case "bool":
                     await Assert.That(result.GetProperty("value").GetBoolean()).IsEqualTo(c.Expect.Value.GetBoolean());
                     break;
+                case "intList":
+                {
+                    var got = result.GetProperty("value").EnumerateArray().Select(e => e.GetInt32());
+                    var want = c.Expect.Value.EnumerateArray().Select(e => e.GetInt32());
+                    await Assert.That(string.Join(",", got)).IsEqualTo(string.Join(",", want));
+                    break;
+                }
                 default:
                     throw new InvalidOperationException($"Unknown expect kind '{c.Expect.Kind}' in case '{c.Name}'.");
             }

@@ -76,6 +76,37 @@
         "params": [ { "type": "int", "value": 41 } ]
       },
       "expect": { "kind": "int", "value": 42 }
+    },
+    {
+      "name": "where filters a list (preserving order)",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp",
+          "left": { "type": "array", "items": [ { "type": "int", "value": 1 }, { "type": "int", "value": 3 }, { "type": "int", "value": 2 } ] },
+          "right": { "type": "symbol", "name": "where" } },
+        "params": [ { "type": "fn", "params": [ { "name": "x" } ],
+          "body": { "type": "block", "statements": [ { "type": "return", "value":
+            { "type": "infixOp", "op": "moreThan", "left": { "type": "symbol", "name": "x" }, "right": { "type": "int", "value": 1 } } } ] } } ]
+      },
+      "expect": { "kind": "intList", "value": [ 3, 2 ] }
+    },
+    {
+      "name": "where then orderBy chained over a list",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp",
+          "left": { "type": "call",
+            "fn": { "type": "infixOp", "op": "objectProp",
+              "left": { "type": "array", "items": [ { "type": "int", "value": 1 }, { "type": "int", "value": 3 }, { "type": "int", "value": 2 } ] },
+              "right": { "type": "symbol", "name": "where" } },
+            "params": [ { "type": "fn", "params": [ { "name": "x" } ],
+              "body": { "type": "block", "statements": [ { "type": "return", "value":
+                { "type": "infixOp", "op": "moreThan", "left": { "type": "symbol", "name": "x" }, "right": { "type": "int", "value": 1 } } } ] } } ] },
+          "right": { "type": "symbol", "name": "orderBy" } },
+        "params": [ { "type": "fn", "params": [ { "name": "x" } ],
+          "body": { "type": "block", "statements": [ { "type": "return", "value": { "type": "symbol", "name": "x" } } ] } } ]
+      },
+      "expect": { "kind": "intList", "value": [ 2, 3 ] }
     }
   ]
 }

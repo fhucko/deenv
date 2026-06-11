@@ -102,14 +102,12 @@ public sealed class CodeExecutor
         return FindScope(assignment.Target.Name, scope).Items[assignment.Target.Name].Value;
     }
 
-    private ExecArray ExecuteArray(CodeArray codeArray, ExecScope scope, ExecContext context)
+    private ExecList ExecuteArray(CodeArray codeArray, ExecScope scope, ExecContext context)
     {
         var items = codeArray.Items
-            .Select(p => new ExecArrayItem { Id = --context.LastId.Value, Value = ExecuteValue(p, scope, context) })
+            .Select(p => new ExecItem { Id = --context.LastId.Value, Value = ExecuteValue(p, scope, context) })
             .ToList();
-        var arr = new ExecArray { Items = items, Id = --context.LastId.Value };
-        context.CreatedArrays.Add(arr);
-        return arr;
+        return new ExecList { Items = items, Id = --context.LastId.Value };
     }
 
     private ExecObject ExecuteObject(CodeObject codeObject, ExecScope scope, ExecContext context)
@@ -117,20 +115,14 @@ public sealed class CodeExecutor
         var props = new Dictionary<string, IExecValue>();
         foreach (var prop in codeObject.Props)
             props[prop.Name] = ExecuteValue(prop.Value, scope, context);
-        var obj = new ExecObject { Props = props, Id = --context.LastId.Value };
-        context.CreatedObjects.Add(obj);
-        return obj;
+        return new ExecObject { Props = props, Id = --context.LastId.Value };
     }
 
     private static IExecValue ExecuteSymbol(CodeSymbol codeSymbol, ExecScope scope, ExecContext context)
     {
         var itemScope = FindScope(codeSymbol.Name, scope);
         var value = itemScope.Items[codeSymbol.Name].Value;
-        if (itemScope.Parent == null)
-        {
-            if (codeSymbol.Name == "db") context.AccessedDb = true;
-            OnValueAccessed(context, value);
-        }
+        if (itemScope.Parent == null) OnValueAccessed(context, value);
         return value;
     }
 
@@ -138,7 +130,7 @@ public sealed class CodeExecutor
     {
         if (context.DepStack.Count > 0) return; // inside a computation → a dep, not a leaf
         if (value is ExecObject obj) context.AccessedObjectProps.Add((obj, null));
-        else if (value is ExecArray arr) context.AccessedArrayItems.Add((arr, null));
+        else if (value is IExecCollection coll) context.AccessedItems.Add((coll, null));
     }
 
     private IExecValue ExecuteInfixOp(CodeInfixOp codeInfixOp, ExecScope scope, ExecContext context)
@@ -150,8 +142,8 @@ public sealed class CodeExecutor
             var target = ExecuteValue(codeInfixOp.Left, scope, context);
 
             // A collection method (db.users.add / .where / …) binds to its target.
-            if (target is ExecArray arr && CollectionMethods.Contains(member.Name))
-                return new ExecSysFunction { Target = arr, Method = member.Name };
+            if (target is IExecCollection coll && CollectionMethods.Contains(member.Name))
+                return new ExecSysFunction { Target = coll, Method = member.Name };
 
             if (target is not ExecObject obj)
                 throw new CodeRuntimeException($"Cannot read '{member.Name}' on a non-object.");
@@ -253,9 +245,9 @@ public sealed class CodeExecutor
 
     private static string ArgKey(IExecValue v) => v switch
     {
-        ExecObject o => "o" + o.Id,
-        ExecArray a  => "a" + a.Id,
-        ExecInt i    => "i" + i.Value,
+        ExecObject o      => "o" + o.Id,
+        IExecCollection a => "a" + a.Id,
+        ExecInt i         => "i" + i.Value,
         ExecBool b   => "b" + (b.Value ? 1 : 0),
         ExecText t   => "t" + t.Value.Length + ":" + t.Value, // length-prefixed: delimiter-safe
         ExecNull     => "n",
@@ -302,12 +294,10 @@ public sealed class CodeExecutor
         ExecuteValue(arg, scope, context) as ExecFunction
         ?? throw new CodeRuntimeException("Expected a lambda argument.");
 
-    private void AddToCollection(ExecArray arr, IExecValue value)
+    private void AddToCollection(IExecCollection coll, IExecValue value)
     {
-        arr.Items.Add(new ExecArrayItem { Id = NextItemId(arr), Value = value });
-
-        if (arr is { IsInDb: true, Path: { } path, ElementTypeName: { } elemType }
-            && _store != null && value is ExecObject obj)
+        // Persist to a db set; a set member is keyed by its own object identity.
+        if (coll is ExecSet { Path: { } path, ElementTypeName: { } elemType } && _store != null && value is ExecObject obj)
         {
             if (!obj.IsInDb)
             {
@@ -316,47 +306,52 @@ public sealed class CodeExecutor
                 obj.TypeName = elemType;
             }
             _store.AddToSet(path, obj.Id);
+            coll.Items.Add(new ExecItem { Id = obj.Id, Value = obj });
+        }
+        else
+        {
+            coll.Items.Add(new ExecItem { Id = NextItemId(coll), Value = value });
         }
     }
 
-    private void RemoveFromCollection(ExecArray arr, IExecValue value)
+    private void RemoveFromCollection(IExecCollection coll, IExecValue value)
     {
-        var item = arr.Items.FirstOrDefault(i => ReferenceEquals(i.Value, value)
+        var item = coll.Items.FirstOrDefault(i => ReferenceEquals(i.Value, value)
             || (i.Value is ExecObject a && value is ExecObject b && a.Id == b.Id));
-        if (item != null) arr.Items.Remove(item);
+        if (item != null) coll.Items.Remove(item);
 
-        if (arr is { IsInDb: true, Path: { } path } && _store != null && value is ExecObject obj && obj.IsInDb)
+        if (coll is ExecSet { Path: { } path } && _store != null && value is ExecObject obj && obj.IsInDb)
             _store.RemoveFromSet(path, obj.Id);
     }
 
-    private ExecArray Where(ExecArray arr, ExecFunction predicate, ExecContext context)
+    private ExecList Where(IExecCollection coll, ExecFunction predicate, ExecContext context)
     {
-        RecordMembership(arr, context);
-        var items = arr.Items
+        RecordMembership(coll, context);
+        var items = coll.Items
             .Where(item => InvokeLambda(predicate, item.Value, context) is ExecBool { Value: true })
             .ToList();
-        return new ExecArray { Items = items, Id = --context.LastId.Value, IsInDb = false };
+        return new ExecList { Items = items, Id = --context.LastId.Value };
     }
 
-    private ExecArray OrderBy(ExecArray arr, ExecFunction keySelector, ExecContext context)
+    private ExecList OrderBy(IExecCollection coll, ExecFunction keySelector, ExecContext context)
     {
-        RecordMembership(arr, context);
-        var items = arr.Items
+        RecordMembership(coll, context);
+        var items = coll.Items
             .Select(item => (item, key: InvokeLambda(keySelector, item.Value, context)))
             .OrderBy(p => p.key, ExecValueComparer.Instance)
             .Select(p => p.item)
             .ToList();
-        return new ExecArray { Items = items, Id = --context.LastId.Value, IsInDb = false };
+        return new ExecList { Items = items, Id = --context.LastId.Value };
     }
 
-    private static int NextItemId(ExecArray arr) =>
-        arr.Items.Count == 0 ? 1 : arr.Items.Max(i => i.Id) + 1;
+    private static int NextItemId(IExecCollection coll) =>
+        coll.Items.Count == 0 ? 1 : coll.Items.Max(i => i.Id) + 1;
 
     // A where/orderBy observes the source collection's membership: an add/remove to it
     // can change the result, so it is a dependency of the surrounding computation.
-    private static void RecordMembership(ExecArray arr, ExecContext context)
+    private static void RecordMembership(IExecCollection coll, ExecContext context)
     {
-        if (context.DepStack.Count > 0) context.DepStack.Peek().Members.Add(new MemberDep(arr.Id));
+        if (context.DepStack.Count > 0) context.DepStack.Peek().Members.Add(new MemberDep(coll.Id));
     }
 
     // ── tags ──────────────────────────────────────────────────────────────────────
@@ -396,12 +391,12 @@ public sealed class CodeExecutor
 
     private IExecTagChild[] ExecuteTagForEach(CodeTagForEach codeForEach, ExecScope scope, ExecContext context)
     {
-        var array = ExecuteValue(codeForEach.Collection, scope, context) as ExecArray
+        var collection = ExecuteValue(codeForEach.Collection, scope, context) as IExecCollection
             ?? throw new CodeRuntimeException("foreach target is not a collection.");
         var children = new List<IExecTagChild>();
-        foreach (var item in array.Items)
+        foreach (var item in collection.Items)
         {
-            if (context.DepStack.Count == 0) context.AccessedArrayItems.Add((array, item));
+            if (context.DepStack.Count == 0) context.AccessedItems.Add((collection, item));
             OnValueAccessed(context, item.Value);
             var itemScope = new ExecScope { Parent = scope };
             itemScope.Items[codeForEach.Item.Name] = new ExecScopeItem { Value = item.Value, IsReadOnly = true };

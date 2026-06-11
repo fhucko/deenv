@@ -2,16 +2,17 @@ using DeEnv.Storage;
 
 namespace DeEnv.Code;
 
-// Runtime values produced by the interpreter. Ported from the app15 prototype and
-// adapted onto the M5 object model: objects carry their TypeName, and db-backed
-// collections carry the NodePath of their set so add/remove can persist through
-// IInstanceStore. `IsInDb == false` marks a transient (not-yet-persisted) value.
+// Runtime values produced by the interpreter. Adapted onto the M5 object model:
+// objects carry their TypeName and an intrinsic Id; a db-backed set (ExecSet) is a
+// mutable, persistent, identity-keyed collection, distinct from a transient ordered
+// list (ExecList — a where/orderBy result or an array literal). `ExecObject.IsInDb`
+// marks an object as persisted vs a not-yet-saved transient.
 
 public interface IExecTagChild;
 
 public interface IExecValue : IExecTagChild
 {
-    // Scalars expose their primitive; objects/arrays expose themselves (for identity).
+    // Scalars expose their primitive; objects/collections expose themselves (identity).
     object? Value { get; }
 }
 
@@ -53,18 +54,35 @@ public sealed class ExecObject : IExecValue
     object IExecValue.Value => this;
 }
 
-public sealed class ExecArray : IExecValue
+// A runtime collection of items: a db-backed set or a transient ordered list. The two
+// share iteration (foreach, where/orderBy) but differ in identity and persistence.
+public interface IExecCollection : IExecValue
 {
-    public required List<ExecArrayItem> Items { get; set; }
+    int Id { get; }
+    List<ExecItem> Items { get; }
+}
+
+// A db-backed set: identity-keyed, persistent, with a stable intrinsic Id. add/remove
+// write through IInstanceStore at Path.
+public sealed class ExecSet : IExecCollection
+{
     public required int Id { get; set; }
-    public bool IsInDb { get; set; }
-    // Persistence binding (db-backed sets only; null for transient/derived collections).
+    public required List<ExecItem> Items { get; set; }
     public NodePath? Path { get; set; }
     public string? ElementTypeName { get; set; }
     object IExecValue.Value => this;
 }
 
-public sealed class ExecArrayItem
+// A transient ordered list: a where/orderBy result or an array literal. Not persisted;
+// its Id is a render-local (negative) id.
+public sealed class ExecList : IExecCollection
+{
+    public required int Id { get; set; }
+    public required List<ExecItem> Items { get; set; }
+    object IExecValue.Value => this;
+}
+
+public sealed class ExecItem
 {
     public required int Id { get; set; }
     public required IExecValue Value { get; set; }
@@ -80,7 +98,7 @@ public sealed class ExecFunction : IExecValue
 // A built-in collection method (add / remove / where / orderBy) bound to its target.
 public sealed class ExecSysFunction : IExecValue
 {
-    public required ExecArray Target { get; set; }
+    public required IExecCollection Target { get; set; }
     public required string Method { get; set; }
     object IExecValue.Value => this;
 }
@@ -107,7 +125,7 @@ public sealed class ExecScopeItem
     public required bool IsReadOnly { get; set; }
 }
 
-// ── execution context (data-access tracking for partial transfer; id minting) ────
+// ── execution context ─────────────────────────────────────────────────────────────
 
 public sealed class LastId
 {
@@ -117,11 +135,11 @@ public sealed class LastId
 public sealed class ExecContext
 {
     public LastId LastId { get; set; } = new();
+
+    // Leaf accesses (made in output position — DepStack empty): the displayed data
+    // shipped to the client. Inside a computation, reads become dependencies instead.
     public HashSet<(ExecObject, string?)> AccessedObjectProps { get; set; } = [];
-    public HashSet<(ExecArray, ExecArrayItem?)> AccessedArrayItems { get; set; } = [];
-    public bool AccessedDb { get; set; }
-    public List<ExecArray> CreatedArrays { get; set; } = [];
-    public List<ExecObject> CreatedObjects { get; set; } = [];
+    public HashSet<(IExecCollection, ExecItem?)> AccessedItems { get; set; } = [];
 
     // ── memoization (Stage 4) ────────────────────────────────────────────────────
     // Computation results captured while rendering, keyed by (function, args), for

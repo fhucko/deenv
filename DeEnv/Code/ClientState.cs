@@ -23,8 +23,8 @@ public static class ClientState
 
         // Items by identity: a foreach over a derived collection iterates the SAME item
         // instances as the source set, so the source array ships exactly what was shown.
-        var accessedItems = new HashSet<ExecArrayItem>();
-        foreach (var (_, item) in context.AccessedArrayItems)
+        var accessedItems = new HashSet<ExecItem>();
+        foreach (var (_, item) in context.AccessedItems)
             if (item != null) accessedItems.Add(item);
 
         var objects = new JsonObject();
@@ -37,7 +37,7 @@ public static class ClientState
         JsonObject DtValue(IExecValue value) => value switch
         {
             ExecObject o => ObjectRef(o),
-            ExecArray a => ArrayRef(a),
+            IExecCollection a => CollectionRef(a),
             ExecInt i => Simple(new JsonObject { ["type"] = "int", ["value"] = i.Value }),
             ExecBool b => Simple(new JsonObject { ["type"] = "bool", ["value"] = b.Value }),
             ExecText t => Simple(new JsonObject { ["type"] = "text", ["value"] = t.Value }),
@@ -57,12 +57,12 @@ public static class ClientState
             return new JsonObject { ["type"] = "object", ["id"] = o.Id };
         }
 
-        JsonObject ArrayRef(ExecArray a)
+        JsonObject CollectionRef(IExecCollection a)
         {
             if (seenArrays.Add(a.Id))
             {
                 var items = new JsonArray();
-                arrays[a.Id.ToString()] = new JsonObject { ["isInDb"] = a.IsInDb, ["items"] = items };
+                arrays[a.Id.ToString()] = new JsonObject { ["isInDb"] = a is ExecSet, ["items"] = items };
                 foreach (var item in a.Items)
                     if (accessedItems.Contains(item))
                         items.Add(new JsonObject { ["id"] = item.Id, ["value"] = DtValue(item.Value) });
@@ -70,11 +70,11 @@ public static class ClientState
             return new JsonObject { ["type"] = "array", ["id"] = a.Id };
         }
 
-        // Register every accessed object/array as a leaf (incl. derived arrays reached
+        // Register every accessed object/collection as a leaf (incl. derived lists reached
         // only via a cache result, not from the scope).
         foreach (var o in accessedProps.Keys) ObjectRef(o);
-        foreach (var (arr, item) in context.AccessedArrayItems)
-            if (item != null) ArrayRef(arr);
+        foreach (var (coll, item) in context.AccessedItems)
+            if (item != null) CollectionRef(coll);
 
         var scope = new JsonObject();
         foreach (var (key, item) in topScope.Items)
