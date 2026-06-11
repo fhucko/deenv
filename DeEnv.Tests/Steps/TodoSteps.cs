@@ -29,14 +29,14 @@ public sealed class TodoSteps(InstanceContext ctx)
     [When("I select the user {string}")]
     public async Task WhenSelectUser(string name)
     {
-        await ctx.Page!.Locator($".user-name:has-text(\"{name}\")").ClickAsync();
+        await ctx.Page!.Locator($".user-name:has-text({Quoted(name)})").ClickAsync();
         await ctx.Page.WaitForSelectorAsync(".selected-user");
     }
 
     [When("I select the list {string}")]
     public async Task WhenSelectList(string name)
     {
-        await ctx.Page!.Locator($".list-name:has-text(\"{name}\")").ClickAsync();
+        await ctx.Page!.Locator($".list-name:has-text({Quoted(name)})").ClickAsync();
         await ctx.Page.WaitForSelectorAsync(".selected-list");
     }
 
@@ -66,7 +66,7 @@ public sealed class TodoSteps(InstanceContext ctx)
     [When("I remove the user {string}")]
     public async Task WhenRemoveUser(string name)
     {
-        await ctx.Page!.Locator($".user-row:has-text(\"{name}\") .remove-user").ClickAsync();
+        await ctx.Page!.Locator($".user-row:has-text({Quoted(name)}) .remove-user").ClickAsync();
     }
 
     [When("I check the first item")]
@@ -85,7 +85,7 @@ public sealed class TodoSteps(InstanceContext ctx)
 
     [Then("the page shows the user {string}")]
     public async Task ThenShowsUser(string name) =>
-        await ctx.Page!.WaitForSelectorAsync($".user-name:has-text(\"{name}\")");
+        await ctx.Page!.WaitForSelectorAsync($".user-name:has-text({Quoted(name)})");
 
     [Then("the page does not show the user {string}")]
     public async Task ThenDoesNotShowUser(string name) =>
@@ -94,7 +94,7 @@ public sealed class TodoSteps(InstanceContext ctx)
 
     [Then("the page shows the list {string}")]
     public async Task ThenShowsList(string name) =>
-        await ctx.Page!.WaitForSelectorAsync($".list-name:has-text(\"{name}\")");
+        await ctx.Page!.WaitForSelectorAsync($".list-name:has-text({Quoted(name)})");
 
     [Then("the page shows an item {string}")]
     public async Task ThenShowsItem(string text) =>
@@ -103,7 +103,7 @@ public sealed class TodoSteps(InstanceContext ctx)
 
     [Then("the page shows the done item {string}")]
     public async Task ThenShowsDoneItem(string text) =>
-        await ctx.Page!.WaitForSelectorAsync($".item-done:has-text(\"{text}\")");
+        await ctx.Page!.WaitForSelectorAsync($".item-done:has-text({Quoted(text)})");
 
     [Then("the page shows the about text")]
     public async Task ThenShowsAbout() =>
@@ -118,6 +118,9 @@ public sealed class TodoSteps(InstanceContext ctx)
     public async Task ThenStoreHasChecked(string typeName) =>
         await EventuallyAsync(() => ctx.Store!.ReadExtent(typeName).Values
             .Any(o => o.Fields.TryGetValue("checked", out var v) && v is BoolValue { Value: true }));
+
+    // A name as a quoted :has-text() argument — quotes/backslashes in the value escaped.
+    private static string Quoted(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
     // Polls a store condition (the WS round-trip is async). An IOException is the test
     // thread reading the store file while the server writes it — transient, retried.

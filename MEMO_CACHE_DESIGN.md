@@ -1,22 +1,35 @@
 # Memo cache — Stage 4
 
-**Status: IMPLEMENTED (4a).** The proposal below was approved and built across three slices
-(server memo+deps, wire format, client cache). Refinements made during the build:
+**Status: IMPLEMENTED (4a), extended through Stages 4b–6.** The proposal below was approved
+and built across three slices (server memo+deps, wire format, client cache). Refinements made
+during the build:
 
-- `MemberDep` keys by the **collection's runtime array id** (recorded inside `where`/`orderBy`),
-  not a separate notion — avoids any shape change to `ExecArray`.
+- `MemberDep` keys by the **collection's runtime array id** (recorded inside `where`/`orderBy`
+  AND by a `foreach` running inside a computation), not a separate notion.
+- **`VarDep` (Stage 6):** a writable top-scope UI-state var read inside a computation is a
+  third dependency kind; assigning the var invalidates dependent entries (client-local — each
+  client owns its vars). Read-only items (`db`, functions) are never deps.
+- **Leaf promotion (Stage 6):** a computation whose result is a TAG TREE (a page fn) is
+  display — its result has no wire form (the client re-renders it), so the reads it made are
+  promoted to leaves and ship. A value-returning computation's reads stay private deps. This is
+  what keeps `where` predicates private while page functions work.
+- **Purity rules (Stage 6):** an identity-creating computation (its result is a transient
+  OBJECT minted inside it — a `getNewX()` factory) is never cached; event handlers run with the
+  cache bypassed (they may be side-effecting). Derived arrays stay cacheable.
+- **Drafts are client-owned (Stage 6):** transient objects in client state ship complete (all
+  props), and a refetch's scope merge never overwrites a var holding a client draft.
 - Each var initializer is itself a memoized computation (`var:<name>`), so its inputs become
-  deps, not leaves.
+  deps, not leaves. Tag/function-valued entries are skipped on the wire.
 - The `sensitive` flag is **deleted**; `salary` is private purely because it is an input to a
   computation (a dep), never a rendered leaf. `server-only` no longer carries privacy meaning;
-  the `CodeValidator` server-only-ref check and the "render reads sensitive field" check were
-  removed (rendering a field is now the choice to expose it).
-- **4a limitation (resolved in 4b):** a client recompute that needs a *hidden* dependency can't
-  run (no inputs) → it reuses the stale result; the WS **refetch** lands in 4b. So 4a apps only
-  re-derive over *shipped* data. (TasksUiDb's Open list dropped its hidden-`priority` sort for
-  this reason; sorting/filtering by shown fields recomputes instantly.)
+  rendering a field is the choice to expose it.
+- The hidden-dependency recompute goes through the WS **refetch** (Stage 4b): the server
+  re-renders over the client's warm session and returns authoritative state. §7's
+  recompute-vs-refetch call went the other way in practice: the client **try-recomputes and
+  treats "Value not available" as the refetch trigger** (with stale-result reuse until the
+  reply lands) — simpler than an up-front deps-present check and proven by the todo app.
 
-The original proposal text follows.
+The original proposal text follows (wire shapes updated as built).
 
 ---
 
@@ -48,7 +61,8 @@ A computation's result can change if any of these change, so all are tracked:
 ```
 PropDep    = (objectId: int, prop: string)
 MemberDep  = (collectionId: int)            // the set/array whose membership was observed
-Deps       = { props: PropDep[], members: MemberDep[] }
+VarDep     = (name: string)                 // a writable top-scope UI-state var (Stage 6)
+Deps       = { props: PropDep[], members: MemberDep[], vars: VarDep[] }
 ```
 
 ## 2. Cache key — `(function, arguments)`
@@ -122,7 +136,8 @@ ExecContext {
     { "key":    { "callee": "<fnId|method:src:lambda>", "args": [ Arg ] },
       "result": DtValue,
       "deps":   { "props":   [ { "obj": int, "prop": "<name>" } ],
-                  "members": [ int ] } }
+                  "members": [ int ],
+                  "vars":    [ "<name>" ] } }
   ]
 }
 ```

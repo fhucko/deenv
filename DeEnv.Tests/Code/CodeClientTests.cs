@@ -112,32 +112,19 @@ public sealed class CodeClientTests
     [Test]
     public async Task Editing_a_bound_db_field_persists_via_the_websocket()
     {
-        var dataPath = Path.GetTempFileName();
-        await using var server = new TestInstanceServer();
-        await server.StartAsync(InstanceContext.InteractiveUiDb(), dataPath);
-        SeedItem(server.Store!, "a");
-        SeedItem(server.Store!, "b");
+        await WithPageAsync(InstanceContext.InteractiveUiDb(), s => { SeedItem(s, "a"); SeedItem(s, "b"); }, async (page, store) =>
+        {
+            // Rename "a" (row 0, ordered by name) → "z".
+            await page.Locator("input.name").Nth(0).FillAsync("z");
 
-        using var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
-        await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
-        var page = await browser.NewPageAsync(new() { BaseURL = server.BaseUrl });
-        await page.GotoAsync("/");
-        await page.WaitForSelectorAsync("[data-key]");
+            // The change reaches storage (poll: the WS round-trip is async).
+            await AssertEventuallyAsync(() => store.ReadExtent("Item").Values.Any(o => Name(o) == "z"));
 
-        // Rename "a" (row 0, ordered by name) → "z".
-        await page.Locator("input.name").Nth(0).FillAsync("z");
-
-        // The change reaches storage (poll: the WS round-trip is async).
-        await AssertEventuallyAsync(() =>
-            server.Store!.ReadExtent("Item").Values
-                .Any(o => o.Fields.TryGetValue("name", out var n) && n is TextValue { Text: "z" }));
-
-        // Accepted: the reply commits the journal entry — the optimistic value stands
-        // (no double-apply, no rollback). Ordered by name, "z" is now the last row.
-        await Task.Delay(100);
-        await Assert.That(await page.Locator("input.name").Nth(1).InputValueAsync()).IsEqualTo("z");
-
-        try { File.Delete(dataPath); } catch { /* best-effort */ }
+            // Accepted: the reply commits the journal entry — the optimistic value stands
+            // (no double-apply, no rollback). Ordered by name, "z" is now the last row.
+            await Task.Delay(100);
+            await Assert.That(await page.Locator("input.name").Nth(1).InputValueAsync()).IsEqualTo("z");
+        });
     }
 
     // Stage 5: optimistic mutations are provisional. Another client deletes a row
@@ -147,28 +134,17 @@ public sealed class CodeClientTests
     [Test]
     public async Task A_rejected_mutation_rolls_back_to_the_value_before()
     {
-        var dataPath = Path.GetTempFileName();
-        await using var server = new TestInstanceServer();
-        await server.StartAsync(InstanceContext.InteractiveUiDb(), dataPath);
-        SeedItem(server.Store!, "a");
-        SeedItem(server.Store!, "b");
+        await WithPageAsync(InstanceContext.InteractiveUiDb(), s => { SeedItem(s, "a"); SeedItem(s, "b"); }, async (page, store) =>
+        {
+            // Out-of-band delete of "a" (GC sweeps it from the extent).
+            var aId = store.ReadExtent("Item").First(kv => Name(kv.Value) == "a").Key;
+            store.RemoveFromSet(NodePath.Root.Field("items"), aId);
 
-        using var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
-        await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
-        var page = await browser.NewPageAsync(new() { BaseURL = server.BaseUrl });
-        await page.GotoAsync("/");
-        await page.WaitForSelectorAsync("[data-key]");
-
-        // Out-of-band delete of "a" (GC sweeps it from the extent).
-        var aId = server.Store!.ReadExtent("Item").First(kv => Name(kv.Value) == "a").Key;
-        server.Store!.RemoveFromSet(NodePath.Root.Field("items"), aId);
-
-        // Optimistically rename the now-deleted row; the reject rolls it back to "a".
-        await page.Locator("input.name").Nth(0).FillAsync("aX");
-        await page.WaitForFunctionAsync(
-            "() => document.querySelector('input.name')?.value === 'a'");
-
-        try { File.Delete(dataPath); } catch { /* best-effort */ }
+            // Optimistically rename the now-deleted row; the reject rolls it back to "a".
+            await page.Locator("input.name").Nth(0).FillAsync("aX");
+            await page.WaitForFunctionAsync(
+                "() => document.querySelector('input.name')?.value === 'a'");
+        });
     }
 
     // Adding a transient object to a db set sends an arrayAdd; the server mints it into
@@ -177,31 +153,19 @@ public sealed class CodeClientTests
     [Test]
     public async Task Adding_a_set_member_persists_and_remaps_its_id()
     {
-        var dataPath = Path.GetTempFileName();
-        await using var server = new TestInstanceServer();
-        await server.StartAsync(InstanceContext.InteractiveUiDb(), dataPath);
-        SeedItem(server.Store!, "a");
-        SeedItem(server.Store!, "b");
+        await WithPageAsync(InstanceContext.InteractiveUiDb(), s => { SeedItem(s, "a"); SeedItem(s, "b"); }, async (page, store) =>
+        {
+            await page.Locator("input.new-name").FillAsync("c");
+            await page.Locator("button.add").ClickAsync();
 
-        using var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
-        await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
-        var page = await browser.NewPageAsync(new() { BaseURL = server.BaseUrl });
-        await page.GotoAsync("/");
-        await page.WaitForSelectorAsync("[data-key]");
+            // The new member is minted into the extent and linked into the set.
+            await AssertEventuallyAsync(() => store.ReadExtent("Item").Values.Any(o => Name(o) == "c"));
 
-        await page.Locator("input.new-name").FillAsync("c");
-        await page.Locator("button.add").ClickAsync();
-
-        // The new member is minted into the extent and linked into the set.
-        await AssertEventuallyAsync(() =>
-            server.Store!.ReadExtent("Item").Values.Any(o => Name(o) == "c"));
-
-        // Negative→real id remap: every row now carries a positive (real) data-key.
-        await page.WaitForFunctionAsync(
-            "() => { const ks = [...document.querySelectorAll('[data-key]')].map(e => +e.getAttribute('data-key'));" +
-            " return ks.length === 3 && ks.every(k => k > 0); }");
-
-        try { File.Delete(dataPath); } catch { /* best-effort */ }
+            // Negative→real id remap: every row now carries a positive (real) data-key.
+            await page.WaitForFunctionAsync(
+                "() => { const ks = [...document.querySelectorAll('[data-key]')].map(e => +e.getAttribute('data-key'));" +
+                " return ks.length === 3 && ks.every(k => k > 0); }");
+        });
     }
 
     private static string? Name(ObjectValue o) =>
@@ -215,34 +179,24 @@ public sealed class CodeClientTests
     [Test]
     public async Task A_hidden_dependency_recomputes_on_the_server_via_refetch()
     {
-        var dataPath = Path.GetTempFileName();
-        await using var server = new TestInstanceServer();
-        await server.StartAsync(InstanceContext.RefetchUiDb(), dataPath);
-        SeedPerson(server.Store!, "Ada", 999); // an earner (salary > 100), never shipped
+        await WithPageAsync(InstanceContext.RefetchUiDb(), s => SeedPerson(s, "Ada", 999), async page =>
+        {
+            await Assert.That(await page.Locator(".earner").AllInnerTextsAsync()).IsEquivalentTo(new[] { "Ada" });
 
-        using var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
-        await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
-        var page = await browser.NewPageAsync(new() { BaseURL = server.BaseUrl });
-        await page.GotoAsync("/");
-        await page.WaitForSelectorAsync("[data-key]");
+            // Add a high earner: the client can't re-filter (Ada's salary is private) → refetch.
+            await page.Locator("button.add-rich").ClickAsync();
+            await page.WaitForFunctionAsync(
+                "() => [...document.querySelectorAll('.earner')].some(e => e.textContent === 'Rich')");
 
-        await Assert.That(await page.Locator(".earner").AllInnerTextsAsync()).IsEquivalentTo(new[] { "Ada" });
+            // Add a low earner: it joins the people list but the server filter keeps it out.
+            await page.Locator("button.add-poor").ClickAsync();
+            await page.WaitForFunctionAsync(
+                "() => [...document.querySelectorAll('.person')].some(e => e.textContent === 'Poor')");
 
-        // Add a high earner: the client can't re-filter (Ada's salary is private) → refetch.
-        await page.Locator("button.add-rich").ClickAsync();
-        await page.WaitForFunctionAsync(
-            "() => [...document.querySelectorAll('.earner')].some(e => e.textContent === 'Rich')");
-
-        // Add a low earner: it joins the people list but the server filter keeps it out.
-        await page.Locator("button.add-poor").ClickAsync();
-        await page.WaitForFunctionAsync(
-            "() => [...document.querySelectorAll('.person')].some(e => e.textContent === 'Poor')");
-
-        var earners = await page.Locator(".earner").AllInnerTextsAsync();
-        await Assert.That(earners).Contains("Rich");
-        await Assert.That(earners).DoesNotContain("Poor");
-
-        try { File.Delete(dataPath); } catch { /* best-effort */ }
+            var earners = await page.Locator(".earner").AllInnerTextsAsync();
+            await Assert.That(earners).Contains("Rich");
+            await Assert.That(earners).DoesNotContain("Poor");
+        });
     }
 
     // Polls a condition until true or a timeout elapses (for async WS persistence). An
@@ -264,7 +218,10 @@ public sealed class CodeClientTests
 
     // ── harness ─────────────────────────────────────────────────────────────────────
 
-    private static async Task WithPageAsync(InstanceDescription desc, Action<IInstanceStore> seed, Func<IPage, Task> body)
+    private static Task WithPageAsync(InstanceDescription desc, Action<IInstanceStore> seed, Func<IPage, Task> body) =>
+        WithPageAsync(desc, seed, (page, _) => body(page));
+
+    private static async Task WithPageAsync(InstanceDescription desc, Action<IInstanceStore> seed, Func<IPage, IInstanceStore, Task> body)
     {
         var dataPath = Path.GetTempFileName();
         await using var server = new TestInstanceServer();
@@ -289,7 +246,7 @@ public sealed class CodeClientTests
                 "\n--- content (first 1500) ---\n" + content[..Math.Min(1500, content.Length)]);
         }
 
-        try { await body(page); }
+        try { await body(page, server.Store!); }
         finally { try { File.Delete(dataPath); } catch { /* best-effort */ } }
     }
 
