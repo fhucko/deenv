@@ -22,6 +22,7 @@ public static class InstanceDescriptionLoader
 
         Validate(desc);
         CodeValidator.Validate(desc);
+        CodeIds.Assign(desc); // number every CodeFunction for stable memo-cache keys
         return desc;
     }
 

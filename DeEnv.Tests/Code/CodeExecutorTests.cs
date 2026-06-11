@@ -158,6 +158,35 @@ public sealed class CodeExecutorTests
         await Assert.That(ps).IsEquivalentTo(new[] { 2, 3 });
     }
 
+    // ── memoization (Stage 4) ────────────────────────────────────────────────────────
+
+    // A where computation is memoized: the context holds an entry whose result is the
+    // derived array and whose deps record the source membership + each item's read prop.
+    [Test]
+    public async Task Where_is_memoized_with_result_and_dependencies()
+    {
+        var scope = new ExecScope();
+        var exec = new CodeExecutor();
+        var ctx = new ExecContext();
+
+        CodeObject Item(int p) => new() { Props = [new CodeObjectProp { Name = "p", Value = Int(p) }] };
+        var arr = new CodeArray { Items = [Item(1), Item(3), Item(2)] };
+        var predicate = new CodeFunction
+        {
+            Params = [new CodeFunctionParam { Name = "x" }],
+            Body = new CodeBlock { Statements = [new CodeReturn { Value = Op(CodeInfixOpType.MoreThan, Prop(Sym("x"), "p"), Int(1)) }] },
+        };
+
+        Run(scope, exec, ctx, new CodeVarDec { Name = "arr", Value = arr });
+        var where = new CodeCall { Fn = Prop(Sym("arr"), "where"), Params = [predicate] };
+        var result = (ExecArray)exec.ExecuteValue(where, scope, ctx);
+
+        var entry = ctx.Memo.Values.Single(e => e.Key.StartsWith("where:"));
+        await Assert.That(ReferenceEquals(entry.Result, result)).IsTrue();
+        await Assert.That(entry.Deps.Members.Count).IsGreaterThan(0);              // observed source membership
+        await Assert.That(entry.Deps.Props.Any(d => d.Prop == "p")).IsTrue();      // read each item's p
+    }
+
     // ── transient-add through the M5 store ──────────────────────────────────────────
 
     [Test]

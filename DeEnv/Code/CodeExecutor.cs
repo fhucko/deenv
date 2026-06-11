@@ -159,6 +159,7 @@ public sealed class CodeExecutor
                 throw new CodeRuntimeException($"Unknown field '{member.Name}'.");
 
             if (context.Suppress == 0) context.AccessedObjectProps.Add((obj, member.Name));
+            if (context.DepStack.Count > 0) context.DepStack.Peek().Props.Add(new PropDep(obj.Id, member.Name));
             OnValueAccessed(context, value);
             return value;
         }
@@ -215,12 +216,49 @@ public sealed class CodeExecutor
 
     private IExecValue CallFunction(ExecFunction fn, ICodeValue[] args, ExecScope scope, ExecContext context)
     {
-        var callScope = new ExecScope { Parent = fn.Scope };
-        for (var i = 0; i < args.Length; i++)
-            callScope.Items[fn.Function.Params[i].Name] =
-                new ExecScopeItem { Value = ExecuteValue(args[i], scope, context), IsReadOnly = true };
-        return ExecuteBlock(fn.Function.Body, callScope, context) ?? new ExecNothing();
+        // Args evaluate in the caller's context (their deps are the caller's); the body
+        // is memoized by (function id, arg identities) with its own captured deps.
+        var argVals = new IExecValue[args.Length];
+        for (var i = 0; i < args.Length; i++) argVals[i] = ExecuteValue(args[i], scope, context);
+
+        return Memoize(MemoKey($"fn:{fn.Function.Id}", argVals), context, () =>
+        {
+            var callScope = new ExecScope { Parent = fn.Scope };
+            for (var i = 0; i < argVals.Length; i++)
+                callScope.Items[fn.Function.Params[i].Name] = new ExecScopeItem { Value = argVals[i], IsReadOnly = true };
+            return ExecuteBlock(fn.Function.Body, callScope, context) ?? new ExecNothing();
+        });
     }
+
+    // Run `compute` as a memoized computation: capture its dependencies in a fresh
+    // Deps, store the (key → result, deps) entry, and fold its deps into the caller's
+    // (a caller transitively depends on what its callees read).
+    private static IExecValue Memoize(string key, ExecContext context, Func<IExecValue> compute)
+    {
+        var deps = new Deps();
+        context.DepStack.Push(deps);
+        IExecValue result;
+        try { result = compute(); }
+        finally { context.DepStack.Pop(); }
+
+        context.Memo[key] = new CacheEntry { Key = key, Result = result, Deps = deps };
+        if (context.DepStack.Count > 0) context.DepStack.Peek().Merge(deps);
+        return result;
+    }
+
+    private static string MemoKey(string callee, IReadOnlyList<IExecValue> args) =>
+        args.Count == 0 ? callee : callee + "|" + string.Join(",", args.Select(ArgKey));
+
+    private static string ArgKey(IExecValue v) => v switch
+    {
+        ExecObject o => "o" + o.Id,
+        ExecArray a  => "a" + a.Id,
+        ExecInt i    => "i" + i.Value,
+        ExecBool b   => "b" + (b.Value ? 1 : 0),
+        ExecText t   => "t" + t.Value.Length + ":" + t.Value, // length-prefixed: delimiter-safe
+        ExecNull     => "n",
+        _            => "?",
+    };
 
     // Invoke a lambda with one already-evaluated argument (for where/orderBy).
     private IExecValue InvokeLambda(ExecFunction fn, IExecValue arg, ExecContext context)
@@ -242,9 +280,17 @@ public sealed class CodeExecutor
                 RemoveFromCollection(sysFn.Target, ExecuteValue(args[0], scope, context));
                 return new ExecNothing();
             case "where":
-                return Where(sysFn.Target, AsLambda(args[0], scope, context), context);
+            {
+                var lambda = AsLambda(args[0], scope, context);
+                return Memoize($"where:a{sysFn.Target.Id}:fn{lambda.Function.Id}", context,
+                    () => Where(sysFn.Target, lambda, context));
+            }
             case "orderBy":
-                return OrderBy(sysFn.Target, AsLambda(args[0], scope, context), context);
+            {
+                var lambda = AsLambda(args[0], scope, context);
+                return Memoize($"orderBy:a{sysFn.Target.Id}:fn{lambda.Function.Id}", context,
+                    () => OrderBy(sysFn.Target, lambda, context));
+            }
             default:
                 throw new CodeRuntimeException($"Unknown collection method '{sysFn.Method}'.");
         }
@@ -283,6 +329,7 @@ public sealed class CodeExecutor
 
     private ExecArray Where(ExecArray arr, ExecFunction predicate, ExecContext context)
     {
+        RecordMembership(arr, context);
         var items = arr.Items
             .Where(item => InvokeLambda(predicate, item.Value, context) is ExecBool { Value: true })
             .ToList();
@@ -291,6 +338,7 @@ public sealed class CodeExecutor
 
     private ExecArray OrderBy(ExecArray arr, ExecFunction keySelector, ExecContext context)
     {
+        RecordMembership(arr, context);
         var items = arr.Items
             .Select(item => (item, key: InvokeLambda(keySelector, item.Value, context)))
             .OrderBy(p => p.key, ExecValueComparer.Instance)
@@ -301,6 +349,13 @@ public sealed class CodeExecutor
 
     private static int NextItemId(ExecArray arr) =>
         arr.Items.Count == 0 ? 1 : arr.Items.Max(i => i.Id) + 1;
+
+    // A where/orderBy observes the source collection's membership: an add/remove to it
+    // can change the result, so it is a dependency of the surrounding computation.
+    private static void RecordMembership(ExecArray arr, ExecContext context)
+    {
+        if (context.DepStack.Count > 0) context.DepStack.Peek().Members.Add(new MemberDep(arr.Id));
+    }
 
     // ── tags ──────────────────────────────────────────────────────────────────────
 

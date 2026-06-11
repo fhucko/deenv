@@ -128,4 +128,11 @@ public sealed class ExecContext
     // functions) so their inputs stay on the server — only the rendered (client-run)
     // accesses are shipped. See SsrRenderer / ClientState.
     public int Suppress { get; set; }
+
+    // ── memoization (Stage 4) ────────────────────────────────────────────────────
+    // Computation results captured while rendering, keyed by (function, args), for
+    // transfer; and the dependency stack — one Deps per in-flight computation, top is
+    // the running one. See MemoCache.cs / MEMO_CACHE_DESIGN.md.
+    public Dictionary<string, CacheEntry> Memo { get; } = [];
+    public Stack<Deps> DepStack { get; } = new();
 }
