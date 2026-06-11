@@ -59,13 +59,22 @@ public sealed class SsrRenderer
             var body = new StringBuilder();
             SerializeChild(result, body);
 
-            // First-paint state for the client: the db graph + session vars as data,
-            // and the ui/common AST so the client re-defines the same functions.
-            var initData = ClientState.Serialize(scope).ToJsonString();
+            // First-paint state: only what the client-run render accessed (access-scoped,
+            // sensitive fields denied) + the client-facing AST. Server-only functions and
+            // the var initializers (which may compute from withheld data) never ship — the
+            // client re-defines client functions and reads var *values* from initData.
+            var initData = ClientState.Serialize(scope, context, _desc).ToJsonString();
+            var clientUi = new InstanceUi(
+                Vars: null,
+                Functions: _desc.Ui!.Functions?.Where(f => !f.ServerOnly).ToList(),
+                Render: _desc.Ui.Render);
+            var clientCommon = _desc.Common?.Functions is { } common
+                ? new InstanceCommon(common.Where(f => !f.ServerOnly).ToList())
+                : null;
             var initUi = new JsonObject
             {
-                ["ui"] = JsonSerializer.SerializeToNode(_desc.Ui, SchemaJson.Options),
-                ["common"] = _desc.Common is null ? null : JsonSerializer.SerializeToNode(_desc.Common, SchemaJson.Options),
+                ["ui"] = JsonSerializer.SerializeToNode(clientUi, SchemaJson.Options),
+                ["common"] = clientCommon is null ? null : JsonSerializer.SerializeToNode(clientCommon, SchemaJson.Options),
             }.ToJsonString();
 
             return UiLayout(title, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi));
@@ -90,19 +99,23 @@ public sealed class SsrRenderer
         var db = DbBridge.LoadRoot(_store, _desc, context);
         scope.Items["db"] = new ExecScopeItem { Value = db, IsReadOnly = true };
 
-        // UI/session state. Reset on reload, so the first-paint value is the
-        // authored initializer — except `path`, which is the requested URL (routing).
+        // Functions first (close over the same top scope → mutual recursion) so var
+        // initializers may call them — including server-only ones.
+        foreach (var f in _desc.Common?.Functions ?? []) DefineFunction(f, scope);
+        foreach (var f in ui.Functions ?? []) DefineFunction(f, scope);
+
+        // UI/session state. Initializers run server-side with access recording
+        // suppressed (their inputs stay on the server; only the resulting value is
+        // shipped). `path` is the requested URL (routing).
+        context.Suppress++;
         foreach (var v in ui.Vars ?? [])
         {
             var value = v.Value == null ? new ExecNull() : exec.ExecuteValue(v.Value, scope, context);
             scope.Items[v.Name] = new ExecScopeItem { Value = value, IsReadOnly = false };
         }
+        context.Suppress--;
         if (scope.Items.ContainsKey("path"))
             scope.Items["path"] = new ExecScopeItem { Value = new ExecText { Value = urlPath }, IsReadOnly = false };
-
-        // Shared + UI functions (close over the same top scope → mutual recursion).
-        foreach (var f in _desc.Common?.Functions ?? []) DefineFunction(f, scope);
-        foreach (var f in ui.Functions ?? []) DefineFunction(f, scope);
 
         var renderFn = ui.Render ?? throw new CodeRuntimeException("The 'ui' section has no render function.");
         var result = exec.InvokeFunction(renderFn, [], scope, context);

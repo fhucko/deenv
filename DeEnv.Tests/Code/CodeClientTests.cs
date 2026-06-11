@@ -91,6 +91,19 @@ public sealed class CodeClientTests
         });
     }
 
+    [Test]
+    public async Task Server_only_materialized_list_hydrates_without_calling_the_server()
+    {
+        // The client never has `highEarners` (server-only, not shipped); it renders from
+        // the materialized `rich` var. Hydration must succeed (no faulting on load).
+        await WithPageAsync(InstanceContext.SensitiveUiDb(), s => { SeedPerson(s, "Ada", 999); SeedPerson(s, "Bob", 5); }, async page =>
+        {
+            var earners = page.Locator(".earner");
+            await Assert.That(await earners.CountAsync()).IsEqualTo(1);
+            await Assert.That(await earners.Nth(0).InnerTextAsync()).IsEqualTo("Ada");
+        });
+    }
+
     // ── harness ─────────────────────────────────────────────────────────────────────
 
     private static async Task WithPageAsync(InstanceDescription desc, Action<IInstanceStore> seed, Func<IPage, Task> body)
@@ -138,6 +151,16 @@ public sealed class CodeClientTests
             ["priority"] = new IntValue(priority),
         }));
         store.AddToSet(NodePath.Root.Field("tasks"), id);
+    }
+
+    private static void SeedPerson(IInstanceStore store, string name, int salary)
+    {
+        var id = store.CreateObject("Person", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name),
+            ["salary"] = new IntValue(salary),
+        }));
+        store.AddToSet(NodePath.Root.Field("people"), id);
     }
 
     private static void SeedItem(IInstanceStore store, string name)

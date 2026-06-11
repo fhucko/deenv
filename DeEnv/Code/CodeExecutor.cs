@@ -136,6 +136,7 @@ public sealed class CodeExecutor
 
     private static void OnValueAccessed(ExecContext context, IExecValue value)
     {
+        if (context.Suppress > 0) return; // server-side computation: not shipped
         if (value is ExecObject obj) context.AccessedObjectProps.Add((obj, null));
         else if (value is ExecArray arr) context.AccessedArrayItems.Add((arr, null));
     }
@@ -157,7 +158,7 @@ public sealed class CodeExecutor
             if (!obj.Props.TryGetValue(member.Name, out var value))
                 throw new CodeRuntimeException($"Unknown field '{member.Name}'.");
 
-            context.AccessedObjectProps.Add((obj, member.Name));
+            if (context.Suppress == 0) context.AccessedObjectProps.Add((obj, member.Name));
             OnValueAccessed(context, value);
             return value;
         }
@@ -343,7 +344,7 @@ public sealed class CodeExecutor
         var children = new List<IExecTagChild>();
         foreach (var item in array.Items)
         {
-            context.AccessedArrayItems.Add((array, item));
+            if (context.Suppress == 0) context.AccessedArrayItems.Add((array, item));
             OnValueAccessed(context, item.Value);
             var itemScope = new ExecScope { Parent = scope };
             itemScope.Items[codeForEach.Item.Name] = new ExecScopeItem { Value = item.Value, IsReadOnly = true };

@@ -40,6 +40,68 @@ public static class CodeValidator
         if (ui.Render == null)
             throw new SchemaValidationException("The 'ui' section must define a 'render' function.");
         ValidateFunction(ui.Render, top);
+
+        // Client-run code (render + non-server-only functions) must not reference a
+        // server-only function — those are never shipped, so a reference would fault
+        // on the client. Server-side code (var initializers, server-only functions)
+        // may. (A sensitive *field* read by client-run code is caught at render time;
+        // the static type-aware check needs the deferred type-checker.)
+        var serverOnly = new HashSet<string>();
+        foreach (var f in (ui.Functions ?? []).Concat(desc.Common?.Functions ?? []))
+            if (f.ServerOnly && f.Name != null) serverOnly.Add(f.Name);
+
+        if (serverOnly.Count > 0)
+        {
+            CheckNoServerOnlyRefs(ui.Render, serverOnly);
+            foreach (var f in ui.Functions ?? []) if (!f.ServerOnly) CheckNoServerOnlyRefs(f, serverOnly);
+            foreach (var f in desc.Common?.Functions ?? []) if (!f.ServerOnly) CheckNoServerOnlyRefs(f, serverOnly);
+        }
+    }
+
+    // Walks client-run code for a symbol naming a server-only function. The right
+    // side of object-prop access is a member name, not a symbol, so it is skipped.
+    private static void CheckNoServerOnlyRefs(ICodeElement node, HashSet<string> serverOnly)
+    {
+        switch (node)
+        {
+            case CodeSymbol s when serverOnly.Contains(s.Name):
+                throw new SchemaValidationException(
+                    $"Client-run code references server-only function '{s.Name}'. Compute it in a " +
+                    $"var initializer (server-side) and read the result, which ships as state.");
+            case CodeFunction fn: CheckNoServerOnlyRefs(fn.Body, serverOnly); break;
+            case CodeBlock b: foreach (var s in b.Statements) CheckNoServerOnlyRefs(s, serverOnly); break;
+            case CodeReturn r: CheckNoServerOnlyRefs(r.Value, serverOnly); break;
+            case CodeVarDec v when v.Value != null: CheckNoServerOnlyRefs(v.Value, serverOnly); break;
+            case CodeAssignment a: CheckNoServerOnlyRefs(a.Value, serverOnly); break;
+            case CodeIf i:
+                CheckNoServerOnlyRefs(i.Condition, serverOnly);
+                CheckNoServerOnlyRefs(i.Body, serverOnly);
+                if (i.ElseBody != null) CheckNoServerOnlyRefs(i.ElseBody, serverOnly);
+                break;
+            case CodeInfixOp op:
+                CheckNoServerOnlyRefs(op.Left, serverOnly);
+                if (op.Op != CodeInfixOpType.ObjectProp) CheckNoServerOnlyRefs(op.Right, serverOnly);
+                break;
+            case CodeCall c:
+                CheckNoServerOnlyRefs(c.Fn, serverOnly);
+                foreach (var p in c.Params) CheckNoServerOnlyRefs(p, serverOnly);
+                break;
+            case CodeArray arr: foreach (var it in arr.Items) CheckNoServerOnlyRefs(it, serverOnly); break;
+            case CodeObject obj: foreach (var p in obj.Props) CheckNoServerOnlyRefs(p.Value, serverOnly); break;
+            case CodeTag tag:
+                foreach (var at in tag.Attributes) CheckNoServerOnlyRefs(at.Value, serverOnly);
+                foreach (var ch in tag.Children) CheckNoServerOnlyRefs(ch, serverOnly);
+                break;
+            case CodeTagForEach fe:
+                CheckNoServerOnlyRefs(fe.Collection, serverOnly);
+                foreach (var ch in fe.Body) CheckNoServerOnlyRefs(ch, serverOnly);
+                break;
+            case CodeTagIf ti:
+                CheckNoServerOnlyRefs(ti.Condition, serverOnly);
+                foreach (var ch in ti.Body) CheckNoServerOnlyRefs(ch, serverOnly);
+                foreach (var ch in ti.ElseBody) CheckNoServerOnlyRefs(ch, serverOnly);
+                break;
+        }
     }
 
     private static void DeclareNamed(CodeFunction fn, Scope scope)

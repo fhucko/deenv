@@ -54,6 +54,35 @@ public sealed class CodeSteps(InstanceContext ctx)
         store.AddToSet(NodePath.Root.Field("tasks"), id);
     }
 
+    [Given("the people instance seeded with salaries")]
+    public void GivenPeopleSeeded()
+    {
+        ctx.Description = InstanceContext.SensitiveUiDb();
+        var store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+        ctx.Store = store;
+        SeedPerson(store, "Ada", salary: 999); // high earner (> 100)
+        SeedPerson(store, "Bob", salary: 5);   // not an earner
+    }
+
+    [Given("the leaky people instance seeded")]
+    public void GivenLeakyPeopleSeeded()
+    {
+        ctx.Description = InstanceContext.SensitiveLeakUiDb();
+        var store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+        ctx.Store = store;
+        SeedPerson(store, "Ada", salary: 999);
+    }
+
+    private static void SeedPerson(IInstanceStore store, string name, int salary)
+    {
+        var id = store.CreateObject("Person", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name),
+            ["salary"] = new IntValue(salary),
+        }));
+        store.AddToSet(NodePath.Root.Field("people"), id);
+    }
+
     // ── When ──────────────────────────────────────────────────────────────────
 
     [When("the page at {string} is rendered")]
@@ -68,6 +97,15 @@ public sealed class CodeSteps(InstanceContext ctx)
     // Assertions are scoped to the rendered <body> — the visible first paint — not the
     // whole document, so the <head>'s window.initData/initUi data island (which carries
     // the same field values) does not pollute substring counts or ordering.
+
+    // Checks the WHOLE document (head data island included), so it catches a value
+    // leaking through window.initData even when it is never displayed in the body.
+    [Then("the page does not include {string}")]
+    public async Task ThenPageDoesNotInclude(string fragment)
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        await Assert.That(ctx.RenderedHtml!.Contains(fragment)).IsFalse();
+    }
 
     [Then("the rendered HTML contains {string}")]
     public async Task ThenHtmlContains(string fragment)

@@ -276,6 +276,106 @@ public class InstanceContext
     }
     """;
 
+    // Code milestone, Stage 4a: a sensitive field (`salary`) and a server-only
+    // derivation. `highEarners` (server-only) filters by salary; its result is
+    // materialised into the `rich` var; render shows only the resulting names. So the
+    // client receives the high earners' names but never any salary, and never the
+    // non-earner rows (db.people is read only on the server).
+    public static InstanceDescription SensitiveUiDb() =>
+        InstanceDescriptionLoader.Load(SensitiveUiJson);
+
+    private const string SensitiveUiJson = """
+    {
+      "types": [
+        { "name": "Db", "baseType": "object",
+          "props": [ { "name": "people", "type": "Person", "cardinality": "set" } ] },
+        { "name": "Person", "baseType": "object",
+          "props": [
+            { "name": "name",   "type": "text" },
+            { "name": "salary", "type": "int", "sensitive": true }
+          ] }
+      ],
+      "common": {
+        "functions": [
+          { "type": "fn", "name": "highEarners", "serverOnly": true,
+            "params": [ { "name": "people" } ],
+            "body": { "type": "block", "statements": [ { "type": "return", "value":
+              { "type": "call",
+                "fn": { "type": "infixOp", "op": "objectProp",
+                  "left": { "type": "symbol", "name": "people" },
+                  "right": { "type": "symbol", "name": "where" } },
+                "params": [ { "type": "fn", "params": [ { "name": "p" } ],
+                  "body": { "type": "block", "statements": [ { "type": "return", "value":
+                    { "type": "infixOp", "op": "moreThan",
+                      "left": { "type": "infixOp", "op": "objectProp",
+                        "left": { "type": "symbol", "name": "p" },
+                        "right": { "type": "symbol", "name": "salary" } },
+                      "right": { "type": "int", "value": 100 } } } ] } } ] } } ] } }
+        ]
+      },
+      "ui": {
+        "vars": [
+          { "name": "path", "value": { "type": "text", "value": "/" } },
+          { "name": "rich", "value": { "type": "call",
+            "fn": { "type": "symbol", "name": "highEarners" },
+            "params": [ { "type": "infixOp", "op": "objectProp",
+              "left": { "type": "symbol", "name": "db" },
+              "right": { "type": "symbol", "name": "people" } } ] } }
+        ],
+        "render": {
+          "type": "fn", "params": [],
+          "body": { "type": "block", "statements": [ { "type": "return", "value":
+            { "type": "tag", "name": "main", "attributes": [], "children": [
+              { "type": "foreach", "item": { "name": "p" },
+                "collection": { "type": "symbol", "name": "rich" },
+                "body": [
+                  { "type": "tag", "name": "div",
+                    "attributes": [ { "name": "class", "value": { "type": "text", "value": "earner" } } ],
+                    "children": [ { "type": "infixOp", "op": "objectProp",
+                      "left": { "type": "symbol", "name": "p" },
+                      "right": { "type": "symbol", "name": "name" } } ] }
+                ] }
+            ] } } ] }
+        }
+      }
+    }
+    """;
+
+    // Same types as SensitiveUiDb, but the render reads the sensitive `salary`
+    // directly in client-run code — the data-transfer boundary rejects it at render.
+    public static InstanceDescription SensitiveLeakUiDb() =>
+        InstanceDescriptionLoader.Load("""
+        {
+          "types": [
+            { "name": "Db", "baseType": "object",
+              "props": [ { "name": "people", "type": "Person", "cardinality": "set" } ] },
+            { "name": "Person", "baseType": "object",
+              "props": [
+                { "name": "name",   "type": "text" },
+                { "name": "salary", "type": "int", "sensitive": true }
+              ] }
+          ],
+          "ui": {
+            "render": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+              { "type": "return", "value":
+                { "type": "tag", "name": "main", "attributes": [], "children": [
+                  { "type": "foreach", "item": { "name": "p" },
+                    "collection": { "type": "infixOp", "op": "objectProp",
+                      "left": { "type": "symbol", "name": "db" },
+                      "right": { "type": "symbol", "name": "people" } },
+                    "body": [
+                      { "type": "tag", "name": "div", "attributes": [], "children": [
+                        { "type": "infixOp", "op": "objectProp",
+                          "left": { "type": "symbol", "name": "p" },
+                          "right": { "type": "symbol", "name": "salary" } }
+                      ] }
+                    ] }
+                ] } }
+            ] } }
+          }
+        }
+        """);
+
     // ── storage ───────────────────────────────────────────────────────────────
 
     public string DataFilePath { get; set; } = Path.GetTempFileName();

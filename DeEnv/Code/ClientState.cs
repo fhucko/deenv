@@ -1,20 +1,40 @@
 using System.Text.Json.Nodes;
+using DeEnv.Instance;
 
 namespace DeEnv.Code;
 
-// Serializes a rendered top scope (the db object graph + ui/session vars) into the
-// client's data-transfer shape (ServerDtState — see DeEnv/Instance/dt.ts) for the
-// first-paint window.initData. Functions are omitted: the client re-defines them
-// from window.initUi (the AST). This is a FULL transfer; the partial, ExecContext-
-// scoped version is Stage 4.
+// The data-transfer boundary: serializes the rendered top scope into the client's
+// first-paint state (ServerDtState — see DeEnv/Instance/dt.ts), shipping ONLY what
+// the client-run render actually read. Two rules enforce secure-by-default transfer:
+//
+//   • Access-scoped — an object ships only the props the render accessed, an array
+//     only the items it iterated. Data touched solely by server-side computations
+//     (var initializers / server-only functions, where access recording is
+//     suppressed) never appears, so row- and field-level scoping fall out for free.
+//   • Sensitive-denied — a field marked `sensitive` is never serialized. Because
+//     server-side accesses are suppressed, a *recorded* access of a sensitive field
+//     means client-run code read it directly — an invariant violation, surfaced as
+//     an error rather than a silent leak.
 //
 //   { objects: { "<id>": { isInDb, props: { <name>: DtValue } } },
 //     arrays:  { "<id>": { isInDb, items: [ { id, value: DtValue } ] } },
 //     scope:   { "<key>": { isReadOnly, value: DtValue } } }
 public static class ClientState
 {
-    public static JsonObject Serialize(ExecScope topScope)
+    public static JsonObject Serialize(ExecScope topScope, ExecContext context, InstanceDescription desc)
     {
+        // Recorded (client-run) accesses, indexed for lookup.
+        var accessedProps = new Dictionary<ExecObject, HashSet<string>>();
+        foreach (var (obj, name) in context.AccessedObjectProps)
+            if (name != null) (accessedProps.TryGetValue(obj, out var s) ? s : accessedProps[obj] = []).Add(name);
+
+        // Items are tracked by their own identity, not per-array: a foreach over a
+        // derived collection (where/orderBy) iterates the SAME item instances as the
+        // source set, so the source array ships exactly the items that were rendered.
+        var accessedItems = new HashSet<ExecArrayItem>();
+        foreach (var (_, item) in context.AccessedArrayItems)
+            if (item != null) accessedItems.Add(item);
+
         var objects = new JsonObject();
         var arrays = new JsonObject();
         var scope = new JsonObject();
@@ -38,9 +58,16 @@ public static class ClientState
             if (seenObjects.Add(o.Id))
             {
                 var props = new JsonObject();
-                // Register the entry before recursing so a reference cycle terminates.
                 objects[o.Id.ToString()] = new JsonObject { ["isInDb"] = o.IsInDb, ["props"] = props };
-                foreach (var (name, propValue) in o.Props) props[name] = DtValue(propValue);
+                if (accessedProps.TryGetValue(o, out var names))
+                    foreach (var name in names)
+                    {
+                        if (IsSensitive(o.TypeName, name))
+                            throw new CodeRuntimeException(
+                                $"Render reads sensitive field '{o.TypeName}.{name}' on the client. " +
+                                $"Move it behind a server-only computation that ships only its result.");
+                        if (o.Props.TryGetValue(name, out var pv)) props[name] = DtValue(pv);
+                    }
             }
             return new JsonObject { ["type"] = "object", ["id"] = o.Id };
         }
@@ -52,10 +79,14 @@ public static class ClientState
                 var items = new JsonArray();
                 arrays[a.Id.ToString()] = new JsonObject { ["isInDb"] = a.IsInDb, ["items"] = items };
                 foreach (var item in a.Items)
-                    items.Add(new JsonObject { ["id"] = item.Id, ["value"] = DtValue(item.Value) });
+                    if (accessedItems.Contains(item))
+                        items.Add(new JsonObject { ["id"] = item.Id, ["value"] = DtValue(item.Value) });
             }
             return new JsonObject { ["type"] = "array", ["id"] = a.Id };
         }
+
+        bool IsSensitive(string? typeName, string propName) =>
+            typeName != null && desc.FindType(typeName)?.Props?.FirstOrDefault(p => p.Name == propName)?.Sensitive == true;
 
         foreach (var (key, item) in topScope.Items)
         {

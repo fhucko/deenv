@@ -131,3 +131,53 @@ Feature: Code-owned UI rendering (server-side)
     Given a generic instance with no code
     When the page at "/" is rendered
     Then the rendered HTML contains 'id="node-form"'
+
+  @milestone-code @single-user
+  Scenario: A sensitive field and unauthorized rows are never sent to the client
+    # `salary` is sensitive; `highEarners` (server-only) filters by it and ships only
+    # its result. The client gets the high earner's name, but no salary value and no
+    # non-earner row — db.people is read only on the server.
+    Given the people instance seeded with salaries
+    When the page at "/" is rendered
+    Then the rendered HTML contains "Ada"
+    And the page does not include "999"
+    And the page does not include "Bob"
+
+  @milestone-code @single-user
+  Scenario: Reading a sensitive field in client render is rejected at render
+    # The render shows p.salary directly; the transfer boundary refuses to ship it and
+    # the renderer surfaces an error page instead of leaking it.
+    Given the leaky people instance seeded
+    When the page at "/" is rendered
+    Then the rendered HTML contains "sensitive"
+
+  @milestone-code @single-user
+  Scenario: Client-run code referencing a server-only function is rejected at load
+    Given the schema document:
+      """
+      {
+        "types": [
+          { "name": "Db", "baseType": "object",
+            "props": [ { "name": "people", "type": "Person", "cardinality": "set" } ] },
+          { "name": "Person", "baseType": "object",
+            "props": [ { "name": "name", "type": "text" } ] }
+        ],
+        "common": {
+          "functions": [
+            { "type": "fn", "name": "secret", "serverOnly": true, "params": [],
+              "body": { "type": "block", "statements": [
+                { "type": "return", "value": { "type": "int", "value": 1 } } ] } }
+          ]
+        },
+        "ui": {
+          "render": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+            { "type": "return", "value":
+              { "type": "tag", "name": "div", "attributes": [], "children": [
+                { "type": "call", "fn": { "type": "symbol", "name": "secret" }, "params": [] }
+              ] } }
+          ] } }
+        }
+      }
+      """
+    When the document is loaded
+    Then loading is rejected with an error mentioning "server-only"
