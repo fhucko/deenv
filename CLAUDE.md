@@ -27,9 +27,11 @@ where developers design data visually and use it as objects. Full mission in
    done (M4 designer as self-hosting; M5 the object model; M6 Code: reactive
    UI on twin interpreters; M7 the app document: one text file — types +
    initialData + code — with parser and printer; JSON is internal only — see
-   DECISIONS.md). The next milestone is chosen from ROADMAP.md's future list
-   when work resumes; later milestones are out of scope unless explicitly
-   asked. **Schema versioning stays postponed** (self-hosted on top of Code).
+   DECISIONS.md). The current milestone is **Milestone 8: UI customization**
+   — views (per-type / per-path render functions) over the generic UI, with
+   `fn render()` becoming optional (plan: ui-customization.md). **Schema
+   versioning stays postponed** (self-hosted on top of Code). Later
+   milestones are out of scope unless explicitly asked.
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
    custom language, the render-coupled storage engine, and the multi-device
@@ -96,9 +98,16 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
-Milestones 1–7 are done; the next milestone has not been picked yet (see
-ROADMAP.md's future list — candidates include real-time/multi-user, schema
-versioning, UI customization).
+Milestones 1–7 are done. The current milestone is **Milestone 8: UI
+customization** — views over the generic UI, chosen per request by a
+rendering-function decision (plan: ui-customization.md). A **type view**
+(`view Customer(customer)`) replaces the generic object page for that type
+(breadcrumbs stay); a **path view** (`view "/reports"(path)`) takes over a
+URL subtree; `fn render()` becomes optional sugar for the root path view;
+everything without a view stays the generic auto-form. View pages are full
+code pages — memo cache, two-way binding, WS mutations, warm-session refetch
+all unchanged. Designer editing of views, fragment-level islands, and the
+self-hosted generic UI are explicitly deferred.
 
 **Milestone 7 (the app document) just landed** — one text file describes a
 whole instance: `types` + optional `initialData` + optional `common`/`ui`

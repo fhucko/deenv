@@ -151,6 +151,21 @@ Done when: the todo app is authored as `instance.app` (one file: types +
 seed + UI), the whole suite stays green on the parsed text, and parse/print
 round-trips are stable. ✓ Plan: code-text-syntax.md.
 
+## Milestone 8 — UI customization (views)  ← CURRENT
+
+User-controlled rendering over the generic UI, chosen per request by a
+rendering-function decision. The `ui` section gains **views**: a type view
+(`view Customer(customer)`) replaces the generic object page for that type
+(breadcrumb chrome stays); a path view (`view "/reports"(path)`) takes over a
+URL subtree entirely. `fn render()` becomes optional sugar for the root path
+view — today's whole-app takeover is the degenerate case. A view page is a
+full code page (memo cache, two-way binding, WS mutations, refetch — all
+unchanged); everything without a view stays the generic auto-form.
+
+Done when: an app customizes one type's page and one URL subtree while its
+remaining pages stay generic, with the whole suite green. Plan:
+ui-customization.md.
+
 ---
 
 ## Future milestones (NOT scoped — do not build yet)
@@ -160,7 +175,9 @@ round-trips are stable. ✓ Plan: code-text-syntax.md.
   runtime; editor tooling. Enables schema versioning to be built inside the
   environment.
 
-- **UI customization.** User-controlled rendering, powered by code.
+- **Self-hosted generic UI.** The auto-form experience re-expressed in Code
+  (per-type default views derived from the schema; the C# form renderer and
+  the separate generic client retire). Views (M8) are the seam it plugs into.
 
 - **Schema versioning.** Git-style versioning of the schema, built inside
   the environment itself using the code milestone (versioning is
