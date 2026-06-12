@@ -73,6 +73,10 @@ public class InstanceContext
     // The rendered HTML from the code-owned UI (Stage 2 SSR), under test.
     public string? RenderedHtml { get; set; }
 
+    // The code-bearing fixture documents, for the printer round-trip tests.
+    public static IReadOnlyList<string> CodeFixtureApps =>
+        [TasksUiApp, InteractiveUiApp, SensitiveUiApp, RefetchUiApp];
+
     private const string TasksUiApp = """
     types
         Db
