@@ -26,9 +26,10 @@ where developers design data visually and use it as objects. Full mission in
 1. **Build the current milestone only.** Per ROADMAP.md, Milestones 1–6 are
    done (M4 delivered as self-hosting; M5 the object model: identity, extents,
    references, sets, GC; M6 Code: reactive UI as hand-written AST — see
-   DECISIONS.md). **Schema versioning was postponed** (to be self-hosted on
-   top of Code — see DECISIONS.md / ROADMAP.md). The next milestone is chosen
-   from ROADMAP.md's future list when work resumes; later milestones are out
+   DECISIONS.md). The current milestone is **Milestone 7: Code text syntax**
+   — a parser + printer for an app.txt-style text form that replaces AST JSON
+   as the authoring surface (plan: code-text-syntax.md). **Schema versioning
+   stays postponed** (self-hosted on top of Code). Later milestones are out
    of scope unless explicitly asked.
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
@@ -93,9 +94,16 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
-Milestones 1–6 are done; the next milestone has not been picked yet (see
-ROADMAP.md's future list — candidates include UI customization, schema
-versioning, real-time/multi-user).
+Milestones 1–6 are done. The current milestone is **Milestone 7: Code text
+syntax** — port the prototype's combinator parser (`app14/DeEnv/Parsing` +
+`CodeParse.cs`) to produce our Code AST from an app.txt-style text form
+(indentation blocks, JSX-like tags, expression precedence), carried in a
+sidecar file (`"codeFile"` in the schema document). Text replaces inline
+`ui`/`common` AST JSON as the authoring surface; the AST stays the in-memory
+and wire form (client untouched, no TS parser). The printer (AST → canonical
+text) lands as the final stage with round-trip tests. Staged plan:
+code-text-syntax.md. Done when the todo app is authored as `instance.code`
+and the whole suite stays green on the parsed AST.
 
 **Milestone 6 (Code) just landed** — user-authored behaviour and UI as
 hand-written JSON AST in the schema document (`ui`/`common` sections),

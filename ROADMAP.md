@@ -134,14 +134,29 @@ a shared conformance suite. Delivered in stages (plan: cozy-humming-metcalfe):
 Done when: the todo app — authored as data (types + ui AST + seed) — runs,
 persists, and reacts, with both interpreters conformant. ✓
 
+## Milestone 7 — Code text syntax (parser + printer)  ← CURRENT
+
+A C#/TSX-like text form for Code, replacing hand-written AST JSON as the
+authoring surface (the AST remains the in-memory and wire form — the client
+still receives AST; no TS parser). Indentation-based blocks, JSX-like tags,
+expression precedence — `app.txt` style, ported from the prototype's
+combinator parser. Code lives in a sidecar file referenced by the schema
+document (`"codeFile"`); the loader parses it into the same validated AST,
+and inline `ui`/`common` JSON is retired. The printer (AST → canonical text)
+ships too, with round-trip tests — the designer will need it to display code.
+
+Done when: the todo app's code is authored as `instance.code` text, the whole
+existing suite stays green on the parsed AST, and parse/print round-trips are
+stable. Plan: code-text-syntax.md.
+
 ---
 
 ## Future milestones (NOT scoped — do not build yet)
 
-- **Code, next layers.** Text syntax + parser for hand-editing code (today:
-  hand-written AST); a full type-checker (today: structural validation);
+- **Code, next layers.** A full type-checker (today: structural validation);
   derived-collection mutation semantics; dictionaries surfaced to the Code
-  runtime. Enables schema versioning to be built inside the environment.
+  runtime; editor tooling. Enables schema versioning to be built inside the
+  environment.
 
 - **UI customization.** User-controlled rendering, powered by code.
 
