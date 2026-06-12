@@ -11,24 +11,17 @@ public sealed class SchemaSteps(InstanceContext ctx)
 {
     // ── Given ─────────────────────────────────────────────────────────────────
 
-    [Given("the schema document:")]
-    public void GivenSchemaDocument(string json)
+    [Given("the app description:")]
+    public void GivenAppDescription(string appText)
     {
-        ctx.SchemaJson = json;
+        ctx.SchemaJson = appText;
     }
 
-    // The schema's sidecar code text (M7: code is always authored as text).
-    [Given("the code text:")]
-    public void GivenCodeText(string code)
-    {
-        ctx.CodeText = code;
-    }
-
-    [Given("a schema document file describing a single-bool Db")]
-    public void GivenSchemaFileBoolDb()
+    [Given("an app description file describing a single-bool Db")]
+    public void GivenAppFileBoolDb()
     {
         ctx.SchemaFilePath = Path.GetTempFileName();
-        File.WriteAllText(ctx.SchemaFilePath, """{ "types": [ { "name": "Db", "baseType": "bool" } ] }""");
+        File.WriteAllText(ctx.SchemaFilePath, "types\n    Db: bool\n");
     }
 
     // ── When ──────────────────────────────────────────────────────────────────
@@ -38,7 +31,7 @@ public sealed class SchemaSteps(InstanceContext ctx)
     {
         try
         {
-            ctx.LoadedDescription = InstanceDescriptionLoader.Load(ctx.SchemaJson!, ctx.CodeText);
+            ctx.LoadedDescription = InstanceDescriptionLoader.Load(ctx.SchemaJson!);
         }
         catch (Exception ex)
         {

@@ -1,3 +1,25 @@
+types
+    Db
+        users: set of User
+    User
+        name: text
+        todoLists: set of TodoList
+    TodoList
+        name: text
+        items: set of TodoItem
+    TodoItem
+        text: text
+        checked: bool
+
+initialData
+    Db 1
+        users: [2]
+    User 2
+        name: "User 1"
+        todoLists: [3]
+    TodoList 3
+        name: "List 1"
+        items: []
 ui
     var path = "/"
     var title = "Todo list"

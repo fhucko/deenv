@@ -193,14 +193,11 @@ public sealed class CodeExecutorTests
     public async Task Add_transient_object_mints_into_extent_and_links_set()
     {
         var desc = InstanceDescriptionLoader.Load("""
-        {
-          "types": [
-            { "name": "Db", "baseType": "object",
-              "props": [{ "name": "users", "type": "User", "cardinality": "set" }] },
-            { "name": "User", "baseType": "object",
-              "props": [{ "name": "name", "type": "text" }] }
-          ]
-        }
+        types
+            Db
+                users: set of User
+            User
+                name: text
         """);
         var dataPath = Path.GetTempFileName();
         var store = new JsonFileInstanceStore(dataPath, desc);

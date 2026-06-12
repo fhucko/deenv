@@ -44,12 +44,10 @@ public record InstanceCommon(IReadOnlyList<CodeFunction>? Functions = null);
 public record InstanceInitialData(
     IReadOnlyDictionary<string, IReadOnlyDictionary<string, JsonElement>>? Extents = null);
 
+// Parsed from ONE app text document (AppParse) — the only authoring surface. This
+// record (and its JSON form) is internal: the in-memory model and the wire.
 public record InstanceDescription(
     IReadOnlyList<TypeDefinition>? Types = null,
     InstanceUi? Ui = null,
     InstanceCommon? Common = null,
-    InstanceInitialData? InitialData = null,
-    // The sidecar Code text file (path relative to the schema document) whose parse
-    // yields Ui/Common. Text is the only authoring surface for code — the loader
-    // rejects inline ui/common JSON; the AST lives in memory and on the wire only.
-    string? CodeFile = null);
+    InstanceInitialData? InitialData = null);

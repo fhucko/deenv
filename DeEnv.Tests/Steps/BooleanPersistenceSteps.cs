@@ -10,7 +10,7 @@ namespace DeEnv.Tests.Steps;
 [Binding]
 public sealed class BooleanPersistenceSteps(InstanceContext ctx)
 {
-    private const string BoolJson = """{ "types": [{ "name": "Db", "baseType": "bool" }] }""";
+    private const string BoolJson = "types\n    Db: bool\n";
 
     [Given("a single-boolean instance with value unchecked")]
     public void GivenUnchecked()

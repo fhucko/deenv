@@ -22,6 +22,10 @@ public static class BaseTypes
 
     public static BaseType Parse(string name) => ByName[name];
 
+    // Reverse lookup, for printing a description back to app text.
+    public static string NameOf(BaseType baseType) =>
+        ByName.First(p => p.Value == baseType).Key;
+
     // A synthetic TypeDefinition standing in for a leaf base type referenced by name.
     public static TypeDefinition Leaf(string name) => new(name, Parse(name));
 }

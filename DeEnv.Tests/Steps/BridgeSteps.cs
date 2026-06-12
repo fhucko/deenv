@@ -14,7 +14,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
 {
     private const string Sentinel = "UNCHANGED-SENTINEL";
 
-    private readonly string _metaPath = Path.Combine(AppContext.BaseDirectory, "meta.schema.json");
+    private readonly string _metaPath = Path.Combine(AppContext.BaseDirectory, "meta.app");
 
     // Designer-data authoring state (per scenario).
     private InstanceDescription? _meta;
@@ -33,7 +33,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
     // ── Given: meta-schema document ─────────────────────────────────────────────
 
     [Given("the meta-schema document")]
-    public void GivenTheMetaSchemaDocument() { /* meta.schema.json ships to the test output */ }
+    public void GivenTheMetaSchemaDocument() { /* meta.app ships to the test output */ }
 
     [When("the meta-schema is loaded")]
     public void WhenMetaSchemaLoaded()

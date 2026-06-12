@@ -35,9 +35,8 @@
   <!-- The hand-written instance schema document. Loaded at startup (Program.cs) and
        copied next to the executable so it can be read from AppContext.BaseDirectory. -->
   <ItemGroup>
-    <None Include="instance.schema.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="instance.code" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="meta.schema.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="instance.app" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="meta.app" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Compiled TypeScript clients, embedded and served: instance.js (generic auto-form,

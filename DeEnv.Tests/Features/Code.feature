@@ -49,15 +49,12 @@ Feature: Code-owned UI rendering (server-side)
 
   @milestone-code @single-user
   Scenario: A binding to an undeclared symbol is rejected at load
-    Given the schema document:
+    Given the app description:
       """
-      {
-        "types": [ { "name": "Db", "baseType": "object",
-          "props": [ { "name": "note", "type": "text" } ] } ]
-      }
-      """
-    And the code text:
-      """
+      types
+          Db
+              note: text
+
       ui
           fn render()
               return <div>
@@ -68,19 +65,14 @@ Feature: Code-owned UI rendering (server-side)
 
   @milestone-code @single-user
   Scenario: A two-way binding to a read-only target is rejected at load
-    Given the schema document:
+    Given the app description:
       """
-      {
-        "types": [
-          { "name": "Db", "baseType": "object",
-            "props": [ { "name": "things", "type": "Thing", "cardinality": "set" } ] },
-          { "name": "Thing", "baseType": "object",
-            "props": [ { "name": "name", "type": "text" } ] }
-        ]
-      }
-      """
-    And the code text:
-      """
+      types
+          Db
+              things: set of Thing
+          Thing
+              name: text
+
       ui
           fn render()
               return <div>
@@ -91,23 +83,20 @@ Feature: Code-owned UI rendering (server-side)
     Then loading is rejected with an error mentioning "read-only"
 
   @milestone-code @single-user
-  Scenario: A syntax error in the code text is rejected at load with its position
-    Given the schema document:
+  Scenario: A syntax error in the code is rejected at load with its position
+    Given the app description:
       """
-      {
-        "types": [ { "name": "Db", "baseType": "object",
-          "props": [ { "name": "note", "type": "text" } ] } ]
-      }
-      """
-    And the code text:
-      """
+      types
+          Db
+              note: text
+
       ui
           fn render()
               return <div>
                   oops =
       """
     When the document is loaded
-    Then loading is rejected with an error mentioning "line 4"
+    Then loading is rejected with an error mentioning "line 8"
 
   @milestone-code @single-user
   Scenario: A runtime error during first paint renders an SSR error page
@@ -115,13 +104,10 @@ Feature: Code-owned UI rendering (server-side)
     # type error at runtime. The renderer catches it and serves an error page.
     Given the code instance:
       """
-      {
-        "types": [ { "name": "Db", "baseType": "object",
-          "props": [ { "name": "note", "type": "text" } ] } ]
-      }
-      """
-    And its code:
-      """
+      types
+          Db
+              note: text
+
       ui
           fn render()
               return <div>

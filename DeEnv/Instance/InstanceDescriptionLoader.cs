@@ -5,70 +5,37 @@ namespace DeEnv.Instance;
 
 public static class InstanceDescriptionLoader
 {
-    // `codeText` is the content of the schema's sidecar code file (see CodeFile) —
-    // the only way code enters a description. Inline ui/common JSON is rejected:
-    // text is the authoring surface; the AST exists in memory and on the wire only.
-    public static InstanceDescription Load(string json, string? codeText = null)
+    // An instance is described by ONE app text document (types + initialData +
+    // common + ui — see AppParse). JSON is internal only: the in-memory model,
+    // the wire, and storage. A syntax error fails the load with its position; the
+    // semantic validations below run on the parsed description.
+    public static InstanceDescription Load(string appText)
     {
-        InstanceDescription? desc;
+        InstanceDescription desc;
         try
         {
-            desc = JsonSerializer.Deserialize<InstanceDescription>(json, SchemaJson.Options);
+            desc = AppParse.Parse(appText);
         }
-        catch (JsonException ex)
+        catch (DeEnv.Code.Parsing.CodeParseException ex)
         {
-            throw new SchemaValidationException($"Schema document is not valid JSON: {ex.Message}");
+            throw new SchemaValidationException(ex.Message);
         }
 
-        if (desc == null)
-            throw new SchemaValidationException("Schema document is not valid JSON: deserialized to null.");
-
-        if (desc.Ui != null || desc.Common != null)
-            throw new SchemaValidationException(
-                "Inline 'ui'/'common' JSON is not supported: author code as text in the schema's codeFile.");
-        if (desc.CodeFile != null && codeText == null)
-            throw new SchemaValidationException(
-                $"The schema references code file '{desc.CodeFile}': load it via LoadFile, or pass the code text.");
-
-        if (codeText != null)
-        {
-            try
-            {
-                var (common, ui) = CodeParse.ParseDocument(codeText);
-                desc = desc with { Ui = ui, Common = common };
-            }
-            catch (DeEnv.Code.Parsing.CodeParseException ex)
-            {
-                throw new SchemaValidationException($"Code file: {ex.Message}");
-            }
-        }
-
-        Validate(desc);
-        ValidateInitialData(desc);
-        CodeValidator.Validate(desc);
+        ValidateDescription(desc);
         CodeIds.Assign(desc); // number every CodeFunction for stable memo-cache keys
         return desc;
     }
 
-    public static InstanceDescription LoadFile(string path)
+    public static InstanceDescription LoadFile(string path) =>
+        Load(File.ReadAllText(path));
+
+    // The semantic validation pipeline, also used by the designer bridge on a
+    // machine-built description before it is printed and published.
+    public static void ValidateDescription(InstanceDescription desc)
     {
-        var json = File.ReadAllText(path);
-        // Peek the codeFile reference and read the sidecar relative to the schema.
-        string? codeText = null;
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("codeFile", out var cf)
-                && cf.GetString() is { } codeFile)
-                codeText = File.ReadAllText(
-                    Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, codeFile));
-        }
-        catch (JsonException)
-        {
-            // Malformed JSON: fall through — Load reports it with the standard error.
-        }
-        return Load(json, codeText);
+        Validate(desc);
+        ValidateInitialData(desc);
+        CodeValidator.Validate(desc);
     }
 
     private static void Validate(InstanceDescription desc)

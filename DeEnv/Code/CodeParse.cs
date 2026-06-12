@@ -300,7 +300,9 @@ public static class CodeParse
                 (_, item) => item)
             .SkipEmptyLinesBefore()));
 
-    private static Parser<ICodeStatement[]> Section(string keyword) =>
+    // Public: the app document (AppParse) composes these sections after its own
+    // `types`/`initialData` sections.
+    public static Parser<ICodeStatement[]> Section(string keyword) =>
         Seq(Text(keyword), NlOrEnd, SectionItems, (_, _, items) => items)
             .SkipEmptyLinesBefore();
 
@@ -318,7 +320,7 @@ public static class CodeParse
         return (MapCommon(common), MapUi(ui));
     }
 
-    private static InstanceCommon? MapCommon(ICodeStatement[]? items)
+    public static InstanceCommon? MapCommon(ICodeStatement[]? items)
     {
         if (items == null) return null;
         var functions = new List<CodeFunction>();
@@ -328,7 +330,7 @@ public static class CodeParse
         return new InstanceCommon(functions);
     }
 
-    private static InstanceUi MapUi(ICodeStatement[] items)
+    public static InstanceUi MapUi(ICodeStatement[] items)
     {
         var vars = new List<UiVar>();
         var functions = new List<CodeFunction>();

@@ -29,17 +29,11 @@ public sealed class CodeSteps(InstanceContext ctx)
         SeedTask(store, "Gamma", done: false, priority: 3);
     }
 
-    // A two-part Given (M7: code is text): the schema document first, the code next.
+    // One app text document describes the whole instance (M7).
     [Given("the code instance:")]
-    public void GivenCodeInstance(string json)
+    public void GivenCodeInstance(string appText)
     {
-        ctx.SchemaJson = json;
-    }
-
-    [Given("its code:")]
-    public void GivenItsCode(string code)
-    {
-        ctx.Description = InstanceDescriptionLoader.Load(ctx.SchemaJson!, code);
+        ctx.Description = InstanceDescriptionLoader.Load(appText);
         ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
     }
 

@@ -15,38 +15,26 @@ public class InstanceContext
 
     // ── schema document loading (milestone 3) ──────────────────────────────────
 
-    // Raw document text under test, its sidecar code text (M7), the result of
-    // loading them, and any error raised.
+    // Raw app document text under test, the result of loading it, and any error raised.
     public string? SchemaJson { get; set; }
-    public string? CodeText { get; set; }
     public InstanceDescription? LoadedDescription { get; set; }
     public Exception? LoadError { get; set; }
     public string? SchemaFilePath { get; set; }
 
     public static InstanceDescription BoolDb() =>
-        InstanceDescriptionLoader.Load("""{ "types": [{ "name": "Db", "baseType": "bool" }] }""");
+        InstanceDescriptionLoader.Load("""
+        types
+            Db: bool
+        """);
 
     public static InstanceDescription ShopDb() =>
         InstanceDescriptionLoader.Load("""
-        {
-          "types": [
-            {
-              "name": "Db",
-              "baseType": "object",
-              "props": [
-                { "name": "customers", "type": "Customer", "cardinality": "dictionary", "keyType": "text" }
-              ]
-            },
-            {
-              "name": "Customer",
-              "baseType": "object",
-              "props": [
-                { "name": "name",   "type": "text" },
-                { "name": "active", "type": "bool" }
-              ]
-            }
-          ]
-        }
+        types
+            Db
+                customers: dict of Customer by text
+            Customer
+                name: text
+                active: bool
         """);
 
     // Milestone 5 object-graph instance: one extent type (Person), a set of
@@ -55,66 +43,45 @@ public class InstanceContext
     // this milestone introduces.
     public static InstanceDescription ObjectGraphDb() =>
         InstanceDescriptionLoader.Load("""
-        {
-          "types": [
-            {
-              "name": "Db",
-              "baseType": "object",
-              "props": [
-                { "name": "people", "type": "Person", "cardinality": "set" },
-                { "name": "lead",   "type": "Person" }
-              ]
-            },
-            {
-              "name": "Person",
-              "baseType": "object",
-              "props": [
-                { "name": "name", "type": "text" }
-              ]
-            }
-          ]
-        }
+        types
+            Db
+                people: set of Person
+                lead: Person
+            Person
+                name: text
         """);
 
     // Milestone 2 CRM-with-orders instance: objects, nested dictionaries, every
-    // base type, and both auto (int) + manual (text) key generation. Now a test
-    // fixture (crm.schema.json) — the committed default app became the todo app.
+    // base type. Now a test fixture (crm.app) — the committed default app is todo.
     public static InstanceDescription CrmDb() =>
         InstanceDescriptionLoader.LoadFile(
-            Path.Combine(AppContext.BaseDirectory, "crm.schema.json"));
+            Path.Combine(AppContext.BaseDirectory, "crm.app"));
 
-    // The committed default app (DeEnv/instance.schema.json): the todo app — the
-    // Code milestone's end-to-end proof. Types + ui AST + initialData seed; tests
-    // drive the real single source of truth.
+    // The committed default app (DeEnv/instance.app): the todo app — types,
+    // initialData seed, and ui code in one text document; tests drive the real
+    // single source of truth.
     public static InstanceDescription TodoDb() =>
         InstanceDescriptionLoader.LoadFile(
-            Path.Combine(AppContext.BaseDirectory, "instance.schema.json"));
+            Path.Combine(AppContext.BaseDirectory, "instance.app"));
 
     // Code milestone: a hand-written `ui` component over a Task set. The render fn
     // exercises element/text, a bound text field, a bound checkbox, foreach, if/else,
     // and where/orderBy collection functions — the full Stage-2 SSR surface.
     public static InstanceDescription TasksUiDb() =>
-        InstanceDescriptionLoader.Load(TasksUiJson, TasksUiCode);
+        InstanceDescriptionLoader.Load(TasksUiApp);
 
     // The rendered HTML from the code-owned UI (Stage 2 SSR), under test.
     public string? RenderedHtml { get; set; }
 
-    private const string TasksUiJson = """
-    {
-      "types": [
-        { "name": "Db", "baseType": "object",
-          "props": [ { "name": "tasks", "type": "Task", "cardinality": "set" } ] },
-        { "name": "Task", "baseType": "object",
-          "props": [
-            { "name": "title",    "type": "text" },
-            { "name": "done",     "type": "bool" },
-            { "name": "priority", "type": "int"  }
-          ] }
-      ]
-    }
-    """;
+    private const string TasksUiApp = """
+    types
+        Db
+            tasks: set of Task
+        Task
+            title: text
+            done: bool
+            priority: int
 
-    private const string TasksUiCode = """
     ui
         var path = "/"
         var title = "Tasks"
@@ -144,20 +111,15 @@ public class InstanceContext
     // text field bound two-way (so typing reorders the list — exercising identity-keyed
     // reconciliation) plus a transient new-item form (a name var + add button).
     public static InstanceDescription InteractiveUiDb() =>
-        InstanceDescriptionLoader.Load(InteractiveUiJson, InteractiveUiCode);
+        InstanceDescriptionLoader.Load(InteractiveUiApp);
 
-    private const string InteractiveUiJson = """
-    {
-      "types": [
-        { "name": "Db", "baseType": "object",
-          "props": [ { "name": "items", "type": "Item", "cardinality": "set" } ] },
-        { "name": "Item", "baseType": "object",
-          "props": [ { "name": "name", "type": "text" } ] }
-      ]
-    }
-    """;
+    private const string InteractiveUiApp = """
+    types
+        Db
+            items: set of Item
+        Item
+            name: text
 
-    private const string InteractiveUiCode = """
     ui
         var path = "/"
         var newName = ""
@@ -182,23 +144,16 @@ public class InstanceContext
     // salary, and never the non-earner rows (db.people is read only inside the computation).
     // No `sensitive` flag: "private" = "an input to a computation, never a rendered result".
     public static InstanceDescription SensitiveUiDb() =>
-        InstanceDescriptionLoader.Load(SensitiveUiJson, SensitiveUiCode);
+        InstanceDescriptionLoader.Load(SensitiveUiApp);
 
-    private const string SensitiveUiJson = """
-    {
-      "types": [
-        { "name": "Db", "baseType": "object",
-          "props": [ { "name": "people", "type": "Person", "cardinality": "set" } ] },
-        { "name": "Person", "baseType": "object",
-          "props": [
-            { "name": "name",   "type": "text" },
-            { "name": "salary", "type": "int" }
-          ] }
-      ]
-    }
-    """;
+    private const string SensitiveUiApp = """
+    types
+        Db
+            people: set of Person
+        Person
+            name: text
+            salary: int
 
-    private const string SensitiveUiCode = """
     common
         fn highEarners(people)
             return people.where((p) => p.salary > 100)
@@ -221,23 +176,16 @@ public class InstanceContext
     // (the existing members' salaries are private), so it refetches: the server recomputes
     // over fresh storage and returns the authoritative earners list.
     public static InstanceDescription RefetchUiDb() =>
-        InstanceDescriptionLoader.Load(RefetchUiJson, RefetchUiCode);
+        InstanceDescriptionLoader.Load(RefetchUiApp);
 
-    private const string RefetchUiJson = """
-    {
-      "types": [
-        { "name": "Db", "baseType": "object",
-          "props": [ { "name": "people", "type": "Person", "cardinality": "set" } ] },
-        { "name": "Person", "baseType": "object",
-          "props": [
-            { "name": "name",   "type": "text" },
-            { "name": "salary", "type": "int" }
-          ] }
-      ]
-    }
-    """;
+    private const string RefetchUiApp = """
+    types
+        Db
+            people: set of Person
+        Person
+            name: text
+            salary: int
 
-    private const string RefetchUiCode = """
     ui
         var path = "/"
 

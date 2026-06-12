@@ -13,14 +13,14 @@ using GenHTTP.Modules.Websockets;
 // Properties/launchSettings.json). The instance runtime is untouched: modes only
 // pick which schema + data files it runs on.
 //
-//   instance  → run instance.schema.json + instance-data.json  (the built app)
-//   designer  → run meta.schema.json     + designer-data.json  (author schemas as data)
-//   export    → project designer data into instance.schema.json, then exit (the bridge)
+//   instance  → run instance.app + instance-data.json  (the built app)
+//   designer  → run meta.app     + designer-data.json  (author schemas as data)
+//   export    → project designer data into instance.app, then exit (the bridge)
 
 var baseDir = AppContext.BaseDirectory;
-var instanceSchema = Path.Combine(baseDir, "instance.schema.json");
+var instanceSchema = Path.Combine(baseDir, "instance.app");
 var instanceData   = Path.Combine(baseDir, "instance-data.json");
-var metaSchema     = Path.Combine(baseDir, "meta.schema.json");
+var metaSchema     = Path.Combine(baseDir, "meta.app");
 var designerData   = Path.Combine(baseDir, "designer-data.json");
 
 var mode = ModeArg(args);
