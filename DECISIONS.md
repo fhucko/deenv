@@ -434,12 +434,15 @@ the milestone lands. Key decisions made while landing it:
   expose it). Identity-creating factories (result = transient object minted
   inside) are never cached; event handlers bypass the cache (side effects).
 - **First paint never calls the server**; later, a stale or missing value
-  triggers a `refetch` — the server re-renders over the client's **warm
-  session** (minted at SSR under a `clientId`, shipped in the page, claimed
-  by the WS `hello` within a 10s window, else dropped and the refetch falls
-  back to a fresh load). Mutations mirror into the warm graph alongside the
-  durable store write. This per-client "server remembers what the client
-  sees" seam is the foundation the real-time milestone builds push on.
+  triggers a `refetch` — the server re-renders, **always over a fresh load
+  from the store** (the single source of truth), so the result reflects every
+  committed change. A per-client `clientId` (minted at SSR, shipped in the
+  page, claimed by the WS `hello` within a 10s window) is the seam the
+  real-time milestone will hang push on, but it carries no data — there is no
+  per-client warm graph to keep in sync or to go stale against another
+  session's change. (Earlier the session mirrored each mutation into a warm
+  graph and refetch rendered over it; that cache could diverge from the store
+  on a cross-session change, so it was removed — see the cleanup note below.)
 - **Optimistic mutations are provisional.** Each is journaled (field-level,
   with captured before-values) and sent with a correlation id; an error reply
   reverse-replays the journal past the failed entry (rollback), an ok commits
@@ -540,6 +543,21 @@ takes over a subtree. Decisions:
   UI are deferred.** The last is the next milestone — a *reflective library*
   (`objectForm(x)`, `setTable(s)` over schema metadata) plugged in at lowest
   dispatch precedence; views are the seam it will use.
+
+### Refetch reads the store, not a per-client warm graph (cleanup)
+
+The Code milestone kept a per-client warm ExecObject graph (the session) that
+each mutation mirrored into, and `refetch` re-rendered over it. That graph is a
+second source of truth that only the owning session updates, so any change from
+**another session** (each tab/WS connection is its own session = its own user)
+left it stale — and a refetch trusting it could silently drop committed changes.
+Since the store already holds every change from every session, refetch now
+re-renders over a **fresh store load**; the per-mutation graph mirroring is
+deleted and the session shrinks to the clientId/claim handle. Behavior is
+unchanged for a single session (its warm graph held exactly its own persisted
+mutations); a refetch now also reflects other sessions' committed changes when
+it runs. Making a page refetch *automatically* on an external change (vs. on its
+own next interaction) — live push — stays the real-time/multi-user milestone.
 
 ## Tool stack and project structure
 

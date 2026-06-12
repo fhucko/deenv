@@ -139,7 +139,8 @@ hydrates and takes over (identity-keyed reconciliation, two-way binding).
 Transfer/reactivity is a **memo cache**: computation results ship with
 dependency refs, never input values — privacy is structural, and the first
 paint never calls the server. Mutations persist over the WS against a
-per-client **warm session** (clientId, hello, 10s claim window) with a
+per-client session (clientId, hello, 10s claim window — a thin handle; refetch
+re-renders from a fresh store load, no warm graph) with a
 field-level **change journal** (rollback on server reject) and
 negative→real id remapping; hidden-dependency recomputes go through
 `refetch`. The schema document also carries a normalized **initialData**

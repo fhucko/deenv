@@ -1,25 +1,16 @@
 using System.Collections.Concurrent;
-using DeEnv.Code;
 
 namespace DeEnv.Http;
 
-// A live per-client view of a code-owned UI: the warm db object graph the client is
-// looking at, minted at SSR and addressed by an opaque clientId shipped in the page.
-// The WS reuses it so a recompute (refetch) needs no reload, keeping it in sync with
-// each client mutation — the "server remembers what the client sees" seam that a later
-// milestone builds cross-client change propagation on. Mutations also persist through
-// the store (the durable truth); the warm graph mirrors them for in-memory recompute.
+// A per-client handle for a code-owned UI: an opaque clientId minted at SSR and shipped
+// in the page, claimed by the client's WS. It carries no data of its own — a refetch
+// always re-renders over a fresh load from the store (the single source of truth), so
+// there is no per-client warm graph to keep in sync (and none to go stale against a
+// change made by another session). This is the seam the real-time milestone will hang
+// per-client subscriptions on; for now it only tracks liveness.
 public sealed class ClientSession
 {
     public required string Id { get; init; }
-
-    // The warm db root (the same ExecObject graph the SSR render produced).
-    public required ExecObject Db { get; init; }
-
-    // By-id handles into the warm graph, for applying an identity-addressed mutation
-    // without re-walking: object id → object, set id → set.
-    public Dictionary<int, ExecObject> Objects { get; } = [];
-    public Dictionary<int, ExecArray> Sets { get; } = [];
 
     // A session is claimed by the client's WS (the `hello` on socket open). Until then
     // it only survives the claim window; an unclaimed session is a render whose client
@@ -57,10 +48,9 @@ public sealed class ClientSessionStore
         _idleTtl = idleTtl ?? DefaultIdleTtl;
     }
 
-    public ClientSession Create(ExecObject db)
+    public ClientSession Create()
     {
-        var session = new ClientSession { Id = Guid.NewGuid().ToString("N"), Db = db };
-        Index(session);
+        var session = new ClientSession { Id = Guid.NewGuid().ToString("N") };
         _sessions[session.Id] = session;
         _order.Enqueue(session.Id);
         SweepExpired();
@@ -104,32 +94,5 @@ public sealed class ClientSessionStore
             _order.TryDequeue(out _);
             _sessions.TryRemove(id, out _);
         }
-    }
-
-    // Walk the warm graph once, indexing every persisted object/set by its intrinsic id.
-    private static void Index(ClientSession session)
-    {
-        var seen = new HashSet<int>();
-
-        void Walk(IExecValue value)
-        {
-            switch (value)
-            {
-                case ExecObject o:
-                    if (o.Id > 0)
-                    {
-                        if (!seen.Add(o.Id)) return; // a reference cycle — already indexed
-                        session.Objects[o.Id] = o;
-                    }
-                    foreach (var p in o.Props.Values) Walk(p);
-                    break;
-                case ExecArray a:
-                    if (a.Id > 0) session.Sets[a.Id] = a;
-                    foreach (var item in a.Items) Walk(item.Value);
-                    break;
-            }
-        }
-
-        Walk(session.Db);
     }
 }

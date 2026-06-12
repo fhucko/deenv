@@ -342,89 +342,76 @@ public sealed class WsHandler
 
         _store.WriteField(objectId, prop, LeafForType(valEl, BaseTypes.Parse(propDef.Type)));
 
-        // Mirror into the warm graph so a later recompute sees the change.
-        if (Session(root) is { } s && s.Objects.TryGetValue(objectId, out var obj))
-            obj.Props[prop] = ExecValueFromWire(valEl);
-
         var response = new JsonObject { ["op"] = "objectPropChange", ["ok"] = true };
         return response.ToJsonString(_jsonOpts);
     }
 
-    // The WS's first message on open: claims the warm session minted at SSR, keeping it
-    // past the claim window. If the hello arrives too late the session is already gone —
-    // `sessionAlive: false` — and later refetches fall back to a full re-render.
+    // The WS's first message on open: claims the session minted at SSR (keeping it past
+    // the claim window). The session carries no data — a refetch re-renders from a fresh
+    // store load — so the report is informational; `sessionAlive: false` just means the
+    // hello arrived past the window.
     private string HandleHello(JsonElement root)
     {
         var alive = Session(root) != null;
         return new JsonObject { ["op"] = "hello", ["sessionAlive"] = alive }.ToJsonString(_jsonOpts);
     }
 
-    // Re-render the code UI over fresh storage with the client's session vars and return
-    // authoritative client state. The client calls this after a mutation leaves a cache
-    // entry it cannot recompute locally (a hidden dependency).
+    // Re-render the code UI and return authoritative client state. Called when a mutation
+    // leaves a cache entry the client cannot recompute locally (a hidden dependency). The
+    // render runs over a FRESH load from the store — the single source of truth — so it
+    // reflects every committed change, not a per-client mirror that could have diverged.
     private string HandleRefetch(string pathStr, JsonElement root)
     {
-        // Object-valued vars (the client's selection) resolve against the warm graph,
-        // so the re-render computes selection-dependent data the first paint never
-        // shipped. An unresolvable ref (expired session) falls back to the initializer.
-        var session = Session(root);
+        Session(root); // slide liveness; the session holds no data
+
+        // Load the graph once from the store; object-valued vars (the client's selection)
+        // resolve to the same instances the render uses, so selection-dependent data the
+        // first paint never shipped gets computed.
+        var db = Code.DbBridge.LoadRoot(_store, _desc, new Code.ExecContext());
+        var byId = IndexObjects(db);
+
         var sessionVars = new Dictionary<string, Code.IExecValue>();
         if (root.TryGetProperty("vars", out var vars) && vars.ValueKind == JsonValueKind.Object)
             foreach (var v in vars.EnumerateObject())
-                if (SessionVarFromWire(v.Value, session) is { } value)
+                if (SessionVarFromWire(v.Value, byId) is { } value)
                     sessionVars[v.Name] = value;
 
-        // Recompute over the session's warm graph (already reflecting this client's
-        // mutations); falls back to a fresh load if there is no session. Transients
-        // mint below the client's id floor (no collisions with its local drafts).
+        // Transients mint below the client's id floor (no collisions with its local drafts).
         var lastId = root.TryGetProperty("lastId", out var le) && le.ValueKind == JsonValueKind.Number
             ? le.GetInt32() : 0;
-        var state = new SsrRenderer(_store, _desc).RenderState(pathStr, sessionVars, session?.Db, lastId);
+        var state = new SsrRenderer(_store, _desc).RenderState(pathStr, sessionVars, db, lastId);
         return new JsonObject { ["op"] = "refetch", ["state"] = state }.ToJsonString(_jsonOpts);
     }
 
-    private static Code.IExecValue? SessionVarFromWire(JsonElement el, ClientSession? session)
+    // Index every persisted object in a loaded graph by its intrinsic id (for resolving
+    // an object-valued session var to the instance the render will use).
+    private static Dictionary<int, Code.ExecObject> IndexObjects(Code.ExecObject root)
     {
-        if ((el.TryGetProperty("type", out var t) ? t.GetString() : null) == "object")
-            return session != null
-                   && el.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.Number
-                   && session.Objects.TryGetValue(idEl.GetInt32(), out var obj)
-                ? obj : null;
-        return ExecValueFromWire(el);
-    }
-
-    // A new set member's warm runtime object, complete per its type: scalars as the
-    // store persisted them, set props as empty warm arrays (registered in the session
-    // by their real id), single object refs unset — so a later warm re-render can read
-    // any of its props without a reload.
-    private Code.ExecObject WarmObject(ObjectValue fields, TypeDefinition type, int id, ClientSession session)
-    {
-        var props = new Dictionary<string, Code.IExecValue>();
-        foreach (var prop in type.Props ?? [])
+        var byId = new Dictionary<int, Code.ExecObject>();
+        void Walk(Code.IExecValue value)
         {
-            switch (prop.Cardinality)
+            switch (value)
             {
-                case Cardinality.Set when fields.Fields.GetValueOrDefault(prop.Name) is SetValue sv:
-                    var arr = new Code.ExecArray
-                    {
-                        Id = sv.Id,
-                        Kind = Code.ArrayKind.Set,
-                        Items = [],
-                        ElementTypeName = prop.Type,
-                    };
-                    props[prop.Name] = arr;
-                    session.Sets[sv.Id] = arr;
+                case Code.ExecObject o:
+                    if (o.Id > 0 && byId.TryAdd(o.Id, o))
+                        foreach (var p in o.Props.Values) Walk(p);
                     break;
-                case Cardinality.Dictionary:
-                    break; // not surfaced to the Code runtime yet
-                default:
-                    props[prop.Name] = _desc.IsObjectType(prop.Type)
-                        ? new Code.ExecNull()
-                        : Code.DbBridge.ScalarToExec(fields.Fields.GetValueOrDefault(prop.Name));
+                case Code.ExecArray a:
+                    foreach (var item in a.Items) Walk(item.Value);
                     break;
             }
         }
-        return new Code.ExecObject { Props = props, Id = id, TypeName = type.Name };
+        Walk(root);
+        return byId;
+    }
+
+    private static Code.IExecValue? SessionVarFromWire(JsonElement el, Dictionary<int, Code.ExecObject> byId)
+    {
+        if ((el.TryGetProperty("type", out var t) ? t.GetString() : null) == "object")
+            return el.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.Number
+                   && byId.TryGetValue(idEl.GetInt32(), out var obj)
+                ? obj : null;
+        return ExecValueFromWire(el);
     }
 
     // A scalar session var as the client interpreter holds it: { "type", "value" }.
@@ -473,15 +460,6 @@ public sealed class WsHandler
                 && minted?.Fields.Fields.GetValueOrDefault(prop.Name) is SetValue sv)
                 collections[prop.Name] = new JsonObject { ["id"] = sv.Id, ["elementTypeName"] = prop.Type };
 
-        // Mirror into the warm graph: a complete new member object (scalars as
-        // persisted, empty warm sets registered by id), linked into the warm set.
-        if (Session(root) is { } s && s.Sets.TryGetValue(setId, out var set) && minted != null)
-        {
-            var obj = WarmObject(minted.Value.Fields, typeDef, id, s);
-            set.Items.Add(new Code.ExecItem { Key = id, Value = obj });
-            s.Objects[id] = obj;
-        }
-
         // `newId`, not `id` — the reply's `id` slot is the request correlation id.
         var response = new JsonObject { ["op"] = "arrayAdd", ["newId"] = id, ["collections"] = collections };
         if (root.TryGetProperty("tempId", out var te) && te.ValueKind == JsonValueKind.Number)
@@ -501,10 +479,6 @@ public sealed class WsHandler
         if (_store.SetElementType(setId) is null)
             return Error($"No set with id {setId}.");
         _store.RemoveFromSet(setId, objectId);
-
-        // Mirror into the warm graph: drop the member from the warm set.
-        if (Session(root) is { } s && s.Sets.TryGetValue(setId, out var set))
-            set.Items.RemoveAll(i => i.Value is Code.ExecObject o && o.Id == objectId);
 
         var response = new JsonObject { ["op"] = "arrayRemove", ["ok"] = true };
         return response.ToJsonString(_jsonOpts);

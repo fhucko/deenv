@@ -110,13 +110,10 @@ public sealed class SsrRenderer
             var body = new StringBuilder();
             SerializeChild(result, body);
 
-            // Mint a session over this render's warm db graph and ship its id, so the WS
-            // can recompute (and, later, push) over the very graph the client is viewing
-            // without a rebuild. See ClientSession.
-            var clientId = _sessions != null && scope.Items.TryGetValue("db", out var dbItem)
-                           && dbItem.Value is ExecObject warmDb
-                ? _sessions.Create(warmDb).Id
-                : "";
+            // Mint a session and ship its clientId, so the WS can claim it (hello) and a
+            // later milestone can hang per-client push on it. The id is all the client
+            // needs; a refetch re-renders over a fresh store load. See ClientSession.
+            var clientId = _sessions?.Create().Id ?? "";
 
             // First-paint state: only what the client-run render accessed (access-scoped,
             // sensitive fields denied) + the client-facing AST. Server-only functions and
