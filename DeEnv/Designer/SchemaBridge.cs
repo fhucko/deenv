@@ -82,6 +82,9 @@ public static class SchemaBridge
         File.WriteAllText(targetAppPath, AppPrint.Print(desc));
         // Reset the instance's data through the storage seam: reinitialize to the
         // new schema's initial document immediately (no stale data until next start).
+        // The old file goes first — an export deliberately replaces the instance's
+        // data, and opening a store over it would (rightly) trip the startup guard.
+        File.Delete(targetDataPath);
         new JsonFileInstanceStore(targetDataPath, desc).Reset();
     }
 

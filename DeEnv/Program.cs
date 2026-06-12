@@ -23,38 +23,51 @@ using GenHTTP.Modules.Websockets;
 
 var baseDir = AppContext.BaseDirectory;
 var appFile = AppArg(args);
-var instanceSchema = Path.IsPathRooted(appFile) ? appFile : Path.Combine(baseDir, appFile);
-var instanceData   = Path.Combine(baseDir,
-    Path.GetFileNameWithoutExtension(instanceSchema) + "-data.json");
+var instanceSchema = AppPaths.SchemaPath(appFile, baseDir);
+var instanceData   = AppPaths.DataPath(appFile, baseDir);
 var metaSchema     = Path.Combine(baseDir, "meta.app");
 var designerData   = Path.Combine(baseDir, "designer-data.json");
 
 var mode = ModeArg(args);
 
-if (mode == "export")
+IInstanceStore store;
+InstanceDescription description;
+try
 {
-    SchemaBridge.Export(metaSchema, designerData, instanceSchema, instanceData);
-    Console.WriteLine($"Exported designer schema → {instanceSchema} (instance data reset).");
+    if (mode == "export")
+    {
+        SchemaBridge.Export(metaSchema, designerData, instanceSchema, instanceData);
+        Console.WriteLine($"Exported designer schema → {instanceSchema} (instance data reset).");
+        return;
+    }
+
+    var (schemaPath, dataPath) = mode == "designer"
+        ? (metaSchema, designerData)
+        : (instanceSchema, instanceData);
+
+    // TEMPORARY (testing scaffolding — remove later): first run of Designer mode opens
+    // on the current instance schema instead of a blank slate (no-op once the designer
+    // has its own types).
+    if (mode == "designer")
+        SchemaBridge.SeedDesignerData(metaSchema, designerData, instanceSchema);
+
+    // ── Host the instance runtime on the selected schema + data ────────────────
+
+    description = InstanceDescriptionLoader.LoadFile(schemaPath);
+    store = new JsonFileInstanceStore(dataPath, description);
+    Console.WriteLine($"Running in '{mode}' mode on {schemaPath}.");
+}
+catch (StoredDataException ex)
+{
+    // The startup guard tripped: a data file belongs to a different/older app.
+    // Refuse to serve (mutations would silently never persist) — the message
+    // names the file and the remedy.
+    Console.Error.WriteLine(ex.Message);
+    Environment.ExitCode = 1;
     return;
 }
 
-var (schemaPath, dataPath) = mode == "designer"
-    ? (metaSchema, designerData)
-    : (instanceSchema, instanceData);
-
-// TEMPORARY (testing scaffolding — remove later): first run of Designer mode opens
-// on the current instance schema instead of a blank slate (no-op once the designer
-// has its own types).
-if (mode == "designer")
-    SchemaBridge.SeedDesignerData(metaSchema, designerData, instanceSchema);
-
-// ── Host the instance runtime on the selected schema + data ────────────────────
-
-var description = InstanceDescriptionLoader.LoadFile(schemaPath);
-IInstanceStore store = new JsonFileInstanceStore(dataPath, description);
 var app = InstanceApp.Build(store, description);
-
-Console.WriteLine($"Running in '{mode}' mode on {schemaPath}.");
 
 await Host.Create()
           .Handler(app)

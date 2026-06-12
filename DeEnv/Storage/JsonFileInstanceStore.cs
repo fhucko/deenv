@@ -38,6 +38,27 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
         if (!File.Exists(filePath) || new FileInfo(filePath).Length == 0)
             File.WriteAllText(filePath, InitialJson());
+        else
+            // The startup guard: an existing data file must match the running app's
+            // types — fail loudly here rather than half-work over stale data.
+            StoredDataValidator.Validate(LoadRawDoc(), desc, filePath);
+    }
+
+    // The file exactly as stored, for the startup guard (no LoadDoc normalization,
+    // which would patch in a root/extents and mask a malformed document).
+    private JsonObject LoadRawDoc()
+    {
+        try
+        {
+            if (JsonNode.Parse(File.ReadAllText(_filePath)) is JsonObject doc)
+                return doc;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+        }
+        throw new StoredDataException(
+            $"Data file '{_filePath}' is not a readable data document. " +
+            "Delete or move the file to reseed it from the app's initialData.");
     }
 
     // ── read ────────────────────────────────────────────────────────────────────

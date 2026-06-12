@@ -483,6 +483,34 @@ app.txt-style indentation language. Decisions made landing it:
 - Grammar fixes over the prototype: `0` literals, text escapes, parentheses,
   a real postfix chain (`a.where(p).orderBy(k)`), static arity checking.
 
+## Stored data must match the running app (startup guard)
+
+Found in the field: a data file left behind by an older schema made the todo
+app half-work — the first paint rendered, but every mutation was rejected
+server-side ("No set with id 0") and reloads lost all changes. The store only
+seeds when its data file is missing or empty, so it silently ran over stale
+data. Decisions (specced by `StoredData.feature`):
+
+- **Fail loudly at startup, never reseed over an existing file.** On
+  construction over an existing data file, `StoredDataValidator` checks the
+  document structurally against the app's types: unknown extent types,
+  stored fields the app doesn't declare, a stored kind contradicting the
+  declaration (scalar/set/dictionary/reference, scalar tag vs base type),
+  references to objects that don't exist, and legacy collections without
+  intrinsic ids are all rejected with the file path, the offending detail,
+  and the remedy named (`StoredDataException`; Program.cs exits 1). Deleting
+  or moving the file is a deliberate user act — data is never dropped
+  silently.
+- **Additive evolution stays cheap.** A declared prop missing from stored
+  fields is fine (reads fall back to defaults), so adding a prop to a type
+  does not invalidate existing data. This is a structural-compatibility
+  guard, not schema versioning — versioning (migrations on shape changes
+  that DO conflict) stays a postponed milestone.
+- **One data file per app document** (`<stem>-data.json` via `AppPaths`,
+  always in the run directory), so `--app` switching never mixes data. The
+  bridge's export deletes the target data file before reseeding — an export
+  deliberately replaces the instance's data, and is the one path allowed to.
+
 ## Tool stack and project structure
 
 Web-first: **C# backend, TypeScript front-end.** C# stays where it's strong;
