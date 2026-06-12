@@ -53,16 +53,15 @@ Feature: Code-owned UI rendering (server-side)
       """
       {
         "types": [ { "name": "Db", "baseType": "object",
-          "props": [ { "name": "note", "type": "text" } ] } ],
-        "ui": {
-          "render": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
-            { "type": "return", "value":
-              { "type": "tag", "name": "div", "attributes": [], "children": [
-                { "type": "symbol", "name": "missing" }
-              ] } }
-          ] } }
-        }
+          "props": [ { "name": "note", "type": "text" } ] } ]
       }
+      """
+    And the code text:
+      """
+      ui
+          fn render()
+              return <div>
+                  missing
       """
     When the document is loaded
     Then loading is rejected with an error mentioning "missing"
@@ -77,51 +76,56 @@ Feature: Code-owned UI rendering (server-side)
             "props": [ { "name": "things", "type": "Thing", "cardinality": "set" } ] },
           { "name": "Thing", "baseType": "object",
             "props": [ { "name": "name", "type": "text" } ] }
-        ],
-        "ui": {
-          "render": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
-            { "type": "return", "value":
-              { "type": "tag", "name": "div", "attributes": [], "children": [
-                { "type": "foreach", "item": { "name": "t" },
-                  "collection": { "type": "infixOp", "op": "objectProp",
-                    "left": { "type": "symbol", "name": "db" },
-                    "right": { "type": "symbol", "name": "things" } },
-                  "body": [
-                    { "type": "tag", "name": "input", "attributes": [
-                      { "name": "type",  "value": { "type": "text", "value": "text" } },
-                      { "name": "value", "value": { "type": "symbol", "name": "t" } }
-                    ], "children": [] }
-                  ] }
-              ] } }
-          ] } }
-        }
+        ]
       }
+      """
+    And the code text:
+      """
+      ui
+          fn render()
+              return <div>
+                  foreach t in db.things
+                      <input type="text" value={t}>
       """
     When the document is loaded
     Then loading is rejected with an error mentioning "read-only"
 
   @milestone-code @single-user
+  Scenario: A syntax error in the code text is rejected at load with its position
+    Given the schema document:
+      """
+      {
+        "types": [ { "name": "Db", "baseType": "object",
+          "props": [ { "name": "note", "type": "text" } ] } ]
+      }
+      """
+    And the code text:
+      """
+      ui
+          fn render()
+              return <div>
+                  oops =
+      """
+    When the document is loaded
+    Then loading is rejected with an error mentioning "line 4"
+
+  @milestone-code @single-user
   Scenario: A runtime error during first paint renders an SSR error page
-    # The render adds 1 to a text field — a structurally-valid AST that throws a
+    # The render adds 1 to a text field — structurally-valid code that throws a
     # type error at runtime. The renderer catches it and serves an error page.
     Given the code instance:
       """
       {
         "types": [ { "name": "Db", "baseType": "object",
-          "props": [ { "name": "note", "type": "text" } ] } ],
-        "ui": {
-          "render": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
-            { "type": "return", "value":
-              { "type": "tag", "name": "div", "attributes": [], "children": [
-                { "type": "infixOp", "op": "add",
-                  "left": { "type": "infixOp", "op": "objectProp",
-                    "left": { "type": "symbol", "name": "db" },
-                    "right": { "type": "symbol", "name": "note" } },
-                  "right": { "type": "int", "value": 1 } }
-              ] } }
-          ] } }
-        }
+          "props": [ { "name": "note", "type": "text" } ] } ]
       }
+      """
+    And its code:
+      """
+      ui
+          fn render()
+              return <div>
+                  db.note + 1
       """
     When the page at "/" is rendered
     Then the rendered HTML contains "<h1>Error</h1>"

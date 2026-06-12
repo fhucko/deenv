@@ -15,8 +15,10 @@ public class InstanceContext
 
     // ── schema document loading (milestone 3) ──────────────────────────────────
 
-    // Raw document text under test, the result of loading it, and any error raised.
+    // Raw document text under test, its sidecar code text (M7), the result of
+    // loading them, and any error raised.
     public string? SchemaJson { get; set; }
+    public string? CodeText { get; set; }
     public InstanceDescription? LoadedDescription { get; set; }
     public Exception? LoadError { get; set; }
     public string? SchemaFilePath { get; set; }
@@ -92,7 +94,7 @@ public class InstanceContext
     // exercises element/text, a bound text field, a bound checkbox, foreach, if/else,
     // and where/orderBy collection functions — the full Stage-2 SSR surface.
     public static InstanceDescription TasksUiDb() =>
-        InstanceDescriptionLoader.Load(TasksUiJson);
+        InstanceDescriptionLoader.Load(TasksUiJson, TasksUiCode);
 
     // The rendered HTML from the code-owned UI (Stage 2 SSR), under test.
     public string? RenderedHtml { get; set; }
@@ -108,105 +110,41 @@ public class InstanceContext
             { "name": "done",     "type": "bool" },
             { "name": "priority", "type": "int"  }
           ] }
-      ],
-      "ui": {
-        "vars": [
-          { "name": "path",  "value": { "type": "text", "value": "/" } },
-          { "name": "title", "value": { "type": "text", "value": "Tasks" } }
-        ],
-        "render": {
-          "type": "fn",
-          "params": [],
-          "body": { "type": "block", "statements": [ { "type": "return", "value":
-            { "type": "tag", "name": "main", "attributes": [], "children": [
-              { "type": "tag", "name": "h1", "attributes": [],
-                "children": [ { "type": "symbol", "name": "title" } ] },
-
-              { "type": "tag", "name": "section",
-                "attributes": [ { "name": "id", "value": { "type": "text", "value": "all" } } ],
-                "children": [
-                  { "type": "foreach",
-                    "item": { "name": "t" },
-                    "collection": { "type": "call",
-                      "fn": { "type": "infixOp", "op": "objectProp",
-                        "left": { "type": "infixOp", "op": "objectProp",
-                          "left": { "type": "symbol", "name": "db" },
-                          "right": { "type": "symbol", "name": "tasks" } },
-                        "right": { "type": "symbol", "name": "orderBy" } },
-                      "params": [ { "type": "fn", "params": [ { "name": "x" } ],
-                        "body": { "type": "block", "statements": [ { "type": "return", "value":
-                          { "type": "infixOp", "op": "objectProp",
-                            "left": { "type": "symbol", "name": "x" },
-                            "right": { "type": "symbol", "name": "priority" } } } ] } } ] },
-                    "body": [
-                      { "type": "tag", "name": "div",
-                        "attributes": [ { "name": "class", "value": { "type": "text", "value": "task" } } ],
-                        "children": [
-                          { "type": "tag", "name": "input",
-                            "attributes": [
-                              { "name": "type",  "value": { "type": "text", "value": "text" } },
-                              { "name": "value", "value": { "type": "infixOp", "op": "objectProp",
-                                "left": { "type": "symbol", "name": "t" },
-                                "right": { "type": "symbol", "name": "title" } } }
-                            ], "children": [] },
-                          { "type": "tag", "name": "input",
-                            "attributes": [
-                              { "name": "type",    "value": { "type": "text", "value": "checkbox" } },
-                              { "name": "checked", "value": { "type": "infixOp", "op": "objectProp",
-                                "left": { "type": "symbol", "name": "t" },
-                                "right": { "type": "symbol", "name": "done" } } }
-                            ], "children": [] },
-                          { "type": "if",
-                            "condition": { "type": "infixOp", "op": "objectProp",
-                              "left": { "type": "symbol", "name": "t" },
-                              "right": { "type": "symbol", "name": "done" } },
-                            "body": [ { "type": "tag", "name": "span",
-                              "attributes": [ { "name": "class", "value": { "type": "text", "value": "status" } } ],
-                              "children": [ { "type": "text", "value": "done" } ] } ],
-                            "elseBody": [ { "type": "tag", "name": "span",
-                              "attributes": [ { "name": "class", "value": { "type": "text", "value": "status" } } ],
-                              "children": [ { "type": "text", "value": "open" } ] } ] }
-                        ] }
-                    ] }
-                ] },
-
-              { "type": "tag", "name": "section",
-                "attributes": [ { "name": "id", "value": { "type": "text", "value": "open" } } ],
-                "children": [
-                  { "type": "foreach",
-                    "item": { "name": "t" },
-                    "collection": { "type": "call",
-                      "fn": { "type": "infixOp", "op": "objectProp",
-                        "left": { "type": "infixOp", "op": "objectProp",
-                          "left": { "type": "symbol", "name": "db" },
-                          "right": { "type": "symbol", "name": "tasks" } },
-                        "right": { "type": "symbol", "name": "where" } },
-                      "params": [ { "type": "fn", "params": [ { "name": "x" } ],
-                        "body": { "type": "block", "statements": [ { "type": "return", "value":
-                          { "type": "infixOp", "op": "equals",
-                            "left": { "type": "infixOp", "op": "objectProp",
-                              "left": { "type": "symbol", "name": "x" },
-                              "right": { "type": "symbol", "name": "done" } },
-                            "right": { "type": "bool", "value": false } } } ] } } ] },
-                    "body": [
-                      { "type": "tag", "name": "span",
-                        "attributes": [ { "name": "class", "value": { "type": "text", "value": "open-title" } } ],
-                        "children": [ { "type": "infixOp", "op": "objectProp",
-                          "left": { "type": "symbol", "name": "t" },
-                          "right": { "type": "symbol", "name": "title" } } ] }
-                    ] }
-                ] }
-            ] } } ] }
-        }
-      }
+      ]
     }
+    """;
+
+    private const string TasksUiCode = """
+    ui
+        var path = "/"
+        var title = "Tasks"
+
+        fn render()
+            return <main>
+                <h1>
+                    title
+                <section id="all">
+                    foreach t in db.tasks.orderBy((x) => x.priority)
+                        <div class="task">
+                            <input type="text" value={t.title}>
+                            <input type="checkbox" checked={t.done}>
+                            if t.done
+                                <span class="status">
+                                    "done"
+                            else
+                                <span class="status">
+                                    "open"
+                <section id="open">
+                    foreach t in db.tasks.where((x) => x.done == false)
+                        <span class="open-title">
+                            t.title
     """;
 
     // Code milestone, Stage 3: a tiny interactive `ui` over an Item set, ordered by a
     // text field bound two-way (so typing reorders the list — exercising identity-keyed
     // reconciliation) plus a transient new-item form (a name var + add button).
     public static InstanceDescription InteractiveUiDb() =>
-        InstanceDescriptionLoader.Load(InteractiveUiJson);
+        InstanceDescriptionLoader.Load(InteractiveUiJson, InteractiveUiCode);
 
     private const string InteractiveUiJson = """
     {
@@ -215,63 +153,27 @@ public class InstanceContext
           "props": [ { "name": "items", "type": "Item", "cardinality": "set" } ] },
         { "name": "Item", "baseType": "object",
           "props": [ { "name": "name", "type": "text" } ] }
-      ],
-      "ui": {
-        "vars": [
-          { "name": "path",    "value": { "type": "text", "value": "/" } },
-          { "name": "newName", "value": { "type": "text", "value": "" } }
-        ],
-        "render": {
-          "type": "fn", "params": [],
-          "body": { "type": "block", "statements": [ { "type": "return", "value":
-            { "type": "tag", "name": "main", "attributes": [], "children": [
-              { "type": "tag", "name": "input", "attributes": [
-                { "name": "class", "value": { "type": "text", "value": "new-name" } },
-                { "name": "value", "value": { "type": "symbol", "name": "newName" } }
-              ], "children": [] },
-              { "type": "tag", "name": "button", "attributes": [
-                { "name": "class", "value": { "type": "text", "value": "add" } },
-                { "name": "onClick", "value": { "type": "fn", "params": [],
-                  "body": { "type": "block", "statements": [
-                    { "type": "call",
-                      "fn": { "type": "infixOp", "op": "objectProp",
-                        "left": { "type": "infixOp", "op": "objectProp",
-                          "left": { "type": "symbol", "name": "db" },
-                          "right": { "type": "symbol", "name": "items" } },
-                        "right": { "type": "symbol", "name": "add" } },
-                      "params": [ { "type": "object", "props": [
-                        { "name": "name", "value": { "type": "symbol", "name": "newName" } }
-                      ] } ] },
-                    { "type": "assign", "target": { "type": "symbol", "name": "newName" },
-                      "value": { "type": "text", "value": "" } }
-                  ] } } }
-              ], "children": [ { "type": "text", "value": "Add" } ] },
-              { "type": "foreach", "item": { "name": "i" },
-                "collection": { "type": "call",
-                  "fn": { "type": "infixOp", "op": "objectProp",
-                    "left": { "type": "infixOp", "op": "objectProp",
-                      "left": { "type": "symbol", "name": "db" },
-                      "right": { "type": "symbol", "name": "items" } },
-                    "right": { "type": "symbol", "name": "orderBy" } },
-                  "params": [ { "type": "fn", "params": [ { "name": "x" } ],
-                    "body": { "type": "block", "statements": [ { "type": "return", "value":
-                      { "type": "infixOp", "op": "objectProp",
-                        "left": { "type": "symbol", "name": "x" },
-                        "right": { "type": "symbol", "name": "name" } } } ] } } ] },
-                "body": [
-                  { "type": "tag", "name": "div", "attributes": [], "children": [
-                    { "type": "tag", "name": "input", "attributes": [
-                      { "name": "class", "value": { "type": "text", "value": "name" } },
-                      { "name": "value", "value": { "type": "infixOp", "op": "objectProp",
-                        "left": { "type": "symbol", "name": "i" },
-                        "right": { "type": "symbol", "name": "name" } } }
-                    ], "children": [] }
-                  ] }
-                ] }
-            ] } } ] }
-        }
-      }
+      ]
     }
+    """;
+
+    private const string InteractiveUiCode = """
+    ui
+        var path = "/"
+        var newName = ""
+
+        fn addItem()
+            db.items.add({ name: newName })
+            newName = ""
+
+        fn render()
+            return <main>
+                <input class="new-name" value={newName}>
+                <button class="add" onClick={addItem}>
+                    "Add"
+                foreach i in db.items.orderBy((x) => x.name)
+                    <div>
+                        <input class="name" value={i.name}>
     """;
 
     // Code milestone, Stage 4: a private field (`salary`) by construction. `highEarners`
@@ -280,7 +182,7 @@ public class InstanceContext
     // salary, and never the non-earner rows (db.people is read only inside the computation).
     // No `sensitive` flag: "private" = "an input to a computation, never a rendered result".
     public static InstanceDescription SensitiveUiDb() =>
-        InstanceDescriptionLoader.Load(SensitiveUiJson);
+        InstanceDescriptionLoader.Load(SensitiveUiJson, SensitiveUiCode);
 
     private const string SensitiveUiJson = """
     {
@@ -292,51 +194,24 @@ public class InstanceContext
             { "name": "name",   "type": "text" },
             { "name": "salary", "type": "int" }
           ] }
-      ],
-      "common": {
-        "functions": [
-          { "type": "fn", "name": "highEarners",
-            "params": [ { "name": "people" } ],
-            "body": { "type": "block", "statements": [ { "type": "return", "value":
-              { "type": "call",
-                "fn": { "type": "infixOp", "op": "objectProp",
-                  "left": { "type": "symbol", "name": "people" },
-                  "right": { "type": "symbol", "name": "where" } },
-                "params": [ { "type": "fn", "params": [ { "name": "p" } ],
-                  "body": { "type": "block", "statements": [ { "type": "return", "value":
-                    { "type": "infixOp", "op": "moreThan",
-                      "left": { "type": "infixOp", "op": "objectProp",
-                        "left": { "type": "symbol", "name": "p" },
-                        "right": { "type": "symbol", "name": "salary" } },
-                      "right": { "type": "int", "value": 100 } } } ] } } ] } } ] } }
-        ]
-      },
-      "ui": {
-        "vars": [
-          { "name": "path", "value": { "type": "text", "value": "/" } },
-          { "name": "rich", "value": { "type": "call",
-            "fn": { "type": "symbol", "name": "highEarners" },
-            "params": [ { "type": "infixOp", "op": "objectProp",
-              "left": { "type": "symbol", "name": "db" },
-              "right": { "type": "symbol", "name": "people" } } ] } }
-        ],
-        "render": {
-          "type": "fn", "params": [],
-          "body": { "type": "block", "statements": [ { "type": "return", "value":
-            { "type": "tag", "name": "main", "attributes": [], "children": [
-              { "type": "foreach", "item": { "name": "p" },
-                "collection": { "type": "symbol", "name": "rich" },
-                "body": [
-                  { "type": "tag", "name": "div",
-                    "attributes": [ { "name": "class", "value": { "type": "text", "value": "earner" } } ],
-                    "children": [ { "type": "infixOp", "op": "objectProp",
-                      "left": { "type": "symbol", "name": "p" },
-                      "right": { "type": "symbol", "name": "name" } } ] }
-                ] }
-            ] } } ] }
-        }
-      }
+      ]
     }
+    """;
+
+    private const string SensitiveUiCode = """
+    common
+        fn highEarners(people)
+            return people.where((p) => p.salary > 100)
+
+    ui
+        var path = "/"
+        var rich = highEarners(db.people)
+
+        fn render()
+            return <main>
+                foreach p in rich
+                    <div class="earner">
+                        p.name
     """;
 
     // Code milestone, Stage 4b: a hidden-dependency recompute. `people` is rendered by
@@ -346,7 +221,7 @@ public class InstanceContext
     // (the existing members' salaries are private), so it refetches: the server recomputes
     // over fresh storage and returns the authoritative earners list.
     public static InstanceDescription RefetchUiDb() =>
-        InstanceDescriptionLoader.Load(RefetchUiJson);
+        InstanceDescriptionLoader.Load(RefetchUiJson, RefetchUiCode);
 
     private const string RefetchUiJson = """
     {
@@ -358,71 +233,26 @@ public class InstanceContext
             { "name": "name",   "type": "text" },
             { "name": "salary", "type": "int" }
           ] }
-      ],
-      "ui": {
-        "vars": [ { "name": "path", "value": { "type": "text", "value": "/" } } ],
-        "render": {
-          "type": "fn", "params": [],
-          "body": { "type": "block", "statements": [ { "type": "return", "value":
-            { "type": "tag", "name": "main", "attributes": [], "children": [
-              { "type": "tag", "name": "button", "attributes": [
-                { "name": "class", "value": { "type": "text", "value": "add-rich" } },
-                { "name": "onClick", "value": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
-                  { "type": "call",
-                    "fn": { "type": "infixOp", "op": "objectProp",
-                      "left": { "type": "infixOp", "op": "objectProp",
-                        "left": { "type": "symbol", "name": "db" },
-                        "right": { "type": "symbol", "name": "people" } },
-                      "right": { "type": "symbol", "name": "add" } },
-                    "params": [ { "type": "object", "props": [
-                      { "name": "name",   "value": { "type": "text", "value": "Rich" } },
-                      { "name": "salary", "value": { "type": "int",  "value": 200 } }
-                    ] } ] }
-                ] } } }
-              ], "children": [ { "type": "text", "value": "Add rich" } ] },
-
-              { "type": "tag", "name": "button", "attributes": [
-                { "name": "class", "value": { "type": "text", "value": "add-poor" } },
-                { "name": "onClick", "value": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
-                  { "type": "call",
-                    "fn": { "type": "infixOp", "op": "objectProp",
-                      "left": { "type": "infixOp", "op": "objectProp",
-                        "left": { "type": "symbol", "name": "db" },
-                        "right": { "type": "symbol", "name": "people" } },
-                      "right": { "type": "symbol", "name": "add" } },
-                    "params": [ { "type": "object", "props": [
-                      { "name": "name",   "value": { "type": "text", "value": "Poor" } },
-                      { "name": "salary", "value": { "type": "int",  "value": 50 } }
-                    ] } ] }
-                ] } } }
-              ], "children": [ { "type": "text", "value": "Add poor" } ] },
-
-              { "type": "foreach", "item": { "name": "p" },
-                "collection": { "type": "infixOp", "op": "objectProp",
-                  "left": { "type": "symbol", "name": "db" }, "right": { "type": "symbol", "name": "people" } },
-                "body": [ { "type": "tag", "name": "div",
-                  "attributes": [ { "name": "class", "value": { "type": "text", "value": "person" } } ],
-                  "children": [ { "type": "infixOp", "op": "objectProp",
-                    "left": { "type": "symbol", "name": "p" }, "right": { "type": "symbol", "name": "name" } } ] } ] },
-
-              { "type": "foreach", "item": { "name": "p" },
-                "collection": { "type": "call",
-                  "fn": { "type": "infixOp", "op": "objectProp",
-                    "left": { "type": "infixOp", "op": "objectProp",
-                      "left": { "type": "symbol", "name": "db" }, "right": { "type": "symbol", "name": "people" } },
-                    "right": { "type": "symbol", "name": "where" } },
-                  "params": [ { "type": "fn", "params": [ { "name": "x" } ], "body": { "type": "block", "statements": [ { "type": "return", "value":
-                    { "type": "infixOp", "op": "moreThan",
-                      "left": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "x" }, "right": { "type": "symbol", "name": "salary" } },
-                      "right": { "type": "int", "value": 100 } } } ] } } ] },
-                "body": [ { "type": "tag", "name": "div",
-                  "attributes": [ { "name": "class", "value": { "type": "text", "value": "earner" } } ],
-                  "children": [ { "type": "infixOp", "op": "objectProp",
-                    "left": { "type": "symbol", "name": "p" }, "right": { "type": "symbol", "name": "name" } } ] } ] }
-            ] } } ] }
-        }
-      }
+      ]
     }
+    """;
+
+    private const string RefetchUiCode = """
+    ui
+        var path = "/"
+
+        fn render()
+            return <main>
+                <button class="add-rich" onClick={() => db.people.add({ name: "Rich", salary: 200 })}>
+                    "Add rich"
+                <button class="add-poor" onClick={() => db.people.add({ name: "Poor", salary: 50 })}>
+                    "Add poor"
+                foreach p in db.people
+                    <div class="person">
+                        p.name
+                foreach p in db.people.where((x) => x.salary > 100)
+                    <div class="earner">
+                        p.name
     """;
 
     // ── storage ───────────────────────────────────────────────────────────────

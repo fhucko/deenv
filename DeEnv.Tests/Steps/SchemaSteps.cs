@@ -17,6 +17,13 @@ public sealed class SchemaSteps(InstanceContext ctx)
         ctx.SchemaJson = json;
     }
 
+    // The schema's sidecar code text (M7: code is always authored as text).
+    [Given("the code text:")]
+    public void GivenCodeText(string code)
+    {
+        ctx.CodeText = code;
+    }
+
     [Given("a schema document file describing a single-bool Db")]
     public void GivenSchemaFileBoolDb()
     {
@@ -31,7 +38,7 @@ public sealed class SchemaSteps(InstanceContext ctx)
     {
         try
         {
-            ctx.LoadedDescription = InstanceDescriptionLoader.Load(ctx.SchemaJson!);
+            ctx.LoadedDescription = InstanceDescriptionLoader.Load(ctx.SchemaJson!, ctx.CodeText);
         }
         catch (Exception ex)
         {

@@ -5,7 +5,10 @@ namespace DeEnv.Instance;
 
 public static class InstanceDescriptionLoader
 {
-    public static InstanceDescription Load(string json)
+    // `codeText` is the content of the schema's sidecar code file (see CodeFile) —
+    // the only way code enters a description. Inline ui/common JSON is rejected:
+    // text is the authoring surface; the AST exists in memory and on the wire only.
+    public static InstanceDescription Load(string json, string? codeText = null)
     {
         InstanceDescription? desc;
         try
@@ -20,6 +23,26 @@ public static class InstanceDescriptionLoader
         if (desc == null)
             throw new SchemaValidationException("Schema document is not valid JSON: deserialized to null.");
 
+        if (desc.Ui != null || desc.Common != null)
+            throw new SchemaValidationException(
+                "Inline 'ui'/'common' JSON is not supported: author code as text in the schema's codeFile.");
+        if (desc.CodeFile != null && codeText == null)
+            throw new SchemaValidationException(
+                $"The schema references code file '{desc.CodeFile}': load it via LoadFile, or pass the code text.");
+
+        if (codeText != null)
+        {
+            try
+            {
+                var (common, ui) = CodeParse.ParseDocument(codeText);
+                desc = desc with { Ui = ui, Common = common };
+            }
+            catch (DeEnv.Code.Parsing.CodeParseException ex)
+            {
+                throw new SchemaValidationException($"Code file: {ex.Message}");
+            }
+        }
+
         Validate(desc);
         ValidateInitialData(desc);
         CodeValidator.Validate(desc);
@@ -27,8 +50,26 @@ public static class InstanceDescriptionLoader
         return desc;
     }
 
-    public static InstanceDescription LoadFile(string path) =>
-        Load(File.ReadAllText(path));
+    public static InstanceDescription LoadFile(string path)
+    {
+        var json = File.ReadAllText(path);
+        // Peek the codeFile reference and read the sidecar relative to the schema.
+        string? codeText = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("codeFile", out var cf)
+                && cf.GetString() is { } codeFile)
+                codeText = File.ReadAllText(
+                    Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, codeFile));
+        }
+        catch (JsonException)
+        {
+            // Malformed JSON: fall through — Load reports it with the standard error.
+        }
+        return Load(json, codeText);
+    }
 
     private static void Validate(InstanceDescription desc)
     {

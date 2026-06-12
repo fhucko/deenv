@@ -48,4 +48,8 @@ public record InstanceDescription(
     IReadOnlyList<TypeDefinition>? Types = null,
     InstanceUi? Ui = null,
     InstanceCommon? Common = null,
-    InstanceInitialData? InitialData = null);
+    InstanceInitialData? InitialData = null,
+    // The sidecar Code text file (path relative to the schema document) whose parse
+    // yields Ui/Common. Text is the only authoring surface for code — the loader
+    // rejects inline ui/common JSON; the AST lives in memory and on the wire only.
+    string? CodeFile = null);
