@@ -1,5 +1,6 @@
 using System.Text;
 using DeEnv.Code.Parsing;
+using DeEnv.Instance;
 using static DeEnv.Code.Parsing.Parse;
 
 namespace DeEnv.Code;
@@ -156,4 +157,197 @@ public static class CodeParse
 
     // Parse a single expression that must consume the whole text.
     public static ICodeValue ParseExpression(string text) => Run(Value, text);
+
+    // ── statements & indentation blocks ──────────────────────────────────────────
+    // A block's indent is discovered from its first line (IndentLookahead) and every
+    // line of the block must sit at exactly that indent; a shallower line ends it.
+
+    public static IndentedParser<CodeAssignment> AssignStatement => _ =>
+        Seq(AssignValue, NlOrEnd, (assign, _) => assign);
+
+    public static IndentedParser<CodeReturn> Return => indent =>
+        Seq(Text("return"), Ws1, ValueWithNl(indent), (_, _, value) => new CodeReturn { Value = value });
+
+    public static IndentedParser<CodeVarDec> VarDec => _ =>
+        Seq(Text("var"), Ws1, Symbol,
+            Optional(Seq(Ws0, Text("="), Ws0, Value, (_, _, _, v) => v)), NlOrEnd,
+            (_, _, name, value, _) => new CodeVarDec { Name = name.Name, Value = value });
+
+    // A named function: `fn name(params)` + an indented body. `server fn` marks it
+    // server-only (never shipped to the client).
+    public static IndentedParser<CodeFunction> NamedFunction => indent =>
+        Seq(Optional(Seq(Text("server"), Ws1, (s, _) => s)),
+            Text("fn"), Ws1, Symbol, Ws0, FunctionParams, NlOrEnd, IndentedBlock(indent),
+            (serverOnly, _, _, name, _, parameters, _, body) => new CodeFunction
+            {
+                Name = name.Name,
+                Params = parameters,
+                Body = body,
+                ServerOnly = serverOnly != null,
+            });
+
+    public static IndentedParser<CodeCall> CallStatement => _ =>
+        Seq(Postfix.Filter(v => v is CodeCall), NlOrEnd, (call, _) => (CodeCall)call);
+
+    public static IndentedParser<CodeIf> If => indent =>
+        Seq(Text("if"), Ws1, Value, NlOrEnd, IndentedBlock(indent),
+            Optional(OneOf<ICodeStatement>(
+                Seq(Text(indent), Text("else"), Ws1, Lazy(() => If(indent)), (_, _, _, nested) => nested),
+                Seq(Text(indent), Text("else"), NlOrEnd, IndentedBlock(indent), (_, _, _, body) => body))),
+            (_, _, condition, _, body, elseBody) => new CodeIf
+            {
+                Condition = condition,
+                Body = body,
+                ElseBody = elseBody,
+            });
+
+    public static IndentedParser<ICodeStatement> Statement => indent =>
+        Seq(Text(indent), OneOf<ICodeStatement>(
+            AssignStatement(indent),
+            If(indent),
+            Return(indent),
+            NamedFunction(indent),
+            CallStatement(indent),
+            VarDec(indent)),
+            (_, statement) => statement);
+
+    public static IndentedParser<CodeBlock> Block => indent =>
+        Many1(Statement(indent).SkipEmptyLinesBefore())
+            .ConvertTo(statements => new CodeBlock { Statements = statements });
+
+    public static IndentedParser<CodeBlock> IndentedBlock => indent =>
+        IndentLookahead(indent, Ws1, Block).SkipEmptyLinesBefore();
+
+    // A multiline value position (a return / tag child): an inline value ending the
+    // line, a multiline tag, or a multiline lambda.
+    public static IndentedParser<ICodeValue> ValueWithNl => indent => Lazy(() => OneOf<ICodeValue>(
+        Seq(Value, NlOrEnd, (value, _) => value),
+        TagMultiline(indent),
+        MultilineLambda(indent)));
+
+    // (x) => with an indented statement body.
+    public static IndentedParser<CodeFunction> MultilineLambda => indent =>
+        Seq(FunctionParams, Ws0, Text("=>"), NlOrEnd, IndentedBlock(indent),
+            (parameters, _, _, _, body) => new CodeFunction
+            {
+                Name = null,
+                Params = parameters,
+                Body = body,
+            });
+
+    // ── tags (JSX-like; children are an indented block, no closing tag) ──────────
+
+    public static IndentedParser<CodeTagAttribute> TagAttribute => _ =>
+        Seq(Ws1, Symbol, Ws0, Text("="), Ws0,
+            OneOf<ICodeValue>(
+                Seq(Text("{"), Ws0, Value, Ws0, Text("}"), (_, _, value, _, _) => value),
+                TextLiteral),
+            (_, name, _, _, _, value) => new CodeTagAttribute { Name = name.Name, Value = value });
+
+    public static IndentedParser<CodeTag> TagMultiline => indent =>
+        Seq(Text("<"), Symbol, Many0(TagAttribute(indent)), Ws0, Text(">"), NlOrEnd,
+            Optional(IndentedTagChildren(indent)),
+            (_, name, attributes, _, _, _, children) => new CodeTag
+            {
+                Name = name.Name,
+                Attributes = attributes,
+                Children = children ?? [],
+            });
+
+    public static IndentedParser<CodeTagIf> TagIf => indent =>
+        Seq(Text("if"), Ws1, Value, NlOrEnd, IndentedTagChildren(indent),
+            Optional(OneOf(
+                Seq(Text(indent), Text("else"), Ws1, Lazy(() => TagIf(indent)),
+                    (_, _, _, nested) => new ICodeTagChild[] { nested }),
+                Seq(Text(indent), Text("else"), NlOrEnd, IndentedTagChildren(indent),
+                    (_, _, _, body) => body))),
+            (_, _, condition, _, body, elseBody) => new CodeTagIf
+            {
+                Condition = condition,
+                Body = body,
+                ElseBody = elseBody ?? [],
+            });
+
+    public static IndentedParser<CodeTagForEach> TagForEach => indent =>
+        Seq(Text("foreach"), Ws1, Symbol, Ws1, Text("in"), Ws1, Value, NlOrEnd, IndentedTagChildren(indent),
+            (_, _, item, _, _, _, collection, _, body) => new CodeTagForEach
+            {
+                Item = item,
+                Collection = collection,
+                Body = body,
+            });
+
+    public static IndentedParser<ICodeTagChild> TagChild => indent =>
+        Seq(Text(indent), OneOf<ICodeTagChild>(
+            TagIf(indent),
+            TagForEach(indent),
+            ValueWithNl(indent)),
+            (_, child) => child);
+
+    public static IndentedParser<ICodeTagChild[]> IndentedTagChildren => indent =>
+        IndentLookahead(indent, Ws1, i => Many1(TagChild(i).SkipEmptyLinesBefore()))
+            .SkipEmptyLinesBefore();
+
+    // ── the document: `common` + `ui` sections ──────────────────────────────────
+    // The code file replaces the schema document's JSON ui/common sections. Top-level
+    // items are named functions and (in ui) vars; `fn render()` is the render fn.
+
+    public static Parser<ICodeStatement[]> SectionItems => IndentLookahead("", Ws1,
+        indent => Many1(
+            Seq(Text(indent), OneOf<ICodeStatement>(
+                NamedFunction(indent),
+                VarDec(indent)),
+                (_, item) => item)
+            .SkipEmptyLinesBefore()));
+
+    private static Parser<ICodeStatement[]> Section(string keyword) =>
+        Seq(Text(keyword), NlOrEnd, SectionItems, (_, _, items) => items)
+            .SkipEmptyLinesBefore();
+
+    // Raw sections only — mapping (and its errors) happens AFTER Run has chosen the
+    // parse that consumes the whole input. Mapping inside the combine would throw on
+    // partial candidates mid-backtracking (Many1 yields shorter matches first).
+    private static Parser<(ICodeStatement[]? Common, ICodeStatement[] Ui)> Document =>
+        Seq(Optional(Section("common")), Section("ui"), (common, ui) => (common, ui))
+            .SkipEmptyLinesAfter();
+
+    // Parse a whole code file into the sections the schema's JSON form used to carry.
+    public static (InstanceCommon? Common, InstanceUi Ui) ParseDocument(string source)
+    {
+        var (common, ui) = Run(Seq(Document, Ws0, (doc, _) => doc), source);
+        return (MapCommon(common), MapUi(ui));
+    }
+
+    private static InstanceCommon? MapCommon(ICodeStatement[]? items)
+    {
+        if (items == null) return null;
+        var functions = new List<CodeFunction>();
+        foreach (var item in items)
+            functions.Add(item as CodeFunction
+                ?? throw new CodeParseException("The 'common' section may only contain functions."));
+        return new InstanceCommon(functions);
+    }
+
+    private static InstanceUi MapUi(ICodeStatement[] items)
+    {
+        var vars = new List<UiVar>();
+        var functions = new List<CodeFunction>();
+        CodeFunction? render = null;
+        foreach (var item in items)
+            switch (item)
+            {
+                case CodeVarDec v:
+                    vars.Add(new UiVar(v.Name, v.Value));
+                    break;
+                case CodeFunction { Name: "render" } fn:
+                    render = fn;
+                    break;
+                case CodeFunction fn:
+                    functions.Add(fn);
+                    break;
+            }
+        if (render == null)
+            throw new CodeParseException("The 'ui' section must define 'fn render()'.");
+        return new InstanceUi(vars, functions, render);
+    }
 }
