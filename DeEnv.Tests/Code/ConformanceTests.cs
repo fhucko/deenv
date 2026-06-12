@@ -18,7 +18,7 @@ public sealed class ConformanceTests
     private static readonly JsonSerializerOptions JsonOpts = SchemaJson.Options;
 
     private sealed record Suite(Case[] Cases);
-    public sealed record Case(string Name, JsonElement Expr, Expectation Expect);
+    public sealed record Case(string Name, JsonElement Expr, Expectation Expect, string? Text = null);
     public sealed record Expectation(string Kind, JsonElement Value);
 
     public static IEnumerable<Func<Case>> Cases()
@@ -28,13 +28,34 @@ public sealed class ConformanceTests
         foreach (var c in suite.Cases) yield return () => c;
     }
 
+    public static IEnumerable<Func<Case>> TextCases()
+    {
+        foreach (var c in Cases())
+            if (c().Text != null) yield return c;
+    }
+
     [Test]
     [MethodDataSource(nameof(Cases))]
     public async Task Conformance_case_evaluates(Case c)
     {
         var expr = c.Expr.Deserialize<ICodeValue>(JsonOpts)!;
         var result = new CodeExecutor().ExecuteValue(expr, new ExecScope(), new ExecContext());
+        await AssertExpectation(c, result);
+    }
 
+    // The same cases through the TEXT form (Stage 1 of the text-syntax milestone):
+    // parsing the case's text must evaluate to exactly what the AST form does.
+    [Test]
+    [MethodDataSource(nameof(TextCases))]
+    public async Task Conformance_text_form_parses_and_evaluates(Case c)
+    {
+        var expr = CodeParse.ParseExpression(c.Text!);
+        var result = new CodeExecutor().ExecuteValue(expr, new ExecScope(), new ExecContext());
+        await AssertExpectation(c, result);
+    }
+
+    private static async Task AssertExpectation(Case c, IExecValue result)
+    {
         switch (c.Expect.Kind)
         {
             case "int":
