@@ -55,6 +55,35 @@ public sealed class TypeResolver
         return new ResolvedTypeInfo(currentType, currentCardinality, currentKeyTypeName);
     }
 
+    // True when any step of the walk enters a dictionary (the segment addresses a
+    // dictionary key). Dictionary entries are not surfaced to the Code runtime yet,
+    // so type views decline such pages and the generic UI keeps them.
+    public bool TraversesDictionary(NodePath path)
+    {
+        var db = _desc.Db();
+        if (db == null) return false;
+
+        var currentType = db;
+        var currentCardinality = Cardinality.Single;
+        foreach (var segment in path.Segments)
+        {
+            if (currentCardinality == Cardinality.Dictionary)
+                return true;
+            if (currentCardinality == Cardinality.Set)
+            {
+                currentCardinality = Cardinality.Single;
+                continue;
+            }
+            var prop = currentType.Props?.FirstOrDefault(p => p.Name == segment);
+            if (prop == null) return false;
+            var resolved = ResolveTypeName(prop.Type);
+            if (resolved == null) return false;
+            currentType = resolved;
+            currentCardinality = prop.Cardinality;
+        }
+        return false;
+    }
+
     private TypeDefinition? ResolveTypeName(string name)
     {
         if (BaseTypes.IsName(name))

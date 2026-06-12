@@ -25,9 +25,10 @@ public sealed class SsrRenderer
 
     public string Render(string urlPath)
     {
-        // Code owns all routing when a `ui` section exists; the generic auto-form
-        // below is the fallback only when there is no `ui`.
-        if (_desc.Ui != null)
+        // The rendering-function decision: a matching view makes this a code page;
+        // everything else falls through to the generic auto-form (which now also
+        // serves apps WITH a ui section, for the URLs their views don't cover).
+        if (_desc.Ui != null && ResolveView(urlPath) != null)
             return RenderUi(urlPath);
 
         var nodePath = ParsePath(urlPath);
@@ -48,16 +49,64 @@ public sealed class SsrRenderer
         return Page(urlPath, nodePath, typeInfo, node);
     }
 
-    // ── code-owned UI (the `ui` section) ────────────────────────────────────────
+    // ── the rendering-function decision (views) ─────────────────────────────────
 
-    // Execute the render fn over a prepared top scope and serialize the resulting
-    // tag tree to HTML. A runtime error on first paint becomes an SSR error page.
+    private enum ViewKind { Render, Path, Type }
+
+    private sealed record ViewMatch(ViewKind Kind, CodeFunction Fn, UiView? View, NodePath? TargetPath);
+
+    // Which render function (if any) owns this URL:
+    //   1. the longest segment-aware path-view prefix — `fn render()` counts as the
+    //      implicit root view "/", so an explicit longer path view still beats it;
+    //   2. else, when generic routing lands on an object page of a type with a type
+    //      view (and no traversal segment is a dictionary — dict entries are not in
+    //      the Code runtime), that view;
+    //   3. else null: the generic auto-form. `/~/{id}` id-routes stay generic.
+    private ViewMatch? ResolveView(string urlPath)
+    {
+        var ui = _desc.Ui;
+        if (ui == null) return null;
+
+        UiView? bestPath = null;
+        foreach (var view in ui.Views ?? [])
+            if (view.Path is { } prefix && PathMatches(prefix, urlPath)
+                && (bestPath == null || prefix.Length > bestPath.Path!.Length))
+                bestPath = view;
+        if (bestPath != null)
+            return new ViewMatch(ViewKind.Path, bestPath.Fn, bestPath, null);
+        if (ui.Render != null)
+            return new ViewMatch(ViewKind.Render, ui.Render, null, null);
+
+        if (ui.Views is not { Count: > 0 }) return null;
+        var nodePath = ParsePath(urlPath);
+        if (nodePath.Segments.Count >= 1 && nodePath.Segments[0] == "~") return null;
+        if (_resolver.TraversesDictionary(nodePath)) return null;
+        var typeInfo = _resolver.ResolveType(nodePath);
+        if (typeInfo is not { Cardinality: Cardinality.Single, Type.BaseType: BaseType.Object }) return null;
+        var typeView = ui.Views.FirstOrDefault(v => v.Type == typeInfo.Type.Name);
+        return typeView == null ? null : new ViewMatch(ViewKind.Type, typeView.Fn, typeView, nodePath);
+    }
+
+    // Segment-aware prefix: "/reports" matches "/reports" and "/reports/x",
+    // never "/reportsx"; "/" matches everything.
+    private static bool PathMatches(string prefix, string urlPath) =>
+        prefix == "/" || urlPath == prefix || urlPath.StartsWith(prefix + "/", StringComparison.Ordinal);
+
+    // The routed object of a type view was deleted (or a reference is unset): the
+    // page is NotFound, not a code error.
+    private sealed class ViewTargetNotFoundException : Exception;
+
+    // ── code-owned UI (view pages; `fn render()` is the root view) ──────────────
+
+    // Execute the resolved view over a prepared top scope and serialize the
+    // resulting tag tree to HTML. A runtime error on first paint becomes an SSR
+    // error page; a missing view target becomes the NotFound page.
     private string RenderUi(string urlPath)
     {
         var context = new ExecContext();
         try
         {
-            var (result, title, scope) = ExecuteRender(urlPath, context);
+            var (result, title, scope, match, targetId) = ExecuteRender(urlPath, context);
             var body = new StringBuilder();
             SerializeChild(result, body);
 
@@ -77,17 +126,34 @@ public sealed class SsrRenderer
             var clientUi = new InstanceUi(
                 Vars: null,
                 Functions: _desc.Ui!.Functions?.Where(f => !f.ServerOnly).ToList(),
-                Render: _desc.Ui.Render);
+                Render: _desc.Ui.Render,
+                Views: _desc.Ui.Views);
             var clientCommon = _desc.Common?.Functions is { } common
                 ? new InstanceCommon(common.Where(f => !f.ServerOnly).ToList())
                 : null;
+
+            // The resolved rendering-function decision, so the client re-renders the
+            // same view: which view, and (type views) the routed object's id.
+            var viewInfo = new JsonObject { ["kind"] = match.Kind.ToString().ToLowerInvariant() };
+            if (match.View != null) viewInfo["index"] = _desc.Ui.Views!.ToList().IndexOf(match.View);
+            if (targetId is { } id) viewInfo["objectId"] = id;
+
             var initUi = new JsonObject
             {
                 ["ui"] = JsonSerializer.SerializeToNode(clientUi, SchemaJson.Options),
                 ["common"] = clientCommon is null ? null : JsonSerializer.SerializeToNode(clientCommon, SchemaJson.Options),
+                ["view"] = viewInfo,
             }.ToJsonString();
 
-            return UiLayout(title, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi), clientId);
+            // A type view keeps the generic breadcrumb chrome (plain links) around
+            // its content; path views and the root render own the page.
+            var breadcrumbs = match.Kind == ViewKind.Type ? Breadcrumbs(match.TargetPath!) : "";
+
+            return UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi), clientId);
+        }
+        catch (ViewTargetNotFoundException)
+        {
+            return NotFoundPage(urlPath, ParsePath(urlPath));
         }
         catch (CodeRuntimeException ex)
         {
@@ -119,11 +185,11 @@ public sealed class SsrRenderer
     {
         var context = new ExecContext();
         context.LastId.Value = Math.Min(0, lastIdFloor);
-        var (_, _, scope) = ExecuteRender(urlPath, context, sessionVars, warmDb);
+        var (_, _, scope, _, _) = ExecuteRender(urlPath, context, sessionVars, warmDb);
         return ClientState.Serialize(scope, context);
     }
 
-    private (IExecTagChild Result, string Title, ExecScope Scope) ExecuteRender(
+    private (IExecTagChild Result, string Title, ExecScope Scope, ViewMatch Match, int? TargetId) ExecuteRender(
         string urlPath, ExecContext context, IReadOnlyDictionary<string, IExecValue>? sessionVars = null,
         ExecObject? warmDb = null)
     {
@@ -163,31 +229,80 @@ public sealed class SsrRenderer
             foreach (var (name, value) in sessionVars)
                 if (scope.Items.TryGetValue(name, out var it) && !it.IsReadOnly) it.Value = value;
 
-        var renderFn = ui.Render ?? throw new CodeRuntimeException("The 'ui' section has no render function.");
-        var result = exec.InvokeFunction(renderFn, [], scope, context);
+        // The rendering-function decision, re-resolved here so the refetch path
+        // (RenderState → ExecuteRender) renders the same view as the page did.
+        var match = ResolveView(urlPath)
+            ?? throw new CodeRuntimeException("No view matches this URL.");
+
+        // A type view's parameter: the routed object, found by walking the URL
+        // segments through the SAME graph instance bound as `db` (so leaves,
+        // session mirroring and identity all line up). Bound as a call argument —
+        // never a top-scope var — so it can't be overridden or shipped as scope.
+        int? targetId = null;
+        IExecValue[] args = [];
+        if (match.Kind == ViewKind.Type)
+        {
+            var target = FindTarget(db, match.TargetPath!) ?? throw new ViewTargetNotFoundException();
+            targetId = target.Id;
+            args = [target];
+        }
+        else if (match.Kind == ViewKind.Path && match.Fn.Params.Length > 0)
+        {
+            args = [new ExecText { Value = urlPath }];
+        }
+
+        var result = exec.InvokeFunction(match.Fn, args, scope, context);
 
         if (result is not IExecTagChild child)
-            throw new CodeRuntimeException("The render function did not return a renderable value.");
+            throw new CodeRuntimeException("The view did not return a renderable value.");
 
+        // Title: the app's `title` var when set; a type-view page falls back to the
+        // generic page title (its node path), other code pages to "DeEnv".
         var title = scope.Items.TryGetValue("title", out var t) && t.Value is ExecText titleText
             ? titleText.Value
-            : "DeEnv";
-        return (child, title, scope);
+            : match.Kind == ViewKind.Type ? PageTitle(match.TargetPath!) : "DeEnv";
+        return (child, title, scope, match, targetId);
     }
 
-    // Page shell for a code-owned UI: the SSR body is the first paint; the deferred
-    // bundle hydrates and takes over rendering from window.initUi / window.initData.
-    private static string UiLayout(string title, string body, string initData, string initUi, string clientId) => $$"""
+    // Walk URL segments through the loaded object graph: a set member segment is the
+    // item's identity key, a field segment is a prop. Null when anything is missing
+    // (deleted member, unset reference) — the caller renders NotFound.
+    private static ExecObject? FindTarget(ExecObject root, NodePath path)
+    {
+        IExecValue current = root;
+        foreach (var segment in path.Segments)
+        {
+            if (current is ExecArray arr && int.TryParse(segment, out var id))
+                current = arr.Items.FirstOrDefault(i => i.Key == id)?.Value ?? new ExecNull();
+            else if (current is ExecObject obj && obj.Props.TryGetValue(segment, out var value))
+                current = value;
+            else
+                return null;
+        }
+        return current as ExecObject;
+    }
+
+    // Page shell for a code page: optional generic chrome (a type view keeps the
+    // breadcrumbs) around the `#app` mount the client reconciles into; the deferred
+    // bundle hydrates from window.initUi / window.initData. The chrome CSS ships only
+    // when there IS chrome — a full-takeover page stays unstyled (the app's own look).
+    private static string UiLayout(
+        string title, string breadcrumbs, string body, string initData, string initUi, string clientId) => $$"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
           <meta charset="utf-8">
-          <title>{{Escape(title)}}</title>
+          <title>{{Escape(title)}}</title>{{(breadcrumbs.Length > 0 ? $"\n  <style>{ViewChromeCss}</style>" : "")}}
           <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";</script>
           <script defer src="/ui-js"></script>
         </head>
-        <body>{{body}}</body>
+        <body>{{breadcrumbs}}<div id="app">{{body}}</div></body>
         </html>
+        """;
+
+    private const string ViewChromeCss = """
+        body { font-family: system-ui, Arial, sans-serif; margin: 2rem; color: #222; }
+        nav.breadcrumbs { margin-bottom: 1rem; color: #666; }
         """;
 
     private static void DefineFunction(CodeFunction fn, ExecScope scope)

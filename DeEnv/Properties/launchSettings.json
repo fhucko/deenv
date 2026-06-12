@@ -12,6 +12,12 @@
       "launchBrowser": true,
       "launchUrl": "http://localhost:8080"
     },
+    "Instance — Shop (views)": {
+      "commandName": "Project",
+      "commandLineArgs": "--mode instance --app shop.app",
+      "launchBrowser": true,
+      "launchUrl": "http://localhost:8080"
+    },
     "Designer": {
       "commandName": "Project",
       "commandLineArgs": "--mode designer",

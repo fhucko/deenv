@@ -123,6 +123,14 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         commitJournal(msg.id);
     }
 
+    // An uncorrelated error is a failed refetch (it carries no id) — clear the
+    // in-flight guard so a later mutation can retry, instead of wedging forever.
+    if (msg.error != null && typeof msg.id !== "number") {
+        refetchInFlight = false;
+        console.error("Server error:", msg.error);
+        return;
+    }
+
     if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
         const arrayId = pendingAdds.get(msg.tempId);
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }

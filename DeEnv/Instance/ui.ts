@@ -10,7 +10,7 @@ function renderUi(): void {
     const context: ExecContext = { lastId: uiStatic.lastId };
     let result: ExecValue;
     try {
-        result = callFunction(uiStatic.renderFn, context);
+        result = callFunction(uiStatic.renderFn, context, uiStatic.renderArgs);
     } catch (e) {
         // Unshipped data read outside any computation boundary: keep the current DOM
         // and ask the server; the refetch reply re-renders with the data present.
@@ -21,7 +21,9 @@ function renderUi(): void {
         }
         throw e;
     }
-    updateChildren(document.body, [result]);
+    // Mount on the #app container the SSR shell emits (present on every code page,
+    // including a full-takeover render); fall back to body if it is somehow absent.
+    updateChildren(document.getElementById("app") ?? document.body, [result]);
     syncPath();
     syncScopeText("title", v => { document.title = v; });
     refreshErrorBanner();
@@ -36,15 +38,14 @@ function syncPath(): void {
     if (item.value.value !== location.pathname) history.pushState(null, "", item.value.value);
 }
 
-// The latest server-rejected mutation, surfaced as a dismissable banner. Re-appended
-// after each render (the body reconciler drops children it didn't produce); keyed so
-// the reconciler never repurposes the element for app content.
+// The latest server-rejected mutation, surfaced as a dismissable banner. Lives on
+// document.body, OUTSIDE the #app reconciler root, so a render never disturbs it.
 function refreshErrorBanner(): void {
-    const existing = document.querySelector<HTMLElement>("[data-key='__error']");
+    const existing = document.getElementById("__error");
     if (uiStatic.lastError == null) { existing?.remove(); return; }
     const banner = existing ?? document.createElement("div");
     if (existing == null) {
-        banner.setAttribute("data-key", "__error");
+        banner.id = "__error";
         banner.style.cssText =
             "position:fixed;top:0;left:0;right:0;z-index:9999;padding:0.5rem 1rem;" +
             "background:#b00020;color:#fff;font:14px system-ui,sans-serif;cursor:pointer;";
@@ -54,11 +55,14 @@ function refreshErrorBanner(): void {
     document.body.appendChild(banner);
 }
 
-// Invoke a (no-arg) function — the render fn or an event handler — by running its
-// body directly. (The render fn is shipped as a bare CodeFunction without a "type"
-// discriminator, so it must not be routed back through executeValue.)
-function callFunction(fn: ExecFunction, context: ExecContext): ExecValue {
+// Invoke a function — the render fn / a view / an event handler — by running its
+// body directly over its params bound to `args` (a view's routed object or path;
+// handlers pass none). The fn is a bare CodeFunction without a "type" discriminator,
+// so it must not be routed back through executeValue.
+function callFunction(fn: ExecFunction, context: ExecContext, args: ExecValue[] = []): ExecValue {
     const callScope: ExecScope = { parent: fn.scope, items: {} };
+    for (let i = 0; i < args.length && i < fn.fn.params.length; i++)
+        callScope.items[fn.fn.params[i].name] = { value: args[i], isReadOnly: true };
     return executeBlock(fn.fn.body, callScope, context) ?? { type: "nothing" };
 }
 

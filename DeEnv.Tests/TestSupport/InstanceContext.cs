@@ -73,9 +73,17 @@ public class InstanceContext
     // The rendered HTML from the code-owned UI (Stage 2 SSR), under test.
     public string? RenderedHtml { get; set; }
 
+    // Milestone 8: the shop app — a TYPE view (Customer) + a PATH view (/dashboard)
+    // over a generic remainder, no `fn render()`. The committed DeEnv/shop.app and
+    // this text are the same document. Drives UiCustomization.feature.
+    public static InstanceDescription ViewsUiDb() =>
+        InstanceDescriptionLoader.LoadFile(
+            Path.Combine(AppContext.BaseDirectory, "shop.app"));
+
     // The code-bearing fixture documents, for the printer round-trip tests.
     public static IReadOnlyList<string> CodeFixtureApps =>
-        [TasksUiApp, InteractiveUiApp, SensitiveUiApp, RefetchUiApp];
+        [TasksUiApp, InteractiveUiApp, SensitiveUiApp, RefetchUiApp,
+         File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "shop.app"))];
 
     private const string TasksUiApp = """
     types
