@@ -143,8 +143,10 @@ public sealed class CodeParseTests
     [Test]
     public async Task Inline_lambda_sugars_to_a_returning_body()
     {
+        // A single lambda parameter needs no parentheses (the parenthesized form
+        // stays accepted — see the next test).
         // fn.Body is concretely typed (CodeBlock), so it carries no "type" discriminator.
-        await AssertParsesTo("(x) => x.done == false",
+        await AssertParsesTo("x => x.done == false",
             """
             { "type": "fn", "name": null, "params": [ { "name": "x" } ], "id": 0, "serverOnly": false,
               "body": { "statements": [ { "type": "return", "value":
@@ -153,6 +155,16 @@ public sealed class CodeParseTests
                     "left": { "type": "symbol", "name": "x" }, "right": { "type": "symbol", "name": "done" } },
                   "right": { "type": "bool", "value": false } } } ] } }
             """);
+    }
+
+    [Test]
+    public async Task A_parenthesized_single_param_lambda_still_parses()
+    {
+        var bare = JsonSerializer.SerializeToNode<ICodeValue>(
+            CodeParse.ParseExpression("x => x.done"), SchemaJson.Options)!;
+        var parenthesized = JsonSerializer.SerializeToNode<ICodeValue>(
+            CodeParse.ParseExpression("(x) => x.done"), SchemaJson.Options)!;
+        await Assert.That(JsonNode.DeepEquals(bare, parenthesized)).IsTrue();
     }
 
     [Test]

@@ -59,9 +59,12 @@ public sealed class AppPrintTests
         await AssertPrints("(2 + 3) * 4", "(2 + 3) * 4");
         await AssertPrints("a - b - c", "a - b - c");          // left-assoc: no parens
         await AssertPrints("a - (b - c)", "a - (b - c)");      // right nesting kept
+        await AssertPrints("db.tasks.where(x => x.done == false)",
+                           "db.tasks.where(x => x.done == false)");
+        // The parenthesized single-param form normalizes to the bare form.
         await AssertPrints("db.tasks.where((x) => x.done == false)",
-                           "db.tasks.where((x) => x.done == false)");
-        await AssertPrints("((n) => n + 1)(41)", "((n) => n + 1)(41)");
+                           "db.tasks.where(x => x.done == false)");
+        await AssertPrints("((n) => n + 1)(41)", "(n => n + 1)(41)");
     }
 
     private static async Task AssertPrints(string source, string expected)

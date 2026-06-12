@@ -10,7 +10,7 @@ namespace DeEnv.Code;
 // Ported from the app14 prototype's CodeParse and adapted to this AST, with four fixes
 // the prototype lacked: `0` is a valid int literal, text literals support escapes
 // (\" \\ \n \t), parenthesized expressions exist, and postfix chaining is a real layer
-// (so `db.tasks.where(p).orderBy(k)` and `((n) => n + 1)(41)` parse).
+// (so `db.tasks.where(p).orderBy(k)` and `(n => n + 1)(41)` parse).
 //
 // Expression precedence (loosest binds last):
 //   postfix (.member, (args))  →  * / %  →  + -  →  comparisons  →  &&  →  ||
@@ -134,9 +134,15 @@ public static class CodeParse
         Text(")"),
         (_, names, _) => names.Select(p => new CodeFunctionParam { Name = p.Name }).ToArray());
 
-    // (x) => expr — sugar for a one-statement body returning the expression.
+    // A lambda's parameter list: a single parameter needs no parentheses
+    // (`x => x.done`); zero or many keep them (`() => …`, `(a, b) => …`).
+    public static Parser<CodeFunctionParam[]> LambdaParams => OneOf(
+        FunctionParams,
+        Symbol.ConvertTo(s => new[] { new CodeFunctionParam { Name = s.Name } }));
+
+    // x => expr — sugar for a one-statement body returning the expression.
     public static Parser<CodeFunction> InlineLambda => Seq(
-        FunctionParams, Ws0, Text("=>"), Ws0, Value,
+        LambdaParams, Ws0, Text("=>"), Ws0, Value,
         (parameters, _, _, _, body) => new CodeFunction
         {
             Name = null,
@@ -225,9 +231,9 @@ public static class CodeParse
         TagMultiline(indent),
         MultilineLambda(indent)));
 
-    // (x) => with an indented statement body.
+    // x => / (a, b) => with an indented statement body.
     public static IndentedParser<CodeFunction> MultilineLambda => indent =>
-        Seq(FunctionParams, Ws0, Text("=>"), NlOrEnd, IndentedBlock(indent),
+        Seq(LambdaParams, Ws0, Text("=>"), NlOrEnd, IndentedBlock(indent),
             (parameters, _, _, _, body) => new CodeFunction
             {
                 Name = null,

@@ -73,11 +73,15 @@ public static class CodePrint
         if (fn.Body.Statements is not [CodeReturn ret])
             throw new InvalidOperationException(
                 "A multi-statement lambda has no inline form (use a named function).");
-        return Params(fn) + " => " + Value(ret.Value);
+        return LambdaParams(fn) + " => " + Value(ret.Value);
     }
 
+    // Named functions always parenthesize; a lambda's single parameter prints bare.
     private static string Params(CodeFunction fn) =>
         "(" + string.Join(", ", fn.Params.Select(p => p.Name)) + ")";
+
+    private static string LambdaParams(CodeFunction fn) =>
+        fn.Params is [var single] ? single.Name : Params(fn);
 
     private static string Quote(string s)
     {
@@ -172,7 +176,7 @@ public static class CodePrint
                 break;
             case CodeFunction fn when fn.Body.Statements is not [CodeReturn]:
                 // A multi-statement lambda: only expressible in multiline positions.
-                sb.Append(Params(fn)).Append(" =>\n");
+                sb.Append(LambdaParams(fn)).Append(" =>\n");
                 Block(sb, fn.Body, indent + Step);
                 break;
             default:

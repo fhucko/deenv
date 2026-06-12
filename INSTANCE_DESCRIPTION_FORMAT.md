@@ -102,7 +102,7 @@ ui
   `true`, `null`), arrays `[a, b]`, objects `{ name: value }`, member/call
   chains (`db.tasks.where(p).orderBy(k)`), the operators
   `. ` → `* / %` → `+ -` → `== != > >= < <=` → `&&` → `||`, parentheses,
-  inline lambdas `(x) => expr` (multiline lambdas in `return`/tag positions).
+  inline lambdas `x => expr` / `(a, b) => expr` (multiline lambdas in `return`/tag positions).
 - **Tags** are JSX-like with no closing tag — children are the indented
   block. Attributes: `attr="text"` or `attr={expr}`. Tag-level `if`/`else`
   and `foreach x in collection`.

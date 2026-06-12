@@ -95,7 +95,7 @@ public class InstanceContext
                 <h1>
                     title
                 <section id="all">
-                    foreach t in db.tasks.orderBy((x) => x.priority)
+                    foreach t in db.tasks.orderBy(x => x.priority)
                         <div class="task">
                             <input type="text" value={t.title}>
                             <input type="checkbox" checked={t.done}>
@@ -106,7 +106,7 @@ public class InstanceContext
                                 <span class="status">
                                     "open"
                 <section id="open">
-                    foreach t in db.tasks.where((x) => x.done == false)
+                    foreach t in db.tasks.where(x => x.done == false)
                         <span class="open-title">
                             t.title
     """;
@@ -137,7 +137,7 @@ public class InstanceContext
                 <input class="new-name" value={newName}>
                 <button class="add" onClick={addItem}>
                     "Add"
-                foreach i in db.items.orderBy((x) => x.name)
+                foreach i in db.items.orderBy(x => x.name)
                     <div>
                         <input class="name" value={i.name}>
     """;
@@ -160,7 +160,7 @@ public class InstanceContext
 
     common
         fn highEarners(people)
-            return people.where((p) => p.salary > 100)
+            return people.where(p => p.salary > 100)
 
     ui
         var path = "/"
@@ -202,7 +202,7 @@ public class InstanceContext
                 foreach p in db.people
                     <div class="person">
                         p.name
-                foreach p in db.people.where((x) => x.salary > 100)
+                foreach p in db.people.where(x => x.salary > 100)
                     <div class="earner">
                         p.name
     """;
