@@ -83,7 +83,7 @@ ui
     fn selectUser(user)
         selectedUser = user
 
-    fn render()                ← required when ui is present
+    fn render()                ← optional: the whole-app render (root view)
         return <main>
             <input class="new-user" value={newUser.name}>
             <button onClick={addNewUser}>
@@ -109,6 +109,38 @@ ui
 - A two-way `value`/`checked` binding on an `<input>` must target an
   assignable lvalue (a writable var or a prop chain).
 
+### Views — customizing parts of the generic UI
+
+A `ui` section may define **views** instead of (or alongside) `fn render()`.
+A view is a render function bound to a type or a URL path; everything a view
+doesn't cover stays the generic auto-form. The page is chosen per request:
+
+```
+ui
+    view Customer(customer)        ← TYPE view: the object page for that type
+        return <main>
+            <input class="email" value={customer.email}>
+
+    view "/dashboard"(path)        ← PATH view: owns that URL subtree
+        return <main>
+            foreach c in db.customers.where(x => x.active == true)
+                <div>
+                    c.name
+```
+
+- A **type view** `view T(param)` replaces the generic object page for type
+  `T`; the routed object binds to `param`, and the generic breadcrumb trail is
+  kept around the view's content. (Dictionary-entry pages stay generic — dicts
+  are not in the Code runtime yet.)
+- A **path view** `view "/p"(param)` takes over `/p` and everything under it
+  (longest matching prefix wins); `param` (optional) is the request path.
+- `fn render()` is the implicit `view "/"` — defining it takes over the whole
+  URL space (no type view or generic page is reachable). An app with only
+  partial views needs no `render`.
+- A view page is a full code page (two-way binding, mutations over the
+  WebSocket, the memo cache, refetch — all as in a render app). Views ship to
+  the client and re-render there.
+
 ## Validation a loader must enforce
 
 A malformed document is rejected at load with a clear, specific error
@@ -124,6 +156,10 @@ A malformed document is rejected at load with a clear, specific error
   writable symbols, two-way bindings target lvalues, named-function call
   arity matches, no duplicate `var` in a block. (Type checking is deferred —
   type mismatches are runtime errors.)
+- A `ui` section defines `render` or at least one view. A view targets exactly
+  one type (which must exist and be an object type; the view takes one param)
+  or one path (starting with `/`, no trailing slash; at most one param); no two
+  views share a target; no `view "/"` alongside `render`.
 
 ## Worked example
 

@@ -511,6 +511,36 @@ data. Decisions (specced by `StoredData.feature`):
   bridge's export deletes the target data file before reseeding — an export
   deliberately replaces the instance's data, and is the one path allowed to.
 
+## UI customization — views, a per-request rendering decision (M8)
+
+Rendering was all-or-nothing (a `ui` with `fn render()` owned every URL, or the
+generic auto-form owned all of them). M8 added **views** — render functions
+bound to a type or a path — so an app customizes parts of the generic UI or
+takes over a subtree. Decisions:
+
+- **A rendering-function decision, generic fallback.** `SsrRenderer.ResolveView`
+  picks per request: longest segment-aware path-view prefix → that view; else a
+  type view when generic routing resolves to that type's object page (and no
+  segment is a dictionary — dict entries aren't in the Code runtime); else the
+  generic auto-form. So an app's customized pages and its generic pages coexist
+  in one URL space.
+- **`fn render()` becomes optional — the implicit root view `"/"`.** A
+  whole-app takeover (the todo app) is just `render`; partial-override apps
+  define no render. User was explicit: don't force a render function for
+  partial overrides.
+- **A view page is a full code page.** The view fn takes `render`'s place in the
+  pipeline (memo cache, two-way binding, WS mutations, journal/rollback,
+  warm-session refetch). The routed object / path binds as a CALL ARGUMENT, not
+  a top-scope var — so it never ships as scope or is overridden by a stale
+  client var, and refetch re-resolves the same view from the path it carries.
+- **Type-view pages keep the generic breadcrumb chrome** (plain server links,
+  no client JS); path views and the root render own the page. Every code page
+  now mounts into `<div id="app">`.
+- **Designer view-editing, fragment-level islands, and the self-hosted generic
+  UI are deferred.** The last is the next milestone — a *reflective library*
+  (`objectForm(x)`, `setTable(s)` over schema metadata) plugged in at lowest
+  dispatch precedence; views are the seam it will use.
+
 ## Tool stack and project structure
 
 Web-first: **C# backend, TypeScript front-end.** C# stays where it's strong;
