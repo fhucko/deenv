@@ -69,7 +69,8 @@ public static class AppParse
     private static Parser<TypeDefinition[]> TypesSection =>
         Seq(Text("types"), NlOrEnd,
             IndentLookahead("", Ws1, indent =>
-                Many1(Seq(Text(indent), TypeEntry(indent), (_, t) => t).SkipEmptyLinesBefore())),
+                Many1(Seq(Text(indent), TypeEntry(indent), (_, t) => t).SkipEmptyLinesBefore()))
+                .SkipEmptyLinesBefore(),
             (_, _, types) => types)
         .SkipEmptyLinesBefore();
 
@@ -107,7 +108,8 @@ public static class AppParse
     private static Parser<(string Type, string Id, JsonObject Fields)[]> InitialDataSection =>
         Seq(Text("initialData"), NlOrEnd,
             IndentLookahead("", Ws1, indent =>
-                Many1(Seq(Text(indent), SeedEntry(indent), (_, e) => e).SkipEmptyLinesBefore())),
+                Many1(Seq(Text(indent), SeedEntry(indent), (_, e) => e).SkipEmptyLinesBefore()))
+                .SkipEmptyLinesBefore(),
             (_, _, entries) => entries)
         .SkipEmptyLinesBefore();
 

@@ -47,6 +47,11 @@ public static class AppPrint
                 sb.Append('\n');
                 CodePrint.Function(sb, fn, "    ");
             }
+            foreach (var view in ui.Views ?? [])
+            {
+                sb.Append('\n');
+                CodePrint.View(sb, view.Type ?? view.Path!, quoted: view.Path != null, view.Fn, "    ");
+            }
             if (ui.Render != null)
             {
                 sb.Append('\n');

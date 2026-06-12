@@ -295,16 +295,44 @@ public static class CodeParse
             .SkipEmptyLinesBefore();
 
     // ── the document: `common` + `ui` sections ──────────────────────────────────
-    // The code file replaces the schema document's JSON ui/common sections. Top-level
-    // items are named functions and (in ui) vars; `fn render()` is the render fn.
+    // Top-level items are named functions, (in ui) vars, and (in ui) views;
+    // `fn render()` is the optional whole-app render fn (the root path view).
 
+    // A view declaration riding through SectionItems until MapUi consumes it. Never
+    // serialized (not in the ICodeStatement JsonDerivedType list) — it exists only
+    // between the parser and the section mapping. `view` is a CONTEXTUAL keyword:
+    // it introduces a section item but stays usable as an ordinary identifier.
+    internal sealed class CodeViewDec : ICodeStatement
+    {
+        public string? Type { get; init; }
+        public string? Path { get; init; }
+        public required CodeFunction Fn { get; init; }
+    }
+
+    // `view Customer(customer)` (type target) / `view "/reports"(path)` (path target).
+    public static IndentedParser<ICodeStatement> ViewDec => indent =>
+        Seq(Text("view"), Ws1,
+            OneOf<object>(Symbol, TextLiteral),
+            Ws0, FunctionParams, NlOrEnd, IndentedBlock(indent),
+            (_, _, target, _, parameters, _, body) => (ICodeStatement)new CodeViewDec
+            {
+                Type = (target as CodeSymbol)?.Name,
+                Path = (target as CodeText)?.Value,
+                Fn = new CodeFunction { Name = null, Params = parameters, Body = body },
+            });
+
+    // SkipEmptyLinesBefore on the LOOKAHEAD itself: a blank line between the section
+    // header and its first item (the printer's canonical spacing) must not break the
+    // indent probe.
     public static Parser<ICodeStatement[]> SectionItems => IndentLookahead("", Ws1,
         indent => Many1(
             Seq(Text(indent), OneOf<ICodeStatement>(
+                ViewDec(indent),
                 NamedFunction(indent),
                 VarDec(indent)),
                 (_, item) => item)
-            .SkipEmptyLinesBefore()));
+            .SkipEmptyLinesBefore()))
+        .SkipEmptyLinesBefore();
 
     // Public: the app document (AppParse) composes these sections after its own
     // `types`/`initialData` sections.
@@ -340,6 +368,7 @@ public static class CodeParse
     {
         var vars = new List<UiVar>();
         var functions = new List<CodeFunction>();
+        var views = new List<UiView>();
         CodeFunction? render = null;
         foreach (var item in items)
             switch (item)
@@ -353,9 +382,12 @@ public static class CodeParse
                 case CodeFunction fn:
                     functions.Add(fn);
                     break;
+                case CodeViewDec view:
+                    views.Add(new UiView(view.Type, view.Path, view.Fn));
+                    break;
             }
-        if (render == null)
-            throw new CodeParseException("The 'ui' section must define 'fn render()'.");
-        return new InstanceUi(vars, functions, render);
+        // render is optional: with only views, the app customizes parts of the
+        // generic UI. (A ui with neither is rejected by CodeValidator.)
+        return new InstanceUi(vars, functions, render, views);
     }
 }

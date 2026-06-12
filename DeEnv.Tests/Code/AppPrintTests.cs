@@ -43,6 +43,28 @@ public sealed class AppPrintTests
     }
 
     [Test]
+    public async Task A_views_document_round_trips()
+    {
+        await AssertRoundTrips(
+            """
+            types
+                Db
+                    things: set of Thing
+                Thing
+                    name: text
+
+            ui
+                view Thing(thing)
+                    return <div class="thing">
+                        thing.name
+
+                view "/special"(path)
+                    return <main>
+                        "special"
+            """);
+    }
+
+    [Test]
     public async Task The_crm_and_meta_documents_round_trip()
     {
         await AssertRoundTrips(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "crm.app")));

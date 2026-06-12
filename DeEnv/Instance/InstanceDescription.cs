@@ -25,13 +25,21 @@ public record TypeDefinition(
 // newItem). Client-held; for SSR the initializer seeds its first-paint value.
 public record UiVar(string Name, ICodeValue? Value = null);
 
-// The `ui` section: client-held state variables, shared component functions, and
-// the entry-point `render` function. When present, code owns all routing and the
-// generic auto-form is no longer used.
+// A view: a render function bound to a TYPE (replaces the generic object page for
+// that type) or to a URL PATH (code takes over that subtree). Exactly one target is
+// set. The function is anonymous — the target rides here, never on Fn.Name (a named
+// function would be registered into the client's top scope; the server never does).
+public record UiView(string? Type, string? Path, CodeFunction Fn);
+
+// The `ui` section: client-held state variables, shared component functions, views,
+// and the optional entry-point `render` function (the implicit root path view —
+// when present, code owns the whole URL space). Without it, views customize parts
+// of the generic UI and everything else stays the auto-form.
 public record InstanceUi(
     IReadOnlyList<UiVar>? Vars = null,
     IReadOnlyList<CodeFunction>? Functions = null,
-    CodeFunction? Render = null);
+    CodeFunction? Render = null,
+    IReadOnlyList<UiView>? Views = null);
 
 // The `common` section: functions shared by server and client. A function may be
 // marked server-only (CodeFunction.ServerOnly) so it is never shipped to the client.
