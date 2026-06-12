@@ -49,10 +49,21 @@ minimal-API `WebApplication`) — no ASP.NET MVC weight.
 This is adequate *only because* Milestone 1 is single-user: one writer, no
 contention. Two things are consciously deferred:
 - **Crash durability** — a plain rewrite can leave a half-written file if
-  the process dies mid-write. Accepted for now (hardcoded demo instance).
-  The cheap fix when wanted: write-to-temp-then-atomic-rename.
+  the process dies mid-write. The cheap fix was taken: writes are
+  write-to-temp-then-atomic-rename, so a reader never sees a half-written
+  file.
 - **Isolation (the I in ACID)** — concurrent-writer safety. Not needed until
   the multi-user milestone.
+
+**The document is held in memory.** It is loaded (and validated against the
+app's types) once at startup and kept as the authoritative copy: reads serve
+from it, a mutation edits it in place and then rewrites the file for
+durability. This drops the per-operation read-and-reparse the original design
+did on every call. It is correct *because the instance is single-process* —
+nothing else writes the file behind our back, so the in-memory copy can't go
+stale (the cross-process version of that is the same class of problem as
+cross-session staleness — the real-time/multi-user milestone). Still a plain
+JSON file behind the interface; not a storage engine.
 
 **Critical seam:** all storage access goes through an interface, never
 direct file calls. Principle: the interface speaks the **model's terms —
