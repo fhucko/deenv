@@ -134,20 +134,22 @@ a shared conformance suite. Delivered in stages (plan: cozy-humming-metcalfe):
 Done when: the todo app — authored as data (types + ui AST + seed) — runs,
 persists, and reacts, with both interpreters conformant. ✓
 
-## Milestone 7 — Code text syntax (parser + printer)  ← CURRENT
+## Milestone 7 — The app document (text syntax, parser + printer)  ← DONE
 
-A C#/TSX-like text form for Code, replacing hand-written AST JSON as the
-authoring surface (the AST remains the in-memory and wire form — the client
-still receives AST; no TS parser). Indentation-based blocks, JSX-like tags,
-expression precedence — `app.txt` style, ported from the prototype's
-combinator parser. Code lives in a sidecar file referenced by the schema
-document (`"codeFile"`); the loader parses it into the same validated AST,
-and inline `ui`/`common` JSON is retired. The printer (AST → canonical text)
-ships too, with round-trip tests — the designer will need it to display code.
+One text document describes a whole instance: `types`, an optional
+`initialData` seed, and code (`common`/`ui`) in an app.txt-style language —
+indentation blocks, JSX-like tags, expression precedence — ported from the
+prototype's combinator parser (offset cursor + positioned errors added).
+**JSON is retired from authoring**: the parsed `InstanceDescription` and its
+JSON form are internal only (the in-memory model and the wire — the client
+still receives AST; there is no TS parser). The designer bridge publishes a
+design by printing the same format. The printer (description → canonical
+text) ships with round-trip tests: `parse(print(d))` is the identity and the
+canonical form is a fixpoint.
 
-Done when: the todo app's code is authored as `instance.code` text, the whole
-existing suite stays green on the parsed AST, and parse/print round-trips are
-stable. Plan: code-text-syntax.md.
+Done when: the todo app is authored as `instance.app` (one file: types +
+seed + UI), the whole suite stays green on the parsed text, and parse/print
+round-trips are stable. ✓ Plan: code-text-syntax.md.
 
 ---
 

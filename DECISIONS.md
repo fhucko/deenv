@@ -453,6 +453,36 @@ the milestone lands. Key decisions made while landing it:
   seed (extents; plain scalars, sets as id arrays, refs as bare ids) applied
   by the store on first run. The committed default instance is the todo app.
 
+## The app document — one text file, JSON internal only (M7)
+
+An instance is described by ONE hand-editable text document (`instance.app`):
+`types`, an optional `initialData` seed, and code (`common`/`ui`) in an
+app.txt-style indentation language. Decisions made landing it:
+
+- **JSON is retired from authoring.** The earlier JSON schema document and the
+  brief codeFile-sidecar form are gone; `InstanceDescription` and its JSON
+  serialization are internal — the in-memory model and the wire. The client
+  still receives the Code AST as JSON (`initUi`); there is no TS parser, text
+  never crosses the wire.
+- **One grammar, ported from the prototype** (`app14/DeEnv/Parsing` +
+  `CodeParse`), upgraded with an offset cursor (no substring slicing) and a
+  failure high-water mark (a broken document reports line/column). Combinator
+  semantics were kept identical — `Many1` yields shorter matches first and the
+  grammar relies on that backtracking — and section/document mapping runs only
+  AFTER the full-input parse is chosen (mapping inside a combine throws on
+  partial candidates).
+- **The printer is the inverse.** `AppPrint`/`CodePrint` emit the canonical
+  form (four-space indent, minimal parens by precedence, vars→fns→render);
+  `parse(print(d))` is the identity and the canonical text is a fixpoint —
+  this is how the designer will present stored code as editable text.
+- **The designer bridge publishes text**: `Project` builds the typed
+  description, the shared validation pipeline runs on it, `AppPrint` writes
+  `instance.app`. Two M3 validation rules became inexpressible in the text
+  format (object type without props; non-object type with props) — they
+  remain enforced semantically and are exercised through the bridge.
+- Grammar fixes over the prototype: `0` literals, text escapes, parentheses,
+  a real postfix chain (`a.where(p).orderBy(k)`), static arity checking.
+
 ## Tool stack and project structure
 
 Web-first: **C# backend, TypeScript front-end.** C# stays where it's strong;

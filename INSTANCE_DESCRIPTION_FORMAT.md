@@ -1,173 +1,132 @@
-# Instance description format
+# App description format
 
-The JSON shape that describes an instance. Hand-written for now (no
-designer, no generator). The format is intentionally minimal: a type is a
-shape; cardinality and nullability live on the *usage* (the prop), not on
-the type itself.
+An instance is described by **one text document** (`instance.app`): types, an
+optional `initialData` seed, and optional code (`common` / `ui`). Hand-written
+today; the designer bridge prints the same format when publishing a design.
+JSON is internal only — the parsed `InstanceDescription`, the wire, and storage.
 
-## Top-level shape
+Blocks are indentation-scoped (four spaces canonical; a block's indent is fixed
+by its first line). The printer (`AppPrint`/`CodePrint`) emits the canonical
+form, and `parse(print(description))` is the identity.
 
-```json
-{
-  "types":       [ /* type definitions */ ],
-  "ui":          { /* optional: vars + functions + render fn (Code AST) */ },
-  "common":      { /* optional: shared functions (Code AST) */ },
-  "initialData": { /* optional: hand-authored seed, normalized extents */ }
-}
+## Sections
+
+```
+types           ← required
+initialData     ← optional: first-run seed
+common          ← optional: shared functions
+ui              ← optional: vars + functions + fn render()
 ```
 
-The root is the type named **`Db`**. The root is implicitly **single** and
-**non-null** — these are rules, not fields, and need not be stated.
+When `ui` is present, code owns all routing and rendering; without it the
+generic auto-form serves the instance.
 
-Only `types` is required. When `ui` is present, code owns all routing and
-rendering (the generic auto-form is the no-`ui` fallback). The `ui`/`common`
-code is hand-written JSON AST (`"type"`-discriminated nodes, camelCase) — see
-the committed todo app (`DeEnv/instance.schema.json`) for the worked example
-of all three sections.
+## types
+
+```
+types
+    Db
+        users: set of User
+        settings: dict of text by text
+        lead: User
+    User
+        name: text
+        boss: User?
+    Flag: bool
+```
+
+- An **object type** is a name with indented props; a **leaf alias** is
+  `Name: baseType` (one of `bool`, `int`, `decimal`, `text`, `date`,
+  `datetime`).
+- A prop is `name: type` — a base type or another type's name (a single
+  object-typed prop *is* a reference). `set of X` declares a set (X must be an
+  object type; members are keyed by their own identity). `dict of X by key`
+  declares a dictionary (`by key` optional, default `text`). A trailing `?`
+  marks the prop nullable.
+- The root type **`Db`** must exist; it is implicitly single and non-null.
 
 ## initialData
 
-A hand-authored seed the store applies on first run only (when the data file
-does not exist yet). Normalized extents in friendly form:
+A hand-authored seed the store applies on first run only:
 
-```json
-"initialData": {
-  "extents": {
-    "Db":   { "1": { "users": [2] } },
-    "User": { "2": { "name": "User 1", "todoLists": [3] } },
-    "TodoList": { "3": { "name": "List 1", "items": [] } }
-  }
-}
+```
+initialData
+    Db 1
+        users: [2]
+    User 2
+        name: "User 1"
+        todoLists: [3]
+    TodoList 3
+        items: []
 ```
 
-- Each pool maps an **authored positive id** (globally unique) to the
-  object's fields.
-- Scalars are plain JSON values; a **set** is an array of member ids; a
-  **single object reference** is a bare id. Omitted scalars default; omitted
-  references stay unset. (Dictionary entries cannot be seeded yet.)
-- Exactly one `Db` entry — the root.
-- The id counter starts above the highest authored id, so later creations
-  never collide.
+- Each entry is `TypeName id` (authored positive ids, globally unique) with
+  indented `field: value` lines. Scalars are literals; a **set** is an array
+  of member ids; a **single reference** is a bare id. Omitted scalars default;
+  omitted references stay unset. Exactly one `Db` entry — the root.
+- The id counter starts above the highest authored id.
 
-## Type definition
+## common and ui — code
 
-| Field      | Required        | Meaning                                                             |
-| ---------- | --------------- | ------------------------------------------------------------------- |
-| `name`     | yes             | Identifier in the type registry; how other types refer to it.       |
-| `baseType` | yes             | One of: `bool`, `int`, `decimal`, `text`, `date`, `datetime`, `object`. |
-| `props`    | object types only | Ordered list of fields. Only present when `baseType` is `object`. |
+Code is an app.txt-style language parsed to the Code AST (the same AST the
+twin interpreters execute and the wire ships):
 
-A type carries **no cardinality and no nullability.** A type is just a
-shape. (See "Why no aliases" below.)
+```
+common
+    server fn hash(p)          ← `server` = never shipped to the client
+        return p
 
-## Prop
+ui
+    var path = "/"
+    var selectedUser
 
-| Field           | Required        | Default            | Meaning                                                         |
-| --------------- | --------------- | ------------------ | --------------------------------------------------------------- |
-| `name`          | yes             | —                  | Field name within the object.                                   |
-| `type`          | yes             | —                  | A base type name, or the name of a type defined in `types`.     |
-| `cardinality`   | no              | `single`           | `single` or `dictionary`.                                       |
-| `keyType`       | dictionary only | `text`             | Base type of the dictionary's keys.                             |
-| `keyGeneration` | dictionary only | derived (see below)| `auto` or `manual`.                                             |
-| `nullable`      | no              | `false`            | Boolean. `true` makes the field nullable; omit for non-null.    |
+    fn selectUser(user)
+        selectedUser = user
 
-Omit `cardinality`, `keyType`, `keyGeneration`, and `nullable` when they
-take the default. Read literally: anything not stated is single and non-null.
-
-## Dictionary keys
-
-A dictionary prop declares its key type (`keyType`) and how keys are produced
-(`keyGeneration`):
-
-- `keyType` — any base type (`text`, `int`, …). Defaults to `text`.
-- `keyGeneration`:
-  - **`auto`** — keys are auto-incremented by the platform (next = max + 1).
-    Requires a numeric `keyType` (`int`). The create form has no key field.
-  - **`manual`** — the user supplies the key when creating an entry. Works with
-    any `keyType`. The create form includes a key field.
-  - Default: `auto` when `keyType` is `int`, otherwise `manual`.
-
-(Key-field designation — using one of the entry's own fields as its key — is
-still deferred.)
-
-## Worked examples
-
-### Bool root — the simplest valid instance
-
-```json
-{
-  "types": [
-    { "name": "Db", "baseType": "bool" }
-  ]
-}
+    fn render()                ← required when ui is present
+        return <main>
+            <input class="new-user" value={newUser.name}>
+            <button onClick={addNewUser}>
+                "Add user"
+            foreach user in db.users
+                <div class="user-row">
+                    user.name
+            if selectedUser != null
+                <h2>
+                    selectedUser.name
 ```
 
-Renders as a single checkbox at `/`.
+- **Statements**: `var x` / `var x = expr`, assignment, `return`, calls,
+  `if` / `else if` / `else`, named `fn`s.
+- **Expressions**: literals (`0`, `-7`, `"text"` with `\" \\ \n \t` escapes,
+  `true`, `null`), arrays `[a, b]`, objects `{ name: value }`, member/call
+  chains (`db.tasks.where(p).orderBy(k)`), the operators
+  `. ` → `* / %` → `+ -` → `== != > >= < <=` → `&&` → `||`, parentheses,
+  inline lambdas `(x) => expr` (multiline lambdas in `return`/tag positions).
+- **Tags** are JSX-like with no closing tag — children are the indented
+  block. Attributes: `attr="text"` or `attr={expr}`. Tag-level `if`/`else`
+  and `foreach x in collection`.
+- A two-way `value`/`checked` binding on an `<input>` must target an
+  assignable lvalue (a writable var or a prop chain).
 
-### Shop — object root with a dictionary of customers
+## Validation a loader must enforce
 
-```json
-{
-  "types": [
-    {
-      "name": "Db",
-      "baseType": "object",
-      "props": [
-        { "name": "customers", "type": "Customer", "cardinality": "dictionary" }
-      ]
-    },
-    {
-      "name": "Customer",
-      "baseType": "object",
-      "props": [
-        { "name": "name",   "type": "text" },
-        { "name": "active", "type": "bool" }
-      ]
-    }
-  ]
-}
-```
+A malformed document is rejected at load with a clear, specific error
+(`SchemaValidationException`); a syntax error reports line and column.
 
-Renders `Db` as a form at `/` whose `customers` field is an HTML table.
-Each row links to `/customers/{key}`, which renders a Customer form.
+- Type names are unique; a root type `Db` exists.
+- Every prop's type resolves to a base type or a declared type; a set's
+  element type is an object type; prop names are unique within a type.
+- `initialData`: known types and fields, globally-unique positive ids, set
+  members and references point at existing entries of the right type, exactly
+  one `Db` entry.
+- Code is structurally validated: symbols resolve, assignments target
+  writable symbols, two-way bindings target lvalues, named-function call
+  arity matches, no duplicate `var` in a block. (Type checking is deferred —
+  type mismatches are runtime errors.)
 
-## Why no aliases (deferred)
+## Worked example
 
-TypeScript allows `type Names = string[]` — a type that *is* a collection.
-Applied here, that would mean a type could be e.g. "dictionary of Customer"
-in its own right, referenced by name from props. That is a convenience
-(reuse) layered over the model, not part of it. It also partially breaks
-the rule that cardinality lives on props — once aliases exist, cardinality
-can live in two places, and prop sites stop being locally readable.
-
-The current prop-side cardinality model is the canonical form. Aliases
-would be sugar over it. **Deferred** as a future convenience; not built now.
-
-## Validation rules a loader must enforce
-
-A malformed document is rejected at load time with a clear, specific error
-(`SchemaValidationException`) naming the offending type or prop — never an
-obscure failure deeper in the renderer or storage.
-
-- Type names are unique. (This also forbids a second `Db` — a duplicate `Db`
-  is just a duplicate name, not a special case.)
-- A root type named `Db` exists.
-- `baseType` is one of the known base types
-  (`bool`, `int`, `decimal`, `text`, `date`, `datetime`, `object`).
-- Every prop's `type` resolves to a base type or a type in `types`.
-- `props` is present iff `baseType` is `object`.
-- Prop names are unique within a type.
-- `cardinality` and `nullable` only appear on props, never on type
-  definitions.
-- `cardinality` is `single`, `set`, or `dictionary`. `nullable` is a boolean.
-  No other values.
-- A set's element type is an object type (members are keyed by their own
-  identity), and a set declares no `keyType`.
-- A dictionary's `keyType` is a known base type.
-- The document is syntactically valid JSON.
-- `initialData` (when present): types and fields exist, ids are unique
-  positive integers, set members / single refs point at existing entries of
-  the right type, and there is exactly one `Db` entry.
-- `ui`/`common` code (when present) passes structural validation: symbols
-  declared, assignments target writable symbols, two-way bindings target
-  assignable lvalues.
+The committed default app, `DeEnv/instance.app`, is the todo application —
+types, seed, and the full UI in one document. The designer's meta-schema
+(`DeEnv/meta.app`) is a types-only document.

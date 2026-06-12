@@ -23,14 +23,13 @@ where developers design data visually and use it as objects. Full mission in
 
 ## Ground rules — important
 
-1. **Build the current milestone only.** Per ROADMAP.md, Milestones 1–6 are
-   done (M4 delivered as self-hosting; M5 the object model: identity, extents,
-   references, sets, GC; M6 Code: reactive UI as hand-written AST — see
-   DECISIONS.md). The current milestone is **Milestone 7: Code text syntax**
-   — a parser + printer for an app.txt-style text form that replaces AST JSON
-   as the authoring surface (plan: code-text-syntax.md). **Schema versioning
-   stays postponed** (self-hosted on top of Code). Later milestones are out
-   of scope unless explicitly asked.
+1. **Build the current milestone only.** Per ROADMAP.md, Milestones 1–7 are
+   done (M4 designer as self-hosting; M5 the object model; M6 Code: reactive
+   UI on twin interpreters; M7 the app document: one text file — types +
+   initialData + code — with parser and printer; JSON is internal only — see
+   DECISIONS.md). The next milestone is chosen from ROADMAP.md's future list
+   when work resumes; later milestones are out of scope unless explicitly
+   asked. **Schema versioning stays postponed** (self-hosted on top of Code).
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
    custom language, the render-coupled storage engine, and the multi-device
@@ -66,10 +65,13 @@ where developers design data visually and use it as objects. Full mission in
    real long-term pillar (Vision pillar 5), but a late milestone. For now,
    plain JSON behind the interface. See DECISIONS.md.
 
-9. **No custom text syntax yet.** User code is hand-written JSON AST (the
-   schema document's `ui`/`common` sections), interpreted by twin C#/TS
-   interpreters kept in lockstep by a shared conformance suite. A text
-   syntax/parser, a type checker, and editor tooling are future layers.
+9. **The app document is the authoring surface.** An instance is ONE text
+   file (`instance.app`: types + initialData + common/ui code — see
+   INSTANCE_DESCRIPTION_FORMAT.md), parsed by `AppParse`/`CodeParse` and
+   printed back by `AppPrint`/`CodePrint` (round-trip stable). JSON is
+   internal only (the in-memory `InstanceDescription`, the wire, storage).
+   Code executes on twin C#/TS interpreters kept in lockstep by a shared
+   conformance suite; a type checker and editor tooling are future layers.
 
 10. **Watch for hidden scope.** This project's main risk is breadth. A plain
     sentence ("other users see a notification") can contain an entire future
@@ -94,16 +96,22 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
-Milestones 1–6 are done. The current milestone is **Milestone 7: Code text
-syntax** — port the prototype's combinator parser (`app14/DeEnv/Parsing` +
-`CodeParse.cs`) to produce our Code AST from an app.txt-style text form
-(indentation blocks, JSX-like tags, expression precedence), carried in a
-sidecar file (`"codeFile"` in the schema document). Text replaces inline
-`ui`/`common` AST JSON as the authoring surface; the AST stays the in-memory
-and wire form (client untouched, no TS parser). The printer (AST → canonical
-text) lands as the final stage with round-trip tests. Staged plan:
-code-text-syntax.md. Done when the todo app is authored as `instance.code`
-and the whole suite stays green on the parsed AST.
+Milestones 1–7 are done; the next milestone has not been picked yet (see
+ROADMAP.md's future list — candidates include real-time/multi-user, schema
+versioning, UI customization).
+
+**Milestone 7 (the app document) just landed** — one text file describes a
+whole instance: `types` + optional `initialData` + optional `common`/`ui`
+code, in an app.txt-style indentation-based language (JSX-like tags,
+expression precedence). `DeEnv/Code/Parsing` is the combinator core (offset
+cursor, positioned errors); `CodeParse`/`AppParse` parse, `CodePrint`/
+`AppPrint` print the canonical form back (round-trip tested: parse∘print is
+the identity, print∘parse a fixpoint). **JSON is retired from authoring** —
+the `InstanceDescription` record and its JSON form are internal (in-memory +
+wire; the client still receives AST, there is no TS parser). The committed
+default app is `DeEnv/instance.app` (the todo app: types + seed + UI in ~130
+lines); the designer runs `meta.app` and the bridge publishes designs by
+printing the same format. Format reference: INSTANCE_DESCRIPTION_FORMAT.md.
 
 **Milestone 6 (Code) just landed** — user-authored behaviour and UI as
 hand-written JSON AST in the schema document (`ui`/`common` sections),
