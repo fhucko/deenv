@@ -1,8 +1,14 @@
 {
   "profiles": {
-    "Instance": {
+    "Instance — Todo": {
       "commandName": "Project",
-      "commandLineArgs": "--mode instance",
+      "commandLineArgs": "--mode instance --app instance.app",
+      "launchBrowser": true,
+      "launchUrl": "http://localhost:8080"
+    },
+    "Instance — CRM": {
+      "commandName": "Project",
+      "commandLineArgs": "--mode instance --app crm.app",
       "launchBrowser": true,
       "launchUrl": "http://localhost:8080"
     },

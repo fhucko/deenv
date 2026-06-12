@@ -13,13 +13,19 @@ using GenHTTP.Modules.Websockets;
 // Properties/launchSettings.json). The instance runtime is untouched: modes only
 // pick which schema + data files it runs on.
 //
-//   instance  → run instance.app + instance-data.json  (the built app)
-//   designer  → run meta.app     + designer-data.json  (author schemas as data)
+//   instance  → run an app document + its data file (the built app)
+//   designer  → run meta.app + designer-data.json (author schemas as data)
 //   export    → project designer data into instance.app, then exit (the bridge)
+//
+// `--app <file>` (instance mode) picks which app document to run — e.g.
+// `--app crm.app`. Each app gets its own data file (<name>-data.json), so
+// switching apps never mixes data. Defaults to instance.app (the todo app).
 
 var baseDir = AppContext.BaseDirectory;
-var instanceSchema = Path.Combine(baseDir, "instance.app");
-var instanceData   = Path.Combine(baseDir, "instance-data.json");
+var appFile = AppArg(args);
+var instanceSchema = Path.IsPathRooted(appFile) ? appFile : Path.Combine(baseDir, appFile);
+var instanceData   = Path.Combine(baseDir,
+    Path.GetFileNameWithoutExtension(instanceSchema) + "-data.json");
 var metaSchema     = Path.Combine(baseDir, "meta.app");
 var designerData   = Path.Combine(baseDir, "designer-data.json");
 
@@ -65,4 +71,13 @@ static string ModeArg(string[] args)
         if (args[i] is "--mode" or "-m")
             return args[i + 1].ToLowerInvariant();
     return "instance";
+}
+
+// Parse `--app <file>`; defaults to the committed todo app.
+static string AppArg(string[] args)
+{
+    for (var i = 0; i < args.Length - 1; i++)
+        if (args[i] is "--app" or "-a")
+            return args[i + 1];
+    return "instance.app";
 }

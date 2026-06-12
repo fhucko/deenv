@@ -36,6 +36,7 @@
        copied next to the executable so it can be read from AppContext.BaseDirectory. -->
   <ItemGroup>
     <None Include="instance.app" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="crm.app" CopyToOutputDirectory="PreserveNewest" />
     <None Include="meta.app" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

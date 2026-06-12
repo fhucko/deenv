@@ -28,7 +28,7 @@
        milestone-2/3 scenarios keep using. -->
   <ItemGroup>
     <Content Include="..\DeEnv\instance.app" Link="instance.app" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="crm.app" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\DeEnv\crm.app" Link="crm.app" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\DeEnv\meta.app" Link="meta.app" CopyToOutputDirectory="PreserveNewest" />
     <!-- Shared Code-interpreter conformance cases (run by C# and by the TypeScript twin). -->
     <Content Include="..\DeEnv\Code\conformance.json" Link="conformance.json" CopyToOutputDirectory="PreserveNewest" />

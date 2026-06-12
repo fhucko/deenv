@@ -6,9 +6,8 @@ obj/
 DeEnv/Instance/*.js
 *.js.map
 
-## Instance runtime data
-instance-data.json
-designer-data.json
+## Instance runtime data (one per app: <app>-data.json)
+*-data.json
 
 ## VS / Rider
 .vs/
@@ -17,7 +16,3 @@ designer-data.json
 
 ## NuGet
 *.nupkg
-
-## Prototype reference (untracked, not part of the build)
-/app14/
-/app15/
