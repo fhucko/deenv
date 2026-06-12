@@ -24,11 +24,14 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private readonly TypeResolver _resolver;
     private readonly System.Text.Json.JsonSerializerOptions _writeOpts = new() { WriteIndented = true };
 
-    // Every operation is load-file → mutate → rewrite-file; the lock makes each one
-    // atomic against concurrent connections in this process, and SaveDoc's
-    // write-temp-then-move keeps the file itself atomic for any reader. (Cross-process
-    // and cross-op transactional safety stay with the real-time milestone.)
+    // The document is loaded into memory ONCE at construction and kept as the
+    // authoritative copy: reads serve from it, and a mutation edits it then rewrites the
+    // file (write-temp-then-move, atomic for any reader) for durability. This is safe
+    // because an instance is single-process — nothing else writes the file behind our
+    // back (the cross-process / real-time story is a later milestone). The lock
+    // serializes operations against concurrent connections in this one process.
     private readonly object _sync = new();
+    private JsonObject _doc;
 
     public JsonFileInstanceStore(string filePath, InstanceDescription desc)
     {
@@ -37,11 +40,19 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         _resolver = new TypeResolver(desc);
 
         if (!File.Exists(filePath) || new FileInfo(filePath).Length == 0)
-            File.WriteAllText(filePath, InitialJson());
+        {
+            // Seed from the app's initialData (or an empty root) and persist it.
+            _doc = BuildInitialDoc();
+            WriteAtomic(_doc.ToJsonString(_writeOpts));
+        }
         else
+        {
+            var raw = LoadRawDoc();
             // The startup guard: an existing data file must match the running app's
             // types — fail loudly here rather than half-work over stale data.
-            StoredDataValidator.Validate(LoadRawDoc(), desc, filePath);
+            StoredDataValidator.Validate(raw, desc, filePath);
+            _doc = Normalize(raw);
+        }
     }
 
     // The file exactly as stored, for the startup guard (no LoadDoc normalization,
@@ -454,12 +465,16 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
     }
 
-    // Reinitialize the data file to the schema's initial document (the initialData
-    // seed when the schema carries one, else the default empty root). Used by the
-    // designer bridge when publishing a new schema.
+    // Reinitialize the data to the schema's initial document (the initialData seed when
+    // the schema carries one, else the default empty root) — in memory and on disk.
+    // Used by the designer bridge when publishing a new schema.
     public void Reset()
     {
-        lock (_sync) WriteAtomic(InitialJson());
+        lock (_sync)
+        {
+            _doc = BuildInitialDoc();
+            WriteAtomic(_doc.ToJsonString(_writeOpts));
+        }
     }
 
     // ── dictionary entries (manual keys; values are scalars or object references) ──
@@ -528,11 +543,13 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     // ── helpers: doc + extents ──────────────────────────────────────────────────
 
-    private JsonObject LoadDoc()
+    // The in-memory authoritative document — loaded once at construction, mutated in
+    // place by writes (each followed by SaveDoc). Every operation goes through here.
+    private JsonObject LoadDoc() => _doc;
+
+    // Patch in the structural slots a hand-seeded or legacy document may omit.
+    private JsonObject Normalize(JsonObject doc)
     {
-        var text = File.Exists(_filePath) ? File.ReadAllText(_filePath) : "";
-        var doc = (string.IsNullOrWhiteSpace(text) ? null : JsonNode.Parse(text)) as JsonObject
-                  ?? new JsonObject();
         if (doc["extents"] is not JsonObject) doc["extents"] = new JsonObject();
         if (doc["root"] is null) doc["root"] = InitialRootNode();
         return doc;
@@ -774,8 +791,6 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1));
 
     // ── initial document ────────────────────────────────────────────────────────
-
-    private string InitialJson() => BuildInitialDoc().ToJsonString(_writeOpts);
 
     private JsonObject BuildInitialDoc()
     {
