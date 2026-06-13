@@ -1,12 +1,12 @@
 Feature: Self-hosted generic UI (object forms)
-  An app opts into the self-hosted generic UI with `generic` in its `ui` section.
-  The generic object page is then re-expressed in the Code language: an `objectForm`
-  library renders a form from the type's schema (a Code value) using the `field(obj,
-  name)` builtin for dynamic, two-way-bound access — plugged in at the lowest view
-  precedence as a synthesized per-type view. An object that holds a set self-hosts too:
-  objectForm renders the set as an inline table whose member rows link to the nested
-  member URL (path-walk). Only a type holding an arbitrary-key dictionary still falls to
-  the C# auto-form (no dicts in the Code runtime yet).
+  The self-hosted generic UI is the DEFAULT for any app without a custom `fn render()`.
+  The generic object page is re-expressed in the Code language: an `objectForm` library
+  renders a form from the type's schema (a Code value) using the `field(obj, name)`
+  builtin for dynamic, two-way-bound access — plugged in as a synthesized per-type view.
+  An object that holds a set self-hosts too: objectForm renders the set as an inline
+  table whose member rows link to the nested member URL (path-walk); a dictionary renders
+  inline as a `dictTable`. Only navigating INTO a dictionary entry still falls to the C#
+  auto-form (dict-entry pages aren't self-hosted yet).
 
   @milestone-9 @single-user
   Scenario: An all-scalar object page is rendered by the self-hosted form

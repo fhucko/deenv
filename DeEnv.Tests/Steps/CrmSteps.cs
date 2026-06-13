@@ -85,14 +85,22 @@ public sealed class CrmSteps(InstanceContext ctx)
     [When(@"I set the {string} field to {string}")]
     public async Task WhenSetFieldAsync(string field, string value)
     {
-        await ctx.Page!.Locator($"input[data-field='{field}']").FillAsync(value);
+        // Self-hosted forms class inputs by prop name (input.name) and autosave each edit;
+        // the retiring C# auto-form keyed them with data-field and committed on Save.
+        var selfHosted = ctx.Page!.Locator($"input.{field}");
+        var input = await selfHosted.CountAsync() > 0 ? selfHosted.First
+            : ctx.Page!.Locator($"input[data-field='{field}']").First;
+        await input.FillAsync(value);
     }
 
     [When("I save")]
     public async Task WhenSaveAsync()
     {
-        // [data-wired] ensures the WS is open and the submit handler is attached.
-        await ctx.Page!.Locator("form#node-form[data-wired] button[type='submit']").ClickAsync();
+        // The self-hosted UI autosaves each edit (no Save button) — here we just wait for the
+        // WS write to flush. The retiring C# auto-form commits on its Save button; click it
+        // when present. [data-wired] ensures the WS is open and the handler attached.
+        var saveButton = ctx.Page!.Locator("form#node-form[data-wired] button[type='submit']");
+        if (await saveButton.CountAsync() > 0) await saveButton.ClickAsync();
         await ctx.Page.WaitForTimeoutAsync(500); // let the WS write reach the server
     }
 
@@ -101,8 +109,19 @@ public sealed class CrmSteps(InstanceContext ctx)
     [When("I click New")]
     public async Task WhenClickNewAsync()
     {
-        await ctx.Page!.Locator("button[data-newentry][data-wired]").First.ClickAsync();
-        await ctx.Page.Locator("form.create-form").WaitForAsync();
+        // Wait until the page settles into either UI: the self-hosted inline add form, or
+        // the C# auto-form's (wired) New button.
+        await ctx.Page!.Locator(".set-new, .dict-new, button[data-newentry][data-wired]")
+            .First.WaitForAsync();
+        // The retiring C# auto-form reveals its create form behind a New button. The
+        // self-hosted set/dict tables show their add form (.set-new/.dict-new) inline —
+        // nothing to click, so this is a no-op there.
+        var newButton = ctx.Page.Locator("button[data-newentry][data-wired]");
+        if (await newButton.CountAsync() > 0)
+        {
+            await newButton.First.ClickAsync();
+            await ctx.Page.Locator("form.create-form").WaitForAsync();
+        }
     }
 
     [When(@"I set the create field {string} to {string}")]

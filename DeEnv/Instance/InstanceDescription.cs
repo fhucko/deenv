@@ -32,19 +32,16 @@ public record UiVar(string Name, ICodeValue? Value = null);
 // object. The function is anonymous — the target rides here, never on Fn.Name.
 public record UiView(string? Type, CodeFunction Fn, string? Prop = null);
 
-// The `ui` section: client-held state variables, shared component functions, views,
-// and the optional entry-point `render` function (the implicit root path view —
-// when present, code owns the whole URL space). Without it, views customize parts
-// of the generic UI and everything else stays the auto-form.
-// `Generic` is the opt-in to the self-hosted generic UI: when set, object pages of
-// all-scalar types that lack an explicit view are rendered by the Code `objectForm`
-// library (synthesized into per-type views at render time) instead of the C# auto-form.
+// The `ui` section: client-held state variables, shared component functions, the
+// synthesized generic views, and the optional entry-point `render` function. With
+// `fn render()` the code owns the whole URL space (fully-custom UI); without it the
+// self-hosted generic UI is the default (synthesized into per-type Views at render
+// time by GenericUi.Effective). `Views` is never authored — only synthesized.
 public record InstanceUi(
     IReadOnlyList<UiVar>? Vars = null,
     IReadOnlyList<CodeFunction>? Functions = null,
     CodeFunction? Render = null,
-    IReadOnlyList<UiView>? Views = null,
-    bool Generic = false);
+    IReadOnlyList<UiView>? Views = null);
 
 // The `common` section: functions shared by server and client. A function may be
 // marked server-only (CodeFunction.ServerOnly) so it is never shipped to the client.

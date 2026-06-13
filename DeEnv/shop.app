@@ -31,6 +31,3 @@ initialData
         name: "Grace Hopper"
         email: "grace@example.com"
         active: true
-
-ui
-    generic

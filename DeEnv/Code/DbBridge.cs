@@ -197,7 +197,7 @@ public static class DbBridge
         IntValue i      => new ExecInt { Value = i.Value },
         TextValue t     => new ExecText { Value = t.Text },
         BoolValue b     => new ExecBool { Value = b.Value },
-        DecimalValue d  => new ExecText { Value = d.Value.ToString() }, // no decimal exec value yet
+        DecimalValue d  => new ExecText { Value = d.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) }, // no decimal exec value yet
         DateValue d     => new ExecText { Value = d.Value.ToString("yyyy-MM-dd") },
         DateTimeValue t => new ExecText { Value = t.Value.ToString("O") },
         _ => new ExecNull(),

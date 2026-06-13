@@ -113,24 +113,19 @@ ui
 
 ### Two modes: fully custom or fully auto
 
-A `ui` section is one of two modes — there is no partial-customization middle
-layer (the M8 `view` system was dropped; "auto with overrides" will come later
-via the custom mode composing the generic UI as a library):
+An app is one of two modes — there is no partial-customization middle layer (the
+M8 `view` system was dropped; "auto with overrides" will come later via the custom
+mode composing the generic UI as a library):
 
-- **Fully custom** — `fn render()` owns the whole URL space. A full code page
-  (two-way binding, WS mutations, the memo cache, refetch); it ships to the
-  client and re-renders there.
-- **Fully auto** — `generic` on its own line opts into the **self-hosted generic
-  UI** (M9): the generic object/reference/set pages are rendered by a Code library
-  (`objectForm`/`refEditor`/`setTable` over the type's schema) instead of the C#
-  auto-form. Shapes not yet self-hosted (dictionaries, the Db-root object page)
-  stay on the C# auto-form. An app with no `ui` section is also fully auto (the
-  C# auto-form).
-
-```
-ui
-    generic
-```
+- **Fully custom** — a `ui` section with `fn render()` owns the whole URL space. A
+  full code page (two-way binding, WS mutations, the memo cache, refetch); it ships
+  to the client and re-renders there.
+- **Fully auto (the default)** — any app *without* a `fn render()` (including an app
+  with no `ui` section at all) is rendered by the **self-hosted generic UI** (M9):
+  the generic object/reference/set/dictionary pages are rendered by a Code library
+  (`objectForm`/`refEditor`/`setTable`/`dictTable` over the type's schema). There is
+  no opt-in flag — auto is simply what you get without a custom render. (Navigating
+  INTO a dictionary entry still falls to the retiring C# auto-form for now.)
 
 ## Validation a loader must enforce
 
@@ -147,7 +142,9 @@ A malformed document is rejected at load with a clear, specific error
   writable symbols, two-way bindings target lvalues, named-function call
   arity matches, no duplicate `var` in a block. (Type checking is deferred —
   type mismatches are runtime errors.)
-- A `ui` section defines `fn render()` (fully custom) or `generic` (fully auto).
+- A `ui` section is optional; when present it may define `fn render()` (fully
+  custom) and/or shared vars/helpers. Without a `fn render()`, the app is fully
+  auto (the default self-hosted generic UI).
 
 ## Worked example
 

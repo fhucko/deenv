@@ -6,11 +6,11 @@ using TUnit.Assertions.Extensions;
 
 namespace DeEnv.Tests.Steps;
 
-// Steps for SelfHostedUi.feature — the self-hosted generic UI (milestone 9, slice 1).
-// The fixture opts in with `generic` and has no hand-written views, so the all-scalar
-// Note object page is rendered by the Code `objectForm` library. Page-kind and
-// navigation steps ("I open", "the page is a code page", "… auto-form", "the page
-// shows", "the store eventually has …") are reused from the other step bindings.
+// Steps for SelfHostedUi.feature — the self-hosted generic UI (milestone 9). The fixtures
+// have no custom `fn render()`, so they fall to the default self-hosted generic UI: their
+// object pages are rendered by the Code `objectForm` library. Page-kind and navigation
+// steps ("I open", "the page is a code page", "the page shows", "the store eventually
+// has …") are reused from the other step bindings.
 [Binding]
 public sealed class SelfHostedUiSteps(InstanceContext ctx)
 {

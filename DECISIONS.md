@@ -625,7 +625,10 @@ roadmap-future layer) are later slices. Decisions:
 - **Opt-in is a model flag, not a test hack.** `generic` in the `ui` section →
   `InstanceUi.Generic` (parsed, printed, round-trip tested). It scopes the
   self-hosting so existing apps (todo/shop/crm) are untouched, and is the
-  migration seam later slices widen until the C# renderer retires.
+  migration seam later slices widen until the C# renderer retires. *(Superseded in
+  Phase 2b: the opt-in flag and the `IsSelfHostable` gate were removed once every
+  shape self-hosted — the self-hosted generic UI is now the default. See "Phase 2b:
+  default-on" below.)*
 - **Synthesis stays render-time; the canonical description is pristine.**
   `GenericUi.Effective` builds an augmented `InstanceUi` (library functions +
   synthesized views, renumbered via `CodeIds` for stable memo keys) used by
@@ -764,6 +767,41 @@ auto-form, and is deleted when dictionaries self-host. Specced by
 `SelfHostedUi.feature` (the `/` self-host + nested-link scenario, plus a dict-bearing
 fixture whose `/` stays C#). Default-on remains blocked only by **general
 dictionaries** and **designer parity**.
+
+### Phase 2b: default-on (the self-hosted generic UI is the default)
+
+With dictionaries self-hosted (Phase 1) and the base-typed root removed (Phase 2a, "Db
+must be an object type"), every shape the generic UI needs now renders in Code, so the
+opt-in came down:
+
+- **`GenericUi.Effective` synthesizes by default.** It returns the app's ui unchanged
+  only when there is a fully-custom `fn render()`; otherwise (a ui section without a
+  render, *or no ui section at all*) it synthesizes the generic library + per-type views.
+  A plain types-only app now renders entirely through `objectForm`.
+- **The `generic` opt-in and the `IsSelfHostable` gate were deleted.** `InstanceUi.Generic`,
+  its parser marker, its printer line, and the "render-or-generic" loader check are gone;
+  `Effective` synthesizes an object view for *every* object type (no per-type gate). The
+  one remaining seam is `TypeResolver.TraversesDictionary` in `ResolveView`: navigating
+  INTO a dictionary entry still routes to the retiring C# auto-form (dict-entry pages
+  aren't self-hosted), as does the `/~/{id}` id-route.
+- **Collection labels became navigable.** `objectForm` now renders a set/dict prop's
+  label as an `<a class="list-title" href={nest(base, prop)}>` (path-walk: the collection
+  route is reachable), where it was a plain `<label>`.
+- **The C#-auto-form features were migrated, not deleted.** The milestone-1/2/4/5 features
+  that drove the C# form (Bool-root, Instance, Navigation, Presentation, Editing, Entries,
+  ObjectModel, Bridge) now assert the self-hosted UI: class-based selectors (`input.<prop>`,
+  `.set-row`, `.ref-editor`) and **autosave** (no Save button) instead of `#node-form` /
+  `data-path` / explicit Save. Scenarios that tested C#-form-only ceremony were dropped as
+  obsolete: "an unsaved change does not persist" (autosave has no unsaved state) and the
+  create-form's save-and-open / cancel (the self-hosted set/dict add is an inline component
+  with one Add button). The dictionary *route* (`/settings`) scenarios stay on the C# form.
+- **A latent culture bug surfaced and was fixed.** `DbBridge.ScalarToExec` formatted a
+  decimal with the OS culture (`99,5` on a non-invariant machine); it now uses
+  `InvariantCulture`, matching the rest of the codebase and the C# form.
+
+What's left for Phase 3: delete the C# `SsrRenderer` auto-form + `instance.ts` + `/js` +
+the C#-form-only WS ops (keep `addEntry`/`removeEntry`), self-host the dict-entry page and
+the `/~/{id}` id-route, and serve infra endpoints on a separate port.
 
 ## Tool stack and project structure
 

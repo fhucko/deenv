@@ -77,10 +77,10 @@ public class InstanceContext
     // The rendered HTML from the code-owned UI (Stage 2 SSR), under test.
     public string? RenderedHtml { get; set; }
 
-    // Milestone 9 (self-hosted generic UI): an app that opts into the generic Code UI
-    // (`generic`) with no hand-written views. The all-scalar `Note` object page is rendered
-    // by the self-hosted `objectForm` library; the Db root (`/`) self-hosts too, rendering
-    // its `notes` set as an inline table whose member rows link to the nested member URL
+    // Milestone 9 (self-hosted generic UI): an app with no `ui` section, so the self-hosted
+    // generic UI (the default) renders it. The all-scalar `Note` object page is rendered by
+    // the self-hosted `objectForm` library; the Db root (`/`) self-hosts too, rendering its
+    // `notes` set as an inline table whose member rows link to the nested member URL
     // (/notes/2). Drives SelfHostedUi.feature.
     public static InstanceDescription SelfHostedFormDb() =>
         InstanceDescriptionLoader.Load(SelfHostedFormApp);
@@ -103,14 +103,11 @@ public class InstanceContext
             done: false
             count: 3
             dueDate: "2026-01-01"
-
-    ui
-        generic
     """;
 
-    // Milestone 9: a `generic` app whose Db holds an arbitrary-key DICTIONARY. The Code
-    // stdlib can't render a dictionary yet, so Db is not self-hostable and `/` stays on the
-    // C# auto-form (the migration seam). `Setting` (all-scalar) self-hosts.
+    // Milestone 9: an app whose Db holds an arbitrary-key DICTIONARY, rendered by the default
+    // self-hosted generic UI. The Db root self-hosts, rendering the dictionary inline via the
+    // `dictTable` library component. `Setting` (all-scalar) self-hosts too.
     public static InstanceDescription SelfHostedDictDb() =>
         InstanceDescriptionLoader.Load(SelfHostedDictApp);
 
@@ -123,14 +120,11 @@ public class InstanceContext
 
     initialData
         Db 1
-
-    ui
-        generic
     """;
 
-    // Milestone 9: a `generic` app whose Db holds a SCALAR dictionary (text→text). The
-    // self-hosted dictTable shows a Key + Value column; entries persist via the path-addressed
-    // addEntry/removeEntry ops, like the object dict.
+    // Milestone 9: an app whose Db holds a SCALAR dictionary (text→text), rendered by the
+    // default self-hosted generic UI. The self-hosted dictTable shows a Key + Value column;
+    // entries persist via the path-addressed addEntry/removeEntry ops, like the object dict.
     public static InstanceDescription SelfHostedScalarDictDb() =>
         InstanceDescriptionLoader.Load(SelfHostedScalarDictApp);
 
@@ -141,15 +135,12 @@ public class InstanceContext
 
     initialData
         Db 1
-
-    ui
-        generic
     """;
 
-    // Milestone 9 (slice 2: references). Opts in with `generic`. `Db.lead: Person` is a
-    // reference ROUTE (/lead → the self-hosted reference editor); `Note` is self-hostable
-    // (title scalar + `author: Person` reference) so /notes/{id} renders an objectForm with
-    // an embedded author picker. Two people seed the Person extent for "pick existing".
+    // Milestone 9 (slice 2: references). Rendered by the default self-hosted generic UI.
+    // `Db.lead: Person` is a reference ROUTE (/lead → the self-hosted reference editor);
+    // `Note` (title scalar + `author: Person` reference) so /notes/{id} renders an objectForm
+    // with an embedded author picker. Two people seed the Person extent for "pick existing".
     public static InstanceDescription SelfHostedRefDb() =>
         InstanceDescriptionLoader.Load(SelfHostedRefApp);
 
@@ -175,9 +166,6 @@ public class InstanceContext
             name: "Grace"
         Note 4
             title: "First note"
-
-    ui
-        generic
     """;
 
     // The code-bearing fixture documents, for the printer round-trip tests.

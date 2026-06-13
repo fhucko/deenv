@@ -3,11 +3,13 @@ using DeEnv.Code;
 namespace DeEnv.Instance;
 
 // The self-hosted generic UI (milestone 9), a reflective Code library over schema data,
-// synthesized into the effective ui at render time when an app opts in (InstanceUi.Generic).
+// synthesized into the effective ui at render time. It is the DEFAULT UI: any app without a
+// fully-custom `fn render()` (including an app with no `ui` section) renders through it.
 //
 //   • objectForm(obj, meta, base) — an object page: a field per prop (scalar input, a nested
-//     refEditor for a single object reference, or an inline setTable for an object set). `base`
-//     is the page's URL path, so an inline set builds nested member links. Edits autosave.
+//     refEditor for a single object reference, an inline setTable for an object set, or an
+//     inline dictTable for a dictionary). A collection's label is a navigable list-title link
+//     to its own route. `base` is the page's URL path, so inline links nest. Edits autosave.
 //   • refEditor(parent, prop, target) — a reference editor: current label, a pick button
 //     per extent() candidate, a clear button, and a create-new form. A COMPONENT: its body
 //     runs once as init (a local `state` holding a draft), and it returns a render fn.
@@ -27,7 +29,7 @@ namespace DeEnv.Instance;
 // stored by type NAME (cycle-safe); a component resolves them with field(__descs, name).
 //
 // Synthesis is render-time only: the canonical InstanceDescription (what AppPrint emits)
-// keeps just the `generic` flag. A synthesized OBJECT view (Type=T, Prop=null) binds the
+// carries no UI at all for a plain app. A synthesized OBJECT view (Type=T, Prop=null) binds the
 // routed object; a REFERENCE / SET view (Type=O, Prop=P) binds the parent object that owns
 // the prop — both reuse the M8 type-view client binding (no new wire shape).
 public static class GenericUi
@@ -42,8 +44,12 @@ public static class GenericUi
                         meta.name
                     foreach p in meta.props
                         <div class="field">
-                            <label class={p.name}>
-                                humanize(p.name)
+                            if p.baseType == "set" || p.baseType == "dictionary"
+                                <a class="list-title" href={nest(base, p.name)}>
+                                    humanize(p.name)
+                            else
+                                <label class={p.name}>
+                                    humanize(p.name)
                             if p.baseType == "object"
                                 refEditor(obj, p.name, field(__descs, p.target))()
                             else if p.baseType == "set"
@@ -187,7 +193,12 @@ public static class GenericUi
     public static InstanceUi? Effective(InstanceDescription desc)
     {
         var ui = desc.Ui;
-        if (ui is not { Generic: true }) return ui;
+        // A fully-custom UI (`fn render()`) owns the whole URL space — no generic synthesis.
+        if (ui?.Render != null) return ui;
+        // Otherwise the self-hosted generic UI is the DEFAULT: synthesize per-type views over
+        // the (possibly absent) ui section. A plain app — no `ui` section, or only common
+        // helpers — renders entirely through the Code objectForm library.
+        ui ??= new InstanceUi();
 
         // Parse the library FRESH (distinct CodeFunction instances each call, so concurrent
         // renderers never share mutable Ids).
@@ -199,9 +210,9 @@ public static class GenericUi
         var synthViews = new List<UiView>();
         foreach (var type in objectTypes)
         {
-            // Object page for a self-hostable type (scalars + single references + object sets).
-            if (IsSelfHostable(type, desc))
-                synthViews.Add(SynthObjectView(type.Name));
+            // An object page for every object type. (Dictionaries self-host now, so there is
+            // no longer a per-type gate routing some types to the C# auto-form.)
+            synthViews.Add(SynthObjectView(type.Name));
 
             // Reference-route editor per single object-reference prop (any owner — e.g. Db.lead).
             foreach (var prop in RefProps(type, desc))
@@ -234,23 +245,6 @@ public static class GenericUi
 
     private static IEnumerable<PropDefinition> SetProps(TypeDefinition type, InstanceDescription desc) =>
         (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Set && desc.IsObjectType(p.Type));
-
-    // IsSelfHostable is the TEMPORARY migration seam between the two coexisting renderers:
-    // "can the Code UI fully render this type? If yes, synthesize a view; else fall to the
-    // (retiring) C# auto-form, which still covers everything." Not root-specific, not
-    // permanent — the only prop the Code stdlib can't render yet is an arbitrary-key
-    // dictionary, so the gate exists purely to route dict-bearing types to C# (without it,
-    // objectForm would walk a dict prop, have no arm, and silently drop it). DELETE this
-    // (it becomes `true` everywhere) once dictionaries self-host and the C# renderer retires.
-    //
-    // Self-hostable = every prop is a single scalar, a single object reference, or an object
-    // SET (a dictionary keyed by member identity — rendered inline as a table with nested
-    // member links). A scalar set or an arbitrary-key dictionary still forces C#.
-    private static bool IsSelfHostable(TypeDefinition type, InstanceDescription desc) =>
-        type.Props is { Count: > 0 } props && props.All(p =>
-            p.Cardinality == Cardinality.Single
-            || (p.Cardinality == Cardinality.Set && desc.IsObjectType(p.Type))
-            || p.Cardinality == Cardinality.Dictionary);
 
     // `view T(obj, base)` → `return objectForm(obj, field(__descs, "T"), base)`. `base` is the
     // page's URL path, threaded so inline sets build nested member links (nest(base, prop)).

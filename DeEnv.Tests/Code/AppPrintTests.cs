@@ -43,23 +43,6 @@ public sealed class AppPrintTests
     }
 
     [Test]
-    public async Task A_generic_opt_in_document_round_trips()
-    {
-        await AssertRoundTrips(
-            """
-            types
-                Db
-                    notes: set of Note
-                Note
-                    title: text
-                    done: bool
-
-            ui
-                generic
-            """);
-    }
-
-    [Test]
     public async Task The_crm_and_meta_documents_round_trip()
     {
         await AssertRoundTrips(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "crm.app")));

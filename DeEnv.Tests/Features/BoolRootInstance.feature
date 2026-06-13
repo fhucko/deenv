@@ -1,6 +1,7 @@
 Feature: Bool-root instance
-  The simplest valid instance: Db is a single bool. It renders as one
-  checkbox. This is the degenerate case of the instance model, not a stub.
+  The simplest valid instance: an object Db with a single bool field. It renders
+  as one checkbox in the self-hosted generic UI, which autosaves each edit (no
+  Save button). This is the degenerate case of the instance model, not a stub.
 
   @milestone-1 @single-user
   Scenario: The root renders as a checkbox
@@ -17,18 +18,9 @@ Feature: Bool-root instance
     Then the checkbox is checked
 
   @milestone-1 @single-user @persistence
-  Scenario: A saved value survives a reload
+  Scenario: An edit autosaves and survives a reload
     Given an instance whose Db is a bool with value false
     When I navigate to the root URL "/"
     And I click the checkbox
-    And I save
     And I reload
     Then the checkbox is checked
-
-  @milestone-1 @single-user @persistence
-  Scenario: An unsaved change does not persist
-    Given an instance whose Db is a bool with value false
-    When I navigate to the root URL "/"
-    And I click the checkbox
-    And I reload
-    Then the checkbox is unchecked

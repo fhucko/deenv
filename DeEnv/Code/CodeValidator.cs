@@ -51,11 +51,9 @@ public static class CodeValidator
         foreach (var f in ui.Functions ?? []) ValidateFunction(f, top);
         foreach (var f in desc.Common?.Functions ?? []) ValidateFunction(f, top);
 
-        // An app is fully custom (`fn render()`) or fully auto (`generic`); a ui section
-        // with neither renders nothing — reject at load.
-        if (ui.Render == null && !ui.Generic)
-            throw new SchemaValidationException(
-                "The 'ui' section must define 'fn render()' (custom UI) or 'generic' (auto UI).");
+        // An app is fully custom (`fn render()`) or fully auto (the default self-hosted
+        // generic UI when there is no render). A ui section with only vars/helpers and no
+        // render is valid: the generic UI takes over.
         if (ui.Render != null) ValidateFunction(ui.Render, top);
     }
 

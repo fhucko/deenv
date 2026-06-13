@@ -62,20 +62,24 @@ public sealed class NavigationSteps(InstanceContext ctx)
     }
 
     // Matches: When I click the row for key "42" in the customers table
+    // The self-hosted dictTable links each row's key cell to the nested entry URL
+    // (a.dict-open); the retiring C# table used tr[data-nav].
     [When(@"I click the row for key {string} in the customers table")]
     public async Task WhenClickRowAsync(string key)
     {
-        await ctx.Page!.Locator($"tr[data-nav] a:text('{key}')").ClickAsync();
+        await ctx.Page!.Locator($"table a:text-is('{key}')").First.ClickAsync();
         await ctx.Page.WaitForURLAsync(new System.Text.RegularExpressions.Regex($".*/customers/{key}$"));
     }
 
     // ── Then ──────────────────────────────────────────────────────────────────
 
     // Matches: Then I see a form for "Shop"
+    // The self-hosted object page is a div.object-form with an <h2> heading; the retiring
+    // C# auto-form used a <form id="node-form">. Either way the heading is the type name.
     [Then(@"I see a form for {string}")]
     public async Task ThenFormForAsync(string typeName)
     {
-        var text = await ctx.Page!.Locator("form h2").InnerTextAsync();
+        var text = await ctx.Page!.Locator(".object-form h2, form h2").First.InnerTextAsync();
         await Assert.That(text).IsEqualTo(typeName);
     }
 
@@ -91,7 +95,7 @@ public sealed class NavigationSteps(InstanceContext ctx)
     [Then(@"the {string} field shows {string}")]
     public async Task ThenFieldShowsAsync(string fieldName, string expected)
     {
-        var input = ctx.Page!.Locator($"input[data-path$='/{fieldName}']");
+        var input = await FieldInputAsync(fieldName);
         var value = await input.GetAttributeAsync("value") ?? "";
         await Assert.That(value).IsEqualTo(expected);
     }
@@ -100,8 +104,18 @@ public sealed class NavigationSteps(InstanceContext ctx)
     [Then(@"the {string} field shows a checked checkbox")]
     public async Task ThenFieldCheckedAsync(string fieldName)
     {
-        var cb = ctx.Page!.Locator($"input[type='checkbox'][data-path$='/{fieldName}']");
+        var cb = await FieldInputAsync(fieldName);
         await Assert.That(await cb.IsCheckedAsync()).IsTrue();
+    }
+
+    // A field input on either UI: the self-hosted form classes inputs by prop name
+    // (input.name); the retiring C# auto-form keyed them by path (data-path$='/name').
+    private async Task<ILocator> FieldInputAsync(string fieldName)
+    {
+        var selfHosted = ctx.Page!.Locator($"input.{fieldName}");
+        return await selfHosted.CountAsync() > 0
+            ? selfHosted.First
+            : ctx.Page!.Locator($"input[data-path$='/{fieldName}']").First;
     }
 
     // Matches: Then the URL is "/customers/42"

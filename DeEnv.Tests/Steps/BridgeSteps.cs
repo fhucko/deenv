@@ -174,8 +174,12 @@ public sealed class BridgeSteps(InstanceContext ctx)
     [Then("a reference link {string} is present")]
     public async Task ThenReferenceLinkPresentAsync(string fieldName)
     {
-        var count = await ctx.Page!.Locator($"a[href='/{fieldName}']").CountAsync();
-        await Assert.That(count).IsGreaterThanOrEqualTo(1);
+        // The self-hosted object form renders a single reference as an inline editor under
+        // its labeled field; the retiring C# auto-form rendered it as a link to /<field>.
+        var editor = await ctx.Page!.Locator(".ref-editor").CountAsync();
+        if (editor > 0) { await Assert.That(editor).IsGreaterThanOrEqualTo(1); return; }
+        var link = await ctx.Page!.Locator($"a[href='/{fieldName}']").CountAsync();
+        await Assert.That(link).IsGreaterThanOrEqualTo(1);
     }
 
     [Then("the exported type {string} has a set prop {string} of type {string}")]
@@ -224,7 +228,8 @@ public sealed class BridgeSteps(InstanceContext ctx)
     [Then("the {string} field is present")]
     public async Task ThenFieldPresentAsync(string fieldName)
     {
-        var count = await ctx.Page!.Locator($"input[data-path$='/{fieldName}']").CountAsync();
+        // Self-hosted inputs are classed by prop name; the C# auto-form keyed them by path.
+        var count = await ctx.Page!.Locator($"input.{fieldName}, input[data-path$='/{fieldName}']").CountAsync();
         await Assert.That(count).IsGreaterThanOrEqualTo(1);
     }
 }

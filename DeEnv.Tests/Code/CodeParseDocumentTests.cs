@@ -202,16 +202,18 @@ public sealed class CodeParseDocumentTests
     }
 
     [Test]
-    public async Task A_ui_section_with_neither_render_nor_generic_is_rejected_at_load()
+    public async Task A_ui_section_without_render_loads_and_defaults_to_the_generic_ui()
     {
-        await Assert.That(() => InstanceDescriptionLoader.Load(
+        // No `fn render()` is fine: the self-hosted generic UI is the default. A ui section
+        // may still carry vars/helpers the generic library does not use.
+        var desc = InstanceDescriptionLoader.Load(
             "types\n" +
             "    Db\n" +
             "        note: text\n" +
             "\n" +
             "ui\n" +
-            "    var path = \"/\"\n"))
-            .Throws<SchemaValidationException>();
+            "    var path = \"/\"\n");
+        await Assert.That(desc.Ui!.Render).IsNull();
     }
 
     [Test]

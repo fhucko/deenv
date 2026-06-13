@@ -51,31 +51,35 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
 
     // ── When ────────────────────────────────────────────────────────────────────
 
+    // The self-hosted setTable shows its add form (.set-new) inline; Add stays on the list
+    // (no save-and-open), so we follow the new member's open link to its own page.
     [When(@"I create a new {string} named {string} in the set")]
     public async Task WhenCreateNewInSetAsync(string typeName, string name)
     {
-        await ctx.Page!.Locator("button[data-newentry][data-wired]").First.ClickAsync();
-        await ctx.Page.Locator("form.create-form").WaitForAsync();
-        await ctx.Page.Locator("form.create-form [data-mode='new']").ClickAsync();
-        await ctx.Page.Locator("form.create-form input[name='name']").FillAsync(name);
-        await ctx.Page.Locator("form.create-form button[data-saveopen]").ClickAsync();
-        await ctx.Page.WaitForTimeoutAsync(700);
+        await ctx.Page!.Locator(".set-new input.name").FillAsync(name);
+        await ctx.Page.Locator("button.set-add").ClickAsync();
+        await ctx.Page.Locator(".set-row", new() { HasTextString = name }).First.WaitForAsync();
+        await ctx.Page.WaitForTimeoutAsync(500); // negative→real id remap settles
+        await ctx.Page.Locator(".set-row", new() { HasTextString = name })
+                      .First.Locator("a.set-open").ClickAsync();
+        await ctx.Page.WaitForTimeoutAsync(400);
     }
 
+    // The self-hosted reference editor's create-new: fill the .ref-new draft, then Create.
     [When(@"I create a new {string} named {string} through the reference")]
     public async Task WhenCreateNewThroughReferenceAsync(string typeName, string name)
     {
-        // [data-wired] ensures the toggle's click handler is attached before we use it.
-        await ctx.Page!.Locator("[data-ref] [data-mode='new'][data-wired]").ClickAsync();
-        await ctx.Page.Locator("[data-ref] .ref-new input[name='name']").FillAsync(name);
+        await ctx.Page!.Locator(".ref-new input.name").FillAsync(name);
+        await ctx.Page.Locator("button.ref-create").ClickAsync();
+        await ctx.Page.WaitForTimeoutAsync(400);
     }
 
+    // The self-hosted reference editor offers each candidate as a .ref-pick button.
     [When(@"I pick the existing {string} named {string}")]
     public async Task WhenPickExistingAsync(string typeName, string name)
     {
-        await ctx.Page!.Locator("[data-ref] [data-mode='existing'][data-wired]").ClickAsync();
-        await ctx.Page.Locator("[data-ref] select[data-pick]")
-                      .SelectOptionAsync(new Microsoft.Playwright.SelectOptionValue { Label = name });
+        await ctx.Page!.Locator("button.ref-pick", new() { HasTextString = name }).First.ClickAsync();
+        await ctx.Page.WaitForTimeoutAsync(400);
     }
 
     [When(@"I open the id-route for {string}")]
@@ -90,19 +94,19 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
     {
         await ctx.EnsureServerAndBrowserAsync();
         await ctx.Page!.GotoAsync(ctx.BaseUrl + "/" + setName);
-        var id = IdOf(name).ToString();
-        await ctx.Page!.Locator($"button[data-delentry][data-wired][data-key='{id}']").ClickAsync();
-        await ctx.Page.WaitForTimeoutAsync(700); // unlink + GC + reload
+        // The self-hosted setTable's per-row Remove button (.set-remove) unlinks the member.
+        await ctx.Page.Locator(".set-row", new() { HasTextString = name })
+                      .Locator("button.set-remove").First.ClickAsync();
+        await ctx.Page.WaitForTimeoutAsync(700); // unlink + GC
     }
 
     // ── Then ────────────────────────────────────────────────────────────────────
 
     [Then(@"the set {string} lists {string}")]
-    public async Task ThenSetListsAsync(string setName, string name)
-    {
-        var rows = ctx.Page!.Locator("table tbody tr", new() { HasTextString = name });
-        await Assert.That(await rows.CountAsync()).IsGreaterThanOrEqualTo(1);
-    }
+    public async Task ThenSetListsAsync(string setName, string name) =>
+        // .set-row (class), not `table tbody tr`: the client reconciler appends <tr> directly
+        // to <table>, so there is no <tbody> after hydration. Wait for the row to settle.
+        await ctx.Page!.Locator(".set-row", new() { HasTextString = name }).First.WaitForAsync();
 
     [Then(@"following {string} in the set {string} opens the same object both times")]
     public async Task ThenSameObjectBothTimesAsync(string name, string setName)
@@ -113,7 +117,7 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
         // Following it opens the member object (name shows), then re-reading the
         // member's link yields the same identity address — it is one object.
         await ctx.Page!.GotoAsync(ctx.BaseUrl + href1);
-        var shown = await ctx.Page.Locator("input[data-path$='/name']").GetAttributeAsync("value") ?? "";
+        var shown = await ctx.Page.Locator("input.name").First.GetAttributeAsync("value") ?? "";
         await Assert.That(shown).IsEqualTo(name);
 
         await ctx.Page.GotoAsync(ctx.BaseUrl + "/" + setName);
@@ -122,15 +126,18 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
     }
 
     private async Task<string> MemberHrefAsync(string setName, string name) =>
-        await ctx.Page!.Locator("table tbody tr", new() { HasTextString = name })
-                      .First.Locator("a").First.GetAttributeAsync("href") ?? "";
+        await ctx.Page!.Locator(".set-row", new() { HasTextString = name })
+                      .First.Locator("a.set-open").First.GetAttributeAsync("href") ?? "";
 
     [Then(@"navigating to {string} shows the {string} field {string}")]
     public async Task ThenNavigatingShowsFieldAsync(string path, string field, string expected)
     {
         await ctx.EnsureServerAndBrowserAsync();
         await ctx.Page!.GotoAsync(ctx.BaseUrl + path);
-        var value = await ctx.Page.Locator($"input[data-path$='/{field}']").GetAttributeAsync("value") ?? "";
+        var selfHosted = ctx.Page.Locator($"input.{field}");
+        var input = await selfHosted.CountAsync() > 0 ? selfHosted.First
+            : ctx.Page.Locator($"input[data-path$='/{field}']").First;
+        var value = await input.GetAttributeAsync("value") ?? "";
         await Assert.That(value).IsEqualTo(expected);
     }
 

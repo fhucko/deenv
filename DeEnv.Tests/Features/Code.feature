@@ -4,7 +4,7 @@ Feature: Code-owned UI rendering (server-side)
   executed on the server and its tag tree is serialised to HTML. This covers the
   Stage-2 SSR surface — elements, text, bound fields, foreach, if/else, and the
   where/orderBy collection functions — plus load-time structural validation and
-  the generic auto-form fallback when there is no `ui`.
+  the self-hosted generic UI that serves apps without a `fn render()`.
 
   @milestone-code @single-user
   Scenario: An element with interpolated text renders
@@ -117,10 +117,11 @@ Feature: Code-owned UI rendering (server-side)
     Then the rendered HTML contains "<h1>Error</h1>"
 
   @milestone-code @single-user
-  Scenario: The generic auto-form is still used when there is no ui section
+  Scenario: The self-hosted generic UI serves an app with no fn render()
     Given a generic instance with no code
     When the page at "/" is rendered
-    Then the rendered HTML contains 'id="node-form"'
+    Then the rendered HTML contains "object-form"
+    And the page does not include 'id="node-form"'
 
   @milestone-code @single-user
   Scenario: A sensitive field and unauthorized rows are never sent to the client

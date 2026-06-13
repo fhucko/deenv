@@ -64,10 +64,10 @@ public sealed class SsrRenderer
     // Which render function (if any) owns this URL:
     //   1. `fn render()` — the fully-custom UI, owns the whole URL space;
     //   2. else, the synthesized generic view for the routed node (object page, or a
-    //      reference / set route), when the app opts into the self-hosted generic UI
-    //      and no traversal segment is a dictionary (dict entries aren't in the Code
-    //      runtime yet);
-    //   3. else null: the C# auto-form. `/~/{id}` id-routes stay on it.
+    //      reference / set route) — the self-hosted generic UI is the default, so this
+    //      covers every app without a custom render, as long as no traversal segment
+    //      walks INTO a dictionary entry (those entry pages still fall to the C# form);
+    //   3. else null: the C# auto-form (a dict route/entry, the `/~/{id}` id-route).
     private ViewMatch? ResolveView(string urlPath)
     {
         var ui = _ui;

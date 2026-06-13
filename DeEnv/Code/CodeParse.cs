@@ -303,19 +303,9 @@ public static class CodeParse
 
     // ── the document: `common` + `ui` sections ──────────────────────────────────
     // Top-level items are named functions and (in ui) vars; `fn render()` is the
-    // optional whole-app render fn (fully-custom UI). An app is either fully custom
-    // (`fn render()`) or fully auto (`generic` / the C# auto-form) — there is no
-    // partial-customization `view` feature (dropped; the auto UI is a library the
-    // custom render will compose instead).
-
-    // The `generic` opt-in marker: a ui section item, consumed by MapUi into
-    // InstanceUi.Generic. A CONTEXTUAL keyword (still usable as an identifier).
-    internal sealed class CodeGenericMarker : ICodeStatement;
-
-    // `generic` on its own line. Backtracks (so `genericFoo`, `generic = …` fall through
-    // to the function/var parsers) because NlOrEnd must follow immediately.
-    public static IndentedParser<ICodeStatement> GenericMarker => _ =>
-        Seq(Text("generic"), NlOrEnd, (_, _) => (ICodeStatement)new CodeGenericMarker());
+    // optional whole-app render fn (fully-custom UI). Without it the self-hosted generic
+    // UI is the default — there is no partial-customization `view` feature (dropped; the
+    // auto UI is a library the custom render will compose instead).
 
     // SkipEmptyLinesBefore on the LOOKAHEAD itself: a blank line between the section
     // header and its first item (the printer's canonical spacing) must not break the
@@ -323,7 +313,6 @@ public static class CodeParse
     public static Parser<ICodeStatement[]> SectionItems => IndentLookahead("", Ws1,
         indent => Many1(
             Seq(Text(indent), OneOf<ICodeStatement>(
-                GenericMarker(indent),
                 NamedFunction(indent),
                 VarDec(indent)),
                 (_, item) => item)
@@ -365,7 +354,6 @@ public static class CodeParse
         var vars = new List<UiVar>();
         var functions = new List<CodeFunction>();
         CodeFunction? render = null;
-        var generic = false;
         foreach (var item in items)
             switch (item)
             {
@@ -378,13 +366,10 @@ public static class CodeParse
                 case CodeFunction fn:
                     functions.Add(fn);
                     break;
-                case CodeGenericMarker:
-                    generic = true;
-                    break;
             }
-        // An app is fully custom (`fn render()`) or fully auto (`generic`). The
-        // synthesized generic views (InstanceUi.Views) are added at render time, never
-        // authored here. (A ui with neither render nor `generic` is rejected by CodeValidator.)
-        return new InstanceUi(vars, functions, render, Views: null, Generic: generic);
+        // An app is fully custom (`fn render()`) or fully auto (the self-hosted generic UI,
+        // the default when there is no render). The synthesized generic views
+        // (InstanceUi.Views) are added at render time by GenericUi.Effective, never here.
+        return new InstanceUi(vars, functions, render, Views: null);
     }
 }

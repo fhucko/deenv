@@ -1,6 +1,6 @@
-Feature: Editing fields with explicit Save
-  Editing an object's fields and committing them with the Save button.
-  Nothing persists until Save. Exercises text, decimal, date, bool, and a
+Feature: Editing fields
+  Editing an object's fields in the self-hosted generic UI, which autosaves each
+  edit over the WebSocket (no Save button). Exercises text, decimal, date, and a
   nested order on the Milestone 2 CRM instance.
 
   Background:
@@ -27,13 +27,6 @@ Feature: Editing fields with explicit Save
     And I reload
     Then the "total" field shows "99.5"
     And the "date" field shows "2026-02-03"
-
-  @milestone-2 @single-user
-  Scenario: An unsaved edit does not persist
-    When I navigate to the customer "1"
-    And I set the "name" field to "Temporary"
-    And I reload
-    Then the "name" field shows "Acme"
 
   @milestone-2 @single-user
   Scenario: Edit the root scalar field

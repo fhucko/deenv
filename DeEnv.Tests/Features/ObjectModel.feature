@@ -44,17 +44,15 @@ Feature: The object model — identity, references, sets, GC
     Given a person "Ada" in the extent referenced by the set "people"
     When I navigate to "/lead"
     And I pick the existing "Person" named "Ada"
-    And I save
     Then the extent "Person" has 1 object
-    And navigating to "/lead" shows the "name" field "Ada"
+    And the current reference is "Ada"
 
   @milestone-5 @single-user
   Scenario: Creating a new object through a reference mints it into the extent
     When I navigate to "/lead"
     And I create a new "Person" named "Grace" through the reference
-    And I save
     Then the extent "Person" has 1 object
-    And navigating to "/lead" shows the "name" field "Grace"
+    And the current reference is "Grace"
 
   # ── the shared-object proof: one object, many references ────────────────────
 
@@ -62,11 +60,12 @@ Feature: The object model — identity, references, sets, GC
   Scenario: The same object reached by two references is one object
     Given a person "Ada" in the extent referenced by the set "people"
     And the single reference "lead" references the person "Ada"
-    When I navigate to "/lead"
-    And I set the "name" field to "Ada Lovelace"
+    When I navigate to "/people"
+    And I follow the set member open link
+    And I fill the "name" field with "Ada Lovelace"
     And I save
-    And I navigate to "/people"
-    Then the set "people" lists "Ada Lovelace"
+    And I navigate to "/lead"
+    Then the current reference is "Ada Lovelace"
 
   # ── lifetime by GC ─────────────────────────────────────────────────────────
 
@@ -83,4 +82,5 @@ Feature: The object model — identity, references, sets, GC
     And the single reference "lead" references the person "Ada"
     When I remove "Ada" from the set "people"
     Then the extent "Person" has 1 object
-    And navigating to "/lead" shows the "name" field "Ada"
+    When I navigate to "/lead"
+    Then the current reference is "Ada"
