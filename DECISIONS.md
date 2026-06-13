@@ -667,17 +667,19 @@ default stays blocked and references is the next necessary step. Decisions:
   empty editor, not `NotFound`, and the client needs no new wiring (it binds the
   parent by id exactly like a type view; the prop + target descriptor ride as
   literals in the view body).
-- **Create-new (landed).** The reference editor's create-new form binds inputs to
-  a **synthesized top-scope draft var** (`__draft_<Owner>_<Prop>`, a pre-shaped
-  default object) bundled into the reference descriptor with a reset closure; the
-  Create button does `setRef(parent, prop, draft)` (mint + point) then resets the
-  draft. This reuses the proven top-scope-var reactivity (reassign → invalidateVar
-  → re-render) — the same shape hand-written apps use for new-item forms — and
-  needs no new primitives. (Component-local draft state via the init+render pattern
-  was the elegant alternative, but a generic stdlib `refEditor` re-keys its memo
-  entry every render because its descriptor arg is rebuilt each time, which would
-  reset the draft; the synthesized var sidesteps that. The component pattern, with
-  `obj.prop = x`, remains the path for *hand-authored* forms — see below.)
+- **Create-new (landed; unified on the component pattern 2026-06-13).** The
+  reference editor and the set table are **components**: each runs its body once as
+  init (a local `state` holding a `clone(blank)` draft), returns a render fn, and
+  resets after Create with `state.draft = clone(blank)` (`obj.prop = x`). The
+  Create button does `setRef(parent, prop, state.draft)` / `set.add(state.draft)`.
+  This is the SAME component pattern hand-authored forms use — one creation
+  mechanism. (An earlier cut synthesized a top-scope `__draft_<Owner>_<Prop>` var
+  per prop because a generic stdlib re-keys its memo entry every render when its
+  descriptor arg is rebuilt — which would reset a component-local draft. The fix:
+  make descriptors a single STABLE registry var `__descs` (typeName → descriptor,
+  cross-refs by name; built once → stable instance every render), so the
+  components' args are stable and the memo cache runs their init exactly once. New
+  builtin `clone(obj)` mints a fresh draft from a type's `blank` template.)
 
 Specced by `SelfHostedUi.feature`'s reference scenarios. **Still opt-in**:
 default-on remains blocked until object creation, sets, and dicts are also
@@ -705,8 +707,10 @@ state after Create. Decisions, verified by a prototype scenario (`ComponentFormA
   field through the same path two-way binding uses (invalidate + persist when
   server-backed). Small and general — most languages have it.
 
-Creation itself (a generic New form = this component over `objectForm` + a Create
-button, and create-new in the reference editor) is the next slice, built on this.
+The generic UI now uses this pattern too (`refEditor`/`setTable` are components),
+unified via the stable `__descs` registry — see the slice-2 create-new bullet
+above. So `obj.prop = x` + the component pattern is the *single* creation
+mechanism, for both hand-authored and generic UI.
 
 ### Slice 3: set tables (with creation)
 

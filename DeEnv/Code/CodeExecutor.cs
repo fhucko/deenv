@@ -269,6 +269,21 @@ public sealed class CodeExecutor
         return Memoize($"extent:{typeName.Value}", context, () => DbBridge.LoadExtent(_store, typeName.Value, context));
     }
 
+    // clone(obj): a fresh object with the source's SCALAR props copied (shallow; scalars
+    // are immutable so the values are shared). Used to mint a new draft from a type's
+    // blank template — a generic component's create-new state.
+    private IExecValue ExecuteClone(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 1)
+            throw new CodeRuntimeException("clone(obj) takes one argument.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject obj)
+            throw new CodeRuntimeException("clone() expects an object.");
+        var props = new Dictionary<string, IExecValue>();
+        foreach (var (name, v) in obj.Props)
+            if (v is ExecInt or ExecText or ExecBool or ExecNull) props[name] = v;
+        return new ExecObject { Props = props, Id = --context.LastId.Value };
+    }
+
     // link(obj): the id-route URL ("/~/<id>") to an object's page — Code has no string
     // concatenation, so building member links needs a builtin.
     private IExecValue ExecuteLink(CodeCall call, ExecScope scope, ExecContext context)
@@ -298,6 +313,7 @@ public sealed class CodeExecutor
                 case "humanize": return ExecuteHumanize(codeCall, scope, context);
                 case "extent": return ExecuteExtent(codeCall, scope, context);
                 case "link": return ExecuteLink(codeCall, scope, context);
+                case "clone": return ExecuteClone(codeCall, scope, context);
                 // setRef(obj, prop, value) persists on the client (the reference editor).
                 // Server-side (SSR / refetch) never runs the click handler, so it no-ops.
                 case "setRef": return new ExecNothing();

@@ -388,6 +388,17 @@ function execLink(codeCall: CodeCall, scope: ExecScope, context: ExecContext): E
     return { type: "text", value: "/~/" + obj.id };
 }
 
+// clone(obj): a fresh object with the source's SCALAR props copied (a new draft from a
+// type's blank template — a generic component's create-new state).
+function execClone(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const obj = executeValue(codeCall.params[0], scope, context).value;
+    if (obj.type !== "object") throw new Error("clone() expects an object.");
+    const props: { [name: string]: ExecValue } = {};
+    for (const [name, v] of Object.entries(obj.props))
+        if (v.type === "int" || v.type === "text" || v.type === "bool" || v.type === "null") props[name] = v;
+    return { type: "object", props, id: --context.lastId.value };
+}
+
 // extent(typeName): the reference picker's candidates — all objects of a type. Memoized
 // like where/orderBy; the server shipped the displayed list and the client reuses it. No
 // store on the client, so a cache miss/stale throws "Value not available", which the
@@ -526,6 +537,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         if (codeCall.fn.name === "extent") return execExtent(codeCall, scope, context);
         if (codeCall.fn.name === "setRef") return execSetRef(codeCall, scope, context);
         if (codeCall.fn.name === "link") return execLink(codeCall, scope, context);
+        if (codeCall.fn.name === "clone") return execClone(codeCall, scope, context);
     }
     const fn = executeValue(codeCall.fn, scope, context).value;
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));

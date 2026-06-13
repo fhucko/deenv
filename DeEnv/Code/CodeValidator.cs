@@ -35,6 +35,7 @@ public static class CodeValidator
         top.Declare("extent", writable: false);   // a type's objects (reference picker)
         top.Declare("setRef", writable: false);    // set/clear an object reference prop
         top.Declare("link", writable: false);      // the id-route URL to an object's page
+        top.Declare("clone", writable: false);     // a fresh object from a blank template
         foreach (var v in ui.Vars ?? [])
         {
             if (top.IsDeclaredLocally(v.Name))

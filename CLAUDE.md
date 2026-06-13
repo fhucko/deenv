@@ -135,11 +135,13 @@ object form (`Note.author`). New builtins `extent(typeName)` (memoized candidate
 list, rides the memo cache) and `setRef(obj, prop, value)` (id-addressed
 `setReferenceField` WS op + `WriteReference` store method); `ResolvedTypeInfo.
 IsReference` + a synthesized reference view keyed by `UiView.Prop`, bound to the
-parent object. Pick-existing, clear, and **create-new** (a synthesized top-scope
-draft var per reference prop + a reset closure, bundled into the reference
-descriptor; Create = `setRef` + reset). The `obj.prop = x` lvalue and the verified
-component pattern (`fn c() { init; return render }`) are the path for *hand-
-authored* forms. Tried making the self-hosted UI the default and reverted:
+parent object. Pick-existing, clear, and **create-new** — `refEditor`/`setTable`
+are **components** (`var state = { draft: clone(target.blank) }` init once, return
+render, reset `state.draft = clone(blank)` via `obj.prop = x`); Create =
+`setRef(parent, prop, state.draft)` / `set.add(state.draft)`. This is the SAME
+component pattern hand-authored forms use — one creation mechanism — enabled by a
+stable top-scope descriptor registry (`__descs`) and the `clone(obj)` builtin.
+Tried making the self-hosted UI the default and reverted:
 it breaks the reference editor on unset routes and the designer, which need more
 slices. **Remaining slices**: object creation forms, set tables, dictionaries
 (needs dicts in the Code runtime — a roadmap-future layer), then flip the default

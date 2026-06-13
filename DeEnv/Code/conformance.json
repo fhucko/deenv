@@ -123,6 +123,17 @@
       "expect": { "kind": "text", "value": "Company name" }
     },
     {
+      "name": "clone copies an object's scalar fields",
+      "text": "clone({ n: 7 }).n",
+      "expr": {
+        "type": "infixOp", "op": "objectProp",
+        "left": { "type": "call", "fn": { "type": "symbol", "name": "clone" },
+          "params": [ { "type": "object", "props": [ { "name": "n", "value": { "type": "int", "value": 7 } } ] } ] },
+        "right": { "type": "symbol", "name": "n" }
+      },
+      "expect": { "kind": "int", "value": 7 }
+    },
+    {
       "name": "object-field assignment (obj.x = 9) sets the field",
       "expr": {
         "type": "call",
