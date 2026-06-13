@@ -327,12 +327,14 @@ function fieldResult(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     recordProp(obj.id, name);
     return {
         value,
-        // The generic form STAGES edits in memory (so the UI reflects them) but does
-        // NOT persist them — `save(obj)` flushes the object on the Save button, so an
-        // edit is discardable until then. (Static `obj.member` still persists live.)
+        // Autosave: a bound edit persists immediately (like static `obj.member`), so the
+        // generic form needs no Save button — consistent with the reference picker and
+        // the reactive code pages.
         setValue: p => {
+            const before = obj.props[name];
             obj.props[name] = p;
             invalidateProp(obj.id, name);
+            if (obj.id > 0) propValueChange(obj, name, p, before);
         },
     };
 }
@@ -360,18 +362,6 @@ function execHumanize(codeCall: CodeCall, scope: ExecScope, context: ExecContext
     const v = executeValue(codeCall.params[0], scope, context).value;
     if (v.type !== "text") throw new Error("humanize() expects a text value.");
     return { type: "text", value: humanizeText(v.value) };
-}
-
-// save(obj): persist the object's scalar fields (the generic form's Save button). Flushes
-// the staged in-memory values through the same per-field WS op two-way binding uses.
-function execSave(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
-    const obj = executeValue(codeCall.params[0], scope, context).value;
-    if (obj.type !== "object") throw new Error("save() expects an object.");
-    if (obj.id > 0)
-        for (const [name, v] of Object.entries(obj.props))
-            if (v.type === "int" || v.type === "bool" || v.type === "text")
-                propValueChange(obj, name, v, v);
-    return { type: "nothing" };
 }
 
 // extent(typeName): the reference picker's candidates — all objects of a type. Memoized
@@ -509,7 +499,6 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     if (codeCall.fn.type === "symbol") {
         if (codeCall.fn.name === "field") return fieldResult(codeCall, scope, context).value;
         if (codeCall.fn.name === "humanize") return execHumanize(codeCall, scope, context);
-        if (codeCall.fn.name === "save") return execSave(codeCall, scope, context);
         if (codeCall.fn.name === "extent") return execExtent(codeCall, scope, context);
         if (codeCall.fn.name === "setRef") return execSetRef(codeCall, scope, context);
     }

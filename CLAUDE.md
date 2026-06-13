@@ -116,8 +116,9 @@ library*: `objectForm(obj, meta)` renders a form by iterating the type's schema
 (passed as a Code value, `meta: { name, props: [{ name, baseType }] }`) and
 binding each scalar field via the new `field(obj, name)` builtin (dynamic
 by-name prop access, the reflective twin of `obj.member`), with humanized labels
-(`humanize`) and a Save button (`save`) — `field` stages edits in memory and
-`save` flushes them, matching the C# form's batch semantics. An app opts in
+(`humanize`). Edits **autosave** — `field` persists each change over the WS (no
+Save button), consistent with the reference picker and the reactive code pages.
+An app opts in
 with `generic` in its `ui` section (`InstanceUi.Generic`); at render time
 `GenericUi.Effective` synthesizes a `view T(obj)` per all-scalar object type
 without an explicit view, calling `objectForm` with that type's descriptor as a

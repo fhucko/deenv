@@ -265,10 +265,8 @@ public sealed class CodeExecutor
                 case "field": return ExecuteField(codeCall, scope, context);
                 case "humanize": return ExecuteHumanize(codeCall, scope, context);
                 case "extent": return ExecuteExtent(codeCall, scope, context);
-                // save(obj) / setRef(obj, prop, value) persist on the client (the
-                // generic form's Save button / the reference editor). Server-side (SSR /
-                // refetch) never runs the click handler, so they no-op.
-                case "save": return new ExecNothing();
+                // setRef(obj, prop, value) persists on the client (the reference editor).
+                // Server-side (SSR / refetch) never runs the click handler, so it no-ops.
                 case "setRef": return new ExecNothing();
             }
 

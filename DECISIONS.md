@@ -589,20 +589,16 @@ roadmap-future layer) are later slices. Decisions:
   needed primitives:
   - `field(obj, name)` — dynamic by-name access, the reflective twin of
     `obj.member` (same dep/leaf bookkeeping on the server). Its client `setValue`
-    **stages** the edit in memory (the UI reflects it) but does **not** persist —
-    so the generic form keeps the C# form's batch-on-Save semantics (an edit is
-    discardable until Save). Static `obj.member` still persists live for app code.
-  - `save(obj)` — the Save button's action: flushes the object's scalar fields
-    through the existing per-field `objectPropChange` WS op. Server-side (SSR /
-    refetch) it is a no-op (the click handler never runs there).
+    **autosaves**: it persists each edit over the per-field `objectPropChange` WS
+    op immediately, like static `obj.member` — no Save button. (A Save button +
+    a `save()` builtin with staged edits was tried for C#-form parity, then
+    dropped: autosave is consistent with the reference picker and the reactive
+    code pages, and less ceremony — see the minimal-by-default principle.)
   - `humanize(text)` — a prop name → a label ("companyName" → "Company name"),
     so labels match the C# form. Canonical impl in `DeEnv.Code.TextUtil` (shared
     with `SsrRenderer`), mirrored in `codeExec.ts`.
-  All three are in both twin interpreters; `field`/`humanize` have conformance
-  cases; the validator knows them as builtins. (Keeping the Save button — rather
-  than live-bind — is parity with the C# object form, a prerequisite for making
-  the self-hosted UI the default. The form's root is a `<div>`, not a `<form>`,
-  so the Save `<button>` doesn't submit/navigate.)
+  Both are in both twin interpreters; both have conformance cases; the validator
+  knows them as builtins.
 - **Synthesis over a runtime `schema` global.** Rather than ship a schema and a
   new `ViewKind.Generic` + client bootstrap, an opted-in app gets, at render
   time, a synthesized `view T(obj)` per all-scalar object type without an

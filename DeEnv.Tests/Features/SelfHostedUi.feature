@@ -35,11 +35,10 @@ Feature: Self-hosted generic UI (object forms)
     Then the "dueDate" label reads "Due date"
 
   @milestone-9 @single-user
-  Scenario: Editing persists on Save over the WebSocket
+  Scenario: Editing a field autosaves over the WebSocket
     Given the self-hosted form app is running
     When I open "/notes/2"
     And I fill the "title" field with "Renamed"
-    And I save the form
     Then the store eventually has a "Note" whose "title" is "Renamed"
 
   # ── references: the self-hosted pick-or-clear editor (slice 2) ──────────────

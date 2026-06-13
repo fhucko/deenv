@@ -39,8 +39,6 @@ public static class GenericUi
                                 <input type="checkbox" class={p.name} checked={field(obj, p.name)}>
                             else
                                 <input type={inputType(p.baseType)} class={p.name} value={field(obj, p.name)}>
-                    <button class="save" onClick={() => save(obj)}>
-                        "Save"
 
             fn refEditor(parent, prop, target)
                 return <div class="ref-editor">

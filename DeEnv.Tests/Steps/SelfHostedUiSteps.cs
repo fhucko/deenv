@@ -27,10 +27,6 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task WhenFillField(string field, string value) =>
         await ctx.Page!.Locator($"input.{field}").FillAsync(value);
 
-    [When("I save the form")]
-    public async Task WhenSaveForm() =>
-        await ctx.Page!.Locator("button.save").ClickAsync();
-
     [Then("the {string} field is a {string} input")]
     public async Task ThenFieldInputKind(string field, string kind)
     {
