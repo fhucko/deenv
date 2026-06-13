@@ -55,6 +55,14 @@ public static class InstanceDescriptionLoader
             throw new SchemaValidationException(
                 "Schema document must define exactly one root type named 'Db'.");
 
+        // The root 'Db' must be an OBJECT type — it holds the app's data (props: scalars,
+        // references, sets, dictionaries). A base-typed root (e.g. `Db: bool`) is rejected:
+        // it is a degenerate shape the generic UI would have to special-case, and every real
+        // app's root is an object. (See DECISIONS.md / INSTANCE_DESCRIPTION_FORMAT.md.)
+        if (desc.Db()?.BaseType != BaseType.Object)
+            throw new SchemaValidationException(
+                "The root type 'Db' must be an object type (it holds the app's data).");
+
         // An invalid baseType / cardinality is rejected by the enum converter while
         // parsing (a JSON error), so it never reaches here — this validates structure.
         foreach (var type in desc.AllTypes())

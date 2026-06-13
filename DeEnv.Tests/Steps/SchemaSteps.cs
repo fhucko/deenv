@@ -21,7 +21,7 @@ public sealed class SchemaSteps(InstanceContext ctx)
     public void GivenAppFileBoolDb()
     {
         ctx.SchemaFilePath = Path.GetTempFileName();
-        File.WriteAllText(ctx.SchemaFilePath, "types\n    Db: bool\n");
+        File.WriteAllText(ctx.SchemaFilePath, "types\n    Db\n        ready: bool\n");
     }
 
     // ── When ──────────────────────────────────────────────────────────────────

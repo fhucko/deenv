@@ -21,10 +21,14 @@ public class InstanceContext
     public Exception? LoadError { get; set; }
     public string? SchemaFilePath { get; set; }
 
+    // The simplest valid instance: an object Db with a single bool field. (The root must
+    // be an object type — a base-typed `Db: bool` is rejected at load.) Renders as one
+    // checkbox via the C# auto-form.
     public static InstanceDescription BoolDb() =>
         InstanceDescriptionLoader.Load("""
         types
-            Db: bool
+            Db
+                ready: bool
         """);
 
     public static InstanceDescription ShopDb() =>

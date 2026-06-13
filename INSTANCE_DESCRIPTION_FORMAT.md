@@ -43,7 +43,9 @@ types
   object type; members are keyed by their own identity). `dict of X by key`
   declares a dictionary (`by key` optional, default `text`). A trailing `?`
   marks the prop nullable.
-- The root type **`Db`** must exist; it is implicitly single and non-null.
+- The root type **`Db`** must exist and must be an **object** type (it holds the
+  app's data — props: scalars, references, sets, dictionaries); it is implicitly
+  single and non-null. A base-typed root (e.g. `Db: bool`) is rejected at load.
 
 ## initialData
 

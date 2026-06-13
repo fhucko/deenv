@@ -16,10 +16,10 @@ public sealed class BoolRootSteps(InstanceContext ctx)
     [Given("an instance whose Db is a bool with value false")]
     public void GivenBoolFalse()
     {
+        // The object Db's single bool field defaults to false; no explicit seed needed.
         ctx.Description = InstanceContext.BoolDb();
         ctx.DataFilePath = Path.GetTempFileName();
         ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
-        ctx.Store.WriteLeaf(NodePath.Root, new BoolValue(false));
     }
 
     // ── When ──────────────────────────────────────────────────────────────────

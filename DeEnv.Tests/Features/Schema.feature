@@ -22,14 +22,14 @@ Feature: App description document
     And the root type is named "Db"
 
   @milestone-3 @single-user
-  Scenario: The minimal bool-root document loads
+  Scenario: A base-typed root is rejected — Db must be an object
     Given the app description:
       """
       types
           Db: bool
       """
     When the document is loaded
-    Then the document loads successfully
+    Then loading is rejected with an error mentioning "object"
 
   @milestone-3 @single-user
   Scenario: A document with no Db type is rejected
