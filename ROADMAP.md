@@ -151,21 +151,16 @@ Done when: the todo app is authored as `instance.app` (one file: types +
 seed + UI), the whole suite stays green on the parsed text, and parse/print
 round-trips are stable. ✓ Plan: code-text-syntax.md.
 
-## Milestone 8 — UI customization (views)  ← DONE
+## Milestone 8 — UI customization (views)  ← DONE, then DROPPED (2026-06-13)
 
-User-controlled rendering over the generic UI, chosen per request by a
-rendering-function decision. The `ui` section gained **views**: a type view
-(`view Customer(customer)`) replaces the generic object page for that type
-(breadcrumb chrome stays); a path view (`view "/dashboard"(path)`) takes over a
-URL subtree entirely. `fn render()` is now optional — the implicit root view,
-so a whole-app takeover (the todo app) is the degenerate case, and an app with
-only partial views needs no render. A view page is a full code page (memo
-cache, two-way binding, WS mutations, refetch); everything without a view stays
-the generic auto-form. The shop app (`DeEnv/shop.app`) is the worked example.
-
-Done when: an app customizes one type's page and one URL subtree while its
-remaining pages stay generic, with the whole suite green. ✓ Plan:
-staged-honking-fox.md.
+M8 added user-authored **views** (a type view `view Customer(c)`, a path view
+`view "/dashboard"(p)`) to customize parts of the generic UI. It was **dropped**:
+the middle layer was awkward and db-structure-coupled, and its value uncertain.
+The UI is now **two modes** — fully **custom** (`fn render()`) or fully **auto**
+(the generic UI). "Auto with overrides" is deferred to a cleaner mechanism: the
+custom mode *composing the generic UI as a library* (M9 makes the generic UI that
+library). The synthesized-view dispatch is kept as the generic UI's internal
+routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED").
 
 ---
 

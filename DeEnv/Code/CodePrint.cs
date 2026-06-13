@@ -103,14 +103,6 @@ public static class CodePrint
         Block(sb, fn.Body, indent + Step);
     }
 
-    // `view Customer(customer)` / `view "/reports"(path)` + the body block.
-    public static void View(StringBuilder sb, string target, bool quoted, CodeFunction fn, string indent)
-    {
-        sb.Append(indent).Append("view ").Append(quoted ? Quote(target) : target)
-          .Append(Params(fn)).Append('\n');
-        Block(sb, fn.Body, indent + Step);
-    }
-
     private static void Block(StringBuilder sb, CodeBlock block, string indent)
     {
         foreach (var statement in block.Statements)

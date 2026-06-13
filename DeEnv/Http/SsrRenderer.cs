@@ -55,31 +55,24 @@ public sealed class SsrRenderer
         return Page(urlPath, nodePath, typeInfo, node);
     }
 
-    // ── the rendering-function decision (views) ─────────────────────────────────
+    // ── the rendering-function decision ─────────────────────────────────────────
 
-    private enum ViewKind { Render, Path, Type }
+    private enum ViewKind { Render, Type }
 
     private sealed record ViewMatch(ViewKind Kind, CodeFunction Fn, UiView? View, NodePath? TargetPath);
 
     // Which render function (if any) owns this URL:
-    //   1. the longest segment-aware path-view prefix — `fn render()` counts as the
-    //      implicit root view "/", so an explicit longer path view still beats it;
-    //   2. else, when generic routing lands on an object page of a type with a type
-    //      view (and no traversal segment is a dictionary — dict entries are not in
-    //      the Code runtime), that view;
-    //   3. else null: the generic auto-form. `/~/{id}` id-routes stay generic.
+    //   1. `fn render()` — the fully-custom UI, owns the whole URL space;
+    //   2. else, the synthesized generic view for the routed node (object page, or a
+    //      reference / set route), when the app opts into the self-hosted generic UI
+    //      and no traversal segment is a dictionary (dict entries aren't in the Code
+    //      runtime yet);
+    //   3. else null: the C# auto-form. `/~/{id}` id-routes stay on it.
     private ViewMatch? ResolveView(string urlPath)
     {
         var ui = _ui;
         if (ui == null) return null;
 
-        UiView? bestPath = null;
-        foreach (var view in ui.Views ?? [])
-            if (view.Path is { } prefix && PathMatches(prefix, urlPath)
-                && (bestPath == null || prefix.Length > bestPath.Path!.Length))
-                bestPath = view;
-        if (bestPath != null)
-            return new ViewMatch(ViewKind.Path, bestPath.Fn, bestPath, null);
         if (ui.Render != null)
             return new ViewMatch(ViewKind.Render, ui.Render, null, null);
 
@@ -119,11 +112,6 @@ public sealed class SsrRenderer
         var view = (ui.Views ?? []).FirstOrDefault(v => v.Type == ownerType && v.Prop == prop);
         return view == null ? null : new ViewMatch(ViewKind.Type, view.Fn, view, parentPath);
     }
-
-    // Segment-aware prefix: "/reports" matches "/reports" and "/reports/x",
-    // never "/reportsx"; "/" matches everything.
-    private static bool PathMatches(string prefix, string urlPath) =>
-        prefix == "/" || urlPath == prefix || urlPath.StartsWith(prefix + "/", StringComparison.Ordinal);
 
     // The routed object of a type view was deleted (or a reference is unset): the
     // page is NotFound, not a code error.
@@ -275,10 +263,6 @@ public sealed class SsrRenderer
             var target = FindTarget(db, match.TargetPath!) ?? throw new ViewTargetNotFoundException();
             targetId = target.Id;
             args = [target];
-        }
-        else if (match.Kind == ViewKind.Path && match.Fn.Params.Length > 0)
-        {
-            args = [new ExecText { Value = urlPath }];
         }
 
         var result = exec.InvokeFunction(match.Fn, args, scope, context);

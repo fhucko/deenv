@@ -26,14 +26,15 @@ where developers design data visually and use it as objects. Full mission in
 1. **Build the current milestone only.** Per ROADMAP.md, Milestones 1–8 are
    done (M4 designer as self-hosting; M5 the object model; M6 Code: reactive
    UI on twin interpreters; M7 the app document: one text file — types +
-   initialData + code — with parser and printer; M8 UI customization: views,
-   per-type/per-path render functions over the generic UI, `fn render()`
-   optional — see DECISIONS.md). **M9 (self-hosted generic UI) is in progress,
-   slice 1 landed**: the generic object form re-expressed in Code as an
-   `objectForm(obj, meta)` library over schema-as-data, plus the `field(obj,
-   name)` dynamic-access builtin, opted in per app via `generic` in the `ui`
-   section. Remaining slices (set tables, references, dicts, then retiring the
-   C# renderer + `instance.ts`) are the next work. **Schema versioning stays
+   initialData + code — with parser and printer; M8 UI customization was
+   **dropped 2026-06-13** in favour of **two UI modes** — fully custom (`fn
+   render()`) or fully auto (the generic UI) — see DECISIONS.md). **M9
+   (self-hosted generic UI) is in progress**: the generic UI re-expressed in Code
+   as a library (`objectForm`/`refEditor`/`setTable` over schema-as-data; builtins
+   `field`/`humanize`/`extent`/`setRef`/`link`; `obj.prop = x`), opted in per app
+   via `generic`. Object forms, references (pick/clear/create-new), and set tables
+   are self-hosted; dicts + the Db-root object page + the id-route remain, then
+   the C# renderer + `instance.ts` retire. **Schema versioning stays
    postponed** (self-hosted on top of Code). Later milestones are out of scope
    unless explicitly asked.
 
@@ -145,17 +146,17 @@ slices. **Remaining slices**: object creation forms, set tables, dictionaries
 and retire the C# renderer + the separate generic client (`instance.ts`). See
 DECISIONS.md.
 
-**Milestone 8 (UI customization) just landed** — views over the generic UI,
-chosen per request by a rendering-function decision (`SsrRenderer.ResolveView`).
-A **type view** (`view Customer(customer)`) replaces the generic object page for
-that type (breadcrumbs stay); a **path view** (`view "/dashboard"(path)`) takes
-over a URL subtree; `fn render()` is now the optional implicit root view;
-everything without a view stays the generic auto-form. View pages are full code
-pages (memo cache, two-way binding, WS mutations, warm-session refetch); the
-routed object/path binds as a call arg, and every code page mounts into
-`<div id="app">`. Worked example: `DeEnv/shop.app` ("Instance — Shop (views)"
-profile). Designer view-editing, fragment-level islands, and the self-hosted
-generic UI are deferred.
+**Milestone 8 (UI customization — views) was DROPPED (2026-06-13).** The UI is
+now **two modes only**: fully **custom** (`fn render()`, owns the whole UI) or
+fully **auto** (the generic UI — C# auto-form, or the M9 self-hosted `generic`
+opt-in). The user-authored `view T(x)` / `view "/path"(p)` middle layer was
+removed (awkward, db-structure-coupled, uncertain value); "auto with overrides"
+is deferred to the cleaner mechanism of the custom mode *composing the generic UI
+as a library* (`fn render()` calling `objectForm`/`field`/…). The
+`InstanceUi.Views` + synthesized-view dispatch are KEPT, but only as the generic
+UI's *internal* routing (`GenericUi.Effective` / `ResolveView`) — not user-facing.
+See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED") and the
+two-UI-modes memory.
 
 **Milestone 7 (the app document) just landed** — one text file describes a
 whole instance: `types` + optional `initialData` + optional `common`/`ui`

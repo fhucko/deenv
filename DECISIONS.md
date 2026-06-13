@@ -525,7 +525,20 @@ data. Decisions (specced by `StoredData.feature`):
   bridge's export deletes the target data file before reseeding — an export
   deliberately replaces the instance's data, and is the one path allowed to.
 
-## UI customization — views, a per-request rendering decision (M8)
+## UI customization — views, a per-request rendering decision (M8) — SUPERSEDED
+
+**Superseded 2026-06-13: the user-authored `view` system was dropped.** The UI is
+now **two modes only** — fully **auto** (the generic UI) or fully **custom** (`fn
+render()`). The partial-customization middle layer below was awkward and coupled
+to db structure (path views especially); the capability ("auto with overrides")
+is deferred to a cleaner mechanism — the custom mode *composing the generic UI as
+a library* (`fn render()` calling `objectForm`/`field`/… — see the M9 self-hosted
+library). Removed: `view T(x)` / `view "/path"(p)` from the parser, `UiView.Path`,
+`ViewKind.Path`, the `ResolveView` path branch, `ValidateViews`, `CodePrint.View`,
+the `AppPrint` view loop, `shop.app`'s views (now a generic example), and
+`UiCustomization.feature`. **Kept** as the generic UI's *internal* routing:
+`InstanceUi.Views` + the synthesized-view dispatch (`GenericUi.Effective` /
+`ResolveView`). The original M8 reasoning is below for history.
 
 Rendering was all-or-nothing (a `ui` with `fn render()` owned every URL, or the
 generic auto-form owned all of them). M8 added **views** — render functions

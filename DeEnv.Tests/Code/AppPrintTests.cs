@@ -43,28 +43,6 @@ public sealed class AppPrintTests
     }
 
     [Test]
-    public async Task A_views_document_round_trips()
-    {
-        await AssertRoundTrips(
-            """
-            types
-                Db
-                    things: set of Thing
-                Thing
-                    name: text
-
-            ui
-                view Thing(thing)
-                    return <div class="thing">
-                        thing.name
-
-                view "/special"(path)
-                    return <main>
-                        "special"
-            """);
-    }
-
-    [Test]
     public async Task A_generic_opt_in_document_round_trips()
     {
         await AssertRoundTrips(

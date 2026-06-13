@@ -109,45 +109,21 @@ ui
 - A two-way `value`/`checked` binding on an `<input>` must target an
   assignable lvalue (a writable var or a prop chain).
 
-### Views — customizing parts of the generic UI
+### Two modes: fully custom or fully auto
 
-A `ui` section may define **views** instead of (or alongside) `fn render()`.
-A view is a render function bound to a type or a URL path; everything a view
-doesn't cover stays the generic auto-form. The page is chosen per request:
+A `ui` section is one of two modes — there is no partial-customization middle
+layer (the M8 `view` system was dropped; "auto with overrides" will come later
+via the custom mode composing the generic UI as a library):
 
-```
-ui
-    view Customer(customer)        ← TYPE view: the object page for that type
-        return <main>
-            <input class="email" value={customer.email}>
-
-    view "/dashboard"(path)        ← PATH view: owns that URL subtree
-        return <main>
-            foreach c in db.customers.where(x => x.active == true)
-                <div>
-                    c.name
-```
-
-- A **type view** `view T(param)` replaces the generic object page for type
-  `T`; the routed object binds to `param`, and the generic breadcrumb trail is
-  kept around the view's content. (Dictionary-entry pages stay generic — dicts
-  are not in the Code runtime yet.)
-- A **path view** `view "/p"(param)` takes over `/p` and everything under it
-  (longest matching prefix wins); `param` (optional) is the request path.
-- `fn render()` is the implicit `view "/"` — defining it takes over the whole
-  URL space (no type view or generic page is reachable). An app with only
-  partial views needs no `render`.
-- A view page is a full code page (two-way binding, mutations over the
-  WebSocket, the memo cache, refetch — all as in a render app). Views ship to
-  the client and re-render there.
-
-A `ui` section may also contain `generic` on its own line — the opt-in to the
-**self-hosted generic UI** (M9). With it, the generic object page for each
-all-scalar object type (one without a hand-written view) is rendered by a Code
-`objectForm` library over the type's schema instead of the C# auto-form; pages
-that aren't all-scalar object pages (the Db root, sets) stay generic for now.
-`generic` satisfies the "renders something" rule on its own (no `render`/view
-needed). Slice 1 covers object forms only.
+- **Fully custom** — `fn render()` owns the whole URL space. A full code page
+  (two-way binding, WS mutations, the memo cache, refetch); it ships to the
+  client and re-renders there.
+- **Fully auto** — `generic` on its own line opts into the **self-hosted generic
+  UI** (M9): the generic object/reference/set pages are rendered by a Code library
+  (`objectForm`/`refEditor`/`setTable` over the type's schema) instead of the C#
+  auto-form. Shapes not yet self-hosted (dictionaries, the Db-root object page)
+  stay on the C# auto-form. An app with no `ui` section is also fully auto (the
+  C# auto-form).
 
 ```
 ui
@@ -169,10 +145,7 @@ A malformed document is rejected at load with a clear, specific error
   writable symbols, two-way bindings target lvalues, named-function call
   arity matches, no duplicate `var` in a block. (Type checking is deferred —
   type mismatches are runtime errors.)
-- A `ui` section defines `render`, at least one view, or `generic`. A view
-  targets exactly one type (which must exist and be an object type; the view
-  takes one param) or one path (starting with `/`, no trailing slash; at most
-  one param); no two views share a target; no `view "/"` alongside `render`.
+- A `ui` section defines `fn render()` (fully custom) or `generic` (fully auto).
 
 ## Worked example
 

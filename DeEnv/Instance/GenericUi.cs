@@ -126,9 +126,6 @@ public static class GenericUi
         var (_, libUi) = CodeParse.ParseDocument(StdlibSource);
         var library = libUi.Functions ?? [];
 
-        var explicitObjectTypes = (ui.Views ?? [])
-            .Where(v => v is { Type: not null, Path: null, Prop: null }).Select(v => v.Type!).ToHashSet();
-
         var draftVars = new List<UiVar>();
         var synthViews = new List<UiView>();
         foreach (var type in (desc.Types ?? []).Where(t => t.BaseType == BaseType.Object))
@@ -140,8 +137,8 @@ public static class GenericUi
             foreach (var prop in SetProps(type, desc))
                 draftVars.Add(new UiVar(DraftVarName(type.Name, prop.Name), DraftLiteral(desc.FindType(prop.Type)!)));
 
-            // Object page for a self-hostable type without an explicit view.
-            if (IsSelfHostable(type) && !explicitObjectTypes.Contains(type.Name))
+            // Object page for a self-hostable type.
+            if (IsSelfHostable(type))
                 synthViews.Add(SynthObjectView(type, desc));
 
             // Reference-route editor for each reference prop (any owner — e.g. Db.lead).
@@ -187,7 +184,7 @@ public static class GenericUi
     private static UiView SynthObjectView(TypeDefinition type, InstanceDescription desc)
     {
         var body = Return(Call("objectForm", Sym("obj"), ObjectDescriptor(type, desc)));
-        return new UiView(type.Name, null, Fn("obj", body));
+        return new UiView(type.Name, Fn("obj", body));
     }
 
     // Reference route: `view(parent)` → `return refEditor(parent, "P", <ref descriptor>)`,
@@ -195,7 +192,7 @@ public static class GenericUi
     private static UiView SynthRefView(string ownerType, PropDefinition prop, TypeDefinition target, InstanceDescription desc)
     {
         var body = Return(Call("refEditor", Sym("parent"), Text(prop.Name), RefDescriptor(ownerType, prop.Name, target, desc)));
-        return new UiView(ownerType, null, Fn("parent", body), Prop: prop.Name);
+        return new UiView(ownerType, Fn("parent", body), Prop: prop.Name);
     }
 
     // Set route: `view(parent)` → `return setTable(field(parent, "P"), <set descriptor>)`,
@@ -204,7 +201,7 @@ public static class GenericUi
     {
         var set = new CodeCall { Fn = Sym("field"), Params = [Sym("parent"), Text(prop.Name)] };
         var body = Return(Call("setTable", set, SetDescriptor(ownerType, prop.Name, element)));
-        return new UiView(ownerType, null, Fn("parent", body), Prop: prop.Name);
+        return new UiView(ownerType, Fn("parent", body), Prop: prop.Name);
     }
 
     // The set descriptor setTable uses: { props, draft, resetDraft } — props are the

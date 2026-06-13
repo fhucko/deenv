@@ -33,24 +33,4 @@ initialData
         active: true
 
 ui
-    view Customer(customer)
-        return <main class="customer-card">
-            <h2 class="customer-name">
-                customer.name
-            <input class="email" value={customer.email}>
-            <label>
-                <input type="checkbox" class="active" checked={customer.active}>
-                "Active"
-            <h3>
-                "Open orders"
-            foreach o in customer.orders.where(x => x.shipped == false)
-                <div class="open-order">
-                    o.item
-
-    view "/dashboard"(path)
-        return <main class="dashboard">
-            <h1>
-                "Dashboard"
-            foreach c in db.customers.where(x => x.active == true)
-                <div class="active-customer">
-                    c.name
+    generic

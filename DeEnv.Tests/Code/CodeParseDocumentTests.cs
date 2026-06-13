@@ -202,28 +202,7 @@ public sealed class CodeParseDocumentTests
     }
 
     [Test]
-    public async Task A_ui_section_without_render_parses_when_it_has_views()
-    {
-        var (_, ui) = CodeParse.ParseDocument(
-            "ui\n" +
-            "    view Customer(customer)\n" +
-            "        return <div>\n" +
-            "            customer.name\n" +
-            "    view \"/dashboard\"(path)\n" +
-            "        return <main>\n" +
-            "            \"hi\"\n");
-
-        await Assert.That(ui.Render).IsNull();
-        await Assert.That(ui.Views!.Count).IsEqualTo(2);
-        await Assert.That(ui.Views[0].Type).IsEqualTo("Customer");
-        await Assert.That(ui.Views[0].Path).IsNull();
-        await Assert.That(ui.Views[0].Fn.Params[0].Name).IsEqualTo("customer");
-        await Assert.That(ui.Views[1].Path).IsEqualTo("/dashboard");
-        await Assert.That(ui.Views[1].Type).IsNull();
-    }
-
-    [Test]
-    public async Task A_ui_section_with_neither_render_nor_views_is_rejected_at_load()
+    public async Task A_ui_section_with_neither_render_nor_generic_is_rejected_at_load()
     {
         await Assert.That(() => InstanceDescriptionLoader.Load(
             "types\n" +
@@ -232,57 +211,6 @@ public sealed class CodeParseDocumentTests
             "\n" +
             "ui\n" +
             "    var path = \"/\"\n"))
-            .Throws<SchemaValidationException>();
-    }
-
-    [Test]
-    public async Task A_view_targeting_an_unknown_type_is_rejected_at_load()
-    {
-        var ex = await Assert.That(() => InstanceDescriptionLoader.Load(
-            "types\n" +
-            "    Db\n" +
-            "        note: text\n" +
-            "\n" +
-            "ui\n" +
-            "    view Customer(c)\n" +
-            "        return <div>\n" +
-            "            \"x\"\n"))
-            .Throws<SchemaValidationException>();
-        await Assert.That(ex!.Message).Contains("Customer");
-    }
-
-    [Test]
-    public async Task A_type_view_must_take_exactly_one_parameter()
-    {
-        await Assert.That(() => InstanceDescriptionLoader.Load(
-            "types\n" +
-            "    Db\n" +
-            "        things: set of Thing\n" +
-            "    Thing\n" +
-            "        name: text\n" +
-            "\n" +
-            "ui\n" +
-            "    view Thing()\n" +
-            "        return <div>\n" +
-            "            \"x\"\n"))
-            .Throws<SchemaValidationException>();
-    }
-
-    [Test]
-    public async Task Two_views_for_the_same_target_are_rejected()
-    {
-        await Assert.That(() => InstanceDescriptionLoader.Load(
-            "types\n" +
-            "    Db\n" +
-            "        note: text\n" +
-            "\n" +
-            "ui\n" +
-            "    view \"/a\"(p)\n" +
-            "        return <div>\n" +
-            "            \"1\"\n" +
-            "    view \"/a\"(p)\n" +
-            "        return <div>\n" +
-            "            \"2\"\n"))
             .Throws<SchemaValidationException>();
     }
 

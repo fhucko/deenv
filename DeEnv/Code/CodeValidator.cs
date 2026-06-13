@@ -50,55 +50,12 @@ public static class CodeValidator
         foreach (var f in ui.Functions ?? []) ValidateFunction(f, top);
         foreach (var f in desc.Common?.Functions ?? []) ValidateFunction(f, top);
 
-        // render is optional (it is the implicit root path view); but a ui section
-        // with neither render, views, nor the `generic` opt-in renders nothing
-        // anywhere — reject at load.
-        if (ui.Render == null && (ui.Views == null || ui.Views.Count == 0) && !ui.Generic)
+        // An app is fully custom (`fn render()`) or fully auto (`generic`); a ui section
+        // with neither renders nothing — reject at load.
+        if (ui.Render == null && !ui.Generic)
             throw new SchemaValidationException(
-                "The 'ui' section must define 'fn render()', at least one view, or 'generic'.");
+                "The 'ui' section must define 'fn render()' (custom UI) or 'generic' (auto UI).");
         if (ui.Render != null) ValidateFunction(ui.Render, top);
-
-        ValidateViews(desc, ui, top);
-    }
-
-    private static void ValidateViews(InstanceDescription desc, InstanceUi ui, Scope top)
-    {
-        var targets = new HashSet<string>();
-        foreach (var view in ui.Views ?? [])
-        {
-            if ((view.Type == null) == (view.Path == null))
-                throw new SchemaValidationException("A view must target exactly one type or one path.");
-
-            if (view.Type is { } typeName)
-            {
-                var type = desc.FindType(typeName)
-                    ?? throw new SchemaValidationException($"View targets unknown type '{typeName}'.");
-                if (type.BaseType != BaseType.Object)
-                    throw new SchemaValidationException($"View targets '{typeName}', which is not an object type.");
-                if (view.Fn.Params.Length != 1)
-                    throw new SchemaValidationException(
-                        $"The view for type '{typeName}' must take exactly one parameter (the routed object).");
-            }
-
-            if (view.Path is { } path)
-            {
-                if (!path.StartsWith('/') || (path.Length > 1 && path.EndsWith('/')))
-                    throw new SchemaValidationException(
-                        $"View path '{path}' must start with '/' and not end with one.");
-                if (path == "/" && ui.Render != null)
-                    throw new SchemaValidationException(
-                        "A view for \"/\" duplicates 'fn render()' (render is the root view).");
-                if (view.Fn.Params.Length > 1)
-                    throw new SchemaValidationException(
-                        $"The view for path '{path}' takes at most one parameter (the request path).");
-            }
-
-            if (!targets.Add(view.Type ?? view.Path!))
-                throw new SchemaValidationException(
-                    $"Two views target '{view.Type ?? view.Path}'.");
-
-            ValidateFunction(view.Fn, top);
-        }
     }
 
     private static void DeclareNamed(CodeFunction fn, Scope scope)

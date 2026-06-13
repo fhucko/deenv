@@ -302,19 +302,11 @@ public static class CodeParse
             .SkipEmptyLinesBefore();
 
     // ── the document: `common` + `ui` sections ──────────────────────────────────
-    // Top-level items are named functions, (in ui) vars, and (in ui) views;
-    // `fn render()` is the optional whole-app render fn (the root path view).
-
-    // A view declaration riding through SectionItems until MapUi consumes it. Never
-    // serialized (not in the ICodeStatement JsonDerivedType list) — it exists only
-    // between the parser and the section mapping. `view` is a CONTEXTUAL keyword:
-    // it introduces a section item but stays usable as an ordinary identifier.
-    internal sealed class CodeViewDec : ICodeStatement
-    {
-        public string? Type { get; init; }
-        public string? Path { get; init; }
-        public required CodeFunction Fn { get; init; }
-    }
+    // Top-level items are named functions and (in ui) vars; `fn render()` is the
+    // optional whole-app render fn (fully-custom UI). An app is either fully custom
+    // (`fn render()`) or fully auto (`generic` / the C# auto-form) — there is no
+    // partial-customization `view` feature (dropped; the auto UI is a library the
+    // custom render will compose instead).
 
     // The `generic` opt-in marker: a ui section item, consumed by MapUi into
     // InstanceUi.Generic. A CONTEXTUAL keyword (still usable as an identifier).
@@ -325,25 +317,12 @@ public static class CodeParse
     public static IndentedParser<ICodeStatement> GenericMarker => _ =>
         Seq(Text("generic"), NlOrEnd, (_, _) => (ICodeStatement)new CodeGenericMarker());
 
-    // `view Customer(customer)` (type target) / `view "/reports"(path)` (path target).
-    public static IndentedParser<ICodeStatement> ViewDec => indent =>
-        Seq(Text("view"), Ws1,
-            OneOf<object>(Symbol, TextLiteral),
-            Ws0, FunctionParams, NlOrEnd, IndentedBlock(indent),
-            (_, _, target, _, parameters, _, body) => (ICodeStatement)new CodeViewDec
-            {
-                Type = (target as CodeSymbol)?.Name,
-                Path = (target as CodeText)?.Value,
-                Fn = new CodeFunction { Name = null, Params = parameters, Body = body },
-            });
-
     // SkipEmptyLinesBefore on the LOOKAHEAD itself: a blank line between the section
     // header and its first item (the printer's canonical spacing) must not break the
     // indent probe.
     public static Parser<ICodeStatement[]> SectionItems => IndentLookahead("", Ws1,
         indent => Many1(
             Seq(Text(indent), OneOf<ICodeStatement>(
-                ViewDec(indent),
                 GenericMarker(indent),
                 NamedFunction(indent),
                 VarDec(indent)),
@@ -385,7 +364,6 @@ public static class CodeParse
     {
         var vars = new List<UiVar>();
         var functions = new List<CodeFunction>();
-        var views = new List<UiView>();
         CodeFunction? render = null;
         var generic = false;
         foreach (var item in items)
@@ -400,15 +378,13 @@ public static class CodeParse
                 case CodeFunction fn:
                     functions.Add(fn);
                     break;
-                case CodeViewDec view:
-                    views.Add(new UiView(view.Type, view.Path, view.Fn));
-                    break;
                 case CodeGenericMarker:
                     generic = true;
                     break;
             }
-        // render is optional: with only views (or the `generic` opt-in), the app
-        // customizes parts of the generic UI. (A ui with none is rejected by CodeValidator.)
-        return new InstanceUi(vars, functions, render, views, generic);
+        // An app is fully custom (`fn render()`) or fully auto (`generic`). The
+        // synthesized generic views (InstanceUi.Views) are added at render time, never
+        // authored here. (A ui with neither render nor `generic` is rejected by CodeValidator.)
+        return new InstanceUi(vars, functions, render, Views: null, Generic: generic);
     }
 }

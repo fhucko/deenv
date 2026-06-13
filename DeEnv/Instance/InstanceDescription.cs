@@ -25,14 +25,12 @@ public record TypeDefinition(
 // newItem). Client-held; for SSR the initializer seeds its first-paint value.
 public record UiVar(string Name, ICodeValue? Value = null);
 
-// A view: a render function bound to a TYPE (replaces the generic object page for
-// that type) or to a URL PATH (code takes over that subtree). Exactly one target is
-// set. The function is anonymous — the target rides here, never on Fn.Name (a named
-// function would be registered into the client's top scope; the server never does).
-// `Prop` marks a synthesized REFERENCE-route view: it owns the page for the reference
-// prop `Prop` on type `Type` (e.g. Db.lead), bound to the parent object like a type view.
-// Null for an ordinary type/path view. Render-time only (never parsed/printed).
-public record UiView(string? Type, string? Path, CodeFunction Fn, string? Prop = null);
+// A SYNTHESIZED generic-UI view (render-time only; never authored or printed — user
+// `view` declarations were dropped in favour of two modes, fully auto / fully custom).
+// `Type` is the type it renders; `Prop` (when set) marks a reference- or set-route view
+// owning the page for prop `Type.Prop` (e.g. Db.lead / Db.notes), bound to the parent
+// object. The function is anonymous — the target rides here, never on Fn.Name.
+public record UiView(string? Type, CodeFunction Fn, string? Prop = null);
 
 // The `ui` section: client-held state variables, shared component functions, views,
 // and the optional entry-point `render` function (the implicit root path view —

@@ -73,13 +73,6 @@ public class InstanceContext
     // The rendered HTML from the code-owned UI (Stage 2 SSR), under test.
     public string? RenderedHtml { get; set; }
 
-    // Milestone 8: the shop app — a TYPE view (Customer) + a PATH view (/dashboard)
-    // over a generic remainder, no `fn render()`. The committed DeEnv/shop.app and
-    // this text are the same document. Drives UiCustomization.feature.
-    public static InstanceDescription ViewsUiDb() =>
-        InstanceDescriptionLoader.LoadFile(
-            Path.Combine(AppContext.BaseDirectory, "shop.app"));
-
     // Milestone 9 (self-hosted generic UI, slice 1): an app that opts into the generic
     // Code UI (`generic`) with no hand-written views. The all-scalar `Note` object page
     // is rendered by the self-hosted `objectForm` library; `/` and `/notes` (the Db root
