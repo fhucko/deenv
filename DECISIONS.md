@@ -663,6 +663,31 @@ Specced by `SelfHostedUi.feature`'s reference scenarios. **Still opt-in**:
 default-on remains blocked until object creation, sets, and dicts are also
 self-hosted (the designer's full needs).
 
+### Component-local state — the creation foundation (verified, not yet shipped)
+
+Self-hosted CREATION needs a form that accumulates a new object's fields before
+minting (real systems create a record *with* its values, not an empty row first).
+The clean mechanism is the **component pattern**: a function runs its body ONCE as
+init (local state), returns a render function (the reactive part), and resets its
+state after Create. Decisions, verified by a prototype scenario (`ComponentFormApp`):
+
+- **Init-once falls out of the memo cache.** A memoized component call caches its
+  result — the render *closure* — so the body runs once and the captured draft
+  persists across renders; the returned render fn is the reactive part that re-runs
+  on dependency change. No new "run-once" runtime concept.
+- **State lives in an object PROP, not a local var.** `invalidateVar` is top-scope
+  only, so a local `var draft` reassign wouldn't re-render; `invalidateProp` works
+  at any depth. So the component holds a wrapper (`var state = { draft }`) and resets
+  with `state.draft = getNew()` — prop-reactive, no new invalidation machinery.
+- **`obj.prop = x` is the one enabling language addition.** Assignment gained an
+  object-field lvalue (a symbol *or* a `.member` chain): `CodeAssignment.Target`
+  is now `ICodeValue`, the parser has an `Lvalue`, and both interpreters set the
+  field through the same path two-way binding uses (invalidate + persist when
+  server-backed). Small and general — most languages have it.
+
+Creation itself (a generic New form = this component over `objectForm` + a Create
+button, and create-new in the reference editor) is the next slice, built on this.
+
 ## Tool stack and project structure
 
 Web-first: **C# backend, TypeScript front-end.** C# stays where it's strong;
