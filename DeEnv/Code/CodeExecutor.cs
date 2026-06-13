@@ -223,6 +223,17 @@ public sealed class CodeExecutor
         return value;
     }
 
+    // humanize(text): a prop name → a human label ("companyName" → "Company name").
+    // Pure; runs identically on server and client (TextUtil / codeExec.ts twin).
+    private IExecValue ExecuteHumanize(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 1)
+            throw new CodeRuntimeException("humanize(text) takes one argument.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecText text)
+            throw new CodeRuntimeException("humanize() expects a text value.");
+        return new ExecText { Value = TextUtil.Humanize(text.Value) };
+    }
+
     private static int AsInt(IExecValue v) => v is ExecInt i ? i.Value
         : throw new CodeRuntimeException("Expected an int.");
     private static bool AsBool(IExecValue v) => v is ExecBool b ? b.Value
@@ -232,10 +243,17 @@ public sealed class CodeExecutor
 
     private IExecValue ExecuteCall(CodeCall codeCall, ExecScope scope, ExecContext context)
     {
-        // `field` is a built-in: intercept before resolving the callee (it is not a
-        // scope symbol). Wins over any same-named user binding.
-        if (codeCall.Fn is CodeSymbol { Name: "field" })
-            return ExecuteField(codeCall, scope, context);
+        // Built-ins: intercept before resolving the callee (they are not scope symbols).
+        // Win over any same-named user binding.
+        if (codeCall.Fn is CodeSymbol builtin)
+            switch (builtin.Name)
+            {
+                case "field": return ExecuteField(codeCall, scope, context);
+                case "humanize": return ExecuteHumanize(codeCall, scope, context);
+                // save(obj) persists on the client (the generic form's Save button).
+                // Server-side (SSR / refetch) never runs the click handler, so no-op.
+                case "save": return new ExecNothing();
+            }
 
         var callee = ExecuteValue(codeCall.Fn, scope, context);
         return callee switch

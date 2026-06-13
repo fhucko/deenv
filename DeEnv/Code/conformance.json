@@ -113,6 +113,16 @@
       "expect": { "kind": "int", "value": 7 }
     },
     {
+      "name": "humanize a camelCase prop name",
+      "text": "humanize(\"companyName\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "symbol", "name": "humanize" },
+        "params": [ { "type": "text", "value": "companyName" } ]
+      },
+      "expect": { "kind": "text", "value": "Company name" }
+    },
+    {
       "name": "immediately-invoked function (n => n + 1)(41)",
       "text": "(n => n + 1)(41)",
       "expr": {

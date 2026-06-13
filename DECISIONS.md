@@ -584,13 +584,25 @@ roadmap-future layer) are later slices. Decisions:
   `objectForm(obj, meta)` iterates an ordinary Code value `meta: { name, props:
   [{ name, baseType }] }` with the existing `foreach`/`.prop`. No new
   introspection built-ins; the type descriptor *is* data.
-- **One real primitive: `field(obj, name)`.** Code had no `obj[name]`
-  (object-prop access requires a literal symbol), so a form driven by
-  schema-iterated names was impossible. `field` is the reflective twin of
-  `obj.member`: same dependency/leaf bookkeeping on the server, and on the
-  client a `setValue` that writes back and persists — so a bound input is
-  two-way exactly like a static field. Added to both twin interpreters + a
-  conformance case; the validator knows it as a builtin.
+- **Three builtins, all schema-driven.** Code had no `obj[name]` (object-prop
+  access requires a literal symbol), so a form driven by schema-iterated names
+  needed primitives:
+  - `field(obj, name)` — dynamic by-name access, the reflective twin of
+    `obj.member` (same dep/leaf bookkeeping on the server). Its client `setValue`
+    **stages** the edit in memory (the UI reflects it) but does **not** persist —
+    so the generic form keeps the C# form's batch-on-Save semantics (an edit is
+    discardable until Save). Static `obj.member` still persists live for app code.
+  - `save(obj)` — the Save button's action: flushes the object's scalar fields
+    through the existing per-field `objectPropChange` WS op. Server-side (SSR /
+    refetch) it is a no-op (the click handler never runs there).
+  - `humanize(text)` — a prop name → a label ("companyName" → "Company name"),
+    so labels match the C# form. Canonical impl in `DeEnv.Code.TextUtil` (shared
+    with `SsrRenderer`), mirrored in `codeExec.ts`.
+  All three are in both twin interpreters; `field`/`humanize` have conformance
+  cases; the validator knows them as builtins. (Keeping the Save button — rather
+  than live-bind — is parity with the C# object form, a prerequisite for making
+  the self-hosted UI the default. The form's root is a `<div>`, not a `<form>`,
+  so the Save `<button>` doesn't submit/navigate.)
 - **Synthesis over a runtime `schema` global.** Rather than ship a schema and a
   new `ViewKind.Generic` + client bootstrap, an opted-in app gets, at render
   time, a synthesized `view T(obj)` per all-scalar object type without an

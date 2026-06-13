@@ -806,24 +806,7 @@ public sealed class SsrRenderer
     private static string Escape(string s) =>
         System.Net.WebUtility.HtmlEncode(s);
 
-    // "companyName" -> "Company name", "shipped" -> "Shipped", "key_type" -> "Key type".
-    internal static string Humanize(string name)
-    {
-        if (string.IsNullOrEmpty(name)) return name;
-        var sb = new StringBuilder(name.Length + 4);
-        for (var i = 0; i < name.Length; i++)
-        {
-            var c = name[i];
-            if (c is '_' or '-')
-            {
-                sb.Append(' ');
-                continue;
-            }
-            if (char.IsUpper(c) && i > 0 && (char.IsLower(name[i - 1]) || char.IsDigit(name[i - 1])))
-                sb.Append(' ');
-            sb.Append(char.ToLowerInvariant(c));
-        }
-        var s = sb.ToString().Trim();
-        return s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
-    }
+    // "companyName" -> "Company name". The canonical implementation lives in
+    // DeEnv.Code.TextUtil (shared with the `humanize` Code builtin).
+    internal static string Humanize(string name) => TextUtil.Humanize(name);
 }

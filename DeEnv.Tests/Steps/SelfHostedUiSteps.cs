@@ -20,15 +20,27 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
-    // objectForm gives each field input the class of its prop name (class={p.name}).
+    // objectForm gives each field input (and its label) the class of its prop name
+    // (class={p.name}).
     [When("I fill the {string} field with {string}")]
     public async Task WhenFillField(string field, string value) =>
         await ctx.Page!.Locator($"input.{field}").FillAsync(value);
+
+    [When("I save the form")]
+    public async Task WhenSaveForm() =>
+        await ctx.Page!.Locator("button.save").ClickAsync();
 
     [Then("the {string} field is a {string} input")]
     public async Task ThenFieldInputKind(string field, string kind)
     {
         var type = await ctx.Page!.Locator($"input.{field}").GetAttributeAsync("type");
         await Assert.That(type).IsEqualTo(kind);
+    }
+
+    [Then("the {string} label reads {string}")]
+    public async Task ThenLabelReads(string field, string text)
+    {
+        var actual = await ctx.Page!.Locator($"label.{field}").InnerTextAsync();
+        await Assert.That(actual.Trim()).IsEqualTo(text);
     }
 }

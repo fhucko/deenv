@@ -95,6 +95,7 @@ public class InstanceContext
             title: text
             done: bool
             count: int
+            dueDate: date
 
     initialData
         Db 1
@@ -103,6 +104,7 @@ public class InstanceContext
             title: "First"
             done: false
             count: 3
+            dueDate: "2026-01-01"
 
     ui
         generic

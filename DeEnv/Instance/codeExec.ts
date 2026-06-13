@@ -320,14 +320,51 @@ function fieldResult(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     recordProp(obj.id, name);
     return {
         value,
+        // The generic form STAGES edits in memory (so the UI reflects them) but does
+        // NOT persist them — `save(obj)` flushes the object on the Save button, so an
+        // edit is discardable until then. (Static `obj.member` still persists live.)
         setValue: p => {
-            const before = obj.props[name];
             obj.props[name] = p;
             invalidateProp(obj.id, name);
-            // A positive id ⇒ the object is server-backed, so persist the change.
-            if (obj.id > 0) propValueChange(obj, name, p, before);
         },
     };
+}
+
+// humanize(text): a prop name → a human label ("companyName" → "Company name").
+// Twin of DeEnv.Code.TextUtil.Humanize; pinned by the conformance suite.
+function humanizeText(name: string): string {
+    if (!name) return name;
+    const isUpper = (c: string) => c >= "A" && c <= "Z";
+    const isLower = (c: string) => c >= "a" && c <= "z";
+    const isDigit = (c: string) => c >= "0" && c <= "9";
+    let out = "";
+    for (let i = 0; i < name.length; i++) {
+        const c = name[i];
+        if (c === "_" || c === "-") { out += " "; continue; }
+        if (isUpper(c) && i > 0 && (isLower(name[i - 1]) || isDigit(name[i - 1]))) out += " ";
+        out += c.toLowerCase();
+    }
+    out = out.trim();
+    return out.length === 0 ? out : out[0].toUpperCase() + out.slice(1);
+}
+
+function execHumanize(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    if (codeCall.params.length !== 1) throw new Error("humanize(text) takes one argument.");
+    const v = executeValue(codeCall.params[0], scope, context).value;
+    if (v.type !== "text") throw new Error("humanize() expects a text value.");
+    return { type: "text", value: humanizeText(v.value) };
+}
+
+// save(obj): persist the object's scalar fields (the generic form's Save button). Flushes
+// the staged in-memory values through the same per-field WS op two-way binding uses.
+function execSave(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const obj = executeValue(codeCall.params[0], scope, context).value;
+    if (obj.type !== "object") throw new Error("save() expects an object.");
+    if (obj.id > 0)
+        for (const [name, v] of Object.entries(obj.props))
+            if (v.type === "int" || v.type === "bool" || v.type === "text")
+                propValueChange(obj, name, v, v);
+    return { type: "nothing" };
 }
 
 function collectionSysFunction(arr: ExecArray, method: string, context: ExecContext): ExecSysFunction {
@@ -433,9 +470,13 @@ function executeInfixOpBasic(codeInfixOp: CodeInfixOp, scope: ExecScope, context
 }
 
 function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
-    // `field` is a built-in (intercepted in executeValue for its setValue); in statement
-    // position the value form is enough.
-    if (codeCall.fn.type === "symbol" && codeCall.fn.name === "field") return fieldResult(codeCall, scope, context).value;
+    // Built-ins. `field` is also intercepted in executeValue for its setValue; in
+    // statement position the value form is enough.
+    if (codeCall.fn.type === "symbol") {
+        if (codeCall.fn.name === "field") return fieldResult(codeCall, scope, context).value;
+        if (codeCall.fn.name === "humanize") return execHumanize(codeCall, scope, context);
+        if (codeCall.fn.name === "save") return execSave(codeCall, scope, context);
+    }
     const fn = executeValue(codeCall.fn, scope, context).value;
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));
     if (fn.type !== "fn") throw new Error("Target of a call is not a function.");

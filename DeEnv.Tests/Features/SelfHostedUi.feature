@@ -26,10 +26,18 @@ Feature: Self-hosted generic UI (object forms)
     Then the "title" field is a "text" input
     And the "count" field is a "number" input
     And the "done" field is a "checkbox" input
+    And the "dueDate" field is a "date" input
 
   @milestone-9 @single-user
-  Scenario: Editing a scalar field persists over the WebSocket
+  Scenario: Field labels are humanized
+    Given the self-hosted form app is running
+    When I open "/notes/2"
+    Then the "dueDate" label reads "Due date"
+
+  @milestone-9 @single-user
+  Scenario: Editing persists on Save over the WebSocket
     Given the self-hosted form app is running
     When I open "/notes/2"
     And I fill the "title" field with "Renamed"
+    And I save the form
     Then the store eventually has a "Note" whose "title" is "Renamed"

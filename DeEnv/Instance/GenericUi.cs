@@ -19,17 +19,19 @@ public static class GenericUi
     private const string StdlibSource = """
         ui
             fn objectForm(obj, meta)
-                return <form class="object-form">
+                return <div class="object-form">
                     <h2>
                         meta.name
                     foreach p in meta.props
                         <div class="field">
-                            <label>
-                                p.name
+                            <label class={p.name}>
+                                humanize(p.name)
                             if p.baseType == "bool"
                                 <input type="checkbox" class={p.name} checked={field(obj, p.name)}>
                             else
                                 <input type={inputType(p.baseType)} class={p.name} value={field(obj, p.name)}>
+                    <button class="save" onClick={() => save(obj)}>
+                        "Save"
 
             fn inputType(baseType)
                 if baseType == "int"

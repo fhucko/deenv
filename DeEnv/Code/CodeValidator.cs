@@ -27,9 +27,12 @@ public static class CodeValidator
         // Top scope: db (read-only) + ui vars (writable) + all function names.
         var top = new Scope(null);
         top.Declare("db", writable: false);
-        // `field(obj, name)` is a built-in (dynamic by-name prop access for the
-        // self-hosted generic UI); resolvable as a symbol, no fixed arity.
+        // Built-ins for the self-hosted generic UI, resolvable as symbols (no fixed
+        // arity): field (dynamic by-name access), humanize (prop name → label), save
+        // (persist an object's fields — the generic form's Save button).
         top.Declare("field", writable: false);
+        top.Declare("humanize", writable: false);
+        top.Declare("save", writable: false);
         foreach (var v in ui.Vars ?? [])
         {
             if (top.IsDeclaredLocally(v.Name))
