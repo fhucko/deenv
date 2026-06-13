@@ -654,10 +654,17 @@ default stays blocked and references is the next necessary step. Decisions:
   empty editor, not `NotFound`, and the client needs no new wiring (it binds the
   parent by id exactly like a type view; the prop + target descriptor ride as
   literals in the view body).
-- **Create-new is deferred.** A draft that accumulates typed fields before mint
-  needs persistent per-field state (a top-scope var), which doesn't fit a generic
-  stdlib function cleanly. Slice 2 ships pick-existing + clear; create-through-
-  reference is a focused follow-up.
+- **Create-new (landed).** The reference editor's create-new form binds inputs to
+  a **synthesized top-scope draft var** (`__draft_<Owner>_<Prop>`, a pre-shaped
+  default object) bundled into the reference descriptor with a reset closure; the
+  Create button does `setRef(parent, prop, draft)` (mint + point) then resets the
+  draft. This reuses the proven top-scope-var reactivity (reassign → invalidateVar
+  → re-render) — the same shape hand-written apps use for new-item forms — and
+  needs no new primitives. (Component-local draft state via the init+render pattern
+  was the elegant alternative, but a generic stdlib `refEditor` re-keys its memo
+  entry every render because its descriptor arg is rebuilt each time, which would
+  reset the draft; the synthesized var sidesteps that. The component pattern, with
+  `obj.prop = x`, remains the path for *hand-authored* forms — see below.)
 
 Specced by `SelfHostedUi.feature`'s reference scenarios. **Still opt-in**:
 default-on remains blocked until object creation, sets, and dicts are also

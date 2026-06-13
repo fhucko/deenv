@@ -72,6 +72,15 @@ Feature: Self-hosted generic UI (object forms)
     And the "/lead" reference eventually points at "Ada"
 
   @milestone-9 @single-user
+  Scenario: Creating a new object through a reference mints and points at it
+    Given the self-hosted reference app is running
+    When I open "/lead"
+    And I fill the new "name" with "Carol"
+    And I create the new object
+    Then the current reference is "Carol"
+    And the "/lead" reference eventually points at "Carol"
+
+  @milestone-9 @single-user
   Scenario: Clearing a reference unsets it
     Given the self-hosted reference app is running
     When I open "/lead"

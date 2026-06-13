@@ -89,6 +89,14 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task WhenClearReference() =>
         await ctx.Page!.Locator("button.ref-clear").First.ClickAsync();
 
+    [When("I fill the new {string} with {string}")]
+    public async Task WhenFillNewField(string field, string value) =>
+        await ctx.Page!.Locator($".ref-new input.{field}").First.FillAsync(value);
+
+    [When("I create the new object")]
+    public async Task WhenCreateNewObject() =>
+        await ctx.Page!.Locator("button.ref-create").First.ClickAsync();
+
     [Then("the current reference is {string}")]
     public async Task ThenCurrentReference(string label) =>
         await ctx.Page!.WaitForFunctionAsync(
