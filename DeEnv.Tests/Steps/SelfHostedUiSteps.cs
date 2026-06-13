@@ -41,6 +41,28 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await Assert.That(actual.Trim()).IsEqualTo(text);
     }
 
+    // A set rendered inline links each member by its nested member URL (path-walk),
+    // e.g. /notes/2 — not the /~/<id> id-route.
+    [Then("a set member open link points at {string}")]
+    public async Task ThenSetMemberLink(string href) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('a.set-open')].some(e => e.getAttribute('href') === {JsString(href)})");
+
+    // Click the inline member link and follow it. End-to-end parity: the link string is
+    // built by `nest` on the server (SSR) AND re-built by the client on hydrate (from
+    // location.pathname) — following it confirms both agree and that the nested URL resolves
+    // to a self-hosted page (not a C# fallback / not-found).
+    [When("I follow the set member open link")]
+    public async Task WhenFollowSetMember() =>
+        await ctx.Page!.Locator("a.set-open").First.ClickAsync();
+
+    [Given("the self-hosted dict app is running")]
+    public async Task GivenSelfHostedDictAppRunning()
+    {
+        ctx.Description = InstanceContext.SelfHostedDictDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
     // ── component-local state (creation prototype) ─────────────────────────────────
 
     [Given("the component form app is running")]

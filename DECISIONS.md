@@ -726,7 +726,44 @@ concat, so member links need it). `IsSelfHostable` is unchanged — objects that
 *route* self-hosts, and members open via `/~/<id>` (still the C# page until a
 follow-up self-hosts the id-route). Specced by `SelfHostedUi.feature`'s set
 scenario. Default-on remains blocked (dicts, the Db-root object page, and the
-designer).
+designer). (Slice 4 superseded the `link` builtin and "`IsSelfHostable`
+unchanged" — see below.)
+
+### Slice 4: objects-that-hold-sets self-host (inline tables, nested path-walk)
+
+The navigation model was settled here: **keep nested path-walk URLs**, because a
+**set is a dictionary keyed by member identity** (which is why M5 dropped positional
+arrays) — so `/notes/3` is a stable dictionary-entry access, not a positional
+fiction. (An identity-addressed `/` + `/~/<id>` design was drafted and rejected: the
+user wanted path-walk kept.)
+
+So objects that *hold* sets now self-host. `IsSelfHostable(type, desc)` widens from
+"all props single" to "every prop is a single scalar, a single reference, **or an
+object set**" — only an arbitrary-key dictionary (or a scalar set) still forces C#.
+`objectForm` gains a set branch: it renders each set as an **inline table**
+(`setTable`, the slice-3 component, reused) whose member rows link to the **nested
+member URL** (`/notes/3`), the same path C# uses — not the `/~/<id>` id-route. The
+Db root (`/`) is no longer special-cased; it's just an object whose props include a
+set, rendered by the same uniform path (scalar arm → reference arm → set arm, the
+same shape each slice added).
+
+To build nested links the generic UI must know the **page's base path**, so it is
+threaded in as a second view argument (`view T(obj, base)`), bound to the request URL
+in `SsrRenderer.ExecuteRender` and mirrored on the client (`init.ts`, from
+`location.pathname`). One new builtin **`nest(base, seg)`** — a URL path-join
+(`seg` a prop name or an object → its id; trims a trailing `/`) — **replaces** the
+slice-3 `link` builtin (its only use was the set "open" link, now nested). The set
+and reference *routes* (`/notes`, `/lead`) are kept (path-walk: every segment stays
+navigable). The object and set views take `base` (sets build nested links); the
+reference view takes none — a reference builds no nested links, so it ignores the
+`base` arg `ExecuteRender` passes uniformly (both interpreters bind `min(args, params)`).
+
+`IsSelfHostable` is documented in code as the **temporary migration seam** between
+the two renderers — it exists only to route dict-bearing types to the (retiring) C#
+auto-form, and is deleted when dictionaries self-host. Specced by
+`SelfHostedUi.feature` (the `/` self-host + nested-link scenario, plus a dict-bearing
+fixture whose `/` stays C#). Default-on remains blocked only by **general
+dictionaries** and **designer parity**.
 
 ## Tool stack and project structure
 

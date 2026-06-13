@@ -252,17 +252,18 @@ public sealed class SsrRenderer
         var match = ResolveView(urlPath)
             ?? throw new CodeRuntimeException("No view matches this URL.");
 
-        // A type view's parameter: the routed object, found by walking the URL
-        // segments through the SAME graph instance bound as `db` (so leaves,
-        // session mirroring and identity all line up). Bound as a call argument —
-        // never a top-scope var — so it can't be overridden or shipped as scope.
+        // A type view's parameters: (1) the routed object, found by walking the URL
+        // segments through the SAME graph instance bound as `db` (so leaves, session
+        // mirroring and identity all line up); (2) the request URL as `base`, so the
+        // generic UI builds nested member links (nest(base, prop) → /notes/3). Bound as
+        // call arguments — never top-scope vars — so they can't be overridden or shipped.
         int? targetId = null;
         IExecValue[] args = [];
         if (match.Kind == ViewKind.Type)
         {
             var target = FindTarget(db, match.TargetPath!) ?? throw new ViewTargetNotFoundException();
             targetId = target.Id;
-            args = [target];
+            args = [target, new ExecText { Value = urlPath }];
         }
 
         var result = exec.InvokeFunction(match.Fn, args, scope, context);

@@ -284,15 +284,25 @@ public sealed class CodeExecutor
         return new ExecObject { Props = props, Id = --context.LastId.Value };
     }
 
-    // link(obj): the id-route URL ("/~/<id>") to an object's page — Code has no string
-    // concatenation, so building member links needs a builtin.
-    private IExecValue ExecuteLink(CodeCall call, ExecScope scope, ExecContext context)
+    // nest(base, seg): a URL path-join ("/notes" + a member → "/notes/3") — Code has no
+    // string concatenation, so building nested member links needs a builtin. `seg` is a
+    // text (a prop name, or — for a future dictionary route — a text/int key) or an object
+    // (→ its intrinsic id). A trailing "/" on base is trimmed so nest("/", "x") == "/x". One
+    // primitive covers prop names, set members, and dict keys — no further URL builtin.
+    private IExecValue ExecuteNest(CodeCall call, ExecScope scope, ExecContext context)
     {
-        if (call.Params.Length != 1)
-            throw new CodeRuntimeException("link(obj) takes one argument.");
-        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject obj)
-            throw new CodeRuntimeException("link() expects an object.");
-        return new ExecText { Value = "/~/" + obj.Id };
+        if (call.Params.Length != 2)
+            throw new CodeRuntimeException("nest(base, seg) takes two arguments.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecText baseText)
+            throw new CodeRuntimeException("nest() expects a text base path.");
+        var segStr = ExecuteValue(call.Params[1], scope, context) switch
+        {
+            ExecObject obj => obj.Id.ToString(),
+            ExecInt i => i.Value.ToString(),
+            ExecText t => t.Value,
+            _ => throw new CodeRuntimeException("nest() expects a text or object segment."),
+        };
+        return new ExecText { Value = baseText.Value.TrimEnd('/') + "/" + segStr };
     }
 
     private static int AsInt(IExecValue v) => v is ExecInt i ? i.Value
@@ -312,7 +322,7 @@ public sealed class CodeExecutor
                 case "field": return ExecuteField(codeCall, scope, context);
                 case "humanize": return ExecuteHumanize(codeCall, scope, context);
                 case "extent": return ExecuteExtent(codeCall, scope, context);
-                case "link": return ExecuteLink(codeCall, scope, context);
+                case "nest": return ExecuteNest(codeCall, scope, context);
                 case "clone": return ExecuteClone(codeCall, scope, context);
                 // setRef(obj, prop, value) persists on the client (the reference editor).
                 // Server-side (SSR / refetch) never runs the click handler, so it no-ops.

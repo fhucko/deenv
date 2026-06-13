@@ -31,12 +31,13 @@ where developers design data visually and use it as objects. Full mission in
    render()`) or fully auto (the generic UI) — see DECISIONS.md). **M9
    (self-hosted generic UI) is in progress**: the generic UI re-expressed in Code
    as a library (`objectForm`/`refEditor`/`setTable` over schema-as-data; builtins
-   `field`/`humanize`/`extent`/`setRef`/`link`; `obj.prop = x`), opted in per app
-   via `generic`. Object forms, references (pick/clear/create-new), and set tables
-   are self-hosted; dicts + the Db-root object page + the id-route remain, then
-   the C# renderer + `instance.ts` retire. **Schema versioning stays
-   postponed** (self-hosted on top of Code). Later milestones are out of scope
-   unless explicitly asked.
+   `field`/`humanize`/`extent`/`setRef`/`nest`/`clone`; `obj.prop = x`), opted in per
+   app via `generic`. Object forms, references (pick/clear/create-new), set tables,
+   AND objects-that-hold-sets (the Db root self-hosts; sets render inline with nested
+   path-walk member links, e.g. `/notes/3`) are self-hosted; only **general
+   dictionaries** + **designer parity** remain, then the C# renderer + `instance.ts`
+   retire. **Schema versioning stays postponed** (self-hosted on top of Code). Later
+   milestones are out of scope unless explicitly asked.
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
    custom language, the render-coupled storage engine, and the multi-device
@@ -143,10 +144,22 @@ component pattern hand-authored forms use — one creation mechanism — enabled
 stable top-scope descriptor registry (`__descs`) and the `clone(obj)` builtin.
 Tried making the self-hosted UI the default and reverted:
 it breaks the reference editor on unset routes and the designer, which need more
-slices. **Remaining slices**: object creation forms, set tables, dictionaries
-(needs dicts in the Code runtime — a roadmap-future layer), then flip the default
-and retire the C# renderer + the separate generic client (`instance.ts`). See
-DECISIONS.md.
+slices.
+
+**Slice 3 (set tables)** self-hosted a set *route* (`/notes`) as a `setTable`
+component. **Slice 4 (objects-that-hold-sets) just landed**: the navigation model is
+settled as **nested path-walk** (a *set is a dictionary keyed by member identity*, so
+`/notes/3` is a stable dictionary-entry access — that's why there are no positional
+arrays). `IsSelfHostable(type, desc)` widened to allow object sets, so the **Db root
+self-hosts**; `objectForm` renders each set as an **inline table** whose member rows
+link to the **nested member URL** (`/notes/3`), not the `/~/<id>` id-route. The page's
+base path is threaded into the synthesized view (`view T(obj, base)`, bound in
+`SsrRenderer.ExecuteRender` + `init.ts`); new builtin **`nest(base, seg)`** (URL
+path-join) **replaced** `link`. `IsSelfHostable` is the *temporary migration seam*
+(routes only dict-bearing types to the retiring C# form; deleted when dicts self-host).
+**Remaining**: general **dictionaries** (needs dicts in the Code runtime — a
+roadmap-future layer) + **designer parity**, then flip the default and retire the C#
+renderer + the separate generic client (`instance.ts`). See DECISIONS.md.
 
 **Milestone 8 (UI customization — views) was DROPPED (2026-06-13).** The UI is
 now **two modes only**: fully **custom** (`fn render()`, owns the whole UI) or

@@ -87,6 +87,16 @@ across a dictionary.** Concretely:
 - **Dictionaries are the only navigation boundary.** A dictionary field
   renders as a table; you navigate (new page) only by clicking a row into an
   entry, or by following a field that is a dictionary.
+- **A set is a dictionary keyed by member identity** — so it is one such
+  boundary. A set renders as a table whose rows link to the member by its
+  identity key (`/notes/3`), and the URL is *stable* precisely because the key
+  is identity, not a position (this is why the model has no positional arrays).
+
+The self-hosted generic UI (Milestone 9) follows this exactly: it is
+**path-walk** — an object page renders its scalars and single references inline,
+and each set as an inline table whose member rows link to the nested member URL
+(`/notes/3`, `/customers/2/orders/3`). The `/~/<id>` id-route remains only a C#
+fallback, not something the generic UI generates.
 
 This is deliberately the simplest consistent rule: the page boundary is
 predictable — follow the data from this node, stop at every dictionary.

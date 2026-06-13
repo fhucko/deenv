@@ -49,8 +49,9 @@ function init(): void {
 
     // The render function for this page is the server's resolved view (render, a
     // type view, or a path view). Built as a direct closure — never registered by
-    // name. A type view's parameter starts from the shipped object (or a stub whose
-    // unshipped reads trigger the refetch machinery).
+    // name. A type view's parameters are the shipped object (or a stub whose unshipped
+    // reads trigger the refetch machinery) and the page's URL path as `base`, mirroring
+    // the server (SsrRenderer.ExecuteRender) so nested member links match on hydrate.
     const view = initUi.view;
     const fn = view != null && view.kind !== "render" && view.index != null
         ? initUi.ui.views![view.index].fn
@@ -58,8 +59,9 @@ function init(): void {
     uiStatic.renderFn = { type: "fn", fn, scope };
     if (view?.kind === "type" && view.objectId != null) {
         const objects = uiStatic.state.objects;
-        uiStatic.renderArgs = [objects[view.objectId]
-            ?? (objects[view.objectId] = { type: "object", id: view.objectId, props: {} })];
+        uiStatic.renderArgs = [
+            objects[view.objectId] ?? (objects[view.objectId] = { type: "object", id: view.objectId, props: {} }),
+            { type: "text", value: location.pathname }];
     } else if (view?.kind === "path" && fn.params.length > 0) {
         uiStatic.renderArgs = [{ type: "text", value: location.pathname }];
     }

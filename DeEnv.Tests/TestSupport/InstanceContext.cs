@@ -73,10 +73,11 @@ public class InstanceContext
     // The rendered HTML from the code-owned UI (Stage 2 SSR), under test.
     public string? RenderedHtml { get; set; }
 
-    // Milestone 9 (self-hosted generic UI, slice 1): an app that opts into the generic
-    // Code UI (`generic`) with no hand-written views. The all-scalar `Note` object page
-    // is rendered by the self-hosted `objectForm` library; `/` and `/notes` (the Db root
-    // and the set) stay on the C# auto-form. Drives SelfHostedUi.feature.
+    // Milestone 9 (self-hosted generic UI): an app that opts into the generic Code UI
+    // (`generic`) with no hand-written views. The all-scalar `Note` object page is rendered
+    // by the self-hosted `objectForm` library; the Db root (`/`) self-hosts too, rendering
+    // its `notes` set as an inline table whose member rows link to the nested member URL
+    // (/notes/2). Drives SelfHostedUi.feature.
     public static InstanceDescription SelfHostedFormDb() =>
         InstanceDescriptionLoader.Load(SelfHostedFormApp);
 
@@ -98,6 +99,26 @@ public class InstanceContext
             done: false
             count: 3
             dueDate: "2026-01-01"
+
+    ui
+        generic
+    """;
+
+    // Milestone 9: a `generic` app whose Db holds an arbitrary-key DICTIONARY. The Code
+    // stdlib can't render a dictionary yet, so Db is not self-hostable and `/` stays on the
+    // C# auto-form (the migration seam). `Setting` (all-scalar) self-hosts.
+    public static InstanceDescription SelfHostedDictDb() =>
+        InstanceDescriptionLoader.Load(SelfHostedDictApp);
+
+    private const string SelfHostedDictApp = """
+    types
+        Db
+            settings: dict of Setting by text
+        Setting
+            value: text
+
+    initialData
+        Db 1
 
     ui
         generic

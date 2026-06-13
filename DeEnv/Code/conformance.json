@@ -134,6 +134,36 @@
       "expect": { "kind": "int", "value": 7 }
     },
     {
+      "name": "nest joins a base path and a segment, trimming a trailing slash",
+      "text": "nest(\"/\", \"notes\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "symbol", "name": "nest" },
+        "params": [ { "type": "text", "value": "/" }, { "type": "text", "value": "notes" } ]
+      },
+      "expect": { "kind": "text", "value": "/notes" }
+    },
+    {
+      "name": "nest appends a segment to a non-root base",
+      "text": "nest(\"/notes\", \"3\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "symbol", "name": "nest" },
+        "params": [ { "type": "text", "value": "/notes" }, { "type": "text", "value": "3" } ]
+      },
+      "expect": { "kind": "text", "value": "/notes/3" }
+    },
+    {
+      "name": "nest joins a (text) dictionary key — the same primitive a future dict route reuses",
+      "text": "nest(\"/settings\", \"theme\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "symbol", "name": "nest" },
+        "params": [ { "type": "text", "value": "/settings" }, { "type": "text", "value": "theme" } ]
+      },
+      "expect": { "kind": "text", "value": "/settings/theme" }
+    },
+    {
       "name": "object-field assignment (obj.x = 9) sets the field",
       "expr": {
         "type": "call",

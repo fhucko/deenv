@@ -381,11 +381,20 @@ function execHumanize(codeCall: CodeCall, scope: ExecScope, context: ExecContext
     return { type: "text", value: humanizeText(v.value) };
 }
 
-// link(obj): the id-route URL ("/~/<id>") to an object's page (Code has no string concat).
-function execLink(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
-    const obj = executeValue(codeCall.params[0], scope, context).value;
-    if (obj.type !== "object") throw new Error("link() expects an object.");
-    return { type: "text", value: "/~/" + obj.id };
+// nest(base, seg): a URL path-join ("/notes" + a member → "/notes/3") — Code has no string
+// concatenation. `seg` is a text (a prop name, or — for a future dictionary route — a text/int
+// key) or an object (→ its intrinsic id). A trailing "/" on base is trimmed so nest("/", "x")
+// == "/x". One primitive covers prop names, set members, and dict keys — no further URL builtin.
+function execNest(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    if (codeCall.params.length !== 2) throw new Error("nest(base, seg) takes two arguments.");
+    const baseV = executeValue(codeCall.params[0], scope, context).value;
+    if (baseV.type !== "text") throw new Error("nest() expects a text base path.");
+    const seg = executeValue(codeCall.params[1], scope, context).value;
+    const segStr = seg.type === "object" ? String(seg.id)
+        : seg.type === "int" ? String(seg.value)
+        : seg.type === "text" ? seg.value
+        : (() => { throw new Error("nest() expects a text or object segment."); })();
+    return { type: "text", value: baseV.value.replace(/\/+$/, "") + "/" + segStr };
 }
 
 // clone(obj): a fresh object with the source's SCALAR props copied (a new draft from a
@@ -536,7 +545,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         if (codeCall.fn.name === "humanize") return execHumanize(codeCall, scope, context);
         if (codeCall.fn.name === "extent") return execExtent(codeCall, scope, context);
         if (codeCall.fn.name === "setRef") return execSetRef(codeCall, scope, context);
-        if (codeCall.fn.name === "link") return execLink(codeCall, scope, context);
+        if (codeCall.fn.name === "nest") return execNest(codeCall, scope, context);
         if (codeCall.fn.name === "clone") return execClone(codeCall, scope, context);
     }
     const fn = executeValue(codeCall.fn, scope, context).value;

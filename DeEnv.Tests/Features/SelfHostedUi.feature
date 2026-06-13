@@ -3,8 +3,10 @@ Feature: Self-hosted generic UI (object forms)
   The generic object page is then re-expressed in the Code language: an `objectForm`
   library renders a form from the type's schema (a Code value) using the `field(obj,
   name)` builtin for dynamic, two-way-bound access — plugged in at the lowest view
-  precedence as a synthesized per-type view. Pages that are not all-scalar object pages
-  (the Db root, a set) stay on the C# auto-form. Slice 1: object forms only.
+  precedence as a synthesized per-type view. An object that holds a set self-hosts too:
+  objectForm renders the set as an inline table whose member rows link to the nested
+  member URL (path-walk). Only a type holding an arbitrary-key dictionary still falls to
+  the C# auto-form (no dicts in the Code runtime yet).
 
   @milestone-9 @single-user
   Scenario: An all-scalar object page is rendered by the self-hosted form
@@ -14,8 +16,27 @@ Feature: Self-hosted generic UI (object forms)
     And the page shows ".object-form"
 
   @milestone-9 @single-user
-  Scenario: Pages without a self-hosted view stay on the generic auto-form
+  Scenario: The Db root self-hosts and renders its set inline with nested links
     Given the self-hosted form app is running
+    When I open "/"
+    Then the page is a code page
+    And the page shows ".object-form"
+    And the page shows ".set-table"
+    And a set row shows "First"
+    And a set member open link points at "/notes/2"
+
+  @milestone-9 @single-user
+  Scenario: A nested member link from the root resolves to its self-hosted page
+    Given the self-hosted form app is running
+    When I open "/"
+    And I follow the set member open link
+    Then the page is a code page
+    And the page shows ".object-form"
+    And the "title" field is a "text" input
+
+  @milestone-9 @single-user
+  Scenario: A type holding a dictionary stays on the generic auto-form
+    Given the self-hosted dict app is running
     When I open "/"
     Then the page is a generic auto-form
 

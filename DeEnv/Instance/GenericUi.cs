@@ -5,17 +5,20 @@ namespace DeEnv.Instance;
 // The self-hosted generic UI (milestone 9), a reflective Code library over schema data,
 // synthesized into the effective ui at render time when an app opts in (InstanceUi.Generic).
 //
-//   • objectForm(obj, meta) — an object page: a field per prop (scalar input, or a nested
-//     refEditor for a single object reference). Edits autosave via `field`.
+//   • objectForm(obj, meta, base) — an object page: a field per prop (scalar input, a nested
+//     refEditor for a single object reference, or an inline setTable for an object set). `base`
+//     is the page's URL path, so an inline set builds nested member links. Edits autosave.
 //   • refEditor(parent, prop, target) — a reference editor: current label, a pick button
 //     per extent() candidate, a clear button, and a create-new form. A COMPONENT: its body
 //     runs once as init (a local `state` holding a draft), and it returns a render fn.
-//   • setTable(set, desc) — a set table: header + member rows (+ an "open" id-route link +
-//     Remove) + an add form. Also a COMPONENT (the add form holds a draft).
+//   • setTable(set, desc, setPath) — a set table: header + member rows (+ an "open" link to
+//     the nested member URL, nest(setPath, m) → /notes/3, + Remove) + an add form. Also a
+//     COMPONENT (the add form holds a draft).
 //
 // Builtins do the reflective work: field (dynamic access), humanize (labels), extent (a
-// type's objects), setRef (set/clear a reference), link (id-route URL), clone (a fresh
-// draft from a blank template). `obj.prop = x` resets a component's draft after Create.
+// type's objects), setRef (set/clear a reference), nest (a URL path-join for nested member
+// links), clone (a fresh draft from a blank template). `obj.prop = x` resets a component's
+// draft after Create.
 //
 // Descriptors are a single stable top-scope registry var `__descs` (typeName → descriptor),
 // synthesized once — so the component functions receive a stable descriptor argument every
@@ -33,7 +36,7 @@ public static class GenericUi
 
     private const string StdlibSource = """
         ui
-            fn objectForm(obj, meta)
+            fn objectForm(obj, meta, base)
                 return <div class="object-form">
                     <h2>
                         meta.name
@@ -43,6 +46,8 @@ public static class GenericUi
                                 humanize(p.name)
                             if p.baseType == "object"
                                 refEditor(obj, p.name, field(__descs, p.target))()
+                            else if p.baseType == "set"
+                                setTable(field(obj, p.name), field(__descs, p.element), nest(base, p.name))()
                             else if p.baseType == "bool"
                                 <input type="checkbox" class={p.name} checked={field(obj, p.name)}>
                             else
@@ -81,7 +86,7 @@ public static class GenericUi
                                 "Create new"
                 return render
 
-            fn setTable(set, desc)
+            fn setTable(set, desc, setPath)
                 var state = { draft: clone(desc.blank) }
                 fn addNew()
                     set.add(state.draft)
@@ -101,7 +106,7 @@ public static class GenericUi
                                             <td>
                                                 field(m, p.name)
                                     <td>
-                                        <a class="set-open" href={link(m)}>
+                                        <a class="set-open" href={nest(setPath, m)}>
                                             "open"
                                     <td>
                                         <button class="set-remove" onClick={() => set.remove(m)}>
@@ -147,8 +152,8 @@ public static class GenericUi
         var synthViews = new List<UiView>();
         foreach (var type in objectTypes)
         {
-            // Object page for a self-hostable type (scalars + single references).
-            if (IsSelfHostable(type))
+            // Object page for a self-hostable type (scalars + single references + object sets).
+            if (IsSelfHostable(type, desc))
                 synthViews.Add(SynthObjectView(type.Name));
 
             // Reference-route editor per single object-reference prop (any owner — e.g. Db.lead).
@@ -183,24 +188,40 @@ public static class GenericUi
     private static IEnumerable<PropDefinition> SetProps(TypeDefinition type, InstanceDescription desc) =>
         (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Set && desc.IsObjectType(p.Type));
 
-    // A self-hostable object type: every prop is single (a scalar or a single object
-    // reference) — sets and dictionaries still fall to the C# auto-form (later slices).
-    private static bool IsSelfHostable(TypeDefinition type) =>
-        type.Props is { Count: > 0 } props && props.All(p => p.Cardinality == Cardinality.Single);
+    // IsSelfHostable is the TEMPORARY migration seam between the two coexisting renderers:
+    // "can the Code UI fully render this type? If yes, synthesize a view; else fall to the
+    // (retiring) C# auto-form, which still covers everything." Not root-specific, not
+    // permanent — the only prop the Code stdlib can't render yet is an arbitrary-key
+    // dictionary, so the gate exists purely to route dict-bearing types to C# (without it,
+    // objectForm would walk a dict prop, have no arm, and silently drop it). DELETE this
+    // (it becomes `true` everywhere) once dictionaries self-host and the C# renderer retires.
+    //
+    // Self-hostable = every prop is a single scalar, a single object reference, or an object
+    // SET (a dictionary keyed by member identity — rendered inline as a table with nested
+    // member links). A scalar set or an arbitrary-key dictionary still forces C#.
+    private static bool IsSelfHostable(TypeDefinition type, InstanceDescription desc) =>
+        type.Props is { Count: > 0 } props && props.All(p =>
+            p.Cardinality == Cardinality.Single
+            || (p.Cardinality == Cardinality.Set && desc.IsObjectType(p.Type)));
 
-    // `view T(obj)` → `return objectForm(obj, field(__descs, "T"))`.
+    // `view T(obj, base)` → `return objectForm(obj, field(__descs, "T"), base)`. `base` is the
+    // page's URL path, threaded so inline sets build nested member links (nest(base, prop)).
     private static UiView SynthObjectView(string typeName) =>
-        new(typeName, Fn("obj", Return(Call("objectForm", Sym("obj"), Desc(typeName)))));
+        new(typeName, Fn(["obj", "base"], Return(Call("objectForm", Sym("obj"), Desc(typeName), Sym("base")))));
 
     // Reference route `view(parent)` → `return refEditor(parent, "P", field(__descs, "T"))()`
-    // (the component is invoked). Keyed by (owner, Prop), bound to the parent.
+    // (the component is invoked). Keyed by (owner, Prop), bound to the parent. Takes only
+    // `parent`: a reference builds no nested links, so it ignores the `base` arg ExecuteRender
+    // passes to every type view (both interpreters bind min(args, params), so the extra arg is
+    // harmless — keeping the param out of the Code is more honest than declaring it unused).
     private static UiView SynthRefView(string ownerType, string prop, string targetType) =>
-        new(ownerType, Fn("parent", Return(Invoke(Call("refEditor", Sym("parent"), Text(prop), Desc(targetType))))),
+        new(ownerType, Fn(["parent"], Return(Invoke(Call("refEditor", Sym("parent"), Text(prop), Desc(targetType))))),
             Prop: prop);
 
-    // Set route `view(parent)` → `return setTable(field(parent, "P"), field(__descs, "T"))()`.
+    // Set route `view(parent, base)` → `return setTable(field(parent, "P"), field(__descs,
+    // "T"), base)()`. `base` is the set's own URL path, used for nested member links.
     private static UiView SynthSetView(string ownerType, string prop, string elementType) =>
-        new(ownerType, Fn("parent", Return(Invoke(Call("setTable", Field(Sym("parent"), Text(prop)), Desc(elementType))))),
+        new(ownerType, Fn(["parent", "base"], Return(Invoke(Call("setTable", Field(Sym("parent"), Text(prop)), Desc(elementType), Sym("base"))))),
             Prop: prop);
 
     // ── the descriptor registry ──────────────────────────────────────────────────────
@@ -255,6 +276,6 @@ public static class GenericUi
     private static CodeCall Desc(string typeName) => Field(Sym(DescsVar), Text(typeName));
     private static CodeCall Invoke(ICodeValue fn) => new() { Fn = fn, Params = [] };
     private static CodeBlock Return(ICodeValue value) => new() { Statements = [new CodeReturn { Value = value }] };
-    private static CodeFunction Fn(string param, CodeBlock body) =>
-        new() { Name = null, Params = [new CodeFunctionParam { Name = param }], Body = body };
+    private static CodeFunction Fn(string[] @params, CodeBlock body) =>
+        new() { Name = null, Params = @params.Select(p => new CodeFunctionParam { Name = p }).ToArray(), Body = body };
 }
