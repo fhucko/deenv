@@ -52,6 +52,20 @@ Feature: Self-hosted generic UI (object forms)
     Then the note list eventually shows "Buy milk"
     And the draft title is empty
 
+  # ── set tables (slice 3) ───────────────────────────────────────────────────
+
+  @milestone-9 @single-user
+  Scenario: A set route renders a self-hosted table and adds a member
+    Given the self-hosted reference app is running
+    When I open "/notes"
+    Then the page is a code page
+    And the page shows ".set-table"
+    And a set row shows "First note"
+    When I fill the new "title" with "Second note"
+    And I add to the set
+    Then a set row eventually shows "Second note"
+    And the store eventually has a "Note" whose "title" is "Second note"
+
   # ── references: the self-hosted pick-or-clear editor (slice 2) ──────────────
 
   @milestone-9 @single-user

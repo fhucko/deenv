@@ -381,6 +381,13 @@ function execHumanize(codeCall: CodeCall, scope: ExecScope, context: ExecContext
     return { type: "text", value: humanizeText(v.value) };
 }
 
+// link(obj): the id-route URL ("/~/<id>") to an object's page (Code has no string concat).
+function execLink(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const obj = executeValue(codeCall.params[0], scope, context).value;
+    if (obj.type !== "object") throw new Error("link() expects an object.");
+    return { type: "text", value: "/~/" + obj.id };
+}
+
 // extent(typeName): the reference picker's candidates — all objects of a type. Memoized
 // like where/orderBy; the server shipped the displayed list and the client reuses it. No
 // store on the client, so a cache miss/stale throws "Value not available", which the
@@ -518,6 +525,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         if (codeCall.fn.name === "humanize") return execHumanize(codeCall, scope, context);
         if (codeCall.fn.name === "extent") return execExtent(codeCall, scope, context);
         if (codeCall.fn.name === "setRef") return execSetRef(codeCall, scope, context);
+        if (codeCall.fn.name === "link") return execLink(codeCall, scope, context);
     }
     const fn = executeValue(codeCall.fn, scope, context).value;
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));

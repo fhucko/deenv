@@ -695,6 +695,22 @@ state after Create. Decisions, verified by a prototype scenario (`ComponentFormA
 Creation itself (a generic New form = this component over `objectForm` + a Create
 button, and create-new in the reference editor) is the next slice, built on this.
 
+### Slice 3: set tables (with creation)
+
+A set route (`/notes`) self-hosts as a table — columns from the element type's
+scalar props, a row per member (values + an "open" link + a Remove button), and an
+add form (the same synthesized-draft-var pattern as reference create-new, with
+`set.add(draft)` then reset). Keyed by (owner type, set prop) and bound to the
+OWNER object (reusing the reference-route dispatch: `ResolveOwnerBoundView`, now
+shared by reference and set routes; a `Cardinality.Set` branch in `ResolveView`).
+One new builtin: `link(obj)` → the id-route URL `"/~/<id>"` (Code has no string
+concat, so member links need it). `IsSelfHostable` is unchanged — objects that
+*hold* sets (e.g. the Db root) stay on the C# object form for now; only the set
+*route* self-hosts, and members open via `/~/<id>` (still the C# page until a
+follow-up self-hosts the id-route). Specced by `SelfHostedUi.feature`'s set
+scenario. Default-on remains blocked (dicts, the Db-root object page, and the
+designer).
+
 ## Tool stack and project structure
 
 Web-first: **C# backend, TypeScript front-end.** C# stays where it's strong;

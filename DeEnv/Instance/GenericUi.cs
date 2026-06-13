@@ -71,6 +71,36 @@ public static class GenericUi
                         <button class="ref-create" onClick={createRef}>
                             "Create new"
 
+            fn setTable(set, desc)
+                fn addNew()
+                    set.add(desc.draft)
+                    desc.resetDraft()
+                return <div class="set-table">
+                    <table>
+                        <tr class="set-head">
+                            foreach p in desc.props
+                                <th>
+                                    humanize(p.name)
+                        foreach m in set
+                            <tr class="set-row">
+                                foreach p in desc.props
+                                    <td>
+                                        field(m, p.name)
+                                <td>
+                                    <a class="set-open" href={link(m)}>
+                                        "open"
+                                <td>
+                                    <button class="set-remove" onClick={() => set.remove(m)}>
+                                        "Remove"
+                    <div class="set-new">
+                        foreach p in desc.props
+                            if p.baseType == "bool"
+                                <input type="checkbox" class={p.name} checked={field(desc.draft, p.name)}>
+                            else
+                                <input type={inputType(p.baseType)} class={p.name} value={field(desc.draft, p.name)}>
+                        <button class="set-add" onClick={addNew}>
+                            "Add"
+
             fn inputType(baseType)
                 if baseType == "int"
                     return "number"
@@ -103,10 +133,12 @@ public static class GenericUi
         var synthViews = new List<UiView>();
         foreach (var type in (desc.Types ?? []).Where(t => t.BaseType == BaseType.Object))
         {
-            // A pre-shaped draft var per single object-reference prop (create-new state).
+            // A pre-shaped draft var per reference / set prop (create-new state; the set's
+            // draft is an element-type object).
             foreach (var prop in RefProps(type, desc))
-                draftVars.Add(new UiVar(DraftVarName(type.Name, prop.Name),
-                    DraftLiteral(desc.FindType(prop.Type)!)));
+                draftVars.Add(new UiVar(DraftVarName(type.Name, prop.Name), DraftLiteral(desc.FindType(prop.Type)!)));
+            foreach (var prop in SetProps(type, desc))
+                draftVars.Add(new UiVar(DraftVarName(type.Name, prop.Name), DraftLiteral(desc.FindType(prop.Type)!)));
 
             // Object page for a self-hostable type without an explicit view.
             if (IsSelfHostable(type) && !explicitObjectTypes.Contains(type.Name))
@@ -115,6 +147,10 @@ public static class GenericUi
             // Reference-route editor for each reference prop (any owner — e.g. Db.lead).
             foreach (var prop in RefProps(type, desc))
                 synthViews.Add(SynthRefView(type.Name, prop, desc.FindType(prop.Type)!, desc));
+
+            // Set-table page for each object set prop (e.g. Db.notes → /notes).
+            foreach (var prop in SetProps(type, desc))
+                synthViews.Add(SynthSetView(type.Name, prop, desc.FindType(prop.Type)!, desc));
         }
 
         var vars = new List<UiVar>();
@@ -137,6 +173,9 @@ public static class GenericUi
     private static IEnumerable<PropDefinition> RefProps(TypeDefinition type, InstanceDescription desc) =>
         (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Single && desc.IsObjectType(p.Type));
 
+    private static IEnumerable<PropDefinition> SetProps(TypeDefinition type, InstanceDescription desc) =>
+        (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Set && desc.IsObjectType(p.Type));
+
     private static string DraftVarName(string ownerType, string prop) => $"__draft_{ownerType}_{prop}";
 
     // A self-hostable object type: every prop is single (a scalar or a single object
@@ -157,6 +196,27 @@ public static class GenericUi
     {
         var body = Return(Call("refEditor", Sym("parent"), Text(prop.Name), RefDescriptor(ownerType, prop.Name, target, desc)));
         return new UiView(ownerType, null, Fn("parent", body), Prop: prop.Name);
+    }
+
+    // Set route: `view(parent)` → `return setTable(field(parent, "P"), <set descriptor>)`,
+    // keyed by (owner Type, set Prop) and bound to the parent object.
+    private static UiView SynthSetView(string ownerType, PropDefinition prop, TypeDefinition element, InstanceDescription desc)
+    {
+        var set = new CodeCall { Fn = Sym("field"), Params = [Sym("parent"), Text(prop.Name)] };
+        var body = Return(Call("setTable", set, SetDescriptor(ownerType, prop.Name, element)));
+        return new UiView(ownerType, null, Fn("parent", body), Prop: prop.Name);
+    }
+
+    // The set descriptor setTable uses: { props, draft, resetDraft } — props are the
+    // element type's scalar fields (columns + the add form); draft/resetDraft are the
+    // synthesized add-form state (an element-type draft + its reset).
+    private static CodeObject SetDescriptor(string ownerType, string prop, TypeDefinition element)
+    {
+        var draftVar = DraftVarName(ownerType, prop);
+        return Obj(
+            ("props", Arr(Scalars(element).Select(p => (ICodeValue)Obj(("name", Text(p.Name)), ("baseType", Text(p.Type)))))),
+            ("draft", Sym(draftVar)),
+            ("resetDraft", Fn0(Return(new CodeAssignment { Target = Sym(draftVar), Value = DraftLiteral(element) }))));
     }
 
     // The object descriptor objectForm iterates: { name, props: [propDescriptor...] }.

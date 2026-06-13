@@ -88,24 +88,36 @@ public sealed class SsrRenderer
         if (nodePath.Segments.Count >= 1 && nodePath.Segments[0] == "~") return null;
         if (_resolver.TraversesDictionary(nodePath)) return null;
         var typeInfo = _resolver.ResolveType(nodePath);
+        if (typeInfo == null) return null;
+
+        // A set route (/notes): the self-hosted set table, bound to the OWNER object that
+        // holds the set (keyed by owner type + prop) — like a reference route.
+        if (typeInfo is { Cardinality: Cardinality.Set, Type.BaseType: BaseType.Object })
+            return ResolveOwnerBoundView(ui, nodePath);
+
         if (typeInfo is not { Cardinality: Cardinality.Single, Type.BaseType: BaseType.Object }) return null;
 
-        // A single-reference route (e.g. /lead): the page is the reference editor, bound
-        // to the PARENT object that owns the prop — never the (maybe-unset) target. Keyed
-        // by (owner type, prop). An unset reference is the empty editor, not NotFound.
+        // A single-reference route (e.g. /lead): the reference editor, bound to the PARENT
+        // object — never the (maybe-unset) target — so an unset reference is the empty
+        // editor, not NotFound.
         if (typeInfo.IsReference)
-        {
-            var prop = nodePath.Segments[^1];
-            var parentPath = NodePath.FromSegments(nodePath.Segments.Take(nodePath.Segments.Count - 1));
-            var ownerType = _resolver.ResolveType(parentPath)?.Type.Name;
-            var refView = ui.Views.FirstOrDefault(v => v.Type == ownerType && v.Prop == prop);
-            return refView == null ? null : new ViewMatch(ViewKind.Type, refView.Fn, refView, parentPath);
-        }
+            return ResolveOwnerBoundView(ui, nodePath);
 
         // An ordinary object page (a set member / the routed object): the object view
-        // (Prop == null excludes the synthesized reference views).
+        // (Prop == null excludes the synthesized reference / set views).
         var typeView = ui.Views.FirstOrDefault(v => v.Type == typeInfo.Type.Name && v.Prop == null);
         return typeView == null ? null : new ViewMatch(ViewKind.Type, typeView.Fn, typeView, nodePath);
+    }
+
+    // A view that owns the route of a prop (a reference or a set), keyed by (owner type,
+    // prop) and bound to the parent object that holds it.
+    private ViewMatch? ResolveOwnerBoundView(InstanceUi ui, NodePath nodePath)
+    {
+        var prop = nodePath.Segments[^1];
+        var parentPath = NodePath.FromSegments(nodePath.Segments.Take(nodePath.Segments.Count - 1));
+        var ownerType = _resolver.ResolveType(parentPath)?.Type.Name;
+        var view = (ui.Views ?? []).FirstOrDefault(v => v.Type == ownerType && v.Prop == prop);
+        return view == null ? null : new ViewMatch(ViewKind.Type, view.Fn, view, parentPath);
     }
 
     // Segment-aware prefix: "/reports" matches "/reports" and "/reports/x",

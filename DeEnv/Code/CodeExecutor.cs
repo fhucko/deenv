@@ -269,6 +269,17 @@ public sealed class CodeExecutor
         return Memoize($"extent:{typeName.Value}", context, () => DbBridge.LoadExtent(_store, typeName.Value, context));
     }
 
+    // link(obj): the id-route URL ("/~/<id>") to an object's page — Code has no string
+    // concatenation, so building member links needs a builtin.
+    private IExecValue ExecuteLink(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 1)
+            throw new CodeRuntimeException("link(obj) takes one argument.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject obj)
+            throw new CodeRuntimeException("link() expects an object.");
+        return new ExecText { Value = "/~/" + obj.Id };
+    }
+
     private static int AsInt(IExecValue v) => v is ExecInt i ? i.Value
         : throw new CodeRuntimeException("Expected an int.");
     private static bool AsBool(IExecValue v) => v is ExecBool b ? b.Value
@@ -286,6 +297,7 @@ public sealed class CodeExecutor
                 case "field": return ExecuteField(codeCall, scope, context);
                 case "humanize": return ExecuteHumanize(codeCall, scope, context);
                 case "extent": return ExecuteExtent(codeCall, scope, context);
+                case "link": return ExecuteLink(codeCall, scope, context);
                 // setRef(obj, prop, value) persists on the client (the reference editor).
                 // Server-side (SSR / refetch) never runs the click handler, so it no-ops.
                 case "setRef": return new ExecNothing();
