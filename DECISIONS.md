@@ -628,6 +628,45 @@ Slice 1 is specced by `SelfHostedUi.feature` (`@milestone-9`); the all-scalar
 `Note` object page renders via `objectForm`, edits persist over the WS, input
 kind follows `baseType`, and the Db root stays the C# auto-form.
 
+### Slice 2: references (pick-or-create editor)
+
+Self-hosts the reference editor — a reference **route** (`/lead`) and a reference
+**field inside an object form** (`Note.author`) — so a type whose props are
+scalars or single references renders entirely in Code. Tried making slice 1 the
+default first; it broke (a single-reference route → NotFound when unset, losing
+the C# reference editor; the designer also leans on creation/sets/dicts), so the
+default stays blocked and references is the next necessary step. Decisions:
+
+- **`extent(typeName)` rides the memo cache, not a wire dump.** The picker's
+  candidates are a memoized computation (like `where`/`orderBy`, key
+  `extent:<Type>`); only the displayed option labels+ids ship as leaves, so the
+  privacy model holds. The client reuses the shipped result; a mint/`setRef`
+  coarsely stales `extent:*` → the existing `maybeRefetch` re-renders fresh.
+  Labels are read **inline in output position** — wrapping them in a value-
+  returning helper made the reads private (unshipped) and the picker vanished on
+  hydration.
+- **One id-addressed `setRef(obj, prop, value)`** covers both the route and an
+  embedded field, because a route *is* a reference prop on its parent object. New
+  WS op `setReferenceField { objectId, prop, refId|value|clear }` and store
+  method `WriteReference(objectId, prop, targetId, type)` — addressed by id like
+  `objectPropChange`, not by path (the path-based `setReference` stays for the C#
+  editor). GC runs after, so clearing the last reference collects the target.
+- **Reference-route dispatch reuses type-view binding.** `ResolvedTypeInfo`
+  gains `IsReference` (the final segment is a single object-reference prop, not a
+  set member). A synthesized **reference view** is keyed by (owner type, prop)
+  via `UiView.Prop` and bound to the **parent** object — so the unset case is the
+  empty editor, not `NotFound`, and the client needs no new wiring (it binds the
+  parent by id exactly like a type view; the prop + target descriptor ride as
+  literals in the view body).
+- **Create-new is deferred.** A draft that accumulates typed fields before mint
+  needs persistent per-field state (a top-scope var), which doesn't fit a generic
+  stdlib function cleanly. Slice 2 ships pick-existing + clear; create-through-
+  reference is a focused follow-up.
+
+Specced by `SelfHostedUi.feature`'s reference scenarios. **Still opt-in**:
+default-on remains blocked until object creation, sets, and dicts are also
+self-hosted (the designer's full needs).
+
 ## Tool stack and project structure
 
 Web-first: **C# backend, TypeScript front-end.** C# stays where it's strong;

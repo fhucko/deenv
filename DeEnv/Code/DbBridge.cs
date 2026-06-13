@@ -104,6 +104,30 @@ public static class DbBridge
         return obj;
     }
 
+    // All objects of a type's extent as a transient list of SCALAR-ONLY ExecObjects
+    // (id + scalar props). Enough for the reference picker's candidate list — option
+    // label (a text prop) + id. Their object/set/dict props are omitted (the full object
+    // loads via the graph after a reference is set). Memoized by the caller.
+    public static ExecArray LoadExtent(IInstanceStore store, string typeName, ExecContext context)
+    {
+        var items = new List<ExecItem>();
+        foreach (var (id, ov) in store.ReadExtent(typeName))
+        {
+            var obj = new ExecObject { Props = [], Id = id, TypeName = typeName };
+            foreach (var (name, v) in ov.Fields)
+                if (v is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue)
+                    obj.Props[name] = ScalarToExec(v);
+            items.Add(new ExecItem { Key = id, Value = obj });
+        }
+        return new ExecArray
+        {
+            Items = items,
+            Id = --context.LastId.Value,
+            Kind = ArrayKind.List,
+            ElementTypeName = typeName,
+        };
+    }
+
     // Convert a transient ExecObject's scalar props to an ObjectValue for CreateObject.
     // (Collection/reference props are created empty by the store — see BuildFieldsJson.)
     public static ObjectValue ToObjectValue(ExecObject obj)

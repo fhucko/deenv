@@ -33,6 +33,8 @@ public static class CodeValidator
         top.Declare("field", writable: false);
         top.Declare("humanize", writable: false);
         top.Declare("save", writable: false);
+        top.Declare("extent", writable: false);   // a type's objects (reference picker)
+        top.Declare("setRef", writable: false);    // set/clear an object reference prop
         foreach (var v in ui.Vars ?? [])
         {
             if (top.IsDeclaredLocally(v.Name))

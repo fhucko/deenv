@@ -417,6 +417,22 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         return null;
     }
 
+    public void WriteReference(int objectId, string prop, int? targetId, string targetTypeName)
+    {
+        lock (_sync)
+        {
+            var doc = LoadDoc();
+            if (ExtentEntryById(doc, objectId)?["fields"] is not JsonObject fields)
+                throw new InvalidOperationException($"No object with id {objectId}.");
+            if (targetId is null)
+                fields.Remove(prop);
+            else
+                fields[prop] = ObjectRef(targetTypeName, targetId.Value);
+            CollectGarbage(doc);
+            SaveDoc(doc);
+        }
+    }
+
     public void SetReference(NodePath fieldPath, int? id)
     {
         lock (_sync)

@@ -234,6 +234,20 @@ public sealed class CodeExecutor
         return new ExecText { Value = TextUtil.Humanize(text.Value) };
     }
 
+    // extent(typeName): all objects of a type (the reference picker's candidates), as a
+    // memoized computation keyed by type — its displayed result ships and the client
+    // reuses it; a mint/setRef stales `extent:*` so the next render refetches a fresh list.
+    private IExecValue ExecuteExtent(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 1)
+            throw new CodeRuntimeException("extent(typeName) takes one argument.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecText typeName)
+            throw new CodeRuntimeException("extent() expects a text type name.");
+        if (_store == null)
+            throw new CodeRuntimeException("extent() requires a store.");
+        return Memoize($"extent:{typeName.Value}", context, () => DbBridge.LoadExtent(_store, typeName.Value, context));
+    }
+
     private static int AsInt(IExecValue v) => v is ExecInt i ? i.Value
         : throw new CodeRuntimeException("Expected an int.");
     private static bool AsBool(IExecValue v) => v is ExecBool b ? b.Value
@@ -250,9 +264,12 @@ public sealed class CodeExecutor
             {
                 case "field": return ExecuteField(codeCall, scope, context);
                 case "humanize": return ExecuteHumanize(codeCall, scope, context);
-                // save(obj) persists on the client (the generic form's Save button).
-                // Server-side (SSR / refetch) never runs the click handler, so no-op.
+                case "extent": return ExecuteExtent(codeCall, scope, context);
+                // save(obj) / setRef(obj, prop, value) persist on the client (the
+                // generic form's Save button / the reference editor). Server-side (SSR /
+                // refetch) never runs the click handler, so they no-op.
                 case "save": return new ExecNothing();
+                case "setRef": return new ExecNothing();
             }
 
         var callee = ExecuteValue(codeCall.Fn, scope, context);

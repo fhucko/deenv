@@ -110,6 +110,40 @@ public class InstanceContext
         generic
     """;
 
+    // Milestone 9 (slice 2: references). Opts in with `generic`. `Db.lead: Person` is a
+    // reference ROUTE (/lead → the self-hosted reference editor); `Note` is self-hostable
+    // (title scalar + `author: Person` reference) so /notes/{id} renders an objectForm with
+    // an embedded author picker. Two people seed the Person extent for "pick existing".
+    public static InstanceDescription SelfHostedRefDb() =>
+        InstanceDescriptionLoader.Load(SelfHostedRefApp);
+
+    private const string SelfHostedRefApp = """
+    types
+        Db
+            people: set of Person
+            lead: Person
+            notes: set of Note
+        Person
+            name: text
+        Note
+            title: text
+            author: Person
+
+    initialData
+        Db 1
+            people: [2, 3]
+            notes: [4]
+        Person 2
+            name: "Ada"
+        Person 3
+            name: "Grace"
+        Note 4
+            title: "First note"
+
+    ui
+        generic
+    """;
+
     // The code-bearing fixture documents, for the printer round-trip tests.
     public static IReadOnlyList<string> CodeFixtureApps =>
         [TasksUiApp, InteractiveUiApp, SensitiveUiApp, RefetchUiApp,

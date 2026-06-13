@@ -125,10 +125,20 @@ Code literal — so it plugs into M8's type-view dispatch unchanged, ships throu
 the existing wire (no schema shipped separately), and the canonical
 `InstanceDescription` (what `AppPrint` emits) keeps only the `generic` flag.
 Driven by `SelfHostedUi.feature` (`DeEnv/Instance/GenericUi.cs`,
-`InstanceContext.SelfHostedFormApp`). **Remaining slices**: set tables,
-reference pick-or-create (needs extent enumeration from Code), dictionaries
-(needs dicts in the Code runtime — a roadmap-future layer), then retiring the C#
-auto-form renderer + the separate generic client (`instance.ts`). See
+`InstanceContext.SelfHostedFormApp`).
+
+**Slice 2 (references) also landed**: the reference pick-or-create editor is
+self-hosted — a reference *route* (`/lead`) and a reference *field* inside an
+object form (`Note.author`). New builtins `extent(typeName)` (memoized candidate
+list, rides the memo cache) and `setRef(obj, prop, value)` (id-addressed
+`setReferenceField` WS op + `WriteReference` store method); `ResolvedTypeInfo.
+IsReference` + a synthesized reference view keyed by `UiView.Prop`, bound to the
+parent object. Pick-existing + clear only — **create-new is deferred** (needs
+per-field draft state). Tried making the self-hosted UI the default and reverted:
+it breaks the reference editor on unset routes and the designer, which need more
+slices. **Remaining slices**: object creation forms, set tables, dictionaries
+(needs dicts in the Code runtime — a roadmap-future layer), then flip the default
+and retire the C# renderer + the separate generic client (`instance.ts`). See
 DECISIONS.md.
 
 **Milestone 8 (UI customization) just landed** — views over the generic UI,

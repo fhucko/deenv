@@ -58,6 +58,7 @@ public sealed class WsHandler
                 "setReference"     => HandleSetReference(path, pathStr, root),
                 "hello"            => HandleHello(root),
                 "objectPropChange" => HandleObjectPropChange(root),
+                "setReferenceField" => HandleSetReferenceField(root),
                 "arrayAdd"         => HandleArrayAdd(root),
                 "arrayRemove"      => HandleArrayRemove(root),
                 "refetch"          => HandleRefetch(pathStr, root),
@@ -343,6 +344,53 @@ public sealed class WsHandler
         _store.WriteField(objectId, prop, LeafForType(valEl, BaseTypes.Parse(propDef.Type)));
 
         var response = new JsonObject { ["op"] = "objectPropChange", ["ok"] = true };
+        return response.ToJsonString(_jsonOpts);
+    }
+
+    // Set/clear a single object REFERENCE prop on the object with this intrinsic id —
+    // the self-hosted reference editor's persist path (setRef). `refId` points at an
+    // existing extent object; `value` ({ props }) mints a new object and points at it
+    // (reply carries its real id); `clear` unsets. GC runs after (an orphaned target
+    // is collected). Identity-addressed so it serves both a reference route and an
+    // embedded reference field uniformly.
+    private string HandleSetReferenceField(JsonElement root)
+    {
+        if (!root.TryGetProperty("objectId", out var idEl) || idEl.ValueKind != JsonValueKind.Number)
+            return Error("setReferenceField requires a numeric 'objectId'.");
+        if (!root.TryGetProperty("prop", out var propEl) || propEl.GetString() is not { } prop)
+            return Error("setReferenceField requires 'prop'.");
+
+        var objectId = idEl.GetInt32();
+        if (_store.ReadById(objectId) is not { } hit)
+            return Error($"No object with id {objectId}.");
+        var propDef = _desc.FindType(hit.TypeName)?.Props?.FirstOrDefault(p => p.Name == prop);
+        if (propDef is null)
+            return Error($"Type '{hit.TypeName}' has no field '{prop}'.");
+        if (propDef.Cardinality != Cardinality.Single || !_desc.IsObjectType(propDef.Type))
+            return Error($"Field '{prop}' on '{hit.TypeName}' is not a single reference.");
+        var targetType = _desc.FindType(propDef.Type)!;
+
+        int? newId = null;
+        if (root.TryGetProperty("refId", out var refEl) && refEl.ValueKind == JsonValueKind.Number)
+        {
+            _store.WriteReference(objectId, prop, refEl.GetInt32(), targetType.Name);
+        }
+        else if (root.TryGetProperty("value", out var valueEl))
+        {
+            newId = _store.CreateObject(targetType.Name, ExecObjectValue(valueEl, targetType));
+            _store.WriteReference(objectId, prop, newId, targetType.Name);
+        }
+        else if (root.TryGetProperty("clear", out _))
+        {
+            _store.WriteReference(objectId, prop, null, targetType.Name);
+        }
+        else
+        {
+            return Error("setReferenceField requires 'refId', 'value', or 'clear'.");
+        }
+
+        var response = new JsonObject { ["op"] = "setReferenceField", ["ok"] = true };
+        if (newId is { } nid) response["newId"] = nid;
         return response.ToJsonString(_jsonOpts);
     }
 

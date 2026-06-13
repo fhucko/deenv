@@ -41,3 +41,39 @@ Feature: Self-hosted generic UI (object forms)
     And I fill the "title" field with "Renamed"
     And I save the form
     Then the store eventually has a "Note" whose "title" is "Renamed"
+
+  # ── references: the self-hosted pick-or-clear editor (slice 2) ──────────────
+
+  @milestone-9 @single-user
+  Scenario: A reference route renders the self-hosted editor
+    Given the self-hosted reference app is running
+    When I open "/lead"
+    Then the page is a code page
+    And the page shows ".ref-editor"
+    And a reference candidate "Ada" is offered
+    And a reference candidate "Grace" is offered
+
+  @milestone-9 @single-user
+  Scenario: Picking an existing object on a reference route persists
+    Given the self-hosted reference app is running
+    When I open "/lead"
+    And I pick the reference candidate "Ada"
+    Then the current reference is "Ada"
+    And the "/lead" reference eventually points at "Ada"
+
+  @milestone-9 @single-user
+  Scenario: Clearing a reference unsets it
+    Given the self-hosted reference app is running
+    When I open "/lead"
+    And I pick the reference candidate "Ada"
+    And I clear the reference
+    Then the current reference is "(none)"
+
+  @milestone-9 @single-user
+  Scenario: A reference field inside an object form is a self-hosted picker
+    Given the self-hosted reference app is running
+    When I open "/notes/4"
+    Then the page shows ".object-form"
+    And the page shows ".ref-editor"
+    When I pick the reference candidate "Grace"
+    Then the current reference is "Grace"

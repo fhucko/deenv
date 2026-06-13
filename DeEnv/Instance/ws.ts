@@ -89,6 +89,25 @@ function connectWs(): void {
             wsSend({ op: "objectPropChange", id: msgId, clientId: uiStatic.clientId,
                 objectId: obj.id, prop, value: scalarOf(value) });
         },
+        setRef: (obj, prop, value, before) => {
+            const msgId = nextWsMsgId++;
+            journal.push({
+                msgId,
+                undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
+                redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
+            });
+            const base = { op: "setReferenceField", id: msgId, clientId: uiStatic.clientId, objectId: obj.id, prop };
+            if (value.type === "object" && value.id > 0)
+                wsSend({ ...base, refId: value.id });                 // point at an existing extent object
+            else if (value.type === "object")
+                wsSend({ ...base, value: objectOf(value) });          // mint a new object + point
+            else
+                wsSend({ ...base, clear: true });                     // unset
+            // A pick/create can change a type's extent and the referenced object's data the
+            // client never had: stale extents and refetch for the authoritative state.
+            invalidateExtents();
+            needsServerData = true;
+        },
         arrayAdd: (arr, item, typeName) => {
             const msgId = nextWsMsgId++;
             pendingAdds.set(item.key, arr.id);

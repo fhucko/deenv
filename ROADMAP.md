@@ -183,9 +183,14 @@ staged-honking-fox.md.
   the `field(obj, name)` dynamic-access builtin, opted in per app with `generic`
   in the `ui` section; `GenericUi.Effective` synthesizes one per-type view per
   all-scalar object type at render time (the descriptor rides as a Code literal,
-  so nothing new ships on the wire). Specced by `SelfHostedUi.feature`. Next
-  slices: set tables, reference pick-or-create, dictionaries (needs dicts in the
-  Code runtime), then retiring the C# renderer + `instance.ts`.
+  so nothing new ships on the wire). **Slice 2 landed (references):** the
+  reference pick-or-create editor (pick-existing + clear) for a reference route
+  and an embedded reference field, via `extent()` (memoized candidates) +
+  `setRef()` (id-addressed). Specced by `SelfHostedUi.feature`. Next slices:
+  object creation forms, set tables, dictionaries (needs dicts in the Code
+  runtime), then flip the default and retire the C# renderer + `instance.ts`.
+  (Default-on is blocked until those land — it breaks unset reference routes and
+  the designer today.)
 
 - **Schema versioning.** Git-style versioning of the schema, built inside
   the environment itself using the code milestone (versioning is

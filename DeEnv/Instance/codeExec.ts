@@ -278,6 +278,13 @@ function invalidateVar(name: string): void {
     for (const e of memoCache.values())
         if (e.deps.vars.includes(name)) e.stale = true;
 }
+// Coarsely stale every extent computation: a mint or reference change can alter any
+// type's candidate list, and the client can't recompute it (no store) — staling forces a
+// refetch that re-renders with the fresh extents. (Precise per-type deps can come later.)
+function invalidateExtents(): void {
+    if (memoCache == null) return;
+    for (const [key, e] of memoCache) if (key.startsWith("extent:")) e.stale = true;
+}
 
 function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: ExecContext): ExecResult {
     if (codeInfixOp.op !== "objectProp") return { value: executeInfixOpBasic(codeInfixOp, scope, context) };
@@ -364,6 +371,33 @@ function execSave(codeCall: CodeCall, scope: ExecScope, context: ExecContext): E
         for (const [name, v] of Object.entries(obj.props))
             if (v.type === "int" || v.type === "bool" || v.type === "text")
                 propValueChange(obj, name, v, v);
+    return { type: "nothing" };
+}
+
+// extent(typeName): the reference picker's candidates — all objects of a type. Memoized
+// like where/orderBy; the server shipped the displayed list and the client reuses it. No
+// store on the client, so a cache miss/stale throws "Value not available", which the
+// memoize wrapper turns into a refetch (the same hidden-dependency path).
+function execExtent(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const v = executeValue(codeCall.params[0], scope, context).value;
+    if (v.type !== "text") throw new Error("extent() expects a text type name.");
+    return memoize("extent:" + v.value, context, () => { throw new Error("Value not available"); });
+}
+
+// setRef(obj, prop, value): set/clear an object REFERENCE prop and persist it. value is an
+// existing candidate (id>0 → refId), a fresh draft (id<0 → its scalar props), or null
+// (clear). Stages in memory (UI reflects it), then sends the id-addressed WS op.
+function execSetRef(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const obj = executeValue(codeCall.params[0], scope, context).value;
+    const propV = executeValue(codeCall.params[1], scope, context).value;
+    const value = executeValue(codeCall.params[2], scope, context).value;
+    if (obj.type !== "object") throw new Error("setRef() expects an object.");
+    if (propV.type !== "text") throw new Error("setRef() expects a text prop name.");
+    const prop = propV.value;
+    const before = obj.props[prop];
+    obj.props[prop] = value;
+    invalidateProp(obj.id, prop);
+    if (obj.id > 0) referenceChange(obj, prop, value, before);
     return { type: "nothing" };
 }
 
@@ -476,6 +510,8 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         if (codeCall.fn.name === "field") return fieldResult(codeCall, scope, context).value;
         if (codeCall.fn.name === "humanize") return execHumanize(codeCall, scope, context);
         if (codeCall.fn.name === "save") return execSave(codeCall, scope, context);
+        if (codeCall.fn.name === "extent") return execExtent(codeCall, scope, context);
+        if (codeCall.fn.name === "setRef") return execSetRef(codeCall, scope, context);
     }
     const fn = executeValue(codeCall.fn, scope, context).value;
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));
@@ -556,6 +592,7 @@ function findScope(symbol: CodeSymbol, scope: ExecScope): ExecScope {
 // overwritten before-value, the removed item and its index.
 interface WsHooks {
     propChange(obj: ExecObject, prop: string, value: ExecValue, before: ExecValue): void;
+    setRef(obj: ExecObject, prop: string, value: ExecValue, before: ExecValue): void;
     arrayAdd(arr: ExecArray, item: ExecArrayItem, typeName: string | undefined): void;
     arrayRemove(arr: ExecArray, item: ExecArrayItem, index: number): void;
 }
@@ -564,6 +601,9 @@ function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
 
 function propValueChange(obj: ExecObject, propName: string, value: ExecValue, before: ExecValue): void {
     wsHooks?.propChange(obj, propName, value, before);
+}
+function referenceChange(obj: ExecObject, prop: string, value: ExecValue, before: ExecValue): void {
+    wsHooks?.setRef(obj, prop, value, before);
 }
 function sendArrayItemAdd(arr: ExecArray, item: ExecArrayItem): void {
     wsHooks?.arrayAdd(arr, item, arr.elementTypeName);

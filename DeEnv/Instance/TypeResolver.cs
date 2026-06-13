@@ -5,7 +5,11 @@ namespace DeEnv.Instance;
 public record ResolvedTypeInfo(
     TypeDefinition Type,
     Cardinality Cardinality,
-    string? KeyTypeName);
+    string? KeyTypeName,
+    // True when the FINAL path segment is a single object-typed prop reached as a field
+    // (a reference, e.g. /lead) — not a set/dict member that happens to be an object. The
+    // reference editor dispatches on this; a set member is an ordinary object page.
+    bool IsReference = false);
 
 public sealed class TypeResolver
 {
@@ -22,6 +26,7 @@ public sealed class TypeResolver
         var currentType = db;
         var currentCardinality = Cardinality.Single;
         string? currentKeyTypeName = null;
+        var lastWasReference = false;
 
         foreach (var segment in path.Segments)
         {
@@ -31,6 +36,7 @@ public sealed class TypeResolver
                 // identity. Either way, descend into the (single) element.
                 currentCardinality = Cardinality.Single;
                 currentKeyTypeName = null;
+                lastWasReference = false; // a member, not a reference field
             }
             else if (currentType.BaseType == BaseType.Object)
             {
@@ -45,6 +51,7 @@ public sealed class TypeResolver
                 currentCardinality = prop.Cardinality;
                 // Only a dictionary carries a key type; single and set do not.
                 currentKeyTypeName = prop.Cardinality == Cardinality.Dictionary ? (prop.KeyType ?? "text") : null;
+                lastWasReference = prop.Cardinality == Cardinality.Single && resolved.BaseType == BaseType.Object;
             }
             else
             {
@@ -52,7 +59,7 @@ public sealed class TypeResolver
             }
         }
 
-        return new ResolvedTypeInfo(currentType, currentCardinality, currentKeyTypeName);
+        return new ResolvedTypeInfo(currentType, currentCardinality, currentKeyTypeName, lastWasReference);
     }
 
     // True when any step of the walk enters a dictionary (the segment addresses a

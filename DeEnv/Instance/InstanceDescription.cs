@@ -29,7 +29,10 @@ public record UiVar(string Name, ICodeValue? Value = null);
 // that type) or to a URL PATH (code takes over that subtree). Exactly one target is
 // set. The function is anonymous — the target rides here, never on Fn.Name (a named
 // function would be registered into the client's top scope; the server never does).
-public record UiView(string? Type, string? Path, CodeFunction Fn);
+// `Prop` marks a synthesized REFERENCE-route view: it owns the page for the reference
+// prop `Prop` on type `Type` (e.g. Db.lead), bound to the parent object like a type view.
+// Null for an ordinary type/path view. Render-time only (never parsed/printed).
+public record UiView(string? Type, string? Path, CodeFunction Fn, string? Prop = null);
 
 // The `ui` section: client-held state variables, shared component functions, views,
 // and the optional entry-point `render` function (the implicit root path view —

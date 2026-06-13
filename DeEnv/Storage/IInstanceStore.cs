@@ -59,6 +59,11 @@ public interface IInstanceStore
     // then collect unreachable objects.
     void SetReference(NodePath fieldPath, int? id);
 
+    // Like SetReference, but the owning object is addressed by its intrinsic id (not a
+    // path) — how the Code runtime persists a reference field set from the self-hosted
+    // reference editor. `targetTypeName` is the prop's declared type. Collects GC after.
+    void WriteReference(int objectId, string prop, int? targetId, string targetTypeName);
+
     // All objects currently in a type's extent, by identity. Used for the
     // pick-existing candidate list.
     IReadOnlyDictionary<int, ObjectValue> ReadExtent(string typeName);

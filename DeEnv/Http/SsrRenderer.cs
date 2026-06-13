@@ -89,7 +89,22 @@ public sealed class SsrRenderer
         if (_resolver.TraversesDictionary(nodePath)) return null;
         var typeInfo = _resolver.ResolveType(nodePath);
         if (typeInfo is not { Cardinality: Cardinality.Single, Type.BaseType: BaseType.Object }) return null;
-        var typeView = ui.Views.FirstOrDefault(v => v.Type == typeInfo.Type.Name);
+
+        // A single-reference route (e.g. /lead): the page is the reference editor, bound
+        // to the PARENT object that owns the prop — never the (maybe-unset) target. Keyed
+        // by (owner type, prop). An unset reference is the empty editor, not NotFound.
+        if (typeInfo.IsReference)
+        {
+            var prop = nodePath.Segments[^1];
+            var parentPath = NodePath.FromSegments(nodePath.Segments.Take(nodePath.Segments.Count - 1));
+            var ownerType = _resolver.ResolveType(parentPath)?.Type.Name;
+            var refView = ui.Views.FirstOrDefault(v => v.Type == ownerType && v.Prop == prop);
+            return refView == null ? null : new ViewMatch(ViewKind.Type, refView.Fn, refView, parentPath);
+        }
+
+        // An ordinary object page (a set member / the routed object): the object view
+        // (Prop == null excludes the synthesized reference views).
+        var typeView = ui.Views.FirstOrDefault(v => v.Type == typeInfo.Type.Name && v.Prop == null);
         return typeView == null ? null : new ViewMatch(ViewKind.Type, typeView.Fn, typeView, nodePath);
     }
 
