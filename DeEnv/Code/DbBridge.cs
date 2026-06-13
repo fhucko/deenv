@@ -18,6 +18,10 @@ public static class DbBridge
 {
     private const int RootId = 1; // M5 seeds the Db root object at extent id 1.
 
+    // The reserved field a dictionary entry object carries its key in (the `__descs`
+    // convention). The stdlib reads field(entry, "__key"); descriptors exclude it.
+    public const string EntryKeyProp = "__key";
+
     // Load the Db root object graph as a runtime ExecObject (positive id ⇒ in db).
     public static ExecObject LoadRoot(IInstanceStore store, InstanceDescription desc, ExecContext context)
     {
@@ -72,8 +76,47 @@ public static class DbBridge
                 }
 
                 case Cardinality.Dictionary:
-                    // Not yet surfaced to the runtime (later slice).
+                {
+                    // A dictionary surfaces as a Kind=Dict ExecArray of ENTRY objects, each
+                    // carrying its key in a reserved `__key` field (so the stdlib reads it with
+                    // field(entry,"__key") — no foreach-key syntax). An object entry is its
+                    // scalar fields + __key; a scalar entry is a synthesized { __key, value }.
+                    // Entries are display rows here (id stable-by-key, negative = not directly
+                    // addressable); editing an entry happens on its own page. The dict carries
+                    // its SourcePath — it persists through the PATH-addressed add/remove ops.
+                    var items = new List<ExecItem>();
+                    var dictId = 0;
+                    if (ov.Fields.TryGetValue(prop.Name, out var f) && f is DictionaryValue dict)
+                    {
+                        dictId = dict.Id;
+                        var elementIsObject = desc.IsObjectType(prop.Type);
+                        foreach (var (keyVal, entryVal) in dict.Entries)
+                        {
+                            var keyText = KeyText(keyVal);
+                            var entry = new ExecObject
+                            {
+                                Props = [], Id = KeyHash(dictId, keyText), TypeName = elemType!.Name,
+                            };
+                            if (elementIsObject && entryVal is ObjectValue entryOv)
+                                foreach (var (n, v) in entryOv.Fields)
+                                    if (v is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue)
+                                        entry.Props[n] = ScalarToExec(v);
+                            else if (!elementIsObject)
+                                entry.Props["value"] = ScalarToExec(entryVal);
+                            entry.Props[EntryKeyProp] = new ExecText { Value = keyText };
+                            items.Add(new ExecItem { Key = entry.Id, Value = entry });
+                        }
+                    }
+                    obj.Props[prop.Name] = new ExecArray
+                    {
+                        Items = items,
+                        Id = dictId,
+                        Kind = ArrayKind.Dict,
+                        ElementTypeName = elemType!.Name,
+                        SourcePath = fieldPath.ToString(),
+                    };
                     break;
+                }
 
                 default:
                     if (desc.IsObjectType(prop.Type))
@@ -159,6 +202,28 @@ public static class DbBridge
         DateTimeValue t => new ExecText { Value = t.Value.ToString("O") },
         _ => new ExecNull(),
     };
+
+    // A dictionary key's string form (matches the store's KeyToString / WsHandler.KeyString).
+    private static string KeyText(NodeValue key) => key switch
+    {
+        IntValue i  => i.Value.ToString(),
+        TextValue t => t.Text,
+        BoolValue b => b.Value.ToString().ToLowerInvariant(),
+        _ => key.ToString() ?? "",
+    };
+
+    // A stable negative id for a dict entry, derived from (dict id, key) so it survives
+    // re-renders (DOM reconciliation keys off it) without colliding with counter-minted
+    // transients. Negative = a display row not directly addressable by intrinsic id.
+    private static int KeyHash(int dictId, string keyText)
+    {
+        unchecked
+        {
+            var h = 2166136261u; // FNV-1a
+            foreach (var c in $"{dictId}/{keyText}") { h ^= c; h *= 16777619u; }
+            return -(int)(h & 0x3FFFFFFF) - 1; // keep it negative, away from 0
+        }
+    }
 
     private static TypeDefinition? ResolveType(string name, InstanceDescription desc) =>
         desc.FindType(name) ?? BaseTypes.Leaf(name);

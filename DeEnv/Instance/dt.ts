@@ -11,7 +11,7 @@ interface DtArrayRef { type: "array"; id: number; }
 
 interface DtScopeValue { isReadOnly: boolean; value: DtValue; }
 interface ServerDtObject { props: { [name: string]: DtValue }; }
-interface ServerDtArray { kind: "set" | "dict" | "list"; elementTypeName?: string; items: { key: number; value: DtValue }[]; }
+interface ServerDtArray { kind: "set" | "dict" | "list"; elementTypeName?: string; sourcePath?: string; items: { key: number; value: DtValue }[]; }
 
 interface ServerDtState {
     leaves: { objects: { [id: number]: ServerDtObject }; arrays: { [id: number]: ServerDtArray } };
@@ -56,6 +56,7 @@ function mergeState(dtState: ServerDtState): void {
         const arr = arrays[id] ?? (arrays[id] = { type: "array", id, kind: dtArr.kind, items: [], elementTypeName: dtArr.elementTypeName });
         arr.kind = dtArr.kind;
         arr.elementTypeName = dtArr.elementTypeName;
+        arr.sourcePath = dtArr.sourcePath;
         for (const item of dtArr.items)
             if (!arr.items.some(p => p.key === item.key)) arr.items.push({ key: item.key, value: fromDtValue(item.value) });
     }

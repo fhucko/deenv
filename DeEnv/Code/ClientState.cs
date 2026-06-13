@@ -75,6 +75,7 @@ public static class ClientState
                 {
                     ["kind"] = a.Kind.ToString().ToLowerInvariant(),
                     ["elementTypeName"] = a.ElementTypeName,
+                    ["sourcePath"] = a.SourcePath,   // dicts persist via their path (add/removeEntry)
                     ["items"] = items,
                 };
                 foreach (var item in a.Items)

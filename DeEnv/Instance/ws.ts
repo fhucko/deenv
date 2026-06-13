@@ -130,6 +130,33 @@ function connectWs(): void {
             wsSend({ op: "arrayRemove", id: msgId, clientId: uiStatic.clientId,
                 setId: arr.id, objectId: item.key });
         },
+        // A dictionary entry persists through the PATH-addressed addEntry/removeEntry ops
+        // (the dict carries its sourcePath). addEntry's CreateEntry rejects a duplicate key
+        // → the reply is an error → the journal rolls the optimistic row back automatically.
+        entryAdd: (arr, item, key, value) => {
+            const msgId = nextWsMsgId++;
+            journal.push({
+                msgId,
+                undo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
+                redo: () => { if (!arr.items.includes(item)) arr.items.push(item); invalidateMember(arr.id); },
+            });
+            // addEntry's DeserializeValue/DeserializeLeaf reads BARE values at the top level
+            // (an object entry's fields as { name: rawScalar }, a scalar entry as the raw
+            // scalar) — not the tagged/`props` shape the id-addressed ops use.
+            const wireValue = value.type === "object" ? bareFieldsOf(value) : bareScalar(value);
+            wsSend({ op: "addEntry", id: msgId, clientId: uiStatic.clientId,
+                path: arr.sourcePath, key, value: wireValue });
+        },
+        entryRemove: (arr, item, key, index) => {
+            const msgId = nextWsMsgId++;
+            journal.push({
+                msgId,
+                undo: () => { arr.items.splice(Math.min(index, arr.items.length), 0, item); invalidateMember(arr.id); },
+                redo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
+            });
+            wsSend({ op: "removeEntry", id: msgId, clientId: uiStatic.clientId,
+                path: arr.sourcePath, key });
+        },
     });
 }
 
@@ -249,11 +276,28 @@ function scalarOf(value: ExecValue): object {
     }
 }
 
-// A new object's scalar props for the server to persist: { props: { name: leaf } }.
+// A new object's scalar props for the server to persist: { props: { name: leaf } }, each
+// leaf tagged — the shape the id-addressed ops (arrayAdd / setReferenceField) read.
 function objectOf(value: ExecValue): object {
     const props: { [name: string]: object } = {};
     if (value.type === "object")
         for (const [name, v] of Object.entries(value.props))
             if (v.type === "int" || v.type === "bool" || v.type === "text") props[name] = scalarOf(v);
     return { props };
+}
+
+// An object's scalar fields as bare values { name: rawScalar } — the shape addEntry's
+// DeserializeValue/DeserializeLeaf reads (each field a raw JSON scalar, not tagged).
+function bareFieldsOf(value: ExecValue): { [name: string]: string | number | boolean } {
+    const fields: { [name: string]: string | number | boolean } = {};
+    if (value.type === "object")
+        for (const [name, v] of Object.entries(value.props))
+            if (v.type === "int" || v.type === "bool" || v.type === "text") fields[name] = v.value;
+    return fields;
+}
+
+// A scalar ExecValue's raw JS value (a scalar dict entry's bare value for addEntry).
+function bareScalar(value: ExecValue): string | number | boolean {
+    if (value.type === "int" || value.type === "bool" || value.type === "text") return value.value;
+    return "";
 }

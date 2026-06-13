@@ -63,6 +63,19 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    [Given("the self-hosted scalar dict app is running")]
+    public async Task GivenSelfHostedScalarDictAppRunning()
+    {
+        ctx.Description = InstanceContext.SelfHostedScalarDictDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    // A scalar dictionary entry's value, read at its path (/<dict>/<key>).
+    [Then("the dict entry {string} eventually has value {string}")]
+    public async Task ThenDictEntryHasValue(string key, string value) =>
+        await EventuallyAsync(() =>
+            ctx.Store!.ReadNode(NodePath.FromSegments(["settings", key])) is TextValue t && t.Text == value);
+
     // ── component-local state (creation prototype) ─────────────────────────────────
 
     [Given("the component form app is running")]
@@ -111,10 +124,37 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task WhenClearReference() =>
         await ctx.Page!.Locator("button.ref-clear").First.ClickAsync();
 
-    // Both the reference create-new and the set add forms class their inputs by prop name.
+    // The reference create-new, set add, and dict new forms class their inputs by prop name.
     [When("I fill the new {string} with {string}")]
     public async Task WhenFillNewField(string field, string value) =>
-        await ctx.Page!.Locator($".ref-new input.{field}, .set-new input.{field}").First.FillAsync(value);
+        await ctx.Page!.Locator($".ref-new input.{field}, .set-new input.{field}, .dict-new input.{field}").First.FillAsync(value);
+
+    // ── dictionaries ───────────────────────────────────────────────────────────────
+
+    [When("I fill the new key with {string}")]
+    public async Task WhenFillNewKey(string key) =>
+        await ctx.Page!.Locator("input.dict-key").First.FillAsync(key);
+
+    [When("I add the dict entry")]
+    public async Task WhenAddDictEntry() =>
+        await ctx.Page!.Locator("button.dict-add").First.ClickAsync();
+
+    [When("a dict row eventually shows {string}")]
+    [Then("a dict row shows {string}")]
+    [Then("a dict row eventually shows {string}")]
+    public async Task ThenDictRowShows(string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.dict-row')].some(e => e.textContent.includes({JsString(text)}))");
+
+    [When("I remove the dict row {string}")]
+    public async Task WhenRemoveDictRow(string key) =>
+        await ctx.Page!.Locator(".dict-row", new() { HasTextString = key })
+            .Locator("button.dict-remove").First.ClickAsync();
+
+    [Then("no dict row eventually shows {string}")]
+    public async Task ThenNoDictRow(string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => ![...document.querySelectorAll('.dict-row')].some(e => e.textContent.includes({JsString(text)}))");
 
     [When("I create the new object")]
     public async Task WhenCreateNewObject() =>

@@ -54,7 +54,7 @@ interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id:
 // The Code array — one collection shape for every kind, identical on server, wire, and
 // client. A positive id ⇒ persisted (a db set/dict); a negative id ⇒ transient (a list
 // literal or where/orderBy result). ElementTypeName is the member type (set/dict only).
-interface ExecArray { type: "array"; kind: "set" | "dict" | "list"; items: ExecArrayItem[]; id: number; elementTypeName?: string; }
+interface ExecArray { type: "array"; kind: "set" | "dict" | "list"; items: ExecArrayItem[]; id: number; elementTypeName?: string; sourcePath?: string; }
 interface ExecArrayItem { key: number; value: ExecValue; }
 interface ExecFunction { type: "fn"; fn: CodeFunction; scope: ExecScope; }
 interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
@@ -189,7 +189,7 @@ function executeSymbol(codeSymbol: CodeSymbol, scope: ExecScope): ExecResult {
     };
 }
 
-const collectionMethods = ["add", "remove", "where", "orderBy"];
+const collectionMethods = ["add", "remove", "setEntry", "where", "orderBy"];
 
 // ── memoization cache (Stage 4) ────────────────────────────────────────────────────
 // Mirrors the server (DeEnv/Code/MemoCache.cs). Computation boundaries (user-fn calls,
@@ -439,6 +439,7 @@ function collectionSysFunction(arr: ExecArray, method: string, context: ExecCont
     switch (method) {
         case "add": return { type: "sysFn", fn: args => { addToCollection(arr, args[0], context); return { type: "nothing" }; } };
         case "remove": return { type: "sysFn", fn: args => { removeFromCollection(arr, args[0]); return { type: "nothing" }; } };
+        case "setEntry": return { type: "sysFn", fn: args => { setDictEntry(arr, args[0], args[1]); return { type: "nothing" }; } };
         case "where": return { type: "sysFn", fn: args => {
             const lambda = asLambda(args[0]);
             return memoize(`where:a${arr.id}:fn${lambda.fn.id}`, context, () => whereCollection(arr, lambda, context));
@@ -477,7 +478,55 @@ function removeFromCollection(arr: ExecArray, value: ExecValue): void {
     if (index < 0) return;
     const item = arr.items.splice(index, 1)[0];
     invalidateMember(arr.id);
-    if (arr.id > 0) sendArrayItemRemove(arr, item, index);
+    if (arr.id > 0 && arr.kind === "dict") sendEntryRemove(arr, item, dictEntryKey(item.value), index);
+    else if (arr.id > 0) sendArrayItemRemove(arr, item, index);
+}
+
+// setEntry(key, value): create/replace a dictionary entry. The entry surfaces as an object
+// carrying its key in `__key` (object dict: the value's scalar fields; scalar dict: a
+// `{ __key, value }` wrapper). The entry's id is keyHash(dict,key) — deterministic, so the
+// optimistic row and the server's refetched row share an id and dedup on merge.
+function setDictEntry(arr: ExecArray, key: ExecValue, value: ExecValue): void {
+    const keyText = scalarText(key);
+    const id = keyHash(arr.id, keyText);
+    const props: { [name: string]: ExecValue } = {};
+    if (value.type === "object") {
+        for (const [n, v] of Object.entries(value.props))
+            if (v.type === "int" || v.type === "text" || v.type === "bool") props[n] = v;
+    } else {
+        props["value"] = value;
+    }
+    props["__key"] = { type: "text", value: keyText };
+    const entry: ExecObject = { type: "object", id, props };
+    const existing = arr.items.findIndex(i => i.key === id);
+    let item: ExecArrayItem;
+    if (existing >= 0) { item = arr.items[existing]; item.value = entry; }
+    else { item = { key: id, value: entry }; arr.items.push(item); }
+    invalidateMember(arr.id);
+    if (arr.id > 0) sendEntryAdd(arr, item, keyText, value);
+}
+
+// A dictionary entry's key string (the reserved `__key` field).
+function dictEntryKey(value: ExecValue): string {
+    if (value.type === "object" && value.props["__key"]?.type === "text") return value.props["__key"].value;
+    return "";
+}
+
+// A scalar ExecValue's string form (a dictionary key). Mirrors DbBridge.KeyText.
+function scalarText(value: ExecValue): string {
+    if (value.type === "text") return value.value;
+    if (value.type === "int") return String(value.value);
+    if (value.type === "bool") return value.value ? "true" : "false";
+    return "";
+}
+
+// FNV-1a over (dict id, key) → a stable negative id for a dict entry. Mirrors
+// DbBridge.KeyHash so the optimistic row and the server's row key alike.
+function keyHash(dictId: number, keyText: string): number {
+    let h = 2166136261 >>> 0;
+    const s = `${dictId}/${keyText}`;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return -((h & 0x3FFFFFFF)) - 1;
 }
 
 function whereCollection(arr: ExecArray, predicate: ExecFunction, context: ExecContext): ExecArray {
@@ -630,6 +679,9 @@ interface WsHooks {
     setRef(obj: ExecObject, prop: string, value: ExecValue, before: ExecValue): void;
     arrayAdd(arr: ExecArray, item: ExecArrayItem, typeName: string | undefined): void;
     arrayRemove(arr: ExecArray, item: ExecArrayItem, index: number): void;
+    // Dictionary entries persist through the PATH-addressed add/removeEntry ops (arr.sourcePath).
+    entryAdd(arr: ExecArray, item: ExecArrayItem, key: string, value: ExecValue): void;
+    entryRemove(arr: ExecArray, item: ExecArrayItem, key: string, index: number): void;
 }
 let wsHooks: WsHooks | null = null;
 function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
@@ -645,6 +697,12 @@ function sendArrayItemAdd(arr: ExecArray, item: ExecArrayItem): void {
 }
 function sendArrayItemRemove(arr: ExecArray, item: ExecArrayItem, index: number): void {
     wsHooks?.arrayRemove(arr, item, index);
+}
+function sendEntryAdd(arr: ExecArray, item: ExecArrayItem, key: string, value: ExecValue): void {
+    wsHooks?.entryAdd(arr, item, key, value);
+}
+function sendEntryRemove(arr: ExecArray, item: ExecArrayItem, key: string, index: number): void {
+    wsHooks?.entryRemove(arr, item, key, index);
 }
 
 // ── conformance entry point ───────────────────────────────────────────────────────

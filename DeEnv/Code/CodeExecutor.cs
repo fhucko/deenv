@@ -10,7 +10,7 @@ namespace DeEnv.Code;
 // the original item references — preserving object identity for reconciliation.
 public sealed class CodeExecutor
 {
-    private static readonly HashSet<string> CollectionMethods = ["add", "remove", "where", "orderBy"];
+    private static readonly HashSet<string> CollectionMethods = ["add", "remove", "setEntry", "where", "orderBy"];
 
     private readonly IInstanceStore? _store;
 
@@ -451,6 +451,11 @@ public sealed class CodeExecutor
                 return new ExecNothing();
             case "remove":
                 RemoveFromCollection(sysFn.Target, ExecuteValue(args[0], scope, context));
+                return new ExecNothing();
+            // setEntry(key, value): a dictionary create/replace. Dict entries persist through
+            // the PATH-addressed addEntry WS op (handled on the client); server-side (SSR /
+            // refetch never runs a click handler) it no-ops, like setRef.
+            case "setEntry":
                 return new ExecNothing();
             case "where":
             {

@@ -34,11 +34,47 @@ Feature: Self-hosted generic UI (object forms)
     And the page shows ".object-form"
     And the "title" field is a "text" input
 
+  # ── dictionaries (slice: dicts self-host) ──────────────────────────────────
+
   @milestone-9 @single-user
-  Scenario: A type holding a dictionary stays on the generic auto-form
+  Scenario: A dictionary self-hosts as a table
     Given the self-hosted dict app is running
     When I open "/"
-    Then the page is a generic auto-form
+    Then the page is a code page
+    And the page shows ".dict-table"
+
+  @milestone-9 @single-user
+  Scenario: Adding a dictionary entry persists and shows
+    Given the self-hosted dict app is running
+    When I open "/"
+    And I fill the new key with "alpha"
+    And I fill the new "value" with "Hello"
+    And I add the dict entry
+    Then a dict row eventually shows "alpha"
+    And the store eventually has a "Setting" whose "value" is "Hello"
+
+  @milestone-9 @single-user
+  Scenario: Deleting a dictionary entry removes it
+    Given the self-hosted dict app is running
+    When I open "/"
+    And I fill the new key with "beta"
+    And I fill the new "value" with "Bye"
+    And I add the dict entry
+    And a dict row eventually shows "beta"
+    And I remove the dict row "beta"
+    Then no dict row eventually shows "beta"
+
+  @milestone-9 @single-user
+  Scenario: A scalar dictionary self-hosts and an entry persists
+    Given the self-hosted scalar dict app is running
+    When I open "/"
+    Then the page is a code page
+    And the page shows ".dict-table"
+    When I fill the new key with "currency"
+    And I fill the new "value" with "USD"
+    And I add the dict entry
+    Then a dict row eventually shows "currency"
+    And the dict entry "currency" eventually has value "USD"
 
   @milestone-9 @single-user
   Scenario: Input kind follows the prop's base type

@@ -48,6 +48,8 @@ public static class GenericUi
                                 refEditor(obj, p.name, field(__descs, p.target))()
                             else if p.baseType == "set"
                                 setTable(field(obj, p.name), field(__descs, p.element), nest(base, p.name))()
+                            else if p.baseType == "dictionary"
+                                dictTable(field(obj, p.name), p, nest(base, p.name))()
                             else if p.baseType == "bool"
                                 <input type="checkbox" class={p.name} checked={field(obj, p.name)}>
                             else
@@ -119,6 +121,51 @@ public static class GenericUi
                                     else
                                         <input type={inputType(p.baseType)} class={p.name} value={field(state.draft, p.name)}>
                             <button class="set-add" onClick={addNew}>
+                                "Add"
+                return render
+
+            fn dictTable(dict, desc, base)
+                var state = { key: "", draft: clone(desc.blank) }
+                fn addNew()
+                    if desc.isScalar
+                        dict.setEntry(state.key, field(state.draft, "value"))
+                    else
+                        dict.setEntry(state.key, state.draft)
+                    state.key = ""
+                    state.draft = clone(desc.blank)
+                fn render()
+                    return <div class="dict-table">
+                        <table>
+                            <tr class="dict-head">
+                                <th>
+                                    "Key"
+                                foreach p in desc.valueProps
+                                    <th>
+                                        humanize(p.name)
+                                if desc.isScalar
+                                    <th>
+                                        "Value"
+                            foreach m in dict
+                                <tr class="dict-row">
+                                    <td>
+                                        <a class="dict-open" href={nest(base, field(m, "__key"))}>
+                                            field(m, "__key")
+                                    foreach p in desc.valueProps
+                                        <td>
+                                            field(m, p.name)
+                                    if desc.isScalar
+                                        <td>
+                                            field(m, "value")
+                                    <td>
+                                        <button class="dict-remove" onClick={() => dict.remove(m)}>
+                                            "Remove"
+                        <div class="dict-new">
+                            <input class="dict-key" value={state.key}>
+                            foreach p in desc.valueProps
+                                <input type={inputType(p.baseType)} class={p.name} value={field(state.draft, p.name)}>
+                            if desc.isScalar
+                                <input class="value" value={field(state.draft, "value")}>
+                            <button class="dict-add" onClick={addNew}>
                                 "Add"
                 return render
 
@@ -202,7 +249,8 @@ public static class GenericUi
     private static bool IsSelfHostable(TypeDefinition type, InstanceDescription desc) =>
         type.Props is { Count: > 0 } props && props.All(p =>
             p.Cardinality == Cardinality.Single
-            || (p.Cardinality == Cardinality.Set && desc.IsObjectType(p.Type)));
+            || (p.Cardinality == Cardinality.Set && desc.IsObjectType(p.Type))
+            || p.Cardinality == Cardinality.Dictionary);
 
     // `view T(obj, base)` → `return objectForm(obj, field(__descs, "T"), base)`. `base` is the
     // page's URL path, threaded so inline sets build nested member links (nest(base, prop)).
@@ -246,13 +294,34 @@ public static class GenericUi
 
     // A prop descriptor: scalar { name, baseType }; reference { name, baseType:"object",
     // target } and set { name, baseType:"set", element } carry the OTHER type's name (the
-    // component resolves it via field(__descs, name) — cycle-safe).
-    private static CodeObject PropDesc(PropDefinition p, InstanceDescription desc) =>
-        p.Cardinality == Cardinality.Set
+    // component resolves it via field(__descs, name) — cycle-safe). A dictionary
+    // { name, baseType:"dictionary", keyType, isScalar, valueProps, blank } is self-contained
+    // (dictTable reads it directly): valueProps are the element's scalar columns (empty for a
+    // scalar dict, where isScalar=true and a single "Value" column is shown), blank seeds the
+    // New-entry draft.
+    private static CodeObject PropDesc(PropDefinition p, InstanceDescription desc)
+    {
+        if (p.Cardinality == Cardinality.Dictionary)
+        {
+            var isScalar = !desc.IsObjectType(p.Type);
+            var valueProps = isScalar ? [] : Scalars(desc.FindType(p.Type)!);
+            return Obj(
+                ("name", Text(p.Name)),
+                ("baseType", Text("dictionary")),
+                ("keyType", Text(p.KeyType ?? "text")),
+                ("element", Text(p.Type)),
+                ("isScalar", new CodeBool { Value = isScalar }),
+                ("valueProps", Arr(valueProps.Select(vp => (ICodeValue)PropDesc(vp, desc)))),
+                ("blank", isScalar
+                    ? Obj(("value", DefaultFor(p.Type)))
+                    : Obj(valueProps.Select(vp => (vp.Name, DefaultFor(vp.Type))).ToArray())));
+        }
+        return p.Cardinality == Cardinality.Set
             ? Obj(("name", Text(p.Name)), ("baseType", Text("set")), ("element", Text(p.Type)))
             : desc.IsObjectType(p.Type)
                 ? Obj(("name", Text(p.Name)), ("baseType", Text("object")), ("target", Text(p.Type)))
                 : Obj(("name", Text(p.Name)), ("baseType", Text(p.Type)));
+    }
 
     private static ICodeValue DefaultFor(string baseType) => baseType switch
     {

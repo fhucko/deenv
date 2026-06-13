@@ -70,6 +70,13 @@ public sealed class ExecArray : IExecValue
     public required ArrayKind Kind { get; set; }
     public required List<ExecItem> Items { get; set; }
     public string? ElementTypeName { get; set; }
+
+    // A dictionary's source URL path (e.g. "/settings"). Dictionaries persist through the
+    // PATH-addressed store/WS ops (addEntry/removeEntry) — a dict entry's address IS its
+    // key under a path (M5), unlike a set member reached by its own identity. Set/list are
+    // null. Ships to the client so its add/remove sends carry the path.
+    public string? SourcePath { get; set; }
+
     object IExecValue.Value => this;
 }
 

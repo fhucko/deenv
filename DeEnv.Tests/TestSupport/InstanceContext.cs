@@ -124,6 +124,24 @@ public class InstanceContext
         generic
     """;
 
+    // Milestone 9: a `generic` app whose Db holds a SCALAR dictionary (text→text). The
+    // self-hosted dictTable shows a Key + Value column; entries persist via the path-addressed
+    // addEntry/removeEntry ops, like the object dict.
+    public static InstanceDescription SelfHostedScalarDictDb() =>
+        InstanceDescriptionLoader.Load(SelfHostedScalarDictApp);
+
+    private const string SelfHostedScalarDictApp = """
+    types
+        Db
+            settings: dict of text by text
+
+    initialData
+        Db 1
+
+    ui
+        generic
+    """;
+
     // Milestone 9 (slice 2: references). Opts in with `generic`. `Db.lead: Person` is a
     // reference ROUTE (/lead → the self-hosted reference editor); `Note` is self-hostable
     // (title scalar + `author: Person` reference) so /notes/{id} renders an objectForm with
