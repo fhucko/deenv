@@ -309,6 +309,15 @@ public static class CodeParse
         public required CodeFunction Fn { get; init; }
     }
 
+    // The `generic` opt-in marker: a ui section item, consumed by MapUi into
+    // InstanceUi.Generic. A CONTEXTUAL keyword (still usable as an identifier).
+    internal sealed class CodeGenericMarker : ICodeStatement;
+
+    // `generic` on its own line. Backtracks (so `genericFoo`, `generic = …` fall through
+    // to the function/var parsers) because NlOrEnd must follow immediately.
+    public static IndentedParser<ICodeStatement> GenericMarker => _ =>
+        Seq(Text("generic"), NlOrEnd, (_, _) => (ICodeStatement)new CodeGenericMarker());
+
     // `view Customer(customer)` (type target) / `view "/reports"(path)` (path target).
     public static IndentedParser<ICodeStatement> ViewDec => indent =>
         Seq(Text("view"), Ws1,
@@ -328,6 +337,7 @@ public static class CodeParse
         indent => Many1(
             Seq(Text(indent), OneOf<ICodeStatement>(
                 ViewDec(indent),
+                GenericMarker(indent),
                 NamedFunction(indent),
                 VarDec(indent)),
                 (_, item) => item)
@@ -370,6 +380,7 @@ public static class CodeParse
         var functions = new List<CodeFunction>();
         var views = new List<UiView>();
         CodeFunction? render = null;
+        var generic = false;
         foreach (var item in items)
             switch (item)
             {
@@ -385,9 +396,12 @@ public static class CodeParse
                 case CodeViewDec view:
                     views.Add(new UiView(view.Type, view.Path, view.Fn));
                     break;
+                case CodeGenericMarker:
+                    generic = true;
+                    break;
             }
-        // render is optional: with only views, the app customizes parts of the
-        // generic UI. (A ui with neither is rejected by CodeValidator.)
-        return new InstanceUi(vars, functions, render, views);
+        // render is optional: with only views (or the `generic` opt-in), the app
+        // customizes parts of the generic UI. (A ui with none is rejected by CodeValidator.)
+        return new InstanceUi(vars, functions, render, views, generic);
     }
 }

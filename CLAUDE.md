@@ -28,11 +28,14 @@ where developers design data visually and use it as objects. Full mission in
    UI on twin interpreters; M7 the app document: one text file — types +
    initialData + code — with parser and printer; M8 UI customization: views,
    per-type/per-path render functions over the generic UI, `fn render()`
-   optional — see DECISIONS.md). The next milestone is chosen from ROADMAP.md's
-   future list when work resumes (the self-hosted generic UI as a reflective
-   library is the natural next one). **Schema versioning stays postponed**
-   (self-hosted on top of Code). Later milestones are out of scope unless
-   explicitly asked.
+   optional — see DECISIONS.md). **M9 (self-hosted generic UI) is in progress,
+   slice 1 landed**: the generic object form re-expressed in Code as an
+   `objectForm(obj, meta)` library over schema-as-data, plus the `field(obj,
+   name)` dynamic-access builtin, opted in per app via `generic` in the `ui`
+   section. Remaining slices (set tables, references, dicts, then retiring the
+   C# renderer + `instance.ts`) are the next work. **Schema versioning stays
+   postponed** (self-hosted on top of Code). Later milestones are out of scope
+   unless explicitly asked.
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
    custom language, the render-coupled storage engine, and the multi-device
@@ -81,6 +84,14 @@ where developers design data visually and use it as objects. Full mission in
     milestone. When a request looks like it spans milestones, split it and
     flag it rather than quietly building the big version.
 
+11. **Minimal by default.** Keep the authoring surface as small as possible —
+    least boilerplate, most defaults — unless minimalism would hinder the
+    functionality. The common case is zero-config; you write configuration only
+    to deviate. Any flag/opt-in is justified only while removing it would break
+    real behavior, and is then **temporary scaffolding to delete**, not part of
+    the permanent surface. See EXPECTATIONS.md ("Design principle — minimal by
+    default"); it is judged criterion 5 for a slice.
+
 ## Testing approach
 
 Behavior is specced in Gherkin `.feature` files in `DeEnv.Tests\Features`.
@@ -99,11 +110,24 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
-Milestones 1–8 are done; the next milestone has not been picked yet. The
-natural next one (ROADMAP future list) is the **self-hosted generic UI** — the
-auto-form re-expressed in Code as a *reflective library* (`objectForm(x)`,
-`setTable(s)` over schema metadata), plugged in at the lowest dispatch
-precedence that M8's views established.
+**Milestone 9 (self-hosted generic UI) is in progress — slice 1 (object forms)
+just landed.** The generic object page is re-expressed in Code as a *reflective
+library*: `objectForm(obj, meta)` renders a form by iterating the type's schema
+(passed as a Code value, `meta: { name, props: [{ name, baseType }] }`) and
+binding each scalar field two-way via the new `field(obj, name)` builtin —
+dynamic by-name prop access, the reflective twin of `obj.member`. An app opts in
+with `generic` in its `ui` section (`InstanceUi.Generic`); at render time
+`GenericUi.Effective` synthesizes a `view T(obj)` per all-scalar object type
+without an explicit view, calling `objectForm` with that type's descriptor as a
+Code literal — so it plugs into M8's type-view dispatch unchanged, ships through
+the existing wire (no schema shipped separately), and the canonical
+`InstanceDescription` (what `AppPrint` emits) keeps only the `generic` flag.
+Driven by `SelfHostedUi.feature` (`DeEnv/Instance/GenericUi.cs`,
+`InstanceContext.SelfHostedFormApp`). **Remaining slices**: set tables,
+reference pick-or-create (needs extent enumeration from Code), dictionaries
+(needs dicts in the Code runtime — a roadmap-future layer), then retiring the C#
+auto-form renderer + the separate generic client (`instance.ts`). See
+DECISIONS.md.
 
 **Milestone 8 (UI customization) just landed** — views over the generic UI,
 chosen per request by a rendering-function decision (`SsrRenderer.ResolveView`).

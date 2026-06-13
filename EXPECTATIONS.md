@@ -5,6 +5,35 @@ The layer between VISION.md (the destination) and ROADMAP.md (the sequence):
 doesn't meet these. The first slice was scrapped partly because this layer
 wasn't written down — so a working app couldn't be judged against anything.
 
+## Design principle — minimal by default
+
+**Keep everything as minimal as possible: the least boilerplate, the most
+defaults — unless minimalism would hinder the functionality.** This is a
+first-class quality, not a nicety. An app, a type, a `ui` section, a function
+signature should require only what carries meaning; everything derivable should
+be derived, everything optional should be optional with a sensible default.
+
+- **The common case is zero-config.** The plain, expected behavior happens with
+  no markers, flags, or ceremony. You write configuration only to *deviate* from
+  the default, never to ask for it.
+- **Optional is the default for anything inferable.** `fn render()` is optional,
+  `initialData`/`common` are optional, a lambda's single param drops its
+  parentheses — because none of them carry information the system can't supply or
+  do without. Add a required token only when its absence is genuinely ambiguous
+  or wrong.
+- **The "unless it hinders functionality" caveat is the only escape hatch.** A
+  flag or opt-in is justified *only* while removing it would break or limit real
+  behavior — and then it is **temporary scaffolding to delete**, not a permanent
+  part of the surface. State that intent where the flag lives, and remove it when
+  the blocker is gone (e.g. the self-hosted generic UI is opt-in *only* until its
+  slices reach parity and it can become the default; see DECISIONS.md).
+- **Boilerplate is a smell.** If two apps must repeat the same lines to get the
+  same ordinary outcome, that outcome should be the default instead.
+
+This pulls against *premature* scope, not against ambition: minimal surface, full
+capability. When a default would hide a real choice, surface the choice — but
+make the common answer the one you get for free.
+
 ## Technical expectations
 
 - **One solution, two projects.**
@@ -54,6 +83,9 @@ not merely "it runs."
 2. Its `@milestone-1` Gherkin scenarios are green.
 3. It meets the functional expectations above — not just "it runs."
 4. It doesn't quietly pull in a future milestone (see CLAUDE.md ground rules).
+5. It is minimal by default (above): no boilerplate the common case doesn't
+   need; any flag/opt-in it adds is justified by functionality and marked as
+   temporary.
 
 A slice that passes 1–2 but fails 3 is the failure mode that scrapped the
 first attempt. Define 3 before building, not after.

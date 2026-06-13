@@ -100,6 +100,19 @@
       "expect": { "kind": "int", "value": 7 }
     },
     {
+      "name": "dynamic field access field(obj, name)",
+      "text": "field({ n: 7 }, \"n\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "symbol", "name": "field" },
+        "params": [
+          { "type": "object", "props": [ { "name": "n", "value": { "type": "int", "value": 7 } } ] },
+          { "type": "text", "value": "n" }
+        ]
+      },
+      "expect": { "kind": "int", "value": 7 }
+    },
+    {
       "name": "immediately-invoked function (n => n + 1)(41)",
       "text": "(n => n + 1)(41)",
       "expr": {

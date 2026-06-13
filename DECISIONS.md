@@ -551,9 +551,9 @@ takes over a subtree. Decisions:
   no client JS); path views and the root render own the page. Every code page
   now mounts into `<div id="app">`.
 - **Designer view-editing, fragment-level islands, and the self-hosted generic
-  UI are deferred.** The last is the next milestone — a *reflective library*
-  (`objectForm(x)`, `setTable(s)` over schema metadata) plugged in at lowest
-  dispatch precedence; views are the seam it will use.
+  UI are deferred.** The last became M9 (now in progress, slice 1 landed) — a
+  *reflective library* (`objectForm` over schema-as-data) plugged in at lowest
+  dispatch precedence; views are the seam it uses. See the M9 section below.
 
 ### Refetch reads the store, not a per-client warm graph (cleanup)
 
@@ -569,6 +569,52 @@ unchanged for a single session (its warm graph held exactly its own persisted
 mutations); a refetch now also reflects other sessions' committed changes when
 it runs. Making a page refetch *automatically* on an external change (vs. on its
 own next interaction) — live push — stays the real-time/multi-user milestone.
+
+## Self-hosted generic UI — slice 1: object forms via synthesized views (M9)
+
+The next milestone after M8: re-express the C# generic auto-form in the Code
+language itself, so the bespoke renderer (and the separate generic client,
+`instance.ts`) can eventually retire. Decided to deliver it as **slices**; slice
+1 is the generic **object form** for an all-scalar type, proven end-to-end. The
+hard sub-problems (set tables, reference pick-or-create needing extent
+enumeration from Code, and dictionaries — which aren't in the Code runtime, a
+roadmap-future layer) are later slices. Decisions:
+
+- **Reflection = schema-as-data, not new metadata APIs.** The library
+  `objectForm(obj, meta)` iterates an ordinary Code value `meta: { name, props:
+  [{ name, baseType }] }` with the existing `foreach`/`.prop`. No new
+  introspection built-ins; the type descriptor *is* data.
+- **One real primitive: `field(obj, name)`.** Code had no `obj[name]`
+  (object-prop access requires a literal symbol), so a form driven by
+  schema-iterated names was impossible. `field` is the reflective twin of
+  `obj.member`: same dependency/leaf bookkeeping on the server, and on the
+  client a `setValue` that writes back and persists — so a bound input is
+  two-way exactly like a static field. Added to both twin interpreters + a
+  conformance case; the validator knows it as a builtin.
+- **Synthesis over a runtime `schema` global.** Rather than ship a schema and a
+  new `ViewKind.Generic` + client bootstrap, an opted-in app gets, at render
+  time, a synthesized `view T(obj)` per all-scalar object type without an
+  explicit view; its body is `return objectForm(obj, { …descriptor literal… })`.
+  This **plugs into M8's type-view dispatch unchanged**, ships through the
+  existing views channel (the descriptor rides as a Code literal in the view
+  AST — nothing new on the wire), and needs no `init.ts` change. The client's
+  `ExecObject` carries no type name, so passing the descriptor as a call
+  argument (not `typeOf(obj)`) avoids a wire change; `typeOf` is deferred to the
+  slice that recurses into nested objects.
+- **Opt-in is a model flag, not a test hack.** `generic` in the `ui` section →
+  `InstanceUi.Generic` (parsed, printed, round-trip tested). It scopes the
+  self-hosting so existing apps (todo/shop/crm) are untouched, and is the
+  migration seam later slices widen until the C# renderer retires.
+- **Synthesis stays render-time; the canonical description is pristine.**
+  `GenericUi.Effective` builds an augmented `InstanceUi` (library functions +
+  synthesized views, renumbered via `CodeIds` for stable memo keys) used by
+  `SsrRenderer` for both the server render and the shipped client AST. `AppPrint`
+  still prints the original description (just the `generic` flag), so parse/print
+  round-trips are unaffected.
+
+Slice 1 is specced by `SelfHostedUi.feature` (`@milestone-9`); the all-scalar
+`Note` object page renders via `objectForm`, edits persist over the WS, input
+kind follows `baseType`, and the Db root stays the C# auto-form.
 
 ## Tool stack and project structure
 

@@ -179,6 +179,13 @@ staged-honking-fox.md.
 - **Self-hosted generic UI.** The auto-form experience re-expressed in Code
   (per-type default views derived from the schema; the C# form renderer and
   the separate generic client retire). Views (M8) are the seam it plugs into.
+  **Slice 1 landed (object forms):** an `objectForm(obj, meta)` Code library +
+  the `field(obj, name)` dynamic-access builtin, opted in per app with `generic`
+  in the `ui` section; `GenericUi.Effective` synthesizes one per-type view per
+  all-scalar object type at render time (the descriptor rides as a Code literal,
+  so nothing new ships on the wire). Specced by `SelfHostedUi.feature`. Next
+  slices: set tables, reference pick-or-create, dictionaries (needs dicts in the
+  Code runtime), then retiring the C# renderer + `instance.ts`.
 
 - **Schema versioning.** Git-style versioning of the schema, built inside
   the environment itself using the code milestone (versioning is

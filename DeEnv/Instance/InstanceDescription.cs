@@ -35,11 +35,15 @@ public record UiView(string? Type, string? Path, CodeFunction Fn);
 // and the optional entry-point `render` function (the implicit root path view —
 // when present, code owns the whole URL space). Without it, views customize parts
 // of the generic UI and everything else stays the auto-form.
+// `Generic` is the opt-in to the self-hosted generic UI: when set, object pages of
+// all-scalar types that lack an explicit view are rendered by the Code `objectForm`
+// library (synthesized into per-type views at render time) instead of the C# auto-form.
 public record InstanceUi(
     IReadOnlyList<UiVar>? Vars = null,
     IReadOnlyList<CodeFunction>? Functions = null,
     CodeFunction? Render = null,
-    IReadOnlyList<UiView>? Views = null);
+    IReadOnlyList<UiView>? Views = null,
+    bool Generic = false);
 
 // The `common` section: functions shared by server and client. A function may be
 // marked server-only (CodeFunction.ServerOnly) so it is never shipped to the client.

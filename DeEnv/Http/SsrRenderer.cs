@@ -15,12 +15,18 @@ public sealed class SsrRenderer
     private readonly TypeResolver _resolver;
     private readonly ClientSessionStore? _sessions;
 
+    // The ui actually rendered/shipped: the app's ui, augmented with the self-hosted
+    // generic UI (objectForm + synthesized per-type views) when the app opts in. The
+    // canonical _desc stays pristine for printing; _ui carries the render-time synthesis.
+    private readonly InstanceUi? _ui;
+
     public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null)
     {
         _store = store;
         _desc = desc;
         _resolver = new TypeResolver(desc);
         _sessions = sessions;
+        _ui = GenericUi.Effective(desc);
     }
 
     public string Render(string urlPath)
@@ -28,7 +34,7 @@ public sealed class SsrRenderer
         // The rendering-function decision: a matching view makes this a code page;
         // everything else falls through to the generic auto-form (which now also
         // serves apps WITH a ui section, for the URLs their views don't cover).
-        if (_desc.Ui != null && ResolveView(urlPath) != null)
+        if (_ui != null && ResolveView(urlPath) != null)
             return RenderUi(urlPath);
 
         var nodePath = ParsePath(urlPath);
@@ -64,7 +70,7 @@ public sealed class SsrRenderer
     //   3. else null: the generic auto-form. `/~/{id}` id-routes stay generic.
     private ViewMatch? ResolveView(string urlPath)
     {
-        var ui = _desc.Ui;
+        var ui = _ui;
         if (ui == null) return null;
 
         UiView? bestPath = null;
@@ -122,9 +128,9 @@ public sealed class SsrRenderer
             var initData = ClientState.Serialize(scope, context).ToJsonString();
             var clientUi = new InstanceUi(
                 Vars: null,
-                Functions: _desc.Ui!.Functions?.Where(f => !f.ServerOnly).ToList(),
-                Render: _desc.Ui.Render,
-                Views: _desc.Ui.Views);
+                Functions: _ui!.Functions?.Where(f => !f.ServerOnly).ToList(),
+                Render: _ui.Render,
+                Views: _ui.Views);
             var clientCommon = _desc.Common?.Functions is { } common
                 ? new InstanceCommon(common.Where(f => !f.ServerOnly).ToList())
                 : null;
@@ -132,7 +138,7 @@ public sealed class SsrRenderer
             // The resolved rendering-function decision, so the client re-renders the
             // same view: which view, and (type views) the routed object's id.
             var viewInfo = new JsonObject { ["kind"] = match.Kind.ToString().ToLowerInvariant() };
-            if (match.View != null) viewInfo["index"] = _desc.Ui.Views!.ToList().IndexOf(match.View);
+            if (match.View != null) viewInfo["index"] = _ui.Views!.ToList().IndexOf(match.View);
             if (targetId is { } id) viewInfo["objectId"] = id;
 
             var initUi = new JsonObject
@@ -190,7 +196,7 @@ public sealed class SsrRenderer
         string urlPath, ExecContext context, IReadOnlyDictionary<string, IExecValue>? sessionVars = null,
         ExecObject? warmDb = null)
     {
-        var ui = _desc.Ui!;
+        var ui = _ui!;
         var exec = new CodeExecutor(_store);
         var scope = new ExecScope();
 

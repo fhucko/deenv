@@ -130,9 +130,13 @@ function executeValue(value: CodeValue, scope: ExecScope, context: ExecContext):
         case "bool": return { value: { type: "bool", value: value.value } };
         case "null": return { value: { type: "null" } };
         case "fn": return { value: executeFunction(value, scope) };
-        case "call": return { value: executeCall(value, scope, context) };
         case "tag": return { value: executeTag(value, scope, context) };
         case "infixOp": return executeInfixOp(value, scope, context);
+        // field(obj, name) is a bindable lvalue (two-way binding needs its setValue),
+        // so it is resolved here rather than through executeCall (which drops setValue).
+        case "call":
+            if (value.fn.type === "symbol" && value.fn.name === "field") return fieldResult(value, scope, context);
+            return { value: executeCall(value, scope, context) };
         case "symbol": return executeSymbol(value, scope);
         case "object": return { value: executeObject(value, scope, context) };
         case "array": return { value: executeArray(value, scope, context) };
@@ -301,6 +305,31 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
     };
 }
 
+// field(obj, name): dynamic by-name prop access — the reflective twin of `obj.member`,
+// for the self-hosted generic UI (the prop name comes from schema data at runtime). Same
+// dependency recording and write-back/persist as the static objectProp branch above.
+function fieldResult(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecResult {
+    if (codeCall.params.length !== 2) throw new Error("field(obj, name) takes two arguments.");
+    const obj = executeValue(codeCall.params[0], scope, context).value;
+    const nameV = executeValue(codeCall.params[1], scope, context).value;
+    if (obj.type !== "object") throw new Error("field() expects an object.");
+    if (nameV.type !== "text") throw new Error("field() expects a text field name.");
+    const name = nameV.value;
+    const value = obj.props[name];
+    if (value == null) throw new Error("Value not available");
+    recordProp(obj.id, name);
+    return {
+        value,
+        setValue: p => {
+            const before = obj.props[name];
+            obj.props[name] = p;
+            invalidateProp(obj.id, name);
+            // A positive id ⇒ the object is server-backed, so persist the change.
+            if (obj.id > 0) propValueChange(obj, name, p, before);
+        },
+    };
+}
+
 function collectionSysFunction(arr: ExecArray, method: string, context: ExecContext): ExecSysFunction {
     switch (method) {
         case "add": return { type: "sysFn", fn: args => { addToCollection(arr, args[0], context); return { type: "nothing" }; } };
@@ -404,6 +433,9 @@ function executeInfixOpBasic(codeInfixOp: CodeInfixOp, scope: ExecScope, context
 }
 
 function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    // `field` is a built-in (intercepted in executeValue for its setValue); in statement
+    // position the value form is enough.
+    if (codeCall.fn.type === "symbol" && codeCall.fn.name === "field") return fieldResult(codeCall, scope, context).value;
     const fn = executeValue(codeCall.fn, scope, context).value;
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));
     if (fn.type !== "fn") throw new Error("Target of a call is not a function.");

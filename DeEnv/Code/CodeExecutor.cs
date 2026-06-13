@@ -164,16 +164,7 @@ public sealed class CodeExecutor
             if (!obj.Props.TryGetValue(member.Name, out var value))
                 throw new CodeRuntimeException($"Unknown field '{member.Name}'.");
 
-            // DepStack empty → output position: a displayed leaf. Non-empty → inside a
-            // computation: a dependency, plus a pending leaf (shipped only if the
-            // computation's result is a tag tree — i.e. it IS display).
-            if (context.DepStack.Count == 0) context.AccessedObjectProps.Add((obj, member.Name));
-            else
-            {
-                context.DepStack.Peek().Props.Add(new PropDep(obj.Id, member.Name));
-                context.LeafStack.Peek().Props.Add((obj, member.Name));
-            }
-            OnValueAccessed(context, value);
+            RecordPropAccess(obj, member.Name, value, context);
             return value;
         }
 
@@ -198,6 +189,40 @@ public sealed class CodeExecutor
         };
     }
 
+    // Record a prop read (the displayed-leaf / dependency bookkeeping shared by static
+    // `obj.member` access and dynamic `field(obj, name)`): DepStack empty → an output
+    // leaf; inside a computation → a dependency plus a pending leaf.
+    private static void RecordPropAccess(ExecObject obj, string name, IExecValue value, ExecContext context)
+    {
+        if (context.DepStack.Count == 0) context.AccessedObjectProps.Add((obj, name));
+        else
+        {
+            context.DepStack.Peek().Props.Add(new PropDep(obj.Id, name));
+            context.LeafStack.Peek().Props.Add((obj, name));
+        }
+        OnValueAccessed(context, value);
+    }
+
+    // field(obj, name): dynamic by-name prop access — the reflective twin of `obj.member`,
+    // for the self-hosted generic UI (the prop name comes from schema data at runtime, so
+    // it cannot be a static member symbol). Same dependency bookkeeping as `.member`; the
+    // client twin (codeExec.ts) additionally returns a setValue so a bound input writes back.
+    private IExecValue ExecuteField(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 2)
+            throw new CodeRuntimeException("field(obj, name) takes two arguments.");
+        var target = ExecuteValue(call.Params[0], scope, context);
+        var nameVal = ExecuteValue(call.Params[1], scope, context);
+        if (target is not ExecObject obj)
+            throw new CodeRuntimeException("field() expects an object.");
+        if (nameVal is not ExecText name)
+            throw new CodeRuntimeException("field() expects a text field name.");
+        if (!obj.Props.TryGetValue(name.Value, out var value))
+            throw new CodeRuntimeException($"Unknown field '{name.Value}'.");
+        RecordPropAccess(obj, name.Value, value, context);
+        return value;
+    }
+
     private static int AsInt(IExecValue v) => v is ExecInt i ? i.Value
         : throw new CodeRuntimeException("Expected an int.");
     private static bool AsBool(IExecValue v) => v is ExecBool b ? b.Value
@@ -207,6 +232,11 @@ public sealed class CodeExecutor
 
     private IExecValue ExecuteCall(CodeCall codeCall, ExecScope scope, ExecContext context)
     {
+        // `field` is a built-in: intercept before resolving the callee (it is not a
+        // scope symbol). Wins over any same-named user binding.
+        if (codeCall.Fn is CodeSymbol { Name: "field" })
+            return ExecuteField(codeCall, scope, context);
+
         var callee = ExecuteValue(codeCall.Fn, scope, context);
         return callee switch
         {

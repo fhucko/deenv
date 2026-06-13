@@ -141,6 +141,19 @@ ui
   WebSocket, the memo cache, refetch — all as in a render app). Views ship to
   the client and re-render there.
 
+A `ui` section may also contain `generic` on its own line — the opt-in to the
+**self-hosted generic UI** (M9). With it, the generic object page for each
+all-scalar object type (one without a hand-written view) is rendered by a Code
+`objectForm` library over the type's schema instead of the C# auto-form; pages
+that aren't all-scalar object pages (the Db root, sets) stay generic for now.
+`generic` satisfies the "renders something" rule on its own (no `render`/view
+needed). Slice 1 covers object forms only.
+
+```
+ui
+    generic
+```
+
 ## Validation a loader must enforce
 
 A malformed document is rejected at load with a clear, specific error
@@ -156,10 +169,10 @@ A malformed document is rejected at load with a clear, specific error
   writable symbols, two-way bindings target lvalues, named-function call
   arity matches, no duplicate `var` in a block. (Type checking is deferred —
   type mismatches are runtime errors.)
-- A `ui` section defines `render` or at least one view. A view targets exactly
-  one type (which must exist and be an object type; the view takes one param)
-  or one path (starting with `/`, no trailing slash; at most one param); no two
-  views share a target; no `view "/"` alongside `render`.
+- A `ui` section defines `render`, at least one view, or `generic`. A view
+  targets exactly one type (which must exist and be an object type; the view
+  takes one param) or one path (starting with `/`, no trailing slash; at most
+  one param); no two views share a target; no `view "/"` alongside `render`.
 
 ## Worked example
 

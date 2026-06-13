@@ -27,6 +27,9 @@ public static class CodeValidator
         // Top scope: db (read-only) + ui vars (writable) + all function names.
         var top = new Scope(null);
         top.Declare("db", writable: false);
+        // `field(obj, name)` is a built-in (dynamic by-name prop access for the
+        // self-hosted generic UI); resolvable as a symbol, no fixed arity.
+        top.Declare("field", writable: false);
         foreach (var v in ui.Vars ?? [])
         {
             if (top.IsDeclaredLocally(v.Name))
@@ -43,10 +46,11 @@ public static class CodeValidator
         foreach (var f in desc.Common?.Functions ?? []) ValidateFunction(f, top);
 
         // render is optional (it is the implicit root path view); but a ui section
-        // with neither render nor views renders nothing anywhere — reject at load.
-        if (ui.Render == null && (ui.Views == null || ui.Views.Count == 0))
+        // with neither render, views, nor the `generic` opt-in renders nothing
+        // anywhere — reject at load.
+        if (ui.Render == null && (ui.Views == null || ui.Views.Count == 0) && !ui.Generic)
             throw new SchemaValidationException(
-                "The 'ui' section must define 'fn render()' or at least one view.");
+                "The 'ui' section must define 'fn render()', at least one view, or 'generic'.");
         if (ui.Render != null) ValidateFunction(ui.Render, top);
 
         ValidateViews(desc, ui, top);

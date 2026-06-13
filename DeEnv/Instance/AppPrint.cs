@@ -36,6 +36,7 @@ public static class AppPrint
         if (desc.Ui is { } ui)
         {
             sb.Append("\nui\n");
+            if (ui.Generic) sb.Append("    generic\n");
             foreach (var v in ui.Vars ?? [])
             {
                 sb.Append("    var ").Append(v.Name);

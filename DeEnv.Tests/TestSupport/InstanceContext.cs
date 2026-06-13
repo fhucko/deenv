@@ -80,6 +80,34 @@ public class InstanceContext
         InstanceDescriptionLoader.LoadFile(
             Path.Combine(AppContext.BaseDirectory, "shop.app"));
 
+    // Milestone 9 (self-hosted generic UI, slice 1): an app that opts into the generic
+    // Code UI (`generic`) with no hand-written views. The all-scalar `Note` object page
+    // is rendered by the self-hosted `objectForm` library; `/` and `/notes` (the Db root
+    // and the set) stay on the C# auto-form. Drives SelfHostedUi.feature.
+    public static InstanceDescription SelfHostedFormDb() =>
+        InstanceDescriptionLoader.Load(SelfHostedFormApp);
+
+    private const string SelfHostedFormApp = """
+    types
+        Db
+            notes: set of Note
+        Note
+            title: text
+            done: bool
+            count: int
+
+    initialData
+        Db 1
+            notes: [2]
+        Note 2
+            title: "First"
+            done: false
+            count: 3
+
+    ui
+        generic
+    """;
+
     // The code-bearing fixture documents, for the printer round-trip tests.
     public static IReadOnlyList<string> CodeFixtureApps =>
         [TasksUiApp, InteractiveUiApp, SensitiveUiApp, RefetchUiApp,
