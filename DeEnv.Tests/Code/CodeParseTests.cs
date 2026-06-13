@@ -170,10 +170,11 @@ public sealed class CodeParseTests
     [Test]
     public async Task Assignment_is_a_value()
     {
-        // assign.Target is concretely typed (CodeSymbol) — no "type" discriminator.
+        // assign.Target is an lvalue (ICodeValue) — a symbol or an `obj.field` chain — so
+        // it carries a "type" discriminator.
         await AssertParsesTo("path = \"/\"",
             """
-            { "type": "assign", "target": { "name": "path" },
+            { "type": "assign", "target": { "type": "symbol", "name": "path" },
               "value": { "type": "text", "value": "/" } }
             """);
     }

@@ -41,6 +41,17 @@ Feature: Self-hosted generic UI (object forms)
     And I fill the "title" field with "Renamed"
     Then the store eventually has a "Note" whose "title" is "Renamed"
 
+  # ── component-local state (creation prototype) ─────────────────────────────
+
+  @milestone-9 @single-user
+  Scenario: A component holds creation state and resets after Create
+    Given the component form app is running
+    When I open "/"
+    And I fill the draft title with "Buy milk"
+    And I click create
+    Then the note list eventually shows "Buy milk"
+    And the draft title is empty
+
   # ── references: the self-hosted pick-or-clear editor (slice 2) ──────────────
 
   @milestone-9 @single-user

@@ -60,7 +60,7 @@ public static class CodePrint
         CodeInfixOp op =>
             Operand(op.Left, Precedence(op)) + " " + OpToken(op.Op) + " " + Operand(op.Right, Precedence(op) + 1),
         CodeCall call => Operand(call.Fn, 90) + "(" + string.Join(", ", call.Params.Select(Value)) + ")",
-        CodeAssignment assign => assign.Target.Name + " = " + Value(assign.Value),
+        CodeAssignment assign => Value(assign.Target) + " = " + Value(assign.Value),
         CodeFunction fn => InlineLambda(fn),
         _ => throw new InvalidOperationException($"No inline text form for {value.GetType().Name}."),
     };

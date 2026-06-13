@@ -47,14 +47,14 @@ public sealed class CodeParseDocumentTests
                   "condition": { "type": "infixOp", "op": "moreThan",
                     "left": { "type": "symbol", "name": "n" }, "right": { "type": "int", "value": 10 } },
                   "body": { "type": "block", "statements": [
-                    { "type": "assign", "target": { "name": "label" }, "value": { "type": "text", "value": "big" } } ] },
+                    { "type": "assign", "target": { "type": "symbol", "name": "label" }, "value": { "type": "text", "value": "big" } } ] },
                   "elseBody": { "type": "if",
                     "condition": { "type": "infixOp", "op": "moreThan",
                       "left": { "type": "symbol", "name": "n" }, "right": { "type": "int", "value": 5 } },
                     "body": { "type": "block", "statements": [
-                      { "type": "assign", "target": { "name": "label" }, "value": { "type": "text", "value": "mid" } } ] },
+                      { "type": "assign", "target": { "type": "symbol", "name": "label" }, "value": { "type": "text", "value": "mid" } } ] },
                     "elseBody": { "type": "block", "statements": [
-                      { "type": "assign", "target": { "name": "label" }, "value": { "type": "text", "value": "small" } } ] } } } ,
+                      { "type": "assign", "target": { "type": "symbol", "name": "label" }, "value": { "type": "text", "value": "small" } } ] } } } ,
                 { "type": "return", "value": { "type": "symbol", "name": "label" } }
               ] } }
             """);
@@ -78,7 +78,7 @@ public sealed class CodeParseDocumentTests
                       "left": { "type": "symbol", "name": "db" }, "right": { "type": "symbol", "name": "users" } },
                     "right": { "type": "symbol", "name": "add" } },
                   "params": [ { "type": "symbol", "name": "newUser" } ] },
-                { "type": "assign", "target": { "name": "newUser" },
+                { "type": "assign", "target": { "type": "symbol", "name": "newUser" },
                   "value": { "type": "call", "fn": { "type": "symbol", "name": "getNewUser" }, "params": [] } }
               ] } }
             """);

@@ -57,13 +57,37 @@ public sealed class CodeExecutor
         scope.Items[varDec.Name] = new ExecScopeItem { Value = value, IsReadOnly = false };
     }
 
-    private void ExecuteAssignment(CodeAssignment assignment, ExecScope scope, ExecContext context)
+    private void ExecuteAssignment(CodeAssignment assignment, ExecScope scope, ExecContext context) =>
+        AssignAndReturn(assignment, scope, context);
+
+    // Assign to a var (a symbol) or an object field (`obj.member`) and return the value.
+    // A field write sets the prop in place — the same effect two-way binding has; the
+    // client twin additionally invalidates/persists.
+    private IExecValue AssignAndReturn(CodeAssignment assignment, ExecScope scope, ExecContext context)
     {
-        var itemScope = FindScope(assignment.Target.Name, scope);
-        var item = itemScope.Items[assignment.Target.Name];
-        if (item.IsReadOnly)
-            throw new CodeRuntimeException($"Symbol '{assignment.Target.Name}' is read only.");
-        item.Value = ExecuteValue(assignment.Value, scope, context);
+        var value = ExecuteValue(assignment.Value, scope, context);
+        switch (assignment.Target)
+        {
+            case CodeSymbol sym:
+            {
+                var itemScope = FindScope(sym.Name, scope);
+                var item = itemScope.Items[sym.Name];
+                if (item.IsReadOnly)
+                    throw new CodeRuntimeException($"Symbol '{sym.Name}' is read only.");
+                item.Value = value;
+                break;
+            }
+            case CodeInfixOp { Op: CodeInfixOpType.ObjectProp, Left: var left, Right: CodeSymbol member }:
+            {
+                if (ExecuteValue(left, scope, context) is not ExecObject obj)
+                    throw new CodeRuntimeException("Cannot assign a field on a non-object.");
+                obj.Props[member.Name] = value;
+                break;
+            }
+            default:
+                throw new CodeRuntimeException("Invalid assignment target.");
+        }
+        return value;
     }
 
     private IExecValue? ExecuteBlock(CodeBlock block, ExecScope scope, ExecContext context)
@@ -96,11 +120,8 @@ public sealed class CodeExecutor
         _ => throw new NotImplementedException($"Value {value.GetType().Name}"),
     };
 
-    private IExecValue ExecuteAssignmentValue(CodeAssignment assignment, ExecScope scope, ExecContext context)
-    {
-        ExecuteAssignment(assignment, scope, context);
-        return FindScope(assignment.Target.Name, scope).Items[assignment.Target.Name].Value;
-    }
+    private IExecValue ExecuteAssignmentValue(CodeAssignment assignment, ExecScope scope, ExecContext context) =>
+        AssignAndReturn(assignment, scope, context);
 
     private ExecArray ExecuteArray(CodeArray codeArray, ExecScope scope, ExecContext context)
     {

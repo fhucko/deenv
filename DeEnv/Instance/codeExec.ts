@@ -25,7 +25,7 @@ interface CodeArray { type: "array"; items: CodeValue[]; }
 interface CodeObject { type: "object"; props: CodeObjectProp[]; }
 interface CodeObjectProp { name: string; value: CodeValue; }
 interface CodeInfixOp { type: "infixOp"; op: string; left: CodeValue; right: CodeValue; }
-interface CodeAssignment { type: "assign"; target: CodeSymbol; value: CodeValue; }
+interface CodeAssignment { type: "assign"; target: CodeValue; value: CodeValue; }
 interface CodeBlock { type: "block"; statements: CodeStatement[]; }
 interface CodeVarDec { type: "varDec"; name: string; value: CodeValue | null; }
 interface CodeFunction { type: "fn"; name: string | null; params: CodeFunctionParam[]; body: CodeBlock; id?: number; }
@@ -112,13 +112,30 @@ function executeBlock(block: CodeBlock, scope: ExecScope, context: ExecContext):
 }
 
 function executeAssignment(assignment: CodeAssignment, scope: ExecScope, context: ExecContext): ExecValue {
-    const itemScope = findScope(assignment.target, scope);
-    const item = itemScope.items[assignment.target.name];
-    if (item.isReadOnly) throw new Error(`Symbol ${assignment.target.name} is read only`);
-    item.value = executeValue(assignment.value, scope, context).value;
-    // Assigning a top-scope UI-state var invalidates every cached computation that read it.
-    if (itemScope.parent === null) invalidateVar(assignment.target.name);
-    return item.value;
+    const value = executeValue(assignment.value, scope, context).value;
+    const target = assignment.target;
+    if (target.type === "symbol") {
+        const itemScope = findScope(target, scope);
+        const item = itemScope.items[target.name];
+        if (item.isReadOnly) throw new Error(`Symbol ${target.name} is read only`);
+        item.value = value;
+        // Assigning a top-scope UI-state var invalidates every cached computation that read it.
+        if (itemScope.parent === null) invalidateVar(target.name);
+        return value;
+    }
+    // An object-field lvalue (`obj.member = …`): set in place, the same write path two-way
+    // binding uses — invalidate readers, and persist when the object is server-backed.
+    if (target.type === "infixOp" && target.op === "objectProp" && target.right.type === "symbol") {
+        const obj = executeValue(target.left, scope, context).value;
+        if (obj.type !== "object") throw new Error("Cannot assign a field on a non-object.");
+        const prop = target.right.name;
+        const before = obj.props[prop];
+        obj.props[prop] = value;
+        invalidateProp(obj.id, prop);
+        if (obj.id > 0) propValueChange(obj, prop, value, before);
+        return value;
+    }
+    throw new Error("Invalid assignment target.");
 }
 
 // ── values ──────────────────────────────────────────────────────────────────────

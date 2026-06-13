@@ -157,10 +157,22 @@ public static class CodeValidator
 
     private static void ValidateAssignment(CodeAssignment assign, Scope scope)
     {
-        if (!scope.TryResolve(assign.Target.Name, out var writable))
-            throw new SchemaValidationException($"Assignment to undeclared symbol '{assign.Target.Name}'.");
-        if (!writable)
-            throw new SchemaValidationException($"Assignment to read-only symbol '{assign.Target.Name}'.");
+        switch (assign.Target)
+        {
+            case CodeSymbol sym:
+                if (!scope.TryResolve(sym.Name, out var writable))
+                    throw new SchemaValidationException($"Assignment to undeclared symbol '{sym.Name}'.");
+                if (!writable)
+                    throw new SchemaValidationException($"Assignment to read-only symbol '{sym.Name}'.");
+                break;
+            // An object-field lvalue (`obj.member`) is always assignable; validate that the
+            // object expression resolves (the member name itself is not scope-checked).
+            case CodeInfixOp { Op: CodeInfixOpType.ObjectProp, Left: var left }:
+                ValidateValue(left, scope);
+                break;
+            default:
+                throw new SchemaValidationException("Invalid assignment target.");
+        }
         ValidateValue(assign.Value, scope);
     }
 

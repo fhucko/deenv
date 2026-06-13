@@ -150,8 +150,15 @@ public static class CodeParse
             Body = new CodeBlock { Statements = [new CodeReturn { Value = body }] },
         });
 
+    // An assignment lvalue: a bare symbol (a var) or a `.member` chain (`obj.field`).
+    // Calls are not lvalues, so this is symbol + dotted members only.
+    public static Parser<ICodeValue> Lvalue => Seq(
+        Symbol, Many0(Seq(Ws0, Text("."), Ws0, Symbol, (_, _, _, m) => m)),
+        (head, members) => members.Aggregate((ICodeValue)head,
+            (left, m) => new CodeInfixOp { Op = CodeInfixOpType.ObjectProp, Left = left, Right = m }));
+
     public static Parser<CodeAssignment> AssignValue => Seq(
-        Symbol, Ws0, Text("="), Ws0, Value,
+        Lvalue, Ws0, Text("="), Ws0, Value,
         (target, _, _, _, value) => new CodeAssignment { Target = target, Value = value });
 
     // ── the expression entry point ───────────────────────────────────────────────

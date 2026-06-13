@@ -279,6 +279,49 @@ public class InstanceContext
                         p.name
     """;
 
+    // Milestone 9 prototype: the component pattern for creation. `newForm` runs its body
+    // ONCE (init — a wrapper `state` holding a draft), returns a render fn (the reactive
+    // part), and a `create` handler that mints the draft then resets `state.draft` via an
+    // object-field assignment. Verifies init-once + reactive render + create + reset hold
+    // on the memo cache. Hand-authored (full-takeover `fn render()`), not the generic UI.
+    public static InstanceDescription ComponentFormDb() =>
+        InstanceDescriptionLoader.Load(ComponentFormApp);
+
+    private const string ComponentFormApp = """
+    types
+        Db
+            notes: set of Note
+        Note
+            title: text
+
+    ui
+        var path = "/"
+
+        fn getNewNote()
+            return { title: "" }
+
+        fn newForm()
+            var state = { draft: getNewNote() }
+            fn create()
+                db.notes.add(state.draft)
+                state.draft = getNewNote()
+            fn render()
+                return <div class="new-form">
+                    <input class="draft-title" value={state.draft.title}>
+                    <button class="create" onClick={create}>
+                        "Create"
+            return render
+
+        fn render()
+            return <main>
+                newForm()()
+                <h2>
+                    "Notes"
+                foreach n in db.notes
+                    <div class="note-row">
+                        n.title
+    """;
+
     // ── storage ───────────────────────────────────────────────────────────────
 
     public string DataFilePath { get; set; } = Path.GetTempFileName();

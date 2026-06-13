@@ -41,6 +41,32 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await Assert.That(actual.Trim()).IsEqualTo(text);
     }
 
+    // ── component-local state (creation prototype) ─────────────────────────────────
+
+    [Given("the component form app is running")]
+    public async Task GivenComponentFormAppRunning()
+    {
+        ctx.Description = InstanceContext.ComponentFormDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    [When("I fill the draft title with {string}")]
+    public async Task WhenFillDraftTitle(string value) =>
+        await ctx.Page!.Locator("input.draft-title").FillAsync(value);
+
+    [When("I click create")]
+    public async Task WhenClickCreate() =>
+        await ctx.Page!.Locator("button.create").ClickAsync();
+
+    [Then("the note list eventually shows {string}")]
+    public async Task ThenNoteListShows(string title) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.note-row')].some(e => e.textContent.includes({JsString(title)}))");
+
+    [Then("the draft title is empty")]
+    public async Task ThenDraftTitleEmpty() =>
+        await ctx.Page!.WaitForFunctionAsync("() => document.querySelector('input.draft-title')?.value === ''");
+
     // ── references (slice 2) ───────────────────────────────────────────────────────
 
     [Given("the self-hosted reference app is running")]

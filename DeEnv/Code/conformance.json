@@ -123,6 +123,20 @@
       "expect": { "kind": "text", "value": "Company name" }
     },
     {
+      "name": "object-field assignment (obj.x = 9) sets the field",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "fn", "params": [ { "name": "o" } ], "body": { "type": "block", "statements": [
+          { "type": "assign",
+            "target": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "o" }, "right": { "type": "symbol", "name": "x" } },
+            "value": { "type": "int", "value": 9 } },
+          { "type": "return", "value": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "o" }, "right": { "type": "symbol", "name": "x" } } }
+        ] } },
+        "params": [ { "type": "object", "props": [ { "name": "x", "value": { "type": "int", "value": 1 } } ] } ]
+      },
+      "expect": { "kind": "int", "value": 9 }
+    },
+    {
       "name": "immediately-invoked function (n => n + 1)(41)",
       "text": "(n => n + 1)(41)",
       "expr": {

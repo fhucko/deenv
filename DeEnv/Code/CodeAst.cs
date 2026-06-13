@@ -93,7 +93,10 @@ public sealed class CodeVarDec : ICodeStatement
 
 public sealed class CodeAssignment : ICodeStatement, ICodeValue
 {
-    public required CodeSymbol Target { get; set; }
+    // A symbol (a var) or an object-prop access (`obj.field`) — the lvalue. A prop
+    // lvalue writes through the same path as two-way binding (set + invalidate, persist
+    // when the object is server-backed).
+    public required ICodeValue Target { get; set; }
     public required ICodeValue Value { get; set; }
 }
 
