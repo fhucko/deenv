@@ -27,11 +27,6 @@
     <Content Include="tsconfig.json" />
   </ItemGroup>
 
-  <!-- The compiled instance.js (a gitignored build output) is embedded as an assembly
-       resource and served at /js (logical name DeEnv.Instance.instance.js). instance.js
-       lives in the source tree and persists across builds; on a brand-new clone it appears
-       after the first TypeScript compile, so a fresh checkout needs one build to populate it
-       before the embed picks it up. -->
   <!-- The hand-written instance schema document. Loaded at startup (Program.cs) and
        copied next to the executable so it can be read from AppContext.BaseDirectory. -->
   <ItemGroup>
@@ -41,11 +36,10 @@
     <None Include="meta.app" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- Compiled TypeScript clients, embedded and served: instance.js (generic auto-form,
-       /js) and the code-owned UI bundle (codeExec+dt+ui+init, concatenated at /ui-js).
-       All are gitignored build outputs that appear after the first TS compile. -->
+  <!-- The compiled, embedded, self-hosted UI bundle (codeExec+dt+ws+ui+init, concatenated
+       and served at /ui-js). All are gitignored build outputs that appear after the first
+       TypeScript compile. -->
   <ItemGroup>
-    <EmbeddedResource Include="Instance\instance.js" />
     <EmbeddedResource Include="Instance\codeExec.js" />
     <EmbeddedResource Include="Instance\dt.js" />
     <EmbeddedResource Include="Instance\ws.js" />

@@ -7,7 +7,7 @@ using GenHTTP.Modules.IO;
 namespace DeEnv.Http;
 
 // GenHTTP handler for everything that isn't the WebSocket:
-//   /js              → the embedded client script
+//   /ui-js           → the self-hosted UI client bundle
 //   anything else     → server-rendered HTML for that node path
 public sealed class ContentHandler : IHandler
 {
@@ -27,10 +27,6 @@ public sealed class ContentHandler : IHandler
 
         IResponse response = path switch
         {
-            "/js" => request.Respond()
-                     .Content(ClientScript.Js)
-                     .Type(ContentType.ApplicationJavaScript)
-                     .Build(),
             "/ui-js" => request.Respond()
                      .Content(ClientScript.UiJs)
                      .Type(ContentType.ApplicationJavaScript)

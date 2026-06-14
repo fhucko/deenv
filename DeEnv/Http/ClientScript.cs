@@ -2,17 +2,14 @@ using System.Reflection;
 
 namespace DeEnv.Http;
 
-// Reads the compiled TypeScript clients embedded in the assembly (.ts → .js build
+// Reads the compiled TypeScript client embedded in the assembly (.ts → .js build
 // output → embedded resource). No wwwroot, no static files on disk — the JS rides
 // inside DeEnv.dll.
 //
-//   Js   → instance.js, the generic auto-form client, served at /js.
-//   UiJs → the code-owned UI bundle (codeExec + dt + ui + init, concatenated in load
-//          order), served at /ui-js. The interpreter comes first; init.js runs last.
+//   UiJs → the code-owned UI bundle (codeExec + dt + ws + ui + init, concatenated in
+//          load order), served at /ui-js. The interpreter comes first; init.js runs last.
 public static class ClientScript
 {
-    private static readonly Lazy<string> _js = new(() => Read("DeEnv.Instance.instance.js"));
-
     private static readonly Lazy<string> _uiJs = new(() => string.Join("\n;\n",
         Read("DeEnv.Instance.codeExec.js"),
         Read("DeEnv.Instance.dt.js"),
@@ -20,7 +17,6 @@ public static class ClientScript
         Read("DeEnv.Instance.ui.js"),
         Read("DeEnv.Instance.init.js")));
 
-    public static string Js => _js.Value;
     public static string UiJs => _uiJs.Value;
 
     private static string Read(string resource)

@@ -49,13 +49,9 @@ public sealed class WsHandler
 
             var result = op switch
             {
-                "read"             => HandleRead(path, pathStr),
                 "write"            => HandleWrite(path, pathStr, root),
-                "writeObject"      => HandleWriteObject(path, pathStr, root),
-                "newEntryTemplate" => HandleNewEntryTemplate(path, pathStr),
                 "addEntry"         => HandleAddEntry(path, pathStr, root),
                 "removeEntry"      => HandleRemoveEntry(path, pathStr, root),
-                "setReference"     => HandleSetReference(path, pathStr, root),
                 "hello"            => HandleHello(root),
                 "objectPropChange" => HandleObjectPropChange(root),
                 "setReferenceField" => HandleSetReferenceField(root),
@@ -82,26 +78,6 @@ public sealed class WsHandler
         var node = JsonNode.Parse(json)!;
         node["id"] = id.Value;
         return node.ToJsonString(_jsonOpts);
-    }
-
-    // ── read ──────────────────────────────────────────────────────────────────
-
-    private string HandleRead(NodePath path, string pathStr)
-    {
-        var node = _store.ReadNode(path);
-        if (node == null)
-        {
-            var obj = new JsonObject { ["op"] = "read", ["path"] = pathStr, ["notFound"] = true };
-            return obj.ToJsonString(_jsonOpts);
-        }
-
-        var response = new JsonObject
-        {
-            ["op"]   = "read",
-            ["path"] = pathStr,
-            ["data"] = SerializeNodeValue(node)
-        };
-        return response.ToJsonString(_jsonOpts);
     }
 
     // ── write ─────────────────────────────────────────────────────────────────
@@ -134,79 +110,6 @@ public sealed class WsHandler
 
         var response = new JsonObject { ["op"] = "write", ["path"] = pathStr, ["ok"] = true };
         return response.ToJsonString(_jsonOpts);
-    }
-
-    // ── writeObject (object-form Save) ─────────────────────────────────────────
-
-    private string HandleWriteObject(NodePath path, string pathStr, JsonElement root)
-    {
-        var typeInfo = _resolver.ResolveType(path);
-        if (typeInfo == null)
-            return Error($"Path '{pathStr}' does not resolve.");
-        if (typeInfo.Cardinality != Cardinality.Single || typeInfo.Type.BaseType != BaseType.Object)
-            return Error($"Path '{pathStr}' is not an object node.");
-        if (!root.TryGetProperty("fields", out var fieldsEl))
-            return Error("Missing 'fields' in writeObject message.");
-
-        var obj = (ObjectValue)DeserializeValue(fieldsEl, typeInfo.Type);
-        _store.WriteObject(path, obj);
-
-        var response = new JsonObject { ["op"] = "writeObject", ["path"] = pathStr, ["ok"] = true };
-        return response.ToJsonString(_jsonOpts);
-    }
-
-    // ── newEntryTemplate (render the create form) ──────────────────────────────
-
-    private string HandleNewEntryTemplate(NodePath path, string pathStr)
-    {
-        var typeInfo = _resolver.ResolveType(path);
-        if (typeInfo == null)
-            return Error($"Path '{pathStr}' does not resolve.");
-
-        if (typeInfo.Cardinality == Cardinality.Set)
-        {
-            var candidates = new JsonArray();
-            foreach (var (id, obj) in _store.ReadExtent(typeInfo.Type.Name))
-                candidates.Add(new JsonObject { ["id"] = id, ["label"] = LabelOf(obj) });
-
-            var setResponse = new JsonObject
-            {
-                ["op"]         = "newEntryTemplate",
-                ["path"]       = pathStr,
-                ["template"]   = SerializeNodeValue(_store.NewEntryTemplate(path)),
-                ["collection"] = "set",
-                ["candidates"] = candidates
-            };
-            return setResponse.ToJsonString(_jsonOpts);
-        }
-
-        if (typeInfo.Cardinality != Cardinality.Dictionary)
-            return Error($"Path '{pathStr}' is not a dictionary.");
-
-        var response = new JsonObject
-        {
-            ["op"]   = "newEntryTemplate",
-            ["path"] = pathStr,
-            ["template"] = SerializeNodeValue(_store.NewEntryTemplate(path)),
-            ["collection"] = "dictionary"
-        };
-        // A dictionary of objects offers pick-existing candidates alongside the key.
-        if (typeInfo.Type.BaseType == BaseType.Object)
-        {
-            var candidates = new JsonArray();
-            foreach (var (id, obj) in _store.ReadExtent(typeInfo.Type.Name))
-                candidates.Add(new JsonObject { ["id"] = id, ["label"] = LabelOf(obj) });
-            response["candidates"] = candidates;
-        }
-        return response.ToJsonString(_jsonOpts);
-    }
-
-    // Label for a candidate object: its first text field, else empty.
-    private static string LabelOf(ObjectValue obj)
-    {
-        foreach (var (_, v) in obj.Fields)
-            if (v is TextValue t) return t.Text;
-        return "";
     }
 
     // ── addEntry (create on the create-form Save) ──────────────────────────────
@@ -299,34 +202,6 @@ public sealed class WsHandler
             ["ok"]  = true,
             ["key"] = id.ToString()
         };
-        return response.ToJsonString(_jsonOpts);
-    }
-
-    private string HandleSetReference(NodePath path, string pathStr, JsonElement root)
-    {
-        var typeInfo = _resolver.ResolveType(path);
-        if (typeInfo == null || typeInfo.Cardinality != Cardinality.Single || typeInfo.Type.BaseType != BaseType.Object)
-            return Error($"Path '{pathStr}' is not a single reference.");
-
-        if (root.TryGetProperty("refId", out var refEl) && refEl.ValueKind == JsonValueKind.Number)
-        {
-            _store.SetReference(path, refEl.GetInt32());           // point at an existing object
-        }
-        else if (root.TryGetProperty("value", out var valueEl))
-        {
-            var obj = (ObjectValue)DeserializeValue(valueEl, typeInfo.Type);
-            _store.SetReference(path, _store.CreateObject(typeInfo.Type.Name, obj)); // mint + point
-        }
-        else if (root.TryGetProperty("clear", out _))
-        {
-            _store.SetReference(path, null);
-        }
-        else
-        {
-            return Error("setReference requires 'refId', 'value', or 'clear'.");
-        }
-
-        var response = new JsonObject { ["op"] = "setReference", ["path"] = pathStr, ["ok"] = true };
         return response.ToJsonString(_jsonOpts);
     }
 

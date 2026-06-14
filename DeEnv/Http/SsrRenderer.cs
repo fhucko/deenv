@@ -15,9 +15,10 @@ public sealed class SsrRenderer
     private readonly TypeResolver _resolver;
     private readonly ClientSessionStore? _sessions;
 
-    // The ui actually rendered/shipped: the app's ui, augmented with the self-hosted
-    // generic UI (objectForm + synthesized per-type views) when the app opts in. The
-    // canonical _desc stays pristine for printing; _ui carries the render-time synthesis.
+    // The ui actually rendered/shipped: the app's `fn render()`, or — the default — the
+    // self-hosted generic UI (objectForm/refEditor/setTable/dictTable/leafForm + synthesized
+    // per-type views). Every page is code-owned now; there is no C# auto-form. The canonical
+    // _desc stays pristine for printing; _ui carries the render-time synthesis.
     private readonly InstanceUi? _ui;
 
     public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null)
@@ -31,24 +32,12 @@ public sealed class SsrRenderer
 
     public string Render(string urlPath)
     {
-        // The rendering-function decision: a matching view makes this a code page;
-        // everything else falls through to the generic auto-form (which now also
-        // serves apps WITH a ui section, for the URLs their views don't cover).
+        // Every page is code-owned now: a fully-custom `fn render()`, or the self-hosted
+        // generic UI (the default). A URL no view matches — an unknown path, or a bare
+        // scalar field route nothing links to — is NotFound.
         if (_ui != null && ResolveView(urlPath) != null)
             return RenderUi(urlPath);
-
-        var nodePath = ParsePath(urlPath);
-
-        var typeInfo = _resolver.ResolveType(nodePath);
-
-        if (typeInfo == null)
-            return NotFoundPage(urlPath, nodePath);
-
-        var node = _store.ReadNode(nodePath);
-        if (node == null)
-            return NotFoundPage(urlPath, nodePath);
-
-        return Page(urlPath, nodePath, typeInfo, node);
+        return NotFoundPage(urlPath, ParsePath(urlPath));
     }
 
     // ── the rendering-function decision ─────────────────────────────────────────
@@ -403,315 +392,6 @@ public sealed class SsrRenderer
         }
     }
 
-    // ── page layout ───────────────────────────────────────────────────────────
-
-    private string Page(string urlPath, NodePath path, ResolvedTypeInfo typeInfo, NodeValue node)
-    {
-        var body = new StringBuilder();
-        body.AppendLine(Breadcrumbs(path));
-        body.AppendLine("<main>");
-        AppendNodeContent(body, path, typeInfo, node);
-        body.AppendLine("</main>");
-        return Layout(PageTitle(path), body.ToString());
-    }
-
-    private void AppendNodeContent(StringBuilder sb, NodePath path, ResolvedTypeInfo typeInfo, NodeValue node)
-    {
-        if (typeInfo.Cardinality == Cardinality.Dictionary && node is DictionaryValue dictVal)
-        {
-            AppendDictionary(sb, path, typeInfo, dictVal);
-            return;
-        }
-
-        if (node is SetValue setVal)
-        {
-            var title = path.IsRoot ? "Db" : Humanize(path.Segments[^1]);
-            AppendSetTable(sb, path, title, typeInfo.Type.Name, setVal);
-            return;
-        }
-
-        if (node is ReferenceValue refVal)
-        {
-            AppendReferenceEditor(sb, path, refVal);
-            return;
-        }
-
-        switch (node)
-        {
-            case ObjectValue obj:
-                AppendObjectForm(sb, path, typeInfo.Type, obj);
-                break;
-            default:
-                // Base-typed leaf node (the root, or a `dictionary of <base>` entry).
-                AppendLeafForm(sb, path, node);
-                break;
-        }
-    }
-
-    // ── leaf form (one input + Save → `write`) ─────────────────────────────────
-
-    private static void AppendLeafForm(StringBuilder sb, NodePath path, NodeValue value)
-    {
-        var pathAttr = Escape(path.ToString());
-        var label = path.IsRoot ? "Db" : Escape(Humanize(path.Segments[^1]));
-        sb.AppendLine($"""<form id="node-form" data-kind="leaf" data-path="{pathAttr}">""");
-        sb.AppendLine($"  <div class=\"field\"><label>{label}</label>");
-        AppendInput(sb, pathAttr, value);
-        sb.AppendLine("  </div>");
-        sb.AppendLine("""  <div class="actions"><button type="submit">Save</button></div>""");
-        sb.AppendLine("</form>");
-    }
-
-    // ── object form (Save → `writeObject`) ─────────────────────────────────────
-
-    private void AppendObjectForm(StringBuilder sb, NodePath path, TypeDefinition type, ObjectValue obj)
-    {
-        var pathAttr = Escape(path.ToString());
-        sb.AppendLine($"""<form id="node-form" data-kind="object" data-path="{pathAttr}">""");
-        sb.AppendLine($"  <h2>{Escape(type.Name)}</h2>");
-
-        foreach (var prop in type.Props ?? [])
-        {
-            if (!obj.Fields.TryGetValue(prop.Name, out var fieldVal))
-                continue;
-
-            var fieldPath = path.Field(prop.Name);
-
-            if (prop.Cardinality == Cardinality.Dictionary && fieldVal is DictionaryValue dictVal)
-            {
-                // The dictionary renders its own navigable list title (see AppendDictionaryTable).
-                sb.AppendLine("  <div class=\"field\">");
-                AppendDictionaryTable(sb, fieldPath, Humanize(prop.Name), prop.Type, dictVal);
-                sb.AppendLine("  </div>");
-            }
-            else if (fieldVal is SetValue setVal)
-            {
-                sb.AppendLine("  <div class=\"field\">");
-                AppendSetTable(sb, fieldPath, Humanize(prop.Name), prop.Type, setVal);
-                sb.AppendLine("  </div>");
-            }
-            else if (fieldVal is ReferenceValue)
-            {
-                // A single reference renders as a link to its own editor/target page.
-                sb.AppendLine("  <div class=\"field\">");
-                sb.AppendLine($"    <label>{Escape(Humanize(prop.Name))}</label>");
-                sb.AppendLine($"    <a href=\"{Escape(fieldPath.ToString())}\">{Escape(Humanize(prop.Name))}</a>");
-                sb.AppendLine("  </div>");
-            }
-            else
-            {
-                sb.AppendLine($"  <div class=\"field\">");
-                sb.AppendLine($"    <label>{Escape(Humanize(prop.Name))}</label>");
-                AppendInput(sb, Escape(fieldPath.ToString()), fieldVal, prop.Name);
-                sb.AppendLine("  </div>");
-            }
-        }
-
-        sb.AppendLine("""  <div class="actions"><button type="submit">Save</button></div>""");
-        sb.AppendLine("</form>");
-    }
-
-    // Renders a single value input. `fieldName` (when set) lets the client collect
-    // it into a writeObject `fields` map by name.
-    private static void AppendInput(StringBuilder sb, string pathAttr, NodeValue value, string? fieldName = null)
-    {
-        var fieldAttr = fieldName is null ? "" : $" data-field=\"{Escape(fieldName)}\"";
-        switch (value)
-        {
-            case BoolValue b:
-                sb.AppendLine($"""    <input type="checkbox" data-path="{pathAttr}"{fieldAttr}{(b.Value ? " checked" : "")}>""");
-                break;
-            case TextValue t:
-                sb.AppendLine($"""    <input type="text" data-path="{pathAttr}"{fieldAttr} value="{Escape(t.Text)}">""");
-                break;
-            case IntValue i:
-                sb.AppendLine($"""    <input type="number" data-path="{pathAttr}"{fieldAttr} value="{i.Value}">""");
-                break;
-            case DecimalValue d:
-                sb.AppendLine($"""    <input type="number" step="any" data-path="{pathAttr}"{fieldAttr} value="{d.Value.ToString(CultureInfo.InvariantCulture)}">""");
-                break;
-            case DateValue d:
-                sb.AppendLine($"""    <input type="date" data-path="{pathAttr}"{fieldAttr} value="{d.Value:yyyy-MM-dd}">""");
-                break;
-            default:
-                sb.AppendLine($"""    <span data-path="{pathAttr}">{Escape(value.ToString() ?? "")}</span>""");
-                break;
-        }
-    }
-
-    // ── dictionary table ──────────────────────────────────────────────────────
-
-    private void AppendDictionary(StringBuilder sb, NodePath path, ResolvedTypeInfo typeInfo, DictionaryValue dictVal)
-    {
-        var title = path.IsRoot ? "Db" : Humanize(path.Segments[^1]);
-        AppendDictionaryTable(sb, path, title, typeInfo.Type.Name, dictVal);
-    }
-
-    private void AppendDictionaryTable(
-        StringBuilder sb,
-        NodePath dictPath,
-        string title,
-        string elementTypeName,
-        DictionaryValue dictVal)
-    {
-        var entryType = _desc.FindType(elementTypeName);   // null when the element is a base type
-        var cols = entryType?.Props?
-            .Where(p => p.Cardinality == Cardinality.Single && !_desc.IsObjectType(p.Type))
-            .Select(p => p.Name).ToList() ?? [];
-        var isObjectEntry = entryType is { BaseType: BaseType.Object };
-
-        var dictPathAttr = Escape(dictPath.ToString());
-
-        // Navigable list title (links to the dictionary's own page).
-        sb.AppendLine($"<h3 class=\"list-title\"><a href=\"{dictPathAttr}\">{Escape(title)}</a></h3>");
-
-        sb.AppendLine("<table>");
-        sb.AppendLine("  <thead><tr>");
-        sb.AppendLine("    <th>Key</th>");
-        if (isObjectEntry)
-            foreach (var col in cols)
-                sb.AppendLine($"    <th>{Escape(Humanize(col))}</th>");
-        else
-            sb.AppendLine("    <th>Value</th>");
-        sb.AppendLine("    <th></th>");
-        sb.AppendLine("  </tr></thead>");
-        sb.AppendLine("  <tbody>");
-        foreach (var (key, entryVal) in dictVal.Entries)
-        {
-            var keyStr = KeyString(key);
-            var entryPath = dictPath.Key(keyStr);
-            var entryUrl = Escape(entryPath.ToString());
-            sb.AppendLine($"    <tr data-nav=\"{entryUrl}\">");
-            sb.AppendLine($"      <td><a href=\"{entryUrl}\">{Escape(keyStr)}</a></td>");
-            if (isObjectEntry && entryVal is ObjectValue objVal)
-            {
-                foreach (var col in cols)
-                {
-                    var cell = objVal.Fields.TryGetValue(col, out var fv) ? DisplayValue(fv) : "";
-                    sb.AppendLine($"      <td>{Escape(cell)}</td>");
-                }
-            }
-            else
-            {
-                sb.AppendLine($"      <td>{Escape(DisplayValue(entryVal))}</td>");
-            }
-            sb.AppendLine($"      <td><button type=\"button\" data-delentry=\"{dictPathAttr}\" data-key=\"{Escape(keyStr)}\">Delete</button></td>");
-            sb.AppendLine("    </tr>");
-        }
-        sb.AppendLine("  </tbody>");
-        sb.AppendLine("</table>");
-        sb.AppendLine($"<button type=\"button\" data-newentry=\"{dictPathAttr}\" data-collection=\"dictionary\">New</button>");
-    }
-
-    // ── set table (members keyed by their own identity) ─────────────────────────
-
-    private void AppendSetTable(StringBuilder sb, NodePath setPath, string title, string elementTypeName, SetValue setVal)
-    {
-        var entryType = _desc.FindType(elementTypeName);
-        var cols = entryType?.Props?
-            .Where(p => p.Cardinality == Cardinality.Single && !_desc.IsObjectType(p.Type))
-            .Select(p => p.Name).ToList() ?? [];
-
-        var setPathAttr = Escape(setPath.ToString());
-
-        sb.AppendLine($"<h3 class=\"list-title\"><a href=\"{setPathAttr}\">{Escape(title)}</a></h3>");
-        sb.AppendLine("<table>");
-        sb.AppendLine("  <thead><tr>");
-        sb.AppendLine("    <th>Id</th>");
-        foreach (var col in cols)
-            sb.AppendLine($"    <th>{Escape(Humanize(col))}</th>");
-        sb.AppendLine("    <th></th>");
-        sb.AppendLine("  </tr></thead>");
-        sb.AppendLine("  <tbody>");
-        foreach (var (id, member) in setVal.Members)
-        {
-            var entryUrl = Escape(setPath.Key(id.ToString()).ToString());
-            sb.AppendLine($"    <tr data-nav=\"{entryUrl}\">");
-            sb.AppendLine($"      <td><a href=\"{entryUrl}\">{id}</a></td>");
-            if (member is ObjectValue objVal2)
-                foreach (var col in cols)
-                {
-                    var cell = objVal2.Fields.TryGetValue(col, out var fv) ? DisplayValue(fv) : "";
-                    sb.AppendLine($"      <td>{Escape(cell)}</td>");
-                }
-            sb.AppendLine($"      <td><button type=\"button\" data-delentry=\"{setPathAttr}\" data-key=\"{id}\">Delete</button></td>");
-            sb.AppendLine("    </tr>");
-        }
-        sb.AppendLine("  </tbody>");
-        sb.AppendLine("</table>");
-        sb.AppendLine($"<button type=\"button\" data-newentry=\"{setPathAttr}\" data-collection=\"set\">New</button>");
-    }
-
-    // ── reference editor (pick existing or create new) ──────────────────────────
-
-    private void AppendReferenceEditor(StringBuilder sb, NodePath path, ReferenceValue refVal)
-    {
-        var pathAttr = Escape(path.ToString());
-        var typeName = refVal.TypeName;
-        var type = _desc.FindType(typeName);
-
-        sb.AppendLine($"""<form id="node-form" data-kind="reference" data-path="{pathAttr}">""");
-        sb.AppendLine($"  <h2>{Escape(typeName)}</h2>");
-        sb.AppendLine($"""  <div data-ref data-type="{Escape(typeName)}" data-current="existing">""");
-
-        // Mode toggle stays outside the toggled sections so both buttons are always clickable.
-        sb.AppendLine("    <div class=\"ref-toggle\">");
-        sb.AppendLine("""      <button type="button" data-mode="existing">Use existing</button>""");
-        sb.AppendLine("""      <button type="button" data-mode="new">Create new</button>""");
-        sb.AppendLine("    </div>");
-
-        sb.AppendLine("    <div class=\"ref-existing\">");
-        sb.AppendLine("      <select data-pick>");
-        foreach (var (id, obj) in _store.ReadExtent(typeName))
-            sb.AppendLine($"        <option value=\"{id}\">{Escape(LabelOf(obj))}</option>");
-        sb.AppendLine("      </select>");
-        sb.AppendLine("    </div>");
-
-        sb.AppendLine("    <div class=\"ref-new\">");
-        foreach (var prop in type?.Props ?? [])
-            if (prop.Cardinality == Cardinality.Single && !_desc.IsObjectType(prop.Type))
-            {
-                sb.AppendLine($"      <label>{Escape(Humanize(prop.Name))}</label>");
-                AppendNamedInput(sb, prop.Name, ResolveBaseType(prop.Type));
-            }
-        sb.AppendLine("    </div>");
-
-        sb.AppendLine("  </div>");
-        sb.AppendLine("""  <div class="actions"><button type="submit">Save</button></div>""");
-        sb.AppendLine("</form>");
-    }
-
-    private static void AppendNamedInput(StringBuilder sb, string name, BaseType bt)
-    {
-        var n = Escape(name);
-        var html = bt switch
-        {
-            BaseType.Bool     => $"""<input type="checkbox" name="{n}">""",
-            BaseType.Int      => $"""<input type="number" name="{n}" value="0">""",
-            BaseType.Decimal  => $"""<input type="number" step="any" name="{n}" value="0">""",
-            BaseType.Date     => $"""<input type="date" name="{n}">""",
-            _                 => $"""<input type="text" name="{n}" value="">"""
-        };
-        sb.AppendLine($"      {html}");
-    }
-
-    private static BaseType ResolveBaseType(string name) => name switch
-    {
-        "bool"     => BaseType.Bool,
-        "int"      => BaseType.Int,
-        "decimal"  => BaseType.Decimal,
-        "date"     => BaseType.Date,
-        "datetime" => BaseType.DateTime,
-        _          => BaseType.Text
-    };
-
-    private static string LabelOf(ObjectValue obj)
-    {
-        foreach (var (_, v) in obj.Fields)
-            if (v is TextValue t) return t.Text;
-        return "";
-    }
-
     // ── not found ─────────────────────────────────────────────────────────────
 
     private string NotFoundPage(string urlPath, NodePath path)
@@ -729,6 +409,7 @@ public sealed class SsrRenderer
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
+    // A static shell for the NotFound page (no client script — there is nothing to hydrate).
     private static string Layout(string title, string body) => $"""
         <!DOCTYPE html>
         <html lang="en">
@@ -736,7 +417,6 @@ public sealed class SsrRenderer
           <meta charset="utf-8">
           <title>{Escape(title)}</title>
           <style>{Css}</style>
-          <script type="module" src="/js"></script>
         </head>
         <body>
         {body}
@@ -746,20 +426,7 @@ public sealed class SsrRenderer
 
     private const string Css = """
         body { font-family: system-ui, Arial, sans-serif; margin: 2rem; color: #222; }
-        h2 { font-size: 1.6rem; margin: 0 0 1rem; }
         nav.breadcrumbs { margin-bottom: 1rem; color: #666; }
-        .field { margin: 0.5rem 0; }
-        .field > label { display: inline-block; min-width: 10rem; font-weight: 600; }
-        table { border-collapse: collapse; margin: 0.25rem 0 0.75rem; }
-        th, td { border: 1px solid #bbb; padding: 0.4rem 0.8rem; text-align: left; }
-        th { background: #f3f3f3; }
-        .list-title { font-size: 1.3rem; margin: 1.25rem 0 0.5rem; }
-        .list-title a { text-decoration: none; color: #1a56b8; }
-        .list-title a:hover { text-decoration: underline; }
-        .actions { margin-top: 1rem; }
-        button { margin-right: 0.4rem; }
-        .create-form { border: 1px solid #bbb; padding: 0.75rem 1rem; margin: 0.5rem 0; background: #fafafa; }
-        .create-form .error { color: #b00; }
         """;
 
     private static string Breadcrumbs(NodePath path)
@@ -784,24 +451,6 @@ public sealed class SsrRenderer
         return "/" + string.Join("/", segs);
     }
 
-    private static string DisplayValue(NodeValue v) => v switch
-    {
-        BoolValue b  => b.Value ? "✓" : "",
-        TextValue t  => t.Text,
-        IntValue i   => i.Value.ToString(CultureInfo.InvariantCulture),
-        DecimalValue d => d.Value.ToString(CultureInfo.InvariantCulture),
-        DateValue d  => d.Value.ToString("yyyy-MM-dd"),
-        _ => v.ToString() ?? ""
-    };
-
-    private static string KeyString(NodeValue key) => key switch
-    {
-        IntValue i   => i.Value.ToString(),
-        TextValue t  => t.Text,
-        BoolValue b  => b.Value.ToString().ToLowerInvariant(),
-        _ => key.ToString() ?? ""
-    };
-
     private static NodePath ParsePath(string urlPath)
     {
         var segs = urlPath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -810,8 +459,4 @@ public sealed class SsrRenderer
 
     private static string Escape(string s) =>
         System.Net.WebUtility.HtmlEncode(s);
-
-    // "companyName" -> "Company name". The canonical implementation lives in
-    // DeEnv.Code.TextUtil (shared with the `humanize` Code builtin).
-    internal static string Humanize(string name) => TextUtil.Humanize(name);
 }

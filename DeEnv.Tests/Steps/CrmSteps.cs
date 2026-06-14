@@ -106,68 +106,11 @@ public sealed class CrmSteps(InstanceContext ctx)
 
     // ── When (create entry) ────────────────────────────────────────────────────
 
+    // The self-hosted set/dict tables show their add form (.set-new/.dict-new) inline —
+    // there is no New button to click — so this just waits for the add form to be present.
     [When("I click New")]
-    public async Task WhenClickNewAsync()
-    {
-        // Wait until the page settles into either UI: the self-hosted inline add form, or
-        // the C# auto-form's (wired) New button.
-        await ctx.Page!.Locator(".set-new, .dict-new, button[data-newentry][data-wired]")
-            .First.WaitForAsync();
-        // The retiring C# auto-form reveals its create form behind a New button. The
-        // self-hosted set/dict tables show their add form (.set-new/.dict-new) inline —
-        // nothing to click, so this is a no-op there.
-        var newButton = ctx.Page.Locator("button[data-newentry][data-wired]");
-        if (await newButton.CountAsync() > 0)
-        {
-            await newButton.First.ClickAsync();
-            await ctx.Page.Locator("form.create-form").WaitForAsync();
-        }
-    }
-
-    [When(@"I set the create field {string} to {string}")]
-    public async Task WhenSetCreateFieldAsync(string name, string value)
-    {
-        await ctx.Page!.Locator($"form.create-form input[name='{name}']").FillAsync(value);
-    }
-
-    [When(@"I set the create key to {string}")]
-    public async Task WhenSetCreateKeyAsync(string key)
-    {
-        await ctx.Page!.Locator("form.create-form input[name='__key']").FillAsync(key);
-    }
-
-    [When(@"I set the create value to {string}")]
-    public async Task WhenSetCreateValueAsync(string value)
-    {
-        await ctx.Page!.Locator("form.create-form input[name='__value']").FillAsync(value);
-    }
-
-    [When("I save the create form")]
-    public async Task WhenSaveCreateFormAsync()
-    {
-        await ctx.Page!.Locator("form.create-form button[data-save]").ClickAsync();
-        await ctx.Page.WaitForTimeoutAsync(700); // reload to the list on success, or error shown
-    }
-
-    [When("I save and open the create form")]
-    public async Task WhenSaveOpenCreateFormAsync()
-    {
-        await ctx.Page!.Locator("form.create-form button[data-saveopen]").ClickAsync();
-        await ctx.Page.WaitForTimeoutAsync(700); // navigates to the new entry on success
-    }
-
-    [When("I cancel the create form")]
-    public async Task WhenCancelCreateFormAsync()
-    {
-        await ctx.Page!.Locator("form.create-form button[data-cancel]").ClickAsync();
-    }
-
-    [When(@"I delete the row for key {string}")]
-    public async Task WhenDeleteRowAsync(string key)
-    {
-        await ctx.Page!.Locator($"button[data-delentry][data-wired][data-key='{key}']").ClickAsync();
-        await ctx.Page.WaitForTimeoutAsync(600); // removeEntry + reload
-    }
+    public async Task WhenClickNewAsync() =>
+        await ctx.Page!.Locator(".set-new, .dict-new").First.WaitForAsync();
 
     // ── Then ───────────────────────────────────────────────────────────────────
 
@@ -175,12 +118,6 @@ public sealed class CrmSteps(InstanceContext ctx)
     public async Task ThenUrlMatchesAsync(string pattern)
     {
         await Assert.That(Regex.IsMatch(ctx.Page!.Url, pattern)).IsTrue();
-    }
-
-    [Then(@"the table has {int} rows")]
-    public async Task ThenTableRowsAsync(int count)
-    {
-        await Assert.That(await ctx.Page!.Locator("table tbody tr").CountAsync()).IsEqualTo(count);
     }
 
     [Then("I see a create error")]
