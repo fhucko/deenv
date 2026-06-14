@@ -7,7 +7,8 @@ namespace DeEnv.Http;
 // inside DeEnv.dll.
 //
 //   UiJs → the code-owned UI bundle (codeExec + dt + ws + ui + init, concatenated in
-//          load order), served at /ui-js. The interpreter comes first; init.js runs last.
+//          load order), served at /js on the infra port. The interpreter comes first;
+//          init.js runs last.
 public static class ClientScript
 {
     private static readonly Lazy<string> _uiJs = new(() => string.Join("\n;\n",
