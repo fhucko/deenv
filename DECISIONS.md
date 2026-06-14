@@ -799,9 +799,46 @@ opt-in came down:
   decimal with the OS culture (`99,5` on a non-invariant machine); it now uses
   `InvariantCulture`, matching the rest of the codebase and the C# form.
 
-What's left for Phase 3: delete the C# `SsrRenderer` auto-form + `instance.ts` + `/js` +
-the C#-form-only WS ops (keep `addEntry`/`removeEntry`), self-host the dict-entry page and
-the `/~/{id}` id-route, and serve infra endpoints on a separate port.
+### Phase 3: retire the C# renderer
+
+With every shape self-hosting, the second renderer comes out. Done in sub-steps, each a
+green commit:
+
+- **P3a — retire the `/~/{id}` id-route.** Path-walk replaced it (member links are nested
+  paths, references render inline), so nothing generated such links; it was dead surface.
+  Removed the route + `RenderIdRoute`; a `/~/…` URL is now NotFound. (User chose retire
+  over self-host.)
+- **P3b — self-host the dictionary ROUTE** (`/settings`), like the set route: a
+  `Cardinality.Dictionary` branch in `ResolveView` + `SynthDictView` + a stable
+  `__dictDescs` registry (the dictTable add form is a component, so its descriptor must be
+  reference-stable). Duplicate keys are rejected with a visible `.dict-error` via a new
+  `any(lambda)` collection method (client-side check; the server's `CreateEntry` is the
+  backstop). Fixed a latent P1 dangling-`else` bug that dropped a seeded scalar entry's
+  value server-side.
+- **P3c — self-host dictionary ENTRY pages with path-addressed editing.** A dict entry has
+  no extent id (stored inline, negative hash id), so its field edits can't use the
+  id-addressed `objectPropChange`. `ExecObject` gained `SourcePath`/`ScalarEntry` (set by
+  DbBridge, shipped by ClientState, restored by `mergeState`); a bound edit on a negative-id
+  entry routes through a new `pathWrite` hook → the `write` op (`codeExec.persistFieldEdit`).
+  An object entry's field writes at `path/prop` (WriteLeaf walks dict→entry); a scalar
+  entry's value writes at its path, which `HandleWrite` upserts via `WriteDictionaryEntry`.
+  `FindTarget` walks a `Kind=Dict` array by `__key`; `ResolveView` drops the blanket
+  dict-traversal gate — an object entry uses its type's object view, a scalar entry a new
+  shared `leafForm`/`__leaf` view.
+- **P3d — delete the C# auto-form, `instance.ts`, and `/js`.** `SsrRenderer.Render` now
+  renders a matching view or returns NotFound; the node-resolution + form-building code is
+  gone. Dropped the `/js` route + `instance.js` embed + `instance.ts`; removed the
+  C#-form-only WS ops (`read`, `writeObject`, `newEntryTemplate`, `setReference`). KEPT
+  `write` (now the dict-entry path-write), `addEntry`/`removeEntry`, `objectPropChange`,
+  `setReferenceField`, `arrayAdd`/`arrayRemove`. Suite green 203/203.
+
+**Still open — P3e: the infra-port split** ([[project_infra_port_separation]]). Serve `/ws`
+and `/ui-js` on a separate infra/control port so the app port owns a clean, fully-reserved-
+free data URL space. Touches `InstanceApp` (two handler trees / hosts), `Program.cs` +
+`TestInstanceServer` (start both ports; the browser test harness currently assumes one
+port), `SsrRenderer` (inject the infra base; `/ui-js` becomes an absolute cross-port URL),
+and `ws.ts` (build the WS URL against the infra base, not `location.host`). Deferred as a
+focused follow-up: it needs two-port test-harness support and has cross-origin implications.
 
 ## Tool stack and project structure
 
