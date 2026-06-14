@@ -242,12 +242,15 @@ everywhere (no dual-mode); `keyGeneration`/auto retired; `kind`→`type` on the
 wire. Proven by "the same object via two references is one object" and "dropping
 the last reference collects it." Remaining: teaching the designer to author sets/refs.
 
-## Schema versioning — postponed, now the active milestone (M10)
+## Schema versioning — un-postponed, sits on multi-instance (now M11)
 
-**Update 2026-06-14 — un-postponed; this is now Milestone 10.** Its two stated
-preconditions are met (the code milestone M6 exists; identity-on-non-constants from
-M5 makes the diff exact), so it is the scoped next milestone, built **in Code**
-(self-hosted) as the reasoning below always intended. **Scoped first slice:** in the
+**Update 2026-06-14 — un-postponed (preconditions met), then refocused to M11 behind
+multi-instance management (M10).** Its two preconditions are met (the M6 code layer; M5
+identity makes the diff exact). It was briefly scoped as M10, then deferred one step:
+**the unit that gets versioned/applied/tested is an instance**, so multi-instance
+management (M10) lands first as the substrate, and versioning's *apply* + test-instance
+loop sit on it. Built **in Code** (self-hosted) as the reasoning below always intended;
+the scoped first slice below stands for when M11 begins. **Scoped first slice:** in the
 designer, *commit* the schema-as-data as an immutable version (parent pointer →
 linear history) and *diff* it against its parent by matching types/props on
 **identity** (renames exact, not remove+add), proven by a single rename scenario;
@@ -1050,6 +1053,63 @@ partition** for the operations that must stay consistent — the design decision
 principled reconciliation where divergence is allowed, and **render-coupled storage
 (pillar 5)** to hide latency by preloading the right remote data ahead of the
 render.
+
+## Multi-instance management — the kernel host (M10)
+
+**Refocused here 2026-06-14** (schema versioning, briefly M10, stepped back to M11 — see
+that section). The first concrete increment of "The self-hosted image" above: one kernel
+**process hosts multiple instances at once**, each on its own port pair with its own
+sovereign db, driven by an **instance registry** (kernel-owned data). Chosen as the next
+milestone because **the unit that gets versioned, applied, tested, and previewed is an
+instance** — so instance management is the layer *underneath* schema versioning, the
+Stage-2 test-instance loop, and the IDE-manages-instances north star (pillar 9). Building
+versioning first would be a roof without a floor.
+
+**Scope (single-process, single-operator).** IN: hosting N instances on N port pairs from a
+registry; the registry as kernel-owned data (instance identity + store location/seed + port
+binding, and essentially nothing else — the minimality test from "The self-hosted image →
+kernel-owned data" applies); commands to create/list/switch/delete. DEFERRED (each named so
+it does not leak in): cross-machine / kernel-to-kernel connectivity + distributed ACID
+(Stage 5, the *Multi-device* pillar); **fault/resource isolation** between instances (one
+process gives *correctness* isolation via the interpreter sandbox, not resource isolation —
+Stage 5); real-time/multi-user; concurrent-write safety on the registry (single-operator);
+dynamic create/destroy-while-running (a later slice); promoting the registry to a real
+*restricted* kernel-instance (north star — kept a plain bootstrap file for now).
+
+**The load-bearing discipline — the kernel-vs-image line.** The *mechanism* (host/spawn,
+bind a port, hold the registry behind the storage interface) is irreducible C# kernel (the
+OS/process/network boundary from "C# is the kernel — app logic belongs in the app"). The
+management *experience* (create/list/switch/delete) is **image Code** — that same decision
+lists instance management + devops under *belongs in the app*. The trap to avoid is a
+one-off **C# admin panel** the self-hosted IDE later tears out — the exact mistake M4
+avoided by self-hosting the designer. So C# exposes the supervisor mechanism as a callable
+seam; the commands-as-IDE are built in deenv over the registry-as-data.
+
+**First slice** (hosting/wiring only — no Code/interpreter/conformance change): extract the
+"build + start the app+infra hosts for one instance" out of `Program.cs`'s single, blocking
+`RunAsync` tail into a thin C# **kernel supervisor** that starts every instance in the
+registry and blocks on a shutdown signal. The registry is a plain `kernel.json`
+(`{ instances: [{ appFile, port }] }`, infra = port+1, data file derived via `AppPaths`)
+read **without the interpreter** — the sanctioned bootstrap subset. Proven by two scenarios:
+the kernel hosts two instances on distinct ports, both serving their root; a change in one
+leaves the other unchanged (**data sovereignty** — each has its own store). `InstanceApp.Build`
+and the host-start code are already per-instance + port-parameterized (today duplicated in
+`TestInstanceServer`), so this is mostly a *factoring*, not new hosting logic. The
+single-`--app`/`--mode` path stays the one-entry default — designer/export and every launch
+profile keep working.
+
+**Seams honored (cheap now, expensive later):** the registry persists **through the storage
+interface** in the model's terms, never a bespoke side path; the interface stays
+**locality-free** (don't bake in "the one local file"); each instance keeps its **own
+sovereign db** (the kernel registry only points at it) — which is what later lets schema
+versions live in the instance they describe. Kernel-as-restricted-instance stays additive/
+deferred: don't build the registry so as to *prevent* exposing it as a restricted instance
+later (rendering it as data through the generic UI keeps that open).
+
+**Follow-up slices:** `list` (registry surfaced read-only as image Code — the first
+kernel-as-data read path) → `create` (append an entry + hot-add, forcing port-allocation +
+new-app-doc-seed choices) → `switch`/`delete` → promote the registry to a real restricted
+kernel-instance. Schema versioning (M11) then lands on top.
 
 ## Testing: BDD with Gherkin
 

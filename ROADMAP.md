@@ -192,7 +192,37 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   user code (the builtins `field`/`humanize`/`nest`/`clone`/`extent`/`setRef` are already
   reachable); composition needs a deliberate public surface for the library functions.
 
-- **Schema versioning.  ← NEXT (scoped 2026-06-14, first slice defined).**
+- **Multi-instance management (single-process, single-operator).  ← NEXT (M10,
+  refocused 2026-06-14).** One kernel process **hosts multiple instances at once**,
+  each on its own port pair with its own sovereign data, driven by an **instance
+  registry** (which instances exist + their ports) as **kernel-owned data**. The
+  substrate under schema versioning's *apply*, the Stage-2 test-instance loop, and
+  the self-hosted-image north star — the unit that gets versioned/applied/tested is
+  an instance, so instance management is the layer underneath.
+
+  **First slice** (hosting/wiring only — no Code/interpreter change): factor the
+  "build + start the app+infra hosts for one instance" out of `Program.cs`'s single,
+  blocking `RunAsync` tail into a thin C# **kernel supervisor** that starts every
+  instance in a registry and blocks on a shutdown signal. The registry is a plain
+  `kernel.json` the kernel reads **without the interpreter** (the sanctioned
+  bootstrap subset). Proven by two scenarios: the kernel hosts two instances on
+  distinct ports, both serving their root; a change in one leaves the other
+  unchanged (**data sovereignty**). The single-`--app`/`--mode` path stays as the
+  one-entry default (no regression).
+
+  **Kernel discipline:** the kernel gains the *mechanism* (host N instances, bind
+  ports, hold the registry) — **not** the management *experience*. Create/list/
+  switch/delete as the IDE are **image Code** (later slices); a C# admin panel would
+  be the M4 mistake (a one-off the self-hosted IDE later tears out).
+
+  **Deferred (kept out to stay single-process / single-operator):** cross-machine /
+  kernel-to-kernel connectivity + distributed ACID (the *Multi-device* pillar below,
+  Stage 5); fault/resource isolation between instances (Stage 5); real-time/multi-
+  user; dynamic create/destroy-while-running and the management commands (follow-up
+  slices); promoting the registry to a real *restricted* kernel-instance (north
+  star). See STAGES.md + DECISIONS.md ("Multi-instance management — the kernel host").
+
+- **Schema versioning  (sits on multi-instance management — now M11, after M10).**
   Git-style versioning of the schema, built inside the environment itself using
   the code milestone (versioning is behaviour-shaped). The structural
   identity-based diff is already designed — renames are exact because
