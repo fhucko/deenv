@@ -30,13 +30,20 @@ public sealed class SsrRenderer
     // — placed in the system scope, above the custom code, so they never pollute the app scope.
     private readonly IReadOnlySet<string> _systemNames;
 
-    public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null, int infraPort = 0)
+    // The kernel's instance registry (app + ports per hosted instance), surfaced to image Code as
+    // the read-only `instances` system global. Empty when there is no kernel (a bare host/test
+    // instance honestly sees no list).
+    private readonly IReadOnlyList<InstanceInfo> _registry;
+
+    public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
+        int infraPort = 0, IReadOnlyList<InstanceInfo>? registry = null)
     {
         _store = store;
         _desc = desc;
         _resolver = new TypeResolver(desc);
         _sessions = sessions;
         _infraPort = infraPort;
+        _registry = registry ?? [];
         (_ui, _systemNames) = GenericUi.Effective(desc);
     }
 
@@ -251,6 +258,11 @@ public sealed class SsrRenderer
         var db = warmDb ?? DbBridge.LoadRoot(_store, _desc, context);
         system.Items["db"] = new ExecScopeItem { Value = db, IsReadOnly = true };
 
+        // `instances` is the kernel's instance registry, read-only: the list of instances this
+        // kernel hosts (app name + ports), provided so image Code can render the list itself — the
+        // first kernel-as-data read path. Empty when there is no kernel.
+        system.Items["instances"] = new ExecScopeItem { Value = BuildRegistry(context), IsReadOnly = true };
+
         // `status` is a framework state var (the first-paint HTTP status); the view may assign
         // it (e.g. NotFound sets `status = 404`). Read back after render. Default 200.
         system.Items["status"] = new ExecScopeItem { Value = new ExecInt { Value = 200 }, IsReadOnly = false };
@@ -445,6 +457,31 @@ public sealed class SsrRenderer
                 if (b.Value) sb.Append(' ').Append(name);
                 break;
         }
+    }
+
+    // Build the read-only `instances` Code collection from the registry snapshot: one row per
+    // hosted instance, { app, port, assetsPort } scalars. A transient List (negative ids), like a
+    // where/orderBy result — an app reads the rows in output position, so they ship as leaves and
+    // the list survives hydration. Empty when there is no kernel.
+    private ExecArray BuildRegistry(ExecContext context)
+    {
+        var items = new List<ExecItem>();
+        foreach (var info in _registry)
+            items.Add(new ExecItem
+            {
+                Key = --context.LastId.Value,
+                Value = new ExecObject
+                {
+                    Id = --context.LastId.Value,
+                    Props = new Dictionary<string, IExecValue>
+                    {
+                        ["app"] = new ExecText { Value = info.App },
+                        ["port"] = new ExecInt { Value = info.Port },
+                        ["assetsPort"] = new ExecInt { Value = info.AssetsPort },
+                    },
+                },
+            });
+        return new ExecArray { Items = items, Id = --context.LastId.Value, Kind = ArrayKind.List };
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

@@ -23,3 +23,10 @@ Feature: Kernel host (multi-instance)
     Given a registry of two instances that resolve to the same data file
     When the kernel registry is resolved
     Then it is rejected with a clear kernel-config error
+
+  @milestone-10 @single-user
+  Scenario: An instance can render the kernel's list of running instances
+    Given a registry whose first instance is a console app that lists the instances
+    And the kernel has started
+    When I request the console instance's root
+    Then the page lists every hosted instance's app and ports

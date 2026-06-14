@@ -316,6 +316,11 @@ public sealed class WsHandler
         // Transients mint below the client's id floor (no collisions with its local drafts).
         var lastId = root.TryGetProperty("lastId", out var le) && le.ValueKind == JsonValueKind.Number
             ? le.GetInt32() : 0;
+        // The refetch renderer is built with an empty `instances` registry (the default). Safe
+        // because `instances` is a READ-ONLY system global read only in output position — no
+        // computation depends on it, so it never triggers a refetch and a refetch never needs it.
+        // (When `create` makes the registry mutable/live, it will be seeded like `db` and reach
+        // this path the same way — see DECISIONS "`create` direction".)
         var state = new SsrRenderer(_store, _desc).RenderState(pathStr, sessionVars, db, lastId);
         return new JsonObject { ["op"] = "refetch", ["state"] = state }.ToJsonString(_jsonOpts);
     }

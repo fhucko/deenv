@@ -13,9 +13,9 @@ public sealed class ContentHandler : IHandler
 {
     private readonly SsrRenderer _renderer;
 
-    public ContentHandler(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions, int infraPort)
+    public ContentHandler(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions, int infraPort, IReadOnlyList<InstanceInfo> registry)
     {
-        _renderer = new SsrRenderer(store, description, sessions, infraPort);
+        _renderer = new SsrRenderer(store, description, sessions, infraPort, registry);
     }
 
     public ValueTask PrepareAsync() => ValueTask.CompletedTask;
@@ -42,16 +42,18 @@ public sealed class ContentHandlerBuilder : IHandlerBuilder
     private readonly InstanceDescription _description;
     private readonly ClientSessionStore _sessions;
     private readonly int _infraPort;
+    private readonly IReadOnlyList<InstanceInfo> _registry;
 
-    public ContentHandlerBuilder(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions, int infraPort)
+    public ContentHandlerBuilder(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions, int infraPort, IReadOnlyList<InstanceInfo> registry)
     {
         _store = store;
         _description = description;
         _sessions = sessions;
         _infraPort = infraPort;
+        _registry = registry;
     }
 
-    public IHandler Build() => new ContentHandler(_store, _description, _sessions, _infraPort);
+    public IHandler Build() => new ContentHandler(_store, _description, _sessions, _infraPort, _registry);
 }
 
 // The INFRA host's bundle handler: serves the self-hosted UI client at /js. (The

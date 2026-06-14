@@ -8,6 +8,18 @@ using GenHTTP.Modules.Websockets.Protocol;
 
 namespace DeEnv.Http;
 
+// One row of the kernel's instance registry as surfaced to image Code (the read-only `instances`
+// global): the app document name and its two ports. A pure projection — no file paths, no store —
+// so the kernel hands the renderer DATA, not a kernel reference (the locality-free seam). `Port`
+// is the app/serving port; `AssetsPort` is the infra port (/ws + /js).
+//
+// PRIVACY: keep this projection free of anything sensitive. Registry rows render as transient
+// objects, and ClientState ships a transient's props in FULL to every client that renders the
+// list — there is no per-prop gating here. So the "expose the contended external binding (ports),
+// hide internal identity (storage)" line (DECISIONS "`create` direction") must be drawn AT this
+// projection, never relied on at the render.
+public sealed record InstanceInfo(string App, int Port, int AssetsPort);
+
 // Builds the GenHTTP handler trees for an instance, split across two ports so the app
 // port owns a clean, reserved-path-free data URL space. Shared by the real host
 // (Program.cs) and the in-process test host so routing is identical.
@@ -21,7 +33,8 @@ namespace DeEnv.Http;
 public static class InstanceApp
 {
     public static (IHandlerBuilder App, IHandlerBuilder Infra) Build(
-        IInstanceStore store, InstanceDescription description, int infraPort)
+        IInstanceStore store, InstanceDescription description, int infraPort,
+        IReadOnlyList<InstanceInfo>? registry = null)
     {
         var sessions = new ClientSessionStore();
         var ws = new WsHandler(store, description, sessions);
@@ -38,7 +51,7 @@ public static class InstanceApp
             });
 
         var app = Layout.Create()
-            .Add(new ContentHandlerBuilder(store, description, sessions, infraPort));
+            .Add(new ContentHandlerBuilder(store, description, sessions, infraPort, registry ?? []));
 
         var infra = Layout.Create()
             .Add("ws", websocket)

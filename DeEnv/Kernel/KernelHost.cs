@@ -1,3 +1,4 @@
+using DeEnv.Http;
 using DeEnv.Storage;
 
 namespace DeEnv.Kernel;
@@ -62,10 +63,16 @@ public sealed class KernelHost : IAsyncDisposable
     // guard), the already-started instances are stopped so the process never leaks half-bound ports.
     public async Task StartAsync(IReadOnlyList<InstanceSpec> specs)
     {
+        // The registry as image-Code data: every hosted instance's app name (the app document
+        // file name) + its app/infra ports, surfaced to each instance as the read-only `instances`
+        // global (the first kernel-as-data read path). One snapshot, shared by all instances.
+        var registry = specs
+            .Select(s => new InstanceInfo(Path.GetFileName(s.SchemaPath), s.AppPort, s.InfraPort))
+            .ToList();
         try
         {
             foreach (var spec in specs)
-                _instances.Add(await HostedInstance.StartAsync(spec));
+                _instances.Add(await HostedInstance.StartAsync(spec, registry));
         }
         catch
         {

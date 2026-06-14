@@ -22,11 +22,41 @@ public sealed class KernelSteps(InstanceContext ctx)
             ready: bool
     """;
 
+    // A fully-custom app that renders the kernel's `instances` global — the read-only list of
+    // hosted instances (app + ports) provided in the system scope. A custom fn render() runs in
+    // the app scope (parent = system), so `instances` resolves by walking up. Proves the read path
+    // end-to-end through the real scope chain.
+    private const string ConsoleApp = """
+    types
+        Db
+            name: text
+
+    ui
+        fn render()
+            return <main>
+                foreach i in instances
+                    <div class="instance-row">
+                        <span class="app">
+                            i.app
+                        <span class="port">
+                            i.port
+                        <span class="assets">
+                            i.assetsPort
+    """;
+
     private HostedInstance Alpha => ctx.Kernel!.Instances[0];
     private HostedInstance Beta => ctx.Kernel!.Instances[1];
 
     // Captures the error raised while resolving a deliberately-invalid registry.
     private Exception? _configError;
+
+    // The `list` scenario: the served console page, and the tokens it must contain — every app
+    // name plus the ports that ONLY the registry global could have rendered (each instance's app
+    // port, and the OTHER instances' assets ports; the console's own assets port is skipped because
+    // it also appears in the page's window.initInfraPort bootstrap, so it wouldn't prove anything).
+    private string _consoleHtml = "";
+    private string[] _expectedApps = [];
+    private int[] _expectedPorts = [];
 
     // ── Given ─────────────────────────────────────────────────────────────────
 
@@ -107,6 +137,55 @@ public sealed class KernelSteps(InstanceContext ctx)
         await Assert.That(Beta.Store.ReadNode(NodePath.Root.Field("ready"))).IsEqualTo(new BoolValue(false));
         using var http = new HttpClient();
         await Assert.That(await http.GetStringAsync($"http://localhost:{Beta.AppPort}/")).DoesNotContain(" checked");
+    }
+
+    // ── list: the registry as a read-only Code global ───────────────────────────
+
+    [Given("a registry whose first instance is a console app that lists the instances")]
+    public void GivenConsoleRegistry()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "deenv-kernel-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        ctx.KernelDir = dir;
+
+        File.WriteAllText(Path.Combine(dir, "console.app"), ConsoleApp);
+        File.WriteAllText(Path.Combine(dir, "alpha.app"), BoolApp);
+        File.WriteAllText(Path.Combine(dir, "beta.app"), BoolApp);
+
+        int cApp = FreePort(), cAssets = FreePort(),
+            aApp = FreePort(), aAssets = FreePort(),
+            bApp = FreePort(), bAssets = FreePort();
+
+        _expectedApps = ["console.app", "alpha.app", "beta.app"];
+        // Every app port, plus the non-console assets ports — all of which can ONLY appear on the
+        // page via the `instances` global (cAssets is excluded: it's also in window.initInfraPort).
+        _expectedPorts = [cApp, aApp, bApp, aAssets, bAssets];
+
+        File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
+        {
+          "instances": [
+            { "app": "console.app", "appPort": {{cApp}}, "infraPort": {{cAssets}} },
+            { "app": "alpha.app",   "appPort": {{aApp}}, "infraPort": {{aAssets}} },
+            { "app": "beta.app",    "appPort": {{bApp}}, "infraPort": {{bAssets}} }
+          ]
+        }
+        """);
+    }
+
+    [When("I request the console instance's root")]
+    public async Task WhenRequestConsoleRootAsync()
+    {
+        using var http = new HttpClient();
+        _consoleHtml = await http.GetStringAsync($"http://localhost:{ctx.Kernel!.Instances[0].AppPort}/");
+    }
+
+    [Then("the page lists every hosted instance's app and ports")]
+    public async Task ThenPageListsInstancesAsync()
+    {
+        foreach (var app in _expectedApps)
+            await Assert.That(_consoleHtml).Contains(app);
+        foreach (var port in _expectedPorts)
+            await Assert.That(_consoleHtml).Contains(port.ToString());
     }
 
     // ── registry validation (fail loudly on aliased stores) ─────────────────────

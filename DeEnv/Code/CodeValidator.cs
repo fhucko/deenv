@@ -34,6 +34,7 @@ public static class CodeValidator
         system.Declare("db", writable: false);
         system.Declare("path", writable: true);
         system.Declare("status", writable: true);
+        system.Declare("instances", writable: false); // the kernel's read-only instance registry
         system.Declare("field", writable: false);
         system.Declare("humanize", writable: false);
         system.Declare("extent", writable: false);

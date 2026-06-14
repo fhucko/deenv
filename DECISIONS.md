@@ -1140,10 +1140,52 @@ sovereignty, proven at both the store and the served HTML). Committed `kernel.js
 (8080/8081) + crm (8082/8083); the single launch profile runs it. Smoke-tested (plain run hosts
 both); suite green 206/206.
 
-**Follow-up slices:** `list` (registry surfaced read-only as image Code — the first
-kernel-as-data read path) → `create` (append an entry + hot-add, forcing port-allocation +
-new-app-doc-seed choices) → `switch`/`delete` → promote the registry to a real restricted
-kernel-instance. Schema versioning (M11) then lands on top.
+**Second slice (`list`) — landed 2026-06-14.** The instance registry is now readable from image
+Code as a **read-only `system`-scope global** named `instances` — the first kernel-as-data read
+path. Built the way `db`/`path`/`status` are provided (a scope *item*, NOT a builtin — so no
+twin-interpreter/conformance change): `KernelHost.StartAsync` projects the specs into `InstanceInfo`
+rows (`{ app, port, assetsPort }`; app = the app document name, port = app port, assetsPort = infra
+port) and threads the snapshot through `HostedInstance` → `InstanceApp.Build` → `ContentHandler` →
+`SsrRenderer`, which seeds `system.Items["instances"]` (read-only) beside `db`. An app's
+`fn render()` does `foreach i in instances` and renders the list itself — the *presentation* is image
+Code, not a C# admin panel (the kernel-vs-image line). The rows are a transient List (negative ids)
+of scalar-prop objects, read in output position so they ship as leaves and survive hydration via the
+existing `ClientState` scope-walk; `CodeValidator` knows `instances` as a system name. The `registry`
+param defaults to empty, so a kernel-less host/test instance honestly sees an empty list and every
+existing `Build`/`SsrRenderer` call-site is unchanged. **Field naming** (user choice): the Code-facing
+rows use `port`/`assetsPort` (friendlier than the internal `appPort`/`infraPort`); `kernel.json` keeps
+`appPort`/`infraPort` for now. **Read-only** (snapshot, not a live handle): no write, no live updates
+— create/switch/delete are later. Specced by `Kernel.feature`'s list scenario (a `console.app` renders
+the list; a GET asserts every hosted app name + port). The registry as a navigable `/instances` db
+route stays the deferred kernel-as-restricted-instance north star (the global retires into a db prop
+then — not foreclosed).
+
+**Follow-up slices** (`list` ✓ landed 2026-06-14): `create` (append an entry + hot-add, forcing
+port-allocation + new-app-doc-seed choices) → `switch`/`delete` → promote the registry to a real
+restricted kernel-instance. Schema versioning (M11) then lands on top.
+
+**`create` direction — storage by id, ports operator-set, registry-as-data (sketched with the user
+2026-06-14; NOT built — rules 2/10 hold).** Forward design for the `create` slice + the
+registry-as-kernel-data promotion, refining the "self-hosted image → kernel-owned data" and
+"kernel-as-restricted-instance" TBDs above:
+- **Storage is keyed by intrinsic id, never a user-chosen file name.** An instance is an object in
+  the kernel's data with an M5 id; its app document + its data live at a kernel-derived location
+  (`<id>/…`). The operator never names or manages files — a file name is internal bookkeeping, not
+  a contended resource, so it stays hidden. Each instance keeps its **own sovereign store** (NOT one
+  god-file, which would forfeit data sovereignty — the seam versioning/temporal storage hang on); a
+  single physical *container* holding many *logical* sovereign stores ("the image as one portable
+  thing") is a possible custom-storage-engine-era packaging, deferred. An instance may carry an
+  editable human **label** distinct from its id.
+- **Ports are operator-set config** — the one binding the operator owns, because a port is a
+  genuinely external, limited, contended resource (firewalls, proxies, other services), unlike an
+  internal file name. The binding (`port`/`assetsPort`) is an editable field on the instance,
+  surfaced and hand-settable; the storage location is not. **Open sub-choice:** always-explicit
+  (predictable — the current lean) vs. specifiable-with-auto-default (minimal-by-default).
+- **The registry becomes the kernel's own data** (the kernel-as-restricted-instance north star),
+  not a hand-edited `kernel.json` — which was the bootstrap floor for slices 1–2. create/list/
+  switch/delete are then image Code over that data; the kernel owns the id→store and (operator-set)
+  id→ports mapping. The principle drawn: **hide internal identity (id-derived storage), expose the
+  contended external binding (ports).**
 
 ## Testing: BDD with Gherkin
 
