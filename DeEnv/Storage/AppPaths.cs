@@ -24,4 +24,9 @@ public static class AppPaths
     // created instance's id (forward-slashed so it reads the same in the registry on any OS).
     public static string InstancesDir(string baseDir) => Path.Combine(baseDir, "instances");
     public static string CreatedAppRelative(int id) => $"instances/{id}/app.app";
+
+    // The on-disk directory for a created instance's id (<baseDir>/instances/<id>/), which holds its
+    // app document AND its co-located sovereign store. Deleting an instance removes this whole
+    // directory — the kernel's id→location bookkeeping, an OS concern, not an IInstanceStore op.
+    public static string IdDirFor(string baseDir, int id) => Path.Combine(InstancesDir(baseDir), id.ToString());
 }

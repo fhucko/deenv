@@ -45,8 +45,9 @@ where developers design data visually and use it as objects. Full mission in
    `internal` scope outside userspace. **Multi-instance management (the kernel host) is the
    active milestone (Milestone 10, refocused 2026-06-14; first slice landed 2026-06-14)** — the
    kernel host is the entry point (NO run modes; `kernel.json` is the single source of what
-   runs). Build only M10 work next — the follow-up slices (`list` ✓, `create` ✓ landed; switch/delete
-   as image Code) and exposing the export/publish bridge to Code; see Current focus + ROADMAP.md.
+   runs). Build only M10 work next — the operator-facing create/list/switch/delete commands as image
+   Code (the C# mechanism for all four is done), exposing the export/publish bridge to Code, and
+   promoting the registry to a restricted kernel-instance; see Current focus + ROADMAP.md.
    Cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time, and the
    management commands stay out of scope unless explicitly asked. Schema versioning steps back to
    M11 (it sits on instance management).
@@ -143,8 +144,9 @@ the library) live in a **sibling `internal` scope outside userspace**. Driven by
 `SelfHostedUi.feature` (`DeEnv/Instance/GenericUi.cs`) plus the migrated
 milestone-1/2/4/5 features. See DECISIONS.md ("Self-hosted generic UI" + "Post-M9
 refinements") and the project memory. **The current milestone is Milestone 10 — multi-instance
-management (the kernel host)** (refocused 2026-06-14; first three slices LANDED 2026-06-14 — the
-kernel host, `list` (registry read from Code), and `create` (add an instance at runtime)): one kernel
+management (the kernel host)** (refocused 2026-06-14; first five slices LANDED 2026-06-14 — the
+kernel host, `list` (registry read from Code), `create`, and `switch`/`delete` — the full create/list/
+switch/delete *mechanism* in C#): one kernel
 process hosts multiple instances at once, each on its own port pair with its own sovereign data,
 driven by an instance registry as kernel-owned data — the substrate under schema versioning's
 *apply*, the Stage-2 test-instance loop, and the self-hosted-image north star. First slice
@@ -152,7 +154,7 @@ driven by an instance registry as kernel-owned data — the substrate under sche
 `Program.cs` into a thin C# supervisor (`DeEnv/Kernel/`: `RegistryReader` reads `kernel.json` as
 plain bootstrap data; `KernelHost`/`HostedInstance` start every instance + block on shutdown).
 Two instances on two port pairs are both reachable and data-sovereign (`Kernel.feature`,
-`@milestone-10`; suite green 212/212). **Run modes were removed (user direction):** the kernel
+`@milestone-10`; suite green 218/218). **Run modes were removed (user direction):** the kernel
 host is the sole entry point and `kernel.json` is the single source of what runs — a single
 instance is just a one-entry registry, so there is no `--mode`/`--app`. The designer is a registry
 entry; the M4 export/publish bridge is to be exposed to Code (a follow-up), not a CLI mode. Kernel

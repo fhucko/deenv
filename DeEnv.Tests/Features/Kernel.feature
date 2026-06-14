@@ -61,3 +61,54 @@ Feature: Kernel host (multi-instance)
     And the kernel has started
     When the operator creates an instance from a bool app on a free port pair
     Then the console instance's page lists the created instance
+
+  @milestone-10 @single-user
+  Scenario: The kernel deletes a created instance while running
+    Given a registry of one instance
+    And the kernel has started
+    And the operator creates an instance from a bool app on a free port pair
+    When the operator deletes the created instance
+    Then the deleted instance no longer serves its root
+    And the kernel hosts only the original instance
+    And the created instance's store directory is gone
+
+  @milestone-10 @single-user
+  Scenario: A deleted instance stays gone after a kernel restart
+    Given a registry of one instance
+    And the kernel has started
+    And the operator creates an instance from a bool app on a free port pair
+    And the operator deletes the created instance
+    When the kernel restarts from its persisted registry
+    Then the kernel hosts only the original instance
+
+  @milestone-10 @single-user
+  Scenario: An already-running instance stops listing a deleted one
+    Given a registry whose only instance is a console app that lists the instances
+    And the kernel has started
+    And the operator creates an instance from a bool app on a free port pair
+    When the operator deletes the created instance
+    Then the console instance's page no longer lists the created instance
+
+  @milestone-10 @single-user
+  Scenario: The kernel switches an instance to a new port pair
+    Given a registry of one instance
+    And the kernel has started
+    When the operator switches the original instance to a free port pair
+    Then the original instance serves its root on the new port
+    And the original instance no longer serves its root on the old port
+
+  @milestone-10 @single-user
+  Scenario: A switched port binding survives a kernel restart
+    Given a registry of one instance
+    And the kernel has started
+    And the operator switches the original instance to a free port pair
+    When the kernel restarts from its persisted registry
+    Then the original instance serves its root on the new port
+
+  @milestone-10 @single-user
+  Scenario: Switching to a port already in use is rejected
+    Given a registry of two instances on distinct port pairs
+    And the kernel has started
+    When the operator switches the first instance onto the second instance's port
+    Then the switch is rejected with a clear kernel-config error
+    And both instances still serve their roots on their original ports

@@ -64,6 +64,18 @@ public sealed class KernelSteps(InstanceContext ctx)
     private int _createdAppPort;
     private int _createdInfraPort;
 
+    // The `delete` scenarios: the created instance's id-dir, captured before deletion so we can
+    // assert the whole store directory is gone afterwards.
+    private string _createdIdDir = "";
+
+    // The `switch` scenarios: the new port pair the instance was switched to, and the old app port
+    // it was switched away from (kept so we can assert the new binding serves and the old does not),
+    // plus the error a rejected switch raises.
+    private int _switchedAppPort;
+    private int _switchedInfraPort;
+    private int _oldAppPort;
+    private Exception? _switchError;
+
     // ── Given ─────────────────────────────────────────────────────────────────
 
     [Given("a registry of two instances on distinct port pairs")]
@@ -146,6 +158,114 @@ public sealed class KernelSteps(InstanceContext ctx)
         _created = await ctx.Kernel!.CreateAsync(
             BoolApp, _createdAppPort, _createdInfraPort,
             ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+        // Its id-dir (<KernelDir>/instances/<id>) is the directory holding the written app document,
+        // captured now so a later delete assertion can prove the whole store directory is removed.
+        _createdIdDir = Path.GetDirectoryName(_created.Spec.SchemaPath)!;
+    }
+
+    // ── delete: remove a created instance from a running kernel ───────────────────
+
+    [When("the operator deletes the created instance")]
+    [Given("the operator deletes the created instance")]
+    public async Task WhenOperatorDeletesInstanceAsync()
+    {
+        await ctx.Kernel!.DeleteAsync(_created!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+    }
+
+    [Then("the deleted instance no longer serves its root")]
+    public async Task ThenDeletedNoLongerServesAsync()
+    {
+        // Its app host is stopped, so the port no longer accepts connections — the GET fails.
+        await Assert.That(await ServesRootAsync(_createdAppPort)).IsFalse();
+    }
+
+    [Then("the kernel hosts only the original instance")]
+    public async Task ThenHostsOnlyOriginalAsync()
+    {
+        await Assert.That(ctx.Kernel!.Instances.Count).IsEqualTo(1);
+    }
+
+    [Then("the created instance's store directory is gone")]
+    public async Task ThenStoreDirGoneAsync()
+    {
+        await Assert.That(Directory.Exists(_createdIdDir)).IsFalse();
+    }
+
+    [Then("the console instance's page no longer lists the created instance")]
+    public async Task ThenConsoleDoesNotListCreatedAsync()
+    {
+        // The created instance's app port could only ever appear on the console page via the LIVE
+        // `instances` global; after delete the kernel hosts only the console, so it is gone.
+        using var http = new HttpClient();
+        var html = await http.GetStringAsync($"http://localhost:{ctx.Kernel!.Instances[0].AppPort}/");
+        await Assert.That(html).DoesNotContain(_createdAppPort.ToString());
+    }
+
+    // ── switch: re-bind an instance to a new port pair ────────────────────────────
+
+    [When("the operator switches the original instance to a free port pair")]
+    [Given("the operator switches the original instance to a free port pair")]
+    public async Task WhenOperatorSwitchesInstanceAsync()
+    {
+        _oldAppPort = Alpha.AppPort;
+        _switchedAppPort = FreePort();
+        _switchedInfraPort = FreePort();
+        await ctx.Kernel!.SwitchAsync(
+            Alpha, _switchedAppPort, _switchedInfraPort, Path.Combine(ctx.KernelDir!, "kernel.json"));
+    }
+
+    [When("the operator switches the first instance onto the second instance's port")]
+    public async Task WhenOperatorSwitchesOntoUsedPortAsync()
+    {
+        _oldAppPort = Alpha.AppPort;
+        try
+        {
+            // Target Beta's live app port — already bound, so the guard must reject before any stop.
+            await ctx.Kernel!.SwitchAsync(
+                Alpha, Beta.AppPort, FreePort(), Path.Combine(ctx.KernelDir!, "kernel.json"));
+        }
+        catch (Exception ex)
+        {
+            _switchError = ex;
+        }
+    }
+
+    [Then("the original instance serves its root on the new port")]
+    public async Task ThenServesOnNewPortAsync()
+    {
+        // After a restart Alpha is a fresh handle; re-find the live instance by its persisted new port.
+        var instance = ctx.Kernel!.Instances.Single(i => i.AppPort == _switchedAppPort);
+        using var http = new HttpClient();
+        var resp = await http.GetAsync($"http://localhost:{instance.AppPort}/");
+        await Assert.That((int)resp.StatusCode).IsEqualTo(200);
+        await Assert.That(await resp.Content.ReadAsStringAsync()).Contains("input type=\"checkbox\"");
+    }
+
+    [Then("the original instance no longer serves its root on the old port")]
+    public async Task ThenNoLongerServesOnOldPortAsync()
+    {
+        await Assert.That(await ServesRootAsync(_oldAppPort)).IsFalse();
+    }
+
+    [Then("the switch is rejected with a clear kernel-config error")]
+    public async Task ThenSwitchRejectedAsync()
+    {
+        await Assert.That(_switchError).IsNotNull();
+        await Assert.That(_switchError is KernelConfigException).IsTrue();
+        await Assert.That(_switchError!.Message).Contains("Port");
+    }
+
+    [Then("both instances still serve their roots on their original ports")]
+    public async Task ThenBothStillServeAsync()
+    {
+        await Assert.That(ctx.Kernel!.Instances.Count).IsEqualTo(2);
+        using var http = new HttpClient();
+        foreach (var instance in ctx.Kernel.Instances)
+        {
+            var resp = await http.GetAsync($"http://localhost:{instance.AppPort}/");
+            await Assert.That((int)resp.StatusCode).IsEqualTo(200);
+            await Assert.That(await resp.Content.ReadAsStringAsync()).Contains("input type=\"checkbox\"");
+        }
     }
 
     [Then("the created instance serves its root on its assigned port")]
@@ -341,6 +461,22 @@ public sealed class KernelSteps(InstanceContext ctx)
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    // True if an instance is serving its root on this app port, false if the port refuses the
+    // connection (the host has been stopped). A short timeout keeps a refused connection from hanging.
+    private static async Task<bool> ServesRootAsync(int appPort)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        try
+        {
+            var resp = await http.GetAsync($"http://localhost:{appPort}/");
+            return resp.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
 
     // Grab a free TCP port by binding to :0, reading the assigned port, then releasing it —
     // the same approach TestInstanceServer uses for its in-process hosts.

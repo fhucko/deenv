@@ -192,7 +192,7 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   user code (the builtins `field`/`humanize`/`nest`/`clone`/`extent`/`setRef` are already
   reachable); composition needs a deliberate public surface for the library functions.
 
-- **Multi-instance management (single-process, single-operator).  ← M10, first three
+- **Multi-instance management (single-process, single-operator).  ← M10, first five
   slices DONE 2026-06-14.** One kernel process **hosts multiple instances at once**,
   each on its own port pair with its own sovereign data, driven by an **instance
   registry** (which instances exist + their ports) as **kernel-owned data**. The
@@ -214,11 +214,13 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   one app. The designer becomes a registry entry; the M4 export/publish bridge is to
   be exposed to Code (a follow-up), not a CLI mode. Built in `DeEnv/Kernel/`
   (`RegistryReader`/`KernelHost`/`HostedInstance`), specced by `Kernel.feature`
-  (`@milestone-10`); suite green 212/212. Two more slices landed: **`list`** (the registry is
+  (`@milestone-10`); suite green 218/218. Four more slices landed: **`list`** (the registry is
   readable from image Code as a read-only `instances` global — an app renders the list itself, the
-  first kernel-as-data read path) and **`create`** (add an instance to a RUNNING kernel: minted id,
-  id-keyed sovereign store, operator-set ports, persisted to the registry; the `instances` view is
-  live — no stale data). See DECISIONS.md.
+  first kernel-as-data read path), **`create`** (add an instance to a RUNNING kernel: minted id,
+  id-keyed sovereign store, operator-set ports, persisted; the `instances` view is live — no stale
+  data), and **`switch`/`delete`** (re-bind a running instance's ports / remove one + collect its
+  store) — the full create/list/switch/delete *mechanism* in C#. The operator-facing commands as
+  image Code, and promoting the registry to a restricted kernel-instance, remain. See DECISIONS.md.
 
   **Kernel discipline:** the kernel gains the *mechanism* (host N instances, bind
   ports, hold the registry) — **not** the management *experience*. Create/list/

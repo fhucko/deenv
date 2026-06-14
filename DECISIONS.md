@@ -1175,8 +1175,9 @@ the list; a GET asserts every hosted app name + port). The registry as a navigab
 route stays the deferred kernel-as-restricted-instance north star (the global retires into a db prop
 then — not foreclosed).
 
-**Follow-up slices** (`list` ✓, `create` ✓ landed 2026-06-14): `switch`/`delete` → promote the
-registry to a real restricted kernel-instance. Schema versioning (M11) then lands on top.
+**Follow-up slices** (`list` ✓, `create` ✓, `switch`/`delete` ✓ landed 2026-06-14): promote the
+registry to a real restricted kernel-instance (the north star) + the operator-facing create/list/
+switch/delete commands as image Code. Schema versioning (M11) then lands on top.
 
 **`create` direction — storage by id, ports operator-set, registry-as-data (sketched with the user
 2026-06-14; LANDED 2026-06-14 — see "Third slice (`create`)" below).** Forward design for the `create` slice + the
@@ -1222,13 +1223,42 @@ boot snapshot (already-running instances wouldn't see a newly-created one until 
 "accepted limit"; the user rejected it — correctly, as a cheap-to-fix correctness gap, NOT the
 real-time milestone. (The plan/build/review agents gained a "correctness over a convenient limit"
 principle from this — weigh difficulty vs. correctness; fix cheap gaps, don't dress them as accepted
-limits.) The registry threaded to each instance is now a `Func<IReadOnlyList<InstanceInfo>>` provider
-reading the kernel's `volatile _registry` (an immutable snapshot, reference-swapped on every
-hosted-set change), so EVERY instance's next render — SSR **and** the WS refetch path — reflects the
-current instances. This is a live VIEW (a render reads current state), distinct from the deferred
-real-time milestone (live PUSH to an already-open browser page). Single-operator: an atomic reference
-swap suffices, no lock. Proven by a scenario: an already-running console instance's page lists a
-newly-created one.
+limits.) The registry threaded to each instance is a `LiveRegistry` **data cell** (a var-shaped holder
+with a `volatile .Current`); the kernel swaps `.Current` (an immutable snapshot) on every hosted-set
+change, and SSR **and** the WS refetch path read `.Current` per render — so EVERY instance's next
+render reflects the current instances. (First a `Func` pull-provider, then changed to the var-shaped
+cell per the user: ambient framework DATA should be a var/cell, not a pull-function, so the live-update
+path stays open — now a reviewer check.) This is a live VIEW (a render reads current state), distinct
+from the deferred real-time milestone (live PUSH to an already-open browser page). Single-operator: an
+atomic reference swap suffices, no lock. Proven by a scenario: an already-running console instance's
+page lists a newly-created one.
+
+**Fourth + fifth slices (`delete`, `switch`) — landed 2026-06-14.** The remaining kernel management
+ops, C# *mechanism* only (operator command/UI still deferred image Code). `KernelHost.DeleteAsync(
+instance, registryPath)` removes a running instance: refuses boot/stem-derived instances (only id-dir
+CREATED ones — never drop a hand-authored boot data file, the startup-guard principle), stops its two
+hosts (`HostedInstance.DisposeAsync`, the single-instance teardown `create` deferred), drops it from
+`_instances` + `RefreshRegistry` (the `LiveRegistry` whole-snapshot swap keeps a concurrent render
+safe), rewrites kernel.json without the entry, and collects the store by deleting the id-dir
+(`Directory.Delete(recursive)` — store-dir removal is a kernel/OS concern about id→location, NOT an
+`IInstanceStore` op, so the seam is untouched). `KernelHost.SwitchAsync(instance, newAppPort,
+newInfraPort, registryPath)` re-binds a running instance's ports (the one operator-owned config):
+collision-checks the new ports against the live set EXCLUDING self FIRST — so a *rejected* switch stops
+nothing (both instances keep serving) — then stops, restarts on the new ports (`HostedInstance.StartAsync`,
+reused), swaps in `_instances` + refresh, and rewrites the entry's ports. Instances are addressed by
+their `HostedInstance` handle (no `Id` field added — no model-shape change); registry entries match by
+app-relative path (`RelativeApp`/`PathsEqual`, separator/case-insensitive). New `AppPaths.IdDirFor`.
+Specced by `Kernel.feature` (delete: stops serving + gone from the registry + gone after restart +
+store-dir collected + a console instance stops listing it; switch: serves on the new port not the old +
+survives restart + a port clash is rejected with both still serving). Reviewed (meets the bar). Suite
+218/218. **Accepted single-operator limits** (the deferred concurrent-write/atomicity milestone — NOT
+cheap gaps; symmetric to `create`'s ghost): a crash between stop and the kernel.json rewrite leaves a
+stale "ghost" entry; switch is stop-then-restart (brief downtime), no graceful drain. **Deferred:** the
+operator-facing commands as image Code; deleting boot entries; GC beyond the id-dir; repointing switch
+to a different app; registry write-locking. *(Open for the future image-Code delete command: deleting
+the LAST entry yields an empty registry, which `RegistryReader` rejects as "lists no instances" —
+unreachable now since the sole boot instance can't be deleted, but the IDE delete command will need a
+defined empty-kernel mode.)*
 
 ## Testing: BDD with Gherkin
 

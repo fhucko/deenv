@@ -149,6 +149,125 @@ public sealed class KernelHost : IAsyncDisposable
         return created;
     }
 
+    // Delete one CREATED instance from a RUNNING kernel and forget it: stop its hosts, drop it from
+    // the live set, remove its registry entry, and delete its id-dir (app doc + co-located store).
+    // The kernel's hosting MECHANISM only — the delete COMMAND/UI is image Code over the
+    // registry-as-data, a later slice (the kernel-vs-image line). Restricted to created (id-dir)
+    // instances: it must NEVER delete a boot/stem-derived instance's hand-authored data file — the
+    // startup guard's "data is never dropped silently" principle (DECISIONS "Stored data must match
+    // the running app"). `switch` works on any instance because it touches no data; `delete` does.
+    public async Task DeleteAsync(HostedInstance instance, string registryPath)
+    {
+        // Refuse to delete a boot instance BEFORE stopping anything — its app doc + data are
+        // hand-authored, never dropped automatically (CreatedIdOf throws for a non-created instance).
+        var id = CreatedIdOf(instance);
+        var baseDir = BaseDirOf(instance);
+
+        // Stop-then-remove ordering: stop both hosts first (frees the ports), then drop it from the
+        // live set and re-project. The LiveRegistry whole-snapshot swap keeps a concurrent render
+        // thread safe (it reads the old immutable list until the new one is published).
+        await instance.DisposeAsync();
+        _instances.Remove(instance);
+        RefreshRegistry();
+
+        // Rewrite kernel.json without the matching entry, so it stays gone across a restart. (A crash
+        // between the stop and this write leaves a "ghost" entry — the instance is down now but would
+        // re-host on the next boot; acceptable single-operator, the symmetric twin of create's ghost.
+        // True delete-atomicity is the deferred concurrent-write milestone, not a WAL here.)
+        var appRel = RelativeApp(instance, baseDir);
+        var stored = RegistryReader.Read(registryPath);
+        RegistryWriter.Write(registryPath, new Registry(
+            [.. stored.Instances.Where(e => !PathsEqual(e.App, appRel))]));
+
+        // Collect the store: delete the whole id-dir on the filesystem (app doc + its co-located
+        // data file). Store-dir removal is an OS/kernel concern about id→location, so IInstanceStore
+        // stays untouched (it speaks the model's terms — paths/nodes — not "drop my backing dir").
+        var idDir = AppPaths.IdDirFor(baseDir, id);
+        if (Directory.Exists(idDir))
+            Directory.Delete(idDir, recursive: true);
+    }
+
+    // Re-bind one instance to a new port pair in a RUNNING kernel and persist it. Mirrors create:
+    // the operator supplies the new ports (a port is a genuinely contended external resource, so it
+    // stays operator-set — no auto-allocation). Works on ANY instance (boot or created): it rewrites
+    // only ports and touches no data. The kernel MECHANISM only; the switch COMMAND/UI is image Code.
+    public async Task SwitchAsync(HostedInstance instance, int newAppPort, int newInfraPort, string registryPath)
+    {
+        var baseDir = BaseDirOf(instance);
+        var newSpec = instance.Spec with { AppPort = newAppPort, InfraPort = newInfraPort };
+
+        // Guard FIRST, before stopping anything: a rejected switch must stop nothing. Check the new
+        // ports (and unchanged data file) against the LIVE set EXCLUDING this instance — so re-binding
+        // doesn't false-positive against its own current ports — reusing create/boot's named errors.
+        EnsureNoCollision(
+            newSpec,
+            new HashSet<string>(
+                _instances.Where(i => i != instance).Select(i => i.Spec.DataPath),
+                StringComparer.OrdinalIgnoreCase),
+            new HashSet<int>(
+                _instances.Where(i => i != instance).SelectMany(i => new[] { i.AppPort, i.InfraPort })));
+
+        // Stop the old binding, start the new one (ports are the only delta), swap it in, re-project.
+        await instance.DisposeAsync();
+        var restarted = await HostedInstance.StartAsync(newSpec, _registry);
+        _instances[_instances.IndexOf(instance)] = restarted;
+        RefreshRegistry();
+
+        // Persist: rewrite kernel.json mapping the matching entry to its new ports, so the binding
+        // survives a restart. (App path is unchanged — switch re-points ports, not the app document;
+        // repointing to a DIFFERENT app is a deferred slice.)
+        var appRel = RelativeApp(instance, baseDir);
+        var stored = RegistryReader.Read(registryPath);
+        RegistryWriter.Write(registryPath, new Registry(
+            [.. stored.Instances.Select(e =>
+                PathsEqual(e.App, appRel) ? new RegistryEntry(e.App, newAppPort, newInfraPort) : e)]));
+    }
+
+    // The base directory an instance was hosted from, recovered from its schema path. A created
+    // instance's schema dir is <baseDir>/instances/<id>, so baseDir is two levels up; a boot
+    // instance's schema dir IS <baseDir>. Derived from the spec so callers needn't thread baseDir.
+    private static string BaseDirOf(HostedInstance instance)
+    {
+        var schemaDir = Path.GetDirectoryName(instance.Spec.SchemaPath)!;
+        return IsCreated(instance)
+            ? Path.GetDirectoryName(Path.GetDirectoryName(schemaDir)!)!
+            : schemaDir;
+    }
+
+    // A created instance lives under <baseDir>/instances/<id>/ with a numeric id-dir name; a boot
+    // instance does not. This is the gate `delete` uses to refuse dropping hand-authored boot data.
+    private static bool IsCreated(HostedInstance instance)
+    {
+        var schemaDir = Path.GetDirectoryName(instance.Spec.SchemaPath)!;
+        var parent = Path.GetDirectoryName(schemaDir);
+        return parent is not null
+            && string.Equals(Path.GetFileName(parent), "instances", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(Path.GetFileName(schemaDir), out _);
+    }
+
+    // The created id parsed from the instance's id-dir name. Throws if the instance is not a created
+    // one — `delete` is restricted to created instances (never drop a boot instance's authored data).
+    private static int CreatedIdOf(HostedInstance instance)
+    {
+        if (!IsCreated(instance))
+            throw new KernelConfigException(
+                "Only an instance created by the kernel can be deleted — a boot instance's app " +
+                "document and data are hand-authored and are never dropped automatically.");
+        return int.Parse(Path.GetFileName(Path.GetDirectoryName(instance.Spec.SchemaPath)!));
+    }
+
+    // The instance's app-relative path as it appears in kernel.json's RegistryEntry.App: the schema
+    // path made relative to baseDir, forward-slashed (created entries are stored forward-slashed; boot
+    // entries are a bare file name). Used to find the instance's own registry entry to rewrite/remove.
+    private static string RelativeApp(HostedInstance instance, string baseDir) =>
+        Path.GetRelativePath(baseDir, instance.Spec.SchemaPath).Replace('\\', '/');
+
+    // Compare two registry app paths for the same instance, separator- and case-insensitively, so a
+    // match holds regardless of how the path was written (hand-edited boot entry vs. minted created
+    // entry) or the host OS's directory separator.
+    private static bool PathsEqual(string a, string b) =>
+        string.Equals(a.Replace('\\', '/'), b.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
     // The next created-instance id: max numeric subdirectory name under <baseDir>/instances/, + 1
     // (1 when the dir is absent or empty). Deterministic and restart-stable.
     private static int NextInstanceId(string baseDir)
