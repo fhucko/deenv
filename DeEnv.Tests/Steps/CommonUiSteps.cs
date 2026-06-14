@@ -6,8 +6,8 @@ using TUnit.Assertions.Extensions;
 namespace DeEnv.Tests.Steps;
 
 // Shared UI-testing steps used across features (navigation + page-kind assertions).
-// A self-hosted code page loads the /ui-js bundle and mounts into #app; the retiring C#
-// auto-form loads /js and renders #node-form.
+// A self-hosted code page mounts into #app and bootstraps the client bundle (/js) from
+// the infra port — the page carries window.initInfraPort.
 [Binding]
 public sealed class CommonUiSteps(InstanceContext ctx)
 {
@@ -23,7 +23,7 @@ public sealed class CommonUiSteps(InstanceContext ctx)
     {
         await ctx.Page!.WaitForSelectorAsync("#app [data-key]");
         var html = await ctx.Page.ContentAsync();
-        await Assert.That(html).Contains("/ui-js");
+        await Assert.That(html).Contains("initInfraPort");
     }
 
     [Then("the page shows {string}")]

@@ -67,13 +67,24 @@ catch (StoredDataException ex)
     return;
 }
 
-var app = InstanceApp.Build(store, description);
+// Two ports: the app port serves a clean data URL space (SSR only); the infra port
+// serves /ws and /js. The page loads its bundle and opens its WebSocket against the
+// infra port (injected by SsrRenderer as window.initInfraPort).
+const ushort appPort = 8080;
+const ushort infraPort = 8081;
+var (appApp, infraApp) = InstanceApp.Build(store, description, infraPort);
 
 await Host.Create()
-          .Handler(app)
+          .Handler(infraApp)
+          .Defaults(secureUpgrade: false, strictTransport: false)
+          .Port(infraPort)
+          .StartAsync();
+
+await Host.Create()
+          .Handler(appApp)
           // Plain HTTP: no HTTPS endpoint, so don't upgrade/redirect.
           .Defaults(secureUpgrade: false, strictTransport: false)
-          .Port(8080)
+          .Port(appPort)
           .RunAsync();
 
 // Parse `--mode <value>`; defaults to "instance". Unknown values fall through to

@@ -15,7 +15,8 @@ namespace DeEnv.Tests.TestSupport;
 /// </summary>
 public sealed class TestInstanceServer : IAsyncDisposable
 {
-    private IServerHost? _host;
+    private IServerHost? _appHost;
+    private IServerHost? _infraHost;
 
     public string BaseUrl { get; private set; } = "";
     public IInstanceStore? Store { get; private set; }
@@ -24,23 +25,33 @@ public sealed class TestInstanceServer : IAsyncDisposable
     {
         Store = new JsonFileInstanceStore(dataFilePath, description);
 
-        var port = GetFreePort();
-        var app = InstanceApp.Build(Store, description);
+        // Two ports, exactly like production: the app port (SSR, clean URL space) and the
+        // infra port (/ws + /js). The page is served from the app port; its bundle + WS
+        // target the infra port (injected as window.initInfraPort).
+        var appPort = GetFreePort();
+        var infraPort = GetFreePort();
+        var (appApp, infraApp) = InstanceApp.Build(Store, description, infraPort);
 
-        _host = Host.Create()
-                    .Handler(app)
+        _infraHost = Host.Create()
+                    .Handler(infraApp)
+                    .Defaults(secureUpgrade: false, strictTransport: false)
+                    .Port((ushort)infraPort);
+
+        _appHost = Host.Create()
+                    .Handler(appApp)
                     // Plain HTTP for tests: no HTTPS endpoint, so don't upgrade/redirect.
                     .Defaults(secureUpgrade: false, strictTransport: false)
-                    .Port((ushort)port);
+                    .Port((ushort)appPort);
 
-        await _host.StartAsync();
-        BaseUrl = $"http://localhost:{port}";
+        await _infraHost.StartAsync();
+        await _appHost.StartAsync();
+        BaseUrl = $"http://localhost:{appPort}";
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_host != null)
-            await _host.StopAsync();
+        if (_appHost != null) await _appHost.StopAsync();
+        if (_infraHost != null) await _infraHost.StopAsync();
     }
 
     // Grab a free TCP port by binding to :0, reading the assigned port, then releasing it.

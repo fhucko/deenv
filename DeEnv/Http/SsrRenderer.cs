@@ -21,12 +21,18 @@ public sealed class SsrRenderer
     // _desc stays pristine for printing; _ui carries the render-time synthesis.
     private readonly InstanceUi? _ui;
 
-    public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null)
+    // The infra port (where /ws and /js are served) — injected into the page so the client
+    // loads its bundle and opens its WebSocket against it, keeping the app port a clean,
+    // reserved-path-free data URL space.
+    private readonly int _infraPort;
+
+    public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null, int infraPort = 0)
     {
         _store = store;
         _desc = desc;
         _resolver = new TypeResolver(desc);
         _sessions = sessions;
+        _infraPort = infraPort;
         _ui = GenericUi.Effective(desc);
     }
 
@@ -164,7 +170,7 @@ public sealed class SsrRenderer
             // its content; path views and the root render own the page.
             var breadcrumbs = match.Kind == ViewKind.Type ? Breadcrumbs(match.TargetPath!) : "";
 
-            return UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi), clientId);
+            return UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi), clientId, _infraPort);
         }
         catch (ViewTargetNotFoundException)
         {
@@ -300,18 +306,19 @@ public sealed class SsrRenderer
     }
 
     // Page shell for a code page: optional generic chrome (a type view keeps the
-    // breadcrumbs) around the `#app` mount the client reconciles into; the deferred
-    // bundle hydrates from window.initUi / window.initData. The chrome CSS ships only
-    // when there IS chrome — a full-takeover page stays unstyled (the app's own look).
+    // breadcrumbs) around the `#app` mount the client reconciles into; an inline bootstrap
+    // injects the bundle from the infra port (/js), which hydrates from window.initUi /
+    // window.initData. The chrome CSS ships only when there IS chrome — a full-takeover
+    // page stays unstyled (the app's own look).
     private static string UiLayout(
-        string title, string breadcrumbs, string body, string initData, string initUi, string clientId) => $$"""
+        string title, string breadcrumbs, string body, string initData, string initUi, string clientId, int infraPort) => $$"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
           <meta charset="utf-8">
           <title>{{Escape(title)}}</title>{{(breadcrumbs.Length > 0 ? $"\n  <style>{ViewChromeCss}</style>" : "")}}
-          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";</script>
-          <script defer src="/ui-js"></script>
+          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initInfraPort={{infraPort}};</script>
+          <script>(function(){var s=document.createElement("script");s.src=location.protocol+"//"+location.hostname+":"+window.initInfraPort+"/js";document.head.appendChild(s);})();</script>
         </head>
         <body>{{breadcrumbs}}<div id="app">{{body}}</div></body>
         </html>

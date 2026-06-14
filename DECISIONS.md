@@ -832,13 +832,19 @@ green commit:
   `write` (now the dict-entry path-write), `addEntry`/`removeEntry`, `objectPropChange`,
   `setReferenceField`, `arrayAdd`/`arrayRemove`. Suite green 203/203.
 
-**Still open — P3e: the infra-port split** ([[project_infra_port_separation]]). Serve `/ws`
-and `/ui-js` on a separate infra/control port so the app port owns a clean, fully-reserved-
-free data URL space. Touches `InstanceApp` (two handler trees / hosts), `Program.cs` +
-`TestInstanceServer` (start both ports; the browser test harness currently assumes one
-port), `SsrRenderer` (inject the infra base; `/ui-js` becomes an absolute cross-port URL),
-and `ws.ts` (build the WS URL against the infra base, not `location.host`). Deferred as a
-focused follow-up: it needs two-port test-harness support and has cross-origin implications.
+- **P3e — split infra endpoints onto a separate port.** The app port now serves ONLY SSR
+  HTML (a clean, reserved-path-free data URL space); `/ws` and the client bundle (renamed
+  `/ui-js` → **`/js`**, free now that the C# client is gone) move to a separate infra port.
+  `InstanceApp.Build` returns two handler trees (app = ContentHandler SSR-only; infra =
+  `/ws` + a BundleHandler at `/js`) sharing one session store; `Program.cs` (8080 app /
+  8081 infra) and `TestInstanceServer` (two free ports) start both. `SsrRenderer` is given
+  the infra port and injects `window.initInfraPort`; the page's inline bootstrap loads the
+  bundle from `//{location.hostname}:{infraPort}/js` (dynamic insert, so `init()` waits for
+  DOMContentLoaded instead of `defer`), and `ws.ts` opens the WS against the same authority
+  (not `location.host`). Cross-origin script + WS need no CORS config (classic scripts and
+  WS handshakes aren't gated). Suite green 203/203.
+
+Phase 3 complete: the C# renderer is fully retired and the app URL space is clean.
 
 ## Tool stack and project structure
 

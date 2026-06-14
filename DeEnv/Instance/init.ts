@@ -83,4 +83,7 @@ function init(): void {
     renderUi();
 }
 
-init();
+// The bundle is injected dynamically (from the infra port), so it is not `defer`red —
+// wait for the DOM (#app) before the first render.
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => init());
+else init();

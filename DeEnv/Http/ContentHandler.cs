@@ -6,16 +6,16 @@ using GenHTTP.Modules.IO;
 
 namespace DeEnv.Http;
 
-// GenHTTP handler for everything that isn't the WebSocket:
-//   /ui-js           → the self-hosted UI client bundle
-//   anything else     → server-rendered HTML for that node path
+// The APP host's handler: server-rendered HTML for every node path. No reserved paths —
+// the app port is a clean data URL space. Infra endpoints (/ws, /js) live on the infra
+// host (see BundleHandler + InstanceApp).
 public sealed class ContentHandler : IHandler
 {
     private readonly SsrRenderer _renderer;
 
-    public ContentHandler(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions)
+    public ContentHandler(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions, int infraPort)
     {
-        _renderer = new SsrRenderer(store, description, sessions);
+        _renderer = new SsrRenderer(store, description, sessions, infraPort);
     }
 
     public ValueTask PrepareAsync() => ValueTask.CompletedTask;
@@ -25,17 +25,10 @@ public sealed class ContentHandler : IHandler
         var remaining = request.Target.GetRemaining();
         var path = remaining.IsRoot ? "/" : "/" + remaining.ToString().Trim('/');
 
-        IResponse response = path switch
-        {
-            "/ui-js" => request.Respond()
-                     .Content(ClientScript.UiJs)
-                     .Type(ContentType.ApplicationJavaScript)
-                     .Build(),
-            _ => request.Respond()
-                     .Content(_renderer.Render(path))
-                     .Type(ContentType.TextHtml)
-                     .Build(),
-        };
+        IResponse response = request.Respond()
+            .Content(_renderer.Render(path))
+            .Type(ContentType.TextHtml)
+            .Build();
 
         return new ValueTask<IResponse?>(response);
     }
@@ -47,13 +40,36 @@ public sealed class ContentHandlerBuilder : IHandlerBuilder
     private readonly IInstanceStore _store;
     private readonly InstanceDescription _description;
     private readonly ClientSessionStore _sessions;
+    private readonly int _infraPort;
 
-    public ContentHandlerBuilder(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions)
+    public ContentHandlerBuilder(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions, int infraPort)
     {
         _store = store;
         _description = description;
         _sessions = sessions;
+        _infraPort = infraPort;
     }
 
-    public IHandler Build() => new ContentHandler(_store, _description, _sessions);
+    public IHandler Build() => new ContentHandler(_store, _description, _sessions, _infraPort);
+}
+
+// The INFRA host's bundle handler: serves the self-hosted UI client at /js. (The
+// WebSocket is added separately at /ws — see InstanceApp.)
+public sealed class BundleHandler : IHandler
+{
+    public ValueTask PrepareAsync() => ValueTask.CompletedTask;
+
+    public ValueTask<IResponse?> HandleAsync(IRequest request)
+    {
+        IResponse response = request.Respond()
+            .Content(ClientScript.UiJs)
+            .Type(ContentType.ApplicationJavaScript)
+            .Build();
+        return new ValueTask<IResponse?>(response);
+    }
+}
+
+public sealed class BundleHandlerBuilder : IHandlerBuilder
+{
+    public IHandler Build() => new BundleHandler();
 }

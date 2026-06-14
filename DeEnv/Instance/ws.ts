@@ -9,6 +9,9 @@
 // authoritative: ok → the entry commits (drops); error → reverse-replay the journal
 // back past the failed entry, drop it, and re-apply the rest.
 
+// The infra port (set by the SSR page as window.initInfraPort) where /ws and /js live.
+declare const initInfraPort: number;
+
 let codeWs: WebSocket | null = null;
 const codeWsOutbox: string[] = [];
 
@@ -56,7 +59,9 @@ let wsRetryDelay = 1000;
 
 function connectWs(): void {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    codeWs = new WebSocket(`${proto}//${location.host}/ws`);
+    // Infra endpoints (/ws, /js) live on a separate port from the app's URL space, so the
+    // app port stays a clean, reserved-path-free data space. window.initInfraPort carries it.
+    codeWs = new WebSocket(`${proto}//${location.hostname}:${initInfraPort}/ws`);
     codeWs.onopen = () => {
         wsRetryDelay = 1000;
         // Claim the warm session minted at SSR before anything else; if this arrives

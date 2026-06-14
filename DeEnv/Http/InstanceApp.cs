@@ -8,17 +8,21 @@ using GenHTTP.Modules.Websockets.Protocol;
 
 namespace DeEnv.Http;
 
-// Builds the GenHTTP handler tree for an instance. Shared by the real host
+// Builds the GenHTTP handler trees for an instance, split across two ports so the app
+// port owns a clean, reserved-path-free data URL space. Shared by the real host
 // (Program.cs) and the in-process test host so routing is identical.
 //
-//   /ws            → WebSocket: all data ops (read + write), request/response
-//   everything else → ContentHandler: /js (embedded client script) + SSR HTML
+//   App host   → SSR HTML for every node path, nothing reserved (ContentHandler).
+//   Infra host → /ws (WebSocket: all data ops) + /js (the client bundle).
+//
+// Both trees share one session store (the SSR path mints sessions, the WS path recomputes
+// over them — see ClientSession). The app host is told the infra port so the page can load
+// /js and open its WebSocket against it.
 public static class InstanceApp
 {
-    public static IHandlerBuilder Build(IInstanceStore store, InstanceDescription description)
+    public static (IHandlerBuilder App, IHandlerBuilder Infra) Build(
+        IInstanceStore store, InstanceDescription description, int infraPort)
     {
-        // One per-host session store, shared by the SSR path (mints sessions) and the WS
-        // path (recomputes over them). See ClientSession.
         var sessions = new ClientSessionStore();
         var ws = new WsHandler(store, description, sessions);
 
@@ -33,8 +37,13 @@ public static class InstanceApp
                 await frame.Connection.WriteAsync(bytes, FrameType.Text, true, CancellationToken.None);
             });
 
-        return Layout.Create()
+        var app = Layout.Create()
+            .Add(new ContentHandlerBuilder(store, description, sessions, infraPort));
+
+        var infra = Layout.Create()
             .Add("ws", websocket)
-            .Add(new ContentHandlerBuilder(store, description, sessions));
+            .Add("js", new BundleHandlerBuilder());
+
+        return (app, infra);
     }
 }
