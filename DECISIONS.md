@@ -846,6 +846,25 @@ green commit:
 
 Phase 3 complete: the C# renderer is fully retired and the app URL space is clean.
 
+### Post-M9 refinements: a system scope, status, self-hosted NotFound
+
+- **A system scope above the custom code.** Framework-provided context — `db`, `path`, the
+  synthesized generic library, and the descriptor registries (`__descs`/`__dictDescs`) —
+  lives in a SYSTEM scope, the parent of the app (custom-code) scope. The app scope holds
+  only the user's vars/functions; the `__` machinery never pollutes it. `ExecScope.IsTop`
+  (both twins) replaces the old `Parent == null` test for "a reactive top-level var" (dep on
+  read, invalidate on write), so a non-root top scope still reacts. `CodeValidator` mirrors
+  the nesting (a stray `var db`/`var path` shadows rather than erroring). `ClientState` ships
+  the app scope plus its system parent flat — the client resolves by name, so its scope stays
+  flat (observationally identical for all non-shadowing programs). `GenericUi.Effective`
+  returns the synthesized member names so `SsrRenderer` routes them to the system scope.
+- **`path` is provided, not declared.** It is the request URL, always in the system scope;
+  apps no longer write `var path = "/"`.
+- **`status(n)` + self-hosted NotFound.** A `status` builtin sets the first-paint HTTP status
+  (`ExecContext.Status`); `Render` returns `(Html, Status)` and the handler applies a non-200.
+  An unrouted URL (or a deleted view target) renders a synthesized `__notFound` code page
+  (`notFoundForm` sets 404), with breadcrumb chrome — the last static C# page is gone.
+
 ## Tool stack and project structure
 
 Web-first: **C# backend, TypeScript front-end.** C# stays where it's strong;
