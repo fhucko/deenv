@@ -860,10 +860,11 @@ Phase 3 complete: the C# renderer is fully retired and the app URL space is clea
   returns the synthesized member names so `SsrRenderer` routes them to the system scope.
 - **`path` is provided, not declared.** It is the request URL, always in the system scope;
   apps no longer write `var path = "/"`.
-- **`status(n)` + self-hosted NotFound.** A `status` builtin sets the first-paint HTTP status
-  (`ExecContext.Status`); `Render` returns `(Html, Status)` and the handler applies a non-200.
-  An unrouted URL (or a deleted view target) renders a synthesized `__notFound` code page
-  (`notFoundForm` sets 404), with breadcrumb chrome — the last static C# page is gone.
+- **`status` + self-hosted NotFound.** `status` is a writable system var (default 200), the
+  same shape as `path` — assign `status = 404`. `Render` returns `(Html, Status)` and the
+  handler applies a non-200. An unrouted URL (or a deleted view target) renders a synthesized
+  `__notFound` code page (`notFoundForm` sets `status = 404`), with breadcrumb chrome — the
+  last static C# page is gone.
 
 ## Tool stack and project structure
 
