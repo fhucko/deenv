@@ -198,7 +198,7 @@ public static class GenericUi
                     <input class="value" value={field(entry, "value")}>
 
             fn notFoundForm()
-                status(404)
+                status = 404
                 return <main class="not-found">
                     <h1>
                         "Not found"

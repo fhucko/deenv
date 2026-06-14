@@ -327,11 +327,6 @@ public sealed class CodeExecutor
                 // setRef(obj, prop, value) persists on the client (the reference editor).
                 // Server-side (SSR / refetch) never runs the click handler, so it no-ops.
                 case "setRef": return new ExecNothing();
-                // status(n) sets the first-paint HTTP status (e.g. the NotFound view → 404).
-                case "status":
-                    if (codeCall.Params.Length > 0)
-                        context.Status = AsInt(ExecuteValue(codeCall.Params[0], scope, context));
-                    return new ExecNothing();
             }
 
         var callee = ExecuteValue(codeCall.Fn, scope, context);

@@ -25,20 +25,21 @@ public static class CodeValidator
         if (ui == null) return;
 
         // The SYSTEM scope holds the framework-provided symbols ABOVE the custom code:
-        // db (read-only) + path (the request URL, writable) + the built-ins (resolvable as
-        // symbols, no fixed arity — field, humanize, extent, setRef, nest, clone, status).
-        // User vars/functions live in a child `top` scope, so they read these by walking up
-        // but never collide with them (a user var of the same name simply shadows).
+        // the writable state vars db (read-only), path (the request URL) and status (the
+        // first-paint HTTP status, default 200), plus the built-ins (resolvable as symbols,
+        // no fixed arity — field, humanize, extent, setRef, nest, clone). User vars/functions
+        // live in a child `top` scope: they read these by walking up but never collide (a user
+        // var of the same name simply shadows).
         var system = new Scope(null);
         system.Declare("db", writable: false);
         system.Declare("path", writable: true);
+        system.Declare("status", writable: true);
         system.Declare("field", writable: false);
         system.Declare("humanize", writable: false);
         system.Declare("extent", writable: false);
         system.Declare("setRef", writable: false);
         system.Declare("nest", writable: false);
         system.Declare("clone", writable: false);
-        system.Declare("status", writable: false);
 
         var top = new Scope(system);
         foreach (var v in ui.Vars ?? [])

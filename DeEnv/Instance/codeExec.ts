@@ -618,9 +618,6 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         if (codeCall.fn.name === "setRef") return execSetRef(codeCall, scope, context);
         if (codeCall.fn.name === "nest") return execNest(codeCall, scope, context);
         if (codeCall.fn.name === "clone") return execClone(codeCall, scope, context);
-        // status(n) sets the first-paint HTTP status server-side; on the client (a SPA after
-        // first load) it is irrelevant, so it no-ops.
-        if (codeCall.fn.name === "status") return { type: "nothing" };
     }
     const fn = executeValue(codeCall.fn, scope, context).value;
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));

@@ -139,7 +139,7 @@ public sealed class SsrRenderer
         var context = new ExecContext();
         try
         {
-            var (result, title, scope, _, targetId) = ExecuteRender(urlPath, context, forcedMatch: match);
+            var (result, title, scope, _, targetId, status) = ExecuteRender(urlPath, context, forcedMatch: match);
             var body = new StringBuilder();
             SerializeChild(result, body);
 
@@ -186,7 +186,7 @@ public sealed class SsrRenderer
             };
 
             return (UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi), clientId, _infraPort),
-                context.Status);
+                status);
         }
         catch (ViewTargetNotFoundException)
         {
@@ -226,11 +226,11 @@ public sealed class SsrRenderer
     {
         var context = new ExecContext();
         context.LastId.Value = Math.Min(0, lastIdFloor);
-        var (_, _, scope, _, _) = ExecuteRender(urlPath, context, sessionVars, warmDb);
+        var (_, _, scope, _, _, _) = ExecuteRender(urlPath, context, sessionVars, warmDb);
         return ClientState.Serialize(scope, context);
     }
 
-    private (IExecTagChild Result, string Title, ExecScope Scope, ViewMatch Match, int? TargetId) ExecuteRender(
+    private (IExecTagChild Result, string Title, ExecScope Scope, ViewMatch Match, int? TargetId, int Status) ExecuteRender(
         string urlPath, ExecContext context, IReadOnlyDictionary<string, IExecValue>? sessionVars = null,
         ExecObject? warmDb = null, ViewMatch? forcedMatch = null)
     {
@@ -247,6 +247,10 @@ public sealed class SsrRenderer
         // session holds (already reflecting the client's mutations) instead of reloading.
         var db = warmDb ?? DbBridge.LoadRoot(_store, _desc, context);
         system.Items["db"] = new ExecScopeItem { Value = db, IsReadOnly = true };
+
+        // `status` is a framework state var (the first-paint HTTP status); the view may assign
+        // it (e.g. NotFound sets `status = 404`). Read back after render. Default 200.
+        system.Items["status"] = new ExecScopeItem { Value = new ExecInt { Value = 200 }, IsReadOnly = false };
 
         // Functions first (close over their scope → mutual recursion) so var initializers may
         // call them. The synthesized generic library goes in the SYSTEM scope (it is framework
@@ -311,7 +315,10 @@ public sealed class SsrRenderer
             : match.Kind == ViewKind.Type ? PageTitle(match.TargetPath!)
             : match.Kind == ViewKind.NotFound ? "Not found"
             : "DeEnv";
-        return (child, title, scope, match, targetId);
+
+        // The first-paint HTTP status: the (possibly view-assigned) `status` system var.
+        var status = system.Items.TryGetValue("status", out var s) && s.Value is ExecInt si ? si.Value : 200;
+        return (child, title, scope, match, targetId, status);
     }
 
     // Walk URL segments through the loaded object graph: a set member segment is the

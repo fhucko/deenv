@@ -161,11 +161,6 @@ public sealed class ExecContext
 {
     public LastId LastId { get; set; } = new();
 
-    // The HTTP status for this first paint, settable by user code via the `status` builtin
-    // (e.g. the synthesized NotFound view sets 404). 200 unless changed. Client-side it is
-    // irrelevant (a SPA after first load), so the `status` builtin no-ops there.
-    public int Status { get; set; } = 200;
-
     // Leaf accesses (made in output position — DepStack empty): the displayed data
     // shipped to the client. Inside a computation, reads become dependencies instead
     // (plus pending leaves — see LeafFrame).
