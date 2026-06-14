@@ -184,6 +184,14 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   `internal` scope. Specced by `SelfHostedUi.feature` + the migrated milestone-1/2/4/5
   features. See DECISIONS.md.
 
+- **Auto with overrides (custom composes the generic library).** A custom `fn render()`
+  that calls the generic-UI library (`objectForm`/`setTable`/`refEditor`/…) to reuse the
+  auto-form for parts of a page while hand-authoring the rest — the replacement for the
+  dropped M8 `view` system. M9 makes this possible (the generic UI *is* that library). The
+  open design piece: the library functions now live in the `internal` scope, off-limits to
+  user code (the builtins `field`/`humanize`/`nest`/`clone`/`extent`/`setRef` are already
+  reachable); composition needs a deliberate public surface for the library functions.
+
 - **Schema versioning.** Git-style versioning of the schema, built inside
   the environment itself using the code milestone (versioning is
   behaviour-shaped). The structural identity-based diff is already designed —
