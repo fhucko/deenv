@@ -56,7 +56,7 @@ public sealed class ClientSessionTests
         var sessions = new ClientSessionStore(claimWindow: TimeSpan.FromMilliseconds(50));
 
         // SSR mints the session; the client's hello arrives after the window.
-        var html = new SsrRenderer(dataStore, desc, sessions).Render("/");
+        var html = new SsrRenderer(dataStore, desc, sessions).Render("/").Html;
         var clientId = ClientIdOf(html);
         await Task.Delay(150);
 
@@ -86,7 +86,7 @@ public sealed class ClientSessionTests
         Seed(dataStore, "Ada", 999);
         var sessions = new ClientSessionStore();
 
-        var html = new SsrRenderer(dataStore, desc, sessions).Render("/");
+        var html = new SsrRenderer(dataStore, desc, sessions).Render("/").Html;
         var clientId = ClientIdOf(html);
         var ws = new WsHandler(dataStore, desc, sessions);
         ws.ProcessMessage($$"""{ "op": "hello", "clientId": "{{clientId}}" }""");

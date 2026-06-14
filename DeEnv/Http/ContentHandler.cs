@@ -25,10 +25,11 @@ public sealed class ContentHandler : IHandler
         var remaining = request.Target.GetRemaining();
         var path = remaining.IsRoot ? "/" : "/" + remaining.ToString().Trim('/');
 
-        IResponse response = request.Respond()
-            .Content(_renderer.Render(path))
-            .Type(ContentType.TextHtml)
-            .Build();
+        var (html, status) = _renderer.Render(path);
+        var builder = request.Respond().Content(html).Type(ContentType.TextHtml);
+        // Only override the default 200 when user code set a status (e.g. NotFound → 404).
+        if (status != 200) builder = builder.Status(status, ((ResponseStatus)status).ToString());
+        IResponse response = builder.Build();
 
         return new ValueTask<IResponse?>(response);
     }

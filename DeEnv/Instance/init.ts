@@ -30,7 +30,10 @@ const uiStatic: {
     renderFn: null as unknown as ExecFunction,
     renderArgs: [],
     lastId: { value: 0 },
-    state: { objects: {}, arrays: {}, scope: { items: {}, parent: null }, localToServerIds: {}, serverToLocalIds: {} },
+    // The client mirrors the server's framework values (db, path) + app vars in one flat
+    // top scope; resolution is by name, so the server's system/app split is observationally
+    // the same here. isTop marks it reactive (matching the server's IsTop check).
+    state: { objects: {}, arrays: {}, scope: { items: {}, parent: null, isTop: true }, localToServerIds: {}, serverToLocalIds: {} },
     cache: new Map(),
     clientId: "",
     lastError: null,
@@ -66,9 +69,9 @@ function init(): void {
         uiStatic.renderArgs = [{ type: "text", value: location.pathname }];
     }
 
-    // Routing: the live URL overrides the server's first-paint `path`.
-    if (scope.items["path"] != null)
-        scope.items["path"] = { value: { type: "text", value: location.pathname }, isReadOnly: false };
+    // Routing: `path` is framework-provided (the live URL), overriding the server's
+    // first-paint value.
+    scope.items["path"] = { value: { type: "text", value: location.pathname }, isReadOnly: false };
 
     // Browser back/forward: write the location back into the path var and re-render.
     window.addEventListener("popstate", () => {

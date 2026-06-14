@@ -10,6 +10,13 @@ Feature: Self-hosted generic UI (object forms)
   entry has no extent id, so its field edits persist path-addressed (the `write` op).
 
   @milestone-9 @single-user
+  Scenario: An unrouted URL is a self-hosted 404
+    Given the self-hosted form app is running
+    When I request "/does-not-exist"
+    Then the response status is 404
+    And the response body contains "Not found"
+
+  @milestone-9 @single-user
   Scenario: An all-scalar object page is rendered by the self-hosted form
     Given the self-hosted form app is running
     When I open "/notes/2"

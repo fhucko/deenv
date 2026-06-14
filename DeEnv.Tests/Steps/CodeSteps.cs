@@ -81,7 +81,7 @@ public sealed class CodeSteps(InstanceContext ctx)
     public void WhenPageRendered(string path)
     {
         var renderer = new SsrRenderer(ctx.Store!, ctx.Description!);
-        ctx.RenderedHtml = renderer.Render(path);
+        ctx.RenderedHtml = renderer.Render(path).Html;
     }
 
     // ── Then ──────────────────────────────────────────────────────────────────

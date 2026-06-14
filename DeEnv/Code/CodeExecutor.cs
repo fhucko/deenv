@@ -143,7 +143,7 @@ public sealed class CodeExecutor
     {
         var itemScope = FindScope(codeSymbol.Name, scope);
         var item = itemScope.Items[codeSymbol.Name];
-        if (itemScope.Parent == null)
+        if (itemScope.IsTop)
         {
             // A writable top-scope var read inside a computation is a dependency:
             // assigning the var must invalidate the cached result. (Read-only items —
@@ -327,6 +327,11 @@ public sealed class CodeExecutor
                 // setRef(obj, prop, value) persists on the client (the reference editor).
                 // Server-side (SSR / refetch) never runs the click handler, so it no-ops.
                 case "setRef": return new ExecNothing();
+                // status(n) sets the first-paint HTTP status (e.g. the NotFound view → 404).
+                case "status":
+                    if (codeCall.Params.Length > 0)
+                        context.Status = AsInt(ExecuteValue(codeCall.Params[0], scope, context));
+                    return new ExecNothing();
             }
 
         var callee = ExecuteValue(codeCall.Fn, scope, context);

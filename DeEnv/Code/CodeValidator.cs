@@ -24,18 +24,23 @@ public static class CodeValidator
         var ui = desc.Ui;
         if (ui == null) return;
 
-        // Top scope: db (read-only) + ui vars (writable) + all function names.
-        var top = new Scope(null);
-        top.Declare("db", writable: false);
-        // Built-ins for the self-hosted generic UI, resolvable as symbols (no fixed
-        // arity): field (dynamic by-name access), humanize (prop name → label), save
-        // (persist an object's fields — the generic form's Save button).
-        top.Declare("field", writable: false);
-        top.Declare("humanize", writable: false);
-        top.Declare("extent", writable: false);   // a type's objects (reference picker)
-        top.Declare("setRef", writable: false);    // set/clear an object reference prop
-        top.Declare("nest", writable: false);      // a URL path-join for nested member links
-        top.Declare("clone", writable: false);     // a fresh object from a blank template
+        // The SYSTEM scope holds the framework-provided symbols ABOVE the custom code:
+        // db (read-only) + path (the request URL, writable) + the built-ins (resolvable as
+        // symbols, no fixed arity — field, humanize, extent, setRef, nest, clone, status).
+        // User vars/functions live in a child `top` scope, so they read these by walking up
+        // but never collide with them (a user var of the same name simply shadows).
+        var system = new Scope(null);
+        system.Declare("db", writable: false);
+        system.Declare("path", writable: true);
+        system.Declare("field", writable: false);
+        system.Declare("humanize", writable: false);
+        system.Declare("extent", writable: false);
+        system.Declare("setRef", writable: false);
+        system.Declare("nest", writable: false);
+        system.Declare("clone", writable: false);
+        system.Declare("status", writable: false);
+
+        var top = new Scope(system);
         foreach (var v in ui.Vars ?? [])
         {
             if (top.IsDeclaredLocally(v.Name))

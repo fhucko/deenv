@@ -41,6 +41,9 @@ public static class GenericUi
     // entry page). SsrRenderer.ResolveView dispatches a scalar dict entry to it.
     public const string LeafViewType = "__leaf";
 
+    // The reserved view "type" for the self-hosted NotFound page (an unrouted URL).
+    public const string NotFoundViewType = "__notFound";
+
     private const string StdlibSource = """
         ui
             fn objectForm(obj, meta, base)
@@ -194,6 +197,16 @@ public static class GenericUi
                         field(entry, "__key")
                     <input class="value" value={field(entry, "value")}>
 
+            fn notFoundForm()
+                status(404)
+                return <main class="not-found">
+                    <h1>
+                        "Not found"
+                    <p class="missing">
+                        path
+                    <a class="home" href="/">
+                        "Home"
+
             fn inputType(baseType)
                 if baseType == "int"
                     return "number"
@@ -209,11 +222,15 @@ public static class GenericUi
     // REFERENCE / SET view per object reference / set prop. Returns the app's ui unchanged
     // when it does not opt in. Functions are renumbered (CodeIds) over the whole set so
     // server and client key the memo cache alike.
-    public static InstanceUi? Effective(InstanceDescription desc)
+    //
+    // SystemNames lists the synthesized framework members (the library functions + the
+    // descriptor registries) so the renderer places them in the SYSTEM scope, above the
+    // custom code — they never pollute the app scope.
+    public static (InstanceUi? Ui, IReadOnlySet<string> SystemNames) Effective(InstanceDescription desc)
     {
         var ui = desc.Ui;
         // A fully-custom UI (`fn render()`) owns the whole URL space — no generic synthesis.
-        if (ui?.Render != null) return ui;
+        if (ui?.Render != null) return (ui, EmptyNames);
         // Otherwise the self-hosted generic UI is the DEFAULT: synthesize per-type views over
         // the (possibly absent) ui section. A plain app — no `ui` section, or only common
         // helpers — renders entirely through the Code objectForm library.
@@ -251,6 +268,9 @@ public static class GenericUi
         if (objectTypes.Any(t => DictProps(t).Any(p => !desc.IsObjectType(p.Type))))
             synthViews.Add(SynthLeafView());
 
+        // The self-hosted NotFound page for any unrouted URL (sets a 404 status).
+        synthViews.Add(SynthNotFoundView());
+
         var vars = new List<UiVar>();
         vars.AddRange(ui.Vars ?? []);
         vars.Add(new UiVar(DescsVar, Registry(objectTypes, desc)));        // stable type-descriptor registry
@@ -266,8 +286,15 @@ public static class GenericUi
         // Number every function (library + app + synthesized) deterministically so the
         // server and the shipped client key the memo cache identically.
         CodeIds.Assign(new InstanceDescription(Types: desc.Types, Ui: effective, Common: desc.Common));
-        return effective;
+
+        // The framework-synthesized members (library functions + descriptor registries) — the
+        // renderer puts these in the system scope, leaving the app scope to the user's code.
+        var systemNames = new HashSet<string>(library.Where(f => f.Name != null).Select(f => f.Name!))
+            { DescsVar, DictDescsVar };
+        return (effective, systemNames);
     }
+
+    private static readonly IReadOnlySet<string> EmptyNames = new HashSet<string>();
 
     private static IEnumerable<PropDefinition> RefProps(TypeDefinition type, InstanceDescription desc) =>
         (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Single && desc.IsObjectType(p.Type));
@@ -305,6 +332,11 @@ public static class GenericUi
     // to the entry object (FindTarget resolves it by key); its value persists path-addressed.
     private static UiView SynthLeafView() =>
         new(LeafViewType, Fn(["entry", "base"], Return(Call("leafForm", Sym("entry"), Sym("base")))));
+
+    // The shared NotFound view: `view() → return notFoundForm()`. Takes no target — it reads
+    // the framework `path` var and sets a 404 status.
+    private static UiView SynthNotFoundView() =>
+        new(NotFoundViewType, Fn([], Return(Call("notFoundForm"))));
 
     private static UiView SynthDictView(string ownerType, string prop) =>
         new(ownerType, Fn(["parent", "base"], Return(Invoke(Call("dictTable",

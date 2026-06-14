@@ -98,12 +98,16 @@ public static class ClientState
         foreach (var (coll, item) in context.AccessedItems)
             if (item != null) CollectionRef(coll);
 
+        // Ship the app scope AND its system parent (db, path) flat — the client rebuilds a
+        // single scope; resolution is by name, so the system/app split need not survive the
+        // wire. A child var shadows a parent of the same name (none do today).
         var scope = new JsonObject();
-        foreach (var (key, item) in topScope.Items)
-        {
-            if (item.Value is ExecFunction) continue; // functions come from initUi
-            scope[key] = new JsonObject { ["isReadOnly"] = item.IsReadOnly, ["value"] = DtValue(item.Value) };
-        }
+        for (var s = topScope; s != null; s = s.Parent)
+            foreach (var (key, item) in s.Items)
+            {
+                if (item.Value is ExecFunction || scope.ContainsKey(key)) continue; // fns come from initUi
+                scope[key] = new JsonObject { ["isReadOnly"] = item.IsReadOnly, ["value"] = DtValue(item.Value) };
+            }
 
         var cache = new JsonArray();
         foreach (var (_, entry) in context.Memo)

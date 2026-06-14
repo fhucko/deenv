@@ -183,7 +183,6 @@ public class InstanceContext
             priority: int
 
     ui
-        var path = "/"
         var title = "Tasks"
 
         fn render()
@@ -221,7 +220,6 @@ public class InstanceContext
             name: text
 
     ui
-        var path = "/"
         var newName = ""
 
         fn addItem()
@@ -259,7 +257,6 @@ public class InstanceContext
             return people.where(p => p.salary > 100)
 
     ui
-        var path = "/"
         var rich = highEarners(db.people)
 
         fn render()
@@ -287,7 +284,6 @@ public class InstanceContext
             salary: int
 
     ui
-        var path = "/"
 
         fn render()
             return <main>
@@ -319,7 +315,6 @@ public class InstanceContext
             title: text
 
     ui
-        var path = "/"
 
         fn getNewNote()
             return { title: "" }

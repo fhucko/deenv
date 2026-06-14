@@ -70,6 +70,26 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    // ── direct HTTP (status codes) ──────────────────────────────────────────────────
+
+    private int _lastStatus;
+    private string _lastBody = "";
+
+    [When("I request {string}")]
+    public async Task WhenRequest(string path)
+    {
+        using var http = new System.Net.Http.HttpClient();
+        var r = await http.GetAsync(ctx.BaseUrl + path);
+        _lastStatus = (int)r.StatusCode;
+        _lastBody = await r.Content.ReadAsStringAsync();
+    }
+
+    [Then("the response status is {int}")]
+    public async Task ThenResponseStatus(int code) => await Assert.That(_lastStatus).IsEqualTo(code);
+
+    [Then("the response body contains {string}")]
+    public async Task ThenResponseBody(string text) => await Assert.That(_lastBody).Contains(text);
+
     // A scalar dictionary entry's own page (/<dict>/<key>) — the shared leaf editor.
     [Then("the entry value shows {string}")]
     public async Task ThenEntryValueShows(string expected)

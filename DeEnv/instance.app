@@ -21,7 +21,6 @@ initialData
         name: "List 1"
         items: []
 ui
-    var path = "/"
     var title = "Todo list"
     var selectedUser
     var selectedList

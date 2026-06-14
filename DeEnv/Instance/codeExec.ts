@@ -60,7 +60,10 @@ interface ExecFunction { type: "fn"; fn: CodeFunction; scope: ExecScope; }
 interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
 interface ExecTag { type: "tag"; name: string; attributes: { [name: string]: ExecResult }; children: ExecTagChild[]; key?: number; }
 
-interface ExecScope { items: { [name: string]: ExecScopeItem }; parent: ExecScope | null; }
+// isTop marks a persistent top-level scope (the framework system scope, or the app scope)
+// whose writable vars are reactive — read in a computation they are deps, assigned they
+// invalidate the memo cache. Transient local scopes (fn calls, blocks, foreach) leave it unset.
+interface ExecScope { items: { [name: string]: ExecScopeItem }; parent: ExecScope | null; isTop?: boolean; }
 interface ExecScopeItem { value: ExecValue; isReadOnly: boolean; }
 interface ExecContext { lastId: LastId; }
 interface LastId { value: number; }
@@ -120,7 +123,7 @@ function executeAssignment(assignment: CodeAssignment, scope: ExecScope, context
         if (item.isReadOnly) throw new Error(`Symbol ${target.name} is read only`);
         item.value = value;
         // Assigning a top-scope UI-state var invalidates every cached computation that read it.
-        if (itemScope.parent === null) invalidateVar(target.name);
+        if (itemScope.isTop) invalidateVar(target.name);
         return value;
     }
     // An object-field lvalue (`obj.member = …`): set in place, the same write path two-way
@@ -179,12 +182,12 @@ function executeSymbol(codeSymbol: CodeSymbol, scope: ExecScope): ExecResult {
     // A writable top-scope var read inside a computation is a dependency: assigning
     // the var must invalidate the cached result. (Read-only items — db, functions —
     // can never be reassigned, so they are not deps.)
-    if (itemScope.parent === null && !item.isReadOnly) recordVar(codeSymbol.name);
+    if (itemScope.isTop && !item.isReadOnly) recordVar(codeSymbol.name);
     return {
         value: item.value,
         setValue: p => {
             item.value = p;
-            if (itemScope.parent === null) invalidateVar(codeSymbol.name);
+            if (itemScope.isTop) invalidateVar(codeSymbol.name);
         },
     };
 }
@@ -615,6 +618,9 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         if (codeCall.fn.name === "setRef") return execSetRef(codeCall, scope, context);
         if (codeCall.fn.name === "nest") return execNest(codeCall, scope, context);
         if (codeCall.fn.name === "clone") return execClone(codeCall, scope, context);
+        // status(n) sets the first-paint HTTP status server-side; on the client (a SPA after
+        // first load) it is irrelevant, so it no-ops.
+        if (codeCall.fn.name === "status") return { type: "nothing" };
     }
     const fn = executeValue(codeCall.fn, scope, context).value;
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));

@@ -212,7 +212,7 @@ public sealed class CodeParseDocumentTests
             "        note: text\n" +
             "\n" +
             "ui\n" +
-            "    var path = \"/\"\n");
+            "    var selected = \"x\"\n");
         await Assert.That(desc.Ui!.Render).IsNull();
     }
 

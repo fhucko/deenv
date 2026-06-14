@@ -26,6 +26,10 @@ public sealed class SsrRenderer
     // reserved-path-free data URL space.
     private readonly int _infraPort;
 
+    // Names of the synthesized framework members (the generic library + descriptor registries)
+    // — placed in the system scope, above the custom code, so they never pollute the app scope.
+    private readonly IReadOnlySet<string> _systemNames;
+
     public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null, int infraPort = 0)
     {
         _store = store;
@@ -33,22 +37,16 @@ public sealed class SsrRenderer
         _resolver = new TypeResolver(desc);
         _sessions = sessions;
         _infraPort = infraPort;
-        _ui = GenericUi.Effective(desc);
+        (_ui, _systemNames) = GenericUi.Effective(desc);
     }
 
-    public string Render(string urlPath)
-    {
-        // Every page is code-owned now: a fully-custom `fn render()`, or the self-hosted
-        // generic UI (the default). A URL no view matches — an unknown path, or a bare
-        // scalar field route nothing links to — is NotFound.
-        if (_ui != null && ResolveView(urlPath) != null)
-            return RenderUi(urlPath);
-        return NotFoundPage(urlPath, ParsePath(urlPath));
-    }
+    // The rendered HTML plus the first-paint HTTP status (200 unless code set it, e.g. the
+    // self-hosted NotFound view sets 404).
+    public (string Html, int Status) Render(string urlPath) => RenderUi(urlPath);
 
     // ── the rendering-function decision ─────────────────────────────────────────
 
-    private enum ViewKind { Render, Type }
+    private enum ViewKind { Render, Type, NotFound }
 
     private sealed record ViewMatch(ViewKind Kind, CodeFunction Fn, UiView? View, NodePath? TargetPath);
 
@@ -122,15 +120,26 @@ public sealed class SsrRenderer
 
     // ── code-owned UI (view pages; `fn render()` is the root view) ──────────────
 
-    // Execute the resolved view over a prepared top scope and serialize the
-    // resulting tag tree to HTML. A runtime error on first paint becomes an SSR
-    // error page; a missing view target becomes the NotFound page.
-    private string RenderUi(string urlPath)
+    // The synthesized NotFound view (a self-hosted 404 page), used for an unrouted URL or a
+    // deleted view target.
+    private ViewMatch NotFoundMatch()
+    {
+        var v = (_ui?.Views ?? []).FirstOrDefault(x => x.Type == GenericUi.NotFoundViewType)
+            ?? throw new InvalidOperationException("No NotFound view was synthesized.");
+        return new ViewMatch(ViewKind.NotFound, v.Fn, v, null);
+    }
+
+    // Resolve the view for this URL (an unrouted URL falls to the self-hosted NotFound) and
+    // render it. A runtime error on first paint becomes an SSR error page.
+    private (string Html, int Status) RenderUi(string urlPath) =>
+        RenderPage(urlPath, ResolveView(urlPath) ?? NotFoundMatch());
+
+    private (string Html, int Status) RenderPage(string urlPath, ViewMatch match)
     {
         var context = new ExecContext();
         try
         {
-            var (result, title, scope, match, targetId) = ExecuteRender(urlPath, context);
+            var (result, title, scope, _, targetId) = ExecuteRender(urlPath, context, forcedMatch: match);
             var body = new StringBuilder();
             SerializeChild(result, body);
 
@@ -166,26 +175,37 @@ public sealed class SsrRenderer
                 ["view"] = viewInfo,
             }.ToJsonString();
 
-            // A type view keeps the generic breadcrumb chrome (plain links) around
-            // its content; path views and the root render own the page.
-            var breadcrumbs = match.Kind == ViewKind.Type ? Breadcrumbs(match.TargetPath!) : "";
+            // A type view (and the NotFound page) keeps the generic breadcrumb chrome (plain
+            // links) around its content, so a missing page can still navigate back up; a
+            // full-custom render owns the whole page.
+            var breadcrumbs = match.Kind switch
+            {
+                ViewKind.Type => Breadcrumbs(match.TargetPath!),
+                ViewKind.NotFound => Breadcrumbs(ParsePath(urlPath)),
+                _ => "",
+            };
 
-            return UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi), clientId, _infraPort);
+            return (UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi), clientId, _infraPort),
+                context.Status);
         }
         catch (ViewTargetNotFoundException)
         {
-            return NotFoundPage(urlPath, ParsePath(urlPath));
+            // The routed object was deleted (or a reference is unset): render the self-hosted
+            // NotFound view (404), unless we were already rendering it.
+            return match.Kind == ViewKind.NotFound
+                ? (Layout("Not found", "<main><h1>Not found</h1></main>"), 404)
+                : RenderPage(urlPath, NotFoundMatch());
         }
         catch (CodeRuntimeException ex)
         {
             // A user-code error: its message belongs on the page.
-            return Layout("Error", $"<main><h1>Error</h1><p>{Escape(ex.Message)}</p></main>");
+            return (Layout("Error", $"<main><h1>Error</h1><p>{Escape(ex.Message)}</p></main>"), 200);
         }
         catch (Exception ex)
         {
             // An engine bug: log the details, show nothing internal.
             Console.Error.WriteLine($"SSR render of '{urlPath}' failed: {ex}");
-            return Layout("Error", "<main><h1>Error</h1><p>Internal error.</p></main>");
+            return (Layout("Error", "<main><h1>Error</h1><p>Internal error.</p></main>"), 200);
         }
     }
 
@@ -212,35 +232,39 @@ public sealed class SsrRenderer
 
     private (IExecTagChild Result, string Title, ExecScope Scope, ViewMatch Match, int? TargetId) ExecuteRender(
         string urlPath, ExecContext context, IReadOnlyDictionary<string, IExecValue>? sessionVars = null,
-        ExecObject? warmDb = null)
+        ExecObject? warmDb = null, ViewMatch? forcedMatch = null)
     {
         var ui = _ui!;
         var exec = new CodeExecutor(_store);
-        var scope = new ExecScope();
 
-        // db root (the object graph), read-only at the top. A recompute reuses the warm
-        // graph the session holds (already reflecting the client's mutations) instead of
-        // reloading from storage.
+        // The SYSTEM scope holds the framework-provided values (db, path) ABOVE the custom
+        // code. The app code (functions, ui vars) lives in a child `scope`, so it reads
+        // db/path by walking up but never declares or collides with them.
+        var system = new ExecScope { IsTop = true };
+        var scope = new ExecScope { Parent = system, IsTop = true };
+
+        // db root (the object graph), read-only. A recompute reuses the warm graph the
+        // session holds (already reflecting the client's mutations) instead of reloading.
         var db = warmDb ?? DbBridge.LoadRoot(_store, _desc, context);
-        scope.Items["db"] = new ExecScopeItem { Value = db, IsReadOnly = true };
+        system.Items["db"] = new ExecScopeItem { Value = db, IsReadOnly = true };
 
-        // Functions first (close over the same top scope → mutual recursion) so var
-        // initializers may call them — including server-only ones.
+        // Functions first (close over their scope → mutual recursion) so var initializers may
+        // call them. The synthesized generic library goes in the SYSTEM scope (it is framework
+        // code); the app's own functions stay in the app scope. (Common helpers are the user's.)
         foreach (var f in _desc.Common?.Functions ?? []) DefineFunction(f, scope);
-        foreach (var f in ui.Functions ?? []) DefineFunction(f, scope);
+        foreach (var f in ui.Functions ?? []) DefineFunction(f, _systemNames.Contains(f.Name ?? "") ? system : scope);
 
-        // UI/session state. Each initializer is a memoized computation (`var:<name>`),
-        // so its inputs become dependencies (not shipped) and only the resulting value
-        // is shipped in scope. `path` is the requested URL (routing).
+        // UI/session state. Each initializer is a memoized computation (`var:<name>`), so its
+        // inputs become dependencies (not shipped) and only the resulting value is shipped.
+        // The synthesized descriptor registries (__descs/__dictDescs) live in the system scope.
         foreach (var v in ui.Vars ?? [])
         {
             var value = v.Value is { } init
                 ? CodeExecutor.Memoize($"var:{v.Name}", context, () => exec.ExecuteValue(init, scope, context))
                 : new ExecNull();
-            scope.Items[v.Name] = new ExecScopeItem { Value = value, IsReadOnly = false };
+            var target = _systemNames.Contains(v.Name) ? system : scope;
+            target.Items[v.Name] = new ExecScopeItem { Value = value, IsReadOnly = false };
         }
-        if (scope.Items.ContainsKey("path"))
-            scope.Items["path"] = new ExecScopeItem { Value = new ExecText { Value = urlPath }, IsReadOnly = false };
 
         // Client-held session vars (a refetch) override their just-computed values, so the
         // re-render sees the same UI state the client has. Computed vars (e.g. a filtered
@@ -250,9 +274,15 @@ public sealed class SsrRenderer
             foreach (var (name, value) in sessionVars)
                 if (scope.Items.TryGetValue(name, out var it) && !it.IsReadOnly) it.Value = value;
 
-        // The rendering-function decision, re-resolved here so the refetch path
+        // `path` is framework-provided (not declared by the app), always the requested URL —
+        // the request is authoritative for routing. It lives in the system scope (writable;
+        // the client mirrors it to location.pathname and updates it on navigation).
+        system.Items["path"] = new ExecScopeItem { Value = new ExecText { Value = urlPath }, IsReadOnly = false };
+
+        // The rendering-function decision: the caller's forced match (RenderPage passes the
+        // resolved view, incl. NotFound), or re-resolved here so the refetch path
         // (RenderState → ExecuteRender) renders the same view as the page did.
-        var match = ResolveView(urlPath)
+        var match = forcedMatch ?? ResolveView(urlPath)
             ?? throw new CodeRuntimeException("No view matches this URL.");
 
         // A type view's parameters: (1) the routed object, found by walking the URL
@@ -274,11 +304,13 @@ public sealed class SsrRenderer
         if (result is not IExecTagChild child)
             throw new CodeRuntimeException("The view did not return a renderable value.");
 
-        // Title: the app's `title` var when set; a type-view page falls back to the
-        // generic page title (its node path), other code pages to "DeEnv".
+        // Title: the app's `title` var when set; a type-view page falls back to the generic
+        // page title (its node path), the NotFound page to "Not found", others to "DeEnv".
         var title = scope.Items.TryGetValue("title", out var t) && t.Value is ExecText titleText
             ? titleText.Value
-            : match.Kind == ViewKind.Type ? PageTitle(match.TargetPath!) : "DeEnv";
+            : match.Kind == ViewKind.Type ? PageTitle(match.TargetPath!)
+            : match.Kind == ViewKind.NotFound ? "Not found"
+            : "DeEnv";
         return (child, title, scope, match, targetId);
     }
 
@@ -399,24 +431,10 @@ public sealed class SsrRenderer
         }
     }
 
-    // ── not found ─────────────────────────────────────────────────────────────
-
-    private string NotFoundPage(string urlPath, NodePath path)
-    {
-        var parent = path.IsRoot ? "/" : ParentUrl(path);
-        var body = $"""
-            {Breadcrumbs(path)}
-            <main>
-              <p>Not found: <code>{Escape(urlPath)}</code></p>
-              <p><a href="{Escape(parent)}">← Back</a></p>
-            </main>
-        """;
-        return Layout("Not found", body);
-    }
-
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    // A static shell for the NotFound page (no client script — there is nothing to hydrate).
+    // A static shell for an engine-level fallback page (an SSR error, or a NotFound when
+    // even the synthesized NotFound view is unavailable). Normal pages use UiLayout.
     private static string Layout(string title, string body) => $"""
         <!DOCTYPE html>
         <html lang="en">
@@ -451,12 +469,6 @@ public sealed class SsrRenderer
 
     private static string PageTitle(NodePath path) =>
         path.IsRoot ? "Db" : "Db / " + string.Join(" / ", path.Segments);
-
-    private static string ParentUrl(NodePath path)
-    {
-        var segs = path.Segments.Take(path.Segments.Count - 1);
-        return "/" + string.Join("/", segs);
-    }
 
     private static NodePath ParsePath(string urlPath)
     {

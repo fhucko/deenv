@@ -126,6 +126,12 @@ public sealed class ExecScope
 {
     public Dictionary<string, ExecScopeItem> Items { get; set; } = [];
     public ExecScope? Parent { get; set; }
+
+    // A persistent top-level scope (the system scope holding db/path, or the app scope
+    // holding the ui vars/functions) — as opposed to a transient local scope (a function
+    // call, a block, a foreach item). A writable var in a top scope is reactive: read in a
+    // computation it is a dependency; assigned it invalidates the memo cache.
+    public bool IsTop { get; set; }
 }
 
 public sealed class ExecScopeItem
@@ -154,6 +160,11 @@ public sealed class LeafFrame
 public sealed class ExecContext
 {
     public LastId LastId { get; set; } = new();
+
+    // The HTTP status for this first paint, settable by user code via the `status` builtin
+    // (e.g. the synthesized NotFound view sets 404). 200 unless changed. Client-side it is
+    // irrelevant (a SPA after first load), so the `status` builtin no-ops there.
+    public int Status { get; set; } = 200;
 
     // Leaf accesses (made in output position — DepStack empty): the displayed data
     // shipped to the client. Inside a computation, reads become dependencies instead
