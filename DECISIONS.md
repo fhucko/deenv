@@ -1089,12 +1089,13 @@ seam; the commands-as-IDE are built in deenv over the registry-as-data.
 "build + start the app+infra hosts for one instance" out of `Program.cs`'s single, blocking
 `RunAsync` tail into a thin C# **kernel supervisor** that starts every instance in the
 registry and blocks on a shutdown signal. The registry is a plain `kernel.json`
-(`{ instances: [{ appFile, appPort, infraPort, dataFile }] }` — both ports **and** the
-data-file name explicit, not derived) read **without the interpreter** — the sanctioned
-bootstrap subset. Explicit `dataFile` is deliberate and load-bearing: it lets two instances
-of the *same* app document hold *separate* data (the test-instance / branch case that
-motivates multi-instance) — deriving the data file from the app stem would force same-app
-instances to collide on one file, breaking sovereignty. Proven by two scenarios:
+(`{ instances: [{ app, appPort, infraPort }] }` — the app document name + both ports; the
+data file is **derived** from the app stem via `AppPaths`) read **without the interpreter** —
+the sanctioned bootstrap subset. Slice 1's two instances are *different* apps, so derived
+data files don't collide. (Two instances of the **same** app needing *separate* data — the
+test-instance / branch case — is deferred with the `create` / test-instance follow-ups; the
+config grows an explicit data-file or instance-name field *then*, when a slice needs it, not
+before.) Proven by two scenarios:
 the kernel hosts two instances on distinct ports, both serving their root; a change in one
 leaves the other unchanged (**data sovereignty** — each has its own store). `InstanceApp.Build`
 and the host-start code are already per-instance + port-parameterized (today duplicated in
