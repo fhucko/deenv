@@ -171,21 +171,18 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   runtime; editor tooling. Enables schema versioning to be built inside the
   environment.
 
-- **Self-hosted generic UI.** The auto-form experience re-expressed in Code
-  (per-type default views derived from the schema; the C# form renderer and
-  the separate generic client retire). Views (M8) are the seam it plugs into.
-  **Slice 1 landed (object forms):** an `objectForm(obj, meta)` Code library +
-  the `field(obj, name)` dynamic-access builtin, opted in per app with `generic`
-  in the `ui` section; `GenericUi.Effective` synthesizes one per-type view per
-  all-scalar object type at render time (the descriptor rides as a Code literal,
-  so nothing new ships on the wire). **Slice 2 landed (references):** the
-  reference pick-or-create editor (pick-existing + clear) for a reference route
-  and an embedded reference field, via `extent()` (memoized candidates) +
-  `setRef()` (id-addressed). Specced by `SelfHostedUi.feature`. Next slices:
-  object creation forms, set tables, dictionaries (needs dicts in the Code
-  runtime), then flip the default and retire the C# renderer + `instance.ts`.
-  (Default-on is blocked until those land — it breaks unset reference routes and
-  the designer today.)
+- **Self-hosted generic UI.  ← DONE (2026-06-14).** The auto-form experience is
+  re-expressed in Code as a reflective library (`objectForm`/`refEditor`/`setTable`/
+  `dictTable`/`leafForm` over schema-as-data; builtins `field`/`humanize`/`extent`/
+  `setRef`/`nest`/`clone`) and is now the **default** renderer — an app with no
+  `fn render()` self-hosts. Object forms, references, set tables, objects-that-hold-sets
+  (inline tables, nested path-walk links), dictionaries (route + entries), and a
+  self-hosted NotFound all render in Code; the **C# auto-form, `instance.ts`, and the
+  `/js` C# client are deleted** — the self-hosted UI is the sole renderer. Infra
+  (`/ws`, the `/js` bundle) is on a separate port (clean app URL space); framework
+  context lives in a `system` scope with the generic-UI internals in a sibling
+  `internal` scope. Specced by `SelfHostedUi.feature` + the migrated milestone-1/2/4/5
+  features. See DECISIONS.md.
 
 - **Schema versioning.** Git-style versioning of the schema, built inside
   the environment itself using the code milestone (versioning is

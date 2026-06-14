@@ -29,15 +29,17 @@ where developers design data visually and use it as objects. Full mission in
    initialData + code — with parser and printer; M8 UI customization was
    **dropped 2026-06-13** in favour of **two UI modes** — fully custom (`fn
    render()`) or fully auto (the generic UI) — see DECISIONS.md). **M9
-   (self-hosted generic UI) is in progress**: the generic UI re-expressed in Code
-   as a library (`objectForm`/`refEditor`/`setTable` over schema-as-data; builtins
-   `field`/`humanize`/`extent`/`setRef`/`nest`/`clone`; `obj.prop = x`), opted in per
-   app via `generic`. Object forms, references (pick/clear/create-new), set tables,
-   AND objects-that-hold-sets (the Db root self-hosts; sets render inline with nested
-   path-walk member links, e.g. `/notes/3`) are self-hosted; only **general
-   dictionaries** + **designer parity** remain, then the C# renderer + `instance.ts`
-   retire. **Schema versioning stays postponed** (self-hosted on top of Code). Later
-   milestones are out of scope unless explicitly asked.
+   (self-hosted generic UI) is DONE (2026-06-14)**: the generic UI is re-expressed in
+   Code as a library (`objectForm`/`refEditor`/`setTable`/`dictTable`/`leafForm` over
+   schema-as-data; builtins `field`/`humanize`/`extent`/`setRef`/`nest`/`clone`; `obj.prop
+   = x`), and is now the **default** renderer (no opt-in). Object forms, references, set
+   tables, objects-that-hold-sets, dictionaries (route + entries), and a self-hosted
+   NotFound all self-host; the **C# auto-form, `instance.ts`, and the `/js` client are
+   deleted** — the self-hosted UI is the sole renderer. Infra (`/ws`, `/js` bundle) is on
+   a separate port so the app owns a clean data URL space; framework context (`db`,
+   `path`, `status`) lives in a system scope and the generic-UI internals in a sibling
+   `internal` scope outside userspace. **Schema versioning stays postponed.** No milestone
+   is currently in progress — later milestones are out of scope unless explicitly asked.
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
    custom language, the render-coupled storage engine, and the multi-device
@@ -112,54 +114,25 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
-**Milestone 9 (self-hosted generic UI) is in progress — slice 1 (object forms)
-just landed.** The generic object page is re-expressed in Code as a *reflective
-library*: `objectForm(obj, meta)` renders a form by iterating the type's schema
-(passed as a Code value, `meta: { name, props: [{ name, baseType }] }`) and
-binding each scalar field via the new `field(obj, name)` builtin (dynamic
-by-name prop access, the reflective twin of `obj.member`), with humanized labels
-(`humanize`). Edits **autosave** — `field` persists each change over the WS (no
-Save button), consistent with the reference picker and the reactive code pages.
-An app opts in
-with `generic` in its `ui` section (`InstanceUi.Generic`); at render time
-`GenericUi.Effective` synthesizes a `view T(obj)` per all-scalar object type
-without an explicit view, calling `objectForm` with that type's descriptor as a
-Code literal — so it plugs into M8's type-view dispatch unchanged, ships through
-the existing wire (no schema shipped separately), and the canonical
-`InstanceDescription` (what `AppPrint` emits) keeps only the `generic` flag.
-Driven by `SelfHostedUi.feature` (`DeEnv/Instance/GenericUi.cs`,
-`InstanceContext.SelfHostedFormApp`).
-
-**Slice 2 (references) also landed**: the reference pick-or-create editor is
-self-hosted — a reference *route* (`/lead`) and a reference *field* inside an
-object form (`Note.author`). New builtins `extent(typeName)` (memoized candidate
-list, rides the memo cache) and `setRef(obj, prop, value)` (id-addressed
-`setReferenceField` WS op + `WriteReference` store method); `ResolvedTypeInfo.
-IsReference` + a synthesized reference view keyed by `UiView.Prop`, bound to the
-parent object. Pick-existing, clear, and **create-new** — `refEditor`/`setTable`
-are **components** (`var state = { draft: clone(target.blank) }` init once, return
-render, reset `state.draft = clone(blank)` via `obj.prop = x`); Create =
-`setRef(parent, prop, state.draft)` / `set.add(state.draft)`. This is the SAME
-component pattern hand-authored forms use — one creation mechanism — enabled by a
-stable top-scope descriptor registry (`__descs`) and the `clone(obj)` builtin.
-Tried making the self-hosted UI the default and reverted:
-it breaks the reference editor on unset routes and the designer, which need more
-slices.
-
-**Slice 3 (set tables)** self-hosted a set *route* (`/notes`) as a `setTable`
-component. **Slice 4 (objects-that-hold-sets) just landed**: the navigation model is
-settled as **nested path-walk** (a *set is a dictionary keyed by member identity*, so
-`/notes/3` is a stable dictionary-entry access — that's why there are no positional
-arrays). `IsSelfHostable(type, desc)` widened to allow object sets, so the **Db root
-self-hosts**; `objectForm` renders each set as an **inline table** whose member rows
-link to the **nested member URL** (`/notes/3`), not the `/~/<id>` id-route. The page's
-base path is threaded into the synthesized view (`view T(obj, base)`, bound in
-`SsrRenderer.ExecuteRender` + `init.ts`); new builtin **`nest(base, seg)`** (URL
-path-join) **replaced** `link`. `IsSelfHostable` is the *temporary migration seam*
-(routes only dict-bearing types to the retiring C# form; deleted when dicts self-host).
-**Remaining**: general **dictionaries** (needs dicts in the Code runtime — a
-roadmap-future layer) + **designer parity**, then flip the default and retire the C#
-renderer + the separate generic client (`instance.ts`). See DECISIONS.md.
+**No milestone is in progress. Milestone 9 (self-hosted generic UI) is COMPLETE
+(2026-06-14).** The generic UI is re-expressed in Code as a reflective library
+(`objectForm`/`refEditor`/`setTable`/`dictTable`/`leafForm` over schema-as-data;
+builtins `field`/`humanize`/`extent`/`setRef`/`nest`/`clone`; component pattern with
+`var state = { draft: clone(…) }` + `obj.prop = x`) and is the **default** renderer —
+an app with no `fn render()` self-hosts. Object forms, references (pick/clear/
+create-new), set tables, objects-that-hold-sets (inline tables, nested path-walk links
+`/notes/3`), dictionaries (route + object/scalar entries, path-addressed editing), and a
+self-hosted NotFound (`status = 404`) all render in Code. The **C# auto-form,
+`instance.ts`, and the `/js` C# client are deleted** — the self-hosted UI is the sole
+renderer. Infra (`/ws` + the `/js` bundle) is served on a **separate port** so the app
+owns a clean data URL space. Framework context — `db`, `path`, `status` (all system
+vars) — lives in a `system` scope; the generic-UI internals (`__descs`/`__dictDescs` +
+the library) live in a **sibling `internal` scope outside userspace**. Driven by
+`SelfHostedUi.feature` (`DeEnv/Instance/GenericUi.cs`) plus the migrated
+milestone-1/2/4/5 features. See DECISIONS.md ("Self-hosted generic UI" + "Post-M9
+refinements") and the project memory. The next milestone is unscoped — a future-pillar
+choice (real-time/multi-user, "auto with overrides", type-checker/editor tooling,
+schema versioning) — confirm before building.
 
 **Milestone 8 (UI customization — views) was DROPPED (2026-06-13).** The UI is
 now **two modes only**: fully **custom** (`fn render()`, owns the whole UI) or
