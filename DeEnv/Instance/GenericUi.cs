@@ -35,6 +35,7 @@ namespace DeEnv.Instance;
 public static class GenericUi
 {
     private const string DescsVar = "__descs";
+    private const string DictDescsVar = "__dictDescs";
 
     private const string StdlibSource = """
         ui
@@ -131,14 +132,20 @@ public static class GenericUi
                 return render
 
             fn dictTable(dict, desc, base)
-                var state = { key: "", draft: clone(desc.blank) }
+                var state = { key: "", draft: clone(desc.blank), error: "" }
                 fn addNew()
-                    if desc.isScalar
-                        dict.setEntry(state.key, field(state.draft, "value"))
+                    if state.key == ""
+                        state.error = "Key is required"
+                    else if dict.any(m => field(m, "__key") == state.key)
+                        state.error = "Key already exists"
                     else
-                        dict.setEntry(state.key, state.draft)
-                    state.key = ""
-                    state.draft = clone(desc.blank)
+                        if desc.isScalar
+                            dict.setEntry(state.key, field(state.draft, "value"))
+                        else
+                            dict.setEntry(state.key, state.draft)
+                        state.key = ""
+                        state.draft = clone(desc.blank)
+                        state.error = ""
                 fn render()
                     return <div class="dict-table">
                         <table>
@@ -173,6 +180,8 @@ public static class GenericUi
                                 <input class="value" value={field(state.draft, "value")}>
                             <button class="dict-add" onClick={addNew}>
                                 "Add"
+                            <div class="dict-error">
+                                state.error
                 return render
 
             fn inputType(baseType)
@@ -221,11 +230,16 @@ public static class GenericUi
             // Set-table page per object set prop (e.g. Db.notes → /notes).
             foreach (var prop in SetProps(type, desc))
                 synthViews.Add(SynthSetView(type.Name, prop.Name, prop.Type));
+
+            // Dict-table page per dictionary prop (e.g. Db.settings → /settings).
+            foreach (var prop in DictProps(type))
+                synthViews.Add(SynthDictView(type.Name, prop.Name));
         }
 
         var vars = new List<UiVar>();
         vars.AddRange(ui.Vars ?? []);
-        vars.Add(new UiVar(DescsVar, Registry(objectTypes, desc)));   // the stable descriptor registry
+        vars.Add(new UiVar(DescsVar, Registry(objectTypes, desc)));        // stable type-descriptor registry
+        vars.Add(new UiVar(DictDescsVar, DictRegistry(objectTypes, desc))); // stable dict prop-descriptor registry
         var functions = new List<CodeFunction>();
         functions.AddRange(library);
         functions.AddRange(ui.Functions ?? []);
@@ -245,6 +259,9 @@ public static class GenericUi
 
     private static IEnumerable<PropDefinition> SetProps(TypeDefinition type, InstanceDescription desc) =>
         (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Set && desc.IsObjectType(p.Type));
+
+    private static IEnumerable<PropDefinition> DictProps(TypeDefinition type) =>
+        (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Dictionary);
 
     // `view T(obj, base)` → `return objectForm(obj, field(__descs, "T"), base)`. `base` is the
     // page's URL path, threaded so inline sets build nested member links (nest(base, prop)).
@@ -266,12 +283,31 @@ public static class GenericUi
         new(ownerType, Fn(["parent", "base"], Return(Invoke(Call("setTable", Field(Sym("parent"), Text(prop)), Desc(elementType), Sym("base"))))),
             Prop: prop);
 
+    // Dict route `view(parent, base)` → `return dictTable(field(parent, "P"), __dictDescs["O/P"],
+    // base)()`. The prop descriptor comes from the STABLE __dictDescs registry (not a literal),
+    // so the dictTable component's memoized init runs once and its draft state survives renders.
+    private static UiView SynthDictView(string ownerType, string prop) =>
+        new(ownerType, Fn(["parent", "base"], Return(Invoke(Call("dictTable",
+                Field(Sym("parent"), Text(prop)),
+                Field(Sym(DictDescsVar), Text(ownerType + "/" + prop)),
+                Sym("base"))))),
+            Prop: prop);
+
     // ── the descriptor registry ──────────────────────────────────────────────────────
 
     // { TypeName: { name, labelProp, props, blank }, … } — one stable top-scope object.
     private static CodeObject Registry(List<TypeDefinition> objectTypes, InstanceDescription desc) =>
         new() { Props = objectTypes
             .Select(t => new CodeObjectProp { Name = t.Name, Value = TypeDescriptor(t, desc) })
+            .ToArray() };
+
+    // { "Owner/prop": <dict prop descriptor>, … } — a stable top-scope object so a dict-route
+    // view hands dictTable the SAME descriptor every render (memo init-once for its add form).
+    private static CodeObject DictRegistry(List<TypeDefinition> objectTypes, InstanceDescription desc) =>
+        new() { Props = objectTypes
+            .SelectMany(t => (t.Props ?? [])
+                .Where(p => p.Cardinality == Cardinality.Dictionary)
+                .Select(p => new CodeObjectProp { Name = t.Name + "/" + p.Name, Value = PropDesc(p, desc) }))
             .ToArray() };
 
     private static CodeObject TypeDescriptor(TypeDefinition t, InstanceDescription desc)

@@ -1,9 +1,9 @@
 Feature: Collection entry create and delete
   Adding members to a set and entries to a dictionary, and deleting them, on the
-  Milestone 2 CRM instance. The self-hosted set/dict tables show an inline add
-  form that autosaves on Add (set members on /customers); the dictionary route
-  (/settings) is still served by the C# auto-form with a transient create form.
-  There is no create URL, so an entry keyed "new" is unaffected.
+  Milestone 2 CRM instance. The self-hosted set/dict tables show an inline add form
+  that persists on Add (set members on /customers, dictionary entries on /settings).
+  A duplicate dictionary key is rejected with an error. There is no create URL, so an
+  entry keyed "new" is unaffected; navigating into a dictionary entry still resolves.
 
   Background:
     Given a CRM instance
@@ -18,20 +18,19 @@ Feature: Collection entry create and delete
   @milestone-2 @single-user
   Scenario: Create a setting with a manual key
     When I navigate to "/settings"
-    And I click New
-    And I set the create key to "currency"
-    And I set the create value to "USD"
-    And I save and open the create form
-    Then the URL is "/settings/currency"
+    And I fill the new key with "currency"
+    And I fill the new "value" with "USD"
+    And I add the dict entry
+    Then a dict row eventually shows "currency"
+    And the dict entry "currency" eventually has value "USD"
 
   @milestone-2 @single-user
   Scenario: A duplicate manual key is rejected
     Given a setting "currency" with value "USD"
     When I navigate to "/settings"
-    And I click New
-    And I set the create key to "currency"
-    And I set the create value to "EUR"
-    And I save the create form
+    And I fill the new key with "currency"
+    And I fill the new "value" with "EUR"
+    And I add the dict entry
     Then I see a create error
 
   @milestone-2 @single-user
@@ -44,6 +43,6 @@ Feature: Collection entry create and delete
   Scenario: Delete an entry
     Given a setting "currency" with value "USD"
     When I navigate to "/settings"
-    And I delete the row for key "currency"
+    And I remove the dict row "currency"
     And I navigate to "/settings/currency"
     Then I see a not-found view

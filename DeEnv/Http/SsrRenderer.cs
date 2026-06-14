@@ -83,6 +83,12 @@ public sealed class SsrRenderer
         if (typeInfo is { Cardinality: Cardinality.Set, Type.BaseType: BaseType.Object })
             return ResolveOwnerBoundView(ui, nodePath);
 
+        // A dictionary route (/settings): the self-hosted dict table, bound to the OWNER.
+        // (Dictionary ENTRY pages — /settings/<key> — traverse a dict and were excluded
+        // above, so they still fall to the C# auto-form.)
+        if (typeInfo is { Cardinality: Cardinality.Dictionary })
+            return ResolveOwnerBoundView(ui, nodePath);
+
         if (typeInfo is not { Cardinality: Cardinality.Single, Type.BaseType: BaseType.Object }) return null;
 
         // A single-reference route (e.g. /lead): the reference editor, bound to the PARENT

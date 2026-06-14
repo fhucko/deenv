@@ -98,11 +98,15 @@ public static class DbBridge
                                 Props = [], Id = KeyHash(dictId, keyText), TypeName = elemType!.Name,
                             };
                             if (elementIsObject && entryVal is ObjectValue entryOv)
+                            {
                                 foreach (var (n, v) in entryOv.Fields)
                                     if (v is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue)
                                         entry.Props[n] = ScalarToExec(v);
+                            }
                             else if (!elementIsObject)
+                            {
                                 entry.Props["value"] = ScalarToExec(entryVal);
+                            }
                             entry.Props[EntryKeyProp] = new ExecText { Value = keyText };
                             items.Add(new ExecItem { Key = entry.Id, Value = entry });
                         }

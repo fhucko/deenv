@@ -189,7 +189,7 @@ function executeSymbol(codeSymbol: CodeSymbol, scope: ExecScope): ExecResult {
     };
 }
 
-const collectionMethods = ["add", "remove", "setEntry", "where", "orderBy"];
+const collectionMethods = ["add", "remove", "setEntry", "where", "orderBy", "any"];
 
 // ── memoization cache (Stage 4) ────────────────────────────────────────────────────
 // Mirrors the server (DeEnv/Code/MemoCache.cs). Computation boundaries (user-fn calls,
@@ -447,6 +447,15 @@ function collectionSysFunction(arr: ExecArray, method: string, context: ExecCont
         case "orderBy": return { type: "sysFn", fn: args => {
             const lambda = asLambda(args[0]);
             return memoize(`orderBy:a${arr.id}:fn${lambda.fn.id}`, context, () => orderByCollection(arr, lambda, context));
+        } };
+        case "any": return { type: "sysFn", fn: args => {
+            const lambda = asLambda(args[0]);
+            recordMember(arr.id);
+            for (const item of arr.items) {
+                const r = invokeLambda(lambda, item.value, context);
+                if (r.type === "bool" && r.value) return { type: "bool", value: true };
+            }
+            return { type: "bool", value: false };
         } };
         default: throw new Error(`Unknown collection method '${method}'.`);
     }

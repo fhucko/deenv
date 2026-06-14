@@ -10,7 +10,7 @@ namespace DeEnv.Code;
 // the original item references — preserving object identity for reconciliation.
 public sealed class CodeExecutor
 {
-    private static readonly HashSet<string> CollectionMethods = ["add", "remove", "setEntry", "where", "orderBy"];
+    private static readonly HashSet<string> CollectionMethods = ["add", "remove", "setEntry", "where", "orderBy", "any"];
 
     private readonly IInstanceStore? _store;
 
@@ -468,6 +468,16 @@ public sealed class CodeExecutor
                 var lambda = AsLambda(args[0], scope, context);
                 return Memoize($"orderBy:a{sysFn.Target.Id}:fn{lambda.Function.Id}", context,
                     () => OrderBy(sysFn.Target, lambda, context));
+            }
+            case "any":
+            {
+                var lambda = AsLambda(args[0], scope, context);
+                RecordMembership(sysFn.Target, context);
+                return new ExecBool
+                {
+                    Value = sysFn.Target.Items.Any(
+                        item => InvokeLambda(lambda, item.Value, context) is ExecBool { Value: true }),
+                };
             }
             default:
                 throw new CodeRuntimeException($"Unknown collection method '{sysFn.Method}'.");
