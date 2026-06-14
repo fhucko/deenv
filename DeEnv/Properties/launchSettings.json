@@ -1,32 +1,9 @@
 {
   "profiles": {
-    "Instance — Todo": {
+    "DeEnv (kernel host)": {
       "commandName": "Project",
-      "commandLineArgs": "--mode instance --app instance.app",
       "launchBrowser": true,
       "launchUrl": "http://localhost:8080"
-    },
-    "Instance — CRM": {
-      "commandName": "Project",
-      "commandLineArgs": "--mode instance --app crm.app",
-      "launchBrowser": true,
-      "launchUrl": "http://localhost:8080"
-    },
-    "Instance — Shop (views)": {
-      "commandName": "Project",
-      "commandLineArgs": "--mode instance --app shop.app",
-      "launchBrowser": true,
-      "launchUrl": "http://localhost:8080"
-    },
-    "Designer": {
-      "commandName": "Project",
-      "commandLineArgs": "--mode designer",
-      "launchBrowser": true,
-      "launchUrl": "http://localhost:8080"
-    },
-    "Export schema (bridge)": {
-      "commandName": "Project",
-      "commandLineArgs": "--mode export"
     }
   }
 }

@@ -146,7 +146,10 @@ projection sorts by `order` then key and strips `order` from the output. Works
 today as a plain number input; later drag-drop just writes the same field — no
 schema or projection change.
 
-**Mode switching is configuration, not code branches.** `Program.cs` reads a
+**Mode switching is configuration, not code branches.** *(Superseded 2026-06-14 — run modes
+were removed entirely; the kernel host reads `kernel.json` and there is no `--mode`/`--app`
+switch. The designer is a registry entry; export is to be exposed to Code, not a CLI mode. See
+"Multi-instance management — the kernel host". Original text kept for history.)* `Program.cs` reads a
 `--mode` arg (`instance` | `designer` | `export`); `instance`/`designer` share the
 identical hosting block with different schema+data files, and `export` runs the
 bridge and exits. Visual Studio launch profiles (`Properties/launchSettings.json`:
@@ -1110,6 +1113,32 @@ sovereign db** (the kernel registry only points at it) — which is what later l
 versions live in the instance they describe. Kernel-as-restricted-instance stays additive/
 deferred: don't build the registry so as to *prevent* exposing it as a restricted instance
 later (rendering it as data through the generic UI keeps that open).
+
+**First slice — landed 2026-06-14 (no run modes).** A thin C# supervisor in `DeEnv/Kernel/`,
+no Code/interpreter/conformance change. `RegistryReader` reads `kernel.json`
+(`{ instances: [{ app, appPort, infraPort }] }`) as plain bootstrap JSON — System.Text.Json
+only, separate from the model's `SchemaJson`, so the kernel finds its instances without the
+object model. `KernelHost.SpecsFor` resolves each entry to an `InstanceSpec` (app name → schema
+path + **AppPaths-derived** data path; locality lives here, off the registry shape).
+`HostedInstance.StartAsync` is the per-instance "build + start both hosts" unit lifted verbatim
+from `Program.cs`'s old hosting tail (load description → open the sovereign
+`JsonFileInstanceStore` → `InstanceApp.Build` → start the app + infra hosts). `KernelHost` starts
+every spec, stops them all if one fails mid-startup, and exposes the hosted instances;
+`Program.cs` blocks on a `CancellationTokenSource` (Ctrl+C / `ProcessExit`) and disposes.
+
+**Run modes were removed (user direction, 2026-06-14).** `Program.cs` no longer has a
+`--mode`/`--app` switch — the kernel host **is** the entry point, and `kernel.json` is the single
+source of truth for what runs (one entry = a single app; many = multi-instance; a single instance
+is just a one-entry registry). The old `instance`/`designer`/`export` modes are gone. `SchemaBridge`
+(designer publish/export) stays — still unit-tested by `Bridge.feature` — to be **exposed to Code
+as a host-side devops action** (the "publish" primitive), where instance management belongs per
+"C# is the kernel — app logic belongs in the app"; its CLI mode is *not* replaced by another CLI
+mode. The designer is now just `meta.app` as a registry entry (the temporary current-schema seeding
+scaffolding is dropped). Specced by `Kernel.feature` (`@milestone-10`): two instances on distinct
+ports both serve their root, and a change to one instance's store leaves the other's untouched (data
+sovereignty, proven at both the store and the served HTML). Committed `kernel.json` hosts todo
+(8080/8081) + crm (8082/8083); the single launch profile runs it. Smoke-tested (plain run hosts
+both); suite green 206/206.
 
 **Follow-up slices:** `list` (registry surfaced read-only as image Code — the first
 kernel-as-data read path) → `create` (append an entry + hot-add, forcing port-allocation +

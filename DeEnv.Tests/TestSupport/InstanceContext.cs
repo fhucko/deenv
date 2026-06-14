@@ -1,4 +1,5 @@
 using DeEnv.Instance;
+using DeEnv.Kernel;
 using DeEnv.Storage;
 using Microsoft.Playwright;
 
@@ -350,6 +351,13 @@ public class InstanceContext
 
     public TestInstanceServer? Server { get; set; }
     public string BaseUrl => Server?.BaseUrl ?? "";
+
+    // ── kernel host (milestone 10) ──────────────────────────────────────────────
+
+    // A running multi-instance kernel and the temp directory holding its app fixtures,
+    // registry (kernel.json), and derived data files — all cleaned up in Hooks.
+    public KernelHost? Kernel { get; set; }
+    public string? KernelDir { get; set; }
 
     // ── browser ───────────────────────────────────────────────────────────────
 

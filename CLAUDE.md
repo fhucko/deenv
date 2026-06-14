@@ -43,11 +43,13 @@ where developers design data visually and use it as objects. Full mission in
    a separate port so the app owns a clean data URL space; framework context (`db`,
    `path`, `status`) lives in a system scope and the generic-UI internals in a sibling
    `internal` scope outside userspace. **Multi-instance management (the kernel host) is the
-   active milestone (Milestone 10, refocused 2026-06-14)** — build only its defined first
-   slice (host two instances on two port pairs, sovereign data; see Current focus +
-   ROADMAP.md). Cross-machine/multi-kernel + distributed ACID, fault/resource isolation,
-   real-time, and the management commands stay out of scope unless explicitly asked. Schema
-   versioning steps back to M11 (it sits on instance management).
+   active milestone (Milestone 10, refocused 2026-06-14; first slice landed 2026-06-14)** — the
+   kernel host is the entry point (NO run modes; `kernel.json` is the single source of what
+   runs). Build only M10 work next — the follow-up slices (list/create/switch/delete as image
+   Code) and exposing the export/publish bridge to Code; see Current focus + ROADMAP.md.
+   Cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time, and the
+   management commands stay out of scope unless explicitly asked. Schema versioning steps back to
+   M11 (it sits on instance management).
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
    custom language, the render-coupled storage engine, and the multi-device
@@ -123,9 +125,9 @@ steps, when reached, use Playwright.)
 ## Current focus
 
 **Milestone 10 is multi-instance management (the kernel host) — refocused 2026-06-14,
-first slice defined, not yet built. (Schema versioning, briefly scoped as M10, stepped
-back to M11 — it sits on instance management.) Milestone 9 (self-hosted generic UI) is
-COMPLETE (2026-06-14).** The generic UI is re-expressed in Code as a reflective library
+first slice LANDED 2026-06-14 (no run modes — the kernel host is the entry point). (Schema
+versioning, briefly scoped as M10, stepped back to M11 — it sits on instance management.)
+Milestone 9 (self-hosted generic UI) is COMPLETE (2026-06-14).** The generic UI is re-expressed in Code as a reflective library
 (`objectForm`/`refEditor`/`setTable`/`dictTable`/`leafForm` over schema-as-data;
 builtins `field`/`humanize`/`extent`/`setRef`/`nest`/`clone`; component pattern with
 `var state = { draft: clone(…) }` + `obj.prop = x`) and is the **default** renderer —
@@ -141,14 +143,20 @@ the library) live in a **sibling `internal` scope outside userspace**. Driven by
 `SelfHostedUi.feature` (`DeEnv/Instance/GenericUi.cs`) plus the migrated
 milestone-1/2/4/5 features. See DECISIONS.md ("Self-hosted generic UI" + "Post-M9
 refinements") and the project memory. **The current milestone is Milestone 10 — multi-instance
-management (the kernel host)** (refocused 2026-06-14; not yet built): one kernel process hosts
-multiple instances at once, each on its own port pair with its own sovereign data, driven by an
-instance registry as kernel-owned data — the substrate under schema versioning's *apply*, the
-Stage-2 test-instance loop, and the self-hosted-image north star. First slice (hosting/wiring, no
-Code/interpreter change): factor the single-instance host out of `Program.cs` into a thin kernel
-supervisor over a registry; prove two instances on two port pairs are both reachable and
-data-sovereign; the single-`--app` path stays the one-entry default. Kernel discipline: the kernel
-gains the hosting *mechanism*; create/list/switch/delete as the IDE are image Code (later).
+management (the kernel host)** (refocused 2026-06-14; first slice LANDED 2026-06-14): one kernel
+process hosts multiple instances at once, each on its own port pair with its own sovereign data,
+driven by an instance registry as kernel-owned data — the substrate under schema versioning's
+*apply*, the Stage-2 test-instance loop, and the self-hosted-image north star. First slice
+(hosting/wiring, no Code/interpreter change), DONE: the single-instance host is factored out of
+`Program.cs` into a thin C# supervisor (`DeEnv/Kernel/`: `RegistryReader` reads `kernel.json` as
+plain bootstrap data; `KernelHost`/`HostedInstance` start every instance + block on shutdown).
+Two instances on two port pairs are both reachable and data-sovereign (`Kernel.feature`,
+`@milestone-10`; suite green 206/206). **Run modes were removed (user direction):** the kernel
+host is the sole entry point and `kernel.json` is the single source of what runs — a single
+instance is just a one-entry registry, so there is no `--mode`/`--app`. The designer is a registry
+entry; the M4 export/publish bridge is to be exposed to Code (a follow-up), not a CLI mode. Kernel
+discipline: the kernel gains the hosting *mechanism*; create/list/switch/delete as the IDE are
+image Code (later).
 Deferred: cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time
 (Stage 5/later), and the management commands. Schema versioning steps back to M11 (it sits on
 this). See ROADMAP.md (Milestone 10), STAGES.md, and DECISIONS.md ("Multi-instance management —
@@ -200,8 +208,9 @@ in DECISIONS.md ("Code milestone — how it was delivered").
 Milestone 4 was delivered as **self-hosting** (see DECISIONS.md): the designer is
 the instance runtime running a hand-written meta-schema (`DeEnv/meta.schema.json`),
 and `DeEnv/Designer/SchemaBridge.cs` projects the designed data into a canonical
-`instance.schema.json` (validated by `InstanceDescriptionLoader.Load`). A `--mode`
-switch (VS launch profiles Instance / Designer / Export) flips between authoring,
-exporting, and running; the instance runtime itself is untouched. Specced by
+`instance.schema.json` (validated by `InstanceDescriptionLoader.Load`). (Originally a `--mode`
+switch flipped between authoring, exporting, and running; **run modes were removed in M10** —
+the kernel host reads `kernel.json`, the designer is a registry entry, and export is to be exposed
+to Code.) The instance runtime itself is untouched. Specced by
 `DeEnv.Tests\Features\Bridge.feature`. Storage remains plain JSON behind the
 storage interface; no SQLite/versioning yet.

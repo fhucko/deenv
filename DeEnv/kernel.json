@@ -1,0 +1,6 @@
+{
+  "instances": [
+    { "app": "instance.app", "appPort": 8080, "infraPort": 8081 },
+    { "app": "crm.app", "appPort": 8082, "infraPort": 8083 }
+  ]
+}

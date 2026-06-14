@@ -15,6 +15,12 @@ public sealed class Hooks(InstanceContext ctx)
 
         if (ctx.Server != null) await ctx.Server.DisposeAsync();
 
+        // Kernel-host scenarios (milestone 10): stop every hosted instance, then drop the temp
+        // directory holding the fixtures, registry, and derived data files.
+        if (ctx.Kernel != null) await ctx.Kernel.DisposeAsync();
+        try { if (ctx.KernelDir != null && Directory.Exists(ctx.KernelDir)) Directory.Delete(ctx.KernelDir, recursive: true); }
+        catch { /* best-effort */ }
+
         try { if (File.Exists(ctx.DataFilePath)) File.Delete(ctx.DataFilePath); }
         catch { /* best-effort */ }
     }

@@ -192,8 +192,8 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   user code (the builtins `field`/`humanize`/`nest`/`clone`/`extent`/`setRef` are already
   reachable); composition needs a deliberate public surface for the library functions.
 
-- **Multi-instance management (single-process, single-operator).  ← NEXT (M10,
-  refocused 2026-06-14).** One kernel process **hosts multiple instances at once**,
+- **Multi-instance management (single-process, single-operator).  ← M10, first slice
+  DONE 2026-06-14.** One kernel process **hosts multiple instances at once**,
   each on its own port pair with its own sovereign data, driven by an **instance
   registry** (which instances exist + their ports) as **kernel-owned data**. The
   substrate under schema versioning's *apply*, the Stage-2 test-instance loop, and
@@ -207,8 +207,14 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   `kernel.json` the kernel reads **without the interpreter** (the sanctioned
   bootstrap subset). Proven by two scenarios: the kernel hosts two instances on
   distinct ports, both serving their root; a change in one leaves the other
-  unchanged (**data sovereignty**). The single-`--app`/`--mode` path stays as the
-  one-entry default (no regression).
+  unchanged (**data sovereignty**). **Landed**, and run modes were **removed
+  entirely** (user direction): the kernel host is the sole entry point and
+  `kernel.json` is the single source of what runs — a single instance is just a
+  one-entry registry, so there is no `--mode`/`--app` and no regression in hosting
+  one app. The designer becomes a registry entry; the M4 export/publish bridge is to
+  be exposed to Code (a follow-up), not a CLI mode. Built in `DeEnv/Kernel/`
+  (`RegistryReader`/`KernelHost`/`HostedInstance`), specced by `Kernel.feature`
+  (`@milestone-10`); suite green 206/206. See DECISIONS.md.
 
   **Kernel discipline:** the kernel gains the *mechanism* (host N instances, bind
   ports, hold the registry) — **not** the management *experience*. Create/list/
