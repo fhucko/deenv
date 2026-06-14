@@ -26,8 +26,11 @@ Read these before forming any opinion. Do not skip — your context starts empty
   criterion 5 (minimal by default) and the "temporary scaffolding" rule for flags.
 - `INSTANCE_MODEL.md` — one-form-per-type, URL-as-navigation, dictionary-as-only-
   boundary, forms-for-objects / tables-for-dictionaries.
-- `DECISIONS.md` — find the self-hosted-UI / M9 entries and the reasons behind
-  the current opt-in (`generic`) flag and what blocks default-on.
+- `DECISIONS.md` — find the self-hosted-UI / M9 entries (incl. "Phase 2b:
+  default-on" and Phase 3 "retire the C# renderer"). Current state: the
+  self-hosted UI is the **default and sole** renderer — the `generic` opt-in flag
+  and the `IsSelfHostable` gate were **deleted**, and the C# auto-form /
+  `instance.ts` are gone. Don't look for an opt-in; there isn't one.
 - `INSTANCE_DESCRIPTION_FORMAT.md` — only if the slice touches the canonical
   shape `AppPrint` emits.
 
@@ -47,9 +50,11 @@ commit message.
 
 2. **Self-hosting integrity.** The win of this project is architectural: the
    generic UI is Code over schema-as-data (`objectForm`, `refEditor`, builtins
-   like `field`/`extent`/`setRef`), dispatched through M8's type/path views and
-   shipped over the existing wire (no schema shipped separately; the canonical
-   `InstanceDescription` keeps only the `generic` flag). Flag anything that:
+   like `field`/`humanize`/`extent`/`setRef`/`nest`/`clone`), dispatched through
+   synthesized per-type views (the generic UI's *internal* routing —
+   `GenericUi.Effective`/`ResolveView`) and shipped over the existing wire (no
+   schema shipped separately; the `InstanceDescription` carries no UI-mode flag —
+   the generic UI is the default). Flag anything that:
    special-cases the generic renderer instead of staying reflective; smuggles a
    bespoke C#/TS path that should be expressible in Code; or ships data/schema
    it shouldn't. Ask: "is this the generic-renderer-shaped solution, or a

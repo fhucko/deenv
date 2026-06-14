@@ -58,9 +58,10 @@ Read these before writing any code — your context starts empty:
 5. **Author `.ts`, not `.js`.** Compiled JS is build output (gitignored). TS is
    compiled via the `Microsoft.TypeScript.MSBuild` package wired into the build —
    no npm/package.json.
-6. **Verify.** Build and run the relevant scenarios (filter to the milestone tag).
-   Report real results — if something fails, show the output; don't claim green
-   you didn't see.
+6. **Verify, don't commit.** Build and run the relevant scenarios (filter to the
+   milestone tag). Report real results — if something fails, show the output; don't
+   claim green you didn't see. **Never commit or push** — leave changes in the
+   working tree for the user to review; committing is their call.
 
 ## Boundaries — stop and report instead of proceeding when
 
