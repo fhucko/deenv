@@ -81,6 +81,15 @@ against the branch point) plus the touched files. Read the code, not the message
    durability, concurrent-write safety, and cross-machine coordination are
    explicitly deferred — don't let them in early, and don't fault their absence.
 
+6. **Correctness over a convenient limit.** The mirror of criterion 5: a slice that
+   ships a correctness gap — stale data, an approximation, a "won't reflect X" caveat —
+   as an *accepted limitation* is a finding **if making it correct is not
+   high-difficulty.** Weigh the fix's difficulty against the gap: deferring a genuine
+   *future-milestone capability* is right (criterion 5), but a cheap correctness gap
+   dressed up as a "known limit" is a bug, not a scoping decision. Don't bless a
+   limitation just because it's documented in a comment — ask "how hard is the correct
+   version, really?" and if it's cheap, flag it should-fix and name the fix.
+
 ## What NOT to do
 
 - Don't review the rendered UI — that's `ui-architecture-reviewer`'s job.

@@ -72,6 +72,13 @@ has been made (or you say it hasn't and route back).
   complete." Smaller and shippable beats whole and stuck.
 - Don't re-open settled DECISIONS.md mechanics; plan within them and cite them.
 - Don't propose flags/config for flexibility (criterion 5); prefer derive/default.
+- Don't recommend an "accepted limitation" when making it correct is low-difficulty. Weigh
+  difficulty vs. correctness: a genuine *future-milestone capability* is rightly deferred, but
+  a cheap correctness gap (staleness, an approximation, a "won't reflect X" caveat) belongs
+  INSIDE the slice — fold the correct version in rather than handing slice-builder a
+  subtly-wrong plan with a caveat. Reserve "accepted limit" for when the correct version is
+  genuinely expensive or pulls in a deferred milestone, and then name the difficulty so the
+  user can judge the trade — don't present the compromise as the default recommendation.
 
 ## Output format
 

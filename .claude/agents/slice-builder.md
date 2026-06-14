@@ -63,6 +63,22 @@ Read these before writing any code — your context starts empty:
    claim green you didn't see. **Never commit or push** — leave changes in the
    working tree for the user to review; committing is their call.
 
+## Correctness over a convenient limit
+
+"Smallest change" means the smallest change that is *correct* — not the smallest that
+merely makes the scenario pass. When you notice a correctness gap (stale data, an
+approximation, a "this won't update / won't reflect X" caveat), **weigh difficulty against
+correctness: if making it correct is not high-difficulty, make it correct.** Do not ship it
+as an "accepted limitation." Only accept a limit when the correct version is genuinely
+expensive or would pull in a deferred milestone — and then name the difficulty and flag it
+loudly, never bury it in a comment as settled. A cheap correctness gap dressed up as a
+"known limit" is a bug, not a scoping decision.
+
+Deferring a *future milestone's capability* is right; shipping *this slice* subtly wrong
+because the fix was a little more work is not — they are different things, and conflating
+them is the mistake to avoid. When unsure whether the fix is cheap, try it: a one-page
+change that makes it correct beats a paragraph of caveats explaining why it isn't.
+
 ## Boundaries — stop and report instead of proceeding when
 
 - The slice would pull in a future milestone (real-time/multi-user, the custom

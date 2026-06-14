@@ -79,6 +79,15 @@ commit message.
    relevant DECISIONS.md entry rather than asserting a preference; flag genuine
    *inconsistency* across the surface, not deviation from your own taste.
 
+6. **Correctness over a convenient limit.** The mirror of criterion 4: a UI slice that
+   ships a correctness gap — a stale view, a list that doesn't reflect current state, a
+   "won't update until X" caveat — as an *accepted limitation* is a finding **if making
+   it correct is not high-difficulty.** Weigh the fix's difficulty against the gap:
+   deferring a genuine *future-milestone capability* (e.g. live push to an open page —
+   real-time) is right, but a cheap correctness gap dressed up as a "known limit" is a
+   bug, not a scoping decision. Don't bless a limitation just because a comment documents
+   it — ask "how hard is the correct version, really?" and if it's cheap, flag it.
+
 ## What NOT to do
 
 - Don't propose visual/CSS/accessibility polish unless it follows from a
