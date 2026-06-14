@@ -30,20 +30,21 @@ public sealed class SsrRenderer
     // — placed in the system scope, above the custom code, so they never pollute the app scope.
     private readonly IReadOnlySet<string> _systemNames;
 
-    // The kernel's instance registry (app + ports per hosted instance), surfaced to image Code as
-    // the read-only `instances` system global. Empty when there is no kernel (a bare host/test
-    // instance honestly sees no list).
-    private readonly IReadOnlyList<InstanceInfo> _registry;
+    // The kernel's instance registry as a LIVE provider (app + ports per hosted instance), surfaced
+    // to image Code as the read-only `instances` system global. Called PER RENDER, so every fresh
+    // render reflects the kernel's CURRENT instances — a newly-created instance shows up on every
+    // instance's next request, not a frozen boot snapshot. Defaults to empty (no kernel ⇒ no list).
+    private readonly Func<IReadOnlyList<InstanceInfo>> _registry;
 
     public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
-        int infraPort = 0, IReadOnlyList<InstanceInfo>? registry = null)
+        int infraPort = 0, Func<IReadOnlyList<InstanceInfo>>? registry = null)
     {
         _store = store;
         _desc = desc;
         _resolver = new TypeResolver(desc);
         _sessions = sessions;
         _infraPort = infraPort;
-        _registry = registry ?? [];
+        _registry = registry ?? (() => []);
         (_ui, _systemNames) = GenericUi.Effective(desc);
     }
 
@@ -466,7 +467,7 @@ public sealed class SsrRenderer
     private ExecArray BuildRegistry(ExecContext context)
     {
         var items = new List<ExecItem>();
-        foreach (var info in _registry)
+        foreach (var info in _registry())
             items.Add(new ExecItem
             {
                 Key = --context.LastId.Value,

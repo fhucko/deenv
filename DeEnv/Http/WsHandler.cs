@@ -14,14 +14,17 @@ public sealed class WsHandler
     private readonly InstanceDescription _desc;
     private readonly TypeResolver _resolver;
     private readonly ClientSessionStore? _sessions;
+    private readonly Func<IReadOnlyList<InstanceInfo>> _registry;
     private readonly JsonSerializerOptions _jsonOpts = new() { WriteIndented = false };
 
-    public WsHandler(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null)
+    public WsHandler(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
+        Func<IReadOnlyList<InstanceInfo>>? registry = null)
     {
         _store = store;
         _desc = desc;
         _resolver = new TypeResolver(desc);
         _sessions = sessions;
+        _registry = registry ?? (() => []);
     }
 
     // The warm per-client session a code-UI message addresses (clientId minted at SSR).
@@ -316,12 +319,9 @@ public sealed class WsHandler
         // Transients mint below the client's id floor (no collisions with its local drafts).
         var lastId = root.TryGetProperty("lastId", out var le) && le.ValueKind == JsonValueKind.Number
             ? le.GetInt32() : 0;
-        // The refetch renderer is built with an empty `instances` registry (the default). Safe
-        // because `instances` is a READ-ONLY system global read only in output position — no
-        // computation depends on it, so it never triggers a refetch and a refetch never needs it.
-        // (When `create` makes the registry mutable/live, it will be seeded like `db` and reach
-        // this path the same way — see DECISIONS "`create` direction".)
-        var state = new SsrRenderer(_store, _desc).RenderState(pathStr, sessionVars, db, lastId);
+        // The refetch renderer gets the SAME live registry provider as the SSR path, so a refetch
+        // re-render reflects the kernel's current instances — no stale `instances` list.
+        var state = new SsrRenderer(_store, _desc, registry: _registry).RenderState(pathStr, sessionVars, db, lastId);
         return new JsonObject { ["op"] = "refetch", ["state"] = state }.ToJsonString(_jsonOpts);
     }
 

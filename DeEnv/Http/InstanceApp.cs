@@ -34,10 +34,10 @@ public static class InstanceApp
 {
     public static (IHandlerBuilder App, IHandlerBuilder Infra) Build(
         IInstanceStore store, InstanceDescription description, int infraPort,
-        IReadOnlyList<InstanceInfo>? registry = null)
+        Func<IReadOnlyList<InstanceInfo>>? registry = null)
     {
         var sessions = new ClientSessionStore();
-        var ws = new WsHandler(store, description, sessions);
+        var ws = new WsHandler(store, description, sessions, registry ?? (() => []));
 
         // Native GenHTTP websocket (no Fleck). We read/write raw UTF-8 frames so the
         // JSON payload goes on the wire verbatim — no extra serialization wrapping.
@@ -51,7 +51,7 @@ public static class InstanceApp
             });
 
         var app = Layout.Create()
-            .Add(new ContentHandlerBuilder(store, description, sessions, infraPort, registry ?? []));
+            .Add(new ContentHandlerBuilder(store, description, sessions, infraPort, registry ?? (() => [])));
 
         var infra = Layout.Create()
             .Add("ws", websocket)

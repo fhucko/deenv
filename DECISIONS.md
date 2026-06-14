@@ -547,9 +547,11 @@ data. Decisions (specced by `StoredData.feature`):
   guard, not schema versioning — versioning (migrations on shape changes
   that DO conflict) stays a postponed milestone.
 - **One data file per app document** (`<stem>-data.json` via `AppPaths`,
-  always in the run directory), so `--app` switching never mixes data. The
-  bridge's export deletes the target data file before reseeding — an export
-  deliberately replaces the instance's data, and is the one path allowed to.
+  **beside the resolved app document** — the run directory for a boot app, the
+  instance's `instances/<id>/` dir for one created via M10 `create`), so apps
+  never mix data. The bridge's export deletes the target data file before
+  reseeding — an export deliberately replaces the instance's data, and is the
+  one path allowed to.
 
 ## UI customization — views, a per-request rendering decision (M8) — SUPERSEDED
 
@@ -1160,12 +1162,11 @@ the list; a GET asserts every hosted app name + port). The registry as a navigab
 route stays the deferred kernel-as-restricted-instance north star (the global retires into a db prop
 then — not foreclosed).
 
-**Follow-up slices** (`list` ✓ landed 2026-06-14): `create` (append an entry + hot-add, forcing
-port-allocation + new-app-doc-seed choices) → `switch`/`delete` → promote the registry to a real
-restricted kernel-instance. Schema versioning (M11) then lands on top.
+**Follow-up slices** (`list` ✓, `create` ✓ landed 2026-06-14): `switch`/`delete` → promote the
+registry to a real restricted kernel-instance. Schema versioning (M11) then lands on top.
 
 **`create` direction — storage by id, ports operator-set, registry-as-data (sketched with the user
-2026-06-14; NOT built — rules 2/10 hold).** Forward design for the `create` slice + the
+2026-06-14; LANDED 2026-06-14 — see "Third slice (`create`)" below).** Forward design for the `create` slice + the
 registry-as-kernel-data promotion, refining the "self-hosted image → kernel-owned data" and
 "kernel-as-restricted-instance" TBDs above:
 - **Storage is keyed by intrinsic id, never a user-chosen file name.** An instance is an object in
@@ -1186,6 +1187,35 @@ registry-as-kernel-data promotion, refining the "self-hosted image → kernel-ow
   switch/delete are then image Code over that data; the kernel owns the id→store and (operator-set)
   id→ports mapping. The principle drawn: **hide internal identity (id-derived storage), expose the
   contended external binding (ports).**
+
+**Third slice (`create`) — landed 2026-06-14.** `KernelHost.CreateAsync(appDoc, appPort, assetsPort,
+baseDir, registryPath)` adds one instance to a RUNNING kernel and persists it: mints a restart-stable
+**id** (max numeric `instances/<n>/` dir + 1), writes the app doc to `<baseDir>/instances/<id>/app.app`,
+builds an `InstanceSpec` whose **data co-locates with the app doc** (`AppPaths.DataPath` now resolves
+data beside the resolved schema dir — byte-identical for every baseDir/boot app, so a created
+instance's data lives in its id-dir and resolves on restart via `SpecsFor`), collision-checks the new
+spec against the LIVE set's data files + ports (`EnsureNoCollision`, shared with boot), hot-starts both
+hosts, and appends a `RegistryEntry` (`app = "instances/<id>/app.app"`) via the new `RegistryWriter`
+(sibling of `RegistryReader`: plain bootstrap JSON, NOT `IInstanceStore` — the registry-as-kernel-data
+promotion stays deferred). Persistence runs AFTER a successful start, so a failed start leaves no
+orphan registry entry. **Storage by id, never a user file name** (the direction's first concrete step;
+boot entries stay stem-derived, full id-layout migration deferred). **Ports operator-set** (explicit,
+no auto-allocation). The create COMMAND/UI is image Code (a later slice) — this is the C# *mechanism*
+only (kernel-vs-image line), tested directly. Specced by `Kernel.feature` (create-while-running serves
++ hosts both; survives a kernel restart from the persisted registry; sovereign store).
+
+**`instances` is a LIVE view, not a frozen snapshot.** The first cut shipped a per-instance frozen
+boot snapshot (already-running instances wouldn't see a newly-created one until restart) as an
+"accepted limit"; the user rejected it — correctly, as a cheap-to-fix correctness gap, NOT the
+real-time milestone. (The plan/build/review agents gained a "correctness over a convenient limit"
+principle from this — weigh difficulty vs. correctness; fix cheap gaps, don't dress them as accepted
+limits.) The registry threaded to each instance is now a `Func<IReadOnlyList<InstanceInfo>>` provider
+reading the kernel's `volatile _registry` (an immutable snapshot, reference-swapped on every
+hosted-set change), so EVERY instance's next render — SSR **and** the WS refetch path — reflects the
+current instances. This is a live VIEW (a render reads current state), distinct from the deferred
+real-time milestone (live PUSH to an already-open browser page). Single-operator: an atomic reference
+swap suffices, no lock. Proven by a scenario: an already-running console instance's page lists a
+newly-created one.
 
 ## Testing: BDD with Gherkin
 

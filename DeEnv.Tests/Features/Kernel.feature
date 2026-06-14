@@ -30,3 +30,34 @@ Feature: Kernel host (multi-instance)
     And the kernel has started
     When I request the console instance's root
     Then the page lists every hosted instance's app and ports
+
+  @milestone-10 @single-user
+  Scenario: The kernel creates a new instance while running
+    Given a registry of one instance
+    And the kernel has started
+    When the operator creates an instance from a bool app on a free port pair
+    Then the created instance serves its root on its assigned port
+    And the kernel now hosts both instances
+
+  @milestone-10 @single-user
+  Scenario: A created instance survives a kernel restart
+    Given a registry of one instance
+    And the kernel has started
+    And the operator creates an instance from a bool app on a free port pair
+    When the kernel restarts from its persisted registry
+    Then the created instance serves its root on its assigned port
+
+  @milestone-10 @single-user
+  Scenario: A created instance has its own sovereign store
+    Given a registry of one instance
+    And the kernel has started
+    And the operator creates an instance from a bool app on a free port pair
+    When the created instance's data changes
+    Then the original instance is unchanged
+
+  @milestone-10 @single-user
+  Scenario: An already-running instance sees a newly-created one
+    Given a registry whose only instance is a console app that lists the instances
+    And the kernel has started
+    When the operator creates an instance from a bool app on a free port pair
+    Then the console instance's page lists the created instance

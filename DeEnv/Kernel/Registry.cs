@@ -17,22 +17,27 @@ public sealed record RegistryEntry(string App, int AppPort, int InfraPort);
 
 public sealed record Registry(IReadOnlyList<RegistryEntry> Instances);
 
-// Reads the registry from kernel.json. Deliberately a tiny, dependency-free reader (System.Text.Json
-// only): the bootstrap floor under the interpreter, kept separate from the model/wire serialization
-// (SchemaJson) so the kernel does not depend on the object model to find its instances.
-public static class RegistryReader
+// The shared bootstrap JSON shape for kernel.json: camelCase + case-insensitive property names,
+// with comments and trailing commas allowed when reading a hand-edited file. camelCase matches the
+// rest of the project's JSON (see the serialization-style decision) without coupling to SchemaJson's
+// options. Reader and writer share it so a round-tripped registry keeps its shape.
+internal static class RegistryJson
 {
-    // Forgiving toward a hand-edited config file: camelCase + case-insensitive property names,
-    // with comments and trailing commas allowed. camelCase matches the rest of the project's JSON
-    // (see the serialization-style decision) without coupling to SchemaJson's options.
-    private static readonly JsonSerializerOptions Options = new()
+    internal static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
+        WriteIndented = true,
     };
+}
 
+// Reads the registry from kernel.json. Deliberately a tiny, dependency-free reader (System.Text.Json
+// only): the bootstrap floor under the interpreter, kept separate from the model/wire serialization
+// (SchemaJson) so the kernel does not depend on the object model to find its instances.
+public static class RegistryReader
+{
     public static Registry Read(string path)
     {
         if (!File.Exists(path))
@@ -41,7 +46,7 @@ public static class RegistryReader
         Registry? registry;
         try
         {
-            registry = JsonSerializer.Deserialize<Registry>(File.ReadAllText(path), Options);
+            registry = JsonSerializer.Deserialize<Registry>(File.ReadAllText(path), RegistryJson.Options);
         }
         catch (JsonException ex)
         {
@@ -52,6 +57,18 @@ public static class RegistryReader
             throw new KernelConfigException($"Kernel registry '{path}' lists no instances.");
         return registry;
     }
+}
+
+// Rewrites kernel.json — the sibling of RegistryReader, sharing its JSON shape so a created
+// instance's entry reads back identically. Kept the dependency-free bootstrap seam (plain
+// System.Text.Json), NOT routed through IInstanceStore: the registry is bootstrap config that must
+// exist before any instance runs, not instance object-model data — promoting it to a real
+// (restricted) kernel-instance is a deferred slice (see DECISIONS "`create` direction"). Single
+// operator, so no write-locking (deferred with concurrent-write safety).
+public static class RegistryWriter
+{
+    public static void Write(string path, Registry registry) =>
+        File.WriteAllText(path, JsonSerializer.Serialize(registry, RegistryJson.Options));
 }
 
 // The registry could not be read — missing, malformed, or empty. Program.cs reports it and exits

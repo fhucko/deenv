@@ -58,6 +58,12 @@ public sealed class KernelSteps(InstanceContext ctx)
     private string[] _expectedApps = [];
     private int[] _expectedPorts = [];
 
+    // The `create` scenarios: the instance produced by CreateAsync and the port pair it was assigned
+    // (kept so a post-restart instance can be re-found by its persisted port).
+    private HostedInstance? _created;
+    private int _createdAppPort;
+    private int _createdInfraPort;
+
     // ── Given ─────────────────────────────────────────────────────────────────
 
     [Given("a registry of two instances on distinct port pairs")]
@@ -81,6 +87,43 @@ public sealed class KernelSteps(InstanceContext ctx)
         """);
     }
 
+    [Given("a registry of one instance")]
+    public void GivenRegistryOfOne()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "deenv-kernel-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        ctx.KernelDir = dir;
+
+        File.WriteAllText(Path.Combine(dir, "alpha.app"), BoolApp);
+
+        int aApp = FreePort(), aInfra = FreePort();
+        File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
+        {
+          "instances": [
+            { "app": "alpha.app", "appPort": {{aApp}}, "infraPort": {{aInfra}} }
+          ]
+        }
+        """);
+    }
+
+    [Given("a registry whose only instance is a console app that lists the instances")]
+    public void GivenConsoleRegistryOfOne()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "deenv-kernel-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        ctx.KernelDir = dir;
+
+        File.WriteAllText(Path.Combine(dir, "console.app"), ConsoleApp);
+        int cApp = FreePort(), cInfra = FreePort();
+        File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
+        {
+          "instances": [
+            { "app": "console.app", "appPort": {{cApp}}, "infraPort": {{cInfra}} }
+          ]
+        }
+        """);
+    }
+
     // ── When / Given (start) ────────────────────────────────────────────────────
 
     [When("the kernel starts")]
@@ -90,6 +133,70 @@ public sealed class KernelSteps(InstanceContext ctx)
         var registry = RegistryReader.Read(Path.Combine(ctx.KernelDir!, "kernel.json"));
         ctx.Kernel = new KernelHost();
         await ctx.Kernel.StartAsync(KernelHost.SpecsFor(registry, ctx.KernelDir!));
+    }
+
+    // ── create: add an instance to a running kernel ──────────────────────────────
+
+    [When("the operator creates an instance from a bool app on a free port pair")]
+    [Given("the operator creates an instance from a bool app on a free port pair")]
+    public async Task WhenOperatorCreatesInstanceAsync()
+    {
+        _createdAppPort = FreePort();
+        _createdInfraPort = FreePort();
+        _created = await ctx.Kernel!.CreateAsync(
+            BoolApp, _createdAppPort, _createdInfraPort,
+            ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+    }
+
+    [Then("the created instance serves its root on its assigned port")]
+    public async Task ThenCreatedServesRootAsync()
+    {
+        // After a restart _created is disposed; re-find the live instance by its persisted port.
+        var instance = ctx.Kernel!.Instances.Single(i => i.AppPort == _createdAppPort);
+        using var http = new HttpClient();
+        var resp = await http.GetAsync($"http://localhost:{instance.AppPort}/");
+        await Assert.That((int)resp.StatusCode).IsEqualTo(200);
+        await Assert.That(await resp.Content.ReadAsStringAsync()).Contains("input type=\"checkbox\"");
+    }
+
+    [Then("the kernel now hosts both instances")]
+    public async Task ThenHostsBothAsync()
+    {
+        await Assert.That(ctx.Kernel!.Instances.Count).IsEqualTo(2);
+    }
+
+    [Then("the console instance's page lists the created instance")]
+    public async Task ThenConsoleListsCreatedAsync()
+    {
+        // The original console instance ([0]) was already running when the create happened. Its page
+        // must now show the created instance's app port — which can ONLY appear via the LIVE
+        // `instances` global (a frozen boot snapshot would have listed only the console itself).
+        using var http = new HttpClient();
+        var html = await http.GetStringAsync($"http://localhost:{ctx.Kernel!.Instances[0].AppPort}/");
+        await Assert.That(html).Contains(_createdAppPort.ToString());
+    }
+
+    [When("the kernel restarts from its persisted registry")]
+    public async Task WhenKernelRestartsAsync()
+    {
+        await ctx.Kernel!.DisposeAsync();
+        var registry = RegistryReader.Read(Path.Combine(ctx.KernelDir!, "kernel.json"));
+        ctx.Kernel = new KernelHost();
+        await ctx.Kernel.StartAsync(KernelHost.SpecsFor(registry, ctx.KernelDir!));
+    }
+
+    [When("the created instance's data changes")]
+    public void WhenCreatedDataChanges()
+    {
+        _created!.Store.WriteObject(
+            NodePath.Root,
+            new ObjectValue(new Dictionary<string, NodeValue> { ["ready"] = new BoolValue(true) }));
+    }
+
+    [Then("the original instance is unchanged")]
+    public async Task ThenOriginalUnchangedAsync()
+    {
+        await Assert.That(Alpha.Store.ReadNode(NodePath.Root.Field("ready"))).IsEqualTo(new BoolValue(false));
     }
 
     // ── Then ──────────────────────────────────────────────────────────────────

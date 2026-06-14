@@ -1,9 +1,12 @@
 namespace DeEnv.Storage;
 
 // Where an app's files live. Each app document owns its own data file, named after
-// the app file's stem (instance.app → instance-data.json), so switching apps never
-// mixes data. Data files always land in the run directory, even when the app
-// document itself is given as a rooted path somewhere else.
+// the app file's stem (instance.app → instance-data.json) and CO-LOCATED with the
+// resolved app document's own directory, so switching apps never mixes data and a
+// created instance's data lives beside its app doc (in its id-dir) — which is what
+// lets it resolve correctly on a kernel restart. For a baseDir-relative app (every
+// registry entry today) the data still lands in baseDir, identical to before; it
+// only differs for an app doc in a subdir or at a rooted path elsewhere.
 public static class AppPaths
 {
     public static string DataFileNameFor(string appFile) =>
@@ -13,5 +16,12 @@ public static class AppPaths
         Path.IsPathRooted(appFile) ? appFile : Path.Combine(baseDir, appFile);
 
     public static string DataPath(string appFile, string baseDir) =>
-        Path.Combine(baseDir, DataFileNameFor(appFile));
+        Path.Combine(
+            Path.GetDirectoryName(SchemaPath(appFile, baseDir))!,
+            DataFileNameFor(appFile));
+
+    // The directory holding created instances, and the relative app-document path for a
+    // created instance's id (forward-slashed so it reads the same in the registry on any OS).
+    public static string InstancesDir(string baseDir) => Path.Combine(baseDir, "instances");
+    public static string CreatedAppRelative(int id) => $"instances/{id}/app.app";
 }

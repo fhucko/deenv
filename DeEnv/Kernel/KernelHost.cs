@@ -16,6 +16,30 @@ public sealed class KernelHost : IAsyncDisposable
     private readonly List<HostedInstance> _instances = [];
     public IReadOnlyList<HostedInstance> Instances => _instances;
 
+    // The current registry projection, surfaced to every instance as the read-only `instances`
+    // global via CurrentRegistry. A volatile immutable snapshot, reference-swapped whenever the
+    // hosted set changes, so a render on ANY instance reads the LIVE list — no frozen per-instance
+    // snapshot, no stale data after a create. Single-operator: an atomic reference swap suffices, no
+    // lock. (Live VIEW only — a render reads the current list; pushing an update to an already-open
+    // browser page is the deferred real-time milestone, a different thing.)
+    private volatile IReadOnlyList<InstanceInfo> _registry = [];
+
+    // The live provider handed to every instance (a method group → Func), read per render.
+    private IReadOnlyList<InstanceInfo> CurrentRegistry() => _registry;
+
+    // Track a newly-started instance, then re-project the registry so every instance's next render
+    // sees it.
+    private void Register(HostedInstance instance)
+    {
+        _instances.Add(instance);
+        RefreshRegistry();
+    }
+
+    private void RefreshRegistry() =>
+        _registry = _instances
+            .Select(i => new InstanceInfo(Path.GetFileName(i.Spec.SchemaPath), i.AppPort, i.InfraPort))
+            .ToList();
+
     // Resolve each registry entry to a hosting spec: the app name becomes the schema path, and the
     // data path is DERIVED from the app stem (AppPaths) — never stored in the registry, so distinct
     // apps get distinct stores. Resolution lives here, off the registry shape, so the registry stays
@@ -44,35 +68,38 @@ public sealed class KernelHost : IAsyncDisposable
     private static void EnsureNoCollisions(IReadOnlyList<InstanceSpec> specs)
     {
         var dataPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var s in specs)
-            if (!dataPaths.Add(s.DataPath))
-                throw new KernelConfigException(
-                    $"Two instances resolve to the same data file '{s.DataPath}' — each instance needs " +
-                    "its own store. Give them different app documents.");
-
         var ports = new HashSet<int>();
         foreach (var s in specs)
-            foreach (var port in new[] { s.AppPort, s.InfraPort })
-                if (!ports.Add(port))
-                    throw new KernelConfigException(
-                        $"Port {port} is claimed by more than one instance — every app and infra port " +
-                        "must be unique.");
+            EnsureNoCollision(s, dataPaths, ports);
+    }
+
+    // Check one candidate spec against the data files + ports already claimed (the accumulators are
+    // mutated to include it). Shared by the boot-time all-specs check and CreateAsync's check of a
+    // new instance against the LIVE set, so both report the same named errors.
+    private static void EnsureNoCollision(InstanceSpec spec, HashSet<string> dataPaths, HashSet<int> ports)
+    {
+        if (!dataPaths.Add(spec.DataPath))
+            throw new KernelConfigException(
+                $"Two instances resolve to the same data file '{spec.DataPath}' — each instance needs " +
+                "its own store. Give them different app documents.");
+
+        foreach (var port in new[] { spec.AppPort, spec.InfraPort })
+            if (!ports.Add(port))
+                throw new KernelConfigException(
+                    $"Port {port} is claimed by more than one instance — every app and infra port " +
+                    "must be unique.");
     }
 
     // Start every instance. If one fails mid-startup (e.g. a stale data file trips the storage
     // guard), the already-started instances are stopped so the process never leaks half-bound ports.
     public async Task StartAsync(IReadOnlyList<InstanceSpec> specs)
     {
-        // The registry as image-Code data: every hosted instance's app name (the app document
-        // file name) + its app/infra ports, surfaced to each instance as the read-only `instances`
-        // global (the first kernel-as-data read path). One snapshot, shared by all instances.
-        var registry = specs
-            .Select(s => new InstanceInfo(Path.GetFileName(s.SchemaPath), s.AppPort, s.InfraPort))
-            .ToList();
         try
         {
+            // Every instance shares the LIVE registry provider (CurrentRegistry), so each render
+            // reads the current hosted set; Register refreshes it as instances come up.
             foreach (var spec in specs)
-                _instances.Add(await HostedInstance.StartAsync(spec, registry));
+                Register(await HostedInstance.StartAsync(spec, CurrentRegistry));
         }
         catch
         {
@@ -81,10 +108,69 @@ public sealed class KernelHost : IAsyncDisposable
         }
     }
 
+    // Create one new instance in a RUNNING kernel and persist it to the registry. The kernel's
+    // hosting MECHANISM only — the create COMMAND/UI (operator-facing) is image Code over the
+    // registry-as-data, a later slice (the kernel-vs-image line, DECISIONS "Multi-instance
+    // management"). The app document is supplied as content; the operator sets the port pair (ports
+    // are a genuinely contended external resource); storage is keyed by a kernel-minted id, never a
+    // user-chosen file name (DECISIONS "`create` direction — storage by id…").
+    public async Task<HostedInstance> CreateAsync(
+        string appDoc, int appPort, int assetsPort, string baseDir, string registryPath)
+    {
+        // Mint a deterministic id = max existing numeric id-dir + 1 (1 when none) so it survives a
+        // restart and never reuses a directory.
+        var id = NextInstanceId(baseDir);
+        var appRelative = AppPaths.CreatedAppRelative(id);
+        var schemaPath = AppPaths.SchemaPath(appRelative, baseDir);
+        Directory.CreateDirectory(Path.GetDirectoryName(schemaPath)!);
+        File.WriteAllText(schemaPath, appDoc);
+
+        var spec = new InstanceSpec(
+            schemaPath, AppPaths.DataPath(appRelative, baseDir), appPort, assetsPort);
+
+        // Collision-check the new spec against the LIVE set's data files + ports (same named errors
+        // as boot), so a created instance can never alias a running one's store or port.
+        EnsureNoCollision(
+            spec,
+            new HashSet<string>(_instances.Select(i => i.Spec.DataPath), StringComparer.OrdinalIgnoreCase),
+            new HashSet<int>(_instances.SelectMany(i => new[] { i.AppPort, i.InfraPort })));
+
+        // Start it (every instance shares the LIVE registry provider, so this create shows up on
+        // EVERY instance's next render — boot and created alike, no stale list), then track + persist.
+        var created = await HostedInstance.StartAsync(spec, CurrentRegistry);
+        Register(created);
+
+        // Persist: append the created entry (forward-slash relative app path) and rewrite kernel.json,
+        // so the instance reappears on the next boot via SpecsFor. Persist AFTER a successful start, so
+        // a failed start never leaves an orphan entry. (If the WRITE itself throws after the start, the
+        // instance is live now but gone on the next boot — a "ghost"; acceptable single-operator, the
+        // operator sees the exception. True create-atomicity is the deferred concurrent-write milestone.)
+        var stored = RegistryReader.Read(registryPath);
+        RegistryWriter.Write(registryPath, new Registry(
+            [.. stored.Instances, new RegistryEntry(appRelative, appPort, assetsPort)]));
+
+        return created;
+    }
+
+    // The next created-instance id: max numeric subdirectory name under <baseDir>/instances/, + 1
+    // (1 when the dir is absent or empty). Deterministic and restart-stable.
+    private static int NextInstanceId(string baseDir)
+    {
+        var dir = AppPaths.InstancesDir(baseDir);
+        if (!Directory.Exists(dir)) return 1;
+        var max = Directory.EnumerateDirectories(dir)
+            .Select(Path.GetFileName)
+            .Select(name => int.TryParse(name, out var n) ? n : 0)
+            .DefaultIfEmpty(0)
+            .Max();
+        return max + 1;
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (var instance in _instances)
             await instance.DisposeAsync();
         _instances.Clear();
+        RefreshRegistry();
     }
 }
