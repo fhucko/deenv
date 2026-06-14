@@ -39,10 +39,6 @@ public sealed class SsrRenderer
 
         var nodePath = ParsePath(urlPath);
 
-        // id-route: /~/{id} follows a bare reference to its object in the extent.
-        if (nodePath.Segments.Count >= 1 && nodePath.Segments[0] == "~")
-            return RenderIdRoute(urlPath, nodePath);
-
         var typeInfo = _resolver.ResolveType(nodePath);
 
         if (typeInfo == null)
@@ -78,7 +74,6 @@ public sealed class SsrRenderer
 
         if (ui.Views is not { Count: > 0 }) return null;
         var nodePath = ParsePath(urlPath);
-        if (nodePath.Segments.Count >= 1 && nodePath.Segments[0] == "~") return null;
         if (_resolver.TraversesDictionary(nodePath)) return null;
         var typeInfo = _resolver.ResolveType(nodePath);
         if (typeInfo == null) return null;
@@ -398,26 +393,6 @@ public sealed class SsrRenderer
         body.AppendLine(Breadcrumbs(path));
         body.AppendLine("<main>");
         AppendNodeContent(body, path, typeInfo, node);
-        body.AppendLine("</main>");
-        return Layout(PageTitle(path), body.ToString());
-    }
-
-    // id-route page: render the object form for whatever object carries this id.
-    private string RenderIdRoute(string urlPath, NodePath path)
-    {
-        if (path.Segments.Count < 2 || !int.TryParse(path.Segments[1], out var id))
-            return NotFoundPage(urlPath, path);
-
-        var hit = _store.ReadById(id);
-        if (hit == null) return NotFoundPage(urlPath, path);
-
-        var type = _desc.FindType(hit.Value.TypeName);
-        if (type == null) return NotFoundPage(urlPath, path);
-
-        var body = new StringBuilder();
-        body.AppendLine(Breadcrumbs(path));
-        body.AppendLine("<main>");
-        AppendObjectForm(body, path, type, hit.Value.Fields);
         body.AppendLine("</main>");
         return Layout(PageTitle(path), body.ToString());
     }

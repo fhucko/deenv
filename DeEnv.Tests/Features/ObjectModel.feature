@@ -31,12 +31,6 @@ Feature: The object model — identity, references, sets, GC
     Then the set "people" lists "Ada"
     And following "Ada" in the set "people" opens the same object both times
 
-  @milestone-5 @single-user
-  Scenario: The id-route resolves a bare reference to its object
-    Given a person "Ada" in the extent referenced by the set "people"
-    When I open the id-route for "Ada"
-    Then the "name" field shows "Ada"
-
   # ── references: pick existing vs create new (no ownership) ──────────────────
 
   @milestone-5 @single-user
@@ -74,7 +68,6 @@ Feature: The object model — identity, references, sets, GC
     Given a person "Ada" in the extent referenced by the set "people"
     When I remove "Ada" from the set "people"
     Then the extent "Person" has 0 objects
-    And the id-route for "Ada" is not found
 
   @milestone-5 @single-user
   Scenario: A remaining reference keeps the object alive

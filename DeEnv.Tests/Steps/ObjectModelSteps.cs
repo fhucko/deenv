@@ -82,13 +82,6 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
         await ctx.Page.WaitForTimeoutAsync(400);
     }
 
-    [When(@"I open the id-route for {string}")]
-    public async Task WhenOpenIdRouteAsync(string name)
-    {
-        await ctx.EnsureServerAndBrowserAsync();
-        await ctx.Page!.GotoAsync(ctx.BaseUrl + "/~/" + IdOf(name));
-    }
-
     [When(@"I remove {string} from the set {string}")]
     public async Task WhenRemoveFromSetAsync(string name, string setName)
     {
@@ -147,14 +140,6 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
         await Assert.That(ExtentCount(typeName)).IsEqualTo(count);
     }
 
-    [Then(@"the id-route for {string} is not found")]
-    public async Task ThenIdRouteNotFoundAsync(string name)
-    {
-        await ctx.EnsureServerAndBrowserAsync();
-        await ctx.Page!.GotoAsync(ctx.BaseUrl + "/~/" + IdOf(name));
-        await Assert.That(await ctx.Page.ContentAsync()).Contains("Not found");
-    }
-
     // ── helpers ──────────────────────────────────────────────────────────────────
 
     private int ExtentCount(string typeName) =>
@@ -167,7 +152,4 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
                 return id;
         throw new InvalidOperationException($"No person named '{name}' in the extent.");
     }
-
-    private int IdOf(string name) =>
-        _idByName.TryGetValue(name, out var id) ? id : FindPersonId(name);
 }
