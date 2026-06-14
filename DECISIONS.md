@@ -848,16 +848,21 @@ Phase 3 complete: the C# renderer is fully retired and the app URL space is clea
 
 ### Post-M9 refinements: a system scope, status, self-hosted NotFound
 
-- **A system scope above the custom code.** Framework-provided context — `db`, `path`, the
-  synthesized generic library, and the descriptor registries (`__descs`/`__dictDescs`) —
-  lives in a SYSTEM scope, the parent of the app (custom-code) scope. The app scope holds
-  only the user's vars/functions; the `__` machinery never pollutes it. `ExecScope.IsTop`
-  (both twins) replaces the old `Parent == null` test for "a reactive top-level var" (dep on
-  read, invalidate on write), so a non-root top scope still reacts. `CodeValidator` mirrors
-  the nesting (a stray `var db`/`var path` shadows rather than erroring). `ClientState` ships
-  the app scope plus its system parent flat — the client resolves by name, so its scope stays
-  flat (observationally identical for all non-shadowing programs). `GenericUi.Effective`
-  returns the synthesized member names so `SsrRenderer` routes them to the system scope.
+- **A scope tree; generic-UI internals outside userspace.** Framework state — `db`, `path`,
+  `status` — lives in a `system` scope. Under it are two SIBLINGS: `internal` (the synthesized
+  generic library + the descriptor registries `__descs`/`__dictDescs`) and `app` (the user's
+  vars/functions/render). Because they are siblings, user code reaches `system` by walking up
+  but can never reach the internals — they are outside userspace, not merely above it.
+  (Putting them in `system`, an ancestor of `app`, was the first cut and rejected: user code
+  could walk up to `__descs`.) `ExecScope.IsTop` (both twins) replaces the old `Parent == null`
+  test for "a reactive top-level var" (dep on read, invalidate on write), so a non-root top
+  scope still reacts. `CodeValidator` mirrors a system→app nesting (a stray `var db`/`var path`
+  shadows rather than erroring; user code referencing `__descs` is an undefined-symbol error).
+  `SsrRenderer` routes the synthesized members (names from `GenericUi.Effective`) into
+  `internal` and the user's code into `app`; synth views render in `internal`, a custom
+  `fn render()` in `app`; `ClientState` ships the render scope plus its `system` parent flat
+  (the client resolves by name, so its scope stays flat — observationally identical for all
+  non-shadowing programs).
 - **`path` is provided, not declared.** It is the request URL, always in the system scope;
   apps no longer write `var path = "/"`.
 - **`status` + self-hosted NotFound.** `status` is a writable system var (default 200), the
