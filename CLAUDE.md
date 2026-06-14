@@ -13,6 +13,10 @@ where developers design data visually and use it as objects. Full mission in
 - **VISION.md** — the full long-term mission. The destination. Do not treat
   it as the task list.
 - **ROADMAP.md** — the sequenced milestones. This *is* the task list.
+- **STAGES.md** — the product-stage lens on the mission (Stage 1 =
+  single-operator MVP, settled; later stages + the self-hosted-image north
+  star). Points at VISION pillars / ROADMAP milestones rather than restating
+  them.
 - **EXPECTATIONS.md** — what "good" looks like: project structure, build
   rules, and the qualities a slice must meet beyond just running.
 - **INSTANCE_MODEL.md** — the instance type system, URL-as-navigation, and

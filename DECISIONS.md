@@ -921,6 +921,116 @@ The guiding principle for what lives in C# vs. in the app: **C# does as little a
 
 **The dev environment is also self-hosted.** Schema versioning, instance management, devops workflows, and the designer itself are built in DeEnv using its own primitives. Only the irreducible OS/transport boundary stays in C#.
 
+## The self-hosted image — kernel, instances, and cross-instance data (north star)
+
+Consolidates a forward-looking architecture thread (2026-06-14). It is the
+**terminus of the self-hosting path** (M4 designer-as-instance, M9 self-hosted UI)
+and the concrete shape VISION pillar 9 (IDE-grade environment) takes. **This is
+north star, not current scope** — most of it is Stage 3+ (see STAGES.md), and
+CLAUDE.md rules 2/10 still hold. It extends "C# is the kernel — app logic belongs
+in the app" above. Recorded now because the *seams* it implies are cheap to honor
+early and expensive to retrofit.
+
+**Kernel vs. image — the split that makes self-modification safe.** Two layers:
+- The **kernel** — a thin, trusted, *not self-hosted* compiled-C# floor: the
+  interpreter, the storage interface, a multi-instance/port supervisor, and boot.
+  Plain code; cannot be edited from inside.
+- The **image** — everything else as data + Code in the store: the IDE, the
+  designer, every user app. Malleable, versioned, live.
+
+"deenv changes itself" means **the image changes**, and *safely*: a schema/behavior
+edit is branched, previewed live, and promoted (the Stage 2 versioning loop), so
+there is always a known-good image to boot from. The **kernel** evolves like any
+program — recompile and redeploy, a process restart with a new binary — *not* live
+self-modification. Keeping the kernel un-editable from inside is the deliberate
+recovery floor. (The existing `system`/`internal`-scope-outside-userspace pattern
+is this same trusted-floor-vs-userspace instinct in miniature.)
+
+**The IDE is an instance; the kernel runs it.** The dev environment is itself a
+deenv app, seeded via `initialData` — "a sandbox whose initial data contains one
+instance: the IDE." The apparent chicken-and-egg ("you need the IDE to make
+instances, but the IDE *is* an instance") dissolves because **the kernel, not the
+IDE, runs instances** — the IDE is simply the most privileged app in the seed.
+Boot loads the seed image → kernel binds it to a port → from there the IDE asks the
+kernel to spawn more instances on more ports.
+
+**Multi-instance host — one process, many instances, many ports.** The kernel
+hosts N instances bound to N ports. The interpreter sandbox (Code cannot touch the
+host — see the Code section) gives **correctness isolation**: one app's Code cannot
+corrupt another's store. It does **not** give fault/resource isolation — a runaway
+loop still competes for the shared process's CPU/memory. True fault/resource
+isolation between instances is the distributed-runtime stage; do not let "one
+process hosts everything" promise isolation it cannot give.
+
+**Cross-instance operations without distributed ACID.** Each instance has its
+**own sovereign db**. A DevOps operation (e.g. the IDE changing instance X's
+schema) can touch two stores and must be atomic — but *in-process this is not the
+distributed problem*:
+- **One authoritative owner per fact + idempotent reactive projection.** Model
+  schema as **versioned immutable documents** owned by the instance they describe
+  (X's schema versions live in X's db — no god-store, instances stay sovereign).
+  The migration is a *single append to the owning store*, atomic by construction.
+  The IDE's record ("I migrated X") is a **projection**, reconciled idempotently
+  from X's authoritative history — not the second half of a transaction. This is
+  the same move the memo cache makes (derive from authoritative refs), applied to
+  ops; it makes most cross-instance atomicity needs evaporate.
+- **Kernel WAL for the rare true multi-store write.** When a fact genuinely must
+  land in two local stores at once, the kernel (owning both) wraps them in a
+  **write-ahead-logged unit of work** — journal, apply, replay on crash. This
+  promotes M6's field-level change journal to a kernel-level log across stores; it
+  is a job the future custom storage engine does well.
+- **Cross-machine atomicity is Stage 5** distributed ACID (the CAP/multi-device
+  sections above) — genuinely hard, genuinely last. The in-process answer buys
+  ~all the value for the single-operator self-hosted IDE without it.
+- **Seam implication (cheap now):** the storage interface must **not assume
+  locality** and should not *preclude* a unit of work spanning instances; schema
+  should be expressible as versioned immutable documents. Don't build either now;
+  don't foreclose them.
+
+**Kernel-owned data — a layer distinct from instance dbs.** The kernel has its own
+persistent store: connectivity/peers, cluster membership, the instance registry,
+port bindings, the boot/seed pointer. It is the **durable counterpart of the
+`system` scope** (that scope is *runtime* framework context — `db`/`path`/`status`;
+this is *persistent* framework state). It **must** be kernel-owned, not stored in
+an instance, for two reasons: **lifetime** (it has to exist before any instance
+runs — it is how the cluster is assembled and images are found) and **authority**
+(a thing cannot be governed by what it governs — kernel config in a userspace
+instance is `/boot` inside a user's home dir). Discipline: **keep it minimal.** The
+test for what belongs is *"does the kernel need this to assemble the system before
+instances run, or to enforce the trust boundary?"* — connectivity passes; almost
+nothing else should. (A tiny bootstrap subset can be a plain format the kernel
+reads without the interpreter, with richer IDE-editable modeled config layered
+above — thin floor, recursively.)
+
+**Kernel-as-restricted-instance — the access model.** From an instance's point of
+view, the kernel is **another instance with a db**, reached through the *same*
+object/storage abstraction (so the IDE renders and edits kernel config like any
+data — self-describing all the way down). But it is a restricted, special instance
+— the Unix "everything is a file, including `/dev`" move. Restrictions (exact shape
+**TBD**) fall on three axes: **schema fixed by the kernel binary** (read its shape,
+edit values like connectivity, but not restructure it); **access gated** (some
+fields read-only to instances; writes only via the privileged control-plane path
+through `system`, plausibly with router-style commit-with-auto-rollback because a
+bad connectivity change can partition the kernel from itself); and a
+**non-deletable singleton** (a well-known root, not one-of-many in an extent, not
+GC-able). Because the model is uniform, these are *additive constraints layered on
+later*, not a different design — so the detail can be deferred.
+
+**Multi-device is a single-system-image (Stage 5).** "Seamless, same as one
+machine" is achievable for the *programming model* precisely because pillar 2 (no
+server calls in user code) made the abstraction distribution-blind from the start —
+going multi-machine changes only *where the runtime resolves a reference*, not a
+line of user code; M5 identity (resolvable anywhere) is the other half. The kernel
+gains a **fabric** (transport, membership, coordination) that stays in the trusted
+floor; the **image configures it** (topology/placement) as kernel-owned data
+through the privileged control-plane path. The cost the abstraction cannot hide is
+physics: a strongly-consistent single-system-image is, by CAP, **unavailable under
+partition** for the operations that must stay consistent — the design decision is
+*where* to pay that, and deenv's leverage is **versioning (pillars 3+4)** for
+principled reconciliation where divergence is allowed, and **render-coupled storage
+(pillar 5)** to hide latency by preloading the right remote data ahead of the
+render.
+
 ## Testing: BDD with Gherkin
 
 Behavior is specced in Gherkin `.feature` files first, then made to pass.
