@@ -150,4 +150,4 @@ A malformed document is rejected at load with a clear, specific error
 
 The committed default app, `DeEnv/instance.app`, is the todo application —
 types, seed, and the full UI in one document. The designer's meta-schema
-(`DeEnv/meta.app`) is a types-only document.
+(`DeEnv/designer.app`) is a types-only document.

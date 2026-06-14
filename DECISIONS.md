@@ -1133,7 +1133,7 @@ is just a one-entry registry). The old `instance`/`designer`/`export` modes are 
 (designer publish/export) stays — still unit-tested by `Bridge.feature` — to be **exposed to Code
 as a host-side devops action** (the "publish" primitive), where instance management belongs per
 "C# is the kernel — app logic belongs in the app"; its CLI mode is *not* replaced by another CLI
-mode. The designer is now just `meta.app` as a registry entry (the temporary current-schema seeding
+mode. The designer is now just `designer.app` as a registry entry (the temporary current-schema seeding
 scaffolding is dropped). Specced by `Kernel.feature` (`@milestone-10`): two instances on distinct
 ports both serve their root, and a change to one instance's store leaves the other's untouched (data
 sovereignty, proven at both the store and the served HTML). Committed `kernel.json` hosts todo

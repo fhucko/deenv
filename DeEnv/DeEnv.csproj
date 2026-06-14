@@ -33,7 +33,7 @@
     <None Include="instance.app" CopyToOutputDirectory="PreserveNewest" />
     <None Include="crm.app" CopyToOutputDirectory="PreserveNewest" />
     <None Include="shop.app" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="meta.app" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="designer.app" CopyToOutputDirectory="PreserveNewest" />
     <!-- The kernel registry: which instances the multi-instance kernel host runs, and on which
          ports. Read at startup as plain bootstrap data (no interpreter) in kernel mode. -->
     <None Include="kernel.json" CopyToOutputDirectory="PreserveNewest" />

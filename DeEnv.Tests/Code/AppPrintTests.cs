@@ -43,10 +43,10 @@ public sealed class AppPrintTests
     }
 
     [Test]
-    public async Task The_crm_and_meta_documents_round_trip()
+    public async Task The_crm_and_designer_documents_round_trip()
     {
         await AssertRoundTrips(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "crm.app")));
-        await AssertRoundTrips(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "meta.app")));
+        await AssertRoundTrips(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "designer.app")));
     }
 
     // ── expression printing: minimal parentheses ────────────────────────────────

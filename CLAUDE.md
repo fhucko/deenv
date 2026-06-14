@@ -184,7 +184,7 @@ the identity, print∘parse a fixpoint). **JSON is retired from authoring** —
 the `InstanceDescription` record and its JSON form are internal (in-memory +
 wire; the client still receives AST, there is no TS parser). The committed
 default app is `DeEnv/instance.app` (the todo app: types + seed + UI in ~130
-lines); the designer runs `meta.app` and the bridge publishes designs by
+lines); the designer runs `designer.app` and the bridge publishes designs by
 printing the same format. Format reference: INSTANCE_DESCRIPTION_FORMAT.md.
 
 **Milestone 6 (Code) just landed** — user-authored behaviour and UI as

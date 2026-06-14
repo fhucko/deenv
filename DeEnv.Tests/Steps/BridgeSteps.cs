@@ -14,7 +14,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
 {
     private const string Sentinel = "UNCHANGED-SENTINEL";
 
-    private readonly string _metaPath = Path.Combine(AppContext.BaseDirectory, "meta.app");
+    private readonly string _designerAppPath = Path.Combine(AppContext.BaseDirectory, "designer.app");
 
     // Designer-data authoring state (per scenario).
     private InstanceDescription? _meta;
@@ -33,12 +33,12 @@ public sealed class BridgeSteps(InstanceContext ctx)
     // ── Given: meta-schema document ─────────────────────────────────────────────
 
     [Given("the meta-schema document")]
-    public void GivenTheMetaSchemaDocument() { /* meta.app ships to the test output */ }
+    public void GivenTheMetaSchemaDocument() { /* designer.app ships to the test output */ }
 
     [When("the meta-schema is loaded")]
     public void WhenMetaSchemaLoaded()
     {
-        try { _metaLoaded = InstanceDescriptionLoader.LoadFile(_metaPath); }
+        try { _metaLoaded = InstanceDescriptionLoader.LoadFile(_designerAppPath); }
         catch (Exception ex) { _metaError = ex; }
     }
 
@@ -60,7 +60,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
     [Given("a designer instance")]
     public void GivenDesignerInstance()
     {
-        _meta = InstanceDescriptionLoader.LoadFile(_metaPath);
+        _meta = InstanceDescriptionLoader.LoadFile(_designerAppPath);
         _designerDataPath = Path.GetTempFileName();
         _designer = new JsonFileInstanceStore(_designerDataPath, _meta);
 
@@ -121,7 +121,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
         _exportedDataPath = Path.GetTempFileName();
         try
         {
-            SchemaBridge.Export(_metaPath, _designerDataPath, _exportedSchemaPath, _exportedDataPath);
+            SchemaBridge.Export(_designerAppPath, _designerDataPath, _exportedSchemaPath, _exportedDataPath);
             _exported = InstanceDescriptionLoader.LoadFile(_exportedSchemaPath);
         }
         catch (Exception ex)
