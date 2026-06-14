@@ -237,11 +237,14 @@ public sealed class SsrRenderer
         var ui = _ui!;
         var exec = new CodeExecutor(_store);
 
-        // The SYSTEM scope holds the framework-provided values (db, path) ABOVE the custom
-        // code. The app code (functions, ui vars) lives in a child `scope`, so it reads
-        // db/path by walking up but never declares or collides with them.
+        // Three scopes, so the generic-UI internals are OUTSIDE userspace (not just above it):
+        //   system   — framework state (db, path, status), the shared parent both can read;
+        //   internal — the synthesized generic library + descriptor registries (__descs/
+        //              __dictDescs), a SIBLING of app, so user code can never reach them;
+        //   app      — the user's own vars/functions/render.
         var system = new ExecScope { IsTop = true };
-        var scope = new ExecScope { Parent = system, IsTop = true };
+        var internalScope = new ExecScope { Parent = system, IsTop = true };
+        var app = new ExecScope { Parent = system, IsTop = true };
 
         // db root (the object graph), read-only. A recompute reuses the warm graph the
         // session holds (already reflecting the client's mutations) instead of reloading.
@@ -253,30 +256,29 @@ public sealed class SsrRenderer
         system.Items["status"] = new ExecScopeItem { Value = new ExecInt { Value = 200 }, IsReadOnly = false };
 
         // Functions first (close over their scope → mutual recursion) so var initializers may
-        // call them. The synthesized generic library goes in the SYSTEM scope (it is framework
-        // code); the app's own functions stay in the app scope. (Common helpers are the user's.)
-        foreach (var f in _desc.Common?.Functions ?? []) DefineFunction(f, scope);
-        foreach (var f in ui.Functions ?? []) DefineFunction(f, _systemNames.Contains(f.Name ?? "") ? system : scope);
+        // call them. The synthesized generic library goes in the internal scope; the user's
+        // own functions (common + ui) go in the app scope.
+        foreach (var f in _desc.Common?.Functions ?? []) DefineFunction(f, app);
+        foreach (var f in ui.Functions ?? []) DefineFunction(f, _systemNames.Contains(f.Name ?? "") ? internalScope : app);
 
-        // UI/session state. Each initializer is a memoized computation (`var:<name>`), so its
-        // inputs become dependencies (not shipped) and only the resulting value is shipped.
-        // The synthesized descriptor registries (__descs/__dictDescs) live in the system scope.
+        // UI/session state. Each initializer is a memoized computation (`var:<name>`),
+        // evaluated in its own scope. The synthesized registries (__descs/__dictDescs) go in
+        // the internal scope; the user's vars go in the app scope.
         foreach (var v in ui.Vars ?? [])
         {
+            var target = _systemNames.Contains(v.Name) ? internalScope : app;
             var value = v.Value is { } init
-                ? CodeExecutor.Memoize($"var:{v.Name}", context, () => exec.ExecuteValue(init, scope, context))
+                ? CodeExecutor.Memoize($"var:{v.Name}", context, () => exec.ExecuteValue(init, target, context))
                 : new ExecNull();
-            var target = _systemNames.Contains(v.Name) ? system : scope;
             target.Items[v.Name] = new ExecScopeItem { Value = value, IsReadOnly = false };
         }
 
-        // Client-held session vars (a refetch) override their just-computed values, so the
-        // re-render sees the same UI state the client has. Computed vars (e.g. a filtered
-        // list) are not shipped by the client and so recompute fresh here. Read-only items
-        // (db, functions) are never overridable.
+        // Client-held session vars (a refetch) override the user's just-computed values, so the
+        // re-render sees the same UI state the client has. Computed vars (e.g. a filtered list)
+        // are not shipped by the client and so recompute fresh here.
         if (sessionVars != null)
             foreach (var (name, value) in sessionVars)
-                if (scope.Items.TryGetValue(name, out var it) && !it.IsReadOnly) it.Value = value;
+                if (app.Items.TryGetValue(name, out var it) && !it.IsReadOnly) it.Value = value;
 
         // `path` is framework-provided (not declared by the app), always the requested URL —
         // the request is authoritative for routing. It lives in the system scope (writable;
@@ -288,6 +290,11 @@ public sealed class SsrRenderer
         // (RenderState → ExecuteRender) renders the same view as the page did.
         var match = forcedMatch ?? ResolveView(urlPath)
             ?? throw new CodeRuntimeException("No view matches this URL.");
+
+        // The synthesized generic views run in the INTERNAL scope (they use the library +
+        // registries); a custom `fn render()` runs in the APP scope. Either way the chain
+        // reaches system (db/path/status).
+        var renderScope = match.Kind == ViewKind.Render ? app : internalScope;
 
         // A type view's parameters: (1) the routed object, found by walking the URL
         // segments through the SAME graph instance bound as `db` (so leaves, session
@@ -303,14 +310,14 @@ public sealed class SsrRenderer
             args = [target, new ExecText { Value = urlPath }];
         }
 
-        var result = exec.InvokeFunction(match.Fn, args, scope, context);
+        var result = exec.InvokeFunction(match.Fn, args, renderScope, context);
 
         if (result is not IExecTagChild child)
             throw new CodeRuntimeException("The view did not return a renderable value.");
 
-        // Title: the app's `title` var when set; a type-view page falls back to the generic
-        // page title (its node path), the NotFound page to "Not found", others to "DeEnv".
-        var title = scope.Items.TryGetValue("title", out var t) && t.Value is ExecText titleText
+        // Title: the app's `title` var (in the app scope) when set; a type-view page falls back
+        // to the generic page title (its node path), the NotFound page to "Not found", else "DeEnv".
+        var title = app.Items.TryGetValue("title", out var t) && t.Value is ExecText titleText
             ? titleText.Value
             : match.Kind == ViewKind.Type ? PageTitle(match.TargetPath!)
             : match.Kind == ViewKind.NotFound ? "Not found"
@@ -318,7 +325,9 @@ public sealed class SsrRenderer
 
         // The first-paint HTTP status: the (possibly view-assigned) `status` system var.
         var status = system.Items.TryGetValue("status", out var s) && s.Value is ExecInt si ? si.Value : 200;
-        return (child, title, scope, match, targetId, status);
+        // Ship the render scope (internal for a generic view → its __descs; app for a custom
+        // render → its vars) plus the system parent (ClientState walks up).
+        return (child, title, renderScope, match, targetId, status);
     }
 
     // Walk URL segments through the loaded object graph: a set member segment is the
