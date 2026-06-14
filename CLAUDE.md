@@ -42,8 +42,11 @@ where developers design data visually and use it as objects. Full mission in
    deleted** — the self-hosted UI is the sole renderer. Infra (`/ws`, `/js` bundle) is on
    a separate port so the app owns a clean data URL space; framework context (`db`,
    `path`, `status`) lives in a system scope and the generic-UI internals in a sibling
-   `internal` scope outside userspace. **Schema versioning stays postponed.** No milestone
-   is currently in progress — later milestones are out of scope unless explicitly asked.
+   `internal` scope outside userspace. **Schema versioning is now the active milestone
+   (Milestone 10, scoped 2026-06-14)** — build only its defined first slice (see Current
+   focus + ROADMAP.md); its later sub-milestones (branches, 3-way merge, the
+   safe-preview/test-instance loop, conflicting-data migrations) and data-level temporal
+   versioning stay out of scope unless explicitly asked.
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
    custom language, the render-coupled storage engine, and the multi-device
@@ -118,7 +121,8 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
-**No milestone is in progress. Milestone 9 (self-hosted generic UI) is COMPLETE
+**Milestone 10 (schema versioning) is the current milestone — scoped 2026-06-14,
+first slice defined, not yet built. Milestone 9 (self-hosted generic UI) is COMPLETE
 (2026-06-14).** The generic UI is re-expressed in Code as a reflective library
 (`objectForm`/`refEditor`/`setTable`/`dictTable`/`leafForm` over schema-as-data;
 builtins `field`/`humanize`/`extent`/`setRef`/`nest`/`clone`; component pattern with
@@ -134,9 +138,16 @@ vars) — lives in a `system` scope; the generic-UI internals (`__descs`/`__dict
 the library) live in a **sibling `internal` scope outside userspace**. Driven by
 `SelfHostedUi.feature` (`DeEnv/Instance/GenericUi.cs`) plus the migrated
 milestone-1/2/4/5 features. See DECISIONS.md ("Self-hosted generic UI" + "Post-M9
-refinements") and the project memory. The next milestone is unscoped — a future-pillar
-choice (real-time/multi-user, "auto with overrides", type-checker/editor tooling,
-schema versioning) — confirm before building.
+refinements") and the project memory. **The current milestone is Milestone 10 — schema
+versioning** (scoped 2026-06-14; not yet built): git-style versioning of the schema, built
+**in Code** (self-hosted). First slice — in the designer, *commit* the schema-as-data as an
+immutable version (parent pointer → linear history) and *diff* it against its parent by
+**identity** so renames read as renames (not remove+add); persisted through the storage
+interface as immutable documents, read-only (no live-data mutation). Deferred to later
+sub-milestones/pillars: branches, 3-way merge, the safe-preview/test-instance loop (Stage 2),
+conflicting-data migrations, and data-level temporal versioning (pillar 4). See ROADMAP.md
+(Milestone 10), STAGES.md, and DECISIONS.md ("Schema versioning — postponed, now the active
+milestone").
 
 **Milestone 8 (UI customization — views) was DROPPED (2026-06-13).** The UI is
 now **two modes only**: fully **custom** (`fn render()`, owns the whole UI) or

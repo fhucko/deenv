@@ -242,11 +242,31 @@ everywhere (no dual-mode); `keyGeneration`/auto retired; `kind`→`type` on the
 wire. Proven by "the same object via two references is one object" and "dropping
 the last reference collects it." Remaining: teaching the designer to author sets/refs.
 
-## Schema versioning is postponed (was Milestone 5)
+## Schema versioning — postponed, now the active milestone (M10)
 
-**Git-style schema versioning is no longer next**, and will not be built as
-bespoke snapshot/diff C# now. It will be implemented **in the environment itself,
-after a code milestone exists.** Reasoning:
+**Update 2026-06-14 — un-postponed; this is now Milestone 10.** Its two stated
+preconditions are met (the code milestone M6 exists; identity-on-non-constants from
+M5 makes the diff exact), so it is the scoped next milestone, built **in Code**
+(self-hosted) as the reasoning below always intended. **Scoped first slice:** in the
+designer, *commit* the schema-as-data as an immutable version (parent pointer →
+linear history) and *diff* it against its parent by matching types/props on
+**identity** (renames exact, not remove+add), proven by a single rename scenario;
+read-only (no live-data mutation). **Three seams to honor or a future pillar is
+foreclosed:** (1) persist versions **through the storage interface** in the model's
+terms, never side files (else forecloses pillar 4 / temporal versioning); (2) model a
+schema version as an **immutable document with a parent pointer**, not a mutating live
+record (keeps the self-hosted-image north star reachable — see "The self-hosted
+image"); (3) the diff is **structural / identity-based over the app document**, never
+a text line-diff and never a return to JSON authoring. **Deferred to later
+sub-milestones / pillars:** branches; 3-way structural merge (also overlaps the
+real-time conflict model — see "Code execution model… three states"); the safe
+live-preview / test-instance loop (Stage 2 UX, wants pillar 5); applying *conflicting*
+migrations to live data; and all data-level temporal value history (pillar 4). The
+original postponement reasoning is kept below.
+
+**Why it was postponed (history; the conditions above now satisfy it):**
+Git-style schema versioning was not built as bespoke snapshot/diff C#. It is
+implemented **in the environment itself, after a code milestone exists.** Reasoning:
 - **It is behavior-shaped, not data-shaped.** M4 could self-host because
   *designing a schema is data* and the runtime already edits data. Versioning is
   *behavior* — commit, hash, walk a parent DAG, diff — and there is no

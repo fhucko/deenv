@@ -192,10 +192,27 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   user code (the builtins `field`/`humanize`/`nest`/`clone`/`extent`/`setRef` are already
   reachable); composition needs a deliberate public surface for the library functions.
 
-- **Schema versioning.** Git-style versioning of the schema, built inside
-  the environment itself using the code milestone (versioning is
-  behaviour-shaped). The structural identity-based diff is already designed —
-  renames are exact because non-constants carry identity (Milestone 5).
+- **Schema versioning.  ← NEXT (scoped 2026-06-14, first slice defined).**
+  Git-style versioning of the schema, built inside the environment itself using
+  the code milestone (versioning is behaviour-shaped). The structural
+  identity-based diff is already designed — renames are exact because
+  non-constants carry identity (Milestone 5).
+
+  **First slice:** in the self-hosted designer, *commit* the current schema-as-
+  data as an immutable version (parent pointer → linear history) and *diff* a
+  version against its parent by matching types/props on **identity**, so a rename
+  reads as a rename (not remove+add). The diff is computed **in Code**
+  (self-hosted), persisted **through the storage interface** as immutable
+  documents with a parent (no side files), over the app document (never a text
+  line-diff, never a return to JSON authoring). Proven by one scenario: rename a
+  prop, commit, and the diff reports a rename. Read-only delta — it does not
+  mutate live data.
+
+  **Deferred to later sub-milestones / pillars** (kept out to stay thin):
+  branches and 3-way structural merge (the latter overlaps the real-time conflict
+  model); the safe live-preview / test-instance loop (Stage 2 UX, wants pillar 5);
+  applying *conflicting* migrations to live data (the pillar-4 boundary); and all
+  data-level *temporal value* versioning (pillar 4). See STAGES.md + DECISIONS.md.
 
 - **Real-time / multi-user.** Live notifications for data changes on
   currently viewed data, with update and conflict resolution. Structural
