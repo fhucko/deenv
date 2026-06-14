@@ -13,7 +13,7 @@ public sealed class ContentHandler : IHandler
 {
     private readonly SsrRenderer _renderer;
 
-    public ContentHandler(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions, int infraPort, Func<IReadOnlyList<InstanceInfo>> registry)
+    public ContentHandler(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions, int infraPort, LiveRegistry registry)
     {
         _renderer = new SsrRenderer(store, description, sessions, infraPort, registry);
     }
@@ -42,9 +42,9 @@ public sealed class ContentHandlerBuilder : IHandlerBuilder
     private readonly InstanceDescription _description;
     private readonly ClientSessionStore _sessions;
     private readonly int _infraPort;
-    private readonly Func<IReadOnlyList<InstanceInfo>> _registry;
+    private readonly LiveRegistry _registry;
 
-    public ContentHandlerBuilder(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions, int infraPort, Func<IReadOnlyList<InstanceInfo>> registry)
+    public ContentHandlerBuilder(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions, int infraPort, LiveRegistry registry)
     {
         _store = store;
         _description = description;

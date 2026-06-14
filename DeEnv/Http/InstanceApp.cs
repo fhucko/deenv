@@ -20,6 +20,19 @@ namespace DeEnv.Http;
 // projection, never relied on at the render.
 public sealed record InstanceInfo(string App, int Port, int AssetsPort);
 
+// A live cell holding the kernel's current instance registry. The WRITER is the kernel (it swaps
+// `.Current` whenever the hosted set changes); the READERS are every hosted instance's renderer (they
+// read `.Current` at render time, so each render reflects the current instances). It is DATA, not a
+// pull-`Func`: modeling ambient framework data as a var-shaped cell — rather than a delegate — is what
+// keeps a future live-update path open (a cell can later carry change-notification to PUSH a re-render;
+// a function is a pull-only dead-end). The `volatile` reference makes the single-writer / many-reader
+// handoff safe for the single-operator model (an atomic reference swap; no lock).
+public sealed class LiveRegistry
+{
+    private volatile IReadOnlyList<InstanceInfo> _current = [];
+    public IReadOnlyList<InstanceInfo> Current { get => _current; set => _current = value; }
+}
+
 // Builds the GenHTTP handler trees for an instance, split across two ports so the app
 // port owns a clean, reserved-path-free data URL space. Shared by the real host
 // (Program.cs) and the in-process test host so routing is identical.
@@ -34,10 +47,10 @@ public static class InstanceApp
 {
     public static (IHandlerBuilder App, IHandlerBuilder Infra) Build(
         IInstanceStore store, InstanceDescription description, int infraPort,
-        Func<IReadOnlyList<InstanceInfo>>? registry = null)
+        LiveRegistry? registry = null)
     {
         var sessions = new ClientSessionStore();
-        var ws = new WsHandler(store, description, sessions, registry ?? (() => []));
+        var ws = new WsHandler(store, description, sessions, registry ?? new LiveRegistry());
 
         // Native GenHTTP websocket (no Fleck). We read/write raw UTF-8 frames so the
         // JSON payload goes on the wire verbatim — no extra serialization wrapping.
@@ -51,7 +64,7 @@ public static class InstanceApp
             });
 
         var app = Layout.Create()
-            .Add(new ContentHandlerBuilder(store, description, sessions, infraPort, registry ?? (() => [])));
+            .Add(new ContentHandlerBuilder(store, description, sessions, infraPort, registry ?? new LiveRegistry()));
 
         var infra = Layout.Create()
             .Add("ws", websocket)

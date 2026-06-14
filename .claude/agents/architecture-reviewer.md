@@ -90,6 +90,16 @@ against the branch point) plus the touched files. Read the code, not the message
    limitation just because it's documented in a comment — ask "how hard is the correct
    version, really?" and if it's cheap, flag it should-fix and name the fix.
 
+7. **Ambient data belongs in a var, not a pull-function.** When a slice adds framework/context
+   state that is DATA the UI reads — a new scope global, host-provided state, the sibling of
+   `db`/`path`/`status` — prefer modeling it as a **var** (a data cell the future live-update /
+   reactive path can observe and PUSH from), not a pull-only `Func`/delegate consulted at render
+   time. A function is a dead-end for reactivity: you cannot later hang change-notification on it,
+   so live updates would force a reshape. A var-shaped cell keeps that path open. Flag ambient
+   *data* threaded as a function where a var would preserve future live-updateability. (A genuinely
+   *computed* result that depends on call arguments — `extent(type)`, `where(pred)` — is legitimately
+   a function; this is about ambient state, not parameterized computation.)
+
 ## What NOT to do
 
 - Don't review the rendered UI — that's `ui-architecture-reviewer`'s job.

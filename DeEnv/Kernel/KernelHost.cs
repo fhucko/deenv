@@ -16,16 +16,13 @@ public sealed class KernelHost : IAsyncDisposable
     private readonly List<HostedInstance> _instances = [];
     public IReadOnlyList<HostedInstance> Instances => _instances;
 
-    // The current registry projection, surfaced to every instance as the read-only `instances`
-    // global via CurrentRegistry. A volatile immutable snapshot, reference-swapped whenever the
-    // hosted set changes, so a render on ANY instance reads the LIVE list — no frozen per-instance
-    // snapshot, no stale data after a create. Single-operator: an atomic reference swap suffices, no
-    // lock. (Live VIEW only — a render reads the current list; pushing an update to an already-open
-    // browser page is the deferred real-time milestone, a different thing.)
-    private volatile IReadOnlyList<InstanceInfo> _registry = [];
-
-    // The live provider handed to every instance (a method group → Func), read per render.
-    private IReadOnlyList<InstanceInfo> CurrentRegistry() => _registry;
+    // The current registry as a live DATA cell (LiveRegistry), shared BY REFERENCE with every hosted
+    // instance's renderer. RefreshRegistry swaps `.Current` (an immutable snapshot) whenever the hosted
+    // set changes, so a render on ANY instance reads the LIVE list — no frozen per-instance snapshot, no
+    // stale data after a create. (Live VIEW only — a render reads the current list; PUSHING an update to
+    // an already-open browser page is the deferred real-time milestone, a different thing — but the cell
+    // is the var-shaped seam that future path will hang notification on.)
+    private readonly LiveRegistry _registry = new();
 
     // Track a newly-started instance, then re-project the registry so every instance's next render
     // sees it.
@@ -36,7 +33,7 @@ public sealed class KernelHost : IAsyncDisposable
     }
 
     private void RefreshRegistry() =>
-        _registry = _instances
+        _registry.Current = _instances
             .Select(i => new InstanceInfo(Path.GetFileName(i.Spec.SchemaPath), i.AppPort, i.InfraPort))
             .ToList();
 
@@ -99,7 +96,7 @@ public sealed class KernelHost : IAsyncDisposable
             // Every instance shares the LIVE registry provider (CurrentRegistry), so each render
             // reads the current hosted set; Register refreshes it as instances come up.
             foreach (var spec in specs)
-                Register(await HostedInstance.StartAsync(spec, CurrentRegistry));
+                Register(await HostedInstance.StartAsync(spec, _registry));
         }
         catch
         {
@@ -137,7 +134,7 @@ public sealed class KernelHost : IAsyncDisposable
 
         // Start it (every instance shares the LIVE registry provider, so this create shows up on
         // EVERY instance's next render — boot and created alike, no stale list), then track + persist.
-        var created = await HostedInstance.StartAsync(spec, CurrentRegistry);
+        var created = await HostedInstance.StartAsync(spec, _registry);
         Register(created);
 
         // Persist: append the created entry (forward-slash relative app path) and rewrite kernel.json,

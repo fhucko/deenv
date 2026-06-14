@@ -30,21 +30,22 @@ public sealed class SsrRenderer
     // — placed in the system scope, above the custom code, so they never pollute the app scope.
     private readonly IReadOnlySet<string> _systemNames;
 
-    // The kernel's instance registry as a LIVE provider (app + ports per hosted instance), surfaced
-    // to image Code as the read-only `instances` system global. Called PER RENDER, so every fresh
-    // render reflects the kernel's CURRENT instances — a newly-created instance shows up on every
-    // instance's next request, not a frozen boot snapshot. Defaults to empty (no kernel ⇒ no list).
-    private readonly Func<IReadOnlyList<InstanceInfo>> _registry;
+    // The kernel's instance registry as a live DATA cell (app + ports per hosted instance), surfaced
+    // to image Code as the read-only `instances` system global. Read PER RENDER (`.Current`), so every
+    // fresh render reflects the kernel's CURRENT instances — a newly-created instance shows up on every
+    // instance's next request, not a frozen boot snapshot. A var-shaped cell (not a pull-function), so a
+    // future live-update path can hang change-notification on it. Defaults to empty (no kernel ⇒ no list).
+    private readonly LiveRegistry _registry;
 
     public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
-        int infraPort = 0, Func<IReadOnlyList<InstanceInfo>>? registry = null)
+        int infraPort = 0, LiveRegistry? registry = null)
     {
         _store = store;
         _desc = desc;
         _resolver = new TypeResolver(desc);
         _sessions = sessions;
         _infraPort = infraPort;
-        _registry = registry ?? (() => []);
+        _registry = registry ?? new LiveRegistry();
         (_ui, _systemNames) = GenericUi.Effective(desc);
     }
 
@@ -467,7 +468,7 @@ public sealed class SsrRenderer
     private ExecArray BuildRegistry(ExecContext context)
     {
         var items = new List<ExecItem>();
-        foreach (var info in _registry())
+        foreach (var info in _registry.Current)
             items.Add(new ExecItem
             {
                 Key = --context.LastId.Value,

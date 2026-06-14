@@ -898,6 +898,19 @@ Phase 3 complete: the C# renderer is fully retired and the app URL space is clea
   handler applies a non-200. An unrouted URL (or a deleted view target) renders a synthesized
   `__notFound` code page (`notFoundForm` sets `status = 404`), with breadcrumb chrome — the
   last static C# page is gone.
+- **Future direction — a `sys` namespace for `instances` + the framework builtins (NOT built;
+  flagged + scoped 2026-06-14).** Today the framework names — state (`db`, `path`, `status`,
+  `instances`) and the builtin functions (`field`, `humanize`, `extent`, `setRef`, `nest`, `clone`) —
+  are all bare top-level names in the `system` scope, reached by walking up. The near-future cleanup
+  groups the **less-common** framework names under one `sys` namespace: **`sys.instances`** plus **the
+  builtin functions** (`sys.field`, `sys.humanize`, …). The **hot-path core state stays bare** —
+  `db`/`path`/`status` are touched constantly (`db.tasks`, `status = 404`), so namespacing them would
+  cost ergonomics for no clarity gain. The win: a clean global name space, an explicit framework prefix
+  on the specialized data + utilities (not the app's own names), and one obvious home for new framework
+  helpers. Breaking authoring-surface change (bare → `sys.` for the namespaced set), hence deferred; the
+  M10 `instances` slice surfaced it. (Relatedly: ambient framework DATA should be a var/cell — see
+  `LiveRegistry` — not a pull-function, so the reactive/live-update path stays open; now a reviewer
+  check.)
 
 ## Tool stack and project structure
 

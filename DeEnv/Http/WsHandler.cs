@@ -14,17 +14,17 @@ public sealed class WsHandler
     private readonly InstanceDescription _desc;
     private readonly TypeResolver _resolver;
     private readonly ClientSessionStore? _sessions;
-    private readonly Func<IReadOnlyList<InstanceInfo>> _registry;
+    private readonly LiveRegistry _registry;
     private readonly JsonSerializerOptions _jsonOpts = new() { WriteIndented = false };
 
     public WsHandler(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
-        Func<IReadOnlyList<InstanceInfo>>? registry = null)
+        LiveRegistry? registry = null)
     {
         _store = store;
         _desc = desc;
         _resolver = new TypeResolver(desc);
         _sessions = sessions;
-        _registry = registry ?? (() => []);
+        _registry = registry ?? new LiveRegistry();
     }
 
     // The warm per-client session a code-UI message addresses (clientId minted at SSR).
