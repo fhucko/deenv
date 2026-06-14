@@ -89,6 +89,18 @@ function connectWs(): void {
             wsSend({ op: "objectPropChange", id: msgId, clientId: uiStatic.clientId,
                 objectId: obj.id, prop, value: scalarOf(value) });
         },
+        pathWrite: (obj, prop, path, value, before) => {
+            // A dictionary entry's field has no extent id, so it persists by PATH: the `write`
+            // op sets the leaf at the entry's path (an object entry's field at path/prop, a
+            // scalar entry's value at path). DeserializeLeaf reads a BARE value.
+            const msgId = nextWsMsgId++;
+            journal.push({
+                msgId,
+                undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
+                redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
+            });
+            wsSend({ op: "write", id: msgId, clientId: uiStatic.clientId, path, value: bareScalar(value) });
+        },
         setRef: (obj, prop, value, before) => {
             const msgId = nextWsMsgId++;
             journal.push({

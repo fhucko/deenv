@@ -37,6 +37,10 @@ public static class GenericUi
     private const string DescsVar = "__descs";
     private const string DictDescsVar = "__dictDescs";
 
+    // The reserved view "type" for the shared scalar leaf editor (a scalar dictionary
+    // entry page). SsrRenderer.ResolveView dispatches a scalar dict entry to it.
+    public const string LeafViewType = "__leaf";
+
     private const string StdlibSource = """
         ui
             fn objectForm(obj, meta, base)
@@ -184,6 +188,12 @@ public static class GenericUi
                                 state.error
                 return render
 
+            fn leafForm(entry, base)
+                return <div class="leaf-form">
+                    <h2>
+                        field(entry, "__key")
+                    <input class="value" value={field(entry, "value")}>
+
             fn inputType(baseType)
                 if baseType == "int"
                     return "number"
@@ -236,6 +246,11 @@ public static class GenericUi
                 synthViews.Add(SynthDictView(type.Name, prop.Name));
         }
 
+        // One shared leaf editor for scalar dictionary entry pages (/settings/<key>), added
+        // only when the schema has a scalar dictionary (an object dict entry uses its type view).
+        if (objectTypes.Any(t => DictProps(t).Any(p => !desc.IsObjectType(p.Type))))
+            synthViews.Add(SynthLeafView());
+
         var vars = new List<UiVar>();
         vars.AddRange(ui.Vars ?? []);
         vars.Add(new UiVar(DescsVar, Registry(objectTypes, desc)));        // stable type-descriptor registry
@@ -286,6 +301,11 @@ public static class GenericUi
     // Dict route `view(parent, base)` → `return dictTable(field(parent, "P"), __dictDescs["O/P"],
     // base)()`. The prop descriptor comes from the STABLE __dictDescs registry (not a literal),
     // so the dictTable component's memoized init runs once and its draft state survives renders.
+    // The shared scalar-entry view: `view(entry, base)` → `return leafForm(entry, base)`. Bound
+    // to the entry object (FindTarget resolves it by key); its value persists path-addressed.
+    private static UiView SynthLeafView() =>
+        new(LeafViewType, Fn(["entry", "base"], Return(Call("leafForm", Sym("entry"), Sym("base")))));
+
     private static UiView SynthDictView(string ownerType, string prop) =>
         new(ownerType, Fn(["parent", "base"], Return(Invoke(Call("dictTable",
                 Field(Sym("parent"), Text(prop)),

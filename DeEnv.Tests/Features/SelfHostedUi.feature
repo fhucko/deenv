@@ -5,8 +5,9 @@ Feature: Self-hosted generic UI (object forms)
   builtin for dynamic, two-way-bound access — plugged in as a synthesized per-type view.
   An object that holds a set self-hosts too: objectForm renders the set as an inline
   table whose member rows link to the nested member URL (path-walk); a dictionary renders
-  inline as a `dictTable`. Only navigating INTO a dictionary entry still falls to the C#
-  auto-form (dict-entry pages aren't self-hosted yet).
+  inline as a `dictTable`, its route as a `dictTable` page, and each entry on its own page
+  (an object entry via objectForm, a scalar entry via the shared leaf editor). A dict
+  entry has no extent id, so its field edits persist path-addressed (the `write` op).
 
   @milestone-9 @single-user
   Scenario: An all-scalar object page is rendered by the self-hosted form
@@ -63,6 +64,18 @@ Feature: Self-hosted generic UI (object forms)
     And a dict row eventually shows "beta"
     And I remove the dict row "beta"
     Then no dict row eventually shows "beta"
+
+  @milestone-9 @single-user
+  Scenario: A scalar dictionary entry's own page edits its value (path-addressed)
+    Given the self-hosted scalar dict app is running
+    When I open "/"
+    And I fill the new key with "lang"
+    And I fill the new "value" with "en"
+    And I add the dict entry
+    And the dict entry "lang" eventually has value "en"
+    And I open "/settings/lang"
+    And I fill the "value" field with "fr"
+    Then the dict entry "lang" eventually has value "fr"
 
   @milestone-9 @single-user
   Scenario: A scalar dictionary self-hosts and an entry persists

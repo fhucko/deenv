@@ -116,7 +116,21 @@ public sealed class WsHandler
             return Error("Missing 'value' in write message.");
 
         var value = DeserializeLeaf(valEl, typeInfo.Type);
-        _store.WriteLeaf(path, value);
+
+        // A SCALAR dictionary entry's value lives at its path but is addressed by (dict, key)
+        // — WriteLeaf can't walk into a dict, so upsert the entry. (An OBJECT entry's field
+        // path, e.g. /customers/42/name, has an object parent and writes through WriteLeaf.)
+        if (!path.IsRoot
+            && _resolver.ResolveType(NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1)))
+               is { Cardinality: Cardinality.Dictionary } parentInfo)
+        {
+            var dictPath = NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1));
+            _store.WriteDictionaryEntry(dictPath, ParseKey(path.Segments[^1], parentInfo.KeyTypeName ?? "text"), value);
+        }
+        else
+        {
+            _store.WriteLeaf(path, value);
+        }
 
         var response = new JsonObject { ["op"] = "write", ["path"] = pathStr, ["ok"] = true };
         return response.ToJsonString(_jsonOpts);

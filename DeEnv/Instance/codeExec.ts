@@ -50,7 +50,7 @@ interface ExecBool { type: "bool"; value: boolean; }
 interface ExecText { type: "text"; value: string; }
 interface ExecNull { type: "null"; }
 interface ExecNothing { type: "nothing"; }
-interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id: number; }
+interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id: number; sourcePath?: string; scalarEntry?: boolean; }
 // The Code array — one collection shape for every kind, identical on server, wire, and
 // client. A positive id ⇒ persisted (a db set/dict); a negative id ⇒ transient (a list
 // literal or where/orderBy result). ElementTypeName is the member type (set/dict only).
@@ -323,10 +323,20 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
             const before = left.props[right.name];
             left.props[right.name] = p;
             invalidateProp(left.id, right.name);
-            // A positive id ⇒ the object is server-backed, so persist the change.
-            if (left.id > 0) propValueChange(left, right.name, p, before);
+            persistFieldEdit(left, right.name, p, before);
         },
     };
+}
+
+// Persist a bound field edit: a positive id is server-backed (id-addressed objectPropChange);
+// a dictionary entry has no extent id but carries its SourcePath, so it persists via the
+// PATH-addressed `write` op (a scalar entry writes at its path, an object entry at path/prop).
+function persistFieldEdit(obj: ExecObject, name: string, value: ExecValue, before: ExecValue): void {
+    if (obj.id > 0) { propValueChange(obj, name, value, before); return; }
+    if (obj.sourcePath != null) {
+        const path = obj.scalarEntry ? obj.sourcePath : obj.sourcePath + "/" + name;
+        pathWriteChange(obj, name, path, value, before);
+    }
 }
 
 // field(obj, name): dynamic by-name prop access — the reflective twin of `obj.member`,
@@ -351,7 +361,7 @@ function fieldResult(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
             const before = obj.props[name];
             obj.props[name] = p;
             invalidateProp(obj.id, name);
-            if (obj.id > 0) propValueChange(obj, name, p, before);
+            persistFieldEdit(obj, name, p, before);
         },
     };
 }
@@ -685,6 +695,8 @@ function findScope(symbol: CodeSymbol, scope: ExecScope): ExecScope {
 // overwritten before-value, the removed item and its index.
 interface WsHooks {
     propChange(obj: ExecObject, prop: string, value: ExecValue, before: ExecValue): void;
+    // A path-addressed leaf write for a dictionary entry's field (no extent id).
+    pathWrite(obj: ExecObject, prop: string, path: string, value: ExecValue, before: ExecValue): void;
     setRef(obj: ExecObject, prop: string, value: ExecValue, before: ExecValue): void;
     arrayAdd(arr: ExecArray, item: ExecArrayItem, typeName: string | undefined): void;
     arrayRemove(arr: ExecArray, item: ExecArrayItem, index: number): void;
@@ -697,6 +709,9 @@ function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
 
 function propValueChange(obj: ExecObject, propName: string, value: ExecValue, before: ExecValue): void {
     wsHooks?.propChange(obj, propName, value, before);
+}
+function pathWriteChange(obj: ExecObject, propName: string, path: string, value: ExecValue, before: ExecValue): void {
+    wsHooks?.pathWrite(obj, propName, path, value, before);
 }
 function referenceChange(obj: ExecObject, prop: string, value: ExecValue, before: ExecValue): void {
     wsHooks?.setRef(obj, prop, value, before);

@@ -96,6 +96,11 @@ public static class DbBridge
                             var entry = new ExecObject
                             {
                                 Props = [], Id = KeyHash(dictId, keyText), TypeName = elemType!.Name,
+                                // The entry's own node path — its fields persist path-addressed
+                                // (a dict entry has no extent id). A scalar entry's value is AT
+                                // this path; an object entry's fields hang under it.
+                                SourcePath = fieldPath.Key(keyText).ToString(),
+                                ScalarEntry = !elementIsObject,
                             };
                             if (elementIsObject && entryVal is ObjectValue entryOv)
                             {

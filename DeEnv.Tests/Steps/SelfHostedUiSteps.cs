@@ -70,7 +70,16 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    // A scalar dictionary entry's own page (/<dict>/<key>) — the shared leaf editor.
+    [Then("the entry value shows {string}")]
+    public async Task ThenEntryValueShows(string expected)
+    {
+        var v = await ctx.Page!.Locator(".leaf-form input.value").First.GetAttributeAsync("value") ?? "";
+        await Assert.That(v).IsEqualTo(expected);
+    }
+
     // A scalar dictionary entry's value, read at its path (/<dict>/<key>).
+    [When("the dict entry {string} eventually has value {string}")]
     [Then("the dict entry {string} eventually has value {string}")]
     public async Task ThenDictEntryHasValue(string key, string value) =>
         await EventuallyAsync(() =>

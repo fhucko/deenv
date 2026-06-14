@@ -49,7 +49,14 @@ public static class ClientState
             if (seenObjects.Add(o.Id))
             {
                 var props = new JsonObject();
-                objects[o.Id.ToString()] = new JsonObject { ["props"] = props };
+                var entry = new JsonObject { ["props"] = props };
+                // A dict entry carries its path so a bound field edit persists path-addressed.
+                if (o.SourcePath is { } sp)
+                {
+                    entry["sourcePath"] = sp;
+                    entry["scalarEntry"] = o.ScalarEntry;
+                }
+                objects[o.Id.ToString()] = entry;
                 if (o.Id < 0)
                 {
                     // A transient is the client's own draft state: it ships complete —

@@ -74,7 +74,6 @@ public sealed class SsrRenderer
 
         if (ui.Views is not { Count: > 0 }) return null;
         var nodePath = ParsePath(urlPath);
-        if (_resolver.TraversesDictionary(nodePath)) return null;
         var typeInfo = _resolver.ResolveType(nodePath);
         if (typeInfo == null) return null;
 
@@ -84,10 +83,18 @@ public sealed class SsrRenderer
             return ResolveOwnerBoundView(ui, nodePath);
 
         // A dictionary route (/settings): the self-hosted dict table, bound to the OWNER.
-        // (Dictionary ENTRY pages — /settings/<key> — traverse a dict and were excluded
-        // above, so they still fall to the C# auto-form.)
         if (typeInfo is { Cardinality: Cardinality.Dictionary })
             return ResolveOwnerBoundView(ui, nodePath);
+
+        // A SCALAR dictionary entry (/settings/<key>): a single value reached by traversing a
+        // dict. The shared leaf editor renders it, bound to the entry object (its value
+        // persists path-addressed). Object entries fall through to the object view below.
+        if (typeInfo is { Cardinality: Cardinality.Single, Type.BaseType: not BaseType.Object }
+            && _resolver.TraversesDictionary(nodePath))
+        {
+            var leaf = ui.Views.FirstOrDefault(v => v.Type == GenericUi.LeafViewType);
+            return leaf == null ? null : new ViewMatch(ViewKind.Type, leaf.Fn, leaf, nodePath);
+        }
 
         if (typeInfo is not { Cardinality: Cardinality.Single, Type.BaseType: BaseType.Object }) return null;
 
@@ -288,7 +295,12 @@ public sealed class SsrRenderer
         IExecValue current = root;
         foreach (var segment in path.Segments)
         {
-            if (current is ExecArray arr && int.TryParse(segment, out var id))
+            if (current is ExecArray { Kind: ArrayKind.Dict } dict)
+                // A dict entry segment is its key; match the entry carrying that __key.
+                current = dict.Items.FirstOrDefault(i =>
+                    (i.Value as ExecObject)?.Props.GetValueOrDefault(DbBridge.EntryKeyProp) is ExecText k
+                    && k.Value == segment)?.Value ?? new ExecNull();
+            else if (current is ExecArray arr && int.TryParse(segment, out var id))
                 current = arr.Items.FirstOrDefault(i => i.Key == id)?.Value ?? new ExecNull();
             else if (current is ExecObject obj && obj.Props.TryGetValue(segment, out var value))
                 current = value;

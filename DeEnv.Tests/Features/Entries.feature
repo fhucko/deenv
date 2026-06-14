@@ -37,7 +37,7 @@ Feature: Collection entry create and delete
   Scenario: An existing entry keyed "new" is viewable
     Given a setting "new" with value "hello"
     When I navigate to "/settings/new"
-    Then the "new" field shows "hello"
+    Then the entry value shows "hello"
 
   @milestone-2 @single-user
   Scenario: Delete an entry

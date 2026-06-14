@@ -10,7 +10,7 @@ interface DtObjectRef { type: "object"; id: number; }
 interface DtArrayRef { type: "array"; id: number; }
 
 interface DtScopeValue { isReadOnly: boolean; value: DtValue; }
-interface ServerDtObject { props: { [name: string]: DtValue }; }
+interface ServerDtObject { props: { [name: string]: DtValue }; sourcePath?: string; scalarEntry?: boolean; }
 interface ServerDtArray { kind: "set" | "dict" | "list"; elementTypeName?: string; sourcePath?: string; items: { key: number; value: DtValue }[]; }
 
 interface ServerDtState {
@@ -49,6 +49,8 @@ function mergeState(dtState: ServerDtState): void {
         const id = Number(idText);
         const obj = objects[id] ?? (objects[id] = { type: "object", id, props: {} });
         for (const [name, value] of Object.entries(dtObj.props)) obj.props[name] = fromDtValue(value);
+        // A dict entry carries its path so a bound field edit persists path-addressed.
+        if (dtObj.sourcePath != null) { obj.sourcePath = dtObj.sourcePath; obj.scalarEntry = dtObj.scalarEntry; }
     }
 
     for (const [idText, dtArr] of Object.entries(dtState.leaves.arrays)) {

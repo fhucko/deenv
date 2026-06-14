@@ -51,6 +51,15 @@ public sealed class ExecObject : IExecValue
     public required Dictionary<string, IExecValue> Props { get; set; }
     public required int Id { get; set; }
     public string? TypeName { get; set; }
+
+    // For a dictionary ENTRY (an inline value with no extent id, so Id is a negative
+    // stable hash), the entry's own node path — so a bound field edit persists via the
+    // PATH-addressed `write` op instead of the id-addressed objectPropChange. ScalarEntry
+    // marks a scalar dict entry, whose single value lives AT SourcePath (no field suffix);
+    // an object entry's fields write to SourcePath + "/" + prop.
+    public string? SourcePath { get; set; }
+    public bool ScalarEntry { get; set; }
+
     object IExecValue.Value => this;
 }
 
