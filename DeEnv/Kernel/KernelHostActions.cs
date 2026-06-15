@@ -1,26 +1,29 @@
 using System.Text.Json;
-using DeEnv.Code;
 using DeEnv.Designer;
 using DeEnv.Http;
+using DeEnv.Instance;
+using DeEnv.Storage;
 
 namespace DeEnv.Kernel;
 
 // The kernel's implementation of the host-action seam for ONE hosted instance. Its actions either
-// project a SCHEMA OBJECT (passed by its id — the designer passes `db`, the root) into an app
-// document, or address an instance by its id:
-//   • publish(schema, targetId) — project onto an EXISTING instance (resolved by id over the live
-//     hosted set), replacing its document and resetting its data.
-//   • create(schema, appPort, infraPort) — project into a NEW instance on the given ports, via the
-//     kernel create delegate (the C# create mechanism: write the doc, hot-start, append the
-//     registry, refresh the live set).
+// project a DESIGN (passed by its id — the designer passes one `Design` out of its `db.designs`
+// set) into an app document, or address an instance by its id:
+//   • publish(design, targetId) — project the design onto an EXISTING instance (resolved by id over
+//     the live hosted set), replacing its document and resetting its data.
+//   • create(design, appPort, infraPort) — project the design into a NEW instance on the given
+//     ports, via the kernel create delegate (the C# create mechanism: write the doc, hot-start,
+//     append the registry, refresh the live set).
 //   • cloneInstance(sourceId, appPort, infraPort) — copy an existing instance's app doc AND data
 //     into a NEW instance on the given ports, via the kernel clone delegate.
 //   • delete(targetId) — remove an existing instance, via the kernel delete delegate.
 // The kernel constructs one of these per instance and threads it into WsHandler, so an action acts
-// with the CALLING instance's own data as the schema source (its data is the meta-schema it
-// designs). SchemaBridge is unchanged — this is the kernel-side wiring that gives it the right
-// paths and surfaces its validation failure as a reject (it throws, WsHandler catches). The delete /
-// clone delegates are type-distinct (Func<int,Task> vs Func<int,int,int,Task>) so positional
+// with the CALLING instance's own data as the design source (its data is the IDE holding the set of
+// Designs it edits). A publish/create RESOLVES the passed design's id → its Design subtree in the
+// caller's store (through IInstanceStore — never a raw file read) and projects it via SchemaBridge;
+// an id that is not a member of the caller's `designs` is rejected, never a write to the wrong app.
+// SchemaBridge surfaces its validation failure as a reject (it throws, WsHandler catches). The
+// delete / clone delegates are type-distinct (Func<int,Task> vs Func<int,int,int,Task>) so positional
 // mix-ups are compile errors; the call site uses named args for clarity.
 public sealed class KernelHostActions(
     string metaAppPath, string dataPath,
@@ -42,35 +45,37 @@ public sealed class KernelHostActions(
         }
     }
 
-    // publish(schema, targetId): project the calling instance's schema onto an EXISTING target and
-    // reset the target's data. arg 0 is the schema object's id (the root — see RequireRootSchema),
-    // arg 1 the target id. Any instance is a publish target (resolution is purely by id); an id that
-    // matches no hosted instance is rejected — never a write to the wrong store. SchemaBridge.Export
-    // validates the design before writing, so an invalid design (it throws) also writes nothing.
+    // publish(design, targetId): project the PASSED design (one of the caller's `db.designs`) onto an
+    // EXISTING target and reset the target's data. arg 0 is the design object's id (resolved against
+    // the caller's store — see ResolveDesign), arg 1 the target id. Any instance is a publish target
+    // (resolution is purely by id); an id that matches no hosted instance is rejected — never a write
+    // to the wrong store. ProjectDesignDocument validates the design before WriteDocument writes, so an
+    // invalid design (it throws) also writes nothing. No migration on reset (that is M11).
     private void Publish(JsonElement args)
     {
-        RequireRootSchema(ArgInt(args, 0));
+        var design = ResolveDesign(ArgInt(args, 0));
         var targetId = ArgInt(args, 1);
         var target = resolveTarget(targetId)
             ?? throw new InvalidOperationException(
                 $"No instance with id {targetId} to publish to.");
 
-        SchemaBridge.Export(metaAppPath, dataPath, target.SchemaPath, target.DataPath);
+        var appDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
+        SchemaBridge.WriteDocument(appDoc, target.SchemaPath, target.DataPath);
     }
 
-    // create(schema, appPort, infraPort): project the calling instance's schema into a NEW instance
-    // on the given ports — the sibling of publish (spawn rather than replace). arg 0 is the schema
-    // object id (root), args 1/2 the ports. ProjectDocument validates the design first (throws,
-    // spawning nothing, on an invalid one); then the kernel create delegate writes + hot-starts it.
-    // The delegate is async (it binds ports); we block on it because the WS dispatch is synchronous
-    // and there is no synchronization context to deadlock on (a single-operator devops action).
+    // create(design, appPort, infraPort): project the PASSED design into a NEW instance on the given
+    // ports — the sibling of publish (spawn rather than replace). arg 0 is the design object id, args
+    // 1/2 the ports. ProjectDesignDocument validates the design first (throws, spawning nothing, on an
+    // invalid one); then the kernel create delegate writes + hot-starts it. The delegate is async (it
+    // binds ports); we block on it because the WS dispatch is synchronous and there is no
+    // synchronization context to deadlock on (a single-operator devops action).
     private void Create(JsonElement args)
     {
-        RequireRootSchema(ArgInt(args, 0));
+        var design = ResolveDesign(ArgInt(args, 0));
         var appPort = ArgInt(args, 1);
         var infraPort = ArgInt(args, 2);
 
-        var appDoc = SchemaBridge.ProjectDocument(metaAppPath, dataPath); // throws on an invalid design
+        var appDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
         createInstance(appDoc, appPort, infraPort).GetAwaiter().GetResult();
     }
 
@@ -96,15 +101,20 @@ public sealed class KernelHostActions(
         deleteInstance(id).GetAwaiter().GetResult();
     }
 
-    // Today only the caller's own root object (`db`, DbBridge.RootId) is a valid schema to project:
-    // the designer designs one schema, which is its root. A non-root schema object — selecting one
-    // design out of a managed SET of apps — is a future extension (it needs id→subtree resolution
-    // over the caller's store); reject anything else loudly rather than silently projecting the root.
-    private static void RequireRootSchema(int schemaId)
+    // Resolve the passed design's id → its `Design` subtree in the CALLER's store (the IDE holds a
+    // `db.designs` set of Designs). Reads through IInstanceStore (the model's terms — never a raw file
+    // call): a design is `db.designs[id]`, so an id that is not a member of `designs` resolves to no
+    // node and is rejected here, before any projection or write. Opening a fresh store over the
+    // caller's own meta+data is fine — it is the same single-process data the caller renders from
+    // (this action only READS it).
+    private ObjectValue ResolveDesign(int designId)
     {
-        if (schemaId != DbBridge.RootId)
-            throw new InvalidOperationException(
-                $"Only the root schema object (db) can be projected today; got object id {schemaId}.");
+        var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
+        var store = new JsonFileInstanceStore(dataPath, meta);
+        var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+        return store.ReadNode(designPath) as ObjectValue
+            ?? throw new InvalidOperationException(
+                $"No design with id {designId} in the designer's `designs` set.");
     }
 
     // Read a required int argument from the evaluated-args JSON array. Code scalars ship as

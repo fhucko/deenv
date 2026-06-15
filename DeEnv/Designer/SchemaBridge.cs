@@ -7,18 +7,69 @@ namespace DeEnv.Designer;
 
 // The bridge from the self-hosted designer to a runnable instance.
 //
-// The designer is the instance runtime running the meta-schema (meta.schema.json):
-// its data is a Db holding a `types` dictionary of MetaType, each holding a `props`
-// dictionary of MetaProp. `Project` turns that node tree into a canonical schema
-// document (the same shape a hand-written instance.schema.json has); `Export` reads
-// the designer's data file, projects it, validates it with the normal loader, and
-// writes the result as the instance's schema (resetting the instance's data).
+// The designer designs a whole app as ordinary data. The unit it projects is a
+// `Design` node: a `types` set of MetaType (each holding a `props` set of MetaProp)
+// — the STRUCTURED part — plus three `initialData`/`common`/`ui` TEXT fields that
+// carry the other app-document sections verbatim. `Project` turns the structured
+// `types` into TypeDefinitions; `ProjectDesignDocument` assembles the whole app
+// document (printed types + the verbatim sections), validates it with the normal
+// loader, and returns it as text. A publish writes that text onto a target and
+// resets the target's data; a create hands it to the kernel to spawn a new instance.
+//
+// The three text fields hold the VERBATIM section source INCLUDING the section
+// keyword and its indentation — e.g. the `ui` field is "ui\n    fn render()\n…",
+// the empty string when there is no such section. That representation makes both
+// directions trivial: assembly here is "print the types section, then concatenate
+// the non-empty section texts" (no per-section sub-parsing — each section parser
+// already consumes its own keyword), and the future committed-app → Design split is
+// just slicing a document at its section boundaries. Validation (and an empty-section
+// app — empty `ui` → generic UI, empty `initialData` → no seed) all fall out of the
+// normal AppParse pipeline.
 //
 // This lives beside the instance runtime, not inside it — it never touches the
 // renderer, the websocket handler, or the storage engine.
 public static class SchemaBridge
 {
-    // Pure projection: designer Db node tree → the typed description (no text yet).
+    // Project a Design node (structured types + the three verbatim section texts) into a
+    // complete, validated app document (text) — the whole app, not just its types, so a
+    // published/created instance keeps its custom UI (`fn render()`), seed data, and shared
+    // functions. Throws SchemaValidationException on an invalid design (the same validation
+    // pipeline as any hand-written document), so a bad design yields no document.
+    public static string ProjectDesignDocument(NodeValue design)
+    {
+        // Validate the projected TYPES first, on the typed description — so a structural type error
+        // (e.g. an object Db with no props) surfaces as its precise semantic message ("…has baseType
+        // 'object' but no props") rather than the parse error that printing-then-reparsing such an
+        // invalid shape would raise (the printer can emit a propless object the parser won't accept).
+        var typed = Project(design);
+        InstanceDescriptionLoader.ValidateDescription(typed); // throws on invalid types
+
+        // The `types` section, printed from the (now-validated) structured types via the canonical
+        // printer. A types-only description prints exactly the `types` section (no other section
+        // emitted), so this is just that section's text.
+        var typesSection = AppPrint.Print(typed);
+
+        // The other sections, each verbatim INCLUDING its keyword (empty → absent). Concatenated
+        // after the types section with a blank line between (the section parsers skip blank lines
+        // before their keyword, so the spacing is cosmetic / canonical).
+        var sections = new List<string> { typesSection.TrimEnd('\n') };
+        if (design is ObjectValue d)
+            foreach (var name in new[] { "initialData", "common", "ui" })
+                if (TextField(d, name) is { Length: > 0 } section)
+                    sections.Add(section.TrimEnd('\n'));
+
+        var document = string.Join("\n\n", sections) + "\n";
+
+        // Validate the WHOLE assembled document via the normal loader (parse + semantic validation):
+        // this is what catches a malformed section text or a cross-section error (e.g. a Code/UI or
+        // initialData problem). Throws on an invalid design, so nothing is published/spawned. Returning
+        // the assembled text (not a re-print) keeps the user's exact section source.
+        InstanceDescriptionLoader.Load(document);
+        return document;
+    }
+
+    // Pure projection: a Design (or legacy Db) node's `types` set → the typed description (types
+    // only). Shared by ProjectDesignDocument (which adds the other sections) and the M4 tests.
     public static InstanceDescription Project(NodeValue designerDb)
     {
         var types = new List<TypeDefinition>();
@@ -97,13 +148,21 @@ public static class SchemaBridge
         // Validate before writing: throws on an invalid design, leaving files as-is.
         InstanceDescriptionLoader.ValidateDescription(desc);
 
-        File.WriteAllText(targetAppPath, AppPrint.Print(desc));
-        // Reset the instance's data through the storage seam: reinitialize to the
-        // new schema's initial document immediately (no stale data until next start).
-        // The old file goes first — an export deliberately replaces the instance's
-        // data, and opening a store over it would (rightly) trip the startup guard.
+        WriteDocument(AppPrint.Print(desc), targetAppPath, targetDataPath);
+    }
+
+    // Write an already-projected, already-validated app document onto a target instance and
+    // RESET its data (publish's write half — no migration; that is M11). Shared by Export (the
+    // M4 root-Db path) and the kernel's passed-Design publish, so both write + reset identically.
+    public static void WriteDocument(string documentText, string targetAppPath, string targetDataPath)
+    {
+        File.WriteAllText(targetAppPath, documentText);
+        // Reset the instance's data through the storage seam: reinitialize to the new schema's
+        // initial document immediately (no stale data until next start). The old file goes first —
+        // a publish deliberately replaces the instance's data, and opening a store over it would
+        // (rightly) trip the startup guard. The document is re-parsed for the seed shape.
         File.Delete(targetDataPath);
-        new JsonFileInstanceStore(targetDataPath, desc).Reset();
+        new JsonFileInstanceStore(targetDataPath, InstanceDescriptionLoader.Load(documentText)).Reset();
     }
 
     // TEMPORARY (testing scaffolding — not a product feature; remove later):
