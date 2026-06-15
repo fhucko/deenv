@@ -449,15 +449,35 @@ function execSetRef(codeCall: CodeCall, scope: ExecScope, context: ExecContext):
     return { type: "nothing" };
 }
 
-// sys.publish(targetId): a SERVER-ONLY host action — the M4 schema export runs server-side. The
-// client stages NOTHING in the data model (no obj.props mutation, no invalidateProp — mirrors
-// execSetRef minus the local mutation); it only fires the hostAction send-hook, which ws.ts sends
-// as the `hostAction` WS op. The server is authoritative: it alone runs the effect, and an error
-// reply surfaces as a user-visible lastError. Returns nothing (no value); on the server side it
-// no-ops in CodeExecutor, so SSR/refetch never publishes.
+// The schema object crosses the wire as its ID — the server reads the object's subtree from the
+// caller's store and projects it (no object-graph serialization). The designer passes `db`, the
+// root object (id 1). A non-object schema has no id → id 0, which the server rejects.
+function schemaIdArg(schema: ExecValue): ExecValue {
+    return { type: "int", value: schema.type === "object" ? schema.id : 0 };
+}
+
+// sys.publish(schema, targetId): a SERVER-ONLY host action — the M4 schema export runs server-side,
+// projecting the passed SCHEMA object onto an EXISTING target instance. The client stages NOTHING
+// in the data model (no obj.props mutation, no invalidateProp — mirrors execSetRef minus the local
+// mutation); it only fires the hostAction send-hook (schema as its id + the target id), which ws.ts
+// sends as the `hostAction` WS op. The server is authoritative: it alone runs the effect, and an
+// error reply surfaces as a user-visible lastError. Returns nothing; SSR/refetch no-ops it.
 function execPublish(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
-    const args = codeCall.params.map(p => executeValue(p, scope, context).value);
-    sendHostAction("publish", args);
+    const schema = executeValue(codeCall.params[0], scope, context).value;
+    const targetId = executeValue(codeCall.params[1], scope, context).value;
+    sendHostAction("publish", [schemaIdArg(schema), targetId]);
+    return { type: "nothing" };
+}
+
+// sys.create(schema, appPort, infraPort): a SERVER-ONLY host action — project the passed SCHEMA
+// object into a NEW kernel instance on the given ports (the sibling of publish: publish replaces an
+// existing instance, create spawns a new one). Like execPublish it stages NOTHING and only fires
+// the hostAction send-hook (schema as its id + the two ports). Returns nothing; SSR/refetch no-ops it.
+function execCreate(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const schema = executeValue(codeCall.params[0], scope, context).value;
+    const appPort = executeValue(codeCall.params[1], scope, context).value;
+    const infraPort = executeValue(codeCall.params[2], scope, context).value;
+    sendHostAction("create", [schemaIdArg(schema), appPort, infraPort]);
     return { type: "nothing" };
 }
 
@@ -642,6 +662,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "extent": return execExtent(codeCall, scope, context);
         case "setRef": return execSetRef(codeCall, scope, context);
         case "publish": return execPublish(codeCall, scope, context);
+        case "create": return execCreate(codeCall, scope, context);
         case "nest": return execNest(codeCall, scope, context);
         case "clone": return execClone(codeCall, scope, context);
     }

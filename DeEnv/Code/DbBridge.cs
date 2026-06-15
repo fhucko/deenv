@@ -16,7 +16,9 @@ namespace DeEnv.Code;
 // references are.
 public static class DbBridge
 {
-    private const int RootId = 1; // M5 seeds the Db root object at extent id 1.
+    // M5 seeds the Db root object at extent id 1. Public so a host action can recognise the
+    // root schema object the designer passes to sys.create / sys.publish (`db`, id 1).
+    public const int RootId = 1;
 
     // The reserved field a dictionary entry object carries its key in (the `__descs`
     // convention). The stdlib reads field(entry, "__key"); descriptors exclude it.

@@ -33,6 +33,17 @@ public sealed class HostActionSteps
     private string _targetDataPath = "";
     private const int TargetId = 7;
 
+    // The designer passes `db`, the root schema object — DbBridge.RootId. The host action reads
+    // the caller's root and projects it; a non-root schema id is rejected (a future extension).
+    private const int RootSchemaId = 1;
+
+    // What the fake create delegate recorded — the projected app document + the requested ports —
+    // so a create scenario can assert the kernel was asked to spawn the right thing (no real host).
+    private string _createdAppDoc = "";
+    private int _createdAppPort;
+    private int _createdInfraPort;
+    private bool _createInvoked;
+
     private string _reply = "";
 
     // ── Given: a designer instance + a designed schema ──────────────────────────
@@ -74,25 +85,47 @@ public sealed class HostActionSteps
 
     // ── When: publish over the WS ───────────────────────────────────────────────
 
-    [When("the designer publishes to the target's id over the WS")]
+    [When("the designer publishes the schema to the target's id over the WS")]
     public void WhenPublishToTarget() => Publish(TargetId);
 
-    [When("the designer publishes to an unknown id over the WS")]
+    [When("the designer publishes the schema to an unknown id over the WS")]
     public void WhenPublishToUnknown() => Publish(TargetId + 999);
 
-    // Construct the designer's WsHandler with a real KernelHostActions: it acts as the designer
-    // (its own meta+data are the meta-schema) and resolves ONLY TargetId → the target's app+data
-    // spec (any other id → null → an error, never a write). Then process the publish message.
-    private void Publish(int targetId)
+    [When("the designer creates an instance from the schema on ports {int} and {int} over the WS")]
+    public void WhenCreate(int appPort, int infraPort) =>
+        _reply = Ws().ProcessMessage(
+            $$"""{ "op": "hostAction", "action": "create", "args": [ { "type": "int", "value": {{RootSchemaId}} }, { "type": "int", "value": {{appPort}} }, { "type": "int", "value": {{infraPort}} } ] }""");
+
+    // A schema id that is NOT the root object — the guard must reject it (only `db` is projectable
+    // today) before any projection or spawn, so the create delegate is never reached.
+    [When("the designer creates an instance from a non-root schema object over the WS")]
+    public void WhenCreateNonRoot() =>
+        _reply = Ws().ProcessMessage(
+            $$"""{ "op": "hostAction", "action": "create", "args": [ { "type": "int", "value": {{RootSchemaId + 99}} }, { "type": "int", "value": 9100 }, { "type": "int", "value": 9101 } ] }""");
+
+    // publish(schema, targetId): the schema is the root object (RootSchemaId); the target id resolves
+    // to a spec (only TargetId resolves — any other id → null → a reject, never a write).
+    private void Publish(int targetId) =>
+        _reply = Ws().ProcessMessage(
+            $$"""{ "op": "hostAction", "action": "publish", "args": [ { "type": "int", "value": {{RootSchemaId}} }, { "type": "int", "value": {{targetId}} } ] }""");
+
+    // The designer's WsHandler with a real KernelHostActions: it acts as the designer (its own
+    // meta+data are the meta-schema it projects), resolves ONLY TargetId → the target spec, and its
+    // create delegate RECORDS what it was asked to spawn instead of starting a real kernel instance.
+    private WsHandler Ws()
     {
         var hostActions = new KernelHostActions(
             _metaAppPath, _designerDataPath,
-            id => id == TargetId ? new InstanceSpec(_targetAppPath, _targetDataPath, 0, 0) : null);
-
-        var ws = new WsHandler(_designer, _meta, sessions: null, registry: null, hostActions: hostActions);
-
-        _reply = ws.ProcessMessage(
-            $$"""{ "op": "hostAction", "action": "publish", "args": [ { "type": "int", "value": {{targetId}} } ] }""");
+            id => id == TargetId ? new InstanceSpec(_targetAppPath, _targetDataPath, 0, 0) : null,
+            createInstance: (appDoc, appPort, infraPort) =>
+            {
+                _createdAppDoc = appDoc;
+                _createdAppPort = appPort;
+                _createdInfraPort = infraPort;
+                _createInvoked = true;
+                return Task.CompletedTask;
+            });
+        return new WsHandler(_designer, _meta, sessions: null, registry: null, hostActions: hostActions);
     }
 
     // ── Then ────────────────────────────────────────────────────────────────────
@@ -143,6 +176,26 @@ public sealed class HostActionSteps
     {
         await Assert.That(File.ReadAllText(_targetAppPath)).IsEqualTo(TargetAppSentinel);
     }
+
+    [Then("a new instance was created on ports {int} and {int}")]
+    public async Task ThenCreatedOnPorts(int appPort, int infraPort)
+    {
+        await Assert.That(_createInvoked).IsTrue();
+        await Assert.That(_createdAppPort).IsEqualTo(appPort);
+        await Assert.That(_createdInfraPort).IsEqualTo(infraPort);
+    }
+
+    [Then("the created app document describes the designed type {string}")]
+    public async Task ThenCreatedDescribes(string typeName)
+    {
+        // create projected the designer's design to an app document (text) and handed it to the
+        // kernel create; it parses and declares the designed type.
+        await Assert.That(InstanceDescriptionLoader.Load(_createdAppDoc).FindType(typeName)).IsNotNull();
+    }
+
+    [Then("no instance was created")]
+    public async Task ThenNoneCreated() =>
+        await Assert.That(_createInvoked).IsFalse();
 
     // ── teardown ────────────────────────────────────────────────────────────────
 

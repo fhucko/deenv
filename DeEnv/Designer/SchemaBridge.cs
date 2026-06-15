@@ -60,6 +60,24 @@ public static class SchemaBridge
         return new InstanceDescription(types);
     }
 
+    // Read the designer's data, project it, validate it, and return it as an app document
+    // (text) — without writing anywhere. The projection half of Export, shared with `create`
+    // (which hands the text to the kernel to spawn a NEW instance, rather than overwriting an
+    // existing one). Throws SchemaValidationException on an invalid design (the same validation
+    // pipeline as any hand-written document), so a bad design yields no document and no spawn.
+    public static string ProjectDocument(string metaAppPath, string designerDataPath)
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
+        var store = new JsonFileInstanceStore(designerDataPath, meta);
+
+        var db = store.ReadNode(NodePath.Root)
+            ?? throw new SchemaValidationException("Designer data could not be read.");
+
+        var desc = Project(db);
+        InstanceDescriptionLoader.ValidateDescription(desc); // throws on an invalid design
+        return AppPrint.Print(desc);
+    }
+
     // Read the designer's data, project it, validate it, and publish it as the
     // instance's app document (text). Throws SchemaValidationException (writing
     // nothing) when the designed schema is invalid — the same validation pipeline

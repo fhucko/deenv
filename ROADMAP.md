@@ -211,19 +211,21 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   entirely** (user direction): the kernel host is the sole entry point and
   `kernel.json` is the single source of what runs — a single instance is just a
   one-entry registry, so there is no `--mode`/`--app` and no regression in hosting
-  one app. The designer becomes a registry entry; the M4 export/publish bridge is to
-  be exposed to Code (a follow-up), not a CLI mode. Built in `DeEnv/Kernel/`
+  one app. The designer becomes a registry entry; the M4 export/publish bridge is
+  now exposed to Code as host actions, not a CLI mode. Built in `DeEnv/Kernel/`
   (`RegistryReader`/`KernelHost`/`HostedInstance`), specced by `Kernel.feature`
-  (`@milestone-10`); suite green 224/224. Several more slices landed: **`list`** (the registry is
+  (`@milestone-10`); suite green 227/227. Several more slices landed: **`list`** (the registry is
   readable from image Code as a read-only `instances` global — an app renders the list itself, the
   first kernel-as-data read path), **`create`** (add an instance to a RUNNING kernel: minted id,
   id-keyed sovereign store, operator-set ports, persisted; the `instances` view is live — no stale
   data), and **`switch`/`delete`** (re-bind a running instance's ports / remove one + collect its
   store) — the full create/list/switch/delete *mechanism* in C#. Then the **`sys` namespace** (the
-  framework builtins + `instances` under `sys`) and the **host-action primitive** (Code triggers a
-  server-side host op): `sys.publish(id)` runs the M4 schema export as a Code action (export-to-Code).
-  Remaining: the operator-facing create/switch/delete commands as image Code, and promoting the
-  registry to a restricted kernel-instance. See DECISIONS.md.
+  framework builtins + `instances` under `sys`) and the **host-action channel** (Code triggers a
+  server-side host op): `sys.publish(schema, targetId)` runs the M4 schema export onto an existing
+  instance and `sys.create(schema, appPort, infraPort)` spawns a new one — both project a passed
+  schema object (carried by its id; the designer's `Db { types }` meta-schema is unchanged).
+  Remaining: the operator-facing create/publish/switch/delete COMMANDS/UI as image Code, and
+  promoting the registry to a restricted kernel-instance. See DECISIONS.md.
 
   **Kernel discipline:** the kernel gains the *mechanism* (host N instances, bind
   ports, hold the registry) — **not** the management *experience*. Create/list/

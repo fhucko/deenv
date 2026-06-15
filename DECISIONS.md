@@ -1266,7 +1266,7 @@ the LAST entry yields an empty registry, which `RegistryReader` rejects as "list
 unreachable now since the sole boot instance can't be deleted, but the IDE delete command will need a
 defined empty-kernel mode.)*
 
-**Host actions — the Code→host channel; `sys.publish` (export-to-Code) — landed 2026-06-15.** The first
+**Host actions — the Code→host channel; `sys.publish` + `sys.create` (export/create-to-Code) — landed 2026-06-15.** The first
 time Code triggers a HOST operation (a server-side C# routine that touches the filesystem/kernel),
 distinct from the data effects Code already does (mutations over the WS). The M4 schema **publish/export**
 (`SchemaBridge.Export` — project a designer instance's data → a target app document + reset its data;
@@ -1290,10 +1290,28 @@ orphaned since M10 removed `--mode export`) is the first consumer, restored as a
   hosted CREATED instance by id (id 0 / unknown → a clean reject, never a write); the target is named in
   the designer's Code (image Code), not C# wiring. The C# *mechanism* only — the operator-facing publish
   *command/UI* is image Code (a later slice, the kernel-vs-image line).
-- **Specced by `HostAction.feature`** (3 scenarios, at the WS-handler seam). Reviewed (meets the bar).
-  Suite 224/224.
-- **Deferred:** a general server-action/RPC/effect system (this is ONE named builtin); create/switch/delete
-  as image Code (further consumers of the same channel); schema MIGRATION on publish (it's replace+reset —
+- **`sys.create` (the second consumer) + the schema-object reshape (same day):** create-as-image-Code
+  spawns a NEW instance from a schema. To make create/publish a consistent pair, both now take a SCHEMA
+  OBJECT as the first arg — `sys.create(schema, appPort, infraPort)` and `sys.publish(schema, targetId)`
+  (reshaped from `publish(targetId)`). The schema crosses the wire as the object's **id** (the designer
+  passes `db`, the root = `DbBridge.RootId` 1; a non-object → 0 → reject); the server reads the caller's
+  root and projects it via the new `SchemaBridge.ProjectDocument` (project+validate+print, no write — the
+  projection half of `Export`, which is UNCHANGED — minimal footprint). `KernelHostActions.create` blocks
+  on the kernel's `CreateAsync` (`.GetAwaiter().GetResult()` — the WS dispatch is synchronous, no
+  SynchronizationContext to deadlock, single-operator). `KernelHost` gains a `(baseDir, registryPath)` ctor
+  so a Code-triggered create self-services the same id-layout + registry as a boot one. **The designer's
+  meta-schema is UNCHANGED (`Db { types }`)** — "a set of apps" is the registry (the set of instances), NOT
+  a nested object inside the designer (a shape change the user rejected — don't reshape what already works,
+  architecture-reviewer criterion 8). Only the ROOT schema object is projectable today (`RequireRootSchema`
+  rejects any other id, writing/spawning nothing); a non-root schema (selecting one design out of a managed
+  SET) needs id→subtree resolution — a named future extension.
+- **Specced by `HostAction.feature`** (6 scenarios at the WS-handler seam: 3 publish + 3 create, incl.
+  invalid-design and non-root-schema rejections that write/spawn nothing). Reviewed twice (meets the bar).
+  Suite 227/227.
+- **Deferred:** a general server-action/RPC/effect system (these are TWO named builtins); the create/publish
+  COMMAND/UI (a designer surface that drives `sys.create`/`sys.publish`) is image Code; switch/delete
+  as image Code (further consumers of the same channel); a non-root schema object (a managed SET of
+  designs); schema MIGRATION on publish (it's replace+reset —
   the M4 bridge; preserving data is M11 versioning); live-RELOAD of the target after publish (its running
   store stays stale until restart — the operator reloads); AUTH on host actions (deferred wholesale, like
   every WS op — single-operator); uniform ids for boot instances; pinning the publish SOURCE to the

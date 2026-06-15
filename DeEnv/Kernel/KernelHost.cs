@@ -11,7 +11,14 @@ namespace DeEnv.Kernel;
 //
 // It deliberately does NOT own process lifetime (blocking on Ctrl+C) — the composition root does —
 // so it stays a plain start/stop unit that tests can drive synchronously.
-public sealed class KernelHost : IAsyncDisposable
+// Constructed with the kernel's boot context — the base directory it resolves instances under and
+// the registry file it persists to — so a Code-triggered create (sys.create) can self-service the
+// kernel's own CreateAsync with the same id-layout + registry as a boot instance. CreateAsync /
+// DeleteAsync / SwitchAsync deliberately KEEP baseDir/registryPath as explicit parameters (so they
+// stay directly test-drivable against a temp dir + registry); these ctor fields exist ONLY to feed
+// the self-service create delegate (HostActionsFor) the boot values — production passes the same
+// dir + registry to both, so the two sources never diverge in practice.
+public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisposable
 {
     private readonly List<HostedInstance> _instances = [];
     public IReadOnlyList<HostedInstance> Instances => _instances;
@@ -49,7 +56,12 @@ public sealed class KernelHost : IAsyncDisposable
     private IHostActions HostActionsFor(InstanceSpec spec) =>
         new KernelHostActions(
             spec.SchemaPath, spec.DataPath,
-            id => id == 0 ? null : _instances.FirstOrDefault(i => IdOf(i.Spec) == id)?.Spec);
+            id => id == 0 ? null : _instances.FirstOrDefault(i => IdOf(i.Spec) == id)?.Spec,
+            // create projects the caller's schema into a NEW instance via the kernel's own create
+            // mechanism, fed the kernel's boot baseDir/registryPath so a Code-triggered create lands
+            // in the same id-layout + registry as a boot one.
+            createInstance: (appDoc, appPort, infraPort) =>
+                CreateAsync(appDoc, appPort, infraPort, baseDir, registryPath));
 
     // Resolve each registry entry to a hosting spec: the app name becomes the schema path, and the
     // data path is DERIVED from the app stem (AppPaths) — never stored in the registry, so distinct

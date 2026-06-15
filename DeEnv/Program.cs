@@ -30,7 +30,7 @@ catch (KernelConfigException ex)
     return;
 }
 
-var kernel = new KernelHost();
+var kernel = new KernelHost(baseDir, Path.Combine(baseDir, "kernel.json"));
 try
 {
     await kernel.StartAsync(specs);

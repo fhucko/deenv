@@ -143,7 +143,7 @@ public sealed class KernelSteps(InstanceContext ctx)
     public async Task WhenKernelStartsAsync()
     {
         var registry = RegistryReader.Read(Path.Combine(ctx.KernelDir!, "kernel.json"));
-        ctx.Kernel = new KernelHost();
+        ctx.Kernel = new KernelHost(ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
         await ctx.Kernel.StartAsync(KernelHost.SpecsFor(registry, ctx.KernelDir!));
     }
 
@@ -301,7 +301,7 @@ public sealed class KernelSteps(InstanceContext ctx)
     {
         await ctx.Kernel!.DisposeAsync();
         var registry = RegistryReader.Read(Path.Combine(ctx.KernelDir!, "kernel.json"));
-        ctx.Kernel = new KernelHost();
+        ctx.Kernel = new KernelHost(ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
         await ctx.Kernel.StartAsync(KernelHost.SpecsFor(registry, ctx.KernelDir!));
     }
 
