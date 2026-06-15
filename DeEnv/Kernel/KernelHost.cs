@@ -156,19 +156,33 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // guard), the already-started instances are stopped so the process never leaks half-bound ports.
     public async Task StartAsync(IReadOnlyList<InstanceSpec> specs)
     {
+        // Start every instance CONCURRENTLY. Each binds its own (collision-checked) ports and opens
+        // its own store, so they have no startup-time dependency. GenHTTP's host start blocks its
+        // thread synchronously (seconds each), so plain async concurrency would NOT overlap them —
+        // Task.Run puts each instance's startup on its own thread, turning boot from sum-of-instances
+        // into max-of-instances. Every instance shares the LIVE registry provider and gets its own
+        // host-action seam (a lazy closure over the hosted set).
+        var starts = specs
+            .Select(spec => Task.Run(() => HostedInstance.StartAsync(spec, _registry, HostActionsFor(spec))))
+            .ToList();
         try
         {
-            // Every instance shares the LIVE registry provider (CurrentRegistry), so each render
-            // reads the current hosted set; Register refreshes it as instances come up. Each gets
-            // its own host-action seam (its own meta/data paths + the live target resolver).
-            foreach (var spec in specs)
-                Register(await HostedInstance.StartAsync(spec, _registry, HostActionsFor(spec)));
+            await Task.WhenAll(starts);
         }
         catch
         {
+            // One failed mid-startup (e.g. a stale data file trips the storage guard). Stop every
+            // instance that DID start so the process never leaks half-bound ports, then rethrow.
+            foreach (var start in starts)
+                if (start.IsCompletedSuccessfully)
+                    await start.Result.DisposeAsync();
             await DisposeAsync();
             throw;
         }
+
+        // All up — register them, refreshing the shared LiveRegistry with the full set in one go.
+        foreach (var start in starts)
+            Register(start.Result);
     }
 
     // Create one new instance in a RUNNING kernel and persist it to the registry. The kernel's
