@@ -126,6 +126,50 @@ kernel as a *restricted instance*, cross-instance ops without distributed ACID) 
 recorded in **DECISIONS.md → "The self-hosted image — kernel, instances, and
 cross-instance data."**
 
+**The devops thesis — operations as a single act.** This north star is also how
+deenv answers the *devops* half of the mission (VISION.md). All of operating the
+system collapses toward **one irreducible act: place the kernel on a machine and
+start it once.** From that seed the running system does the rest *from within* —
+it hosts, it spawns instances, and later it versions and repairs itself. Devops
+does not vanish (someone still places the seed); it **shrinks to a single step**,
+and how small that step becomes (one binary, one command) is real design work,
+not a given. This is the concrete form of VISION.md's "Positioning &
+sustainability": collapse the stack, run on ordinary hardware, no ops team —
+cheaper than cloud *by construction*.
+
+**Fractal hosting (late).** Because an image is an image — the kernel does not
+care whose — the same hosting primitive runs at every scale: your own app, your
+team's, or *other people's*. A self-hosted kernel can therefore *become* a
+hosting provider, and "self-host" vs. "let someone host for you" stops being a
+fork. This is a real destination but a **late** one: hosting strangers demands
+**fault + resource isolation** (one tenant cannot crash or starve another) and
+**untrusted-code sandboxing** (a tenant's Code is now a threat model) — both
+currently out of scope — and, at scale, the distributed runtime. Written here as
+a capability the architecture *enables*, not near-term work.
+
+**Recovery floor (open question).** The section above names *the recovery
+floor* — the guarantee that a botched self-edit can be undone. Its likely shape:
+a **"safe mode" in which the kernel mints a fresh, known-good default IDE
+instance** (recovery as just another instance spawn) from a default that lives
+where a failing image cannot corrupt it. The hard parts are deferred and
+unsolved: *where* that trustworthy default lives (compiled into the kernel? a
+read-only kernel seed? the git-committed known-good, re-checked-out?), and the
+trade between a **frozen** default (always safe, but stale — it loses the IDE's
+own self-hosted improvements) and a **last-known-good** snapshot (fresher, but it
+must be proven uncorrupted). Named here so the self-operation promise stays
+honest, not solved.
+
+**The ecosystem (capstone).** The furthest destination: an **npm- and
+GitHub-for-apps** — a registry and collaboration surface for libraries and whole
+apps (portable images: data + Code), with a **marketplace where creators are
+paid for their work.** It is VISION.md's community-and-network moat made real. It
+is also a *second product layered on the first*, lighting up only **downstream of
+almost everything**: a registry needs schema versioning (pillar 3); collaboration
+needs multi-user (Stage 3); sharing libraries means running others' code (the
+trust/sandbox problem above); "getting paid" needs a payments + licensing layer.
+The latest of the late — and the point at which the community, not the code,
+becomes the durable advantage.
+
 ## Later stages — not yet drawn
 
 Placeholders, defined by the remaining pillars (see VISION.md / ROADMAP.md):

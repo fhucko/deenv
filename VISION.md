@@ -14,6 +14,13 @@ The goal is to make building and running a database-backed app approachable
 for developers who find today's cloud overwhelming: design an app, and have
 it run, without a DevOps degree.
 
+That promise has **two equal halves.** *Building* the app is the dev half — no
+SQL, no fetch, no endpoints; design data, work with objects (the pillars
+below). *Running* it is the devops half: "have it run, without a DevOps degree"
+is not a footnote to the mission, it is the other half of it. The devops half
+is drawn in full in **STAGES.md** (the self-hosted-image north star) — its
+thesis is that operating the system collapses toward a single act.
+
 ## Who uses this
 
 There is **one operator** — the person driving the tool. They must be
@@ -104,6 +111,43 @@ data-model-literate; the coding burden moves from "developer only" to
 9. **An IDE-grade environment.** The whole experience — schema design, code,
    versioning, instancing — lives in one cohesive app, web-first, with a
    possible desktop wrapper later.
+
+## Positioning & sustainability
+
+**What it competes with.** Today's cloud is the incumbent, and for the vast
+middle of applications it is both overwrought and overpriced — a sprawl of
+managed services, each billed separately, each needing someone who knows it.
+deenv is a **superior solution for that over-served middle**: the small-to-mid
+database-backed apps that do not need hyperscale. The claim is scoped on purpose
+— deenv is *not* trying to beat the hyperscalers at global, high-traffic,
+distributed scale (that is the hardest, latest pillar — pillar 7, STAGES.md
+Stage 5). "Superior to expensive cloud, for the apps cloud over-serves" is a
+large and honest claim; "superior to cloud, full stop" would be an overpromise.
+
+**Free, open, and steward-led.** deenv is **free and open source** — that is
+settled; the **specific license is still being chosen, currently leaning permissive
+(MIT).** The axis is permissive (MIT/Apache) vs. copyleft (GPL/**AGPL**):
+permissive maximises reach and embedding (the current lean), while copyleft
+(especially AGPL) would instead keep the core from being taken closed and
+out-proprietarised, at some adoption friction. (Restrictive source-available
+licenses like BSL are off the table — they are not open source.) One consideration for
+whichever is chosen: the kernel/image boundary is a natural license boundary, so
+apps built on the kernel can stay the author's own regardless (as the Linux
+kernel's GPL does not reach userspace). The creator's role is **steward, not founder** —
+the Linus Torvalds / Evan You model: build and maintain the core, funded by
+**donations and sponsorship**, with a day job as the runway until (if ever) it
+earns the right to go full-time. **AI is the force multiplier** that makes this
+solo, side-project path newly viable — the collaborator that lets one steward
+build what once needed a team.
+
+**The moat is the community.** The paid layer is *not* the creator's company:
+hosting, support, and enterprise services are things **others** may build around
+the free core (the Red Hat pattern — companies forming around a free kernel). So
+the durable advantage is **neither code secrecy nor hosting** — both are
+strip-minable (it is what drove Elastic, Mongo, and HashiCorp to restrictive
+licenses) — it is the **community and the network**: the active center, the
+contributors, and eventually the ecosystem (the capstone in STAGES.md). The enemy
+to fear is **obscurity, not imitation.**
 
 ## Honest scope note
 
