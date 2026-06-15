@@ -305,6 +305,41 @@ public sealed class CodeExecutor
         return new ExecText { Value = baseText.Value.TrimEnd('/') + "/" + segStr };
     }
 
+    // segment(path, n): the n-th "/"-delimited segment of `path` as text ("" if out of
+    // range) — the URL-DESTRUCTURING twin of nest. RAW split on "/" indexed by `n` (the
+    // leading slash yields an empty first segment: segment("/instances/5", 0) == ""). The
+    // framework does the string work; Code gains no general string ops.
+    private IExecValue ExecuteSegment(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 2)
+            throw new CodeRuntimeException("segment(path, n) takes two arguments.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecText path)
+            throw new CodeRuntimeException("segment() expects a text path.");
+        var n = AsInt(ExecuteValue(call.Params[1], scope, context));
+        var parts = path.Value.Split('/');
+        return new ExecText { Value = n >= 0 && n < parts.Length ? parts[n] : "" };
+    }
+
+    // toInt(text): parse `text` to an int; 0 on empty or non-numeric (defensive, mirroring
+    // existing input coercion). Strict (only an optional leading "-" then digits) so the
+    // server/client twins agree exactly on every input — "5x" is non-numeric → 0 on both.
+    private IExecValue ExecuteToInt(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecText text)
+            throw new CodeRuntimeException("toInt() expects a text value.");
+        return new ExecInt { Value = int.TryParse(text.Value, out var n) ? n : 0 };
+    }
+
+    // id(obj): an object's intrinsic int identity — the read companion to nest (which already
+    // stringifies obj.Id for a link). Pure: a route compares this to a parsed segment to find
+    // the addressed object; unlike field() it records no prop dependency and never writes back.
+    private IExecValue ExecuteId(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject obj)
+            throw new CodeRuntimeException("id() expects an object.");
+        return new ExecInt { Value = obj.Id };
+    }
+
     private static int AsInt(IExecValue v) => v is ExecInt i ? i.Value
         : throw new CodeRuntimeException("Expected an int.");
     private static bool AsBool(IExecValue v) => v is ExecBool b ? b.Value
@@ -354,6 +389,9 @@ public sealed class CodeExecutor
         "humanize" => ExecuteHumanize(call, scope, context),
         "extent" => ExecuteExtent(call, scope, context),
         "nest" => ExecuteNest(call, scope, context),
+        "segment" => ExecuteSegment(call, scope, context),
+        "toInt" => ExecuteToInt(call, scope, context),
+        "id" => ExecuteId(call, scope, context),
         "clone" => ExecuteClone(call, scope, context),
         // setRef(obj, prop, value) persists on the client (the reference editor). Server-side
         // (SSR / refetch) never runs the click handler, so it no-ops.

@@ -411,6 +411,38 @@ function execNest(codeCall: CodeCall, scope: ExecScope, context: ExecContext): E
     return { type: "text", value: baseV.value.replace(/\/+$/, "") + "/" + segStr };
 }
 
+// segment(path, n): the n-th "/"-delimited segment of `path` as text ("" if out of range) —
+// the URL-DESTRUCTURING twin of nest. RAW split on "/" indexed by `n` (the leading slash
+// yields an empty first segment). The framework does the string work; Code gains no general
+// string ops.
+function execSegment(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    if (codeCall.params.length !== 2) throw new Error("segment(path, n) takes two arguments.");
+    const pathV = executeValue(codeCall.params[0], scope, context).value;
+    if (pathV.type !== "text") throw new Error("segment() expects a text path.");
+    const nV = executeValue(codeCall.params[1], scope, context).value;
+    if (nV.type !== "int") throw new Error("segment() expects an int index.");
+    const n = nV.value;
+    const parts = pathV.value.split("/");
+    return { type: "text", value: n >= 0 && n < parts.length ? parts[n] : "" };
+}
+
+// toInt(text): parse `text` to an int; 0 on empty or non-numeric. Strict (an optional leading
+// "-" then digits) so this twins the C# int.TryParse exactly — "5x" is non-numeric → 0 on both
+// (parseInt would leniently yield 5 and drift from the server).
+function execToInt(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const v = executeValue(codeCall.params[0], scope, context).value;
+    if (v.type !== "text") throw new Error("toInt() expects a text value.");
+    return { type: "int", value: /^-?\d+$/.test(v.value) ? Number(v.value) : 0 };
+}
+
+// id(obj): an object's intrinsic int identity — the read companion to nest (which stringifies
+// obj.id for a link). Pure: records no prop dependency and never writes back (unlike field).
+function execId(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const obj = executeValue(codeCall.params[0], scope, context).value;
+    if (obj.type !== "object") throw new Error("id() expects an object.");
+    return { type: "int", value: obj.id };
+}
+
 // clone(obj): a fresh object with the source's SCALAR props copied (a new draft from a
 // type's blank template — a generic component's create-new state).
 function execClone(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
@@ -688,6 +720,9 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "cloneInstance": return execCloneInstance(codeCall, scope, context);
         case "delete": return execDelete(codeCall, scope, context);
         case "nest": return execNest(codeCall, scope, context);
+        case "segment": return execSegment(codeCall, scope, context);
+        case "toInt": return execToInt(codeCall, scope, context);
+        case "id": return execId(codeCall, scope, context);
         case "clone": return execClone(codeCall, scope, context);
     }
     const fn = executeValue(codeCall.fn, scope, context).value;

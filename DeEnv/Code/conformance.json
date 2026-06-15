@@ -174,6 +174,140 @@
       "expect": { "kind": "text", "value": "/settings/theme" }
     },
     {
+      "name": "sys.segment index 0 of a rooted path is the empty leading segment",
+      "text": "sys.segment(\"/instances/5\", 0)",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "segment" } },
+        "params": [ { "type": "text", "value": "/instances/5" }, { "type": "int", "value": 0 } ]
+      },
+      "expect": { "kind": "text", "value": "" }
+    },
+    {
+      "name": "sys.segment index 1 of a rooted path",
+      "text": "sys.segment(\"/instances/5\", 1)",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "segment" } },
+        "params": [ { "type": "text", "value": "/instances/5" }, { "type": "int", "value": 1 } ]
+      },
+      "expect": { "kind": "text", "value": "instances" }
+    },
+    {
+      "name": "sys.segment index 2 of a rooted path (the route key)",
+      "text": "sys.segment(\"/instances/5\", 2)",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "segment" } },
+        "params": [ { "type": "text", "value": "/instances/5" }, { "type": "int", "value": 2 } ]
+      },
+      "expect": { "kind": "text", "value": "5" }
+    },
+    {
+      "name": "sys.segment out of range is empty",
+      "text": "sys.segment(\"/instances/5\", 9)",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "segment" } },
+        "params": [ { "type": "text", "value": "/instances/5" }, { "type": "int", "value": 9 } ]
+      },
+      "expect": { "kind": "text", "value": "" }
+    },
+    {
+      "name": "sys.segment of the bare root, index 1, is empty",
+      "text": "sys.segment(\"/\", 1)",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "segment" } },
+        "params": [ { "type": "text", "value": "/" }, { "type": "int", "value": 1 } ]
+      },
+      "expect": { "kind": "text", "value": "" }
+    },
+    {
+      "name": "sys.segment of the empty path, index 0, is empty",
+      "text": "sys.segment(\"\", 0)",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "segment" } },
+        "params": [ { "type": "text", "value": "" }, { "type": "int", "value": 0 } ]
+      },
+      "expect": { "kind": "text", "value": "" }
+    },
+    {
+      "name": "sys.toInt parses a plain number",
+      "text": "sys.toInt(\"5\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "toInt" } },
+        "params": [ { "type": "text", "value": "5" } ]
+      },
+      "expect": { "kind": "int", "value": 5 }
+    },
+    {
+      "name": "sys.toInt drops leading zeros (\"007\" -> 7)",
+      "text": "sys.toInt(\"007\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "toInt" } },
+        "params": [ { "type": "text", "value": "007" } ]
+      },
+      "expect": { "kind": "int", "value": 7 }
+    },
+    {
+      "name": "sys.toInt of a non-numeric text is 0",
+      "text": "sys.toInt(\"x\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "toInt" } },
+        "params": [ { "type": "text", "value": "x" } ]
+      },
+      "expect": { "kind": "int", "value": 0 }
+    },
+    {
+      "name": "sys.toInt of the empty text is 0",
+      "text": "sys.toInt(\"\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "toInt" } },
+        "params": [ { "type": "text", "value": "" } ]
+      },
+      "expect": { "kind": "int", "value": 0 }
+    },
+    {
+      "name": "sys.toInt parses a leading minus sign (\"-3\" -> -3)",
+      "text": "sys.toInt(\"-3\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "toInt" } },
+        "params": [ { "type": "text", "value": "-3" } ]
+      },
+      "expect": { "kind": "int", "value": -3 }
+    },
+    {
+      "name": "sys.toInt(sys.segment(...)) — the routing expression: read a route int from a path",
+      "text": "sys.toInt(sys.segment(\"/instances/5\", 2))",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "toInt" } },
+        "params": [
+          { "type": "call",
+            "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "segment" } },
+            "params": [ { "type": "text", "value": "/instances/5" }, { "type": "int", "value": 2 } ] }
+        ]
+      },
+      "expect": { "kind": "int", "value": 5 }
+    },
+    {
+      "name": "sys.id reads an object's intrinsic id (a fresh object literal mints -1 identically on both twins)",
+      "text": "sys.id({ n: 7 })",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "id" } },
+        "params": [ { "type": "object", "props": [ { "name": "n", "value": { "type": "int", "value": 7 } } ] } ]
+      },
+      "expect": { "kind": "int", "value": -1 }
+    },
+    {
       "name": "object-field assignment (obj.x = 9) sets the field",
       "expr": {
         "type": "call",
