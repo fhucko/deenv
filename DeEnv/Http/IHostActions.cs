@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace DeEnv.Http;
 
 // The seam for SERVER-SIDE host actions — devops effects that run with kernel authority,
-// outside the instance's own data (publish a schema, and later create/switch/delete). It is
+// outside the instance's own data (publish/create/clone/delete an instance; switch later). It is
 // the C# side of the `sys.publish(...)` channel: the client fires a `hostAction` WS message,
 // WsHandler.HandleHostAction reads (action, args) and calls Run, and an action's failure
 // throws (ProcessMessage's catch turns it into the client's `{ error }` reject). Constructed
@@ -12,8 +12,8 @@ namespace DeEnv.Http;
 //
 // Kernel-vs-image line (DECISIONS "C# is the kernel — app logic belongs in the app"): this is
 // the irreducible C# MECHANISM (it touches the file system / another instance's store, an OS
-// boundary). The operator-facing command/UI is image Code over `sys.*`. Today the only action
-// is "publish"; create/switch/delete join later as further named actions on this same seam.
+// boundary). The operator-facing command/UI is image Code over `sys.*`. The named actions are
+// "publish", "create", "cloneInstance" and "delete"; switch joins later on this same seam.
 public interface IHostActions
 {
     // Run the named host action with its raw arguments (the Code call's evaluated args, as a

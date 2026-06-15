@@ -481,6 +481,28 @@ function execCreate(codeCall: CodeCall, scope: ExecScope, context: ExecContext):
     return { type: "nothing" };
 }
 
+// sys.cloneInstance(sourceId, appPort, infraPort): a SERVER-ONLY host action — copy an existing
+// instance's app document AND data into a NEW instance on the given ports (the data-carrying sibling
+// of create: create projects a fresh design, clone copies a live one). The source is named by its
+// instance id (a bare int, NOT a schema object — no schemaIdArg). Stages NOTHING; only fires the
+// hostAction send-hook (the source id + the two ports). Returns nothing; SSR/refetch no-ops it.
+function execCloneInstance(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const sourceId = executeValue(codeCall.params[0], scope, context).value;
+    const appPort = executeValue(codeCall.params[1], scope, context).value;
+    const infraPort = executeValue(codeCall.params[2], scope, context).value;
+    sendHostAction("cloneInstance", [sourceId, appPort, infraPort]);
+    return { type: "nothing" };
+}
+
+// sys.delete(targetId): a SERVER-ONLY host action — remove an existing kernel instance, named by
+// its instance id (a bare int, NOT a schema object). Stages NOTHING; only fires the hostAction
+// send-hook (the target id). Returns nothing; SSR/refetch no-ops it.
+function execDelete(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const targetId = executeValue(codeCall.params[0], scope, context).value;
+    sendHostAction("delete", [targetId]);
+    return { type: "nothing" };
+}
+
 function collectionSysFunction(arr: ExecArray, method: string, context: ExecContext): ExecSysFunction {
     switch (method) {
         case "add": return { type: "sysFn", fn: args => { addToCollection(arr, args[0], context); return { type: "nothing" }; } };
@@ -663,6 +685,8 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "setRef": return execSetRef(codeCall, scope, context);
         case "publish": return execPublish(codeCall, scope, context);
         case "create": return execCreate(codeCall, scope, context);
+        case "cloneInstance": return execCloneInstance(codeCall, scope, context);
+        case "delete": return execDelete(codeCall, scope, context);
         case "nest": return execNest(codeCall, scope, context);
         case "clone": return execClone(codeCall, scope, context);
     }

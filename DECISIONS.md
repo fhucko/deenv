@@ -1114,7 +1114,8 @@ seam; the commands-as-IDE are built in deenv over the registry-as-data.
 `RunAsync` tail into a thin C# **kernel supervisor** that starts every instance in the
 registry and blocks on a shutdown signal. The registry is a plain `kernel.json`
 (`{ instances: [{ app, appPort, infraPort }] }` — the app document name + both ports; the
-data file is **derived** from the app stem via `AppPaths`) read **without the interpreter** —
+data file is **derived** from the app stem via `AppPaths` — *superseded: storage is now id-based,
+`{ id, app, ports }`, see "Operator instance ops + the id-based instance identity model"*) read **without the interpreter** —
 the sanctioned bootstrap subset. Slice 1's two instances are *different* apps, so derived
 data files don't collide. (Two instances of the **same** app needing *separate* data — the
 test-instance / branch case — is deferred with the `create` / test-instance follow-ups; the
@@ -1242,7 +1243,8 @@ page lists a newly-created one.
 **Fourth + fifth slices (`delete`, `switch`) — landed 2026-06-14.** The remaining kernel management
 ops, C# *mechanism* only (operator command/UI still deferred image Code). `KernelHost.DeleteAsync(
 instance, registryPath)` removes a running instance: refuses boot/stem-derived instances (only id-dir
-CREATED ones — never drop a hand-authored boot data file, the startup-guard principle), stops its two
+CREATED ones — never drop a hand-authored boot data file, the startup-guard principle) *— superseded:
+delete now works on ANY instance by id (uniform id-based model), see "Operator instance ops"*, stops its two
 hosts (`HostedInstance.DisposeAsync`, the single-instance teardown `create` deferred), drops it from
 `_instances` + `RefreshRegistry` (the `LiveRegistry` whole-snapshot swap keeps a concurrent render
 safe), rewrites kernel.json without the entry, and collects the store by deleting the id-dir
@@ -1335,6 +1337,47 @@ the generic UI's int fields benefit too). Specced by `Designer.feature` (the edi
 hand; a port stays an int — `"007"`→`"7"`). Suite 229/229. Deferred (named follow-ups): the per-instance
 publish button (`sys.publish(db, i.id)`), delete/switch commands, cardinality/keyType editing, and the full
 kernel+browser create-EFFECT test (the spawn itself is already covered at the WS seam + `Kernel.feature`).
+
+**Operator instance ops + the id-based instance identity model — landed 2026-06-15.** The designer's
+per-instance operations (delete/clone/publish) drove the instance identity model to its final shape.
+This entry is authoritative; it **supersedes the identity details** scattered through the earlier M10
+entries (which describe the model as it evolved — "created = id-dir number, boot = 0", name-resolved
+storage, `RelativeApp`/`PathsEqual` matching, delete-refuses-boot, `sys.publish` targets created-only).
+
+- **Three new operator ops over the host-action channel**, all the sibling pattern of `sys.create`:
+  `sys.delete(id)` (exposes the existing `KernelHost.DeleteAsync`), `sys.cloneInstance(sourceId,
+  appPort, infraPort)` (a NEW `KernelHost.CloneAsync` that copies the source's app doc AND data file
+  into a new instance — a true, data-carrying copy with its own sovereign store), and a per-instance
+  publish button (`sys.publish(db, i.id)`). All are server-only effects (`ExecNothing` + a `hostAction`
+  hook, no conformance case) with the builtin name + `BuiltinArities` in both twins. **Naming:**
+  `sys.cloneInstance` (not `sys.clone`) because `clone` is already the object-copy builtin (arity 1) —
+  a deliberate disambiguation.
+- **Uniform unique int ids.** Every hosted instance carries a stable unique `Id` (registry-stored).
+  The old model gave created instances their id-dir number and ALL boot instances id 0, so the boot
+  apps couldn't be addressed individually (`sys.cloneInstance(i.id)` on any boot row cloned whichever
+  was first — a wrong-instance bug). `IdOf(spec) => spec.Id`; `NextInstanceId` = max(live ids ∪ on-disk
+  `instances/<n>/` dirs) + 1 (the on-disk union is the ghost-id-dir guard — a create whose registry
+  write failed leaves an orphan dir; never re-mint it, or the next create adopts its stale data).
+- **Fully id-based storage; `app` is a display LABEL.** Every instance's files live under
+  `instances/<id>/` (`app.app` + `app-data.json`), resolved PURELY by id (`AppPaths.SchemaPathForId/
+  DataPathForId`). The registry `app` field is a name label, used for nothing functional. The
+  committed apps moved into `instances/1–4/` (`git mv`); `.csproj` globs `instances/**/*.app` into the
+  output. (User direction: "the app field should be just name, not used for anything"; "remove .app
+  from names.") The `.app` extension is gone from every name.
+- **The boot-vs-created distinction is REMOVED.** There is no `IsCreated`/`CreatedIdOf`; delete/clone/
+  publish work on ANY instance by id, registry matching is by `Id` (not path). Deleting an instance
+  removes its `instances/<id>/` dir (its data); the committed app *sources* are git-tracked — the
+  safety net the user accepted in trade for a uniform model (vs. the old "never drop a boot app's
+  hand-authored data" refusal). `sys.instances` drops its `created` flag; rows are `{ id, app (name),
+  port, assetsPort }`. The designer renders publish/delete/clone on every row.
+- **Migration-forgiveness:** `RegistryReader` assigns a unique id to any entry with `Id == 0` (an
+  id-less hand-edited registry self-numbers); it does not relocate files (resolution is by id, so an
+  id-less entry's app files must already be under `instances/<id>/`). The committed registry +
+  fixtures carry explicit ids, so in practice it's a no-op.
+- Specced by `Kernel.feature` (clone-copies-data, clone-a-boot, uniform-delete, ghost-id-dir-not-reused)
+  + `HostAction.feature` (delete/clone seam) + `RegistryReaderTests` (id-assignment). Reviewed twice
+  (meets the bar). Deferred: named create (created instances default to label `"app"`); rename; a
+  `system`/protected flag (the user chose uniform delete-on-all); the kernel+browser effect test.
 
 ## Testing: BDD with Gherkin
 

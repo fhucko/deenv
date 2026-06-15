@@ -1,8 +1,8 @@
 {
   "instances": [
-    { "app": "instance.app", "appPort": 8080, "infraPort": 8081 },
-    { "app": "crm.app", "appPort": 8082, "infraPort": 8083 },
-    { "app": "shop.app", "appPort": 8084, "infraPort": 8085 },
-    { "app": "designer.app", "appPort": 8086, "infraPort": 8087 }
+    { "id": 1, "app": "instance", "appPort": 8080, "infraPort": 8081 },
+    { "id": 2, "app": "crm", "appPort": 8082, "infraPort": 8083 },
+    { "id": 3, "app": "shop", "appPort": 8084, "infraPort": 8085 },
+    { "id": 4, "app": "designer", "appPort": 8086, "infraPort": 8087 }
   ]
 }

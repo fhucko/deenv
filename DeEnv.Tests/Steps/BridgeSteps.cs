@@ -14,7 +14,9 @@ public sealed class BridgeSteps(InstanceContext ctx)
 {
     private const string Sentinel = "UNCHANGED-SENTINEL";
 
-    private readonly string _designerAppPath = Path.Combine(AppContext.BaseDirectory, "designer.app");
+    // The designer (the meta-schema) lives in its id-dir (instances/4/app.app) now that storage is
+    // id-based (the file name no longer carries the app's identity).
+    private readonly string _designerAppPath = Path.Combine(AppContext.BaseDirectory, "instances", "4", "app.app");
 
     // Designer-data authoring state (per scenario).
     private InstanceDescription? _meta;
@@ -33,7 +35,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
     // ── Given: meta-schema document ─────────────────────────────────────────────
 
     [Given("the meta-schema document")]
-    public void GivenTheMetaSchemaDocument() { /* designer.app ships to the test output */ }
+    public void GivenTheMetaSchemaDocument() { /* the designer (instances/4/app.app) ships to the test output */ }
 
     [When("the meta-schema is loaded")]
     public void WhenMetaSchemaLoaded()

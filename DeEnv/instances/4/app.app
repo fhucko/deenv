@@ -16,6 +16,8 @@ types
 ui
     var appPort = 9100
     var infraPort = 9101
+    var cloneAppPort = 9200
+    var cloneInfraPort = 9201
 
     fn addType()
         db.types.add({ name: "", baseType: "object", order: 0, props: [] })
@@ -48,12 +50,20 @@ ui
         return <section class="instances">
             <h2>
                 "Instances"
+            <input class="clone-app-port" value={cloneAppPort}>
+            <input class="clone-infra-port" value={cloneInfraPort}>
             foreach i in sys.instances
                 <div class="instance-row">
                     <span class="instance-app">
                         i.app
                     <span class="instance-port">
                         i.port
+                    <button class="clone-instance" onClick={() => sys.cloneInstance(i.id, cloneAppPort, cloneInfraPort)}>
+                        "Clone"
+                    <button class="publish-instance" onClick={() => sys.publish(db, i.id)}>
+                        "Publish"
+                    <button class="delete-instance" onClick={() => sys.delete(i.id)}>
+                        "Delete"
             <div class="create-form">
                 <input class="app-port" value={appPort}>
                 <input class="infra-port" value={infraPort}>

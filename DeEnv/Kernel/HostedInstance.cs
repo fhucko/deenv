@@ -7,11 +7,15 @@ using GenHTTP.Modules.Practices;
 
 namespace DeEnv.Kernel;
 
-// A fully-resolved instruction to host one instance: where its app document and data file live,
-// and the two ports to bind (app = clean SSR URL space; infra = /ws + /js). `KernelHost.SpecsFor`
-// resolves each registry entry to one of these (app name → schema path + derived data path).
-// Resolving paths into the spec keeps locality in one place and out of the registry shape.
-public sealed record InstanceSpec(string SchemaPath, string DataPath, int AppPort, int InfraPort);
+// A fully-resolved instruction to host one instance: its stable unique id, its display name, where
+// its app document and data file live, and the two ports to bind (app = clean SSR URL space; infra =
+// /ws + /js). `KernelHost.SpecsFor` resolves each registry entry to one of these — the schema/data
+// paths are derived PURELY from the id (AppPaths.SchemaPathForId/DataPathForId), never from the name.
+// `Id` is the instance's address for clone/delete/publish and the sole key to its files; `App` is a
+// display NAME label only (surfaced to `sys.instances`), used for nothing functional — the file path
+// no longer reveals it, so it is carried here for rendering. Resolving paths into the spec keeps
+// locality in one place and out of the registry shape.
+public sealed record InstanceSpec(int Id, string App, string SchemaPath, string DataPath, int AppPort, int InfraPort);
 
 // One instance running under the kernel: its sovereign store and the two GenHTTP hosts. This is
 // the single-instance "build + start both hosts" unit, extracted from Program.cs's old hosting

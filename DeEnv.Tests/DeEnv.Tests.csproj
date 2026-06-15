@@ -23,14 +23,15 @@
     <ProjectReference Include="..\DeEnv\DeEnv.csproj" />
   </ItemGroup>
 
-  <!-- Ship the committed default app (DeEnv/instance.app — the todo app) so TodoDb()
-       drives the real single source of truth; crm.app is the CRM fixture the
-       milestone-2/3 scenarios keep using. -->
+  <!-- Ship the committed app documents, each in its own id-dir (instances/<id>/app.app), so the
+       tests load the same single source of truth the kernel hosts: instances/1 = todo (TodoDb),
+       2 = crm, 3 = shop, 4 = designer (the meta-schema for Bridge/HostAction). The instances/<id>/
+       structure is preserved into the test output (LinkBase) so a test can resolve a fixture by id,
+       exactly like the kernel does. -->
   <ItemGroup>
-    <Content Include="..\DeEnv\instance.app" Link="instance.app" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\DeEnv\crm.app" Link="crm.app" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\DeEnv\shop.app" Link="shop.app" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\DeEnv\designer.app" Link="designer.app" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\DeEnv\instances\**\*.app"
+             LinkBase="instances"
+             CopyToOutputDirectory="PreserveNewest" />
     <!-- Shared Code-interpreter conformance cases (run by C# and by the TypeScript twin). -->
     <Content Include="..\DeEnv\Code\conformance.json" Link="conformance.json" CopyToOutputDirectory="PreserveNewest" />
     <!-- The compiled TypeScript twin interpreter, run against the same cases by TsConformanceTests

@@ -9,6 +9,12 @@ namespace DeEnv.Kernel;
 // EXPERIENCE (create/list/switch/delete) is image Code in a later slice, not C# here — that is the
 // kernel-vs-image line from DECISIONS ("Multi-instance management — the kernel host").
 //
+// Storage is FULLY ID-BASED: every instance lives under instances/<id>/ and is resolved purely by
+// its id; the registry `app` field is a display NAME label, used for nothing functional. There is no
+// boot-vs-created distinction — clone/delete/publish all work on ANY instance by its id. (Deleting an
+// instance removes its instances/<id>/ dir; the committed app SOURCES are git-tracked, the accepted
+// safety net.)
+//
 // It deliberately does NOT own process lifetime (blocking on Ctrl+C) — the composition root does —
 // so it stays a plain start/stop unit that tests can drive synchronously.
 // Constructed with the kernel's boot context — the base directory it resolves instances under and
@@ -39,15 +45,20 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         RefreshRegistry();
     }
 
+    // Re-project the live hosted set as registry rows. The instance NAME comes from spec.App (the
+    // display label) — NOT the schema file name, which is "app" for every instance now that storage
+    // is id-based.
     private void RefreshRegistry() =>
         _registry.Current = _instances
-            .Select(i => new InstanceInfo(IdOf(i.Spec), Path.GetFileName(i.Spec.SchemaPath), i.AppPort, i.InfraPort))
+            .Select(i => new InstanceInfo(IdOf(i.Spec), i.Spec.App, i.AppPort, i.InfraPort))
             .ToList();
 
     // The host-action seam for one instance: it acts as the designer (its own schema+data are the
     // meta-schema for a publish) and resolves a publish target id against the LIVE hosted set — a
     // closure over `_instances`, so an instance created after this one is still a reachable target.
-    // Only created (id-dir) instances are targets; a boot instance has id 0 and matches nothing.
+    // ANY instance is a publish target (resolution is purely by id — there is no boot-vs-created
+    // distinction): an unknown id resolves to null → the existing reject. (The id is unique per
+    // instance, so this targets exactly one app.)
     // ASSUMPTION: `sys.publish` is only meaningful from the DESIGNER. Every instance gets this seam
     // with ITS OWN schema as the meta-schema, so a publish authored in a non-designer app (todo/crm)
     // would try to read that app's data as a meta-schema — SchemaBridge rejects a non-meta Db, so it
@@ -56,23 +67,52 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     private IHostActions HostActionsFor(InstanceSpec spec) =>
         new KernelHostActions(
             spec.SchemaPath, spec.DataPath,
-            id => id == 0 ? null : _instances.FirstOrDefault(i => IdOf(i.Spec) == id)?.Spec,
+            id => _instances.FirstOrDefault(i => i.Spec.Id == id)?.Spec,
             // create projects the caller's schema into a NEW instance via the kernel's own create
             // mechanism, fed the kernel's boot baseDir/registryPath so a Code-triggered create lands
             // in the same id-layout + registry as a boot one.
             createInstance: (appDoc, appPort, infraPort) =>
-                CreateAsync(appDoc, appPort, infraPort, baseDir, registryPath));
+                CreateAsync(appDoc, appPort, infraPort, baseDir, registryPath),
+            // delete + clone resolve the id → the live hosted instance, then run the kernel's own
+            // DeleteAsync/CloneAsync (fed the same boot baseDir/registryPath as create, so a
+            // Code-triggered clone lands in the same id-layout + registry).
+            deleteInstance: id => DeleteAsyncById(id, registryPath),
+            cloneInstance: (sourceId, appPort, infraPort) =>
+                CloneAsyncById(sourceId, appPort, infraPort, baseDir, registryPath));
 
-    // Resolve each registry entry to a hosting spec: the app name becomes the schema path, and the
-    // data path is DERIVED from the app stem (AppPaths) — never stored in the registry, so distinct
-    // apps get distinct stores. Resolution lives here, off the registry shape, so the registry stays
-    // minimal and locality-free.
+    // Resolve an instance id → the live hosted instance (by its unique Spec.Id) and delete it. An id
+    // matching no instance is a clear reject before any work. Every instance is deletable now.
+    private async Task DeleteAsyncById(int id, string registryPath)
+    {
+        var instance = _instances.FirstOrDefault(i => i.Spec.Id == id)
+            ?? throw new InvalidOperationException($"No instance with id {id} to delete.");
+        await DeleteAsync(instance, registryPath);
+    }
+
+    // Resolve a source instance id → the live hosted instance (by its unique Spec.Id) and clone it
+    // onto the given ports. An unknown id is a clear reject. Any instance is a valid clone source —
+    // clone only READS its files (see CloneAsync). (Ids are unique, so cloning a specific instance is
+    // unambiguous.)
+    private async Task CloneAsyncById(int sourceId, int appPort, int infraPort, string baseDir, string registryPath)
+    {
+        var source = _instances.FirstOrDefault(i => i.Spec.Id == sourceId)
+            ?? throw new InvalidOperationException($"No instance with id {sourceId} to clone.");
+        await CloneAsync(source, appPort, infraPort, baseDir, registryPath);
+    }
+
+    // Resolve each registry entry to a hosting spec: the schema/data paths are derived PURELY from the
+    // entry's id (AppPaths.SchemaPathForId/DataPathForId — instances/<id>/app.app + app-data.json),
+    // never from the `app` name (which is carried through as a display label only). Distinct ids get
+    // distinct id-dirs, so distinct instances get distinct stores. Resolution lives here, off the
+    // registry shape, so the registry stays minimal and locality-free.
     public static IReadOnlyList<InstanceSpec> SpecsFor(Registry registry, string baseDir)
     {
         var specs = registry.Instances
             .Select(e => new InstanceSpec(
-                AppPaths.SchemaPath(e.App, baseDir),
-                AppPaths.DataPath(e.App, baseDir),
+                e.Id,
+                e.App,
+                AppPaths.SchemaPathForId(baseDir, e.Id),
+                AppPaths.DataPathForId(baseDir, e.Id),
                 e.AppPort,
                 e.InfraPort))
             .ToList();
@@ -85,9 +125,8 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // guarantee — so it must be caught here, not discovered later (matches the storage guard's
     // "never silently run over the wrong data", DECISIONS "Stored data must match the running app").
     // A shared port is rejected too: GenHTTP would fail the second bind anyway, but an upfront,
-    // named error beats a mid-startup bind exception. (Two instances of the SAME app needing
-    // SEPARATE stores is the deferred test-instance/branch case — the registry grows an explicit
-    // data-file field THEN; until then, distinct apps are how you get distinct stores.)
+    // named error beats a mid-startup bind exception. (Since storage is id-based, two entries with
+    // the SAME id are what would alias a store — distinct ids never collide.)
     private static void EnsureNoCollisions(IReadOnlyList<InstanceSpec> specs)
     {
         var dataPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -104,7 +143,7 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         if (!dataPaths.Add(spec.DataPath))
             throw new KernelConfigException(
                 $"Two instances resolve to the same data file '{spec.DataPath}' — each instance needs " +
-                "its own store. Give them different app documents.");
+                "its own store. Give them distinct ids.");
 
         foreach (var port in new[] { spec.AppPort, spec.InfraPort })
             if (!ports.Add(port))
@@ -137,20 +176,20 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // registry-as-data, a later slice (the kernel-vs-image line, DECISIONS "Multi-instance
     // management"). The app document is supplied as content; the operator sets the port pair (ports
     // are a genuinely contended external resource); storage is keyed by a kernel-minted id, never a
-    // user-chosen file name (DECISIONS "`create` direction — storage by id…").
+    // user-chosen file name (DECISIONS "`create` direction — storage by id…"). A created instance
+    // defaults to the display name "app" (naming a created instance is a follow-up).
     public async Task<HostedInstance> CreateAsync(
         string appDoc, int appPort, int assetsPort, string baseDir, string registryPath)
     {
-        // Mint a deterministic id = max existing numeric id-dir + 1 (1 when none) so it survives a
-        // restart and never reuses a directory.
+        // Mint a unique id (max over the live set AND on-disk id-dirs + 1). Its id-dir is
+        // instances/<id>/, so it survives a restart and never reuses a directory — even a ghost one.
         var id = NextInstanceId(baseDir);
-        var appRelative = AppPaths.CreatedAppRelative(id);
-        var schemaPath = AppPaths.SchemaPath(appRelative, baseDir);
-        Directory.CreateDirectory(Path.GetDirectoryName(schemaPath)!);
+        var schemaPath = AppPaths.SchemaPathForId(baseDir, id);
+        Directory.CreateDirectory(AppPaths.IdDirFor(baseDir, id));
         File.WriteAllText(schemaPath, appDoc);
 
         var spec = new InstanceSpec(
-            schemaPath, AppPaths.DataPath(appRelative, baseDir), appPort, assetsPort);
+            id, "app", schemaPath, AppPaths.DataPathForId(baseDir, id), appPort, assetsPort);
 
         // Collision-check the new spec against the LIVE set's data files + ports (same named errors
         // as boot), so a created instance can never alias a running one's store or port.
@@ -160,36 +199,76 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
             new HashSet<int>(_instances.SelectMany(i => new[] { i.AppPort, i.InfraPort })));
 
         // Start it (every instance shares the LIVE registry provider, so this create shows up on
-        // EVERY instance's next render — boot and created alike, no stale list), then track + persist.
+        // EVERY instance's next render — no stale list), then track + persist.
         var created = await HostedInstance.StartAsync(spec, _registry, HostActionsFor(spec));
         Register(created);
 
-        // Persist: append the created entry (forward-slash relative app path) and rewrite kernel.json,
-        // so the instance reappears on the next boot via SpecsFor. Persist AFTER a successful start, so
-        // a failed start never leaves an orphan entry. (If the WRITE itself throws after the start, the
-        // instance is live now but gone on the next boot — a "ghost"; acceptable single-operator, the
-        // operator sees the exception. True create-atomicity is the deferred concurrent-write milestone.)
+        // Persist: append the created entry and rewrite kernel.json, so the instance reappears on the
+        // next boot via SpecsFor. Persist AFTER a successful start, so a failed start never leaves an
+        // orphan entry. (If the WRITE itself throws after the start, the instance is live now but gone
+        // on the next boot — a "ghost"; acceptable single-operator, the operator sees the exception.
+        // True create-atomicity is the deferred concurrent-write milestone.)
         var stored = RegistryReader.Read(registryPath);
         RegistryWriter.Write(registryPath, new Registry(
-            [.. stored.Instances, new RegistryEntry(appRelative, appPort, assetsPort)]));
+            [.. stored.Instances, new RegistryEntry(id, "app", appPort, assetsPort)]));
 
         return created;
     }
 
-    // Delete one CREATED instance from a RUNNING kernel and forget it: stop its hosts, drop it from
-    // the live set, remove its registry entry, and delete its id-dir (app doc + co-located store).
-    // The kernel's hosting MECHANISM only — the delete COMMAND/UI is image Code over the
-    // registry-as-data, a later slice (the kernel-vs-image line). Restricted to created (id-dir)
-    // instances: it must NEVER delete a boot/stem-derived instance's hand-authored data file — the
-    // startup guard's "data is never dropped silently" principle (DECISIONS "Stored data must match
-    // the running app"). `switch` works on any instance because it touches no data; `delete` does.
+    // Clone one instance in a RUNNING kernel: copy its app document AND its data into a NEW instance
+    // on the given ports, then persist it. The data-carrying sibling of CreateAsync — where create
+    // PROJECTS a fresh design (write a new doc, empty store), clone COPIES a live one byte-for-byte
+    // (the same app doc, the same data), so the new instance is a true, independent copy with its own
+    // sovereign store. Any source is fine to clone: we only READ its files, never touch them. The
+    // clone keeps the source's display name. Single-operator copy: cloning a source that is being
+    // written concurrently is the deferred concurrency case (the same ghost/atomicity caveat as
+    // create), not handled here.
+    public async Task<HostedInstance> CloneAsync(
+        HostedInstance source, int appPort, int infraPort, string baseDir, string registryPath)
+    {
+        // Mint a fresh unique id + id-dir paths, exactly like CreateAsync.
+        var id = NextInstanceId(baseDir);
+        var schemaPath = AppPaths.SchemaPathForId(baseDir, id);
+        var dataPath = AppPaths.DataPathForId(baseDir, id);
+        Directory.CreateDirectory(AppPaths.IdDirFor(baseDir, id));
+
+        // Copy the source's files instead of writing a projected document: the app doc always, and
+        // the data file when it exists (a brand-new source may not have persisted yet). This copied
+        // data is the clone's whole point — an independent store seeded from the source's current
+        // state, NOT an empty one.
+        File.Copy(source.Spec.SchemaPath, schemaPath);
+        if (File.Exists(source.Spec.DataPath))
+            File.Copy(source.Spec.DataPath, dataPath);
+
+        var spec = new InstanceSpec(id, source.Spec.App, schemaPath, dataPath, appPort, infraPort);
+
+        // Collision-check the new spec against the LIVE set's data files + ports (same named errors
+        // as boot/create), so the clone can never alias a running instance's store or port.
+        EnsureNoCollision(
+            spec,
+            new HashSet<string>(_instances.Select(i => i.Spec.DataPath), StringComparer.OrdinalIgnoreCase),
+            new HashSet<int>(_instances.SelectMany(i => new[] { i.AppPort, i.InfraPort })));
+
+        // Start it (shares the LIVE registry, so it shows up on every instance's next render), then
+        // track + persist AFTER a successful start (a failed start leaves no orphan entry — the same
+        // ghost caveat as create if the WRITE itself throws).
+        var created = await HostedInstance.StartAsync(spec, _registry, HostActionsFor(spec));
+        Register(created);
+
+        RegistryWriter.Write(registryPath, new Registry(
+            [.. RegistryReader.Read(registryPath).Instances,
+                new RegistryEntry(id, source.Spec.App, appPort, infraPort)]));
+
+        return created;
+    }
+
+    // Delete one instance from a RUNNING kernel and forget it: stop its hosts, drop it from the live
+    // set, remove its registry entry, and delete its id-dir (app doc + co-located store). The kernel's
+    // hosting MECHANISM only — the delete COMMAND/UI is image Code over the registry-as-data, a later
+    // slice (the kernel-vs-image line). Works on ANY instance by its id: the committed app SOURCES are
+    // git-tracked, which is the accepted safety net for the data this drops (DECISIONS / user sign-off).
     public async Task DeleteAsync(HostedInstance instance, string registryPath)
     {
-        // Refuse to delete a boot instance BEFORE stopping anything — its app doc + data are
-        // hand-authored, never dropped automatically (CreatedIdOf throws for a non-created instance).
-        var id = CreatedIdOf(instance);
-        var baseDir = BaseDirOf(instance);
-
         // Stop-then-remove ordering: stop both hosts first (frees the ports), then drop it from the
         // live set and re-project. The LiveRegistry whole-snapshot swap keeps a concurrent render
         // thread safe (it reads the old immutable list until the new one is published).
@@ -197,30 +276,29 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         _instances.Remove(instance);
         RefreshRegistry();
 
-        // Rewrite kernel.json without the matching entry, so it stays gone across a restart. (A crash
-        // between the stop and this write leaves a "ghost" entry — the instance is down now but would
-        // re-host on the next boot; acceptable single-operator, the symmetric twin of create's ghost.
-        // True delete-atomicity is the deferred concurrent-write milestone, not a WAL here.)
-        var appRel = RelativeApp(instance, baseDir);
+        // Rewrite kernel.json without the matching entry (by its unique id), so it stays gone across a
+        // restart. (A crash between the stop and this write leaves a "ghost" entry — the instance is
+        // down now but would re-host on the next boot; acceptable single-operator, the symmetric twin
+        // of create's ghost. True delete-atomicity is the deferred concurrent-write milestone, not a
+        // WAL here.)
         var stored = RegistryReader.Read(registryPath);
         RegistryWriter.Write(registryPath, new Registry(
-            [.. stored.Instances.Where(e => !PathsEqual(e.App, appRel))]));
+            [.. stored.Instances.Where(e => e.Id != instance.Spec.Id)]));
 
         // Collect the store: delete the whole id-dir on the filesystem (app doc + its co-located
         // data file). Store-dir removal is an OS/kernel concern about id→location, so IInstanceStore
         // stays untouched (it speaks the model's terms — paths/nodes — not "drop my backing dir").
-        var idDir = AppPaths.IdDirFor(baseDir, id);
+        var idDir = AppPaths.IdDirFor(BaseDirOf(instance), instance.Spec.Id);
         if (Directory.Exists(idDir))
             Directory.Delete(idDir, recursive: true);
     }
 
     // Re-bind one instance to a new port pair in a RUNNING kernel and persist it. Mirrors create:
     // the operator supplies the new ports (a port is a genuinely contended external resource, so it
-    // stays operator-set — no auto-allocation). Works on ANY instance (boot or created): it rewrites
-    // only ports and touches no data. The kernel MECHANISM only; the switch COMMAND/UI is image Code.
+    // stays operator-set — no auto-allocation). It rewrites only ports and touches no data. The
+    // kernel MECHANISM only; the switch COMMAND/UI is image Code.
     public async Task SwitchAsync(HostedInstance instance, int newAppPort, int newInfraPort, string registryPath)
     {
-        var baseDir = BaseDirOf(instance);
         var newSpec = instance.Spec with { AppPort = newAppPort, InfraPort = newInfraPort };
 
         // Guard FIRST, before stopping anything: a rejected switch must stop nothing. Check the new
@@ -240,83 +318,46 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         _instances[_instances.IndexOf(instance)] = restarted;
         RefreshRegistry();
 
-        // Persist: rewrite kernel.json mapping the matching entry to its new ports, so the binding
-        // survives a restart. (App path is unchanged — switch re-points ports, not the app document;
-        // repointing to a DIFFERENT app is a deferred slice.)
-        var appRel = RelativeApp(instance, baseDir);
+        // Persist: rewrite kernel.json mapping the matching entry (by its unique id) to its new ports,
+        // so the binding survives a restart. (App + id are unchanged — switch re-points ports, not the
+        // app document; repointing to a DIFFERENT app is a deferred slice.)
         var stored = RegistryReader.Read(registryPath);
         RegistryWriter.Write(registryPath, new Registry(
             [.. stored.Instances.Select(e =>
-                PathsEqual(e.App, appRel) ? new RegistryEntry(e.App, newAppPort, newInfraPort) : e)]));
+                e.Id == instance.Spec.Id ? e with { AppPort = newAppPort, InfraPort = newInfraPort } : e)]));
     }
 
-    // The base directory an instance was hosted from, recovered from its schema path. A created
-    // instance's schema dir is <baseDir>/instances/<id>, so baseDir is two levels up; a boot
-    // instance's schema dir IS <baseDir>. Derived from the spec so callers needn't thread baseDir.
+    // The base directory an instance was hosted from, recovered from its schema path. Every instance
+    // lives at <baseDir>/instances/<id>/app.app, so baseDir is two levels up from the schema dir.
+    // Derived from the spec so callers needn't thread baseDir.
     private static string BaseDirOf(HostedInstance instance)
     {
-        var schemaDir = Path.GetDirectoryName(instance.Spec.SchemaPath)!;
-        return IsCreated(instance)
-            ? Path.GetDirectoryName(Path.GetDirectoryName(schemaDir)!)!
-            : schemaDir;
+        var schemaDir = Path.GetDirectoryName(instance.Spec.SchemaPath)!; // <baseDir>/instances/<id>
+        return Path.GetDirectoryName(Path.GetDirectoryName(schemaDir)!)!; // <baseDir>
     }
 
-    // A created instance lives under <baseDir>/instances/<id>/ with a numeric id-dir name; a boot
-    // instance does not. This is the gate `delete` uses to refuse dropping hand-authored boot data,
-    // and the gate `publish` uses to decide which instances are addressable targets. Spec-based so
-    // both the live hosted set and a candidate spec can be tested by the same rule.
-    private static bool IsCreated(InstanceSpec spec)
+    // The instance's unique id — its address for clone/delete/publish and `sys.instances` rows.
+    // Carried on the spec (assigned in the registry / minted by create). It is also the instance's
+    // id-dir name (instances/<Id>/) — the sole key to its files now that storage is id-based.
+    private static int IdOf(InstanceSpec spec) => spec.Id;
+
+    // The next instance id: max id over the LIVE hosted set + 1 (1 when empty). A single shared id
+    // pool, so every hosted instance has a unique address. Deterministic; an id-dir is instances/<id>/.
+    // The next unique instance id: one past the max of BOTH the live hosted set AND any on-disk
+    // instances/<n>/ directory. Unioning the on-disk dirs means a "ghost" id-dir — left by a create
+    // whose registry write failed (see CreateAsync), so it is not in the live set — is never
+    // re-minted, so a new instance can never silently adopt an orphaned store's stale data.
+    // Deterministic + restart-stable.
+    private int NextInstanceId(string baseDir)
     {
-        var schemaDir = Path.GetDirectoryName(spec.SchemaPath)!;
-        var parent = Path.GetDirectoryName(schemaDir);
-        return parent is not null
-            && string.Equals(Path.GetFileName(parent), "instances", StringComparison.OrdinalIgnoreCase)
-            && int.TryParse(Path.GetFileName(schemaDir), out _);
-    }
-
-    private static bool IsCreated(HostedInstance instance) => IsCreated(instance.Spec);
-
-    // The created id parsed from the instance's id-dir name. Throws if the instance is not a created
-    // one — `delete` is restricted to created instances (never drop a boot instance's authored data).
-    private static int CreatedIdOf(HostedInstance instance)
-    {
-        if (!IsCreated(instance))
-            throw new KernelConfigException(
-                "Only an instance created by the kernel can be deleted — a boot instance's app " +
-                "document and data are hand-authored and are never dropped automatically.");
-        return int.Parse(Path.GetFileName(Path.GetDirectoryName(instance.Spec.SchemaPath)!));
-    }
-
-    // The instance's id: its created id-dir number, or 0 for a boot/stem-derived instance (which
-    // has no id yet — boot instances aren't publish targets; uniform ids for boot instances stay
-    // deferred). Non-throwing, used to project `sys.instances` rows and to resolve a publish target.
-    private static int IdOf(InstanceSpec spec) =>
-        IsCreated(spec) ? int.Parse(Path.GetFileName(Path.GetDirectoryName(spec.SchemaPath)!)) : 0;
-
-    // The instance's app-relative path as it appears in kernel.json's RegistryEntry.App: the schema
-    // path made relative to baseDir, forward-slashed (created entries are stored forward-slashed; boot
-    // entries are a bare file name). Used to find the instance's own registry entry to rewrite/remove.
-    private static string RelativeApp(HostedInstance instance, string baseDir) =>
-        Path.GetRelativePath(baseDir, instance.Spec.SchemaPath).Replace('\\', '/');
-
-    // Compare two registry app paths for the same instance, separator- and case-insensitively, so a
-    // match holds regardless of how the path was written (hand-edited boot entry vs. minted created
-    // entry) or the host OS's directory separator.
-    private static bool PathsEqual(string a, string b) =>
-        string.Equals(a.Replace('\\', '/'), b.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
-
-    // The next created-instance id: max numeric subdirectory name under <baseDir>/instances/, + 1
-    // (1 when the dir is absent or empty). Deterministic and restart-stable.
-    private static int NextInstanceId(string baseDir)
-    {
+        var maxLive = _instances.Select(i => i.Spec.Id).DefaultIfEmpty(0).Max();
         var dir = AppPaths.InstancesDir(baseDir);
-        if (!Directory.Exists(dir)) return 1;
-        var max = Directory.EnumerateDirectories(dir)
-            .Select(Path.GetFileName)
-            .Select(name => int.TryParse(name, out var n) ? n : 0)
-            .DefaultIfEmpty(0)
-            .Max();
-        return max + 1;
+        var maxDir = Directory.Exists(dir)
+            ? Directory.EnumerateDirectories(dir)
+                .Select(d => int.TryParse(Path.GetFileName(d), out var n) ? n : 0)
+                .DefaultIfEmpty(0).Max()
+            : 0;
+        return Math.Max(maxLive, maxDir) + 1;
     }
 
     public async ValueTask DisposeAsync()

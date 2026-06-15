@@ -473,10 +473,11 @@ public sealed class SsrRenderer
     }
 
     // Build the read-only `instances` Code collection from the registry snapshot: one row per
-    // hosted instance, { id, app, port, assetsPort } scalars. A transient List (negative ids), like
-    // a where/orderBy result — an app reads the rows in output position, so they ship as leaves and
-    // the list survives hydration. Empty when there is no kernel. `id` is the host-action address
-    // (e.g. sys.publish(i.id)); it is 0 for a boot instance (no id yet).
+    // hosted instance, { id, app, port, assetsPort } scalars. A transient List (negative ids), like a
+    // where/orderBy result — an app reads the rows in output position, so they ship as leaves and the
+    // list survives hydration. Empty when there is no kernel. `id` is the host-action address (e.g.
+    // sys.publish(db, i.id)), unique per instance and the sole key to its files; `app` is a display
+    // name only. clone/delete/publish work on ANY instance, so there is no created/boot flag.
     private ExecArray BuildRegistry(ExecContext context)
     {
         var items = new List<ExecItem>();

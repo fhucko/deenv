@@ -27,15 +27,17 @@
     <Content Include="tsconfig.json" />
   </ItemGroup>
 
-  <!-- The hand-written instance schema document. Loaded at startup (Program.cs) and
-       copied next to the executable so it can be read from AppContext.BaseDirectory. -->
+  <!-- The hand-written instance app documents, one per hosted instance, each in its own id-dir
+       (instances/<id>/app.app). The kernel resolves an instance's schema PURELY by its id (the
+       registry `app` field is a display name, used for nothing functional), so the id-dir layout
+       must survive into the output. %(RecursiveDir) preserves the instances/<id>/ structure under
+       the executable, so AppContext.BaseDirectory/instances/<id>/app.app exists at runtime. -->
   <ItemGroup>
-    <None Include="instance.app" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="crm.app" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="shop.app" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="designer.app" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="instances\**\*.app"
+          CopyToOutputDirectory="PreserveNewest"
+          LinkBase="instances" />
     <!-- The kernel registry: which instances the multi-instance kernel host runs, and on which
-         ports. Read at startup as plain bootstrap data (no interpreter) in kernel mode. -->
+         ports. Read at startup as plain bootstrap data (no interpreter). -->
     <None Include="kernel.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

@@ -68,6 +68,12 @@ public sealed class KernelSteps(InstanceContext ctx)
     // assert the whole store directory is gone afterwards.
     private string _createdIdDir = "";
 
+    // The `clone` scenarios: the instance produced by CloneAsync and the port pair it was assigned
+    // (kept so a post-restart clone can be re-found by its persisted port).
+    private HostedInstance? _cloned;
+    private int _clonedAppPort;
+    private int _clonedInfraPort;
+
     // The `switch` scenarios: the new port pair the instance was switched to, and the old app port
     // it was switched away from (kept so we can assert the new binding serves and the old does not),
     // plus the error a rejected switch raises.
@@ -85,15 +91,18 @@ public sealed class KernelSteps(InstanceContext ctx)
         Directory.CreateDirectory(dir);
         ctx.KernelDir = dir;
 
-        File.WriteAllText(Path.Combine(dir, "alpha.app"), BoolApp);
-        File.WriteAllText(Path.Combine(dir, "beta.app"), BoolApp);
+        // Storage is id-based: each instance lives under instances/<id>/app.app, resolved purely by
+        // its id. The `app` field is a display name label only. Two distinct ids → two distinct
+        // id-dirs → two distinct stores (the data-sovereignty point of the slice).
+        WriteApp(dir, 1, BoolApp);
+        WriteApp(dir, 2, BoolApp);
 
         int aApp = FreePort(), aInfra = FreePort(), bApp = FreePort(), bInfra = FreePort();
         File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
         {
           "instances": [
-            { "app": "alpha.app", "appPort": {{aApp}}, "infraPort": {{aInfra}} },
-            { "app": "beta.app",  "appPort": {{bApp}}, "infraPort": {{bInfra}} }
+            { "id": 1, "app": "alpha", "appPort": {{aApp}}, "infraPort": {{aInfra}} },
+            { "id": 2, "app": "beta",  "appPort": {{bApp}}, "infraPort": {{bInfra}} }
           ]
         }
         """);
@@ -106,13 +115,13 @@ public sealed class KernelSteps(InstanceContext ctx)
         Directory.CreateDirectory(dir);
         ctx.KernelDir = dir;
 
-        File.WriteAllText(Path.Combine(dir, "alpha.app"), BoolApp);
+        WriteApp(dir, 1, BoolApp);
 
         int aApp = FreePort(), aInfra = FreePort();
         File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
         {
           "instances": [
-            { "app": "alpha.app", "appPort": {{aApp}}, "infraPort": {{aInfra}} }
+            { "id": 1, "app": "alpha", "appPort": {{aApp}}, "infraPort": {{aInfra}} }
           ]
         }
         """);
@@ -125,12 +134,12 @@ public sealed class KernelSteps(InstanceContext ctx)
         Directory.CreateDirectory(dir);
         ctx.KernelDir = dir;
 
-        File.WriteAllText(Path.Combine(dir, "console.app"), ConsoleApp);
+        WriteApp(dir, 1, ConsoleApp);
         int cApp = FreePort(), cInfra = FreePort();
         File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
         {
           "instances": [
-            { "app": "console.app", "appPort": {{cApp}}, "infraPort": {{cInfra}} }
+            { "id": 1, "app": "console", "appPort": {{cApp}}, "infraPort": {{cInfra}} }
           ]
         }
         """);
@@ -163,6 +172,24 @@ public sealed class KernelSteps(InstanceContext ctx)
         _createdIdDir = Path.GetDirectoryName(_created.Spec.SchemaPath)!;
     }
 
+    // ── ghost id-dir: a new instance must never reuse an orphaned directory ───────
+
+    private int _orphanId;
+
+    [Given("an orphaned instance directory {string} exists")]
+    public void GivenOrphanedInstanceDir(string id)
+    {
+        // Simulate a "ghost": an instances/<n>/ dir left on disk by a create whose registry write
+        // failed, so it is NOT in kernel.json (and not in the live set). The next create must mint an
+        // id PAST it — never reuse the dir — or it would adopt the orphan's stale data.
+        _orphanId = int.Parse(id);
+        Directory.CreateDirectory(Path.Combine(ctx.KernelDir!, "instances", id));
+    }
+
+    [Then("the created instance's id is past the orphaned directory")]
+    public async Task ThenCreatedIdPastOrphanAsync() =>
+        await Assert.That(_created!.Spec.Id).IsGreaterThan(_orphanId);
+
     // ── delete: remove a created instance from a running kernel ───────────────────
 
     [When("the operator deletes the created instance")]
@@ -170,6 +197,29 @@ public sealed class KernelSteps(InstanceContext ctx)
     public async Task WhenOperatorDeletesInstanceAsync()
     {
         await ctx.Kernel!.DeleteAsync(_created!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+    }
+
+    // Delete a REGISTRY ("boot") instance — the second of two — by addressing it by its unique id,
+    // proving delete is uniform now (no boot refusal). Capture its id-dir first so a later assertion
+    // can prove the whole store directory is removed.
+    [When("the operator deletes the second instance by its id")]
+    public async Task WhenOperatorDeletesSecondAsync()
+    {
+        _createdIdDir = Path.GetDirectoryName(Beta.Spec.SchemaPath)!;
+        var target = ctx.Kernel!.Instances.Single(i => i.Spec.Id == Beta.Spec.Id);
+        await ctx.Kernel.DeleteAsync(target, Path.Combine(ctx.KernelDir!, "kernel.json"));
+    }
+
+    [Then("the kernel hosts only the first instance")]
+    public async Task ThenHostsOnlyFirstAsync()
+    {
+        await Assert.That(ctx.Kernel!.Instances.Count).IsEqualTo(1);
+    }
+
+    [Then("the second instance's store directory is gone")]
+    public async Task ThenSecondStoreDirGoneAsync()
+    {
+        await Assert.That(Directory.Exists(_createdIdDir)).IsFalse();
     }
 
     [Then("the deleted instance no longer serves its root")]
@@ -199,6 +249,86 @@ public sealed class KernelSteps(InstanceContext ctx)
         using var http = new HttpClient();
         var html = await http.GetStringAsync($"http://localhost:{ctx.Kernel!.Instances[0].AppPort}/");
         await Assert.That(html).DoesNotContain(_createdAppPort.ToString());
+    }
+
+    // ── clone: copy a created instance (app doc + data) onto a new port pair ───────
+
+    [When("the operator clones the created instance onto a free port pair")]
+    [Given("the operator clones the created instance onto a free port pair")]
+    public async Task WhenOperatorClonesInstanceAsync()
+    {
+        _clonedAppPort = FreePort();
+        _clonedInfraPort = FreePort();
+        _cloned = await ctx.Kernel!.CloneAsync(
+            _created!, _clonedAppPort, _clonedInfraPort,
+            ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+    }
+
+    [Then("the clone serves its root on its assigned port")]
+    public async Task ThenCloneServesRootAsync()
+    {
+        // After a restart _cloned is disposed; re-find the live instance by its persisted port.
+        var instance = ctx.Kernel!.Instances.Single(i => i.AppPort == _clonedAppPort);
+        using var http = new HttpClient();
+        var resp = await http.GetAsync($"http://localhost:{instance.AppPort}/");
+        await Assert.That((int)resp.StatusCode).IsEqualTo(200);
+        await Assert.That(await resp.Content.ReadAsStringAsync()).Contains("input type=\"checkbox\"");
+    }
+
+    [Then("the clone's data matches the source")]
+    public async Task ThenCloneDataMatchesSourceAsync()
+    {
+        // The source's bool was toggled to true before the clone; CloneAsync copied the DATA file, so
+        // the clone's sovereign store carries the same value (true) — a true copy, not an empty store.
+        var instance = ctx.Kernel!.Instances.Single(i => i.AppPort == _clonedAppPort);
+        await Assert.That(instance.Store.ReadNode(NodePath.Root.Field("ready"))).IsEqualTo(new BoolValue(true));
+        using var http = new HttpClient();
+        await Assert.That(await http.GetStringAsync($"http://localhost:{instance.AppPort}/")).Contains(" checked");
+    }
+
+    [Then("the kernel now hosts three instances")]
+    public async Task ThenHostsThreeAsync()
+    {
+        await Assert.That(ctx.Kernel!.Instances.Count).IsEqualTo(3);
+    }
+
+    // ── clone a BOOT instance by its unique id (the wrong-clone fix) ───────────────
+
+    [Given("the second instance's data changes")]
+    public void WhenSecondDataChanges()
+    {
+        // Toggle the SECOND boot instance's bool to true through its own store. Only the second one
+        // changes — the first stays false — so a later assertion on the clone's data proves the RIGHT
+        // boot was cloned (the old all-boots-share-id-0 model would have cloned the first).
+        Beta.Store.WriteObject(
+            NodePath.Root,
+            new ObjectValue(new Dictionary<string, NodeValue> { ["ready"] = new BoolValue(true) }));
+    }
+
+    [When("the operator clones the second instance by its id onto a free port pair")]
+    public async Task WhenCloneSecondByIdAsync()
+    {
+        _clonedAppPort = FreePort();
+        _clonedInfraPort = FreePort();
+        // Address the boot instance BY ITS UNIQUE ID (resolved from the live set) — the same lookup
+        // the host-action clone path uses — proving a boot instance is individually addressable now.
+        var bootId = Beta.Spec.Id;
+        var source = ctx.Kernel!.Instances.Single(i => i.Spec.Id == bootId);
+        _cloned = await ctx.Kernel.CloneAsync(
+            source, _clonedAppPort, _clonedInfraPort,
+            ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+    }
+
+    [Then("the clone's data matches the second instance")]
+    public async Task ThenCloneDataMatchesSecondAsync()
+    {
+        // The clone carries the SECOND boot's data (ready = true), not the first's (false) — so the
+        // right boot was addressed and copied. (The first boot stays false, asserted implicitly: a
+        // wrong clone would have copied false here.)
+        var instance = ctx.Kernel!.Instances.Single(i => i.AppPort == _clonedAppPort);
+        await Assert.That(instance.Store.ReadNode(NodePath.Root.Field("ready"))).IsEqualTo(new BoolValue(true));
+        using var http = new HttpClient();
+        await Assert.That(await http.GetStringAsync($"http://localhost:{instance.AppPort}/")).Contains(" checked");
     }
 
     // ── switch: re-bind an instance to a new port pair ────────────────────────────
@@ -306,6 +436,7 @@ public sealed class KernelSteps(InstanceContext ctx)
     }
 
     [When("the created instance's data changes")]
+    [Given("the created instance's data changes")]
     public void WhenCreatedDataChanges()
     {
         _created!.Store.WriteObject(
@@ -375,15 +506,16 @@ public sealed class KernelSteps(InstanceContext ctx)
         Directory.CreateDirectory(dir);
         ctx.KernelDir = dir;
 
-        File.WriteAllText(Path.Combine(dir, "console.app"), ConsoleApp);
-        File.WriteAllText(Path.Combine(dir, "alpha.app"), BoolApp);
-        File.WriteAllText(Path.Combine(dir, "beta.app"), BoolApp);
+        WriteApp(dir, 1, ConsoleApp);
+        WriteApp(dir, 2, BoolApp);
+        WriteApp(dir, 3, BoolApp);
 
         int cApp = FreePort(), cAssets = FreePort(),
             aApp = FreePort(), aAssets = FreePort(),
             bApp = FreePort(), bAssets = FreePort();
 
-        _expectedApps = ["console.app", "alpha.app", "beta.app"];
+        // The rendered app names are the registry `app` labels (a display name only — storage is by id).
+        _expectedApps = ["console", "alpha", "beta"];
         // Every app port, plus the non-console assets ports — all of which can ONLY appear on the
         // page via the `instances` global (cAssets is excluded: it's also in window.initInfraPort).
         _expectedPorts = [cApp, aApp, bApp, aAssets, bAssets];
@@ -391,9 +523,9 @@ public sealed class KernelSteps(InstanceContext ctx)
         File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
         {
           "instances": [
-            { "app": "console.app", "appPort": {{cApp}}, "infraPort": {{cAssets}} },
-            { "app": "alpha.app",   "appPort": {{aApp}}, "infraPort": {{aAssets}} },
-            { "app": "beta.app",    "appPort": {{bApp}}, "infraPort": {{bAssets}} }
+            { "id": 1, "app": "console", "appPort": {{cApp}}, "infraPort": {{cAssets}} },
+            { "id": 2, "app": "alpha",   "appPort": {{aApp}}, "infraPort": {{aAssets}} },
+            { "id": 3, "app": "beta",    "appPort": {{bApp}}, "infraPort": {{bAssets}} }
           ]
         }
         """);
@@ -424,15 +556,16 @@ public sealed class KernelSteps(InstanceContext ctx)
         Directory.CreateDirectory(dir);
         ctx.KernelDir = dir;
 
-        // Two entries naming the SAME app document → the same derived data file (alpha-data.json),
-        // which would silently break sovereignty if the kernel didn't reject it.
-        File.WriteAllText(Path.Combine(dir, "alpha.app"), BoolApp);
+        // Two entries with the SAME id → the same id-dir (instances/1/) → the same data file, which
+        // would silently break sovereignty if the kernel didn't reject it. (Storage is id-based, so
+        // a duplicate id — not a duplicate name — is what aliases a store now.)
+        WriteApp(dir, 1, BoolApp);
         int p1 = FreePort(), p2 = FreePort(), p3 = FreePort(), p4 = FreePort();
         File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
         {
           "instances": [
-            { "app": "alpha.app", "appPort": {{p1}}, "infraPort": {{p2}} },
-            { "app": "alpha.app", "appPort": {{p3}}, "infraPort": {{p4}} }
+            { "id": 1, "app": "alpha", "appPort": {{p1}}, "infraPort": {{p2}} },
+            { "id": 1, "app": "beta",  "appPort": {{p3}}, "infraPort": {{p4}} }
           ]
         }
         """);
@@ -461,6 +594,16 @@ public sealed class KernelSteps(InstanceContext ctx)
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    // Write a fixture app document to its id-dir (<dir>/instances/<id>/app.app), the layout the
+    // kernel resolves PURELY by id (AppPaths.SchemaPathForId). The id, not a file name, is what
+    // distinguishes one instance's store from another.
+    private static void WriteApp(string dir, int id, string appDoc)
+    {
+        var idDir = AppPaths.IdDirFor(dir, id);
+        Directory.CreateDirectory(idDir);
+        File.WriteAllText(Path.Combine(idDir, "app.app"), appDoc);
+    }
 
     // True if an instance is serving its root on this app port, false if the port refuses the
     // connection (the host has been stopped). A short timeout keeps a refused connection from hanging.

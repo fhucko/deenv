@@ -9,11 +9,14 @@ using GenHTTP.Modules.Websockets.Protocol;
 namespace DeEnv.Http;
 
 // One row of the kernel's instance registry as surfaced to image Code (the read-only `instances`
-// global): the instance id, the app document name, and its two ports. A pure projection — no file
-// paths, no store — so the kernel hands the renderer DATA, not a kernel reference (the locality-free
-// seam). `Id` is the kernel-minted instance id (0 for a boot instance, which has no id yet — it is
-// the address a host action like `sys.publish(id)` targets); `Port` is the app/serving port;
-// `AssetsPort` is the infra port (/ws + /js).
+// global): the instance id, its display NAME, and its two ports. A pure projection — no file paths,
+// no store — so the kernel hands the renderer DATA, not a kernel reference (the locality-free seam).
+// `Id` is the kernel-minted instance id (the sole key to its files, and the address a host action
+// like `sys.publish(id)` targets); `App` is a display name label only (used for nothing functional);
+// `Port` is the app/serving port; `AssetsPort` is the infra port (/ws + /js).
+//
+// There is no `Created`/boot distinction: storage is fully id-based, and clone/delete/publish all
+// work on ANY instance by its id, so the surface renders those actions on every row uniformly.
 //
 // PRIVACY: keep this projection free of anything sensitive. Registry rows render as transient
 // objects, and ClientState ships a transient's props in FULL to every client that renders the

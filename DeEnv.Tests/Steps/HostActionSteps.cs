@@ -21,7 +21,9 @@ public sealed class HostActionSteps
     private const string TargetAppSentinel = "UNCHANGED-TARGET-APP-SENTINEL";
     private const string TargetDataSentinel = "{ \"unchanged\": \"target-data-sentinel\" }";
 
-    private readonly string _metaAppPath = Path.Combine(AppContext.BaseDirectory, "designer.app");
+    // The designer is the meta-schema; it lives in its id-dir (instances/4/app.app) now that storage
+    // is id-based (the file name no longer carries the app's identity).
+    private readonly string _metaAppPath = Path.Combine(AppContext.BaseDirectory, "instances", "4", "app.app");
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "deenv-hostaction-" + Guid.NewGuid().ToString("N"));
 
     private InstanceDescription _meta = null!;
@@ -43,6 +45,15 @@ public sealed class HostActionSteps
     private int _createdAppPort;
     private int _createdInfraPort;
     private bool _createInvoked;
+
+    // What the fake delete/clone delegates recorded — the ids/ports the kernel was asked to act on —
+    // so a delete/clone scenario can assert the channel carried the right arguments (no real host).
+    private int _deletedId;
+    private bool _deleteInvoked;
+    private int _clonedSourceId;
+    private int _clonedAppPort;
+    private int _clonedInfraPort;
+    private bool _cloneInvoked;
 
     private string _reply = "";
 
@@ -103,6 +114,20 @@ public sealed class HostActionSteps
         _reply = Ws().ProcessMessage(
             $$"""{ "op": "hostAction", "action": "create", "args": [ { "type": "int", "value": {{RootSchemaId + 99}} }, { "type": "int", "value": 9100 }, { "type": "int", "value": 9101 } ] }""");
 
+    // delete(targetId): a bare instance id (NOT a schema object). The recording delete delegate
+    // captures the id; the seam carries it through unchanged and replies ok.
+    [When("the operator deletes instance id {int} over the WS")]
+    public void WhenDelete(int id) =>
+        _reply = Ws().ProcessMessage(
+            $$"""{ "op": "hostAction", "action": "delete", "args": [ { "type": "int", "value": {{id}} } ] }""");
+
+    // cloneInstance(sourceId, appPort, infraPort): three bare ints (a source id + the new ports). The
+    // recording clone delegate captures the triple; the seam carries it through unchanged and replies ok.
+    [When("the operator clones instance id {int} onto ports {int} and {int} over the WS")]
+    public void WhenClone(int sourceId, int appPort, int infraPort) =>
+        _reply = Ws().ProcessMessage(
+            $$"""{ "op": "hostAction", "action": "cloneInstance", "args": [ { "type": "int", "value": {{sourceId}} }, { "type": "int", "value": {{appPort}} }, { "type": "int", "value": {{infraPort}} } ] }""");
+
     // publish(schema, targetId): the schema is the root object (RootSchemaId); the target id resolves
     // to a spec (only TargetId resolves — any other id → null → a reject, never a write).
     private void Publish(int targetId) =>
@@ -111,12 +136,17 @@ public sealed class HostActionSteps
 
     // The designer's WsHandler with a real KernelHostActions: it acts as the designer (its own
     // meta+data are the meta-schema it projects), resolves ONLY TargetId → the target spec, and its
-    // create delegate RECORDS what it was asked to spawn instead of starting a real kernel instance.
+    // create/delete/clone delegates RECORD what they were asked to do instead of driving a real kernel.
     private WsHandler Ws()
     {
+        // The delete/clone seam scenarios carry no designed schema (they never touch the store — the
+        // action just routes ids to the kernel), so open a bare designer instance lazily to give the
+        // WsHandler a valid store + description. The publish/create scenarios already opened one.
+        if (_designer == null) OpenDesigner();
+
         var hostActions = new KernelHostActions(
             _metaAppPath, _designerDataPath,
-            id => id == TargetId ? new InstanceSpec(_targetAppPath, _targetDataPath, 0, 0) : null,
+            id => id == TargetId ? new InstanceSpec(TargetId, "target", _targetAppPath, _targetDataPath, 0, 0) : null,
             createInstance: (appDoc, appPort, infraPort) =>
             {
                 _createdAppDoc = appDoc;
@@ -124,8 +154,23 @@ public sealed class HostActionSteps
                 _createdInfraPort = infraPort;
                 _createInvoked = true;
                 return Task.CompletedTask;
+            },
+            deleteInstance: id =>
+            {
+                _deletedId = id;
+                _deleteInvoked = true;
+                return Task.CompletedTask;
+            },
+            cloneInstance: (sourceId, appPort, infraPort) =>
+            {
+                _clonedSourceId = sourceId;
+                _clonedAppPort = appPort;
+                _clonedInfraPort = infraPort;
+                _cloneInvoked = true;
+                return Task.CompletedTask;
             });
-        return new WsHandler(_designer, _meta, sessions: null, registry: null, hostActions: hostActions);
+        // _designer/_meta are guaranteed set above (a Given, or the lazy OpenDesigner here).
+        return new WsHandler(_designer!, _meta, sessions: null, registry: null, hostActions: hostActions);
     }
 
     // ── Then ────────────────────────────────────────────────────────────────────
@@ -196,6 +241,22 @@ public sealed class HostActionSteps
     [Then("no instance was created")]
     public async Task ThenNoneCreated() =>
         await Assert.That(_createInvoked).IsFalse();
+
+    [Then("the kernel was asked to delete instance id {int}")]
+    public async Task ThenAskedToDelete(int id)
+    {
+        await Assert.That(_deleteInvoked).IsTrue();
+        await Assert.That(_deletedId).IsEqualTo(id);
+    }
+
+    [Then("the kernel was asked to clone source id {int} onto ports {int} and {int}")]
+    public async Task ThenAskedToClone(int sourceId, int appPort, int infraPort)
+    {
+        await Assert.That(_cloneInvoked).IsTrue();
+        await Assert.That(_clonedSourceId).IsEqualTo(sourceId);
+        await Assert.That(_clonedAppPort).IsEqualTo(appPort);
+        await Assert.That(_clonedInfraPort).IsEqualTo(infraPort);
+    }
 
     // ── teardown ────────────────────────────────────────────────────────────────
 

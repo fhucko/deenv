@@ -358,13 +358,16 @@ public sealed class CodeExecutor
         // setRef(obj, prop, value) persists on the client (the reference editor). Server-side
         // (SSR / refetch) never runs the click handler, so it no-ops.
         "setRef" => new ExecNothing(),
-        // publish(schema, targetId) and create(schema, appPort, infraPort) are SERVER-ONLY host
+        // publish(schema, targetId), create(schema, appPort, infraPort),
+        // cloneInstance(sourceId, appPort, infraPort) and delete(targetId) are SERVER-ONLY host
         // actions (the host-action channel). They run only when the client fires the event hook →
         // the `hostAction` WS op; the SSR/refetch renderer never runs them, so here they no-op
         // (exactly like setRef). No conformance case: a host effect returns nothing and is outside
         // the conformance contract.
         "publish" => new ExecNothing(),
         "create" => new ExecNothing(),
+        "cloneInstance" => new ExecNothing(),
+        "delete" => new ExecNothing(),
         _ => null,
     };
 

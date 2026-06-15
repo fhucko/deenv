@@ -46,7 +46,7 @@ catch (StoredDataException ex)
 }
 
 foreach (var instance in kernel.Instances)
-    Console.WriteLine($"Hosting {Path.GetFileName(instance.Spec.SchemaPath)} on app:{instance.AppPort} infra:{instance.InfraPort}.");
+    Console.WriteLine($"Hosting {instance.Spec.App} on app:{instance.AppPort} infra:{instance.InfraPort}.");
 
 // Block until Ctrl+C / process exit, then stop every host cleanly.
 using var shutdown = new CancellationTokenSource();

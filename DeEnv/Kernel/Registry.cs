@@ -8,12 +8,19 @@ namespace DeEnv.Kernel;
 // runs — it is how the system is assembled — so it cannot itself be modeled inside an instance.
 //
 // Minimality (see DECISIONS "The self-hosted image → kernel-owned data — keep it minimal"): an
-// entry carries instance identity (the app document) + its port binding, and essentially nothing
-// else. The data file is DERIVED from the app stem (via AppPaths in KernelHost.SpecsFor), not
-// stored here — so distinct apps get distinct stores, which is the slice's data-sovereignty
-// guarantee. (A later slice that needs two instances of the SAME app with separate data grows an
-// explicit data-file/name field THEN, when a slice needs it — not before.)
-public sealed record RegistryEntry(string App, int AppPort, int InfraPort);
+// entry carries the instance's identity (a stable unique `Id`) + a display name (`App`) + its port
+// binding, and essentially nothing else. Storage is keyed by the ID: the schema + data files live
+// under instances/<id>/ (AppPaths.SchemaPathForId/DataPathForId, via KernelHost.SpecsFor), NOT
+// derived from a name — so `App` is a pure display LABEL, used for nothing functional, and every
+// instance gets its own store by virtue of its distinct id (two instances with the same name still
+// have separate stores).
+//
+// `Id` is that stable unique address: every hosted instance has one, and clone/delete/publish address
+// an instance BY it (the old model — created = id-dir number, boot = 0 — couldn't tell two boot
+// instances apart). An entry written without an id (Id == 0, the unassigned sentinel) gets one
+// assigned deterministically on read, so an id-less hand-edited registry still ends up uniquely
+// addressed — provided its app files already live under instances/<id>/ (resolution is purely by id).
+public sealed record RegistryEntry(int Id, string App, int AppPort, int InfraPort);
 
 public sealed record Registry(IReadOnlyList<RegistryEntry> Instances);
 
@@ -55,7 +62,16 @@ public static class RegistryReader
 
         if (registry?.Instances is null || registry.Instances.Count == 0)
             throw new KernelConfigException($"Kernel registry '{path}' lists no instances.");
-        return registry;
+
+        // Forgive a missing id: assign a unique one to any entry with Id == 0 (the unassigned
+        // sentinel), so an id-less hand-edited registry is still uniquely addressed. Number unassigned
+        // entries deterministically by file order, AFTER the max explicit id, so they never collide
+        // with an id the operator pinned. The committed kernel.json + fixtures carry explicit ids, so
+        // in practice this is a no-op. (Resolution is purely by id, so such an entry's app files must
+        // already live under instances/<id>/ — this fills the id, it doesn't relocate any files.)
+        var maxId = registry.Instances.Where(e => e.Id > 0).Select(e => e.Id).DefaultIfEmpty(0).Max();
+        return new Registry(
+            registry.Instances.Select(e => e.Id > 0 ? e : e with { Id = ++maxId }).ToList());
     }
 }
 

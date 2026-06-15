@@ -214,7 +214,7 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   one app. The designer becomes a registry entry; the M4 export/publish bridge is
   now exposed to Code as host actions, not a CLI mode. Built in `DeEnv/Kernel/`
   (`RegistryReader`/`KernelHost`/`HostedInstance`), specced by `Kernel.feature`
-  (`@milestone-10`); suite green 229/229. Several more slices landed: **`list`** (the registry is
+  (`@milestone-10`); suite green 238/238. Several more slices landed: **`list`** (the registry is
   readable from image Code as a read-only `instances` global — an app renders the list itself, the
   first kernel-as-data read path), **`create`** (add an instance to a RUNNING kernel: minted id,
   id-keyed sovereign store, operator-set ports, persisted; the `instances` view is live — no stale
@@ -224,11 +224,16 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   server-side host op): `sys.publish(schema, targetId)` runs the M4 schema export onto an existing
   instance and `sys.create(schema, appPort, infraPort)` spawns a new one — both project a passed
   schema object (carried by its id; the designer's `Db { types }` meta-schema is unchanged).
-  Then the **operator designer (slice 1)**: `designer.app` gained a HAND-ROLLED custom `fn render()`
-  (a type/prop editor + the `sys.instances` list + a `sys.create(db, ports)` control), replacing its
-  auto generic UI — the operator surface is explicit image Code, NOT a hidden callable designer (the
-  generic-UI-as-a-library compose path is rejected). Remaining: per-instance publish/switch/delete
-  controls + richer editing, and promoting the registry to a restricted kernel-instance. See DECISIONS.md.
+  Then the **operator designer + ops**: `designer.app` (now `instances/4/app.app`) gained a HAND-ROLLED
+  custom `fn render()` (a type/prop editor + the `sys.instances` list + per-instance
+  create/clone/delete/publish controls), replacing its auto generic UI — explicit image Code, NOT a
+  hidden callable designer (the compose path is rejected). The ops: `sys.delete(id)`,
+  `sys.cloneInstance(sourceId, ports)` (copies app doc + data), per-instance `sys.publish(db, id)`.
+  Underpinned by a **uniform id-based instance identity model**: every instance has a stable unique int
+  id; storage is fully id-based (`instances/<id>/`); the registry `app` field is a display NAME label
+  (used for nothing functional, no `.app`); the boot-vs-created distinction is removed (ops work on any
+  instance by id). Remaining: named create, rename, richer editing, and promoting the registry to a
+  restricted kernel-instance. See DECISIONS.md ("Operator instance ops + the id-based instance identity model").
 
   **Kernel discipline:** the kernel gains the *mechanism* (host N instances, bind
   ports, hold the registry) — **not** the management *experience*. Create/list/

@@ -31,8 +31,7 @@ public sealed class AppPrintTests
     [Test]
     public async Task The_todo_app_round_trips()
     {
-        await AssertRoundTrips(File.ReadAllText(
-            Path.Combine(AppContext.BaseDirectory, "instance.app")));
+        await AssertRoundTrips(File.ReadAllText(InstanceContext.AppFixture(1)));
     }
 
     [Test]
@@ -45,8 +44,8 @@ public sealed class AppPrintTests
     [Test]
     public async Task The_crm_and_designer_documents_round_trip()
     {
-        await AssertRoundTrips(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "crm.app")));
-        await AssertRoundTrips(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "designer.app")));
+        await AssertRoundTrips(File.ReadAllText(InstanceContext.AppFixture(2)));
+        await AssertRoundTrips(File.ReadAllText(InstanceContext.AppFixture(4)));
     }
 
     // ── expression printing: minimal parentheses ────────────────────────────────

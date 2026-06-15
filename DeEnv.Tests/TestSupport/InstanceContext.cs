@@ -56,26 +56,28 @@ public class InstanceContext
                 name: text
         """);
 
-    // Milestone 2 CRM-with-orders instance: objects, nested dictionaries, every
-    // base type. Now a test fixture (crm.app) — the committed default app is todo.
+    // Milestone 2 CRM-with-orders instance: objects, nested dictionaries, every base type. A
+    // committed fixture in its id-dir (instances/2/app.app) — the committed default app is todo.
     public static InstanceDescription CrmDb() =>
-        InstanceDescriptionLoader.LoadFile(
-            Path.Combine(AppContext.BaseDirectory, "crm.app"));
+        InstanceDescriptionLoader.LoadFile(AppFixture(2));
 
-    // The committed default app (DeEnv/instance.app): the todo app — types,
-    // initialData seed, and ui code in one text document; tests drive the real
-    // single source of truth.
+    // The committed default app (DeEnv/instances/1/app.app): the todo app — types, initialData seed,
+    // and ui code in one text document; tests drive the real single source of truth.
     public static InstanceDescription TodoDb() =>
-        InstanceDescriptionLoader.LoadFile(
-            Path.Combine(AppContext.BaseDirectory, "instance.app"));
+        InstanceDescriptionLoader.LoadFile(AppFixture(1));
 
-    // The designer app (DeEnv/designer.app): the operator-facing surface, authored as an
+    // The designer app (DeEnv/instances/4/app.app): the operator-facing surface, authored as an
     // explicit custom `fn render()` over its own meta-schema (Db { types: set of MetaType }).
     // No initialData seed — the schema starts empty and is built through the hand-rolled
     // editor (the same document BridgeSteps/HostActionSteps load purely as the meta-schema).
     public static InstanceDescription DesignerDb() =>
-        InstanceDescriptionLoader.LoadFile(
-            Path.Combine(AppContext.BaseDirectory, "designer.app"));
+        InstanceDescriptionLoader.LoadFile(AppFixture(4));
+
+    // A committed app fixture, resolved by its id-dir (instances/<id>/app.app) under the test output
+    // — the same id-based layout the kernel hosts. Storage is fully id-based; the file name ("app")
+    // no longer carries the app's identity, the id-dir does.
+    public static string AppFixture(int id) =>
+        Path.Combine(AppContext.BaseDirectory, "instances", id.ToString(), "app.app");
 
     // Code milestone: a hand-written `ui` component over a Task set. The render fn
     // exercises element/text, a bound text field, a bound checkbox, foreach, if/else,
@@ -177,10 +179,11 @@ public class InstanceContext
             title: "First note"
     """;
 
-    // The code-bearing fixture documents, for the printer round-trip tests.
+    // The code-bearing fixture documents, for the printer round-trip tests. The shop app is a
+    // committed fixture in its id-dir (instances/3/app.app).
     public static IReadOnlyList<string> CodeFixtureApps =>
         [TasksUiApp, InteractiveUiApp, SensitiveUiApp, RefetchUiApp,
-         File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "shop.app"))];
+         File.ReadAllText(AppFixture(3))];
 
     private const string TasksUiApp = """
     types
