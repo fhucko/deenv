@@ -1319,6 +1319,23 @@ orphaned since M10 removed `--mode export`) is the first consumer, restored as a
   designer). Open: the client rollback path (`ws.ts`) has no browser test — a pre-existing gap, flagged as a
   follow-up.
 
+**The operator designer — hand-rolled, not a hidden library (slice 1 — landed 2026-06-15).** The
+create/publish COMMAND surface is image Code: `DeEnv/designer.app` gained a custom `fn render()` (the
+operator-facing designer), replacing its auto generic UI. Slice 1: a hand-rolled type/prop editor over
+`db.types`, a list of running instances (`sys.instances`), and a create control (`<button onClick={() =>
+sys.create(db, appPort, infraPort)}>` — passing the `db` OBJECT, the natural surface). **Decided: the
+designer is EXPLICIT hand-written Code, NOT a "hidden callable designer"** — the user rejected exposing
+the generic `objectForm` library to userspace / the "custom composes the generic UI as a library" compose
+mechanism that the two-UI-modes decision had floated as the future "auto with overrides". The custom render
+stays in the `app` scope (uses `db`/`sys.instances`/`sys.create`, never `internal`-scope library fns), and
+owns the whole page (two-UI-modes). A required fix shipped with it: **a bound `<input>` now coerces its
+(always-string) value back to the bound var's type** (`ui.ts` `coerceInputValue`) — so an `int` port var
+stays an int and `sys.create` receives an int, not the string `"9100"` (the first non-text bound input;
+the generic UI's int fields benefit too). Specced by `Designer.feature` (the editor renders + edits by
+hand; a port stays an int — `"007"`→`"7"`). Suite 229/229. Deferred (named follow-ups): the per-instance
+publish button (`sys.publish(db, i.id)`), delete/switch commands, cardinality/keyType editing, and the full
+kernel+browser create-EFFECT test (the spawn itself is already covered at the WS seam + `Kernel.feature`).
+
 ## Testing: BDD with Gherkin
 
 Behavior is specced in Gherkin `.feature` files first, then made to pass.

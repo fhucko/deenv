@@ -155,14 +155,19 @@ driven by an instance registry as kernel-owned data — the substrate under sche
 `Program.cs` into a thin C# supervisor (`DeEnv/Kernel/`: `RegistryReader` reads `kernel.json` as
 plain bootstrap data; `KernelHost`/`HostedInstance` start every instance + block on shutdown).
 Two instances on two port pairs are both reachable and data-sovereign (`Kernel.feature`,
-`@milestone-10`; suite green 227/227). **Run modes were removed (user direction):** the kernel
+`@milestone-10`; suite green 229/229). **Run modes were removed (user direction):** the kernel
 host is the sole entry point and `kernel.json` is the single source of what runs — a single
 instance is just a one-entry registry, so there is no `--mode`/`--app`. The designer is a registry
 entry; the M4 export/publish bridge is now exposed to Code as host actions — `sys.publish(schema,
 targetId)` (replace an existing instance) and `sys.create(schema, appPort, infraPort)` (spawn a new
 one), both projecting a passed schema object — not a CLI mode. Kernel discipline: the kernel gains
 the hosting *mechanism* (create/list/switch/delete in C# + the host-action channel); the operator
-create/publish/switch/delete COMMANDS-as-the-IDE are image Code (later).
+create/publish/switch/delete COMMANDS-as-the-IDE are image Code. **Slice 1 of that surface landed
+2026-06-15: the operator designer** — `designer.app` gained a HAND-ROLLED custom `fn render()` (type/prop
+editor + `sys.instances` list + a `sys.create(db, ports)` control), replacing its auto generic UI.
+Decided: the designer is explicit hand-written Code, NOT a "hidden callable designer" (no exposing the
+generic `objectForm` library to userspace — the compose mechanism is rejected). Follow-ups: per-instance
+publish button, delete/switch, richer editing.
 Deferred: cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time
 (Stage 5/later), and the management commands. Schema versioning steps back to M11 (it sits on
 this). See ROADMAP.md (Milestone 10), STAGES.md, and DECISIONS.md ("Multi-instance management —

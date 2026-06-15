@@ -69,6 +69,14 @@ public class InstanceContext
         InstanceDescriptionLoader.LoadFile(
             Path.Combine(AppContext.BaseDirectory, "instance.app"));
 
+    // The designer app (DeEnv/designer.app): the operator-facing surface, authored as an
+    // explicit custom `fn render()` over its own meta-schema (Db { types: set of MetaType }).
+    // No initialData seed — the schema starts empty and is built through the hand-rolled
+    // editor (the same document BridgeSteps/HostActionSteps load purely as the meta-schema).
+    public static InstanceDescription DesignerDb() =>
+        InstanceDescriptionLoader.LoadFile(
+            Path.Combine(AppContext.BaseDirectory, "designer.app"));
+
     // Code milestone: a hand-written `ui` component over a Task set. The render fn
     // exercises element/text, a bound text field, a bound checkbox, foreach, if/else,
     // and where/orderBy collection functions — the full Stage-2 SSR surface.

@@ -149,6 +149,17 @@ function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
         if (attr.name !== "data-key" && !want.has(attr.name)) el.removeAttribute(attr.name);
 }
 
+// A text input's value is always a string; coerce it back to the bound value's type so binding an
+// input to a non-text var preserves the type (e.g. a port var stays an int, so sys.create receives
+// an int — not the string "9100"). Unparseable int input falls back to 0.
+function coerceInputValue(raw: string, current: ExecValue | undefined): ExecValue {
+    if (current?.type === "int") {
+        const n = parseInt(raw, 10);
+        return { type: "int", value: isNaN(n) ? 0 : n };
+    }
+    return { type: "text", value: raw };
+}
+
 // Two-way binding + click handlers. A bound value/checked attribute whose result
 // carries a setValue closure writes back to the model and re-renders.
 function wireEvents(el: HTMLElement, tag: ExecTag): void {
@@ -158,7 +169,7 @@ function wireEvents(el: HTMLElement, tag: ExecTag): void {
         (el as HTMLInputElement).oninput = () => {
             const input = el as HTMLInputElement;
             if (checked?.setValue) checked.setValue({ type: "bool", value: input.checked });
-            else if (value?.setValue) value.setValue({ type: "text", value: input.value });
+            else if (value?.setValue) value.setValue(coerceInputValue(input.value, value.value));
             renderUi();
         };
     } else {
