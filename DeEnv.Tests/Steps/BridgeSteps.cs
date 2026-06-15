@@ -142,6 +142,9 @@ public sealed class BridgeSteps(InstanceContext ctx)
         ctx.Playwright = await Playwright.CreateAsync();
         ctx.Browser = await ctx.Playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
         ctx.Page = await ctx.Browser.NewPageAsync(new BrowserNewPageOptions { BaseURL = ctx.BaseUrl });
+        // Fail fast: 5s, not Playwright's 30s default (see InstanceContext.EnsureServerAndBrowserAsync).
+        ctx.Page.SetDefaultTimeout(5000);
+        ctx.Page.SetDefaultNavigationTimeout(5000);
         await ctx.Page.GotoAsync(ctx.BaseUrl + "/");
     }
 

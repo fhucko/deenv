@@ -381,6 +381,10 @@ public class InstanceContext
             Playwright = await Microsoft.Playwright.Playwright.CreateAsync();
             Browser = await Playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
             Page = await Browser.NewPageAsync(new BrowserNewPageOptions { BaseURL = BaseUrl });
+            // Fail fast: 5s for waits and navigation, not Playwright's 30s default — a genuinely
+            // stuck wait surfaces in seconds instead of hanging the suite for half a minute.
+            Page.SetDefaultTimeout(5000);
+            Page.SetDefaultNavigationTimeout(5000);
         }
     }
 }
