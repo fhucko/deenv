@@ -34,8 +34,22 @@ public sealed class KernelHost : IAsyncDisposable
 
     private void RefreshRegistry() =>
         _registry.Current = _instances
-            .Select(i => new InstanceInfo(Path.GetFileName(i.Spec.SchemaPath), i.AppPort, i.InfraPort))
+            .Select(i => new InstanceInfo(IdOf(i.Spec), Path.GetFileName(i.Spec.SchemaPath), i.AppPort, i.InfraPort))
             .ToList();
+
+    // The host-action seam for one instance: it acts as the designer (its own schema+data are the
+    // meta-schema for a publish) and resolves a publish target id against the LIVE hosted set — a
+    // closure over `_instances`, so an instance created after this one is still a reachable target.
+    // Only created (id-dir) instances are targets; a boot instance has id 0 and matches nothing.
+    // ASSUMPTION: `sys.publish` is only meaningful from the DESIGNER. Every instance gets this seam
+    // with ITS OWN schema as the meta-schema, so a publish authored in a non-designer app (todo/crm)
+    // would try to read that app's data as a meta-schema — SchemaBridge rejects a non-meta Db, so it
+    // is a clean error, not a bad write. Today only the designer authors the call; pinning the publish
+    // SOURCE to the designer instance specifically (rather than any caller) is a deferred model choice.
+    private IHostActions HostActionsFor(InstanceSpec spec) =>
+        new KernelHostActions(
+            spec.SchemaPath, spec.DataPath,
+            id => id == 0 ? null : _instances.FirstOrDefault(i => IdOf(i.Spec) == id)?.Spec);
 
     // Resolve each registry entry to a hosting spec: the app name becomes the schema path, and the
     // data path is DERIVED from the app stem (AppPaths) — never stored in the registry, so distinct
@@ -94,9 +108,10 @@ public sealed class KernelHost : IAsyncDisposable
         try
         {
             // Every instance shares the LIVE registry provider (CurrentRegistry), so each render
-            // reads the current hosted set; Register refreshes it as instances come up.
+            // reads the current hosted set; Register refreshes it as instances come up. Each gets
+            // its own host-action seam (its own meta/data paths + the live target resolver).
             foreach (var spec in specs)
-                Register(await HostedInstance.StartAsync(spec, _registry));
+                Register(await HostedInstance.StartAsync(spec, _registry, HostActionsFor(spec)));
         }
         catch
         {
@@ -134,7 +149,7 @@ public sealed class KernelHost : IAsyncDisposable
 
         // Start it (every instance shares the LIVE registry provider, so this create shows up on
         // EVERY instance's next render — boot and created alike, no stale list), then track + persist.
-        var created = await HostedInstance.StartAsync(spec, _registry);
+        var created = await HostedInstance.StartAsync(spec, _registry, HostActionsFor(spec));
         Register(created);
 
         // Persist: append the created entry (forward-slash relative app path) and rewrite kernel.json,
@@ -209,7 +224,7 @@ public sealed class KernelHost : IAsyncDisposable
 
         // Stop the old binding, start the new one (ports are the only delta), swap it in, re-project.
         await instance.DisposeAsync();
-        var restarted = await HostedInstance.StartAsync(newSpec, _registry);
+        var restarted = await HostedInstance.StartAsync(newSpec, _registry, HostActionsFor(newSpec));
         _instances[_instances.IndexOf(instance)] = restarted;
         RefreshRegistry();
 
@@ -235,15 +250,19 @@ public sealed class KernelHost : IAsyncDisposable
     }
 
     // A created instance lives under <baseDir>/instances/<id>/ with a numeric id-dir name; a boot
-    // instance does not. This is the gate `delete` uses to refuse dropping hand-authored boot data.
-    private static bool IsCreated(HostedInstance instance)
+    // instance does not. This is the gate `delete` uses to refuse dropping hand-authored boot data,
+    // and the gate `publish` uses to decide which instances are addressable targets. Spec-based so
+    // both the live hosted set and a candidate spec can be tested by the same rule.
+    private static bool IsCreated(InstanceSpec spec)
     {
-        var schemaDir = Path.GetDirectoryName(instance.Spec.SchemaPath)!;
+        var schemaDir = Path.GetDirectoryName(spec.SchemaPath)!;
         var parent = Path.GetDirectoryName(schemaDir);
         return parent is not null
             && string.Equals(Path.GetFileName(parent), "instances", StringComparison.OrdinalIgnoreCase)
             && int.TryParse(Path.GetFileName(schemaDir), out _);
     }
+
+    private static bool IsCreated(HostedInstance instance) => IsCreated(instance.Spec);
 
     // The created id parsed from the instance's id-dir name. Throws if the instance is not a created
     // one — `delete` is restricted to created instances (never drop a boot instance's authored data).
@@ -255,6 +274,12 @@ public sealed class KernelHost : IAsyncDisposable
                 "document and data are hand-authored and are never dropped automatically.");
         return int.Parse(Path.GetFileName(Path.GetDirectoryName(instance.Spec.SchemaPath)!));
     }
+
+    // The instance's id: its created id-dir number, or 0 for a boot/stem-derived instance (which
+    // has no id yet — boot instances aren't publish targets; uniform ids for boot instances stay
+    // deferred). Non-throwing, used to project `sys.instances` rows and to resolve a publish target.
+    private static int IdOf(InstanceSpec spec) =>
+        IsCreated(spec) ? int.Parse(Path.GetFileName(Path.GetDirectoryName(spec.SchemaPath)!)) : 0;
 
     // The instance's app-relative path as it appears in kernel.json's RegistryEntry.App: the schema
     // path made relative to baseDir, forward-slashed (created entries are stored forward-slashed; boot

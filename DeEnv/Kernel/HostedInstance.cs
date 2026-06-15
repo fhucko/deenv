@@ -37,11 +37,14 @@ public sealed class HostedInstance : IAsyncDisposable
 
     // Load the description, open the sovereign store (the startup guard runs in its constructor),
     // build the app+infra handler trees, and start both hosts. Mirrors the production hosting block.
-    public static async Task<HostedInstance> StartAsync(InstanceSpec spec, LiveRegistry registry)
+    // `hostActions` is this instance's host-action seam (sys.publish, …), supplied by the kernel
+    // (it carries the instance's own meta/data paths + the live target resolver).
+    public static async Task<HostedInstance> StartAsync(
+        InstanceSpec spec, LiveRegistry registry, IHostActions? hostActions = null)
     {
         var description = InstanceDescriptionLoader.LoadFile(spec.SchemaPath);
         var store = new JsonFileInstanceStore(spec.DataPath, description);
-        var (appApp, infraApp) = InstanceApp.Build(store, description, spec.InfraPort, registry);
+        var (appApp, infraApp) = InstanceApp.Build(store, description, spec.InfraPort, registry, hostActions);
 
         var infraHost = Host.Create()
             .Handler(infraApp)

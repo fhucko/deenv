@@ -1266,6 +1266,41 @@ the LAST entry yields an empty registry, which `RegistryReader` rejects as "list
 unreachable now since the sole boot instance can't be deleted, but the IDE delete command will need a
 defined empty-kernel mode.)*
 
+**Host actions — the Code→host channel; `sys.publish` (export-to-Code) — landed 2026-06-15.** The first
+time Code triggers a HOST operation (a server-side C# routine that touches the filesystem/kernel),
+distinct from the data effects Code already does (mutations over the WS). The M4 schema **publish/export**
+(`SchemaBridge.Export` — project a designer instance's data → a target app document + reset its data;
+orphaned since M10 removed `--mode export`) is the first consumer, restored as a Code action.
+
+- **The primitive (reusable channel):** `sys.publish(targetId)` is a side-effecting `sys` builtin —
+  SERVER-ONLY at render (a render no-op `ExecNothing` in `CodeExecutor`, like `setRef`; the client
+  `codeExec.ts` fires a `hostAction` WS send-hook and stages nothing). NO conformance case (an effect is
+  outside the pure-evaluation contract, like setRef/add/remove) — but the builtin name + `BuiltinArities`
+  live in both twins + the validator (the "three places" guard). A new **server-authoritative** WS op
+  `hostAction` (`WsHandler.HandleHostAction` → an `IHostActions` seam → reply `{ok}`/`{error}`): NOT
+  optimistic, NOT journaled — the client sends-and-awaits (a filesystem write can't be modeled
+  optimistically); on error it surfaces `lastError` with no journal replay (`rollbackJournal` returns a
+  bool so a correlated error with no journal entry is the host-action path).
+- **The seam (kernel-vs-image cut):** `IHostActions` (one method) + a `NoHostActions` default that errors
+  (a kernel-less host has no host actions). `KernelHostActions.publish` runs `SchemaBridge.Export`
+  (unchanged) with the CALLING instance as the designer (its own schema = the meta-schema) and the target
+  resolved from `targetId`. The kernel builds one per instance with a live resolver over `_instances`.
+- **id-addressing (the publish target):** `sys.instances` rows gained `id` (`{id, app, port, assetsPort}`)
+  — a created instance's id-dir number; a boot/stem-derived instance is `0`. `sys.publish(id)` targets a
+  hosted CREATED instance by id (id 0 / unknown → a clean reject, never a write); the target is named in
+  the designer's Code (image Code), not C# wiring. The C# *mechanism* only — the operator-facing publish
+  *command/UI* is image Code (a later slice, the kernel-vs-image line).
+- **Specced by `HostAction.feature`** (3 scenarios, at the WS-handler seam). Reviewed (meets the bar).
+  Suite 224/224.
+- **Deferred:** a general server-action/RPC/effect system (this is ONE named builtin); create/switch/delete
+  as image Code (further consumers of the same channel); schema MIGRATION on publish (it's replace+reset —
+  the M4 bridge; preserving data is M11 versioning); live-RELOAD of the target after publish (its running
+  store stays stale until restart — the operator reloads); AUTH on host actions (deferred wholesale, like
+  every WS op — single-operator); uniform ids for boot instances; pinning the publish SOURCE to the
+  designer specifically (today any caller uses its own schema as the meta-schema — only meaningful from the
+  designer). Open: the client rollback path (`ws.ts`) has no browser test — a pre-existing gap, flagged as a
+  follow-up.
+
 ## Testing: BDD with Gherkin
 
 Behavior is specced in Gherkin `.feature` files first, then made to pass.

@@ -69,6 +69,7 @@ public static class CodeValidator
         ["humanize"] = 1,
         ["extent"] = 1,
         ["setRef"] = 3,
+        ["publish"] = 1,
         ["nest"] = 2,
         ["clone"] = 1,
     };

@@ -15,16 +15,18 @@ public sealed class WsHandler
     private readonly TypeResolver _resolver;
     private readonly ClientSessionStore? _sessions;
     private readonly LiveRegistry _registry;
+    private readonly IHostActions _hostActions;
     private readonly JsonSerializerOptions _jsonOpts = new() { WriteIndented = false };
 
     public WsHandler(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
-        LiveRegistry? registry = null)
+        LiveRegistry? registry = null, IHostActions? hostActions = null)
     {
         _store = store;
         _desc = desc;
         _resolver = new TypeResolver(desc);
         _sessions = sessions;
         _registry = registry ?? new LiveRegistry();
+        _hostActions = hostActions ?? new NoHostActions();
     }
 
     // The warm per-client session a code-UI message addresses (clientId minted at SSR).
@@ -61,6 +63,7 @@ public sealed class WsHandler
                 "arrayAdd"         => HandleArrayAdd(root),
                 "arrayRemove"      => HandleArrayRemove(root),
                 "refetch"          => HandleRefetch(pathStr, root),
+                "hostAction"       => HandleHostAction(root),
                 _                  => Error($"Unknown op '{op}'")
             };
             return WithId(result, id);
@@ -323,6 +326,23 @@ public sealed class WsHandler
         // re-render reflects the kernel's current instances — no stale `instances` list.
         var state = new SsrRenderer(_store, _desc, registry: _registry).RenderState(pathStr, sessionVars, db, lastId);
         return new JsonObject { ["op"] = "refetch", ["state"] = state }.ToJsonString(_jsonOpts);
+    }
+
+    // A server-authoritative host action (the sys.publish channel): the server alone runs the
+    // effect (the client staged nothing). Read the action name + raw evaluated args and run them
+    // through the IHostActions seam; on success reply ok. NOT journaled and it does NOT touch the
+    // optimistic IInstanceStore ops — a host action is a devops effect outside the data model. A
+    // failure (unknown action, bad arg, invalid design, unknown target) throws and ProcessMessage's
+    // catch returns it as `{ error }`, which the client surfaces as lastError (no journal replay).
+    private string HandleHostAction(JsonElement root)
+    {
+        if (!root.TryGetProperty("action", out var actionEl) || actionEl.GetString() is not { } action)
+            return Error("hostAction requires a string 'action'.");
+        var args = root.TryGetProperty("args", out var argsEl) ? argsEl : default;
+
+        _hostActions.Run(action, args); // throws on failure → caught as { error }
+
+        return new JsonObject { ["op"] = "hostAction", ["ok"] = true }.ToJsonString(_jsonOpts);
     }
 
     // Index every persisted object in a loaded graph by its intrinsic id (for resolving

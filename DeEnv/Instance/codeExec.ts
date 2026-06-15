@@ -449,6 +449,18 @@ function execSetRef(codeCall: CodeCall, scope: ExecScope, context: ExecContext):
     return { type: "nothing" };
 }
 
+// sys.publish(targetId): a SERVER-ONLY host action — the M4 schema export runs server-side. The
+// client stages NOTHING in the data model (no obj.props mutation, no invalidateProp — mirrors
+// execSetRef minus the local mutation); it only fires the hostAction send-hook, which ws.ts sends
+// as the `hostAction` WS op. The server is authoritative: it alone runs the effect, and an error
+// reply surfaces as a user-visible lastError. Returns nothing (no value); on the server side it
+// no-ops in CodeExecutor, so SSR/refetch never publishes.
+function execPublish(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const args = codeCall.params.map(p => executeValue(p, scope, context).value);
+    sendHostAction("publish", args);
+    return { type: "nothing" };
+}
+
 function collectionSysFunction(arr: ExecArray, method: string, context: ExecContext): ExecSysFunction {
     switch (method) {
         case "add": return { type: "sysFn", fn: args => { addToCollection(arr, args[0], context); return { type: "nothing" }; } };
@@ -629,6 +641,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "humanize": return execHumanize(codeCall, scope, context);
         case "extent": return execExtent(codeCall, scope, context);
         case "setRef": return execSetRef(codeCall, scope, context);
+        case "publish": return execPublish(codeCall, scope, context);
         case "nest": return execNest(codeCall, scope, context);
         case "clone": return execClone(codeCall, scope, context);
     }
@@ -719,6 +732,9 @@ interface WsHooks {
     // Dictionary entries persist through the PATH-addressed add/removeEntry ops (arr.sourcePath).
     entryAdd(arr: ExecArray, item: ExecArrayItem, key: string, value: ExecValue): void;
     entryRemove(arr: ExecArray, item: ExecArrayItem, key: string, index: number): void;
+    // A SERVER-ONLY host action (sys.publish): the client fires the action, the server alone runs
+    // the effect. Stages nothing in the data model (no optimistic mutation to roll back).
+    hostAction(action: string, args: ExecValue[]): void;
 }
 let wsHooks: WsHooks | null = null;
 function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
@@ -743,6 +759,9 @@ function sendEntryAdd(arr: ExecArray, item: ExecArrayItem, key: string, value: E
 }
 function sendEntryRemove(arr: ExecArray, item: ExecArrayItem, key: string, index: number): void {
     wsHooks?.entryRemove(arr, item, key, index);
+}
+function sendHostAction(action: string, args: ExecValue[]): void {
+    wsHooks?.hostAction(action, args);
 }
 
 // ── conformance entry point ───────────────────────────────────────────────────────

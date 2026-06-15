@@ -36,10 +36,12 @@ function commitJournal(msgId: number): void {
 // entry from the newest back to the failed one (restoring each captured before-value),
 // drop the failed entry, then re-apply the survivors in order — they are still pending
 // on the server and may yet be accepted. Their redo recaptures fresh before-values, so
-// a later rollback stays correct.
-function rollbackJournal(msgId: number, error: string): void {
+// a later rollback stays correct. Returns false when no journal entry matches (the error
+// is correlated to a non-journaled send, e.g. a host action) so the caller can still
+// surface it without a journal replay.
+function rollbackJournal(msgId: number, error: string): boolean {
     const idx = journal.findIndex(e => e.msgId === msgId);
-    if (idx < 0) return;
+    if (idx < 0) return false;
     for (let i = journal.length - 1; i >= idx; i--) journal[i].undo();
     const [failed] = journal.splice(idx, 1);
     failed.onReject?.();
@@ -47,6 +49,7 @@ function rollbackJournal(msgId: number, error: string): void {
     uiStatic.lastError = error;
     console.error("Mutation rejected by the server:", error);
     renderUi();
+    return true;
 }
 
 // ── connection ────────────────────────────────────────────────────────────────────
@@ -174,6 +177,16 @@ function connectWs(): void {
             wsSend({ op: "removeEntry", id: msgId, clientId: uiStatic.clientId,
                 path: arr.sourcePath, key });
         },
+        // A SERVER-ONLY host action (sys.publish): the server alone runs the effect, so this stages
+        // NOTHING locally and pushes NO journal entry (there is no optimistic state to roll back). It
+        // allocates a correlation id only to route the reply; an error reply surfaces as lastError
+        // (no journal replay — see onWsMessage). Args ship as wire scalars (the server reads arg 0
+        // as the target id).
+        hostAction: (action, args) => {
+            const msgId = nextWsMsgId++;
+            wsSend({ op: "hostAction", id: msgId, clientId: uiStatic.clientId,
+                action, args: args.map(scalarOf) });
+        },
     });
 }
 
@@ -182,7 +195,16 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
                             state?: ServerDtState; error?: string }): void {
     // Correlated accept/reject first: an error rolls the journal back, an ok commits.
     if (typeof msg.id === "number") {
-        if (msg.error != null) { rollbackJournal(msg.id, msg.error); return; }
+        if (msg.error != null) {
+            // A non-journaled send (a host action stages nothing): no journal entry matches, so
+            // surface the error and re-render WITHOUT a journal replay.
+            if (!rollbackJournal(msg.id, msg.error)) {
+                uiStatic.lastError = msg.error;
+                console.error("Host action rejected by the server:", msg.error);
+                renderUi();
+            }
+            return;
+        }
         commitJournal(msg.id);
     }
 

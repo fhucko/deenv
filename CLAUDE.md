@@ -45,9 +45,9 @@ where developers design data visually and use it as objects. Full mission in
    `internal` scope outside userspace. **Multi-instance management (the kernel host) is the
    active milestone (Milestone 10, refocused 2026-06-14; first slice landed 2026-06-14)** — the
    kernel host is the entry point (NO run modes; `kernel.json` is the single source of what
-   runs). Build only M10 work next — the operator-facing create/list/switch/delete commands as image
-   Code (the C# mechanism for all four is done), exposing the export/publish bridge to Code, and
-   promoting the registry to a restricted kernel-instance; see Current focus + ROADMAP.md.
+   runs). Build only M10 work next — the operator-facing create/switch/delete COMMANDS as image Code
+   (the C# mechanism is done; the host-action channel + export/publish as a Code action `sys.publish`
+   landed), and promoting the registry to a restricted kernel-instance; see Current focus + ROADMAP.md.
    Cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time, and the
    management commands stay out of scope unless explicitly asked. Schema versioning steps back to
    M11 (it sits on instance management).
@@ -154,7 +154,7 @@ driven by an instance registry as kernel-owned data — the substrate under sche
 `Program.cs` into a thin C# supervisor (`DeEnv/Kernel/`: `RegistryReader` reads `kernel.json` as
 plain bootstrap data; `KernelHost`/`HostedInstance` start every instance + block on shutdown).
 Two instances on two port pairs are both reachable and data-sovereign (`Kernel.feature`,
-`@milestone-10`; suite green 218/218). **Run modes were removed (user direction):** the kernel
+`@milestone-10`; suite green 224/224). **Run modes were removed (user direction):** the kernel
 host is the sole entry point and `kernel.json` is the single source of what runs — a single
 instance is just a one-entry registry, so there is no `--mode`/`--app`. The designer is a registry
 entry; the M4 export/publish bridge is to be exposed to Code (a follow-up), not a CLI mode. Kernel

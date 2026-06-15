@@ -358,6 +358,11 @@ public sealed class CodeExecutor
         // setRef(obj, prop, value) persists on the client (the reference editor). Server-side
         // (SSR / refetch) never runs the click handler, so it no-ops.
         "setRef" => new ExecNothing(),
+        // publish(targetId) is a SERVER-ONLY host action (the sys.publish channel). It runs only
+        // when the client fires the event hook → the `hostAction` WS op; the SSR/refetch renderer
+        // never publishes, so here it no-ops (exactly like setRef). No conformance case: a host
+        // effect returns nothing and is outside the conformance contract.
+        "publish" => new ExecNothing(),
         _ => null,
     };
 

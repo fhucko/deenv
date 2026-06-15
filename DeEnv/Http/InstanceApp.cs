@@ -9,16 +9,18 @@ using GenHTTP.Modules.Websockets.Protocol;
 namespace DeEnv.Http;
 
 // One row of the kernel's instance registry as surfaced to image Code (the read-only `instances`
-// global): the app document name and its two ports. A pure projection — no file paths, no store —
-// so the kernel hands the renderer DATA, not a kernel reference (the locality-free seam). `Port`
-// is the app/serving port; `AssetsPort` is the infra port (/ws + /js).
+// global): the instance id, the app document name, and its two ports. A pure projection — no file
+// paths, no store — so the kernel hands the renderer DATA, not a kernel reference (the locality-free
+// seam). `Id` is the kernel-minted instance id (0 for a boot instance, which has no id yet — it is
+// the address a host action like `sys.publish(id)` targets); `Port` is the app/serving port;
+// `AssetsPort` is the infra port (/ws + /js).
 //
 // PRIVACY: keep this projection free of anything sensitive. Registry rows render as transient
 // objects, and ClientState ships a transient's props in FULL to every client that renders the
 // list — there is no per-prop gating here. So the "expose the contended external binding (ports),
 // hide internal identity (storage)" line (DECISIONS "`create` direction") must be drawn AT this
-// projection, never relied on at the render.
-public sealed record InstanceInfo(string App, int Port, int AssetsPort);
+// projection, never relied on at the render. The id is a non-sensitive handle (not a file path).
+public sealed record InstanceInfo(int Id, string App, int Port, int AssetsPort);
 
 // A live cell holding the kernel's current instance registry. The WRITER is the kernel (it swaps
 // `.Current` whenever the hosted set changes); the READERS are every hosted instance's renderer (they
@@ -47,10 +49,11 @@ public static class InstanceApp
 {
     public static (IHandlerBuilder App, IHandlerBuilder Infra) Build(
         IInstanceStore store, InstanceDescription description, int infraPort,
-        LiveRegistry? registry = null)
+        LiveRegistry? registry = null, IHostActions? hostActions = null)
     {
         var sessions = new ClientSessionStore();
-        var ws = new WsHandler(store, description, sessions, registry ?? new LiveRegistry());
+        var ws = new WsHandler(store, description, sessions, registry ?? new LiveRegistry(),
+            hostActions ?? new NoHostActions());
 
         // Native GenHTTP websocket (no Fleck). We read/write raw UTF-8 frames so the
         // JSON payload goes on the wire verbatim — no extra serialization wrapping.
