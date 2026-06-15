@@ -314,20 +314,14 @@ public sealed class CodeExecutor
 
     private IExecValue ExecuteCall(CodeCall codeCall, ExecScope scope, ExecContext context)
     {
-        // Built-ins: intercept before resolving the callee (they are not scope symbols).
-        // Win over any same-named user binding.
-        if (codeCall.Fn is CodeSymbol builtin)
-            switch (builtin.Name)
-            {
-                case "field": return ExecuteField(codeCall, scope, context);
-                case "humanize": return ExecuteHumanize(codeCall, scope, context);
-                case "extent": return ExecuteExtent(codeCall, scope, context);
-                case "nest": return ExecuteNest(codeCall, scope, context);
-                case "clone": return ExecuteClone(codeCall, scope, context);
-                // setRef(obj, prop, value) persists on the client (the reference editor).
-                // Server-side (SSR / refetch) never runs the click handler, so it no-ops.
-                case "setRef": return new ExecNothing();
-            }
+        // Built-ins live under the `sys` namespace (sys.field / sys.humanize / …): a call
+        // whose callee is a member access on the `sys` root routes the member name through
+        // the builtin switch, with call.Params unchanged. Recognized SYNTACTICALLY (the left
+        // is the `sys` symbol) — `sys` is a real object value, but it carries no builtin
+        // props, so this never evaluates `sys.field` as an object-prop access. Builtins are
+        // call-position only (not passable bare values); first-class builtins stay deferred.
+        if (IsSysBuiltin(codeCall.Fn, out var name) && ExecuteBuiltin(name, codeCall, scope, context) is { } builtinResult)
+            return builtinResult;
 
         var callee = ExecuteValue(codeCall.Fn, scope, context);
         return callee switch
@@ -337,6 +331,35 @@ public sealed class CodeExecutor
             _ => throw new CodeRuntimeException("Target of a call is not a function."),
         };
     }
+
+    // A callee of the form `sys.<name>` (a member access on the bare `sys` symbol). The
+    // generic-UI library and any image Code reach the builtins only through this namespace.
+    private static bool IsSysBuiltin(ICodeValue fn, out string name)
+    {
+        if (fn is CodeInfixOp { Op: CodeInfixOpType.ObjectProp, Left: CodeSymbol { Name: "sys" }, Right: CodeSymbol member })
+        {
+            name = member.Name;
+            return true;
+        }
+        name = "";
+        return false;
+    }
+
+    // Dispatch a `sys.<name>(...)` builtin. Returns null for an unknown member, so the caller
+    // falls through to ordinary callee resolution (which will then fail to read the missing
+    // prop on `sys` — the same "unknown field" error a typo would give).
+    private IExecValue? ExecuteBuiltin(string name, CodeCall call, ExecScope scope, ExecContext context) => name switch
+    {
+        "field" => ExecuteField(call, scope, context),
+        "humanize" => ExecuteHumanize(call, scope, context),
+        "extent" => ExecuteExtent(call, scope, context),
+        "nest" => ExecuteNest(call, scope, context),
+        "clone" => ExecuteClone(call, scope, context),
+        // setRef(obj, prop, value) persists on the client (the reference editor). Server-side
+        // (SSR / refetch) never runs the click handler, so it no-ops.
+        "setRef" => new ExecNothing(),
+        _ => null,
+    };
 
     // Invoke a function with already-evaluated arguments in a child of `scope`.
     // Used by the SSR renderer to call the render fn (no args) over a prepared

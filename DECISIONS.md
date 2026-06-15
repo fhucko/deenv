@@ -898,19 +898,25 @@ Phase 3 complete: the C# renderer is fully retired and the app URL space is clea
   handler applies a non-200. An unrouted URL (or a deleted view target) renders a synthesized
   `__notFound` code page (`notFoundForm` sets `status = 404`), with breadcrumb chrome — the
   last static C# page is gone.
-- **Future direction — a `sys` namespace for `instances` + the framework builtins (NOT built;
-  flagged + scoped 2026-06-14).** Today the framework names — state (`db`, `path`, `status`,
-  `instances`) and the builtin functions (`field`, `humanize`, `extent`, `setRef`, `nest`, `clone`) —
-  are all bare top-level names in the `system` scope, reached by walking up. The near-future cleanup
-  groups the **less-common** framework names under one `sys` namespace: **`sys.instances`** plus **the
-  builtin functions** (`sys.field`, `sys.humanize`, …). The **hot-path core state stays bare** —
-  `db`/`path`/`status` are touched constantly (`db.tasks`, `status = 404`), so namespacing them would
-  cost ergonomics for no clarity gain. The win: a clean global name space, an explicit framework prefix
-  on the specialized data + utilities (not the app's own names), and one obvious home for new framework
-  helpers. Breaking authoring-surface change (bare → `sys.` for the namespaced set), hence deferred; the
-  M10 `instances` slice surfaced it. (Relatedly: ambient framework DATA should be a var/cell — see
-  `LiveRegistry` — not a pull-function, so the reactive/live-update path stays open; now a reviewer
-  check.)
+- **A `sys` namespace for `instances` + the framework builtins — LANDED 2026-06-14 (hard cutover).**
+  The framework names were all bare top-level names in the `system` scope. The **less-common** ones now
+  live under one `sys` namespace: **`sys.instances`** + **the builtin functions** (`sys.field`,
+  `sys.humanize`, `sys.extent`, `sys.setRef`, `sys.nest`, `sys.clone`). The **hot-path core state stays
+  bare** — `db`/`path`/`status` are touched constantly (`db.tasks`, `status = 404`), so namespacing them
+  would cost ergonomics for no clarity gain. The win: a clean global name space, an explicit framework
+  prefix on specialized data + utilities, and one obvious home for new framework helpers. **How it
+  landed:** `sys` is a real `ExecObject` seeded in the system scope holding `instances` (still the
+  `LiveRegistry`-backed read-only cell, now a prop of `sys`); the builtins dispatch via a SYNTACTIC rule
+  in BOTH interpreters — a call whose callee is `sys.<member>` (`CodeInfixOp(ObjectProp, sys, member)`)
+  routes through the EXISTING builtin switch (no first-class function values; call-position only), pinned
+  by `conformance.json` `sys.*` cases. A **hard cutover** (zero committed apps used the bare names — only
+  the in-repo generic-UI library + one test fixture): `CodeValidator` declares `sys` not the bare names,
+  so bare `field`/`instances`/etc. are undefined-symbol errors at load, and a `BuiltinArities` map keeps
+  the load-time arity guard the bare builtins had. `GenericUi.cs`'s `StdlibSource` + AST builders emit
+  `sys.*`. Suite 221/221, both conformance twins green. Deferred: first-class passable builtins
+  (`sys.field` is call-position only); a general user-facing module mechanism; type-checking `sys`
+  members. (Relatedly: ambient framework DATA should be a var/cell — see `LiveRegistry` — not a
+  pull-function; now a reviewer check.)
 
 ## Tool stack and project structure
 

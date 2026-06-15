@@ -24,23 +24,18 @@ public static class CodeValidator
         var ui = desc.Ui;
         if (ui == null) return;
 
-        // The SYSTEM scope holds the framework-provided symbols ABOVE the custom code:
-        // the writable state vars db (read-only), path (the request URL) and status (the
-        // first-paint HTTP status, default 200), plus the built-ins (resolvable as symbols,
-        // no fixed arity — field, humanize, extent, setRef, nest, clone). User vars/functions
-        // live in a child `top` scope: they read these by walking up but never collide (a user
-        // var of the same name simply shadows).
+        // The SYSTEM scope holds the framework-provided symbols ABOVE the custom code: the
+        // bare state vars db (read-only), path (the request URL) and status (the first-paint
+        // HTTP status, default 200), plus the `sys` namespace object. The less-common framework
+        // names live UNDER `sys` (sys.instances; the builtins sys.field/humanize/extent/setRef/
+        // nest/clone) rather than as bare symbols — so they are reached as member access on
+        // `sys`, never resolved as bare symbols here. User vars/functions live in a child `top`
+        // scope: they read these by walking up but never collide (a user var simply shadows).
         var system = new Scope(null);
         system.Declare("db", writable: false);
         system.Declare("path", writable: true);
         system.Declare("status", writable: true);
-        system.Declare("instances", writable: false); // the kernel's read-only instance registry
-        system.Declare("field", writable: false);
-        system.Declare("humanize", writable: false);
-        system.Declare("extent", writable: false);
-        system.Declare("setRef", writable: false);
-        system.Declare("nest", writable: false);
-        system.Declare("clone", writable: false);
+        system.Declare("sys", writable: false); // the framework namespace (instances + the builtins)
 
         var top = new Scope(system);
         foreach (var v in ui.Vars ?? [])
@@ -62,6 +57,33 @@ public static class CodeValidator
         // generic UI when there is no render). A ui section with only vars/helpers and no
         // render is valid: the generic UI takes over.
         if (ui.Render != null) ValidateFunction(ui.Render, top);
+    }
+
+    // The fixed arities of the `sys` builtins, mirroring each impl's argument-count check in
+    // CodeExecutor. Used to preserve a load-time arity guard now the builtins are namespaced.
+    // NOTE: a new sys builtin lives in THREE places — both interpreters' dispatch (CodeExecutor +
+    // codeExec.ts) AND this map — or it silently loses its load-time arity guard.
+    private static readonly Dictionary<string, int> BuiltinArities = new()
+    {
+        ["field"] = 2,
+        ["humanize"] = 1,
+        ["extent"] = 1,
+        ["setRef"] = 3,
+        ["nest"] = 2,
+        ["clone"] = 1,
+    };
+
+    // A callee of the form `sys.<name>` (a member access on the bare `sys` symbol) — the
+    // namespaced builtins. Mirrors CodeExecutor.IsSysBuiltin (the runtime dispatch rule).
+    private static bool IsSysBuiltinCallee(ICodeValue fn, out string name)
+    {
+        if (fn is CodeInfixOp { Op: CodeInfixOpType.ObjectProp, Left: CodeSymbol { Name: "sys" }, Right: CodeSymbol member })
+        {
+            name = member.Name;
+            return true;
+        }
+        name = "";
+        return false;
     }
 
     private static void DeclareNamed(CodeFunction fn, Scope scope)
@@ -171,6 +193,15 @@ public static class CodeValidator
                     && call.Params.Length != arity)
                     throw new SchemaValidationException(
                         $"'{callee.Name}' takes {arity} argument(s) but is called with {call.Params.Length}.");
+                // The same fixed-arity guard for a `sys.<builtin>(...)` call (the namespaced
+                // builtins). Preserves the load-time check the bare builtins had via their
+                // per-impl argument-count throw; a `sys.field()` with the wrong count fails to
+                // load rather than at first paint.
+                if (IsSysBuiltinCallee(call.Fn, out var builtin)
+                    && BuiltinArities.TryGetValue(builtin, out var builtinArity)
+                    && call.Params.Length != builtinArity)
+                    throw new SchemaValidationException(
+                        $"'sys.{builtin}' takes {builtinArity} argument(s) but is called with {call.Params.Length}.");
                 break;
             case CodeFunction fn:
                 ValidateFunction(fn, scope);

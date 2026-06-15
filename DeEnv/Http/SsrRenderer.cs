@@ -260,10 +260,21 @@ public sealed class SsrRenderer
         var db = warmDb ?? DbBridge.LoadRoot(_store, _desc, context);
         system.Items["db"] = new ExecScopeItem { Value = db, IsReadOnly = true };
 
-        // `instances` is the kernel's instance registry, read-only: the list of instances this
-        // kernel hosts (app name + ports), provided so image Code can render the list itself — the
-        // first kernel-as-data read path. Empty when there is no kernel.
-        system.Items["instances"] = new ExecScopeItem { Value = BuildRegistry(context), IsReadOnly = true };
+        // `sys` is the framework namespace object, read-only: it holds the less-common framework
+        // members (the builtins are dispatched by the sys-rooted-callee rule; `sys.instances` is the
+        // one stateful member). `sys.instances` is the kernel's instance registry — the list of
+        // instances this kernel hosts (app name + ports), provided so image Code can render the list
+        // itself (the first kernel-as-data read path). Built PER RENDER, so every render reflects the
+        // kernel's CURRENT instances; empty when there is no kernel.
+        system.Items["sys"] = new ExecScopeItem
+        {
+            Value = new ExecObject
+            {
+                Id = --context.LastId.Value,
+                Props = new Dictionary<string, IExecValue> { ["instances"] = BuildRegistry(context) },
+            },
+            IsReadOnly = true,
+        };
 
         // `status` is a framework state var (the first-paint HTTP status); the view may assign
         // it (e.g. NotFound sets `status = 404`). Read back after render. Default 200.

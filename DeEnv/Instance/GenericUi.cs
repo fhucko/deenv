@@ -17,16 +17,16 @@ namespace DeEnv.Instance;
 //     the nested member URL, nest(setPath, m) → /notes/3, + Remove) + an add form. Also a
 //     COMPONENT (the add form holds a draft).
 //
-// Builtins do the reflective work: field (dynamic access), humanize (labels), extent (a
-// type's objects), setRef (set/clear a reference), nest (a URL path-join for nested member
-// links), clone (a fresh draft from a blank template). `obj.prop = x` resets a component's
-// draft after Create.
+// Builtins do the reflective work, all under the framework `sys` namespace: sys.field (dynamic
+// access), sys.humanize (labels), sys.extent (a type's objects), sys.setRef (set/clear a
+// reference), sys.nest (a URL path-join for nested member links), sys.clone (a fresh draft from
+// a blank template). `obj.prop = x` resets a component's draft after Create.
 //
 // Descriptors are a single stable top-scope registry var `__descs` (typeName → descriptor),
 // synthesized once — so the component functions receive a stable descriptor argument every
 // render, which is what lets the memo cache run their init exactly once (the same pattern
 // hand-authored forms use; no separate synthesized draft vars). Cross-type references are
-// stored by type NAME (cycle-safe); a component resolves them with field(__descs, name).
+// stored by type NAME (cycle-safe); a component resolves them with sys.field(__descs, name).
 //
 // Synthesis is render-time only: the canonical InstanceDescription (what AppPrint emits)
 // carries no UI at all for a plain app. A synthesized OBJECT view (Type=T, Prop=null) binds the
@@ -53,60 +53,60 @@ public static class GenericUi
                     foreach p in meta.props
                         <div class="field">
                             if p.baseType == "set" || p.baseType == "dictionary"
-                                <a class="list-title" href={nest(base, p.name)}>
-                                    humanize(p.name)
+                                <a class="list-title" href={sys.nest(base, p.name)}>
+                                    sys.humanize(p.name)
                             else
                                 <label class={p.name}>
-                                    humanize(p.name)
+                                    sys.humanize(p.name)
                             if p.baseType == "object"
-                                refEditor(obj, p.name, field(__descs, p.target))()
+                                refEditor(obj, p.name, sys.field(__descs, p.target))()
                             else if p.baseType == "set"
-                                setTable(field(obj, p.name), field(__descs, p.element), nest(base, p.name))()
+                                setTable(sys.field(obj, p.name), sys.field(__descs, p.element), sys.nest(base, p.name))()
                             else if p.baseType == "dictionary"
-                                dictTable(field(obj, p.name), p, nest(base, p.name))()
+                                dictTable(sys.field(obj, p.name), p, sys.nest(base, p.name))()
                             else if p.baseType == "bool"
-                                <input type="checkbox" class={p.name} checked={field(obj, p.name)}>
+                                <input type="checkbox" class={p.name} checked={sys.field(obj, p.name)}>
                             else
-                                <input type={inputType(p.baseType)} class={p.name} value={field(obj, p.name)}>
+                                <input type={inputType(p.baseType)} class={p.name} value={sys.field(obj, p.name)}>
 
             fn refEditor(parent, prop, target)
-                var state = { draft: clone(target.blank) }
+                var state = { draft: sys.clone(target.blank) }
                 fn createNew()
-                    setRef(parent, prop, state.draft)
-                    state.draft = clone(target.blank)
+                    sys.setRef(parent, prop, state.draft)
+                    state.draft = sys.clone(target.blank)
                 fn render()
                     return <div class="ref-editor">
                         <h3 class="ref-type">
                             target.name
                         <div class="ref-current">
                             "Current: "
-                            if field(parent, prop) == null
+                            if sys.field(parent, prop) == null
                                 "(none)"
                             else
-                                field(field(parent, prop), target.labelProp)
-                        foreach c in extent(target.name)
-                            <button class="ref-pick" onClick={() => setRef(parent, prop, c)}>
-                                field(c, target.labelProp)
-                        <button class="ref-clear" onClick={() => setRef(parent, prop, null)}>
+                                sys.field(sys.field(parent, prop), target.labelProp)
+                        foreach c in sys.extent(target.name)
+                            <button class="ref-pick" onClick={() => sys.setRef(parent, prop, c)}>
+                                sys.field(c, target.labelProp)
+                        <button class="ref-clear" onClick={() => sys.setRef(parent, prop, null)}>
                             "Clear"
                         <div class="ref-new">
                             foreach p in target.props
                                 if p.baseType != "object" && p.baseType != "set"
                                     <label class={p.name}>
-                                        humanize(p.name)
+                                        sys.humanize(p.name)
                                     if p.baseType == "bool"
-                                        <input type="checkbox" class={p.name} checked={field(state.draft, p.name)}>
+                                        <input type="checkbox" class={p.name} checked={sys.field(state.draft, p.name)}>
                                     else
-                                        <input type={inputType(p.baseType)} class={p.name} value={field(state.draft, p.name)}>
+                                        <input type={inputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
                             <button class="ref-create" onClick={createNew}>
                                 "Create new"
                 return render
 
             fn setTable(set, desc, setPath)
-                var state = { draft: clone(desc.blank) }
+                var state = { draft: sys.clone(desc.blank) }
                 fn addNew()
                     set.add(state.draft)
-                    state.draft = clone(desc.blank)
+                    state.draft = sys.clone(desc.blank)
                 fn render()
                     return <div class="set-table">
                         <table>
@@ -114,15 +114,15 @@ public static class GenericUi
                                 foreach p in desc.props
                                     if p.baseType != "object" && p.baseType != "set"
                                         <th>
-                                            humanize(p.name)
+                                            sys.humanize(p.name)
                             foreach m in set
                                 <tr class="set-row">
                                     foreach p in desc.props
                                         if p.baseType != "object" && p.baseType != "set"
                                             <td>
-                                                field(m, p.name)
+                                                sys.field(m, p.name)
                                     <td>
-                                        <a class="set-open" href={nest(setPath, m)}>
+                                        <a class="set-open" href={sys.nest(setPath, m)}>
                                             "open"
                                     <td>
                                         <button class="set-remove" onClick={() => set.remove(m)}>
@@ -131,27 +131,27 @@ public static class GenericUi
                             foreach p in desc.props
                                 if p.baseType != "object" && p.baseType != "set"
                                     if p.baseType == "bool"
-                                        <input type="checkbox" class={p.name} checked={field(state.draft, p.name)}>
+                                        <input type="checkbox" class={p.name} checked={sys.field(state.draft, p.name)}>
                                     else
-                                        <input type={inputType(p.baseType)} class={p.name} value={field(state.draft, p.name)}>
+                                        <input type={inputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
                             <button class="set-add" onClick={addNew}>
                                 "Add"
                 return render
 
             fn dictTable(dict, desc, base)
-                var state = { key: "", draft: clone(desc.blank), error: "" }
+                var state = { key: "", draft: sys.clone(desc.blank), error: "" }
                 fn addNew()
                     if state.key == ""
                         state.error = "Key is required"
-                    else if dict.any(m => field(m, "__key") == state.key)
+                    else if dict.any(m => sys.field(m, "__key") == state.key)
                         state.error = "Key already exists"
                     else
                         if desc.isScalar
-                            dict.setEntry(state.key, field(state.draft, "value"))
+                            dict.setEntry(state.key, sys.field(state.draft, "value"))
                         else
                             dict.setEntry(state.key, state.draft)
                         state.key = ""
-                        state.draft = clone(desc.blank)
+                        state.draft = sys.clone(desc.blank)
                         state.error = ""
                 fn render()
                     return <div class="dict-table">
@@ -161,30 +161,30 @@ public static class GenericUi
                                     "Key"
                                 foreach p in desc.valueProps
                                     <th>
-                                        humanize(p.name)
+                                        sys.humanize(p.name)
                                 if desc.isScalar
                                     <th>
                                         "Value"
                             foreach m in dict
                                 <tr class="dict-row">
                                     <td>
-                                        <a class="dict-open" href={nest(base, field(m, "__key"))}>
-                                            field(m, "__key")
+                                        <a class="dict-open" href={sys.nest(base, sys.field(m, "__key"))}>
+                                            sys.field(m, "__key")
                                     foreach p in desc.valueProps
                                         <td>
-                                            field(m, p.name)
+                                            sys.field(m, p.name)
                                     if desc.isScalar
                                         <td>
-                                            field(m, "value")
+                                            sys.field(m, "value")
                                     <td>
                                         <button class="dict-remove" onClick={() => dict.remove(m)}>
                                             "Remove"
                         <div class="dict-new">
                             <input class="dict-key" value={state.key}>
                             foreach p in desc.valueProps
-                                <input type={inputType(p.baseType)} class={p.name} value={field(state.draft, p.name)}>
+                                <input type={inputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
                             if desc.isScalar
-                                <input class="value" value={field(state.draft, "value")}>
+                                <input class="value" value={sys.field(state.draft, "value")}>
                             <button class="dict-add" onClick={addNew}>
                                 "Add"
                             <div class="dict-error">
@@ -194,8 +194,8 @@ public static class GenericUi
             fn leafForm(entry, base)
                 return <div class="leaf-form">
                     <h2>
-                        field(entry, "__key")
-                    <input class="value" value={field(entry, "value")}>
+                        sys.field(entry, "__key")
+                    <input class="value" value={sys.field(entry, "value")}>
 
             fn notFoundForm()
                 status = 404
@@ -305,12 +305,12 @@ public static class GenericUi
     private static IEnumerable<PropDefinition> DictProps(TypeDefinition type) =>
         (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Dictionary);
 
-    // `view T(obj, base)` → `return objectForm(obj, field(__descs, "T"), base)`. `base` is the
-    // page's URL path, threaded so inline sets build nested member links (nest(base, prop)).
+    // `view T(obj, base)` → `return objectForm(obj, sys.field(__descs, "T"), base)`. `base` is the
+    // page's URL path, threaded so inline sets build nested member links (sys.nest(base, prop)).
     private static UiView SynthObjectView(string typeName) =>
         new(typeName, Fn(["obj", "base"], Return(Call("objectForm", Sym("obj"), Desc(typeName), Sym("base")))));
 
-    // Reference route `view(parent)` → `return refEditor(parent, "P", field(__descs, "T"))()`
+    // Reference route `view(parent)` → `return refEditor(parent, "P", sys.field(__descs, "T"))()`
     // (the component is invoked). Keyed by (owner, Prop), bound to the parent. Takes only
     // `parent`: a reference builds no nested links, so it ignores the `base` arg ExecuteRender
     // passes to every type view (both interpreters bind min(args, params), so the extra arg is
@@ -319,13 +319,13 @@ public static class GenericUi
         new(ownerType, Fn(["parent"], Return(Invoke(Call("refEditor", Sym("parent"), Text(prop), Desc(targetType))))),
             Prop: prop);
 
-    // Set route `view(parent, base)` → `return setTable(field(parent, "P"), field(__descs,
+    // Set route `view(parent, base)` → `return setTable(sys.field(parent, "P"), sys.field(__descs,
     // "T"), base)()`. `base` is the set's own URL path, used for nested member links.
     private static UiView SynthSetView(string ownerType, string prop, string elementType) =>
         new(ownerType, Fn(["parent", "base"], Return(Invoke(Call("setTable", Field(Sym("parent"), Text(prop)), Desc(elementType), Sym("base"))))),
             Prop: prop);
 
-    // Dict route `view(parent, base)` → `return dictTable(field(parent, "P"), __dictDescs["O/P"],
+    // Dict route `view(parent, base)` → `return dictTable(sys.field(parent, "P"), __dictDescs["O/P"],
     // base)()`. The prop descriptor comes from the STABLE __dictDescs registry (not a literal),
     // so the dictTable component's memoized init runs once and its draft state survives renders.
     // The shared scalar-entry view: `view(entry, base)` → `return leafForm(entry, base)`. Bound
@@ -423,7 +423,11 @@ public static class GenericUi
         new() { Props = props.Select(p => new CodeObjectProp { Name = p.Name, Value = p.Value }).ToArray() };
     private static CodeArray Arr(IEnumerable<ICodeValue> items) => new() { Items = items.ToArray() };
     private static CodeCall Call(string fn, params ICodeValue[] args) => new() { Fn = Sym(fn), Params = args };
-    private static CodeCall Field(ICodeValue obj, ICodeValue name) => new() { Fn = Sym("field"), Params = [obj, name] };
+    // The builtin `field` is namespaced under `sys` — its callee is `sys.field` (a member access
+    // on the `sys` symbol), the shape both interpreters dispatch on.
+    private static CodeCall Field(ICodeValue obj, ICodeValue name) => new() { Fn = SysMember("field"), Params = [obj, name] };
+    private static CodeInfixOp SysMember(string name) =>
+        new() { Op = CodeInfixOpType.ObjectProp, Left = Sym("sys"), Right = Sym(name) };
     private static CodeCall Desc(string typeName) => Field(Sym(DescsVar), Text(typeName));
     private static CodeCall Invoke(ICodeValue fn) => new() { Fn = fn, Params = [] };
     private static CodeBlock Return(ICodeValue value) => new() { Statements = [new CodeReturn { Value = value }] };

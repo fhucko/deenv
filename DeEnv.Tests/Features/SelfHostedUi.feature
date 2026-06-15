@@ -111,6 +111,16 @@ Feature: Self-hosted generic UI (object forms)
     When I open "/notes/2"
     Then the "dueDate" label reads "Due date"
 
+  # The generic object form is built entirely from the `sys` namespace builtins
+  # (sys.humanize for the label, sys.field for the value) — a named proof that the
+  # framework names self-host through `sys`, not only incidental coverage.
+  @milestone-10 @single-user
+  Scenario: A generic object form renders a humanized label and a field value through sys
+    Given the self-hosted form app is running
+    When I open "/notes/2"
+    Then the "dueDate" label reads "Due date"
+    And the "title" field shows "First"
+
   @milestone-9 @single-user
   Scenario: Editing a field autosaves over the WebSocket
     Given the self-hosted form app is running

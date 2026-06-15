@@ -100,11 +100,11 @@
       "expect": { "kind": "int", "value": 7 }
     },
     {
-      "name": "dynamic field access field(obj, name)",
-      "text": "field({ n: 7 }, \"n\")",
+      "name": "dynamic field access sys.field(obj, name)",
+      "text": "sys.field({ n: 7 }, \"n\")",
       "expr": {
         "type": "call",
-        "fn": { "type": "symbol", "name": "field" },
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "field" } },
         "params": [
           { "type": "object", "props": [ { "name": "n", "value": { "type": "int", "value": 7 } } ] },
           { "type": "text", "value": "n" }
@@ -113,52 +113,62 @@
       "expect": { "kind": "int", "value": 7 }
     },
     {
-      "name": "humanize a camelCase prop name",
-      "text": "humanize(\"companyName\")",
+      "name": "sys.humanize a camelCase prop name",
+      "text": "sys.humanize(\"companyName\")",
       "expr": {
         "type": "call",
-        "fn": { "type": "symbol", "name": "humanize" },
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "humanize" } },
         "params": [ { "type": "text", "value": "companyName" } ]
       },
       "expect": { "kind": "text", "value": "Company name" }
     },
     {
-      "name": "clone copies an object's scalar fields",
-      "text": "clone({ n: 7 }).n",
+      "name": "sys.clone copies an object's scalar fields",
+      "text": "sys.clone({ n: 7 }).n",
       "expr": {
         "type": "infixOp", "op": "objectProp",
-        "left": { "type": "call", "fn": { "type": "symbol", "name": "clone" },
+        "left": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "clone" } },
           "params": [ { "type": "object", "props": [ { "name": "n", "value": { "type": "int", "value": 7 } } ] } ] },
         "right": { "type": "symbol", "name": "n" }
       },
       "expect": { "kind": "int", "value": 7 }
     },
     {
-      "name": "nest joins a base path and a segment, trimming a trailing slash",
-      "text": "nest(\"/\", \"notes\")",
+      "name": "sys.nest joins a base path and a segment, trimming a trailing slash",
+      "text": "sys.nest(\"/\", \"notes\")",
       "expr": {
         "type": "call",
-        "fn": { "type": "symbol", "name": "nest" },
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "nest" } },
         "params": [ { "type": "text", "value": "/" }, { "type": "text", "value": "notes" } ]
       },
       "expect": { "kind": "text", "value": "/notes" }
     },
     {
-      "name": "nest appends a segment to a non-root base",
-      "text": "nest(\"/notes\", \"3\")",
+      "name": "sys.nest appends a (text) segment to a non-root base",
+      "text": "sys.nest(\"/notes\", \"3\")",
       "expr": {
         "type": "call",
-        "fn": { "type": "symbol", "name": "nest" },
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "nest" } },
         "params": [ { "type": "text", "value": "/notes" }, { "type": "text", "value": "3" } ]
       },
       "expect": { "kind": "text", "value": "/notes/3" }
     },
     {
-      "name": "nest joins a (text) dictionary key — the same primitive a future dict route reuses",
-      "text": "nest(\"/settings\", \"theme\")",
+      "name": "sys.nest appends an INT segment to a non-root base (stringifies it)",
+      "text": "sys.nest(\"/notes\", 3)",
       "expr": {
         "type": "call",
-        "fn": { "type": "symbol", "name": "nest" },
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "nest" } },
+        "params": [ { "type": "text", "value": "/notes" }, { "type": "int", "value": 3 } ]
+      },
+      "expect": { "kind": "text", "value": "/notes/3" }
+    },
+    {
+      "name": "sys.nest joins a (text) dictionary key — the same primitive a dict route reuses",
+      "text": "sys.nest(\"/settings\", \"theme\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "nest" } },
         "params": [ { "type": "text", "value": "/settings" }, { "type": "text", "value": "theme" } ]
       },
       "expect": { "kind": "text", "value": "/settings/theme" }

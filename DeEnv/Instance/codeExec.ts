@@ -152,10 +152,11 @@ function executeValue(value: CodeValue, scope: ExecScope, context: ExecContext):
         case "fn": return { value: executeFunction(value, scope) };
         case "tag": return { value: executeTag(value, scope, context) };
         case "infixOp": return executeInfixOp(value, scope, context);
-        // field(obj, name) is a bindable lvalue (two-way binding needs its setValue),
-        // so it is resolved here rather than through executeCall (which drops setValue).
+        // sys.field(obj, name) is a bindable lvalue (two-way binding needs its setValue), so it
+        // is resolved here rather than through executeCall (which drops setValue). Its callee is
+        // a `sys.field` member access, so recognize the sys-rooted callee (not a bare symbol).
         case "call":
-            if (value.fn.type === "symbol" && value.fn.name === "field") return fieldResult(value, scope, context);
+            if (sysBuiltinName(value.fn) === "field") return fieldResult(value, scope, context);
             return { value: executeCall(value, scope, context) };
         case "symbol": return executeSymbol(value, scope);
         case "object": return { value: executeObject(value, scope, context) };
@@ -608,16 +609,28 @@ function executeInfixOpBasic(codeInfixOp: CodeInfixOp, scope: ExecScope, context
     }
 }
 
+// The `sys` builtin a callee names, or null. Builtins are namespaced under `sys`: a callee of
+// the form `sys.<name>` (a member access on the bare `sys` symbol) dispatches the builtin.
+// Mirrors CodeExecutor.IsSysBuiltin — `sys` is a real object value but carries no builtin
+// props, so this never reads `sys.field` as an object-prop access.
+function sysBuiltinName(fn: CodeValue): string | null {
+    if (fn.type === "infixOp" && fn.op === "objectProp"
+        && fn.left.type === "symbol" && fn.left.name === "sys"
+        && fn.right.type === "symbol")
+        return fn.right.name;
+    return null;
+}
+
 function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
-    // Built-ins. `field` is also intercepted in executeValue for its setValue; in
-    // statement position the value form is enough.
-    if (codeCall.fn.type === "symbol") {
-        if (codeCall.fn.name === "field") return fieldResult(codeCall, scope, context).value;
-        if (codeCall.fn.name === "humanize") return execHumanize(codeCall, scope, context);
-        if (codeCall.fn.name === "extent") return execExtent(codeCall, scope, context);
-        if (codeCall.fn.name === "setRef") return execSetRef(codeCall, scope, context);
-        if (codeCall.fn.name === "nest") return execNest(codeCall, scope, context);
-        if (codeCall.fn.name === "clone") return execClone(codeCall, scope, context);
+    // Built-ins (sys.field / sys.humanize / …). `sys.field` is also intercepted in executeValue
+    // for its setValue; in statement position the value form is enough.
+    switch (sysBuiltinName(codeCall.fn)) {
+        case "field": return fieldResult(codeCall, scope, context).value;
+        case "humanize": return execHumanize(codeCall, scope, context);
+        case "extent": return execExtent(codeCall, scope, context);
+        case "setRef": return execSetRef(codeCall, scope, context);
+        case "nest": return execNest(codeCall, scope, context);
+        case "clone": return execClone(codeCall, scope, context);
     }
     const fn = executeValue(codeCall.fn, scope, context).value;
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));

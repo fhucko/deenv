@@ -22,10 +22,10 @@ public sealed class KernelSteps(InstanceContext ctx)
             ready: bool
     """;
 
-    // A fully-custom app that renders the kernel's `instances` global — the read-only list of
-    // hosted instances (app + ports) provided in the system scope. A custom fn render() runs in
-    // the app scope (parent = system), so `instances` resolves by walking up. Proves the read path
-    // end-to-end through the real scope chain.
+    // A fully-custom app that renders the kernel's `sys.instances` global — the read-only list of
+    // hosted instances (app + ports) provided under the framework `sys` namespace. A custom fn
+    // render() runs in the app scope (parent = system), so `sys` resolves by walking up and
+    // `sys.instances` reads its prop. Proves the read path end-to-end through the real scope chain.
     private const string ConsoleApp = """
     types
         Db
@@ -34,7 +34,7 @@ public sealed class KernelSteps(InstanceContext ctx)
     ui
         fn render()
             return <main>
-                foreach i in instances
+                foreach i in sys.instances
                     <div class="instance-row">
                         <span class="app">
                             i.app
