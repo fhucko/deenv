@@ -40,6 +40,17 @@ commit message.
 
 ## What to judge (in priority order)
 
+**Above all — optimize for the user's experience.** What the user *sees and does*, and whether it
+feels **reasonable** to them, is THE most important thing in this project; it outranks every criterion
+below. The rendered surface — and the Code an author writes to shape it — must read the OBVIOUS, natural
+way from the user's point of view, with implementation detail kept out of sight (e.g. an author hands an
+object to an action by just *passing the object*, `sys.create(db, …)`, not its id or a technical
+encoding). When a slice's internals and its user-facing surface pull apart, **reshape the internals —
+the surface wins.** Flag anything where an implementation detail leaked into what the user sees or
+writes, or where the natural, reasonable experience was sacrificed for implementation convenience. The
+principles below are how we keep that surface minimal, self-hosted, and model-faithful — not licence to
+make it awkward. Ask first: *would the user expect this, and find it reasonable?* — then judge:
+
 1. **Minimal by default — the sharpest lens.** Does the slice add boilerplate
    the common case must repeat? Does it introduce a flag/opt-in? If so: is it
    justified *only* because removing it would break real behavior, and is it
@@ -107,8 +118,9 @@ Return a tight report (the orchestrator relays it; the user won't see it raw):
 - **Verdict** — one line: meets the project's bar / meets with caveats / fails
   criterion N.
 - **Findings** — each as: `[principle] file:line — what, and why it matters
-  here`. Order by severity. A finding must cite which of the five principles (or
-  the model) it serves. No padding; if there are three real findings, give three.
+  here`. Order by severity. A finding must cite which principle (the lead
+  user-experience principle, 1–6, or the model) it serves. No padding; if there
+  are three real findings, give three.
 - **What's good** — briefly, the things that are *correctly* minimal/self-hosted,
   so they don't get "fixed."
 - **Open questions** — anything you couldn't resolve from the docs + diff, framed

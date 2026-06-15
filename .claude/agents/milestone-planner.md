@@ -70,6 +70,15 @@ has been made (or you say it hasn't and route back).
   planning a drift.
 - Don't pull a future pillar into the current milestone to make the slice "more
   complete." Smaller and shippable beats whole and stuck.
+- Don't reshape what already works to satisfy a request. "Make the designer do X" /
+  "make the registry hold Y" is usually realizable by *composing* existing mechanisms — a new
+  sibling action, a new consumer of an existing global/registry — **not** by restructuring a
+  working schema/meta-schema/interface/wire shape. Before proposing any structural change, ask:
+  "does the end goal *require* this shape to change, or would what we have work?" If the existing
+  structure works and the change doesn't serve the goal, plan the smaller composing change instead.
+  Reshaping working structure is the riskiest, most-rippling kind of change and needs explicit user
+  approval — never bake it into a plan unflagged (this is the change-footprint side of "ask before
+  structural changes"; the plan's default should be "use what exists," not "introduce a new shape").
 - Don't re-open settled DECISIONS.md mechanics; plan within them and cite them.
 - Don't propose flags/config for flexibility (criterion 5); prefer derive/default.
 - Don't recommend an "accepted limitation" when making it correct is low-difficulty. Weigh

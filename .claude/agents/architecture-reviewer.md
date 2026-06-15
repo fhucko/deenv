@@ -49,6 +49,18 @@ against the branch point) plus the touched files. Read the code, not the message
 
 ## What to judge (in priority order)
 
+**Above all — optimize for the user's experience.** What the user *writes and sees*, and whether it
+feels **reasonable** to them, is THE most important thing in this project; it outranks every criterion
+below. The surface a user touches must read the OBVIOUS, natural way from their point of view: to hand
+an instance's schema to the kernel, the Code is just `sys.create(db, …)` — *pass the object* — not
+`sys.create(db.id, …)` or any technical encoding; carrying it by id over the wire is hidden plumbing
+shaped to serve that surface, never the reverse. When a slice's internals and its user-facing surface
+pull in different directions, **reshape the internals — the surface wins.** Flag any place where an
+implementation detail leaked into what the user writes/sees, or where the natural, reasonable reading
+was sacrificed for implementation convenience. The correctness criteria below (conformance, the storage
+seam) are non-negotiable musts — but they exist to keep a user-reasonable surface honest, not to excuse
+an awkward one. Ask first: *would the user expect this surface, and find it reasonable?* — then judge:
+
 1. **Twin-interpreter conformance.** The C# (`DeEnv/Code/CodeExecutor.cs`) and TS
    (`DeEnv/Instance/codeExec.ts`) interpreters are kept in lockstep by a shared
    suite (`DeEnv/Code/conformance.json`). Any change to evaluation semantics on
@@ -100,6 +112,19 @@ against the branch point) plus the touched files. Read the code, not the message
    *computed* result that depends on call arguments — `extent(type)`, `where(pred)` — is legitimately
    a function; this is about ambient state, not parameterized computation.)
 
+8. **Necessary-change discipline — don't reshape what already works.** A slice should be
+   the *smallest* change that reaches the end goal. If it restructures an existing, working
+   mechanism — a schema/meta-schema shape, an interface, a wire format, a data model — that the
+   goal did **not** require (the goal was reachable by *using* what already exists), that
+   restructure is a finding. A request phrased as "make X do Y" is usually satisfied by
+   *composing* what's there — a new sibling action, a new consumer of an existing global/registry —
+   **not** by reshaping the thing itself. Ask: "does the end goal actually *need* this shape to
+   change, or would the existing structure have worked?" Reshaping working structure is also the
+   riskiest kind of change (it ripples to data, tests, round-trips) and needs explicit approval
+   (the "ask before structural changes" rule). Flag gratuitous structural change and name the
+   smaller, composing change that uses what exists. (This is the change-footprint mirror of
+   criterion 2: minimal-by-default governs the authoring *surface*; this governs the *diff*.)
+
 ## What NOT to do
 
 - Don't review the rendered UI — that's `ui-architecture-reviewer`'s job.
@@ -120,7 +145,7 @@ Return a tight report (the orchestrator relays it; the user won't see it raw):
 - **Verdict** — one line: meets the bar / meets with caveats / fails criterion N
   (or: this is a UI slice — defer to ui-architecture-reviewer).
 - **Findings** — each as `[principle] file:line — what, and why it matters here`,
-  ordered by severity. Every finding cites which principle (1–5 above) or rule it
+  ordered by severity. Every finding cites which principle (1–8 above) or rule it
   serves. No padding; three real findings beat ten generic ones.
 - **What's good** — briefly, what is correctly minimal / conformant / sealed, so
   it doesn't get "fixed."
