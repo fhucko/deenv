@@ -69,6 +69,23 @@ public sealed class DesignerSteps(InstanceContext ctx)
                 && v is DeEnv.Storage.TextValue t && t.Text == to));
     }
 
+    [When("I retype the prop {string} to {string}")]
+    public async Task WhenRetypeProp(string propName, string newType)
+    {
+        // Renaming a referenced type requires retyping the prop that points at it, so the projected app
+        // stays valid (a prop whose `type` names a missing type is rejected at publish). The prop's type
+        // input is the `.prop-type` in the `.prop-row` whose `.prop-name` currently holds `propName`.
+        await PropTypeInput(propName).FillAsync(newType);
+        // The bound input re-renders the new value (the client edit landed)…
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.prop-row input.prop-type')].some(e => e.value === {JsString(newType)})");
+        // …then wait for the autosave to reach the designer's store, so the publish projects the retyped
+        // prop (the publish reads the store fresh).
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
+            .Any(o => o.Fields.TryGetValue("type", out var v)
+                && v is DeEnv.Storage.TextValue t && t.Text == newType));
+    }
+
     [When("I publish the design")]
     public async Task WhenPublish() =>
         await ctx.Page!.Locator("button.publish-design").ClickAsync();
@@ -131,10 +148,12 @@ public sealed class DesignerSteps(InstanceContext ctx)
     {
         // The publish wrote the projected app document (including the edited, validated `ui` section)
         // onto the target instance's sovereign app doc; poll it (the WS host-action + file write is
-        // async) until the new render's marker text appears in the document.
+        // async) until the new render's marker text appears in the document. The publish projects the
+        // WHOLE (now real, todo-sized) app and resets the target store, so it can run long at the tail
+        // of a saturated full suite — a wider window than the 8s default keeps it deterministic.
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
         await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
-            && File.ReadAllText(target.Spec.SchemaPath).Contains($"\"{marker}\""));
+            && File.ReadAllText(target.Spec.SchemaPath).Contains($"\"{marker}\""), timeoutMs: 15000);
     }
 
     [Then("the {string} instance's app document describes the type {string}")]
@@ -142,10 +161,12 @@ public sealed class DesignerSteps(InstanceContext ctx)
     {
         // The publish wrote the projected app document onto the target instance's app doc (its own
         // sovereign id-dir). Poll it (the WS host-action + file write is async) until the renamed type
-        // appears — the same on-disk app-doc assertion the HostAction publish scenario makes.
+        // appears — the same on-disk app-doc assertion the HostAction publish scenario makes. The publish
+        // projects the WHOLE (now real, todo-sized) app and resets the target store, so it can run long at
+        // the tail of a saturated full suite — a wider window than the 8s default keeps it deterministic.
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
         await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
-            && File.ReadAllText(target.Spec.SchemaPath).Contains(typeName));
+            && File.ReadAllText(target.Spec.SchemaPath).Contains(typeName), timeoutMs: 15000);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────
@@ -158,6 +179,11 @@ public sealed class DesignerSteps(InstanceContext ctx)
     // A design-editor type-name input currently holding `name` (the type being renamed).
     private Microsoft.Playwright.ILocator TypeNameInput(string name) =>
         ctx.Page!.Locator($".design-editor .type-row input.type-name[value={CssString(name)}]");
+
+    // The prop-type input of the `.prop-row` whose `.prop-name` currently holds `propName` (the prop
+    // being retyped). Scoped to that row so it targets the right prop across all the types' prop rows.
+    private Microsoft.Playwright.ILocator PropTypeInput(string propName) =>
+        ctx.Page!.Locator($".design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) input.prop-type");
 
     private static string JsString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 
