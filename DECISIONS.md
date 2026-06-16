@@ -1379,6 +1379,87 @@ storage, `RelativeApp`/`PathsEqual` matching, delete-refuses-boot, `sys.publish`
   (meets the bar). Deferred: named create (created instances default to label `"app"`); rename; a
   `system`/protected flag (the user chose uniform delete-on-all); the kernel+browser effect test.
 
+## The endgame database — the storage pillars' convergence path (north star)
+
+Captures a design discussion (2026-06-16) on the full storage endgame: the
+**render-coupled, strongly-consistent, distributed, versioned, change-tracked**
+store that pillars 3/4/5/7 + real-time converge into. **North star, not current
+scope** — Stage 4/5; CLAUDE.md rules 1/2/10 hold. It deepens "Storage: plain JSON
+file now, real engine later…", and leans on "Conflict handling: two different
+problems", "Multi-device is architecture…", and "The self-hosted image…" above
+rather than restating them.
+
+**You don't build it as one project — you *reach* it.** A from-scratch big-bang is
+structurally impossible for three reasons: (1) the render-coupled engine's API is
+**undesignable until the renderer is rich enough to couple to** — you cannot define
+the interface before its inputs exist; (2) each layer has **hard preconditions**
+(temporal versioning needs M5 identity ✓; render-coupling needs the rich UI +
+real-time views; distribution needs the single-system-image abstraction proven
+single-machine first); (3) it is the **trust floor** users stake their data on, so
+it must arrive in pieces each small enough for one steward to verify and vouch for
+(velocity must not outrun comprehension).
+
+**The development path — the milestone ladder, every rung behind the same
+`IInstanceStore` seam, Gherkin-first:**
+1. **The seam (now).** Model-terms, locality-free, sovereign-per-instance,
+   schema-as-versioned-immutable-documents — the enabling decision; later engines
+   slot in *without* rewriting what is above.
+2. **Schema versioning (M11, next).** Immutable docs + parent pointer + structural
+   identity diff — the first versioned shape in the store.
+3. **Real-time / multi-user (Stage 3).** Three-state client + change journal +
+   conflict resolution + the in-process concurrency fix — change-*tracking*, proven
+   single-machine first.
+4. **Data-level temporal versioning (pillar 4).** Never-overwrite / full history;
+   reshapes the store append-only; co-designed with schema versioning.
+5. **Render-coupled engine (pillar 5).** Now the renderer is rich enough and
+   real-time views exist, so its API (fetch-time filtering, participate-in-render to
+   decide load/preload/cache) is finally designable.
+6. **Distribution / single-system-image (Stage 5).** Kernel **fabric**
+   (transport/membership/coordination) in the trusted floor + image-configured
+   topology + single-primary-per-instance + sync replication + failover. Last —
+   every rung above is its prerequisite.
+
+**CAP is the organizing constraint, and the other pillars are its payment plan.**
+"Replicas must not disagree" = choosing **strong consistency** (the right default —
+it preserves the single-system-image and keeps divergence out of users' faces).
+CAP's bill for that choice: **availability under partition** (a node that cannot
+confirm with peers refuses the write rather than diverging) + **write latency**
+(wait for replication). The pillars *pay* it: versioning (3+4) **reconciles** where
+divergence is allowed; the render-coupled engine (5) **hides latency** by preloading
+the right remote data ahead of render. Four interlocking answers to CAP, not four
+independent features.
+
+**deenv earns "no disagreement" mostly by avoiding the situation, not by heroic
+consensus.** Each instance has **one sovereign db** (a single authority — no
+multi-master *within* an instance, so nothing to diverge); cross-instance facts use
+**one authoritative owner + idempotent projection** (no two-phase commit — see "The
+self-hosted image"). What cannot be dodged and stays Stage-5 hard: **failover**
+(electing the next authority when one dies is itself a consensus problem — the one
+place "consistent **and** available" forces real coordination) and
+**sync-replication latency** (exactly what the render-coupled preload hides).
+
+**The consensus layer is the one place to break the "everything custom" instinct.**
+The docs name distributed ACID "the work of large specialist teams." A solo steward
+hand-rolling Paxos is how you get silent data loss — lean on a **proven algorithm
+(Raft)** or building block; per-instance sovereignty already shrinks the need to
+~failover. Correctness is the whole job at this layer (a subtle bug eats people's
+data): property-based tests, fault injection, conformance discipline. AI accelerates
+*implementing* a known algorithm; it does **not** remove the design-judgment /
+verification burden — for the trust floor, that burden is the point.
+
+**Easily-forgotten pieces (completeness).** "Versioning" is **two** pillars —
+schema (3, structure) and data-temporal (4, values over time). Change **tracking**
+(detection) is not change **resolution** (the 3-way merge — *application* conflict
+survives even on one machine; see "Conflict handling"). Distribution needs
+**per-node id-range allocation** (M5 reserved this) and is only tractable because
+pillar 2 (no server calls in user code) makes app code **distribution-blind** —
+going multi-machine changes only *where a reference resolves*, not a line of user
+code.
+
+**Buildable today:** M10 (multi-instance) → **M11 schema versioning** (the next real
+brick — versioned immutable documents, the foundation everything above sits on). The
+rest stays destination, kept reachable by guarding the seam.
+
 ## Testing: BDD with Gherkin
 
 Behavior is specced in Gherkin `.feature` files first, then made to pass.
