@@ -993,6 +993,20 @@ self-modification. Keeping the kernel un-editable from inside is the deliberate
 recovery floor. (The existing `system`/`internal`-scope-outside-userspace pattern
 is this same trusted-floor-vs-userspace instinct in miniature.)
 
+**Precedent — K2: self-modifiable, but the tooling calcified (cautionary).** K2 (a
+long-standing Central-European ERP) is extensively modifiable *from itself* — strong
+validation of the malleable-image instinct, and a big part of why it has lasted
+decades. But its self-modification *tooling* froze in an aging stack (Delphi, archaic
+dev tools), so "modifiable from itself" coexists with "hard to change from a dev
+point of view" — the malleability never reached the tooling. The lesson that
+motivates the kernel/image split: keep the dev tools (designer, IDE) in the
+**malleable image**, built from deenv's own modern primitives and evolving by the
+same branch→preview→promote loop — never frozen in the kernel or a separate aging
+stack. Only the thin kernel is the frozen floor (recompiled, never self-modified);
+everything a developer touches lives in the image. This is the real-world *why*
+behind M4 self-hosting the designer and "C# is the kernel — app logic belongs in the
+app."
+
 **The IDE is an instance; the kernel runs it.** The dev environment is itself a
 deenv app, seeded via `initialData` — "a sandbox whose initial data contains one
 instance: the IDE." The apparent chicken-and-egg ("you need the IDE to make
