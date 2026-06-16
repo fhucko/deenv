@@ -119,13 +119,13 @@ ui
                                 "Remove prop"
             <label class="ui-label">
                 "UI"
-            <input class="design-ui" value={sys.field(design, "ui")}>
+            <textarea class="design-ui" value={sys.field(design, "ui")}>
             <label class="common-label">
                 "Common"
-            <input class="design-common" value={sys.field(design, "common")}>
+            <textarea class="design-common" value={sys.field(design, "common")}>
             <label class="initial-label">
                 "Initial data"
-            <input class="design-initial" value={sys.field(design, "initialData")}>
+            <textarea class="design-initial" value={sys.field(design, "initialData")}>
             <button class="publish-design" onClick={() => sys.publish(design, instance.id)}>
                 "Publish"
 

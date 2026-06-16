@@ -135,10 +135,15 @@ function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
             if (raw) { el.setAttribute("checked", ""); want.add("checked"); } else el.removeAttribute("checked");
             continue;
         }
-        if (tag.name === "input" && name === "value") {
+        if ((tag.name === "input" || tag.name === "textarea") && name === "value") {
             const text = raw == null ? "" : String(raw);
-            (el as HTMLInputElement).value = text;
-            el.setAttribute("value", text); want.add("value");
+            // Only assign when the value actually differs: the re-render that follows every
+            // keystroke would otherwise reset .value unconditionally and the browser jumps the
+            // caret to the end — unusable while typing (most visible in a multi-line textarea).
+            if ((el as HTMLInputElement).value !== text) (el as HTMLInputElement).value = text;
+            // A textarea's value is its content, not a `value` attribute (the property is
+            // authoritative; `value` is non-standard there), so only an <input> mirrors it.
+            if (tag.name === "input") { el.setAttribute("value", text); want.add("value"); }
             continue;
         }
         if (raw == null || raw === false) { el.removeAttribute(name); continue; }
@@ -165,7 +170,9 @@ function coerceInputValue(raw: string, current: ExecValue | undefined): ExecValu
 function wireEvents(el: HTMLElement, tag: ExecTag): void {
     const checked = tag.attributes["checked"];
     const value = tag.attributes["value"];
-    if (tag.name === "input" && (checked?.setValue || value?.setValue)) {
+    // Two-way binding for <input> and <textarea> (checked is input-only; a textarea binds
+    // only its value — el.value is its text either way).
+    if ((tag.name === "input" || tag.name === "textarea") && (checked?.setValue || value?.setValue)) {
         (el as HTMLInputElement).oninput = () => {
             const input = el as HTMLInputElement;
             if (checked?.setValue) checked.setValue({ type: "bool", value: input.checked });

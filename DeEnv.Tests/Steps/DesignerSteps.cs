@@ -91,13 +91,51 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             $"() => [...document.querySelectorAll('.design-editor .type-row input.type-name')].some(e => e.value === {JsString(name)})");
 
-    [Then("the design editor shows the design's UI text")]
+    [Then("the design editor shows the design's UI text in a textarea")]
     public async Task ThenEditorShowsUiText() =>
-        // The design's `ui` section text is bound into the code-area input; the seeded design's UI is a
-        // custom `fn render()`, so its text contains "fn render". A non-empty value carrying it proves
-        // the whole-app design (not just types) is loaded into the editor.
+        // The design's `ui` section text is bound into the code-area <textarea> (a real multi-line
+        // editor); the seeded design's UI is a custom `fn render()`, so its text contains "fn render".
+        // A non-empty textarea carrying it proves the whole-app design (not just types) is loaded into
+        // the editor AND that the textarea's value (its text content) round-trips through SSR + hydration.
         await ctx.Page!.WaitForFunctionAsync(
-            "() => { const e = document.querySelector('.design-editor input.design-ui'); return e != null && e.value.includes('fn render'); }");
+            "() => { const e = document.querySelector('.design-editor textarea.design-ui'); return e != null && e.value.includes('fn render'); }");
+
+    [When("I replace the design's UI with a render returning {string}")]
+    public async Task WhenSetUiText(string marker)
+    {
+        // Build a complete, VALID multi-line `ui` section (keyword + indentation, exactly the verbatim
+        // form the text field carries) whose render returns the marker text — multi-line, so it exercises
+        // a real textarea, and valid, so the publish's whole-document validation accepts it. \n are real
+        // newlines: FillAsync types them as line breaks into the textarea.
+        var ui = $"ui\n    fn render()\n        return <main>\n            \"{marker}\"\n";
+        // FillAsync clears + types into the <textarea> and fires the input event the binding listens for,
+        // so the bound `ui` field updates and re-renders through the same path a user would drive.
+        var area = ctx.Page!.Locator(".design-editor textarea.design-ui");
+        await area.FillAsync(ui);
+        // The bound textarea reflects the new multi-line value (the client edit landed — proving caret
+        // stability didn't drop characters and the value/oninput wiring round-tripped). The expected
+        // value is passed as a function ARGUMENT (Playwright serialises it safely), so its newlines need
+        // no JS-string escaping.
+        await ctx.Page.WaitForFunctionAsync(
+            "expected => { const e = document.querySelector('.design-editor textarea.design-ui'); return e != null && e.value === expected; }",
+            ui);
+        // …then wait for the autosave (objectPropChange) to reach the designer's sovereign store, so the
+        // subsequent publish projects the edited design (the publish reads the store fresh).
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values
+            .Any(o => o.Fields.TryGetValue("ui", out var v)
+                && v is DeEnv.Storage.TextValue t && t.Text == ui));
+    }
+
+    [Then("the {string} instance's app document renders {string}")]
+    public async Task ThenTargetContainsUi(string label, string marker)
+    {
+        // The publish wrote the projected app document (including the edited, validated `ui` section)
+        // onto the target instance's sovereign app doc; poll it (the WS host-action + file write is
+        // async) until the new render's marker text appears in the document.
+        var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
+        await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
+            && File.ReadAllText(target.Spec.SchemaPath).Contains($"\"{marker}\""));
+    }
 
     [Then("the {string} instance's app document describes the type {string}")]
     public async Task ThenTargetDescribesType(string label, string typeName)

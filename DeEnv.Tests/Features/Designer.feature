@@ -22,7 +22,7 @@ Feature: The operator IDE (routed multi-instance designer)
     When I open the instances list
     And I edit the instance "instance"
     Then the design editor shows a type named "Item"
-    And the design editor shows the design's UI text
+    And the design editor shows the design's UI text in a textarea
 
   @milestone-10 @single-user
   Scenario: Renaming a type and publishing updates the target instance's app document
@@ -32,3 +32,15 @@ Feature: The operator IDE (routed multi-instance designer)
     And I rename the type "Item" to "Widget"
     And I publish the design
     Then the "instance" instance's app document describes the type "Widget"
+
+  # The code-area editors are multi-line <textarea>s with working two-way binding: editing the
+  # UI textarea (a multi-line render) updates the bound design, and publishing projects the
+  # edited UI into the target instance's app document.
+  @milestone-10 @single-user
+  Scenario: Editing the UI textarea and publishing updates the target instance's app document
+    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    When I open the instances list
+    And I edit the instance "instance"
+    And I replace the design's UI with a render returning "edited-by-textarea"
+    And I publish the design
+    Then the "instance" instance's app document renders "edited-by-textarea"

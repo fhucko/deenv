@@ -442,15 +442,45 @@ public sealed class SsrRenderer
 
     private void SerializeTag(ExecTag tag, StringBuilder sb)
     {
+        // A <textarea>'s value is its TEXT CONTENT, not a `value` attribute (browsers ignore
+        // `value` on <textarea>), so its bound `value` is emitted as escaped content below and
+        // skipped in the attribute loop. The client twin (ui.ts) mirrors this: it sets the
+        // .value property, never the attribute.
+        var isTextarea = tag.Name == "textarea";
+
         sb.Append('<').Append(tag.Name);
         foreach (var (name, value) in tag.Attributes)
+        {
+            if (isTextarea && name == "value") continue;
             AppendCodeAttribute(sb, name, value);
+        }
         sb.Append('>');
 
         if (VoidElements.Contains(tag.Name)) return;
 
+        // The bound value as the first content (HTML-escaped, same scalar handling as
+        // AppendCodeAttribute/SerializeChild), then any literal children.
+        if (isTextarea && tag.Attributes.TryGetValue("value", out var v))
+            AppendTextareaValue(sb, v);
+
         foreach (var child in tag.Children) SerializeChild(child, sb);
         sb.Append("</").Append(tag.Name).Append('>');
+    }
+
+    // The scalar value bound to a <textarea>, as HTML-escaped element content. Non-scalar
+    // values (an unset/null bind) render nothing; the bool case is unreachable for a value
+    // bind but handled for completeness, matching SerializeChild.
+    private static void AppendTextareaValue(StringBuilder sb, IExecValue value)
+    {
+        switch (value)
+        {
+            case ExecText t:
+                sb.Append(Escape(t.Value));
+                break;
+            case ExecInt i:
+                sb.Append(Escape(i.Value.ToString(CultureInfo.InvariantCulture)));
+                break;
+        }
     }
 
     // Only scalar attribute values become HTML attributes. Function values (event
