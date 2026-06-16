@@ -233,10 +233,16 @@ public sealed class WsHandler
         var propDef = _desc.FindType(hit.TypeName)?.Props?.FirstOrDefault(p => p.Name == prop);
         if (propDef is null)
             return Error($"Type '{hit.TypeName}' has no field '{prop}'.");
-        if (propDef.Cardinality != Cardinality.Single || _desc.IsObjectType(propDef.Type))
+        if (propDef.Cardinality != Cardinality.Single || _desc.ScalarBaseOf(propDef.Type) is not { } baseType)
             return Error($"Field '{prop}' on '{hit.TypeName}' is not a scalar field.");
 
-        _store.WriteField(objectId, prop, LeafForType(valEl, BaseTypes.Parse(propDef.Type)));
+        var leaf = LeafForType(valEl, baseType);
+        // An enum field's value must be a declared member of its enum (or empty). The leaf is
+        // text-shaped; off-list is rejected so a bad value never persists (mirrored in the
+        // startup guard, StoredDataValidator).
+        if (leaf is TextValue tv && !_desc.EnumAccepts(propDef.Type, tv.Text))
+            return Error($"'{tv.Text}' is not a value of enum '{propDef.Type}'.");
+        _store.WriteField(objectId, prop, leaf);
 
         var response = new JsonObject { ["op"] = "objectPropChange", ["ok"] = true };
         return response.ToJsonString(_jsonOpts);
@@ -457,9 +463,12 @@ public sealed class WsHandler
             {
                 var propDef = type.Props?.FirstOrDefault(d => d.Name == p.Name)
                     ?? throw new InvalidOperationException($"Type '{type.Name}' has no field '{p.Name}'.");
-                if (propDef.Cardinality != Cardinality.Single || _desc.IsObjectType(propDef.Type))
+                if (propDef.Cardinality != Cardinality.Single || _desc.ScalarBaseOf(propDef.Type) is not { } baseType)
                     throw new InvalidOperationException($"Field '{p.Name}' on '{type.Name}' is not a scalar field.");
-                fields[p.Name] = LeafForType(p.Value, BaseTypes.Parse(propDef.Type));
+                var leaf = LeafForType(p.Value, baseType);
+                if (leaf is TextValue tv && !_desc.EnumAccepts(propDef.Type, tv.Text))
+                    throw new InvalidOperationException($"'{tv.Text}' is not a value of enum '{propDef.Type}'.");
+                fields[p.Name] = leaf;
             }
         return new ObjectValue(fields);
     }
@@ -542,6 +551,8 @@ public sealed class WsHandler
             BaseType.Int      => new IntValue(el.ValueKind == JsonValueKind.String ? int.Parse(el.GetString()!, System.Globalization.CultureInfo.InvariantCulture) : el.GetInt32()),
             BaseType.Decimal  => new DecimalValue(el.ValueKind == JsonValueKind.String ? decimal.Parse(el.GetString()!, System.Globalization.CultureInfo.InvariantCulture) : el.GetDecimal()),
             BaseType.Text     => new TextValue(el.GetString() ?? ""),
+            // An enum value is its value name — text-shaped, no new value-kind.
+            BaseType.Enum     => new TextValue(el.GetString() ?? ""),
             BaseType.Date     => new DateValue(DateOnly.Parse(el.GetString() ?? "")),
             BaseType.DateTime => new DateTimeValue(DateTimeOffset.Parse(el.GetString() ?? "")),
             _ => throw new InvalidOperationException($"Cannot deserialize leaf of type {type.BaseType}")

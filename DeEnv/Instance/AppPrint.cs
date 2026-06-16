@@ -61,6 +61,14 @@ public static class AppPrint
 
     private static void PrintType(StringBuilder sb, TypeDefinition type)
     {
+        // An enum type: `Name: enum` then its ordered value names, indented like object props.
+        if (type.BaseType == BaseType.Enum)
+        {
+            sb.Append("    ").Append(type.Name).Append(": enum\n");
+            foreach (var value in type.Values ?? [])
+                sb.Append("        ").Append(value).Append('\n');
+            return;
+        }
         if (type.BaseType != BaseType.Object)
         {
             sb.Append("    ").Append(type.Name).Append(": ").Append(BaseTypes.NameOf(type.BaseType)).Append('\n');

@@ -770,6 +770,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         BaseType.Int      => new IntValue(0),
         BaseType.Decimal  => new DecimalValue(0m),
         BaseType.Text     => new TextValue(""),
+        // An unset enum field defaults to empty (the decided default — NOT the first value);
+        // it stores as text, so the <select> shows its empty option until a value is chosen.
+        BaseType.Enum     => new TextValue(""),
         BaseType.Date     => new DateValue(DateOnly.FromDateTime(DateTime.Today)),
         BaseType.DateTime => new DateTimeValue(DateTimeOffset.Now),
         _ => throw new InvalidOperationException($"No base default for {bt}")
@@ -912,6 +915,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         BaseType.Int      => ToTagged(new IntValue(v.GetInt32())),
         BaseType.Decimal  => ToTagged(new DecimalValue(v.GetDecimal())),
         BaseType.Text     => ToTagged(new TextValue(v.GetString() ?? "")),
+        // A seeded enum value is its value name — text-shaped (loader-validated membership).
+        BaseType.Enum     => ToTagged(new TextValue(v.GetString() ?? "")),
         BaseType.Date     => ToTagged(new DateValue(DateOnly.Parse(v.GetString() ?? ""))),
         BaseType.DateTime => ToTagged(new DateTimeValue(DateTimeOffset.Parse(v.GetString() ?? ""))),
         _ => throw new InvalidOperationException($"No scalar seed for {bt}"),

@@ -3,7 +3,12 @@ using DeEnv.Code;
 
 namespace DeEnv.Instance;
 
-public enum BaseType { Bool, Int, Decimal, Text, Date, DateTime, Object }
+// Bool…DateTime are the leaf VALUE base types; Object and Enum are the two type-KINDS
+// (a type whose baseType is Object or Enum is a declared type, never a prop's leaf type).
+// An enum VALUE is a value name and travels/stores/interprets as Text — there is no new
+// storage value-kind, wire tag, or Code-runtime value; the type-kind only carries its
+// ordered value names (TypeDefinition.Values) for validation and the generic UI <select>.
+public enum BaseType { Bool, Int, Decimal, Text, Date, DateTime, Object, Enum }
 
 public enum Cardinality { Single, Dictionary, Set }
 
@@ -16,10 +21,14 @@ public record PropDefinition(
     string? KeyType = null,
     bool Nullable = false);
 
+// A type's shape: an object type carries Props; an enum type (BaseType.Enum) carries its
+// ordered value names in Values; a leaf alias carries neither. Props and Values are mutually
+// exclusive (an enum is not an object), enforced by the loader.
 public record TypeDefinition(
     string Name,
     BaseType BaseType,
-    IReadOnlyList<PropDefinition>? Props = null);
+    IReadOnlyList<PropDefinition>? Props = null,
+    IReadOnlyList<string>? Values = null);
 
 // A top-level UI state variable (session/UI state: path, selection, transient
 // newItem). Client-held; for SSR the initializer seeds its first-paint value.

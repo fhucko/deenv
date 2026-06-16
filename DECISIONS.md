@@ -1601,6 +1601,49 @@ was missing. Added a cardinality `<select>` (single=`""`/set/dictionary) + a key
   distinguishes items) — NOT a no-arg `render()` closure. This is a concrete case for the "one PUBLIC
   component library / SolidJS-style run-once reactivity" direction (see "UI middle-ground").
 
+**Enum type (`BaseType.Enum`) — first slice — landed 2026-06-16.** deenv had no enum, but a **status enum**
+is item #1 of the Stage-1 MVP capability bar (STAGES.md) and the domain templates need it everywhere. The
+user chose to build it NEXT, ahead of M11 (schema versioning) — a deliberate reorder. An enum is a new type
+declared in `types` alongside object types; this slice proves it end-to-end on a DEDICATED fixture (parse/
+print → store → validate → generic-UI `<select>` → WS persist).
+- **`BaseType.Enum` is a real third type-KIND** (alongside `object` and the leaf base types), the user's
+  explicit choice over a "text + Values list" shortcut. `TypeDefinition` gains `Values` (the ordered value
+  names). **But an enum VALUE travels/stores/interprets as `text` (the value name)** — there is NO new
+  storage value-kind, wire tag, or Code-runtime value. The seams map `BaseType.Enum` → text handling
+  (`InstanceDescriptionQuery.ScalarBaseOf` enum→Text; `DeserializeLeaf`/`StoredDataValidator.BaseTag`/
+  `JsonFileInstanceStore` text arms). So the cost of "a real kind" is an enum case in the type-level
+  switches, NOT a value-representation rewrite — the best of both.
+- **NO twin-interpreter change, verified.** `DbBridge.ScalarToExec` maps the stored `TextValue` → `ExecText`
+  (it switches on the runtime value, not `BaseType`), so an enum value is just text in the runtime. The
+  `<select>` two-way binding was already lvalue-generic in both twins (landed for the M10 designer's port
+  dropdown). **No `conformance.json` case** — conformance pins interpreter VALUE semantics, and enum adds no
+  value; the `<select>` is SSR/DOM behavior covered by a browser scenario.
+- **`.app` syntax:** `OrderStatus: enum` then an indented bare value-name list, declared in `types` as a
+  sibling of the object types. The `enum` keyword after the colon discriminates from a leaf alias / object
+  type **order-INDEPENDENTLY**: the parser is non-deterministic (`Parse.Run` enumerates all parses, returns
+  the unique complete one) AND the leaf-alias alternative `Filter`s out the reserved `enum` keyword, so enum
+  vs. leaf is decided by the token, never by which `OneOf` alternative is listed first (a `slice-builder`
+  comment had wrongly framed it as "tried first" — corrected). **Default of an unset enum field = `""`**
+  (explicit choice, the user's call — NOT first-value-as-default). **Off-list values rejected on BOTH the WS
+  write path AND the startup data guard** (`EnumAccepts`; `""` always allowed).
+- **Generic UI:** a scalar enum prop's descriptor is `{ name, baseType: "enum", values: [...] }`; the stdlib
+  `objectForm` + the `refEditor`/`setTable`/`dictTable` "new" forms render `<select value={sys.field(…)}>`
+  with an empty option + the values. The option VALUE is the bare name (the stored value); the option DISPLAY
+  is `sys.humanize(value)` (`inProgress` shows as "In Progress"), consistent with how field labels humanize —
+  the user's call (auto-humanize over explicit per-value labels, which stay a future enhancement). Persists
+  via the existing `objectPropChange` autosave.
+- **Scope held:** proven on a dedicated `EnumFixtureApp` (test support), NOT a committed app — committed apps
+  mirror into the designer seed, which would drag in `SchemaBridge`/designer enum-projection. `SchemaBridge`,
+  the meta-schema, and `DesignerSeedGenerator` were NOT touched. Specced by `@milestone-enum` scenarios
+  (`Schema.feature` round-trip + off-list reject; `SelfHostedUi.feature` `<select>` render + persist;
+  `AppPrintTests` round-trip). Suite 283/283.
+- **Follow-ups (sequenced):** (1) designer can DEFINE enums (meta-schema + `SchemaBridge` learn the kind);
+  (2) convert the designer's own free-text-that-are-really-enums (`cardinality`/`baseType`/`keyType`) into
+  enum props and DELETE the hand-rolled cardinality `<select>` — the dogfood. Deferred features (YAGNI): int-
+  backed/renamable members (renaming wants M5 identity + the M11 diff), enum dict-keys, per-value labels.
+- Doc follow-up: `INSTANCE_DESCRIPTION_FORMAT.md` doesn't yet document `enum` — deferred until after the
+  pending "drop the colon from type declarations" change, so the format ref records the final syntax once.
+
 ## The endgame database — the storage pillars' convergence path (north star)
 
 Captures a design discussion (2026-06-16) on the full storage endgame: the

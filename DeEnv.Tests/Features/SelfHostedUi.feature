@@ -128,6 +128,18 @@ Feature: Self-hosted generic UI (object forms)
     And I fill the "title" field with "Renamed"
     Then the store eventually has a "Note" whose "title" is "Renamed"
 
+  # ── enum support (first slice) ─────────────────────────────────────────────
+
+  @milestone-enum @single-user
+  Scenario: An enum field renders as a select of its values and persists a choice
+    Given the enum fixture app is running
+    When I open "/orders/2"
+    Then the page is a code page
+    And the "status" field is a select with options "pending, shipped, delivered"
+    And the "status" select displays options "Pending, Shipped, Delivered"
+    When I choose "delivered" in the "status" select
+    Then the store eventually has a "Order" whose "status" is "delivered"
+
   # ── component-local state (creation prototype) ─────────────────────────────
 
   @milestone-9 @single-user

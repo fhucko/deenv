@@ -111,6 +111,37 @@ public class InstanceContext
             dueDate: "2026-01-01"
     """;
 
+    // Enum support (first slice): an app whose Db holds a set of `Order`, where `Order.status`
+    // is typed by the `OrderStatus` enum. No `ui` section, so the default self-hosted generic UI
+    // renders it: the order page's status field is a <select> of the enum's values. Seeded with
+    // one order whose status is set ("shipped") and one left unset (default empty). The dedicated
+    // enum fixture (NOT a committed app — committed apps mirror into the designer seed, which
+    // would drag in SchemaBridge enum-projection, deferred to a later slice).
+    public static InstanceDescription EnumFixtureDb() =>
+        InstanceDescriptionLoader.Load(EnumFixtureApp);
+
+    public const string EnumFixtureApp = """
+    types
+        OrderStatus: enum
+            pending
+            shipped
+            delivered
+        Db
+            orders: set of Order
+        Order
+            label: text
+            status: OrderStatus
+
+    initialData
+        Db 1
+            orders: [2, 3]
+        Order 2
+            label: "First"
+            status: "shipped"
+        Order 3
+            label: "Second"
+    """;
+
     // Milestone 9: an app whose Db holds an arbitrary-key DICTIONARY, rendered by the default
     // self-hosted generic UI. The Db root self-hosts, rendering the dictionary inline via the
     // `dictTable` library component. `Setting` (all-scalar) self-hosts too.

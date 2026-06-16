@@ -48,6 +48,14 @@ public sealed class AppPrintTests
         await AssertRoundTrips(File.ReadAllText(InstanceContext.AppFixture(1)));
     }
 
+    // An enum type (`Name: enum` + an indented value list) round-trips: parse∘print is the
+    // identity and the printed form is a fixpoint, with the values in declared order.
+    [Test]
+    public async Task The_enum_fixture_round_trips()
+    {
+        await AssertRoundTrips(InstanceContext.EnumFixtureApp);
+    }
+
     // ── expression printing: minimal parentheses ────────────────────────────────
 
     [Test]

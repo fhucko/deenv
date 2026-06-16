@@ -119,6 +119,35 @@ Feature: App description document
     When the document is loaded
     Then loading is rejected with an error mentioning "set"
 
+  # ── enum support (first slice) ──────────────────────────────────────────────
+
+  @milestone-enum @single-user
+  Scenario: An enum type round-trips through parse and print, values in order
+    Given the app description:
+      """
+      types
+          OrderStatus: enum
+              pending
+              shipped
+              delivered
+          Db
+              status: OrderStatus
+      """
+    When the document is loaded
+    Then the document loads successfully
+    And the type "OrderStatus" is an enum with values "pending, shipped, delivered"
+    And the document round-trips through the printer
+
+  @milestone-enum @single-user
+  Scenario: An enum field stores an in-list value and rejects an off-list one
+    Given the enum fixture instance is running
+    When the order's status is set to "delivered" over the WS
+    Then the change is accepted
+    And the order's stored status is "delivered"
+    When the order's status is set to "archived" over the WS
+    Then the change is rejected
+    And the order's stored status is "delivered"
+
   @milestone-3 @single-user
   Scenario: The instance is defined by an app description file
     Given an app description file describing a single-bool Db

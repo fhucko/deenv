@@ -63,6 +63,45 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    // ── enum support (first slice) ──────────────────────────────────────────────
+
+    [Given("the enum fixture app is running")]
+    public async Task GivenEnumFixtureAppRunning()
+    {
+        ctx.Description = InstanceContext.EnumFixtureDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    // objectForm renders an enum scalar prop as <select class={p.name}> with an <option> per
+    // value (plus a leading empty option). The options' value attributes must be exactly the
+    // enum's values, in order.
+    [Then("the {string} field is a select with options {string}")]
+    public async Task ThenSelectOptions(string field, string commaList)
+    {
+        var expected = commaList.Split(',').Select(s => s.Trim()).ToArray();
+        var values = await ctx.Page!.Locator($"select.{field} option").EvaluateAllAsync<string[]>(
+            "els => els.map(e => e.getAttribute('value'))");
+        // The empty placeholder option ("") comes first; the enum's values follow it.
+        await Assert.That(values).IsEquivalentTo(new[] { "" }.Concat(expected).ToArray());
+    }
+
+    // The DISPLAYED option labels (textContent) — humanized, while the value attributes stay the
+    // bare names (asserted above). Proves the generic UI shows `sys.humanize(value)`, not the raw name.
+    [Then("the {string} select displays options {string}")]
+    public async Task ThenSelectDisplays(string field, string commaList)
+    {
+        var expected = commaList.Split(',').Select(s => s.Trim()).ToArray();
+        var texts = await ctx.Page!.Locator($"select.{field} option").EvaluateAllAsync<string[]>(
+            "els => els.map(e => e.textContent.trim())");
+        await Assert.That(texts).IsEquivalentTo(new[] { "" }.Concat(expected).ToArray());
+    }
+
+    // Choose an option: SelectOptionAsync fires the <select>'s change event, whose binding
+    // writes the chosen value back through sys.field's setValue (autosave → objectPropChange).
+    [When("I choose {string} in the {string} select")]
+    public async Task WhenChooseInSelect(string value, string field) =>
+        await ctx.Page!.Locator($"select.{field}").SelectOptionAsync(value);
+
     [Given("the self-hosted scalar dict app is running")]
     public async Task GivenSelfHostedScalarDictAppRunning()
     {

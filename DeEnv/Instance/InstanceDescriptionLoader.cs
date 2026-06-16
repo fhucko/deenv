@@ -80,8 +80,12 @@ public static class InstanceDescriptionLoader
                         throw new SchemaValidationException(
                             $"Type '{type.Name}' has duplicate prop name '{prop.Name}'.");
 
-                    ValidateProp(prop, type.Name, seen);
+                    ValidateProp(prop, type.Name, seen, desc);
                 }
+            }
+            else if (type.BaseType == BaseType.Enum)
+            {
+                ValidateEnum(type);
             }
             else if (type.Props != null)
             {
@@ -89,6 +93,22 @@ public static class InstanceDescriptionLoader
                     $"Type '{type.Name}' has props but baseType is not 'object'.");
             }
         }
+    }
+
+    // An enum type carries ≥1 value name, all unique, and no props (an enum is not an object).
+    private static void ValidateEnum(TypeDefinition type)
+    {
+        if (type.Props != null)
+            throw new SchemaValidationException(
+                $"Enum type '{type.Name}' has props, but an enum carries only value names.");
+        if (type.Values == null || type.Values.Count == 0)
+            throw new SchemaValidationException(
+                $"Enum type '{type.Name}' has no values: an enum must list at least one value.");
+        var values = new HashSet<string>();
+        foreach (var value in type.Values)
+            if (!values.Add(value))
+                throw new SchemaValidationException(
+                    $"Enum type '{type.Name}' has duplicate value '{value}'.");
     }
 
     // initialData structure: known types, declared fields, exactly one Db entry,
@@ -150,7 +170,7 @@ public static class InstanceDescriptionLoader
                 $"initialData '{where}' references id {id}, but '{typeName}' has no entry with that id.");
     }
 
-    private static void ValidateProp(PropDefinition prop, string typeName, HashSet<string> typeNames)
+    private static void ValidateProp(PropDefinition prop, string typeName, HashSet<string> typeNames, InstanceDescription desc)
     {
         if (!BaseTypes.IsName(prop.Type) && !typeNames.Contains(prop.Type))
             throw new SchemaValidationException(
@@ -163,10 +183,11 @@ public static class InstanceDescriptionLoader
                 $"Prop '{prop.Name}' on type '{typeName}' has unknown keyType '{prop.KeyType}'.");
 
         // A set is a collection of object references keyed by member identity, so
-        // its element type must be an object type and it carries no key fields.
+        // its element type must be an object type and it carries no key fields. A base
+        // leaf or an enum (a scalar, not an object) is rejected.
         if (prop.Cardinality == Cardinality.Set)
         {
-            if (BaseTypes.IsName(prop.Type))
+            if (BaseTypes.IsName(prop.Type) || desc.IsEnumType(prop.Type))
                 throw new SchemaValidationException(
                     $"Prop '{prop.Name}' on type '{typeName}' is a set of '{prop.Type}', " +
                     $"but a set's element type must be an object type.");

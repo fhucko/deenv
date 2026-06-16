@@ -154,12 +154,22 @@ public static class StoredDataValidator
                 Fail($"{where} references object {reference["id"]} of type '{declaredType}', which is not stored.");
         }
 
-        // A stored scalar: its tag must be the declared type's base type.
+        // A stored scalar: its tag must be the declared type's base type. An enum value is
+        // text-shaped, and must additionally be a declared member of its enum (or empty) —
+        // the startup twin of the WS write-path check (WsHandler.HandleObjectPropChange).
         private void Scalar(JsonObject? node, string declaredType, string where)
         {
             var expected = BaseTag(declaredType);
             if (node is null || TagOf(node) != expected)
+            {
                 Fail($"{where} is declared '{declaredType}' but is stored as '{TagOf(node)}'.");
+                return;
+            }
+            // Only an enum constrains its value set; its stored value is a string (tag "text").
+            if (desc.IsEnumType(declaredType)
+                && node!["value"]?.GetValue<string>() is { } value
+                && !desc.EnumAccepts(declaredType, value))
+                Fail($"{where} holds '{value}', which is not a value of enum '{declaredType}'.");
         }
 
         private void Root(JsonObject doc)
@@ -179,13 +189,18 @@ public static class StoredDataValidator
 
         private static string? TagOf(JsonObject? node) => node?["type"]?.GetValue<string>();
 
-        // The tag a scalar of this declared type is stored with ("text", "bool", …).
+        // The tag a scalar of this declared type is stored with ("text", "bool", …). An enum
+        // value is stored as text (its value name), so its tag is "text" too.
         private string BaseTag(string typeName)
         {
             var baseType = BaseTypes.IsName(typeName)
                 ? BaseTypes.Parse(typeName)
-                : desc.FindType(typeName)?.BaseType
-                  ?? throw new InvalidOperationException($"Unknown type '{typeName}'.");
+                : desc.FindType(typeName)?.BaseType switch
+                  {
+                      BaseType.Enum => BaseType.Text,
+                      { } bt => bt,
+                      null => throw new InvalidOperationException($"Unknown type '{typeName}'."),
+                  };
             return baseType.ToString().ToLowerInvariant();
         }
     }

@@ -1,4 +1,4 @@
-using DeEnv.Code;
+﻿using DeEnv.Code;
 
 namespace DeEnv.Instance;
 
@@ -66,6 +66,13 @@ public static class GenericUi
                                 dictTable(sys.field(obj, p.name), p, sys.nest(base, p.name))()
                             else if p.baseType == "bool"
                                 <input type="checkbox" class={p.name} checked={sys.field(obj, p.name)}>
+                            else if p.baseType == "enum"
+                                <select class={p.name} value={sys.field(obj, p.name)}>
+                                    <option value="">
+                                        ""
+                                    foreach v in p.values
+                                        <option value={v}>
+                                            sys.humanize(v)
                             else
                                 <input type={inputType(p.baseType)} class={p.name} value={sys.field(obj, p.name)}>
 
@@ -96,6 +103,13 @@ public static class GenericUi
                                         sys.humanize(p.name)
                                     if p.baseType == "bool"
                                         <input type="checkbox" class={p.name} checked={sys.field(state.draft, p.name)}>
+                                    else if p.baseType == "enum"
+                                        <select class={p.name} value={sys.field(state.draft, p.name)}>
+                                            <option value="">
+                                                ""
+                                            foreach v in p.values
+                                                <option value={v}>
+                                                    sys.humanize(v)
                                     else
                                         <input type={inputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
                             <button class="ref-create" onClick={createNew}>
@@ -132,6 +146,13 @@ public static class GenericUi
                                 if p.baseType != "object" && p.baseType != "set"
                                     if p.baseType == "bool"
                                         <input type="checkbox" class={p.name} checked={sys.field(state.draft, p.name)}>
+                                    else if p.baseType == "enum"
+                                        <select class={p.name} value={sys.field(state.draft, p.name)}>
+                                            <option value="">
+                                                ""
+                                            foreach v in p.values
+                                                <option value={v}>
+                                                    sys.humanize(v)
                                     else
                                         <input type={inputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
                             <button class="set-add" onClick={addNew}>
@@ -182,7 +203,15 @@ public static class GenericUi
                         <div class="dict-new">
                             <input class="dict-key" value={state.key}>
                             foreach p in desc.valueProps
-                                <input type={inputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
+                                if p.baseType == "enum"
+                                    <select class={p.name} value={sys.field(state.draft, p.name)}>
+                                        <option value="">
+                                            ""
+                                        foreach v in p.values
+                                            <option value={v}>
+                                                sys.humanize(v)
+                                else
+                                    <input type={inputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
                             if desc.isScalar
                                 <input class="value" value={sys.field(state.draft, "value")}>
                             <button class="dict-add" onClick={addNew}>
@@ -364,7 +393,7 @@ public static class GenericUi
 
     private static CodeObject TypeDescriptor(TypeDefinition t, InstanceDescription desc)
     {
-        var scalars = Scalars(t);
+        var scalars = Scalars(t, desc);
         var labelProp = scalars.FirstOrDefault(p => p.Type == "text")?.Name
             ?? scalars.FirstOrDefault()?.Name ?? "";
         return Obj(
@@ -386,7 +415,7 @@ public static class GenericUi
         if (p.Cardinality == Cardinality.Dictionary)
         {
             var isScalar = !desc.IsObjectType(p.Type);
-            var valueProps = isScalar ? [] : Scalars(desc.FindType(p.Type)!);
+            var valueProps = isScalar ? [] : Scalars(desc.FindType(p.Type)!, desc);
             return Obj(
                 ("name", Text(p.Name)),
                 ("baseType", Text("dictionary")),
@@ -398,11 +427,16 @@ public static class GenericUi
                     ? Obj(("value", DefaultFor(p.Type)))
                     : Obj(valueProps.Select(vp => (vp.Name, DefaultFor(vp.Type))).ToArray())));
         }
-        return p.Cardinality == Cardinality.Set
-            ? Obj(("name", Text(p.Name)), ("baseType", Text("set")), ("element", Text(p.Type)))
-            : desc.IsObjectType(p.Type)
-                ? Obj(("name", Text(p.Name)), ("baseType", Text("object")), ("target", Text(p.Type)))
-                : Obj(("name", Text(p.Name)), ("baseType", Text(p.Type)));
+        if (p.Cardinality == Cardinality.Set)
+            return Obj(("name", Text(p.Name)), ("baseType", Text("set")), ("element", Text(p.Type)));
+        if (desc.IsObjectType(p.Type))
+            return Obj(("name", Text(p.Name)), ("baseType", Text("object")), ("target", Text(p.Type)));
+        // An enum scalar prop: { name, baseType: "enum", values: [...] } so objectForm renders a
+        // <select> of its values (a bare `baseType: <typeName>` would fall through to a text input).
+        if (desc.FindType(p.Type) is { BaseType: BaseType.Enum, Values: { } values })
+            return Obj(("name", Text(p.Name)), ("baseType", Text("enum")),
+                ("values", Arr(values.Select(v => (ICodeValue)Text(v)))));
+        return Obj(("name", Text(p.Name)), ("baseType", Text(p.Type)));
     }
 
     private static ICodeValue DefaultFor(string baseType) => baseType switch
@@ -412,8 +446,11 @@ public static class GenericUi
         _ => Text(""),
     };
 
-    private static List<PropDefinition> Scalars(TypeDefinition t) => (t.Props ?? [])
-        .Where(p => p.Cardinality == Cardinality.Single && BaseTypes.IsName(p.Type)).ToList();
+    // Scalar (leaf-valued) props for the blank-draft template and the table columns: base
+    // leaves and enums (an enum value is text-shaped). References/sets/dicts are excluded.
+    private static List<PropDefinition> Scalars(TypeDefinition t, InstanceDescription desc) => (t.Props ?? [])
+        .Where(p => p.Cardinality == Cardinality.Single && (BaseTypes.IsName(p.Type) || desc.IsEnumType(p.Type)))
+        .ToList();
 
     // ── tiny AST builders ───────────────────────────────────────────────────────────
 
