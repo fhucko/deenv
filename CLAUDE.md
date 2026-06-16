@@ -51,8 +51,8 @@ where developers design data visually and use it as objects. Full mission in
    as have named create + per-instance `sys.rename(id, name)`); remaining: richer editing. See Current
    focus + ROADMAP.md.
    Cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time, and the
-   management commands stay out of scope unless explicitly asked. Schema versioning steps back to
-   M11 (it sits on instance management).
+   management commands stay out of scope unless explicitly asked. Schema versioning is M13 (after the
+   UI milestones M11–M12); it sits on instance management.
 
 2. **Later milestones are not "later details."** Real-time/multi-user, the
    custom language, the render-coupled storage engine, and the multi-device
@@ -129,7 +129,7 @@ steps, when reached, use Playwright.)
 
 **Milestone 10 is multi-instance management (the kernel host) — refocused 2026-06-14,
 first slice LANDED 2026-06-14 (no run modes — the kernel host is the entry point). (Schema
-versioning, briefly scoped as M10, stepped back to M11 — it sits on instance management.)
+versioning, briefly scoped as M10, stepped back to M13 — it sits on instance management.)
 Milestone 9 (self-hosted generic UI) is COMPLETE (2026-06-14).** The generic UI is re-expressed in Code as a reflective library
 (`objectForm`/`refEditor`/`setTable`/`dictTable`/`leafForm` over schema-as-data;
 builtins `field`/`humanize`/`extent`/`setRef`/`nest`/`clone`; component pattern with
@@ -178,7 +178,7 @@ model". **Named create + rename then completed the operator flow (2026-06-16):**
 display name — `sys.create(schema, name, appPort, infraPort)` — and a per-instance Rename — `sys.rename(id,
 name)` — edits the registry label (no restart; label-only). Follow-up: richer editing.
 Deferred: cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time
-(Stage 5/later), and the management commands. Schema versioning steps back to M11 (it sits on
+(Stage 5/later), and the management commands. Schema versioning steps back to M13 (it sits on
 this). See ROADMAP.md (Milestone 10), STAGES.md, and DECISIONS.md ("Multi-instance management —
 the kernel host").
 
