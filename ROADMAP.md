@@ -184,13 +184,29 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   `internal` scope. Specced by `SelfHostedUi.feature` + the migrated milestone-1/2/4/5
   features. See DECISIONS.md.
 
-- **Auto with overrides (custom composes the generic library).** A custom `fn render()`
-  that calls the generic-UI library (`objectForm`/`setTable`/`refEditor`/…) to reuse the
-  auto-form for parts of a page while hand-authoring the rest — the replacement for the
-  dropped M8 `view` system. M9 makes this possible (the generic UI *is* that library). The
-  open design piece: the library functions now live in the `internal` scope, off-limits to
-  user code (the builtins `field`/`humanize`/`nest`/`clone`/`extent`/`setRef` are already
-  reachable); composition needs a deliberate public surface for the library functions.
+- **M11 — SolidJS-style reactive components + the public component library (the UI
+  middle-ground).** *(Scheduled as M11 by user decision 2026-06-16, pulled ahead of schema
+  versioning, which moves to M13.)* Delivers pillar 8's "auto with overrides" (modify/extend
+  *parts* of the generic UI) via the mechanism settled in DECISIONS ("UI middle-ground"):
+  **one public component library** (`ObjectForm`/`Field`/`SetTable`/…) that BOTH a custom `fn
+  render()` and the generic UI compose — the generic UI rewritten as the library's **first
+  consumer** (its own completeness proof) — with **SolidJS-style reactivity** (run-once
+  components, no reset on prop change, parent-controlled structural reset; the `__descs`
+  reference-stability dissolved into the interpreter). Supersedes the earlier "call the
+  `internal` `objectForm`/`field` directly" sketch (an internals-leak, rejected). **Foundation
+  first:** the reactivity refactor (a twin-interpreter change; stands alone; kills the
+  `__descs` fragility) before the public library on top. *What's left:* the M9 generic UI is
+  already a Code library, but lives in `internal` with the fragile descriptor model — so the
+  work is the reactivity refactor + promoting it to a clean public API. Decompose via
+  milestone-planner; a vision-keeper pass is worth it (this reorders versioning).
+- **M12 — Visual component designer.** A WinForms/XAML-style visual designer over the M11
+  public component library: drag/arrange/configure components on a canvas, **show-all** (the
+  canvas a synced view of the full `fn render()`; the M7 round-trip printer is the visual↔text
+  sync engine), **live preview = the Stage-2 inner-loop mini-instance** (the real interpreted
+  renderer — no design/runtime divergence), and the native paren-free **`for … in`** keyword
+  desugaring to declarative keyed iteration (the XAML `ItemsControl`/`DataTemplate` role).
+  Extends pillar 1 (design visually) from data to UI. Needs M11 + the Stage-2 live-preview
+  infra. See DECISIONS ("UI middle-ground → Visual component designer").
 
 - **Multi-instance management (single-process, single-operator).  ← M10, first five
   slices DONE 2026-06-14.** One kernel process **hosts multiple instances at once**,
@@ -249,7 +265,7 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   slices); promoting the registry to a real *restricted* kernel-instance (north
   star). See STAGES.md + DECISIONS.md ("Multi-instance management — the kernel host").
 
-- **Schema versioning  (sits on multi-instance management — now M11, after M10).**
+- **Schema versioning  (sits on multi-instance management — now M13, after the UI milestones M11–M12).**
   Git-style versioning of the schema, built inside the environment itself using
   the code milestone (versioning is behaviour-shaped). The structural
   identity-based diff is already designed — renames are exact because

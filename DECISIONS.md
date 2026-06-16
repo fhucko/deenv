@@ -969,7 +969,7 @@ same cache behind the privacy/value-memoization), so giving *components* a Solid
 direction only, build deferred. A **vision-keeper** pressure-test is worth doing before
 it firms (it reverses a prior rejection).
 
-**Sequencing — if pulled forward (the user is weighing this as the milestone after
+**Sequencing — [DECIDED 2026-06-16 → scheduled M11; schema versioning → M13; see ROADMAP. Original deliberation kept:] if pulled forward (the user is weighing this as the milestone after
 M10, 2026-06-16).** No *hard* dependency requires M11 (schema versioning) first — the
 "after M11" framing above was a default, not a requirement — so it can be sequenced
 next, at the cost of deprioritizing versioning (the Stage-2 self-service substrate).
