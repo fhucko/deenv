@@ -1544,6 +1544,37 @@ gap (publish wrote the doc but the running instance kept serving the old one).
 - Specced by the named create + rename additions to `Designer.feature` / `HostAction.feature` and the
   `restartInstance` seam assertions; `sys.create`/`sys.rename` are server-only effects (no conformance case).
 
+**Prop cardinality + key-type editing in the designer — landed 2026-06-16.** The designer's type editor
+edited a prop's name + type but NOT its cardinality (single/set/dictionary) or a dictionary's keyType — so
+a design authored in the IDE could only have single-valued props (you had to drop to the `.app` text for
+`set of X` / `dict of X by K`). A bug: the model (`MetaProp` carries `cardinality`/`keyType`) and the
+projection (`SchemaBridge.Project` maps them to real `set`/`dict` schema) already supported it — only the UI
+was missing. Added a cardinality `<select>` (single=`""`/set/dictionary) + a key-type `<input>` per prop row.
+- **Two framework limitations found the hard way (the real lesson here):**
+  - **A conditional node inside a `foreach` list item does NOT reconcile on an object-prop change.** First
+    attempt rendered the keyType input only `if prop.cardinality == "dictionary"`. Setting a prop to
+    dictionary changed nothing in the DOM — and worse, REVERTED that row's `<select>`. Diagnosis (DOM dump):
+    the FIRST cardinality change in a row re-rendered fine, but the SECOND did not — the row's big shared memo
+    entry isn't re-invalidated for a deep nested-prop change, so `designEditor` returns cached and
+    `syncSelectValue` reverts the select. Adding a stable wrapper "slot" did NOT help (the row still didn't
+    recompute).
+  - **A component's no-arg inner `render()` memo-COLLIDES across list items.** Second attempt extracted the
+    row into a `propEditor(type, prop)` component (the pattern `designSelector` uses). Every row then rendered
+    as the FIRST prop (all `data-key="2"`): the inner `fn render()` has no args, so its memo key
+    (`fn:<renderId>`) is identical for every instance — `closureKey` (which folds in captured locals) is used
+    only for where/orderBy lambdas, not plain calls. `designSelector` escapes this ONLY because it is a
+    singleton (one selector per page), never a list.
+- **What landed: inline row, keyType input ALWAYS rendered (no conditional).** No structural change on a
+  cardinality change → the row reconciles like the other always-present inputs (which work). The cost: the
+  key-type field shows on every prop. To keep that harmless, **`SchemaBridge.Project` now reads `keyType`
+  ONLY for a dictionary** (a single/set prop's stray keyType is dropped — a set that declared one is rejected
+  on load anyway). Driven by a new `Designer.feature` scenario (set a prop to `set of TodoList` + another to
+  `dict of text by text`, apply, assert both in the deployed app doc).
+- **Lesson for future self-hosted UI:** editable LISTS want either (a) all-stable children (no conditional
+  nodes mid-row) or (b) a real per-item component whose render takes the item as an ARG (so the memo key
+  distinguishes items) — NOT a no-arg `render()` closure. This is a concrete case for the "one PUBLIC
+  component library / SolidJS-style run-once reactivity" direction (see "UI middle-ground").
+
 ## The endgame database — the storage pillars' convergence path (north star)
 
 Captures a design discussion (2026-06-16) on the full storage endgame: the

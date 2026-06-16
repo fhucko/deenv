@@ -84,18 +84,27 @@ public static class SchemaBridge
                 var props = new List<PropDefinition>();
                 if (type.Fields.TryGetValue("props", out var propsNode))
                     foreach (var prop in OrderedObjects(propsNode))
+                    {
+                        var cardinality = TextField(prop, "cardinality") switch
+                        {
+                            "" or "single" => Cardinality.Single,
+                            "set"          => Cardinality.Set,
+                            "dictionary"   => Cardinality.Dictionary,
+                            var other => throw new SchemaValidationException(
+                                $"Prop on type '{name}' has unknown cardinality '{other}'."),
+                        };
+                        // keyType is meaningful ONLY for a dictionary. The designer always renders the
+                        // key-type field (a conditional one fails to reconcile when it appears), so a
+                        // single/set prop may carry a leftover value — ignore it here (a set that declared
+                        // a keyType would be rejected on load), keeping the always-shown field harmless.
+                        var keyType = cardinality == Cardinality.Dictionary
+                            && TextField(prop, "keyType") is { Length: > 0 } key ? key : null;
                         props.Add(new PropDefinition(
                             TextField(prop, "name"),
                             TextField(prop, "type"),
-                            TextField(prop, "cardinality") switch
-                            {
-                                "" or "single" => Cardinality.Single,
-                                "set"          => Cardinality.Set,
-                                "dictionary"   => Cardinality.Dictionary,
-                                var other => throw new SchemaValidationException(
-                                    $"Prop on type '{name}' has unknown cardinality '{other}'."),
-                            },
-                            TextField(prop, "keyType") is { Length: > 0 } key ? key : null));
+                            cardinality,
+                            keyType));
+                    }
 
                 if (baseName == "object")
                     // Emit props only when there are some, so a designed object type

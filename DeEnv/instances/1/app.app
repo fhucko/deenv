@@ -269,6 +269,14 @@ ui
                         <div class="prop-row">
                             <input class="prop-name" value={prop.name}>
                             <input class="prop-type" value={prop.type}>
+                            <select class="prop-cardinality" value={prop.cardinality}>
+                                <option value="">
+                                    "single"
+                                <option value="set">
+                                    "set"
+                                <option value="dictionary">
+                                    "dictionary"
+                            <input class="prop-keytype" value={prop.keyType}>
                             <button class="remove-prop" onClick={() => type.props.remove(prop)}>
                                 "Remove prop"
             <label class="ui-label">

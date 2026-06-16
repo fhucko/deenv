@@ -185,6 +185,36 @@ public sealed class DesignerSteps(InstanceContext ctx)
                 && v is DeEnv.Storage.TextValue t && t.Text == newType));
     }
 
+    [When("I set the prop {string} cardinality to {string}")]
+    public async Task WhenSetCardinality(string propName, string cardinality)
+    {
+        // The cardinality <select> in the prop's row (single / set / dictionary). Selecting an option
+        // writes prop.cardinality through the two-way <select> binding and autosaves it. The option
+        // labels are the cardinality words; "single"'s value is "" (the model's default), so the stored
+        // value is "" for single, the word otherwise.
+        await PropCardinalitySelect(propName).SelectOptionAsync(
+            new Microsoft.Playwright.SelectOptionValue { Label = cardinality });
+        var stored = cardinality == "single" ? "" : cardinality;
+        // Wait for THIS prop's autosave (matched by name, so a same-cardinality prop in another seeded
+        // design doesn't satisfy it early), so a later apply projects this prop's new cardinality.
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
+            .Any(o => o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
+                && o.Fields.TryGetValue("cardinality", out var v) && v is DeEnv.Storage.TextValue t && t.Text == stored));
+    }
+
+    [When("I set the prop {string} key type to {string}")]
+    public async Task WhenSetKeyType(string propName, string keyType)
+    {
+        // The key-type field is always present (rendered for every prop); it is only meaningful for a
+        // dictionary — SchemaBridge ignores it for single/set props.
+        await PropKeytypeInput(propName).FillAsync(keyType);
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.prop-row input.prop-keytype')].some(e => e.value === {JsString(keyType)})");
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
+            .Any(o => o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
+                && o.Fields.TryGetValue("keyType", out var v) && v is DeEnv.Storage.TextValue t && t.Text == keyType));
+    }
+
     // ── When: the instance selector (on /instances/<id>) ─────────────────────────
 
     [When("I pick the design {string} in the dropdown")]
@@ -299,6 +329,18 @@ public sealed class DesignerSteps(InstanceContext ctx)
             && File.ReadAllText(target.Spec.SchemaPath).Contains(typeName), timeoutMs: 30000);
     }
 
+    [Then("the {string} instance's app document declares {string}")]
+    public async Task ThenTargetDeclares(string label, string declaration)
+    {
+        // Apply deployed the projected app document; assert it contains the given prop declaration
+        // (e.g. "checked: set of TodoList" / "text: dict of text by text") -- the canonical AppPrint
+        // form of a collection-shaped prop, proving cardinality + key type flowed through projection.
+        // Wide window: the deploy projects the WHOLE app + resets data, run under peak full-suite load.
+        var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
+        await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
+            && File.ReadAllText(target.Spec.SchemaPath).Contains(declaration), timeoutMs: 30000);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────
 
     // The instances-list row for an instance, located by its app-name cell (exact match, so "instance"
@@ -318,6 +360,14 @@ public sealed class DesignerSteps(InstanceContext ctx)
     // being retyped). Scoped to that row so it targets the right prop across all the types' prop rows.
     private Microsoft.Playwright.ILocator PropTypeInput(string propName) =>
         ctx.Page!.Locator($".design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) input.prop-type");
+
+    // The cardinality <select> / key-type input of the `.prop-row` whose `.prop-name` holds `propName`,
+    // scoped to that row (the key-type input only exists once the prop is a dictionary).
+    private Microsoft.Playwright.ILocator PropCardinalitySelect(string propName) =>
+        ctx.Page!.Locator($".design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) select.prop-cardinality");
+
+    private Microsoft.Playwright.ILocator PropKeytypeInput(string propName) =>
+        ctx.Page!.Locator($".design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) input.prop-keytype");
 
     private static string JsString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 

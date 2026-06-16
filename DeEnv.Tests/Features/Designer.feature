@@ -99,3 +99,22 @@ Feature: The operator IDE (designs library + instance design selector)
     Then a new instance "myapp" running design "crm" appears in the instances list
     When I open that new instance
     Then the design dropdown has the design "crm" selected
+
+  # A prop's cardinality (single / set / dictionary) -- and a dictionary's key type -- are editable in
+  # the designer, not just authorable in the .app text. A set's element must be an object type; a
+  # dictionary carries a key type. Picking them and applying deploys the collection-shaped props through
+  # the same projection the seeds use, so the designer can author the whole data model (sets/dicts), not
+  # only single-valued props.
+  @milestone-10 @single-user
+  Scenario: A prop's cardinality and key type are editable and deploy
+    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    When I open the designs list
+    And I edit the design "instance"
+    And I retype the prop "checked" to "TodoList"
+    And I set the prop "checked" cardinality to "set"
+    And I set the prop "text" cardinality to "dictionary"
+    And I set the prop "text" key type to "text"
+    When I open the instance "instance"
+    And I apply the design
+    Then the "instance" instance's app document declares "checked: set of TodoList"
+    And the "instance" instance's app document declares "text: dict of text by text"
