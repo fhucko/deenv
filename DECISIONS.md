@@ -981,6 +981,32 @@ library on top. Land M10 first (no interleaving), then plan the thin first slice
 **milestone-planner** and check the reprioritization via **vision-keeper** before
 building.
 
+**Visual component designer (a further-future layer on the above).** Settled in
+discussion 2026-06-16: once the public component library exists, a **WinForms/XAML-style
+visual designer** composes it — drag/arrange/configure components on a canvas instead of
+hand-writing the `fn render()` tree (extending pillar 1's "design visually" from *data*
+to *UI*). Decisions:
+- **Show all, like XAML — nothing hidden.** The canvas is a synced *view* of the full
+  `fn render()` code (a text pane alongside, XAML-style). Declarative nodes are
+  canvas-editable; an arbitrary imperative bit is edited as text but still **live-rendered**
+  in preview — no sealed/"opaque" blocks (an earlier framing, dropped).
+- **The M7 round-trip-stable printer is the visual↔text sync engine** (`parse∘print =
+  identity` → edit the canvas, print back to `fn render()`, no mangling). Already exists.
+- **Live preview = the Stage-2 inner-loop mini-instance** — the *real* interpreted
+  renderer, scoped to the slice, against representative data. So no separate design-time
+  engine, and **no design/runtime divergence** (deenv's structural edge over XAML, whose
+  design-time rendering can diverge from runtime).
+- **Why "show all" works: declarative control flow.** Keep deenv's native **`for … in`**
+  render keyword (paren-free — cleaner than a `<For>` tag); it **desugars to declarative
+  keyed iteration** (NOT a procedural output loop), which both carries the SolidJS reactive
+  semantics (run-once rows, keyed reset) *and* lets the canvas render the loop body as a
+  repeated template (the XAML `ItemsControl`/`DataTemplate` role). The `for` must express
+  **key-by-identity vs key-by-position** (default identity; a variant for position) — the
+  one reactive detail the surface exposes; the rest is invisible sugar.
+
+**Scope:** further future — pillar 1 × pillar 9, layered on the public component library +
+the printer + the reactivity model + the Stage-2 live preview. Direction only.
+
 ## Tool stack and project structure
 
 Web-first: **C# backend, TypeScript front-end.** C# stays where it's strong;
