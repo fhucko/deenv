@@ -1745,6 +1745,56 @@ code.
 (the real brick — versioned immutable documents, the foundation everything above sits on). The
 rest stays destination, kept reachable by guarding the seam.
 
+## Versioning — unified schema+data, Git-for-data, the instance pins a commit (north star)
+
+Captures a design discussion (2026-06-16) on how deenv versions the db. **North star,
+not current scope** — the convergence of pillars 3 (schema versioning), 4 (data temporal),
+and 5 (the storage engine); far future. **M13 (schema versioning) is the simple linear first
+step — no branches/merge.** Extends "The endgame database" above.
+
+**One mechanism for schema AND data.** In deenv both are content in one identity-bearing
+object graph (M5) — the schema *is* data (app document / meta-schema), the instance data is
+data — so a single **content-addressed** versioning over the store versions both uniformly.
+(The docs already hinted: schema versioning is "the sibling of data temporal versioning —
+cleaner to do both on a real store.") This unifies pillars 3+4 into one mechanism.
+
+**Git for data — branches + commits.** A **commit** = an immutable, content-addressed snapshot
+of the whole store (schema + data); a **branch** = a movable pointer to a commit (development
+lineage). A real, validated category: **Dolt** ("Git for data" — branch/commit/merge/diff for
+schema+data; prolly trees), **TerminusDB** (versioned graph db, Git-like), **Noms** + **Irmin**
+(the ancestors), **Datomic** (immutability + time-travel, but no branches).
+
+**The instance pins a commit; it does NOT equal a branch** (user, 2026-06-16 — this **corrects**
+the Stage-2 "branch = a test instance" metaphor; the operator-facing analogy may stay, but the
+*model* is this). An instance:
+- **pins a specific commit** — its actual running state (immutable, reproducible; the pin keeps
+  that commit reachable against GC even if the branch moves or is deleted), AND
+- **holds a branch ref as a guide** — which lineage it follows / where it would fast-forward to.
+- It is a **checkout, not a branch.** So one branch → many (or zero) instances; instances can
+  share a commit; "update an instance" = deliberately move its pin (a deploy), not silent drift.
+  (Git's *detached HEAD*; GitOps pins a commit, not a branch; Nix pins exact versions.)
+- A *running* instance is a **pinned base commit + a mutable working set** (the live edits);
+  "commit" snapshots the working set into a new immutable commit and advances the branch +
+  re-pins. (Git's working-tree-vs-commit; the Stage-2 "working copy (dirty)".)
+- *Implication for M10:* a registry entry would eventually carry `(commit, branch)` refs instead
+  of pointing at a mutable store dir. A seam not to foreclose; don't build now.
+
+**Scaling — the same trick: content-addressed Merkle / prolly trees.** A branch is O(1) (a
+pointer); a commit is O(changes); identical subtrees are shared by hash. Branches are cheap; the
+costs that bite are **merge** and **history GC**, not branching. This lives in the custom storage
+engine (pillar 5) — which is *why* data temporal versioning (pillar 4) sits behind it.
+
+**The two genuinely hard parts:**
+1. **Merge** — creating branches is trivial; merging diverged ones (3-way structural diff +
+   conflict resolution) is hard, and overlaps the real-time conflict model (already deferred).
+2. **Schema-change-as-migration** — a commit can change schema *and* data, so checking out a
+   different version means the data is interpreted/**migrated** under that schema
+   ("migrate-on-checkout"). Git-for-*code* never has this; the deepest, least-solved bit.
+
+**Scope:** storage endgame (pillars 3+4+5), far future. M13 stays linear-schema-only. Recorded
+now because the seams are cheap to honor, expensive to retrofit (a content-addressed store;
+instances carrying commit/branch refs).
+
 ## Testing: BDD with Gherkin
 
 Behavior is specced in Gherkin `.feature` files first, then made to pass.
