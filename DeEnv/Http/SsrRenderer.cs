@@ -416,16 +416,20 @@ public sealed class SsrRenderer
     private static readonly HashSet<string> VoidElements =
         ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
 
-    private void SerializeChild(IExecTagChild child, StringBuilder sb)
+    // `selectValue` is the bound value of an enclosing <select> (null otherwise), threaded so an
+    // <option> can mark itself `selected` when its own `value` matches the selection — the SSR half
+    // of <select> two-way binding (see SerializeTag's select branch).
+    private void SerializeChild(IExecTagChild child, StringBuilder sb, IExecValue? selectValue = null)
     {
         switch (child)
         {
             case ExecTag tag:
-                SerializeTag(tag, sb);
+                SerializeTag(tag, sb, selectValue);
                 break;
             case ExecArray coll:
-                // foreach / where / orderBy flatten into the child stream.
-                foreach (var item in coll.Items) SerializeChild(item.Value, sb);
+                // foreach / where / orderBy flatten into the child stream (e.g. a select's options
+                // built by foreach), so the select's value carries through the flattening.
+                foreach (var item in coll.Items) SerializeChild(item.Value, sb, selectValue);
                 break;
             case ExecText text:
                 sb.Append(Escape(text.Value));
@@ -440,7 +444,7 @@ public sealed class SsrRenderer
         }
     }
 
-    private void SerializeTag(ExecTag tag, StringBuilder sb)
+    private void SerializeTag(ExecTag tag, StringBuilder sb, IExecValue? selectValue = null)
     {
         // A <textarea>'s value is its TEXT CONTENT, not a `value` attribute (browsers ignore
         // `value` on <textarea>), so its bound `value` is emitted as escaped content below and
@@ -448,12 +452,23 @@ public sealed class SsrRenderer
         // .value property, never the attribute.
         var isTextarea = tag.Name == "textarea";
 
+        // A <select value={x}> drives which <option> is `selected` — `value` is not real HTML on a
+        // <select> (the browser ignores it), so it is skipped in the attribute loop and instead passed
+        // down to the option children. An <option> whose own `value` equals the selection gets `selected`.
+        var isSelect = tag.Name == "select";
+        var childSelectValue =
+            isSelect && tag.Attributes.TryGetValue("value", out var selVal) ? selVal : null;
+        var isSelectedOption =
+            tag.Name == "option" && selectValue != null
+            && tag.Attributes.TryGetValue("value", out var optVal) && ScalarsEqual(optVal, selectValue);
+
         sb.Append('<').Append(tag.Name);
         foreach (var (name, value) in tag.Attributes)
         {
-            if (isTextarea && name == "value") continue;
+            if ((isTextarea || isSelect) && name == "value") continue;
             AppendCodeAttribute(sb, name, value);
         }
+        if (isSelectedOption) sb.Append(" selected");
         sb.Append('>');
 
         if (VoidElements.Contains(tag.Name)) return;
@@ -463,9 +478,24 @@ public sealed class SsrRenderer
         if (isTextarea && tag.Attributes.TryGetValue("value", out var v))
             AppendTextareaValue(sb, v);
 
-        foreach (var child in tag.Children) SerializeChild(child, sb);
+        foreach (var child in tag.Children) SerializeChild(child, sb, childSelectValue);
         sb.Append("</").Append(tag.Name).Append('>');
     }
+
+    // Equality for two scalar exec values, used to match an <option>'s value against the enclosing
+    // <select>'s selection. Cross-type int/text compare by their canonical text (an int option value
+    // authored as a number must match a text-typed selection that holds its digits, and vice versa) —
+    // the same lenient text coercion the client uses (option.value is always a DOM string).
+    private static bool ScalarsEqual(IExecValue a, IExecValue b) =>
+        ScalarText(a) is { } at && ScalarText(b) is { } bt && at == bt;
+
+    private static string? ScalarText(IExecValue v) => v switch
+    {
+        ExecText t => t.Value,
+        ExecInt i => i.Value.ToString(CultureInfo.InvariantCulture),
+        ExecBool b => b.Value ? "true" : "false",
+        _ => null,
+    };
 
     // The scalar value bound to a <textarea>, as HTML-escaped element content. Non-scalar
     // values (an unset/null bind) render nothing; the bool case is unreachable for a value
@@ -503,11 +533,13 @@ public sealed class SsrRenderer
     }
 
     // Build the read-only `instances` Code collection from the registry snapshot: one row per
-    // hosted instance, { id, app, port, assetsPort } scalars. A transient List (negative ids), like a
-    // where/orderBy result — an app reads the rows in output position, so they ship as leaves and the
-    // list survives hydration. Empty when there is no kernel. `id` is the host-action address (e.g.
+    // hosted instance, { id, app, port, assetsPort, designId } scalars. A transient List (negative ids),
+    // like a where/orderBy result — an app reads the rows in output position, so they ship as leaves and
+    // the list survives hydration. Empty when there is no kernel. `id` is the host-action address (e.g.
     // sys.publish(db, i.id)), unique per instance and the sole key to its files; `app` is a display
-    // name only. clone/delete/publish work on ANY instance, so there is no created/boot flag.
+    // name only; `designId` is the explicit reference to the IDE design this instance runs (0 = none),
+    // read by the IDE to pre-select the design dropdown. clone/delete/publish work on ANY instance, so
+    // there is no created/boot flag.
     private ExecArray BuildRegistry(ExecContext context)
     {
         var items = new List<ExecItem>();
@@ -524,6 +556,7 @@ public sealed class SsrRenderer
                         ["app"] = new ExecText { Value = info.App },
                         ["port"] = new ExecInt { Value = info.Port },
                         ["assetsPort"] = new ExecInt { Value = info.AssetsPort },
+                        ["designId"] = new ExecInt { Value = info.DesignId },
                     },
                 },
             });

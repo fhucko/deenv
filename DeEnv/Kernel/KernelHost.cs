@@ -50,7 +50,7 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // is id-based.
     private void RefreshRegistry() =>
         _registry.Current = _instances
-            .Select(i => new InstanceInfo(IdOf(i.Spec), i.Spec.App, i.AppPort, i.InfraPort))
+            .Select(i => new InstanceInfo(IdOf(i.Spec), i.Spec.App, i.AppPort, i.InfraPort, i.Spec.DesignId))
             .ToList();
 
     // The host-action seam for one instance: it acts as the designer (its own schema+data are the
@@ -78,7 +78,12 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
             // Code-triggered clone lands in the same id-layout + registry).
             deleteInstance: id => DeleteAsyncById(id, registryPath),
             cloneInstance: (sourceId, appPort, infraPort) =>
-                CloneAsyncById(sourceId, appPort, infraPort, baseDir, registryPath));
+                CloneAsyncById(sourceId, appPort, infraPort, baseDir, registryPath),
+            // setDesign records the chosen design id on the target's registry entry (and refreshes the
+            // live view so the dropdown re-selects it on the next render). The projection itself is run
+            // by KernelHostActions after this records the reference — the registry write is the "remember
+            // which design" half, the publish projection the "deploy it" half.
+            recordDesign: (targetId, designId) => SetDesignAsyncById(targetId, designId, registryPath));
 
     // Resolve an instance id → the live hosted instance (by its unique Spec.Id) and delete it. An id
     // matching no instance is a clear reject before any work. Every instance is deletable now.
@@ -100,6 +105,34 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         await CloneAsync(source, appPort, infraPort, baseDir, registryPath);
     }
 
+    // Resolve a target instance id → the live hosted instance and record which design it now runs (the
+    // registry-write half of the IDE's Apply; KernelHostActions runs the publish projection). An unknown
+    // id is a clear reject before any write. Async only for delegate-signature symmetry (the work is
+    // synchronous — a registry rewrite, no port bind).
+    private Task SetDesignAsyncById(int targetId, int designId, string registryPath)
+    {
+        var target = _instances.FirstOrDefault(i => i.Spec.Id == targetId)
+            ?? throw new InvalidOperationException($"No instance with id {targetId} to set a design on.");
+        SetDesign(target, designId, registryPath);
+        return Task.CompletedTask;
+    }
+
+    // Record the design an instance runs: update its in-memory spec, re-project the live view (so the
+    // design dropdown pre-selects the new choice on the next render), and persist the new DesignId to
+    // kernel.json (so the reference survives a restart). The instance is NOT restarted — DesignId is
+    // registry metadata, not a hosting parameter; the IDE's Apply pairs this with a publish that does the
+    // actual document/data deploy. The kernel MECHANISM only; Apply (the operator command) is image Code.
+    public void SetDesign(HostedInstance instance, int designId, string registryPath)
+    {
+        instance.SetDesignId(designId);
+        RefreshRegistry();
+
+        var stored = RegistryReader.Read(registryPath);
+        RegistryWriter.Write(registryPath, new Registry(
+            [.. stored.Instances.Select(e =>
+                e.Id == instance.Spec.Id ? e with { DesignId = designId } : e)]));
+    }
+
     // Resolve each registry entry to a hosting spec: the schema/data paths are derived PURELY from the
     // entry's id (AppPaths.SchemaPathForId/DataPathForId — instances/<id>/app.app + app-data.json),
     // never from the `app` name (which is carried through as a display label only). Distinct ids get
@@ -114,7 +147,8 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
                 AppPaths.SchemaPathForId(baseDir, e.Id),
                 AppPaths.DataPathForId(baseDir, e.Id),
                 e.AppPort,
-                e.InfraPort))
+                e.InfraPort,
+                e.DesignId))
             .ToList();
         EnsureNoCollisions(specs);
         return specs;

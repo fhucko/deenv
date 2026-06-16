@@ -553,6 +553,17 @@ function execDelete(codeCall: CodeCall, scope: ExecScope, context: ExecContext):
     return { type: "nothing" };
 }
 
+// sys.setDesign(schema, targetId): a SERVER-ONLY host action — the IDE's "Apply". Record (on the
+// target's registry entry) that it now runs the passed design AND deploy it (publish + the registry
+// write that makes the reference explicit). Like execPublish it stages NOTHING and only fires the
+// hostAction send-hook (the design as its id + the target id). Returns nothing; SSR/refetch no-ops it.
+function execSetDesign(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const schema = executeValue(codeCall.params[0], scope, context).value;
+    const targetId = executeValue(codeCall.params[1], scope, context).value;
+    sendHostAction("setDesign", [schemaIdArg(schema), targetId]);
+    return { type: "nothing" };
+}
+
 function collectionSysFunction(arr: ExecArray, method: string, context: ExecContext): ExecSysFunction {
     switch (method) {
         case "add": return { type: "sysFn", fn: args => { addToCollection(arr, args[0], context); return { type: "nothing" }; } };
@@ -737,6 +748,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "create": return execCreate(codeCall, scope, context);
         case "cloneInstance": return execCloneInstance(codeCall, scope, context);
         case "delete": return execDelete(codeCall, scope, context);
+        case "setDesign": return execSetDesign(codeCall, scope, context);
         case "nest": return execNest(codeCall, scope, context);
         case "segment": return execSegment(codeCall, scope, context);
         case "toInt": return execToInt(codeCall, scope, context);

@@ -1393,6 +1393,59 @@ storage, `RelativeApp`/`PathsEqual` matching, delete-refuses-boot, `sys.publish`
   (meets the bar). Deferred: named create (created instances default to label `"app"`); rename; a
   `system`/protected flag (the user chose uniform delete-on-all); the kernel+browser effect test.
 
+**Operator IDE restructure — design SELECTOR vs design EDITOR, + the explicit designId reference —
+landed 2026-06-16.** The IDE's instance page had grown into the whole designer (the type editor + code
+areas lived on `/instances/<id>`). The user was emphatic that surfaces be SEPARATE: the instance page
+is ONLY a design picker, the editor moves to its own `/designs` section. The split, and the explicit
+reference that replaced label-matching:
+
+- **Four routes, two libraries.** `/designs` = the design LIBRARY (list `db.designs`: label + Edit
+  `/designs/<id>` + Delete). `/designs/<designId>` = the design EDITOR (the moved `section.design-editor`
+  — type/prop editor + the three `ui`/`common`/`initialData` `<textarea>`s; **NO publish** — deploying
+  is the instance's concern), resolving the design by id with the no-`.first` idiom
+  (`foreach d in db.designs { if sys.id(d) == routeId { … } }`). `/instances` = the instances list
+  (`sys.instances`: app + its CURRENT design's label + Open + Clone + Delete). `/instances/<id>` = ONLY a
+  design SELECTOR (a `<select>` dropdown of `db.designs`, current pre-selected + Apply + Clone + Delete).
+  All hand-rolled in `instances/4/app.app`'s custom `fn render()` (still round-trip stable —
+  `AppPrintTests`); `sys.segment`/`sys.toInt`/`sys.id` do the routing.
+- **The instance↔design link is an EXPLICIT reference, not label-matching** (the user chose this). Each
+  registry entry gains `designId` (the id of a `Design` in the designer's `db.designs`): added to
+  `RegistryEntry` + committed `kernel.json` (instance→13, crm→27, shop→39 — the seeded design ids) +
+  `InstanceSpec` + `InstanceInfo`, so `sys.instances` rows expose `designId`. The dropdown reads it to
+  pre-select; the list shows the design's label by looking that id up in `db.designs`. It is one
+  optional int field (defaults to 0 = "no design", e.g. the designer itself), so every existing
+  `RegistryEntry`/`InstanceSpec`/`kernel.json` without it is unaffected. A STRUCTURAL kernel.json change,
+  approved by the user (explicit reference over name-matching: exact + rename-safe).
+- **Apply = `sys.setDesign(design, instanceId)`, a SIBLING host action** (not an extension of
+  `publish`). It is publish + the registry write: `KernelHostActions.SetDesign` projects the design
+  (validates first — an invalid design records nothing, writes nothing), then `recordDesign` (a new
+  kernel delegate → `KernelHost.SetDesign`) rewrites `kernel.json`'s `designId` AND refreshes
+  `LiveRegistry` (so the dropdown re-selects on the next render) AND updates the live `HostedInstance`
+  spec, then writes the projected doc + resets data. Kept publish a pure deploy; setDesign is the
+  "remember-which-design-then-deploy" the IDE's Apply needs. Server-only `ExecNothing` + the `hostAction`
+  hook + `BuiltinArities` in both twins + the validator (the "three places" guard), no conformance case
+  (an effect is outside the pure contract).
+- **`<select>` two-way binding — the one genuinely new rendering piece.** Symmetric to how `<textarea>`
+  was added. SSR (`SsrRenderer.SerializeTag`): a `<select value={x}>` does NOT emit `value` as an
+  attribute (not real HTML there); it threads `x` to its `<option>` children, and the option whose own
+  `value` equals `x` (lenient int/text scalar compare) gets `selected` — so the first paint pre-selects
+  WITHOUT JS, for any option, not just the first. Client (`ui.ts`): `refreshAttributes` skips `value` on
+  `<select>`; `syncSelectValue` sets `select.value` AFTER the options are reconciled (post-`updateChildren`
+  in `applyNode`, with the caret/no-op guard); `wireEvents` wires `onchange` (the select's commit event,
+  not `oninput`) → `value.setValue(coerceInputValue(select.value, …))` + re-render. The per-instance pick
+  is a component (`designSelector(instanceId, currentDesignId)`) keyed on those STABLE ints — NOT the
+  transient `sys.instances` row (rebuilt with a fresh id each render, so it can't key a component) — so
+  the init-once memo holds the picked state across renders.
+- **Deferred (follow-ups, NOT built here):** creating a NEW design (`/designs/new`) and a NEW instance
+  (`/instances/new` — pick a design + ports + `sys.create` + set `designId`); `/instances/new` stays the
+  current stub. After Apply the open selector page does not live-update its dropdown to the new designId
+  (the operator navigates) — the same live-VIEW-not-live-PUSH limit `sys.instances` already has, not the
+  real-time milestone.
+- Specced by the rewritten `Designer.feature` (6 scenarios through the kernel-backed Playwright fixture:
+  designs list + editor + instances list + selector pre-select + Apply-records-and-deploys + edit-then-
+  apply) + `HostAction.feature` (2 `setDesign` WS-seam scenarios) + a `Code.feature` SSR scenario (a
+  `<select>` marks a non-first option `selected`, and omits `value` on the `<select>`).
+
 ## The endgame database — the storage pillars' convergence path (north star)
 
 Captures a design discussion (2026-06-16) on the full storage endgame: the

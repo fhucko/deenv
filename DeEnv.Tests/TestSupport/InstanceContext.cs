@@ -412,16 +412,18 @@ public class InstanceContext
         // hosted by the kernel exactly as production would.
         WriteIdApp(dir, 4, File.ReadAllText(AppFixture(4)));
 
-        // Each target: a minimal valid bool app in its own id-dir. Its registry `app` label is what the
-        // IDE matches against a seeded design's label, so a publish/edit resolves the right design.
+        // Each target references its seeded design by an EXPLICIT designId — the id of the design in the
+        // committed designer seed whose label matches the target's label. Resolved from the designer's
+        // initialData (the seed) so the dropdowns start correct and the instances list shows the design.
+        var designIds = DesignIdsByLabel();
         var entries = new List<string>
         {
-            RegistryEntryJson(4, "designer", FreePort(), FreePort()),
+            RegistryEntryJson(4, "designer", FreePort(), FreePort(), 0),
         };
         foreach (var (id, label) in targets)
         {
             WriteIdApp(dir, id, TargetBoolApp);
-            entries.Add(RegistryEntryJson(id, label, FreePort(), FreePort()));
+            entries.Add(RegistryEntryJson(id, label, FreePort(), FreePort(), designIds[label]));
         }
 
         File.WriteAllText(Path.Combine(dir, "kernel.json"),
@@ -460,8 +462,28 @@ public class InstanceContext
         File.WriteAllText(Path.Combine(idDir, "app.app"), appDoc);
     }
 
-    private static string RegistryEntryJson(int id, string label, int appPort, int infraPort) =>
-        $"{{ \"id\": {id}, \"app\": \"{label}\", \"appPort\": {appPort}, \"infraPort\": {infraPort} }}";
+    private static string RegistryEntryJson(int id, string label, int appPort, int infraPort, int designId) =>
+        $"{{ \"id\": {id}, \"app\": \"{label}\", \"appPort\": {appPort}, \"infraPort\": {infraPort}, \"designId\": {designId} }}";
+
+    // The seeded design id for a label (e.g. "crm") — so a step can assert an instance now records that
+    // design's id after Apply. Reads the same committed designer seed the fixture seeds designIds from.
+    public int DesignIdForLabel(string label) => DesignIdsByLabel()[label];
+
+    // Map each seeded design's label → its id, read from the committed designer seed (instances/4's
+    // initialData). The IDE's instance↔design link is the explicit designId, so a target labelled
+    // "instance" gets the id of the design labelled "instance" — making its dropdown pre-select and its
+    // instances-list row resolve to that design.
+    private static Dictionary<string, int> DesignIdsByLabel()
+    {
+        var designer = InstanceDescriptionLoader.LoadFile(AppFixture(4));
+        var designs = designer.InitialData?.Extents?.GetValueOrDefault("Design")
+            ?? throw new InvalidOperationException("The designer seed has no Design extent.");
+        var map = new Dictionary<string, int>();
+        foreach (var (key, env) in designs)
+            if (env.TryGetProperty("label", out var label) && label.ValueKind == System.Text.Json.JsonValueKind.String)
+                map[label.GetString()!] = int.Parse(key);
+        return map;
+    }
 
     // Grab a free TCP port by binding to :0, reading the assigned port, then releasing it — the same
     // approach KernelSteps/TestInstanceServer use for their in-process hosts.

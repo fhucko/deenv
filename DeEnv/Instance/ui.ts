@@ -113,6 +113,10 @@ function applyNode(node: ChildNode, child: ExecValue): void {
         if (child.key != null) el.setAttribute("data-key", String(child.key));
         refreshAttributes(el, child);
         updateChildren(el, child.children);
+        // A <select>'s bound value selects the matching <option>, set AFTER its options exist
+        // (updateChildren above builds them) — the client half of <select> binding, symmetric to
+        // the SSR `selected` marking. .value selects by the option's value attribute.
+        syncSelectValue(el, child);
         wireEvents(el, child);
     } else if (child.type === "text") {
         node.textContent = child.value;
@@ -146,6 +150,9 @@ function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
             if (tag.name === "input") { el.setAttribute("value", text); want.add("value"); }
             continue;
         }
+        // A <select>'s `value` is not a real attribute (it drives option-selected); it is applied to
+        // the .value property in syncSelectValue, AFTER the options exist — so skip it here.
+        if (tag.name === "select" && name === "value") continue;
         if (raw == null || raw === false) { el.removeAttribute(name); continue; }
         el.setAttribute(name, raw === true ? "" : String(raw));
         want.add(name);
@@ -165,6 +172,20 @@ function coerceInputValue(raw: string, current: ExecValue | undefined): ExecValu
     return { type: "text", value: raw };
 }
 
+// A <select>'s bound value reflected onto its .value property (which selects the matching <option>),
+// the client twin of the SSR `selected` marking. Set after the options are reconciled (applyNode
+// calls this post-updateChildren). The no-op guard mirrors the input/textarea one — only assign when
+// it differs, so an open dropdown / repeated render is never disturbed.
+function syncSelectValue(el: HTMLElement, tag: ExecTag): void {
+    if (tag.name !== "select") return;
+    const value = tag.attributes["value"];
+    if (value == null) return;
+    const v = value.value;
+    if (v.type === "fn" || v.type === "sysFn" || v.type === "object" || v.type === "array") return;
+    const text = v.type === "null" ? "" : String((v as ExecInt | ExecBool | ExecText).value);
+    if ((el as HTMLSelectElement).value !== text) (el as HTMLSelectElement).value = text;
+}
+
 // Two-way binding + click handlers. A bound value/checked attribute whose result
 // carries a setValue closure writes back to the model and re-renders.
 function wireEvents(el: HTMLElement, tag: ExecTag): void {
@@ -181,6 +202,18 @@ function wireEvents(el: HTMLElement, tag: ExecTag): void {
         };
     } else {
         (el as HTMLInputElement).oninput = null;
+    }
+
+    // Two-way binding for <select>: a change picks a new option, so write the chosen value back
+    // (coerced to the bound var's type, like an input — option values are always DOM strings) and
+    // re-render. onchange (not oninput) is the select's commit event.
+    if (tag.name === "select" && value?.setValue) {
+        (el as HTMLSelectElement).onchange = () => {
+            value.setValue(coerceInputValue((el as HTMLSelectElement).value, value.value));
+            renderUi();
+        };
+    } else if (tag.name === "select") {
+        (el as HTMLSelectElement).onchange = null;
     }
 
     const onClick = tag.attributes["onClick"]?.value;

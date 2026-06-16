@@ -134,3 +134,32 @@ Feature: Code-owned UI rendering (server-side)
     And the page does not include "999"
     And the page does not include "Bob"
 
+  # A <select value={x}> marks the <option> whose value equals x as `selected` — and `value`
+  # is NOT emitted on the <select> itself (it is not real HTML there; it drives the selection).
+  # The bound value is a NON-first option (the 2nd), so this proves the SSR selection is driven
+  # by the value, not by the browser's default-first behaviour.
+  @milestone-code @single-user
+  Scenario: A select binds the matching option as selected on first paint
+    Given the code instance:
+      """
+      types
+          Db
+              ready: bool
+
+      ui
+          var chosen = "g"
+
+          fn render()
+              return <select class="pick" value={chosen}>
+                  <option value="r">
+                      "Red"
+                  <option value="g">
+                      "Green"
+                  <option value="b">
+                      "Blue"
+      """
+    When the page at "/" is rendered
+    Then the rendered HTML contains '<option value="g" selected>'
+    And the rendered HTML does not contain '<option value="r" selected>'
+    And the rendered HTML does not contain '<select class="pick" value='
+

@@ -17,6 +17,10 @@ namespace DeEnv.Kernel;
 //   • cloneInstance(sourceId, appPort, infraPort) — copy an existing instance's app doc AND data
 //     into a NEW instance on the given ports, via the kernel clone delegate.
 //   • delete(targetId) — remove an existing instance, via the kernel delete delegate.
+//   • setDesign(design, targetId) — record (on the target's registry entry) that it now runs the
+//     passed design, AND deploy it onto the target — the IDE's "Apply" (remember-then-publish). It is
+//     publish + the registry write: the registry write half (via the kernel recordDesign delegate)
+//     makes the reference explicit so the dropdown can pre-select it later.
 // The kernel constructs one of these per instance and threads it into WsHandler, so an action acts
 // with the CALLING instance's own data as the design source (its data is the IDE holding the set of
 // Designs it edits). A publish/create RESOLVES the passed design's id → its Design subtree in the
@@ -30,7 +34,8 @@ public sealed class KernelHostActions(
     Func<int, InstanceSpec?> resolveTarget,
     Func<string, int, int, Task> createInstance,
     Func<int, Task> deleteInstance,
-    Func<int, int, int, Task> cloneInstance) : IHostActions
+    Func<int, int, int, Task> cloneInstance,
+    Func<int, int, Task> recordDesign) : IHostActions
 {
     public void Run(string action, JsonElement args)
     {
@@ -40,6 +45,7 @@ public sealed class KernelHostActions(
             case "create": Create(args); break;
             case "cloneInstance": Clone(args); break;
             case "delete": Delete(args); break;
+            case "setDesign": SetDesign(args); break;
             default:
                 throw new InvalidOperationException($"Unknown host action '{action}'.");
         }
@@ -60,6 +66,27 @@ public sealed class KernelHostActions(
                 $"No instance with id {targetId} to publish to.");
 
         var appDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
+        SchemaBridge.WriteDocument(appDoc, target.SchemaPath, target.DataPath);
+    }
+
+    // setDesign(design, targetId): the IDE's "Apply" — record (in the registry) that the target now runs
+    // the passed design AND deploy it. arg 0 is the design object's id (a member of the caller's
+    // `db.designs`, resolved against the caller's store), arg 1 the target instance id. Project FIRST so
+    // an invalid design throws before any registry write or document overwrite (records nothing, writes
+    // nothing); then record the reference (the kernel rewrites kernel.json's designId + refreshes the live
+    // view); then write the projected doc + reset the target's data — exactly Publish, with the registry
+    // write in front. An unknown target id is rejected before any work. No migration on reset (that is M11).
+    private void SetDesign(JsonElement args)
+    {
+        var designId = ArgInt(args, 0);
+        var targetId = ArgInt(args, 1);
+        var design = ResolveDesign(designId);
+        var target = resolveTarget(targetId)
+            ?? throw new InvalidOperationException(
+                $"No instance with id {targetId} to set a design on.");
+
+        var appDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
+        recordDesign(targetId, designId).GetAwaiter().GetResult();
         SchemaBridge.WriteDocument(appDoc, target.SchemaPath, target.DataPath);
     }
 

@@ -210,32 +210,27 @@ ui
     fn addProp(type)
         type.props.add({ name: "", type: "text", cardinality: "", keyType: "", order: 0 })
 
-    fn listPage()
-        return <main class="ide-list">
-            <h1>
+    fn nav()
+        return <nav class="ide-nav">
+            <a class="nav-instances" href="/instances">
                 "Instances"
-            <a class="new-instance" href="/instances/new">
-                "New instance"
-            foreach i in sys.instances
-                <div class="instance-row">
-                    <span class="instance-app">
-                        i.app
-                    <span class="instance-port">
-                        i.port
-                    foreach d in db.designs
-                        if d.label == i.app
-                            <span class="design-label">
-                                d.label
-                            <a class="edit-instance" href={sys.nest("/instances", i.id)}>
-                                "Edit"
-                            <button class="publish-instance" onClick={() => sys.publish(d, i.id)}>
-                                "Publish"
-                    <button class="clone-instance" onClick={() => sys.cloneInstance(i.id, newAppPort, newInfraPort)}>
-                        "Clone"
-                    <button class="delete-instance" onClick={() => sys.delete(i.id)}>
+            <a class="nav-designs" href="/designs">
+                "Designs"
+
+    fn designsListPage()
+        return <main class="ide-designs">
+            <h1>
+                "Designs"
+            foreach d in db.designs
+                <div class="design-row">
+                    <span class="design-label">
+                        d.label
+                    <a class="edit-design" href={sys.nest("/designs", sys.id(d))}>
+                        "Edit"
+                    <button class="delete-design" onClick={() => db.designs.remove(d)}>
                         "Delete"
 
-    fn designEditor(design, instance)
+    fn designEditor(design)
         return <section class="design-editor">
             <h2 class="design-label">
                 design.label
@@ -264,21 +259,71 @@ ui
             <label class="initial-label">
                 "Initial data"
             <textarea class="design-initial" value={sys.field(design, "initialData")}>
-            <button class="publish-design" onClick={() => sys.publish(design, instance.id)}>
-                "Publish"
 
-    fn editPage()
+    fn designEditorPage()
         var routeId = sys.toInt(sys.segment(path, 2))
-        return <main class="ide-edit">
+        return <main class="ide-design-edit">
             <h1>
-                "Edit instance"
+                "Edit design"
+            <a class="back" href="/designs">
+                "Back"
+            foreach d in db.designs
+                if sys.id(d) == routeId
+                    designEditor(d)
+
+    fn instancesListPage()
+        return <main class="ide-list">
+            <h1>
+                "Instances"
+            <a class="new-instance" href="/instances/new">
+                "New instance"
+            foreach i in sys.instances
+                <div class="instance-row">
+                    <span class="instance-app">
+                        i.app
+                    <span class="instance-port">
+                        i.port
+                    foreach d in db.designs
+                        if sys.id(d) == i.designId
+                            <span class="design-label">
+                                d.label
+                    <a class="open-instance" href={sys.nest("/instances", i.id)}>
+                        "Open"
+                    <button class="clone-instance" onClick={() => sys.cloneInstance(i.id, newAppPort, newInfraPort)}>
+                        "Clone"
+                    <button class="delete-instance" onClick={() => sys.delete(i.id)}>
+                        "Delete"
+
+    fn designSelector(instanceId, currentDesignId)
+        var state = { pick: currentDesignId }
+        fn render()
+            return <div class="design-selector">
+                <select class="design-pick" value={state.pick}>
+                    foreach d in db.designs
+                        <option value={sys.id(d)}>
+                            d.label
+                foreach d in db.designs
+                    if sys.id(d) == state.pick
+                        <button class="apply-design" onClick={() => sys.setDesign(d, instanceId)}>
+                            "Apply"
+        return render
+
+    fn instanceSelectorPage()
+        var routeId = sys.toInt(sys.segment(path, 2))
+        return <main class="ide-instance">
+            <h1>
+                "Instance"
             <a class="back" href="/instances">
                 "Back"
             foreach i in sys.instances
                 if i.id == routeId
-                    foreach d in db.designs
-                        if d.label == i.app
-                            designEditor(d, i)
+                    <span class="instance-app">
+                        i.app
+                    designSelector(i.id, i.designId)()
+                    <button class="clone-instance" onClick={() => sys.cloneInstance(i.id, newAppPort, newInfraPort)}>
+                        "Clone"
+                    <button class="delete-instance" onClick={() => sys.delete(i.id)}>
+                        "Delete"
 
     fn newPage()
         return <main class="ide-new">
@@ -291,12 +336,20 @@ ui
 
     fn render()
         var page
-        var seg = sys.segment(path, 2)
-        if seg == "new"
-            page = newPage
-        else if seg == ""
-            page = listPage
+        var section = sys.segment(path, 1)
+        var sub = sys.segment(path, 2)
+        if section == "designs"
+            if sub == ""
+                page = designsListPage
+            else
+                page = designEditorPage
         else
-            page = editPage
+            if sub == "new"
+                page = newPage
+            else if sub == ""
+                page = instancesListPage
+            else
+                page = instanceSelectorPage
         return <div class="ide">
+            nav()
             page()

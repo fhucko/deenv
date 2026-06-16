@@ -18,12 +18,17 @@ namespace DeEnv.Http;
 // There is no `Created`/boot distinction: storage is fully id-based, and clone/delete/publish all
 // work on ANY instance by its id, so the surface renders those actions on every row uniformly.
 //
+// `DesignId` is the explicit reference to which IDE design this instance currently runs (0 = none),
+// carried from the registry so the operator IDE can pre-select that design in the /instances/<id>
+// dropdown and show its label in the instances list. It is the id of a `Design` in the designer's own
+// data — a non-sensitive handle like `Id`, not a file path.
+//
 // PRIVACY: keep this projection free of anything sensitive. Registry rows render as transient
 // objects, and ClientState ships a transient's props in FULL to every client that renders the
 // list — there is no per-prop gating here. So the "expose the contended external binding (ports),
 // hide internal identity (storage)" line (DECISIONS "`create` direction") must be drawn AT this
 // projection, never relied on at the render. The id is a non-sensitive handle (not a file path).
-public sealed record InstanceInfo(int Id, string App, int Port, int AssetsPort);
+public sealed record InstanceInfo(int Id, string App, int Port, int AssetsPort, int DesignId = 0);
 
 // A live cell holding the kernel's current instance registry. The WRITER is the kernel (it swaps
 // `.Current` whenever the hosted set changes); the READERS are every hosted instance's renderer (they

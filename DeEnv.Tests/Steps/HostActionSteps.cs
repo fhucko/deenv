@@ -99,6 +99,13 @@ public sealed class HostActionSteps
     private int _clonedInfraPort;
     private bool _cloneInvoked;
 
+    // What the fake recordDesign delegate recorded — the (targetId, designId) the kernel was asked to
+    // record on the registry — so a setDesign scenario can assert the registry-write half ran with the
+    // right reference (the deploy half is a real file write, asserted on the target document).
+    private int _recordedTargetId;
+    private int _recordedDesignId;
+    private bool _recordInvoked;
+
     private string _reply = "";
 
     // ── Given: a designer instance holding a design ─────────────────────────────
@@ -185,6 +192,14 @@ public sealed class HostActionSteps
         _reply = Ws().ProcessMessage(
             $$"""{ "op": "hostAction", "action": "create", "args": [ { "type": "int", "value": {{designId}} }, { "type": "int", "value": {{appPort}} }, { "type": "int", "value": {{infraPort}} } ] }""");
 
+    // setDesign(design, targetId): the IDE's Apply — arg 0 the design object's id, arg 1 the target id.
+    // The real KernelHostActions both records the reference (the fake recordDesign captures it) AND
+    // writes the projected document onto the target (a real file write, like publish).
+    [When("the operator applies that design to the target's id over the WS")]
+    public void WhenApplyDesignToTarget() =>
+        _reply = Ws().ProcessMessage(
+            $$"""{ "op": "hostAction", "action": "setDesign", "args": [ { "type": "int", "value": {{_designId}} }, { "type": "int", "value": {{TargetId}} } ] }""");
+
     // The designer's WsHandler with a real KernelHostActions: it acts as the designer (its own
     // meta+data are the IDE it projects from), resolves ONLY TargetId → the target spec, and its
     // create/delete/clone delegates RECORD what they were asked to do instead of driving a real kernel.
@@ -218,6 +233,13 @@ public sealed class HostActionSteps
                 _clonedAppPort = appPort;
                 _clonedInfraPort = infraPort;
                 _cloneInvoked = true;
+                return Task.CompletedTask;
+            },
+            recordDesign: (targetId, designId) =>
+            {
+                _recordedTargetId = targetId;
+                _recordedDesignId = designId;
+                _recordInvoked = true;
                 return Task.CompletedTask;
             });
         // _designer/_meta are guaranteed set above (a Given, or the lazy OpenDesigner here).
@@ -326,6 +348,14 @@ public sealed class HostActionSteps
         await Assert.That(_clonedSourceId).IsEqualTo(sourceId);
         await Assert.That(_clonedAppPort).IsEqualTo(appPort);
         await Assert.That(_clonedInfraPort).IsEqualTo(infraPort);
+    }
+
+    [Then("the kernel was asked to record that design on the target's id")]
+    public async Task ThenAskedToRecordDesign()
+    {
+        await Assert.That(_recordInvoked).IsTrue();
+        await Assert.That(_recordedTargetId).IsEqualTo(TargetId);
+        await Assert.That(_recordedDesignId).IsEqualTo(_designId);
     }
 
     // ── teardown ────────────────────────────────────────────────────────────────
