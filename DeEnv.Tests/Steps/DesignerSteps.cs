@@ -333,7 +333,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task ThenTargetDeclares(string label, string declaration)
     {
         // Apply deployed the projected app document; assert it contains the given prop declaration
-        // (e.g. "checked: set of TodoList" / "text: dict of text by text") -- the canonical AppPrint
+        // (e.g. "checked set of TodoList" / "text dict of text by text") -- the canonical AppPrint
         // form of a collection-shaped prop, proving cardinality + key type flowed through projection.
         // Wide window: the deploy projects the WHOLE app + resets data, run under peak full-suite load.
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);

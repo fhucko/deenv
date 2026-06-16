@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using DeEnv.Kernel;
 using DeEnv.Storage;
@@ -19,7 +19,7 @@ public sealed class KernelSteps(InstanceContext ctx)
     private const string BoolApp = """
     types
         Db
-            ready: bool
+            ready bool
     """;
 
     // A fully-custom app that renders the kernel's `sys.instances` global — the read-only list of
@@ -29,7 +29,7 @@ public sealed class KernelSteps(InstanceContext ctx)
     private const string ConsoleApp = """
     types
         Db
-            name: text
+            name text
 
     ui
         fn render()

@@ -33,7 +33,8 @@ public static class AppParse
 
     // ── types ────────────────────────────────────────────────────────────────────
 
-    // `name: type` / `name: set of Type` / `name: dict of Type by key`, `?` = nullable.
+    // `name type` / `name set of Type` / `name dict of Type by key`, `?` = nullable (no colon —
+    // the name and its type are separated by whitespace; see Prop).
     private static Parser<Func<string, PropDefinition>> PropType => OneOf(
         Seq(Text("set"), Ws1, Text("of"), Ws1, Name,
             (_, _, _, _, elem) => (Func<string, PropDefinition>)(name =>
@@ -46,25 +47,28 @@ public static class AppParse
             (type, nullable) => (Func<string, PropDefinition>)(name =>
                 new PropDefinition(name, type, Cardinality.Single, Nullable: nullable != null))));
 
+    // A prop is `name <type>` — the name and its type separated by whitespace, no colon.
     private static Parser<PropDefinition> Prop =>
-        Seq(Name, Ws0, Text(":"), Ws0, PropType, (name, _, _, _, make) => make(name));
+        Seq(Name, Ws1, PropType, (name, _, make) => make(name));
 
     // A type declaration is one of three forms, discriminated by what follows the name — NOT by
     // the order of these alternatives (the parser is non-deterministic: `Parse.Run` enumerates all
-    // parses and returns the unique one that consumes the whole document). The forms are made
-    // mutually exclusive at the token, so at most one ever matches:
-    //   • `Name: enum` + an indented bare value-name list  → an enum type.
-    //   • `Name: <baseType>` where baseType is any name EXCEPT the reserved `enum` keyword (the
-    //     Filter) → a leaf alias. The Filter is what keeps it from also matching `: enum`, so the
+    // parses and returns the unique one that consumes the whole document). No colon anywhere; the
+    // forms are mutually exclusive at the token, so at most one ever matches:
+    //   • `Name enum` + an indented bare value-name list  → an enum type.
+    //   • `Name <baseType>` where baseType is any name EXCEPT the reserved `enum` keyword (the
+    //     Filter) → a leaf alias. The Filter keeps it from also matching `Name enum`, so the
     //     enum-vs-leaf choice does not hinge on which alternative is listed first.
-    //   • `Name` then indented props (no colon) → an object type.
+    //   • `Name` then a newline + indented props → an object type. Distinguished from the other two
+    //     by having NO second token on the line (`Ws1` is space/tab only, never the newline), so a
+    //     bare `Db` never matches the leaf/enum forms.
     private static IndentedParser<TypeDefinition> TypeEntry => indent => OneOf(
-        Seq(Name, Ws0, Text(":"), Ws0, Text("enum"), NlOrEnd,
+        Seq(Name, Ws1, Text("enum"), NlOrEnd,
             IndentLookahead(indent, Ws1, valueIndent =>
                 Many1(Seq(Text(valueIndent), Name, NlOrEnd, (_, v, _) => v).SkipEmptyLinesBefore())),
-            (name, _, _, _, _, _, values) => new TypeDefinition(name, BaseType.Enum, Props: null, Values: values)),
-        Seq(Name, Ws0, Text(":"), Ws0, Name.Filter(baseName => baseName != "enum"), NlOrEnd,
-            (name, _, _, _, baseName, _) => LeafType(name, baseName)),
+            (name, _, _, _, values) => new TypeDefinition(name, BaseType.Enum, Props: null, Values: values)),
+        Seq(Name, Ws1, Name.Filter(baseName => baseName != "enum"), NlOrEnd,
+            (name, _, baseName, _) => LeafType(name, baseName)),
         Seq(Name, NlOrEnd,
             IndentLookahead(indent, Ws1, propIndent =>
                 Many1(Seq(Text(propIndent), Prop, NlOrEnd, (_, p, _) => p).SkipEmptyLinesBefore())),

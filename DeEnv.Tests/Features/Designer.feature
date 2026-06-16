@@ -116,5 +116,5 @@ Feature: The operator IDE (designs library + instance design selector)
     And I set the prop "text" key type to "text"
     When I open the instance "instance"
     And I apply the design
-    Then the "instance" instance's app document declares "checked: set of TodoList"
-    And the "instance" instance's app document declares "text: dict of text by text"
+    Then the "instance" instance's app document declares "checked set of TodoList"
+    And the "instance" instance's app document declares "text dict of text by text"

@@ -1,4 +1,4 @@
-using DeEnv.Designer;
+﻿using DeEnv.Designer;
 using DeEnv.Instance;
 using DeEnv.Storage;
 using DeEnv.Tests.TestSupport;
@@ -26,18 +26,18 @@ public sealed class BridgeSteps(InstanceContext ctx)
         """
         types
             Db
-                types: set of MetaType
+                types set of MetaType
             MetaType
-                name: text
-                baseType: text
-                order: int
-                props: set of MetaProp
+                name text
+                baseType text
+                order int
+                props set of MetaProp
             MetaProp
-                name: text
-                type: text
-                cardinality: text
-                keyType: text
-                order: int
+                name text
+                type text
+                cardinality text
+                keyType text
+                order int
         """;
 
     // The per-scenario temp path the test-local meta-schema is written to (set by GivenDesignerInstance

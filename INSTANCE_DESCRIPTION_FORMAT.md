@@ -26,26 +26,35 @@ generic auto-form serves the instance.
 ```
 types
     Db
-        users: set of User
-        settings: dict of text by text
-        lead: User
+        users set of User
+        settings dict of text by text
+        lead User
     User
-        name: text
-        boss: User?
-    Flag: bool
+        name text
+        boss User?
+        status Status
+    Status enum
+        active
+        suspended
+    Flag bool
 ```
 
+- **No colons in the `types` section** — a declaration is `name thing` (the name
+  and what it is, separated by a space). The colon was dropped (it added nothing).
 - An **object type** is a name with indented props; a **leaf alias** is
-  `Name: baseType` (one of `bool`, `int`, `decimal`, `text`, `date`,
-  `datetime`).
-- A prop is `name: type` — a base type or another type's name (a single
-  object-typed prop *is* a reference). `set of X` declares a set (X must be an
-  object type; members are keyed by their own identity). `dict of X by key`
-  declares a dictionary (`by key` optional, default `text`). A trailing `?`
-  marks the prop nullable.
+  `Name baseType` (one of `bool`, `int`, `decimal`, `text`, `date`, `datetime`);
+  an **enum type** is `Name enum` then an indented list of its bare value names.
+- A prop is `name type` — a base type, an enum type, or another type's name (a
+  single object-typed prop *is* a reference). `set of X` declares a set (X must be
+  an object type; members are keyed by their own identity). `dict of X by key`
+  declares a dictionary (`by key` optional, default `text`). A trailing `?` marks
+  the prop nullable.
+- An **enum-typed prop** is a scalar: its value is one of the enum's value names
+  (stored as that name, unset = empty). The generic UI renders it as a `<select>`
+  whose options are the values, displayed humanized (`inProgress` → "In Progress").
 - The root type **`Db`** must exist and must be an **object** type (it holds the
   app's data — props: scalars, references, sets, dictionaries); it is implicitly
-  single and non-null. A base-typed root (e.g. `Db: bool`) is rejected at load.
+  single and non-null. A base-typed root (e.g. `Db bool`) is rejected at load.
 
 ## initialData
 

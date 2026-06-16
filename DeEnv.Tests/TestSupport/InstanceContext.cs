@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using DeEnv.Instance;
 using DeEnv.Kernel;
@@ -31,17 +31,17 @@ public class InstanceContext
         InstanceDescriptionLoader.Load("""
         types
             Db
-                ready: bool
+                ready bool
         """);
 
     public static InstanceDescription ShopDb() =>
         InstanceDescriptionLoader.Load("""
         types
             Db
-                customers: dict of Customer by text
+                customers dict of Customer by text
             Customer
-                name: text
-                active: bool
+                name text
+                active bool
         """);
 
     // Milestone 5 object-graph instance: one extent type (Person), a set of
@@ -52,10 +52,10 @@ public class InstanceContext
         InstanceDescriptionLoader.Load("""
         types
             Db
-                people: set of Person
-                lead: Person
+                people set of Person
+                lead Person
             Person
-                name: text
+                name text
         """);
 
     // Milestone 2 CRM-with-orders instance: objects, nested dictionaries, every base type. A
@@ -94,12 +94,12 @@ public class InstanceContext
     private const string SelfHostedFormApp = """
     types
         Db
-            notes: set of Note
+            notes set of Note
         Note
-            title: text
-            done: bool
-            count: int
-            dueDate: date
+            title text
+            done bool
+            count int
+            dueDate date
 
     initialData
         Db 1
@@ -122,15 +122,15 @@ public class InstanceContext
 
     public const string EnumFixtureApp = """
     types
-        OrderStatus: enum
+        OrderStatus enum
             pending
             shipped
             delivered
         Db
-            orders: set of Order
+            orders set of Order
         Order
-            label: text
-            status: OrderStatus
+            label text
+            status OrderStatus
 
     initialData
         Db 1
@@ -151,9 +151,9 @@ public class InstanceContext
     private const string SelfHostedDictApp = """
     types
         Db
-            settings: dict of Setting by text
+            settings dict of Setting by text
         Setting
-            value: text
+            value text
 
     initialData
         Db 1
@@ -168,7 +168,7 @@ public class InstanceContext
     private const string SelfHostedScalarDictApp = """
     types
         Db
-            settings: dict of text by text
+            settings dict of text by text
 
     initialData
         Db 1
@@ -184,14 +184,14 @@ public class InstanceContext
     private const string SelfHostedRefApp = """
     types
         Db
-            people: set of Person
-            lead: Person
-            notes: set of Note
+            people set of Person
+            lead Person
+            notes set of Note
         Person
-            name: text
+            name text
         Note
-            title: text
-            author: Person
+            title text
+            author Person
 
     initialData
         Db 1
@@ -214,11 +214,11 @@ public class InstanceContext
     private const string TasksUiApp = """
     types
         Db
-            tasks: set of Task
+            tasks set of Task
         Task
-            title: text
-            done: bool
-            priority: int
+            title text
+            done bool
+            priority int
 
     ui
         var title = "Tasks"
@@ -253,9 +253,9 @@ public class InstanceContext
     private const string InteractiveUiApp = """
     types
         Db
-            items: set of Item
+            items set of Item
         Item
-            name: text
+            name text
 
     ui
         var newName = ""
@@ -285,10 +285,10 @@ public class InstanceContext
     private const string SensitiveUiApp = """
     types
         Db
-            people: set of Person
+            people set of Person
         Person
-            name: text
-            salary: int
+            name text
+            salary int
 
     common
         fn highEarners(people)
@@ -316,10 +316,10 @@ public class InstanceContext
     private const string RefetchUiApp = """
     types
         Db
-            people: set of Person
+            people set of Person
         Person
-            name: text
-            salary: int
+            name text
+            salary int
 
     ui
 
@@ -348,9 +348,9 @@ public class InstanceContext
     private const string ComponentFormApp = """
     types
         Db
-            notes: set of Note
+            notes set of Note
         Note
-            title: text
+            title text
 
     ui
 
@@ -483,7 +483,7 @@ public class InstanceContext
     private const string TargetBoolApp = """
     types
         Db
-            ready: bool
+            ready bool
     """;
 
     private static void WriteIdApp(string dir, int id, string appDoc)

@@ -1,4 +1,4 @@
-using DeEnv.Http;
+﻿using DeEnv.Http;
 using DeEnv.Instance;
 using DeEnv.Kernel;
 using DeEnv.Storage;
@@ -35,24 +35,24 @@ public sealed class HostActionSteps
         """
         types
             Db
-                designs: set of Design
+                designs set of Design
             Design
-                label: text
-                initialData: text
-                common: text
-                ui: text
-                types: set of MetaType
+                label text
+                initialData text
+                common text
+                ui text
+                types set of MetaType
             MetaType
-                name: text
-                baseType: text
-                order: int
-                props: set of MetaProp
+                name text
+                baseType text
+                order int
+                props set of MetaProp
             MetaProp
-                name: text
-                type: text
-                cardinality: text
-                keyType: text
-                order: int
+                name text
+                type text
+                cardinality text
+                keyType text
+                order int
         """;
 
     // A custom render section authored into a design's `ui` text field — verbatim section source

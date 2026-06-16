@@ -1,23 +1,23 @@
-types
+﻿types
     Db
-        designs: set of Design
+        designs set of Design
     Design
-        label: text
-        initialData: text
-        common: text
-        ui: text
-        types: set of MetaType
+        label text
+        initialData text
+        common text
+        ui text
+        types set of MetaType
     MetaType
-        name: text
-        baseType: text
-        order: int
-        props: set of MetaProp
+        name text
+        baseType text
+        order int
+        props set of MetaProp
     MetaProp
-        name: text
-        type: text
-        cardinality: text
-        keyType: text
-        order: int
+        name text
+        type text
+        cardinality text
+        keyType text
+        order int
 
 initialData
     MetaProp 2

@@ -1,4 +1,4 @@
-using DeEnv.Code;
+﻿using DeEnv.Code;
 using DeEnv.Instance;
 using DeEnv.Storage;
 using TUnit.Assertions;
@@ -195,9 +195,9 @@ public sealed class CodeExecutorTests
         var desc = InstanceDescriptionLoader.Load("""
         types
             Db
-                users: set of User
+                users set of User
             User
-                name: text
+                name text
         """);
         var dataPath = Path.GetTempFileName();
         var store = new JsonFileInstanceStore(dataPath, desc);

@@ -1,4 +1,4 @@
-Feature: Stored data matches the running app
+﻿Feature: Stored data matches the running app
   Each app document owns its own data file, derived from the app file's name, so
   switching apps never mixes data. On startup the store validates an existing
   data file against the running app's types and REFUSES to start on a mismatch —
@@ -27,9 +27,9 @@ Feature: Stored data matches the running app
       """
       types
           Db
-              users: set of User
+              users set of User
           User
-              name: text
+              name text
       """
     And a stored data file containing:
       """
@@ -52,7 +52,7 @@ Feature: Stored data matches the running app
       """
       types
           Db
-              name: text
+              name text
       """
     And a stored data file containing:
       """
@@ -75,9 +75,9 @@ Feature: Stored data matches the running app
       """
       types
           Db
-              users: set of User
+              users set of User
           User
-              name: text
+              name text
       """
     And a stored data file containing:
       """
@@ -99,7 +99,7 @@ Feature: Stored data matches the running app
       """
       types
           Db
-              count: int
+              count int
       """
     And a stored data file containing:
       """
@@ -121,9 +121,9 @@ Feature: Stored data matches the running app
       """
       types
           Db
-              users: set of User
+              users set of User
           User
-              name: text
+              name text
       """
     And a stored data file containing:
       """
@@ -144,9 +144,9 @@ Feature: Stored data matches the running app
       """
       types
           Db
-              users: set of User
+              users set of User
           User
-              name: text
+              name text
       """
     And a stored data file containing:
       """
@@ -169,7 +169,7 @@ Feature: Stored data matches the running app
       """
       types
           Db
-              name: text
+              name text
       """
     And a stored data file containing:
       """
@@ -193,9 +193,9 @@ Feature: Stored data matches the running app
       """
       types
           Db
-              users: set of User
+              users set of User
           User
-              name: text
+              name text
 
       initialData
           Db 1
@@ -214,8 +214,8 @@ Feature: Stored data matches the running app
       """
       types
           Db
-              name: text
-              motto: text
+              name text
+              motto text
       """
     And a stored data file containing:
       """

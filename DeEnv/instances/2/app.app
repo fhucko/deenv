@@ -1,15 +1,15 @@
-types
+﻿types
     Db
-        users: set of User
+        users set of User
     User
-        name: text
-        todoLists: set of TodoList
+        name text
+        todoLists set of TodoList
     TodoList
-        name: text
-        items: set of TodoItem
+        name text
+        items set of TodoItem
     TodoItem
-        text: text
-        checked: bool
+        text text
+        checked bool
 
 initialData
     Db 1

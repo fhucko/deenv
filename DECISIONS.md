@@ -1641,8 +1641,27 @@ print → store → validate → generic-UI `<select>` → WS persist).
   (2) convert the designer's own free-text-that-are-really-enums (`cardinality`/`baseType`/`keyType`) into
   enum props and DELETE the hand-rolled cardinality `<select>` — the dogfood. Deferred features (YAGNI): int-
   backed/renamable members (renaming wants M5 identity + the M11 diff), enum dict-keys, per-value labels.
-- Doc follow-up: `INSTANCE_DESCRIPTION_FORMAT.md` doesn't yet document `enum` — deferred until after the
-  pending "drop the colon from type declarations" change, so the format ref records the final syntax once.
+- Doc follow-up: `INSTANCE_DESCRIPTION_FORMAT.md` records `enum` as of the colon-removal change below
+  (deferred until then so it captured the final syntax once).
+
+**Colon dropped from the `types` section — landed 2026-06-16.** The user: the colon in a type declaration
+"has no added value." So the `types` section is now colon-free and uniform — `name type` (props),
+`Name enum` + indented values, `Foo text` (leaf alias); object headers were already bare. **STRICT, not
+lenient** (the user: "not lenient, just one variant") — the colon is REJECTED, not merely tolerated.
+- **Scope = the `types` section ONLY.** `initialData` field assignments (`label: "First"`) and `common`/`ui`
+  Code (object literals `{ name: "" }`) KEEP their colons — they are data/code, not type declarations.
+- **Parser** (`AppParse`): `Prop` is `Name Ws1 PropType`; the enum/leaf type forms are `Name Ws1 enum`/
+  `Name Ws1 baseName`. Stays ORDER-INDEPENDENT (the leaf `.Filter`s out `enum`); object-vs-leaf is decided
+  by whether there's a second token on the line — `Ws1` is `[ \t]+` (never the newline), so a bare `Db`
+  can't match the leaf/enum forms. **Printer** (`AppPrint`): emits `name TypeExpr` / `Name enum` / `Name base`.
+- **Converting all `.app` content** (the chicken-and-egg, since a strict parser can't read the old colon'd
+  text): a scoped state-machine text pass (only between a `types` line and the next section keyword / raw-string
+  `"""`) over the 4 committed apps + the test fixtures (~148 lines). GOTCHA: programmatic `\n`-escaped fixture
+  strings (`"types\n    Db\n        ready: bool\n"` in a few step files) are ONE source line, so the line-based
+  pass missed them — they surfaced as parse errors and were fixed by hand. The `Schema.feature` "syntactically
+  broken document" test now uses a STRAY COLON (`name: text`) as its syntax error — which doubles as the proof
+  that the colon is rejected.
+- `INSTANCE_DESCRIPTION_FORMAT.md` updated to the colon-free syntax + the `enum` form.
 
 ## The endgame database — the storage pillars' convergence path (north star)
 

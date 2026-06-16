@@ -1,4 +1,4 @@
-Feature: App description document
+﻿Feature: App description document
   An instance is defined by ONE app text document — types, optional initialData,
   and optional code sections (JSON is internal only: the in-memory model and the
   wire). The document is loaded and validated: a well-formed document loads, and
@@ -11,11 +11,11 @@ Feature: App description document
       """
       types
           Db
-              companyName: text
-              customers: set of Customer
+              companyName text
+              customers set of Customer
           Customer
-              name: text
-              active: bool
+              name text
+              active bool
       """
     When the document is loaded
     Then the document loads successfully
@@ -26,7 +26,7 @@ Feature: App description document
     Given the app description:
       """
       types
-          Db: bool
+          Db bool
       """
     When the document is loaded
     Then loading is rejected with an error mentioning "object"
@@ -36,7 +36,7 @@ Feature: App description document
     Given the app description:
       """
       types
-          Thing: bool
+          Thing bool
       """
     When the document is loaded
     Then loading is rejected with an error mentioning "Db"
@@ -46,9 +46,9 @@ Feature: App description document
     Given the app description:
       """
       types
-          Db: bool
-          Thing: bool
-          Thing: text
+          Db bool
+          Thing bool
+          Thing text
       """
     When the document is loaded
     Then loading is rejected with an error mentioning "Thing"
@@ -58,8 +58,8 @@ Feature: App description document
     Given the app description:
       """
       types
-          Db: bool
-          Db: text
+          Db bool
+          Db text
       """
     When the document is loaded
     Then loading is rejected with an error mentioning "Db"
@@ -70,7 +70,7 @@ Feature: App description document
       """
       types
           Db
-              customers: dict of Customer by text
+              customers dict of Customer by text
       """
     When the document is loaded
     Then loading is rejected with an error mentioning "Customer"
@@ -80,7 +80,7 @@ Feature: App description document
     Given the app description:
       """
       types
-          Db: money
+          Db money
       """
     When the document is loaded
     Then loading is rejected with an error mentioning "baseType"
@@ -91,19 +91,21 @@ Feature: App description document
       """
       types
           Db
-              name: text
-              name: bool
+              name text
+              name bool
       """
     When the document is loaded
     Then loading is rejected with an error mentioning "name"
 
+  # A stray colon in a type declaration is now a syntax error — the colon was removed from the
+  # types section, so `name: text` no longer parses (it is `name text`).
   @milestone-3 @single-user
   Scenario: A syntactically broken document is rejected with its position
     Given the app description:
       """
       types
           Db
-              name text
+              name: text
       """
     When the document is loaded
     Then loading is rejected with an error mentioning "line"
@@ -114,7 +116,7 @@ Feature: App description document
       """
       types
           Db
-              tags: set of text
+              tags set of text
       """
     When the document is loaded
     Then loading is rejected with an error mentioning "set"
@@ -126,12 +128,12 @@ Feature: App description document
     Given the app description:
       """
       types
-          OrderStatus: enum
+          OrderStatus enum
               pending
               shipped
               delivered
           Db
-              status: OrderStatus
+              status OrderStatus
       """
     When the document is loaded
     Then the document loads successfully

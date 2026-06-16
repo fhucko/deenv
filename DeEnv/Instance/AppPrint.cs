@@ -61,22 +61,23 @@ public static class AppPrint
 
     private static void PrintType(StringBuilder sb, TypeDefinition type)
     {
-        // An enum type: `Name: enum` then its ordered value names, indented like object props.
+        // A type declaration carries no colon (`Name kind` / `name type`): the colon adds no value
+        // in the types section. An enum type: `Name enum` then its ordered value names, indented.
         if (type.BaseType == BaseType.Enum)
         {
-            sb.Append("    ").Append(type.Name).Append(": enum\n");
+            sb.Append("    ").Append(type.Name).Append(" enum\n");
             foreach (var value in type.Values ?? [])
                 sb.Append("        ").Append(value).Append('\n');
             return;
         }
         if (type.BaseType != BaseType.Object)
         {
-            sb.Append("    ").Append(type.Name).Append(": ").Append(BaseTypes.NameOf(type.BaseType)).Append('\n');
+            sb.Append("    ").Append(type.Name).Append(' ').Append(BaseTypes.NameOf(type.BaseType)).Append('\n');
             return;
         }
         sb.Append("    ").Append(type.Name).Append('\n');
         foreach (var prop in type.Props ?? [])
-            sb.Append("        ").Append(prop.Name).Append(": ").Append(TypeExpr(prop)).Append('\n');
+            sb.Append("        ").Append(prop.Name).Append(' ').Append(TypeExpr(prop)).Append('\n');
     }
 
     private static string TypeExpr(PropDefinition prop) => prop.Cardinality switch

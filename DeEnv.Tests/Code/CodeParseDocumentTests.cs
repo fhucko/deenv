@@ -209,7 +209,7 @@ public sealed class CodeParseDocumentTests
         var desc = InstanceDescriptionLoader.Load(
             "types\n" +
             "    Db\n" +
-            "        note: text\n" +
+            "        note text\n" +
             "\n" +
             "ui\n" +
             "    var selected = \"x\"\n");

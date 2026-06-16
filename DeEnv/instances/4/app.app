@@ -1,15 +1,15 @@
-types
+﻿types
     Db
-        customers: set of Customer
+        customers set of Customer
     Customer
-        name: text
-        email: text
-        active: bool
-        orders: set of Order
+        name text
+        email text
+        active bool
+        orders set of Order
     Order
-        item: text
-        total: int
-        shipped: bool
+        item text
+        total int
+        shipped bool
 
 initialData
     Db 1

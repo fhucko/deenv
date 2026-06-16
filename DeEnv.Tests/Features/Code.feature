@@ -1,4 +1,4 @@
-Feature: Code-owned UI rendering (server-side)
+﻿Feature: Code-owned UI rendering (server-side)
   The Code milestone gives the instance hand-written behaviour and UI as an AST.
   When a `ui` section exists, code owns all routing: the render function is
   executed on the server and its tag tree is serialised to HTML. This covers the
@@ -53,7 +53,7 @@ Feature: Code-owned UI rendering (server-side)
       """
       types
           Db
-              note: text
+              note text
 
       ui
           fn render()
@@ -69,9 +69,9 @@ Feature: Code-owned UI rendering (server-side)
       """
       types
           Db
-              things: set of Thing
+              things set of Thing
           Thing
-              name: text
+              name text
 
       ui
           fn render()
@@ -88,7 +88,7 @@ Feature: Code-owned UI rendering (server-side)
       """
       types
           Db
-              note: text
+              note text
 
       ui
           fn render()
@@ -106,7 +106,7 @@ Feature: Code-owned UI rendering (server-side)
       """
       types
           Db
-              note: text
+              note text
 
       ui
           fn render()
@@ -144,7 +144,7 @@ Feature: Code-owned UI rendering (server-side)
       """
       types
           Db
-              ready: bool
+              ready bool
 
       ui
           var chosen = "g"
