@@ -918,6 +918,69 @@ Phase 3 complete: the C# renderer is fully retired and the app URL space is clea
   members. (Relatedly: ambient framework DATA should be a var/cell — see `LiveRegistry` — not a
   pull-function; now a reviewer check.)
 
+## UI middle-ground — one public component library + SolidJS-style reactivity (pillar 8, future direction)
+
+Settled in design discussion (2026-06-16) for **partial UI customization** — VISION
+pillar 8's "auto with overrides" (modify/extend *parts* of the generic UI, escaping
+the all-auto-or-all-custom binary). **Future, not current scope** (M10 stands; it also
+touches the interpreter). Recorded because the mechanism finally coheres after **two
+prior failures**: **M8 `view`s** (render-fns replacing a type/path slice) — dropped
+2026-06-13, **db-structure-coupled**; and **"custom *composes* the generic library"** —
+floated by the two-modes decision, **rejected 2026-06-15** (operator designer) for
+exposing the **internal machinery** (`objectForm` over `__descs` reference-stable
+descriptor registries) — implementation, not an authoring surface; a leak.
+
+**The mechanism — three moves:**
+1. **One *public* component library** — a designed authoring API (`ObjectForm`,
+   `Field`, `SetTable`, `RefEditor`, …), *not* the internal functions. `fn render()`
+   composes them, dropping generic components into bespoke markup and hand-writing
+   only the custom parts.
+2. **The generic auto-UI is rewritten as the library's *first consumer*** — it
+   reflects over the schema and composes the *same* public components, exactly as user
+   code does. **One library, two consumers**, not internal-machinery + a public
+   wrapper. This **promotes M9's already-self-hosted generic-UI library from a
+   walled-off `internal` detail to the public authoring API**, and yields a free
+   completeness proof: **if the public library can build the whole generic UI, it is
+   complete and first-class** — the generic UI is its conformance test (the
+   self-hosting + conformance move, as with the twin interpreters).
+3. **Reactivity = the SolidJS model.** A component runs its body **once** (setup +
+   local state) and returns a **reactive view**; **a prop change never resets it**.
+   **Reset is structural and parent-controlled** via control-flow keying —
+   iterate-**by-identity** vs **by-position** (≈ Solid `<For>` / `<Index>`), plus a
+   keyed-recreate for the value case. This **dissolves M9's `__descs`
+   reference-stability problem at the root**: component identity comes from
+   **render-tree position / explicit keys**, not argument references — so a rebuilt
+   descriptor just updates props, nothing needs to stay reference-stable, and `__descs`
+   goes away. The rare explicit "reset when X changes" is a per-call **`key`**.
+   - **Decided against** a per-component **`const`/identity-prop** scheme (the user's own
+     first proposal): chose the *pure* Solid model — reset is the *caller's* concern,
+     kept out of the component, `key` the only (rare) opt-in — for simplicity.
+
+**Why it dodges both failures:** one **clean public library** (no internals-leak), keyed
+on types/position not db-paths (no M8 coupling); the genuinely-internal bit
+(component-instance identity / run-once) moves **down into the interpreter** — below
+userspace, where "C# does as little as possible" already draws the line — not *beside*
+it in a leaky `internal` scope.
+
+**Scope / cost.** Pillar 8 **plus** an interpreter change: today component "run-once"
+rides the **memo cache** (a component call memoized by `(fn id, arg identities)` — the
+same cache behind the privacy/value-memoization), so giving *components* a Solid-style
+**positional/keyed** identity is a real runtime evolution, sequenced after M10/M11 —
+direction only, build deferred. A **vision-keeper** pressure-test is worth doing before
+it firms (it reverses a prior rejection).
+
+**Sequencing — if pulled forward (the user is weighing this as the milestone after
+M10, 2026-06-16).** No *hard* dependency requires M11 (schema versioning) first — the
+"after M11" framing above was a default, not a requirement — so it can be sequenced
+next, at the cost of deprioritizing versioning (the Stage-2 self-service substrate).
+The proposal bundles a **foundation** (the SolidJS reactivity refactor — improves
+*all* UI, kills the `__descs` fragility, stands alone) and a **feature** (the public
+component library / the middle ground). **Do the foundation first** — it's contained,
+pays off across every existing app, and de-risks the feature — then layer the public
+library on top. Land M10 first (no interleaving), then plan the thin first slice via
+**milestone-planner** and check the reprioritization via **vision-keeper** before
+building.
+
 ## Tool stack and project structure
 
 Web-first: **C# backend, TypeScript front-end.** C# stays where it's strong;
