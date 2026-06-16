@@ -47,8 +47,9 @@ where developers design data visually and use it as objects. Full mission in
    kernel host is the entry point (NO run modes; `kernel.json` is the single source of what
    runs). Build only M10 work next — the operator-facing create/switch/delete COMMANDS/UI as image Code
    (the C# mechanism is done; the host-action channel + `sys.publish(schema, targetId)` AND
-   `sys.create(schema, appPort, infraPort)` — both project a passed schema object — have landed), and
-   promoting the registry to a restricted kernel-instance; see Current focus + ROADMAP.md.
+   `sys.create(schema, name, appPort, infraPort)` — both project a passed schema object — have landed,
+   as have named create + per-instance `sys.rename(id, name)`); remaining: richer editing. See Current
+   focus + ROADMAP.md.
    Cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time, and the
    management commands stay out of scope unless explicitly asked. Schema versioning steps back to
    M11 (it sits on instance management).
@@ -159,11 +160,11 @@ Two instances on two port pairs are both reachable and data-sovereign (`Kernel.f
 host is the sole entry point and `kernel.json` is the single source of what runs — a single
 instance is just a one-entry registry, so there is no `--mode`/`--app`. The designer is a registry
 entry; the M4 export/publish bridge is now exposed to Code as host actions — `sys.publish(schema,
-targetId)` (replace an existing instance) and `sys.create(schema, appPort, infraPort)` (spawn a new
-one), both projecting a passed schema object — not a CLI mode. Kernel discipline: the kernel gains
+targetId)` (replace an existing instance) and `sys.create(schema, name, appPort, infraPort)` (spawn a
+new one), both projecting a passed schema object — not a CLI mode. Kernel discipline: the kernel gains
 the hosting *mechanism* (create/list/switch/delete in C# + the host-action channel); the operator
 create/publish/switch/delete COMMANDS-as-the-IDE are image Code. **The operator designer + ops landed
-2026-06-15:** `designer.app` (now `instances/4/app.app`) gained a HAND-ROLLED custom `fn render()` (a
+2026-06-15:** `designer.app` (now `instances/1/app.app`) gained a HAND-ROLLED custom `fn render()` (a
 type/prop editor + the `sys.instances` list + per-instance create/clone/delete/publish controls),
 replacing its auto generic UI. Decided: explicit hand-written Code, NOT a "hidden callable designer"
 (the generic-UI-as-library compose mechanism is rejected). The ops: `sys.delete(id)`,
@@ -173,7 +174,9 @@ has a stable unique int `id`; storage is fully id-based (`instances/<id>/`); the
 is a display NAME label (used for nothing functional, no `.app` extension); the boot-vs-created
 distinction is REMOVED (delete/clone/publish work on any instance by id; deleting drops its data, git
 holds the committed sources). See DECISIONS "Operator instance ops + the id-based instance identity
-model". Follow-ups: named create (created instances default to label "app"), rename, richer editing.
+model". **Named create + rename then completed the operator flow (2026-06-16):** the create form takes a
+display name — `sys.create(schema, name, appPort, infraPort)` — and a per-instance Rename — `sys.rename(id,
+name)` — edits the registry label (no restart; label-only). Follow-up: richer editing.
 Deferred: cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time
 (Stage 5/later), and the management commands. Schema versioning steps back to M11 (it sits on
 this). See ROADMAP.md (Milestone 10), STAGES.md, and DECISIONS.md ("Multi-instance management —

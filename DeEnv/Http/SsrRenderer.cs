@@ -556,7 +556,7 @@ public sealed class SsrRenderer
                         ["app"] = new ExecText { Value = info.App },
                         ["port"] = new ExecInt { Value = info.Port },
                         ["assetsPort"] = new ExecInt { Value = info.AssetsPort },
-                        ["designId"] = new ExecInt { Value = info.DesignId },
+                        ["designId"] = new ExecInt { Value = info.DesignId ?? 0 },
                     },
                 },
             });

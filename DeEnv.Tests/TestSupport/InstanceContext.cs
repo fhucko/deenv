@@ -59,14 +59,14 @@ public class InstanceContext
         """);
 
     // Milestone 2 CRM-with-orders instance: objects, nested dictionaries, every base type. A
-    // committed fixture in its id-dir (instances/2/app.app) — the committed default app is todo.
+    // committed fixture in its id-dir (instances/3/app.app).
     public static InstanceDescription CrmDb() =>
-        InstanceDescriptionLoader.LoadFile(AppFixture(2));
+        InstanceDescriptionLoader.LoadFile(AppFixture(3));
 
-    // The committed default app (DeEnv/instances/1/app.app): the todo app — types, initialData seed,
+    // The committed default app (DeEnv/instances/2/app.app): the todo app — types, initialData seed,
     // and ui code in one text document; tests drive the real single source of truth.
     public static InstanceDescription TodoDb() =>
-        InstanceDescriptionLoader.LoadFile(AppFixture(1));
+        InstanceDescriptionLoader.LoadFile(AppFixture(2));
 
     // A committed app fixture, resolved by its id-dir (instances/<id>/app.app) under the test output
     // — the same id-based layout the kernel hosts. Storage is fully id-based; the file name ("app")
@@ -175,10 +175,10 @@ public class InstanceContext
     """;
 
     // The code-bearing fixture documents, for the printer round-trip tests. The shop app is a
-    // committed fixture in its id-dir (instances/3/app.app).
+    // committed fixture in its id-dir (instances/4/app.app).
     public static IReadOnlyList<string> CodeFixtureApps =>
         [TasksUiApp, InteractiveUiApp, SensitiveUiApp, RefetchUiApp,
-         File.ReadAllText(AppFixture(3))];
+         File.ReadAllText(AppFixture(4))];
 
     private const string TasksUiApp = """
     types
@@ -396,9 +396,9 @@ public class InstanceContext
 
     // ── kernel-backed designer browser (milestone 10: the operator IDE) ─────────
 
-    // The operator IDE (instances/4/app.app) renders `sys.instances` — the kernel's hosted set — so it
+    // The operator IDE (instances/1/app.app) renders `sys.instances` — the kernel's hosted set — so it
     // can only be driven against a REAL KernelHost (TestInstanceServer hosts a single instance with no
-    // kernel, so `sys.instances` would be empty). This boots a kernel hosting the REAL designer as id 4
+    // kernel, so `sys.instances` would be empty). This boots a kernel hosting the REAL designer as id 1
     // plus the given target instances (each a tiny bool app, labelled to match a seeded design), then
     // points Playwright at the DESIGNER instance's app port. Returns the designer's HostedInstance so a
     // step can reach its store; targets are reached via Kernel.Instances by their label (Spec.App).
@@ -408,9 +408,9 @@ public class InstanceContext
         Directory.CreateDirectory(dir);
         KernelDir = dir;
 
-        // The designer at id 4: the REAL committed instances/4/app.app (copied from the test output),
+        // The designer at id 1: the REAL committed instances/1/app.app (copied from the test output),
         // hosted by the kernel exactly as production would.
-        WriteIdApp(dir, 4, File.ReadAllText(AppFixture(4)));
+        WriteIdApp(dir, 1, File.ReadAllText(AppFixture(1)));
 
         // Each target references its seeded design by an EXPLICIT designId — the id of the design in the
         // committed designer seed whose label matches the target's label. Resolved from the designer's
@@ -418,7 +418,7 @@ public class InstanceContext
         var designIds = DesignIdsByLabel();
         var entries = new List<string>
         {
-            RegistryEntryJson(4, "designer", FreePort(), FreePort(), 0),
+            RegistryEntryJson(1, "designer", FreePort(), FreePort()),
         };
         foreach (var (id, label) in targets)
         {
@@ -433,7 +433,7 @@ public class InstanceContext
         Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"));
         await Kernel.StartAsync(KernelHost.SpecsFor(registry, dir));
 
-        var designer = Kernel.Instances.Single(i => i.Spec.Id == 4);
+        var designer = Kernel.Instances.Single(i => i.Spec.Id == 1);
 
         Playwright = await Microsoft.Playwright.Playwright.CreateAsync();
         Browser = await Playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
@@ -462,20 +462,23 @@ public class InstanceContext
         File.WriteAllText(Path.Combine(idDir, "app.app"), appDoc);
     }
 
-    private static string RegistryEntryJson(int id, string label, int appPort, int infraPort, int designId) =>
-        $"{{ \"id\": {id}, \"app\": \"{label}\", \"appPort\": {appPort}, \"infraPort\": {infraPort}, \"designId\": {designId} }}";
+    private static string RegistryEntryJson(int id, string label, int appPort, int infraPort, int? designId = null)
+    {
+        var did = designId.HasValue ? $", \"designId\": {designId.Value}" : "";
+        return $"{{ \"id\": {id}, \"app\": \"{label}\", \"appPort\": {appPort}, \"infraPort\": {infraPort}{did} }}";
+    }
 
     // The seeded design id for a label (e.g. "crm") — so a step can assert an instance now records that
     // design's id after Apply. Reads the same committed designer seed the fixture seeds designIds from.
     public int DesignIdForLabel(string label) => DesignIdsByLabel()[label];
 
-    // Map each seeded design's label → its id, read from the committed designer seed (instances/4's
+    // Map each seeded design's label → its id, read from the committed designer seed (instances/1's
     // initialData). The IDE's instance↔design link is the explicit designId, so a target labelled
     // "instance" gets the id of the design labelled "instance" — making its dropdown pre-select and its
     // instances-list row resolve to that design.
     private static Dictionary<string, int> DesignIdsByLabel()
     {
-        var designer = InstanceDescriptionLoader.LoadFile(AppFixture(4));
+        var designer = InstanceDescriptionLoader.LoadFile(AppFixture(1));
         var designs = designer.InitialData?.Extents?.GetValueOrDefault("Design")
             ?? throw new InvalidOperationException("The designer seed has no Design extent.");
         var map = new Dictionary<string, int>();
@@ -486,8 +489,10 @@ public class InstanceContext
     }
 
     // Grab a free TCP port by binding to :0, reading the assigned port, then releasing it — the same
-    // approach KernelSteps/TestInstanceServer use for their in-process hosts.
-    private static int FreePort()
+    // approach KernelSteps/TestInstanceServer use for their in-process hosts. Public so a step that
+    // fills the create-instance form's port inputs can pick genuinely free ports (the kernel rejects a
+    // port collision, so a hard-coded pair would flake against the other in-process hosts).
+    public static int FreePort()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();

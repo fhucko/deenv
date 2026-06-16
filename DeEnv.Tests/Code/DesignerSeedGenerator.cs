@@ -11,11 +11,11 @@ using TUnit.Core;
 
 namespace DeEnv.Tests.Code;
 
-// Authoring-time generator for the operator IDE's seed (DeEnv/instances/4/app.app).
+// Authoring-time generator for the operator IDE's seed (DeEnv/instances/1/app.app).
 //
 // The designer seeds its `db.designs` set with a faithful `Design` of every committed app the kernel
-// hosts (instances/1 "instance" = todo, 2 = crm, 3 = shop — see kernel.json). Hand-authoring those
-// apps' full ui/common/initialData as `\n`-escaped string literals inside instances/4/app.app is
+// hosts (instances/2 "instance" = todo, 3 = crm, 4 = shop — see kernel.json). Hand-authoring those
+// apps' full ui/common/initialData as `\n`-escaped string literals inside instances/1/app.app is
 // impractical, so this GENERATES the file at authoring time (NOT a runtime/boot load — the no-load
 // model stands): it reads the committed sources, splits each into its top-level sections, parses the
 // `types` section into the structured MetaType/MetaProp the type editor edits, keeps the other three
@@ -23,7 +23,7 @@ namespace DeEnv.Tests.Code;
 // Design text fields carry and ProjectDesignDocument reassembles), assembles the designer's
 // InstanceDescription (its OWN types + its OWN ui/common — the IDE render is preserved exactly, NOT
 // regenerated — plus an initialData whose root Db holds the generated designs), AppPrints it, and
-// overwrites the committed instances/4/app.app.
+// overwrites the committed instances/1/app.app.
 //
 // A design's `label` is the instance's registry `app` field (the IDE's instance↔design matching key),
 // read from the source kernel.json by id — the committed app document itself does not carry its label.
@@ -33,19 +33,19 @@ namespace DeEnv.Tests.Code;
 //
 //   dotnet test --filter "/*/*/DesignerSeedGenerator/*"
 //
-// Then review + commit the regenerated instances/4/app.app. The regenerated file must stay round-trip
+// Then review + commit the regenerated instances/1/app.app. The regenerated file must stay round-trip
 // stable — AppPrintTests.The_crm_and_designer_documents_round_trip pins parse(print(it)) ≡ it.
 public sealed class DesignerSeedGenerator
 {
     // Which committed apps become seeded designs: the kernel-hosted data apps (instance/crm/shop),
-    // NOT the designer itself (id 4 — the IDE editing them). Ordered, so the printed seed is stable.
-    private static readonly int[] SeededInstanceIds = [1, 2, 3];
+    // NOT the designer itself (id 1 — the IDE editing them). Ordered, so the printed seed is stable.
+    private static readonly int[] SeededInstanceIds = [2, 3, 4];
 
     [Test, Explicit]
     public async Task Generate_the_designer_seed_from_the_committed_apps()
     {
         var root = RepoRoot();
-        var designerPath = Path.Combine(root, "DeEnv", "instances", "4", "app.app");
+        var designerPath = Path.Combine(root, "DeEnv", "instances", "1", "app.app");
 
         // id → registry `app` label, from the source kernel.json (the design's label is the instance's
         // label by the IDE's matching convention; the app document does not carry it).
@@ -101,7 +101,7 @@ public sealed class DesignerSeedGenerator
 
         // Load the committed designer seed (the test-output copy) and seed a throwaway store from it, so
         // its designs are live nodes the publish path can read by id.
-        var designer = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(4));
+        var designer = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
         var storePath = Path.Combine(Path.GetTempPath(), "deenv-seedcheck-" + Guid.NewGuid().ToString("N") + ".json");
         var store = new JsonFileInstanceStore(storePath, designer);
         try
@@ -137,18 +137,18 @@ public sealed class DesignerSeedGenerator
     private static string KernelJsonPath() =>
         Path.Combine(RepoRoot(), "DeEnv", "kernel.json");
 
-    // Walk up from the test output dir to the repository root (the dir holding DeEnv/instances/4/app.app),
+    // Walk up from the test output dir to the repository root (the dir holding DeEnv/instances/1/app.app),
     // so the generator reads + writes the SOURCE tree, not the copied test output.
     private static string RepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir != null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "DeEnv", "instances", "4", "app.app")))
+            if (File.Exists(Path.Combine(dir.FullName, "DeEnv", "instances", "1", "app.app")))
                 return dir.FullName;
             dir = dir.Parent;
         }
-        throw new InvalidOperationException("Could not locate the repository root (DeEnv/instances/4/app.app).");
+        throw new InvalidOperationException("Could not locate the repository root (DeEnv/instances/1/app.app).");
     }
 
     // Split an app document into its top-level sections, keyed by section keyword (types / initialData /

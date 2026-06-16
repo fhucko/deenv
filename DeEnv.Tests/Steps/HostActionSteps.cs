@@ -16,10 +16,10 @@ namespace DeEnv.Tests.Steps;
 // action resolves that design's id → its subtree in the store and projects the WHOLE app. This
 // exercises the full server path: WsHandler.HandleHostAction → IHostActions → SchemaBridge.
 //
-// The designer META-SCHEMA here is TEST-LOCAL (a `Db { designs }` shape written to a temp .app),
-// NOT the real instances/4/app.app — that real designer still edits today's `Db { types }` shape and
-// is exercised by Designer.feature; the `Db { designs }` IDE schema + its visible UI are the NEXT
-// slice. Keeping the host-action test on its own meta isolates it from that pending change.
+// The designer META-SCHEMA here is TEST-LOCAL (a minimal `Db { designs }` shape written to a temp
+// .app), NOT the real instances/1/app.app (which the browser-driven Designer.feature exercises).
+// Keeping the host-action test on its own controlled meta isolates the server-path assertions from
+// the full seeded designer — a minimal design is enough to prove resolve → project → host action.
 [Binding]
 public sealed class HostActionSteps
 {
@@ -83,12 +83,25 @@ public sealed class HostActionSteps
     private const int TargetId = 7;
     private const int UnknownTargetId = TargetId + 999;
 
-    // What the fake create delegate recorded — the projected app document + the requested ports —
-    // so a create scenario can assert the kernel was asked to spawn the right thing (no real host).
+    // What the fake create delegate recorded — the projected app document + the requested ports + the
+    // design's id — so a create scenario can assert the kernel was asked to spawn the right thing (no
+    // real host). The design id is threaded so the new instance's registry entry pre-selects its design.
     private string _createdAppDoc = "";
+    private string _createdName = "";
     private int _createdAppPort;
     private int _createdInfraPort;
+    private int? _createdDesignId;
     private bool _createInvoked;
+
+    // What the fake restart delegate recorded — the id the kernel was asked to restart — so a
+    // publish/setDesign scenario can assert the post-write restart was triggered (no real host).
+    private int _restartedId;
+    private bool _restartInvoked;
+
+    // What the fake rename delegate recorded — the (id, name) the kernel was asked to set.
+    private int _renamedId;
+    private string _renamedName = "";
+    private bool _renameInvoked;
 
     // What the fake delete/clone delegates recorded — the ids/ports the kernel was asked to act on —
     // so a delete/clone scenario can assert the channel carried the right arguments (no real host).
@@ -160,13 +173,18 @@ public sealed class HostActionSteps
     [When("the designer publishes that design to an unknown target id over the WS")]
     public void WhenPublishToUnknownTarget() => Publish(_designId, UnknownTargetId);
 
-    [When("the designer creates an instance from that design on ports {int} and {int} over the WS")]
-    public void WhenCreateFromDesign(int appPort, int infraPort) => Create(_designId, appPort, infraPort);
+    [When("the designer creates an instance named {string} from that design on ports {int} and {int} over the WS")]
+    public void WhenCreateFromDesign(string name, int appPort, int infraPort) => Create(_designId, name, appPort, infraPort);
 
     // A schema id that is NOT a design (an existing MetaType object) — the resolver must reject it
     // before any projection or spawn, so the create delegate is never reached.
     [When("the designer creates an instance from a non-design id over the WS")]
-    public void WhenCreateNonDesign() => Create(_nonDesignId, 9100, 9101);
+    public void WhenCreateNonDesign() => Create(_nonDesignId, "app", 9100, 9101);
+
+    [When("the operator renames instance id {int} to {string} over the WS")]
+    public void WhenRename(int id, string name) =>
+        _reply = Ws().ProcessMessage(
+            $$"""{ "op": "hostAction", "action": "rename", "args": [ { "type": "int", "value": {{id}} }, { "type": "text", "value": "{{name}}" } ] }""");
 
     // delete(targetId): a bare instance id (NOT a schema object). The recording delete delegate
     // captures the id; the seam carries it through unchanged and replies ok.
@@ -188,9 +206,9 @@ public sealed class HostActionSteps
         _reply = Ws().ProcessMessage(
             $$"""{ "op": "hostAction", "action": "publish", "args": [ { "type": "int", "value": {{designId}} }, { "type": "int", "value": {{targetId}} } ] }""");
 
-    private void Create(int designId, int appPort, int infraPort) =>
+    private void Create(int designId, string name, int appPort, int infraPort) =>
         _reply = Ws().ProcessMessage(
-            $$"""{ "op": "hostAction", "action": "create", "args": [ { "type": "int", "value": {{designId}} }, { "type": "int", "value": {{appPort}} }, { "type": "int", "value": {{infraPort}} } ] }""");
+            $$"""{ "op": "hostAction", "action": "create", "args": [ { "type": "int", "value": {{designId}} }, { "type": "text", "value": "{{name}}" }, { "type": "int", "value": {{appPort}} }, { "type": "int", "value": {{infraPort}} } ] }""");
 
     // setDesign(design, targetId): the IDE's Apply — arg 0 the design object's id, arg 1 the target id.
     // The real KernelHostActions both records the reference (the fake recordDesign captures it) AND
@@ -213,11 +231,13 @@ public sealed class HostActionSteps
         var hostActions = new KernelHostActions(
             _metaAppPath, _designerDataPath,
             id => id == TargetId ? new InstanceSpec(TargetId, "target", _targetAppPath, _targetDataPath, 0, 0) : null,
-            createInstance: (appDoc, appPort, infraPort) =>
+            createInstance: (appDoc, name, appPort, infraPort, designId) =>
             {
                 _createdAppDoc = appDoc;
+                _createdName = name;
                 _createdAppPort = appPort;
                 _createdInfraPort = infraPort;
+                _createdDesignId = designId;
                 _createInvoked = true;
                 return Task.CompletedTask;
             },
@@ -240,6 +260,19 @@ public sealed class HostActionSteps
                 _recordedTargetId = targetId;
                 _recordedDesignId = designId;
                 _recordInvoked = true;
+                return Task.CompletedTask;
+            },
+            restartInstance: id =>
+            {
+                _restartedId = id;
+                _restartInvoked = true;
+                return Task.CompletedTask;
+            },
+            renameInstance: (id, name) =>
+            {
+                _renamedId = id;
+                _renamedName = name;
+                _renameInvoked = true;
                 return Task.CompletedTask;
             });
         // _designer/_meta are guaranteed set above (a Given, or the lazy OpenDesigner here).
@@ -299,6 +332,13 @@ public sealed class HostActionSteps
         _ = new JsonFileInstanceStore(_targetDataPath, published); // throws if the reset data is invalid
     }
 
+    [Then("the target instance was restarted")]
+    public async Task ThenTargetRestarted()
+    {
+        await Assert.That(_restartInvoked).IsTrue();
+        await Assert.That(_restartedId).IsEqualTo(TargetId);
+    }
+
     [Then("the target app document is unchanged")]
     public async Task ThenTargetAppUnchanged()
     {
@@ -311,6 +351,21 @@ public sealed class HostActionSteps
         await Assert.That(_createInvoked).IsTrue();
         await Assert.That(_createdAppPort).IsEqualTo(appPort);
         await Assert.That(_createdInfraPort).IsEqualTo(infraPort);
+        // The seam threads the design's id through to the new entry (so its dropdown pre-selects it);
+        // the create-from-a-design scenario passes that design's id, so the delegate must receive it.
+        await Assert.That(_createdDesignId).IsEqualTo((int?)_designId);
+    }
+
+    [Then("the created instance has the name {string}")]
+    public async Task ThenCreatedHasName(string name) =>
+        await Assert.That(_createdName).IsEqualTo(name);
+
+    [Then("the kernel was asked to rename instance id {int} to {string}")]
+    public async Task ThenRenameInvoked(int id, string name)
+    {
+        await Assert.That(_renameInvoked).IsTrue();
+        await Assert.That(_renamedId).IsEqualTo(id);
+        await Assert.That(_renamedName).IsEqualTo(name);
     }
 
     [Then("the created app document describes the designed type {string}")]

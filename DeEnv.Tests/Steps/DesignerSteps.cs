@@ -6,12 +6,12 @@ using TUnit.Assertions.Extensions;
 
 namespace DeEnv.Tests.Steps;
 
-// Steps for Designer.feature — the operator IDE (the REAL DeEnv/instances/4/app.app), a URL-routed
+// Steps for Designer.feature — the operator IDE (the REAL DeEnv/instances/1/app.app), a URL-routed
 // multi-instance designer driven end-to-end through a real browser. Unlike the rest of the
 // browser-driven suite it runs against a REAL KernelHost (InstanceContext.StartKernelDesignerBrowserAsync):
 // the IDE renders `sys.instances` (the kernel's hosted set), which is empty under the kernel-less
 // TestInstanceServer, so the designer can only be exercised against a live kernel. The kernel hosts the
-// designer (id 4) plus the named target instances; the browser is pointed at the designer's app port.
+// designer (id 1) plus the named target instances; the browser is pointed at the designer's app port.
 //
 // The IDE's surfaces are SEPARATE: `/designs` (the design library) + `/designs/<designId>` (the design
 // EDITOR — type editor + code areas, no publish), and `/instances` (instances + their current design)
@@ -24,16 +24,22 @@ namespace DeEnv.Tests.Steps;
 [Binding]
 public sealed class DesignerSteps(InstanceContext ctx)
 {
-    // The kernel-hosted designer instance (id 4); its targets are reached via ctx.Kernel.Instances by
+    // The kernel-hosted designer instance (id 1); its targets are reached via ctx.Kernel.Instances by
     // their registry label (Spec.App).
     private HostedInstance _designer = null!;
+
+    // The name + free port pair the create-instance form was filled with — used to locate the spawned
+    // instance (the name is its display label in the list; the ports pin exactly this one in the kernel).
+    private string _newInstanceName = "";
+    private int _newInstanceAppPort;
+    private int _newInstanceInfraPort;
 
     // ── Given ───────────────────────────────────────────────────────────────────
 
     [Given("the operator IDE is running on a kernel hosting instances {string} and {string}")]
     public async Task GivenIdeRunning(string firstLabel, string secondLabel)
     {
-        // Boot a kernel hosting the real designer (id 4) + two target instances labelled to match the
+        // Boot a kernel hosting the real designer (id 1) + two target instances labelled to match the
         // designer's two seeded designs (the fixture seeds each target's designId to the matching
         // design), then point the browser at the designer's app port.
         _designer = await ctx.StartKernelDesignerBrowserAsync((5, firstLabel), (6, secondLabel));
@@ -64,8 +70,10 @@ public sealed class DesignerSteps(InstanceContext ctx)
     {
         // The Edit link is a fresh-SSR <a href="/designs/<designId>"> on the matching design row; clicking
         // it navigates the browser, so the editor page is a full server render with the design's data.
+        // Wait for the editor SECTION (always present once the design resolves) rather than a type row —
+        // a freshly-added design has no types yet, so .type-name would never appear for it.
         await DesignRowFor(label).Locator("a.edit-design").ClickAsync();
-        await ctx.Page!.WaitForSelectorAsync("main.ide-design-edit .design-editor .type-name");
+        await ctx.Page!.WaitForSelectorAsync("main.ide-design-edit .design-editor");
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
     }
 
@@ -80,6 +88,68 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await RowFor(label).Locator("a.open-instance").ClickAsync();
         await ctx.Page!.WaitForSelectorAsync("main.ide-instance select.design-pick");
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+    }
+
+    [When("I open that new instance")]
+    public async Task WhenOpenNewInstance()
+    {
+        // The just-created instance is the one bound to the free ports we filled. Navigate straight to its
+        // selector page (a fresh SSR over the kernel's now-refreshed live set), exactly as the Open link
+        // on the list would.
+        var created = ctx.Kernel!.Instances.Single(i => i.Spec.AppPort == _newInstanceAppPort);
+        await ctx.Page!.GotoAsync($"/instances/{created.Spec.Id}");
+        await ctx.Page.WaitForSelectorAsync("main.ide-instance select.design-pick");
+        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+    }
+
+    // ── When: creating (the inline list forms) ──────────────────────────────────
+
+    [When("I add a design named {string}")]
+    public async Task WhenAddDesign(string label)
+    {
+        // The inline "New design" form on /designs: type the label, click Add. Add runs
+        // db.designs.add({ label, types: [], initialData: "" }) — a journaled mutation. The new row
+        // appears immediately via the client re-render (no nav — race-free), first carrying the draft's
+        // NEGATIVE transient id; the WS persist then remaps it to the real positive id.
+        await ctx.Page!.Locator("input.new-design-label").FillAsync(label);
+        await ctx.Page.Locator("button.add-design").ClickAsync();
+        // Confirm the new row shows in the list (the race-free client re-render).
+        await ctx.Page.WaitForSelectorAsync(
+            $".design-row:has(.design-label:text-is({CssString(label)}))");
+        // Then wait for the persist+remap to land on the client — the row's Edit link must point at the
+        // real (positive) id, so a later Edit click navigates to the now-persisted design, not its
+        // transient negative id. The href is /designs/<id> via sys.nest, so match a positive trailing id.
+        await ctx.Page.WaitForFunctionAsync(
+            $$"""
+            () => {
+                const rows = [...document.querySelectorAll('.design-row')];
+                const row = rows.find(r => { const l = r.querySelector('.design-label'); return l && l.textContent.trim() === {{JsString(label)}}; });
+                if (!row) return false;
+                const a = row.querySelector('a.edit-design');
+                return a != null && /\/designs\/[0-9]+$/.test(a.getAttribute('href') || '');
+            }
+            """);
+    }
+
+    [When("I create an instance named {string} from the design {string} on a free port pair")]
+    public async Task WhenCreateInstance(string name, string designLabel)
+    {
+        // The inline "New instance" form on /instances: pick the design (its option value is the design
+        // id), give it a display name, fill a genuinely free app/infra port pair (a hard-coded pair would
+        // collide with the other in-process hosts → a kernel reject), then click Create. Create runs
+        // sys.create(d, name, appPort, infraPort) — a host action that spawns a new instance running that
+        // design under that name.
+        await ctx.Page!.Locator("select.new-instance-design").SelectOptionAsync(
+            new Microsoft.Playwright.SelectOptionValue { Label = designLabel });
+        _newInstanceName = name;
+        await ctx.Page.Locator("input.new-instance-name").FillAsync(name);
+        _newInstanceAppPort = InstanceContext.FreePort();
+        _newInstanceInfraPort = InstanceContext.FreePort();
+        await ctx.Page.Locator("input.new-instance-app-port").FillAsync(_newInstanceAppPort.ToString());
+        await ctx.Page.Locator("input.new-instance-infra-port").FillAsync(_newInstanceInfraPort.ToString());
+        // The Create button is gated on a picked design (it renders inside `if sys.id(d) == newDesignId`),
+        // so it only appears once the <select> onchange has set the picked id — wait for it, then click.
+        await ctx.Page.Locator("button.create-instance").ClickAsync();
     }
 
     // ── When: editing a design (on /designs/<id>) ────────────────────────────────
@@ -146,6 +216,14 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             $"() => [...document.querySelectorAll('.design-editor .type-row input.type-name')].some(e => e.value === {JsString(name)})");
 
+    [Then("the design editor shows the design's label {string}")]
+    public async Task ThenEditorShowsLabel(string label) =>
+        // The editor's heading binds the design's label (h2.design-label = design.label); a freshly-added
+        // design opens here with its label and otherwise-empty fields (an empty types list, empty code
+        // areas) — a valid library entry, only invalid to DEPLOY until it gains types.
+        await ctx.Page!.WaitForSelectorAsync(
+            $".design-editor h2.design-label:text-is({CssString(label)})");
+
     [Then("the design editor shows the design's UI text in a textarea")]
     public async Task ThenEditorShowsUiText() =>
         // The design's `ui` section text is bound into the code-area <textarea> (a real multi-line
@@ -161,6 +239,32 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // The current design's label is rendered inside the same row, resolved by the explicit designId
         // reference (a row whose designId matches no design shows no .design-label).
         await Assert.That(await row.Locator($".design-label:text-is({CssString(designLabel)})").CountAsync())
+            .IsGreaterThanOrEqualTo(1);
+    }
+
+    [Then("a new instance {string} running design {string} appears in the instances list")]
+    public async Task ThenNewInstanceAppears(string name, string designLabel)
+    {
+        // The host action (sys.create) is async; first wait until the kernel has spawned the instance on
+        // the ports we picked, with the chosen design recorded on its new registry entry (its designId is
+        // the picked design's id — threaded through CreateAsync). This proves the create landed. Create
+        // binds two ports + starts two GenHTTP hosts, so it can run long at the tail of a saturated full
+        // suite — a wide window keeps it deterministic (same reasoning as ThenTargetDescribesType's deploy).
+        var designId = ctx.DesignIdForLabel(designLabel);
+        await EventuallyAsync(() => ctx.Kernel!.Instances
+            .Any(i => i.Spec.AppPort == _newInstanceAppPort && i.Spec.DesignId == designId), timeoutMs: 30000);
+
+        // The instances list is a live VIEW, not a live PUSH (a host-action ok does not re-render the open
+        // page), so reload /instances — a fresh SSR over the kernel's refreshed live set now shows the new
+        // row. The created instance carries the name we typed; assert a row for it shows the picked design
+        // (its design-label resolves through the new designId reference) — proving name + design both flowed
+        // through create → registry → list.
+        await ctx.Page!.GotoAsync("/instances");
+        await ctx.Page.WaitForSelectorAsync("main.ide-list .instance-row");
+        var newRow = ctx.Page.Locator($".instance-row:has(.instance-app:text-is({CssString(name)}))");
+        await Assert.That(await newRow.CountAsync()).IsGreaterThanOrEqualTo(1);
+        await Assert.That(
+            await newRow.Locator($".design-label:text-is({CssString(designLabel)})").CountAsync())
             .IsGreaterThanOrEqualTo(1);
     }
 
@@ -188,10 +292,11 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // Apply also deployed: it wrote the projected app document onto the target instance's app doc (its
         // own sovereign id-dir). Poll it (the WS host-action + file write is async) until the type appears.
         // The deploy projects the WHOLE app and resets the target store, so it can run long at the tail of
-        // a saturated full suite — a wider window than the 8s default keeps it deterministic.
+        // a saturated full suite — a wide window keeps it deterministic (this feature's 8 kernel-backed
+        // browser scenarios run [NotInParallel], so the last one's deploy lands under peak load).
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
         await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
-            && File.ReadAllText(target.Spec.SchemaPath).Contains(typeName), timeoutMs: 15000);
+            && File.ReadAllText(target.Spec.SchemaPath).Contains(typeName), timeoutMs: 30000);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────

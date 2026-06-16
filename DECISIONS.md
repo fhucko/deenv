@@ -1469,7 +1469,7 @@ reference that replaced label-matching:
   (`foreach d in db.designs { if sys.id(d) == routeId { … } }`). `/instances` = the instances list
   (`sys.instances`: app + its CURRENT design's label + Open + Clone + Delete). `/instances/<id>` = ONLY a
   design SELECTOR (a `<select>` dropdown of `db.designs`, current pre-selected + Apply + Clone + Delete).
-  All hand-rolled in `instances/4/app.app`'s custom `fn render()` (still round-trip stable —
+  All hand-rolled in `instances/1/app.app`'s custom `fn render()` (still round-trip stable —
   `AppPrintTests`); `sys.segment`/`sys.toInt`/`sys.id` do the routing.
 - **The instance↔design link is an EXPLICIT reference, not label-matching** (the user chose this). Each
   registry entry gains `designId` (the id of a `Design` in the designer's `db.designs`): added to
@@ -1508,6 +1508,41 @@ reference that replaced label-matching:
   designs list + editor + instances list + selector pre-select + Apply-records-and-deploys + edit-then-
   apply) + `HostAction.feature` (2 `setDesign` WS-seam scenarios) + a `Code.feature` SSR scenario (a
   `<select>` marks a non-first option `selected`, and omits `value` on the `<select>`).
+
+**Named create + rename + restart-on-publish — the operator flow's completers — landed 2026-06-16.**
+The deferred follow-ups from "Operator instance ops" (named create, rename) plus the deploy-visibility
+gap (publish wrote the doc but the running instance kept serving the old one).
+
+- **Named create.** The `/instances/new` stub is replaced by an inline "New instance" form on
+  `/instances` (design `<select>` + a name `<input>` + a free port pair + Create). `sys.create` gains a
+  name argument BEFORE the ports — `sys.create(schema, name, appPort, infraPort)` — matching the logical
+  order ("what → what to call it → where to host it"). The name flows through `KernelHost.CreateAsync`
+  into the new `InstanceSpec.App` + `RegistryEntry`, so the created instance shows under the typed label.
+  (Created instances no longer hard-code the label `"app"`.) `BuiltinArities["create"]` 3→4; both twins
+  read it positionally.
+- **Rename = `sys.rename(id, name)`**, a per-instance op that edits ONLY the registry display label.
+  `KernelHost.RenameAsync` updates the live spec (`HostedInstance.SetApp`) + rewrites `kernel.json` — NO
+  restart (the label is metadata, used for nothing functional, so nothing hosted changes). A new kernel
+  delegate (`Func<int,string,Task> renameInstance`), `ArgText` reads the text arg, server-only `ExecNothing`
+  + `hostAction` hook + `BuiltinArities["rename"]=2` in both twins (the "three places" guard).
+- **Restart-on-publish.** `publish` and `setDesign` wrote the projected doc + reset data but the LIVE
+  instance kept serving the old schema until the next boot. They now fire `restartInstance(targetId)`
+  AFTER the write — the kernel stops the target's two hosts, re-reads the now-updated schema/data from
+  disk, and starts fresh hosts on the same ports (`KernelHost.RestartAsync`). **Fire-and-forget** (`_ =
+  restartInstance(…)`), NOT awaited: the host-action "ok" is sent BEFORE the restart begins, so the
+  designer publishing to ITSELF doesn't deadlock (the WS handler is already done when its own hosts stop).
+  User decision: "the instance should restart on publish … for now restart is acceptable" — a seamless
+  hot-update is a later refinement.
+- **`DesignId` is `int?` (null = no design).** The designer runs no user design, so its `kernel.json`
+  entry has no `designId` at all (`int? DesignId = null` + `JsonIgnoreCondition.WhenWritingNull` omits the
+  field) — cleaner than a sentinel `0`. Threaded through `RegistryEntry`/`InstanceSpec`/`InstanceInfo`.
+- **Test-infra gotcha fixed:** `DesignerParallelism.cs`'s `[NotInParallel]` partial class is matched to
+  the Reqnroll-generated class by NAME, which derives from the feature TITLE. The "IDE restructure" renamed
+  the feature, orphaning the partial — the heavy kernel+browser scenarios silently lost `[NotInParallel]`
+  and starved the thread pool under full-suite parallelism (multi-minute runs, publish-round-trip timeouts).
+  Re-pointed to the current class name, with a comment warning that a title change must regenerate it.
+- Specced by the named create + rename additions to `Designer.feature` / `HostAction.feature` and the
+  `restartInstance` seam assertions; `sys.create`/`sys.rename` are server-only effects (no conformance case).
 
 ## The endgame database — the storage pillars' convergence path (north star)
 

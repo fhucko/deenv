@@ -70,9 +70,10 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
             id => _instances.FirstOrDefault(i => i.Spec.Id == id)?.Spec,
             // create projects the caller's schema into a NEW instance via the kernel's own create
             // mechanism, fed the kernel's boot baseDir/registryPath so a Code-triggered create lands
-            // in the same id-layout + registry as a boot one.
-            createInstance: (appDoc, appPort, infraPort) =>
-                CreateAsync(appDoc, appPort, infraPort, baseDir, registryPath),
+            // in the same id-layout + registry as a boot one. The design's id is recorded on the new
+            // entry (so the new instance's design dropdown pre-selects it).
+            createInstance: (appDoc, name, appPort, infraPort, designId) =>
+                CreateAsync(appDoc, name, appPort, infraPort, baseDir, registryPath, designId),
             // delete + clone resolve the id → the live hosted instance, then run the kernel's own
             // DeleteAsync/CloneAsync (fed the same boot baseDir/registryPath as create, so a
             // Code-triggered clone lands in the same id-layout + registry).
@@ -83,7 +84,11 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
             // live view so the dropdown re-selects it on the next render). The projection itself is run
             // by KernelHostActions after this records the reference — the registry write is the "remember
             // which design" half, the publish projection the "deploy it" half.
-            recordDesign: (targetId, designId) => SetDesignAsyncById(targetId, designId, registryPath));
+            recordDesign: (targetId, designId) => SetDesignAsyncById(targetId, designId, registryPath),
+            // restart re-reads the updated schema+data from disk and hot-swaps the hosted instance;
+            // called fire-and-forget after every publish/setDesign.
+            restartInstance: id => RestartAsync(id),
+            renameInstance: (id, name) => RenameAsync(id, name, registryPath));
 
     // Resolve an instance id → the live hosted instance (by its unique Spec.Id) and delete it. An id
     // matching no instance is a clear reject before any work. Every instance is deletable now.
@@ -225,9 +230,13 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // management"). The app document is supplied as content; the operator sets the port pair (ports
     // are a genuinely contended external resource); storage is keyed by a kernel-minted id, never a
     // user-chosen file name (DECISIONS "`create` direction — storage by id…"). A created instance
-    // defaults to the display name "app" (naming a created instance is a follow-up).
+    // `name` is the display label for the new instance (the registry `app` field). `designId` is the
+    // id of the IDE design this instance was spawned from (null when none) — recorded on the new entry
+    // so its design dropdown pre-selects it and the instances list resolves its design, exactly like a
+    // seeded instance; the IDE's create form threads the picked design's id (mirrors how setDesign
+    // writes DesignId on an existing entry).
     public async Task<HostedInstance> CreateAsync(
-        string appDoc, int appPort, int assetsPort, string baseDir, string registryPath)
+        string appDoc, string name, int appPort, int assetsPort, string baseDir, string registryPath, int? designId = null)
     {
         // Mint a unique id (max over the live set AND on-disk id-dirs + 1). Its id-dir is
         // instances/<id>/, so it survives a restart and never reuses a directory — even a ghost one.
@@ -237,7 +246,7 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         File.WriteAllText(schemaPath, appDoc);
 
         var spec = new InstanceSpec(
-            id, "app", schemaPath, AppPaths.DataPathForId(baseDir, id), appPort, assetsPort);
+            id, name, schemaPath, AppPaths.DataPathForId(baseDir, id), appPort, assetsPort, designId);
 
         // Collision-check the new spec against the LIVE set's data files + ports (same named errors
         // as boot), so a created instance can never alias a running one's store or port.
@@ -258,7 +267,7 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         // True create-atomicity is the deferred concurrent-write milestone.)
         var stored = RegistryReader.Read(registryPath);
         RegistryWriter.Write(registryPath, new Registry(
-            [.. stored.Instances, new RegistryEntry(id, "app", appPort, assetsPort)]));
+            [.. stored.Instances, new RegistryEntry(id, name, appPort, assetsPort, designId)]));
 
         return created;
     }
@@ -373,6 +382,35 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         RegistryWriter.Write(registryPath, new Registry(
             [.. stored.Instances.Select(e =>
                 e.Id == instance.Spec.Id ? e with { AppPort = newAppPort, InfraPort = newInfraPort } : e)]));
+    }
+
+    // Restart one instance in a RUNNING kernel: stop its current hosts, re-read its now-updated schema
+    // and data from disk (written by a preceding publish/setDesign), and start fresh hosts on the same
+    // ports. Called fire-and-forget after every publish/setDesign so the live instance immediately
+    // reflects the deployed version. Self-restart (the designer publishing to itself) is supported: the
+    // "ok" is sent before this fires, so the WS handler is already done when the hosts stop.
+    // Rename an instance's display label in a RUNNING kernel. Updates the live spec and rewrites
+    // kernel.json so the new label persists. No hosts are stopped — renaming is registry metadata only.
+    public Task RenameAsync(int id, string name, string registryPath)
+    {
+        var instance = _instances.FirstOrDefault(i => i.Spec.Id == id)
+            ?? throw new InvalidOperationException($"No instance with id {id} to rename.");
+        instance.SetApp(name);
+        RefreshRegistry();
+        var stored = RegistryReader.Read(registryPath);
+        RegistryWriter.Write(registryPath, new Registry(
+            [.. stored.Instances.Select(e => e.Id == id ? e with { App = name } : e)]));
+        return Task.CompletedTask;
+    }
+
+    public async Task RestartAsync(int id)
+    {
+        var existing = _instances.FirstOrDefault(i => i.Spec.Id == id);
+        if (existing == null) return;
+        await existing.DisposeAsync();
+        _instances[_instances.IndexOf(existing)] =
+            await HostedInstance.StartAsync(existing.Spec, _registry, HostActionsFor(existing.Spec));
+        RefreshRegistry();
     }
 
     // The base directory an instance was hosted from, recovered from its schema path. Every instance

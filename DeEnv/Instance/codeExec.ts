@@ -519,15 +519,26 @@ function execPublish(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     return { type: "nothing" };
 }
 
-// sys.create(schema, appPort, infraPort): a SERVER-ONLY host action — project the passed SCHEMA
-// object into a NEW kernel instance on the given ports (the sibling of publish: publish replaces an
-// existing instance, create spawns a new one). Like execPublish it stages NOTHING and only fires
-// the hostAction send-hook (schema as its id + the two ports). Returns nothing; SSR/refetch no-ops it.
+// sys.create(schema, name, appPort, infraPort): a SERVER-ONLY host action — project the passed SCHEMA
+// object into a NEW kernel instance with the given display label on the given ports (the sibling of
+// publish: publish replaces an existing instance, create spawns a new one). Like execPublish it stages
+// NOTHING and only fires the hostAction send-hook. Returns nothing; SSR/refetch no-ops it.
 function execCreate(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const schema = executeValue(codeCall.params[0], scope, context).value;
-    const appPort = executeValue(codeCall.params[1], scope, context).value;
-    const infraPort = executeValue(codeCall.params[2], scope, context).value;
-    sendHostAction("create", [schemaIdArg(schema), appPort, infraPort]);
+    const name = executeValue(codeCall.params[1], scope, context).value;
+    const appPort = executeValue(codeCall.params[2], scope, context).value;
+    const infraPort = executeValue(codeCall.params[3], scope, context).value;
+    sendHostAction("create", [schemaIdArg(schema), name, appPort, infraPort]);
+    return { type: "nothing" };
+}
+
+// sys.rename(id, name): a SERVER-ONLY host action — update the display label of an existing kernel
+// instance. The id is a bare int (NOT a schema object). Stages NOTHING; only fires the hostAction
+// send-hook. Returns nothing; SSR/refetch no-ops it.
+function execRename(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const id = executeValue(codeCall.params[0], scope, context).value;
+    const name = executeValue(codeCall.params[1], scope, context).value;
+    sendHostAction("rename", [id, name]);
     return { type: "nothing" };
 }
 
@@ -748,6 +759,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "create": return execCreate(codeCall, scope, context);
         case "cloneInstance": return execCloneInstance(codeCall, scope, context);
         case "delete": return execDelete(codeCall, scope, context);
+        case "rename": return execRename(codeCall, scope, context);
         case "setDesign": return execSetDesign(codeCall, scope, context);
         case "nest": return execNest(codeCall, scope, context);
         case "segment": return execSegment(codeCall, scope, context);

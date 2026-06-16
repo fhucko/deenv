@@ -70,9 +70,10 @@ public static class CodeValidator
         ["extent"] = 1,
         ["setRef"] = 3,
         ["publish"] = 2, // (schema, targetId)
-        ["create"] = 3,  // (schema, appPort, infraPort)
+        ["create"] = 4,  // (schema, name, appPort, infraPort)
         ["cloneInstance"] = 3, // (sourceId, appPort, infraPort)
         ["delete"] = 1,  // (targetId)
+        ["rename"] = 2,  // (id, name)
         ["setDesign"] = 2, // (schema, targetId)
         ["nest"] = 2,
         ["segment"] = 2,

@@ -24,8 +24,8 @@
   </ItemGroup>
 
   <!-- Ship the committed app documents, each in its own id-dir (instances/<id>/app.app), so the
-       tests load the same single source of truth the kernel hosts: instances/1 = todo (TodoDb),
-       2 = crm, 3 = shop, 4 = designer (the meta-schema for Bridge/HostAction). The instances/<id>/
+       tests load the same single source of truth the kernel hosts: instances/1 = designer (the
+       meta-schema for Bridge/HostAction), 2 = todo (TodoDb), 3 = crm, 4 = shop. The instances/<id>/
        structure is preserved into the test output (LinkBase) so a test can resolve a fixture by id,
        exactly like the kernel does. -->
   <ItemGroup>

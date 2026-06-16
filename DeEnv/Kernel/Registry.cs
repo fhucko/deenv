@@ -25,9 +25,9 @@ namespace DeEnv.Kernel;
 // set) this instance currently runs — chosen over label-matching (the IDE used to match a row to a
 // design by name) so the link is exact and rename-safe. It is the id of a `Design` object in the
 // designer's data, recorded by the IDE's Apply action (sys.setDesign) and read back to pre-select the
-// design dropdown on /instances/<id>. 0 means "no design chosen" (e.g. the designer itself), which the
-// IDE renders as no current design.
-public sealed record RegistryEntry(int Id, string App, int AppPort, int InfraPort, int DesignId = 0);
+// design dropdown on /instances/<id>. null means "no design chosen", and is omitted from kernel.json
+// (see RegistryJson.Options — WhenWritingNull).
+public sealed record RegistryEntry(int Id, string App, int AppPort, int InfraPort, int? DesignId = null);
 
 public sealed record Registry(IReadOnlyList<RegistryEntry> Instances);
 
@@ -44,6 +44,7 @@ internal static class RegistryJson
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
         WriteIndented = true,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
     };
 }
 

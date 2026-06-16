@@ -15,7 +15,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
     private const string Sentinel = "UNCHANGED-SENTINEL";
 
     // Bridge.feature is a unit-level test of the M4 ROOT-projection mechanism (SchemaBridge.Project/
-    // Export: a `Db` whose root `types` set IS the designed schema). The live designer (instances/4/
+    // Export: a `Db` whose root `types` set IS the designed schema). The live designer (instances/1/
     // app.app) has since moved to the `Db { designs }` IDE shape (a SET of whole-app Designs, projected
     // by ProjectDesignDocument — the DESIGN path, exercised by HostAction.feature). So this test owns a
     // TEST-LOCAL `Db { types }` meta-schema, decoupled from the live designer — the same isolation

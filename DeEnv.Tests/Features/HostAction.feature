@@ -23,6 +23,7 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     And the target app document describes the designed type "Item"
     And the target app document contains the custom render
     And the target instance's data is reset
+    And the target instance was restarted
 
   @milestone-10 @single-user
   Scenario: Publishing an invalid design is rejected and writes nothing
@@ -49,18 +50,19 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     And the target app document is unchanged
 
   @milestone-10 @single-user
-  Scenario: Create projects the passed design into a new instance on the given ports
+  Scenario: Create projects the passed design into a new named instance on the given ports
     Given a designer instance holding a design with a type "Item" and a custom render
-    When the designer creates an instance from that design on ports 9100 and 9101 over the WS
+    When the designer creates an instance named "myapp" from that design on ports 9100 and 9101 over the WS
     Then the host action reply is ok
     And a new instance was created on ports 9100 and 9101
+    And the created instance has the name "myapp"
     And the created app document describes the designed type "Item"
     And the created app document contains the custom render
 
   @milestone-10 @single-user
   Scenario: Creating from an invalid design is rejected and spawns nothing
     Given a designer instance holding a design whose root is an object type with no props
-    When the designer creates an instance from that design on ports 9100 and 9101 over the WS
+    When the designer creates an instance named "myapp" from that design on ports 9100 and 9101 over the WS
     Then the host action reply is an error mentioning "props"
     And no instance was created
 
@@ -94,6 +96,7 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     And the kernel was asked to record that design on the target's id
     And the target app document describes the designed type "Item"
     And the target instance's data is reset
+    And the target instance was restarted
 
   # An invalid design is rejected before any registry write or document overwrite — Apply records
   # nothing and deploys nothing (the projection validates first).
@@ -104,3 +107,10 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     When the operator applies that design to the target's id over the WS
     Then the host action reply is an error mentioning "props"
     And the target app document is unchanged
+
+  # rename(id, name): update an instance's display label in the registry.
+  @milestone-10 @single-user
+  Scenario: Rename updates an instance's display label
+    When the operator renames instance id 7 to "renamed" over the WS
+    Then the host action reply is ok
+    And the kernel was asked to rename instance id 7 to "renamed"

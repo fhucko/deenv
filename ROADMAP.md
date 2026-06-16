@@ -222,9 +222,9 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   store) — the full create/list/switch/delete *mechanism* in C#. Then the **`sys` namespace** (the
   framework builtins + `instances` under `sys`) and the **host-action channel** (Code triggers a
   server-side host op): `sys.publish(schema, targetId)` runs the M4 schema export onto an existing
-  instance and `sys.create(schema, appPort, infraPort)` spawns a new one — both project a passed
+  instance and `sys.create(schema, name, appPort, infraPort)` spawns a new one — both project a passed
   schema object (carried by its id; the designer's `Db { types }` meta-schema is unchanged).
-  Then the **operator designer + ops**: `designer.app` (now `instances/4/app.app`) gained a HAND-ROLLED
+  Then the **operator designer + ops**: `designer.app` (now `instances/1/app.app`) gained a HAND-ROLLED
   custom `fn render()` (a type/prop editor + the `sys.instances` list + per-instance
   create/clone/delete/publish controls), replacing its auto generic UI — explicit image Code, NOT a
   hidden callable designer (the compose path is rejected). The ops: `sys.delete(id)`,
@@ -232,8 +232,10 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   Underpinned by a **uniform id-based instance identity model**: every instance has a stable unique int
   id; storage is fully id-based (`instances/<id>/`); the registry `app` field is a display NAME label
   (used for nothing functional, no `.app`); the boot-vs-created distinction is removed (ops work on any
-  instance by id). Remaining: named create, rename, richer editing, and promoting the registry to a
-  restricted kernel-instance. See DECISIONS.md ("Operator instance ops + the id-based instance identity model").
+  instance by id). **Named create + rename then completed the operator flow** (the create form takes a
+  display name → `sys.create(schema, name, appPort, infraPort)`; a per-instance Rename → `sys.rename(id,
+  name)` edits the registry label). Remaining: richer editing. See DECISIONS.md ("Operator instance ops +
+  the id-based instance identity model").
 
   **Kernel discipline:** the kernel gains the *mechanism* (host N instances, bind
   ports, hold the registry) — **not** the management *experience*. Create/list/

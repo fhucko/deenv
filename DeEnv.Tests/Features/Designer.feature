@@ -1,5 +1,5 @@
 Feature: The operator IDE (designs library + instance design selector)
-  The designer (instance 4) is a URL-routed multi-instance IDE, authored as an explicit custom
+  The designer (instance 1) is a URL-routed multi-instance IDE, authored as an explicit custom
   `fn render()` over a `Db { designs: set of Design }` meta-schema. A `Design` is a WHOLE app —
   structured `types` plus the other app-document sections (initialData/common/ui) as source text. The
   surfaces are SEPARATE: `/designs` is the design LIBRARY (list + per-design edit/delete) and
@@ -72,3 +72,30 @@ Feature: The operator IDE (designs library + instance design selector)
     When I open the instance "instance"
     And I apply the design
     Then the "instance" instance's app document describes the type "Widget"
+
+  # Create a design: the inline "New design" form on /designs adds a fresh, empty, labelled design to
+  # db.designs. It appears in the library via the client re-render (no nav — race-free), and opening it
+  # shows the (empty) editor. An empty-types design is a valid LIBRARY entry; it is only invalid to
+  # deploy until it gains types.
+  @milestone-10 @single-user
+  Scenario: Adding a design from the list form puts it in the library and it opens in the editor
+    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    When I open the designs list
+    And I add a design named "blank"
+    Then the designs list shows a design "blank"
+    When I edit the design "blank"
+    Then the design editor shows the design's label "blank"
+
+  # Create an instance: the inline "New instance" form on /instances picks an existing design (a
+  # <select>) + a display name + a free app/infra port pair, and Create spawns a new instance running
+  # that design under that name. The kernel refreshes its live set, so the new instance shows in the list
+  # (race-free) under the typed name — and its NEW registry entry carries the picked design's id, so
+  # opening it pre-selects that design in the selector.
+  @milestone-10 @single-user
+  Scenario: Creating an instance from the list form spawns it running the picked design
+    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    When I open the instances list
+    And I create an instance named "myapp" from the design "crm" on a free port pair
+    Then a new instance "myapp" running design "crm" appears in the instances list
+    When I open that new instance
+    Then the design dropdown has the design "crm" selected

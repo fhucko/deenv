@@ -165,7 +165,7 @@ public sealed class KernelSteps(InstanceContext ctx)
         _createdAppPort = FreePort();
         _createdInfraPort = FreePort();
         _created = await ctx.Kernel!.CreateAsync(
-            BoolApp, _createdAppPort, _createdInfraPort,
+            BoolApp, "app", _createdAppPort, _createdInfraPort,
             ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
         // Its id-dir (<KernelDir>/instances/<id>) is the directory holding the written app document,
         // captured now so a later delete assertion can prove the whole store directory is removed.

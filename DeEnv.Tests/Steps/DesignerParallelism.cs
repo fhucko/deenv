@@ -7,7 +7,11 @@ namespace DeEnv.Tests.Features;
 // generated feature class [NotInParallel] serializes them against the rest of the suite, so each runs
 // with the machine to itself — fast and deterministic. (A partial declaration of the Reqnroll-generated
 // class; the attribute applies to its discovered tests.)
+//
+// NOTE: this class name MUST match the Reqnroll-generated class, which derives from the Feature TITLE in
+// Designer.feature. If that title changes, regenerate the name (else this becomes a dead orphan partial
+// and the real tests silently lose [NotInParallel] — they then starve under full parallelism).
 [TUnit.Core.NotInParallel]
-public partial class TheOperatorIDERoutedMulti_InstanceDesignerFeature
+public partial class TheOperatorIDEDesignsLibraryInstanceDesignSelectorFeature
 {
 }

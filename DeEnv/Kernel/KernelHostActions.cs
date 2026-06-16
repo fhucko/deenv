@@ -28,14 +28,16 @@ namespace DeEnv.Kernel;
 // an id that is not a member of the caller's `designs` is rejected, never a write to the wrong app.
 // SchemaBridge surfaces its validation failure as a reject (it throws, WsHandler catches). The
 // delete / clone delegates are type-distinct (Func<int,Task> vs Func<int,int,int,Task>) so positional
-// mix-ups are compile errors; the call site uses named args for clarity.
+// mix-ups are compile errors; same-typed delegates (deleteInstance / restartInstance) use named args.
 public sealed class KernelHostActions(
     string metaAppPath, string dataPath,
     Func<int, InstanceSpec?> resolveTarget,
-    Func<string, int, int, Task> createInstance,
+    Func<string, string, int, int, int?, Task> createInstance,
     Func<int, Task> deleteInstance,
     Func<int, int, int, Task> cloneInstance,
-    Func<int, int, Task> recordDesign) : IHostActions
+    Func<int, int, Task> recordDesign,
+    Func<int, Task> restartInstance,
+    Func<int, string, Task> renameInstance) : IHostActions
 {
     public void Run(string action, JsonElement args)
     {
@@ -46,6 +48,7 @@ public sealed class KernelHostActions(
             case "cloneInstance": Clone(args); break;
             case "delete": Delete(args); break;
             case "setDesign": SetDesign(args); break;
+            case "rename": Rename(args); break;
             default:
                 throw new InvalidOperationException($"Unknown host action '{action}'.");
         }
@@ -67,6 +70,9 @@ public sealed class KernelHostActions(
 
         var appDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
         SchemaBridge.WriteDocument(appDoc, target.SchemaPath, target.DataPath);
+        // Restart the target so the new schema and reset data take effect immediately. Fire-and-forget:
+        // the "ok" is sent before the restart begins, avoiding self-restart deadlock on the WS thread.
+        _ = restartInstance(targetId);
     }
 
     // setDesign(design, targetId): the IDE's "Apply" — record (in the registry) that the target now runs
@@ -88,22 +94,27 @@ public sealed class KernelHostActions(
         var appDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
         recordDesign(targetId, designId).GetAwaiter().GetResult();
         SchemaBridge.WriteDocument(appDoc, target.SchemaPath, target.DataPath);
+        _ = restartInstance(targetId);
     }
 
-    // create(design, appPort, infraPort): project the PASSED design into a NEW instance on the given
-    // ports — the sibling of publish (spawn rather than replace). arg 0 is the design object id, args
-    // 1/2 the ports. ProjectDesignDocument validates the design first (throws, spawning nothing, on an
-    // invalid one); then the kernel create delegate writes + hot-starts it. The delegate is async (it
-    // binds ports); we block on it because the WS dispatch is synchronous and there is no
-    // synchronization context to deadlock on (a single-operator devops action).
+    // create(design, name, appPort, infraPort): project the PASSED design into a NEW instance with the
+    // given display label on the given ports — the sibling of publish (spawn rather than replace). arg 0
+    // is the design object id, arg 1 the display label, args 2/3 the ports. ProjectDesignDocument
+    // validates the design first (throws, spawning nothing, on an invalid one); then the kernel create
+    // delegate writes + hot-starts it, recording the design's id on the new instance's registry entry
+    // (so its dropdown pre-selects that design, like a seeded one). The delegate is async (it binds
+    // ports); we block on it because the WS dispatch is synchronous and there is no synchronization
+    // context to deadlock on (a single-operator devops action).
     private void Create(JsonElement args)
     {
-        var design = ResolveDesign(ArgInt(args, 0));
-        var appPort = ArgInt(args, 1);
-        var infraPort = ArgInt(args, 2);
+        var designId = ArgInt(args, 0);
+        var design = ResolveDesign(designId);
+        var name = ArgText(args, 1);
+        var appPort = ArgInt(args, 2);
+        var infraPort = ArgInt(args, 3);
 
         var appDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
-        createInstance(appDoc, appPort, infraPort).GetAwaiter().GetResult();
+        createInstance(appDoc, name, appPort, infraPort, designId).GetAwaiter().GetResult();
     }
 
     // cloneInstance(sourceId, appPort, infraPort): copy an existing instance (app doc + data) into a
@@ -144,6 +155,15 @@ public sealed class KernelHostActions(
                 $"No design with id {designId} in the designer's `designs` set.");
     }
 
+    // rename(id, name): update an instance's display label in the registry. arg 0 is the instance id,
+    // arg 1 the new label text. The rename delegate updates the live spec and rewrites kernel.json.
+    private void Rename(JsonElement args)
+    {
+        var id = ArgInt(args, 0);
+        var name = ArgText(args, 1);
+        renameInstance(id, name).GetAwaiter().GetResult();
+    }
+
     // Read a required int argument from the evaluated-args JSON array. Code scalars ship as
     // { type, value }; accept a bare JSON number too (defensive). Anything else is a bad call.
     private static int ArgInt(JsonElement args, int index)
@@ -157,5 +177,20 @@ public sealed class KernelHostActions(
             && v.ValueKind == JsonValueKind.Number)
             return v.GetInt32();
         throw new InvalidOperationException($"host action expects an integer argument at position {index}.");
+    }
+
+    // Read a required text argument from the evaluated-args JSON array. Code scalars ship as
+    // { type, value }; accept a bare JSON string too (defensive). Anything else is a bad call.
+    private static string ArgText(JsonElement args, int index)
+    {
+        if (args.ValueKind != JsonValueKind.Array || args.GetArrayLength() <= index)
+            throw new InvalidOperationException($"host action expects an argument at position {index}.");
+        var arg = args[index];
+        if (arg.ValueKind == JsonValueKind.String)
+            return arg.GetString()!;
+        if (arg.ValueKind == JsonValueKind.Object && arg.TryGetProperty("value", out var v)
+            && v.ValueKind == JsonValueKind.String)
+            return v.GetString()!;
+        throw new InvalidOperationException($"host action expects a text argument at position {index}.");
     }
 }

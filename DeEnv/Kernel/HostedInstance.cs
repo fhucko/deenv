@@ -14,11 +14,11 @@ namespace DeEnv.Kernel;
 // `Id` is the instance's address for clone/delete/publish and the sole key to its files; `App` is a
 // display NAME label only (surfaced to `sys.instances`), used for nothing functional — the file path
 // no longer reveals it, so it is carried here for rendering. `DesignId` is the explicit reference to
-// the IDE design this instance runs (0 = none), carried from the registry through to `sys.instances` so
-// the design dropdown can pre-select it; the IDE's Apply (sys.setDesign) updates it. Resolving paths
+// the IDE design this instance runs (null = none), carried from the registry through to `sys.instances`
+// so the design dropdown can pre-select it; the IDE's Apply (sys.setDesign) updates it. Resolving paths
 // into the spec keeps locality in one place and out of the registry shape.
 public sealed record InstanceSpec(
-    int Id, string App, string SchemaPath, string DataPath, int AppPort, int InfraPort, int DesignId = 0);
+    int Id, string App, string SchemaPath, string DataPath, int AppPort, int InfraPort, int? DesignId = null);
 
 // One instance running under the kernel: its sovereign store and the two GenHTTP hosts. This is
 // the single-instance "build + start both hosts" unit, extracted from Program.cs's old hosting
@@ -35,6 +35,7 @@ public sealed class HostedInstance : IAsyncDisposable
     // registry metadata only — the hosting (ports, store) is unchanged — so this is a plain spec swap, no
     // restart. The kernel persists the new value to kernel.json + refreshes the live view (KernelHost.SetDesign).
     internal void SetDesignId(int designId) => Spec = Spec with { DesignId = designId };
+    internal void SetApp(string name) => Spec = Spec with { App = name };
 
     private readonly IServerHost _appHost;
     private readonly IServerHost _infraHost;
