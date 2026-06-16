@@ -14,9 +14,35 @@ public sealed class BridgeSteps(InstanceContext ctx)
 {
     private const string Sentinel = "UNCHANGED-SENTINEL";
 
-    // The designer (the meta-schema) lives in its id-dir (instances/4/app.app) now that storage is
-    // id-based (the file name no longer carries the app's identity).
-    private readonly string _designerAppPath = Path.Combine(AppContext.BaseDirectory, "instances", "4", "app.app");
+    // Bridge.feature is a unit-level test of the M4 ROOT-projection mechanism (SchemaBridge.Project/
+    // Export: a `Db` whose root `types` set IS the designed schema). The live designer (instances/4/
+    // app.app) has since moved to the `Db { designs }` IDE shape (a SET of whole-app Designs, projected
+    // by ProjectDesignDocument — the DESIGN path, exercised by HostAction.feature). So this test owns a
+    // TEST-LOCAL `Db { types }` meta-schema, decoupled from the live designer — the same isolation
+    // HostActionSteps uses for its own `Db { designs }` meta. It still defines MetaType/MetaProp, so the
+    // "meta-schema document loads" scenario holds. (Written to a temp .app per scenario, alongside the
+    // existing temp data/export files — these step temp files are left to the OS temp dir, as before.)
+    private const string MetaSchema =
+        """
+        types
+            Db
+                types: set of MetaType
+            MetaType
+                name: text
+                baseType: text
+                order: int
+                props: set of MetaProp
+            MetaProp
+                name: text
+                type: text
+                cardinality: text
+                keyType: text
+                order: int
+        """;
+
+    // The per-scenario temp path the test-local meta-schema is written to (set by GivenDesignerInstance
+    // / WhenMetaSchemaLoaded), used as the meta path for the export.
+    private string _designerAppPath = "";
 
     // Designer-data authoring state (per scenario).
     private InstanceDescription? _meta;
@@ -25,6 +51,18 @@ public sealed class BridgeSteps(InstanceContext ctx)
     private string _exportedSchemaPath = "";
     private string _exportedDataPath = "";
     private readonly Dictionary<string, int> _typeKeys = new();
+
+    // Write the test-local meta-schema to a temp .app and return its path, so the export reads it as
+    // the meta. Idempotent within a scenario (a single temp file reused).
+    private string EnsureMetaSchemaFile()
+    {
+        if (_designerAppPath.Length == 0)
+        {
+            _designerAppPath = Path.GetTempFileName();
+            File.WriteAllText(_designerAppPath, MetaSchema);
+        }
+        return _designerAppPath;
+    }
 
     // Meta-schema load + export results.
     private InstanceDescription? _metaLoaded;
@@ -35,12 +73,12 @@ public sealed class BridgeSteps(InstanceContext ctx)
     // ── Given: meta-schema document ─────────────────────────────────────────────
 
     [Given("the meta-schema document")]
-    public void GivenTheMetaSchemaDocument() { /* the designer (instances/4/app.app) ships to the test output */ }
+    public void GivenTheMetaSchemaDocument() { /* the test-local meta-schema is written on demand */ }
 
     [When("the meta-schema is loaded")]
     public void WhenMetaSchemaLoaded()
     {
-        try { _metaLoaded = InstanceDescriptionLoader.LoadFile(_designerAppPath); }
+        try { _metaLoaded = InstanceDescriptionLoader.LoadFile(EnsureMetaSchemaFile()); }
         catch (Exception ex) { _metaError = ex; }
     }
 
@@ -62,7 +100,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
     [Given("a designer instance")]
     public void GivenDesignerInstance()
     {
-        _meta = InstanceDescriptionLoader.LoadFile(_designerAppPath);
+        _meta = InstanceDescriptionLoader.LoadFile(EnsureMetaSchemaFile());
         _designerDataPath = Path.GetTempFileName();
         _designer = new JsonFileInstanceStore(_designerDataPath, _meta);
 

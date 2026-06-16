@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using DeEnv.Instance;
 using DeEnv.Kernel;
 using DeEnv.Storage;
@@ -65,13 +67,6 @@ public class InstanceContext
     // and ui code in one text document; tests drive the real single source of truth.
     public static InstanceDescription TodoDb() =>
         InstanceDescriptionLoader.LoadFile(AppFixture(1));
-
-    // The designer app (DeEnv/instances/4/app.app): the operator-facing surface, authored as an
-    // explicit custom `fn render()` over its own meta-schema (Db { types: set of MetaType }).
-    // No initialData seed — the schema starts empty and is built through the hand-rolled
-    // editor (the same document BridgeSteps/HostActionSteps load purely as the meta-schema).
-    public static InstanceDescription DesignerDb() =>
-        InstanceDescriptionLoader.LoadFile(AppFixture(4));
 
     // A committed app fixture, resolved by its id-dir (instances/<id>/app.app) under the test output
     // — the same id-based layout the kernel hosts. Storage is fully id-based; the file name ("app")
@@ -397,5 +392,85 @@ public class InstanceContext
             Page.SetDefaultTimeout(5000);
             Page.SetDefaultNavigationTimeout(5000);
         }
+    }
+
+    // ── kernel-backed designer browser (milestone 10: the operator IDE) ─────────
+
+    // The operator IDE (instances/4/app.app) renders `sys.instances` — the kernel's hosted set — so it
+    // can only be driven against a REAL KernelHost (TestInstanceServer hosts a single instance with no
+    // kernel, so `sys.instances` would be empty). This boots a kernel hosting the REAL designer as id 4
+    // plus the given target instances (each a tiny bool app, labelled to match a seeded design), then
+    // points Playwright at the DESIGNER instance's app port. Returns the designer's HostedInstance so a
+    // step can reach its store; targets are reached via Kernel.Instances by their label (Spec.App).
+    public async Task<HostedInstance> StartKernelDesignerBrowserAsync(params (int Id, string Label)[] targets)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "deenv-ide-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        KernelDir = dir;
+
+        // The designer at id 4: the REAL committed instances/4/app.app (copied from the test output),
+        // hosted by the kernel exactly as production would.
+        WriteIdApp(dir, 4, File.ReadAllText(AppFixture(4)));
+
+        // Each target: a minimal valid bool app in its own id-dir. Its registry `app` label is what the
+        // IDE matches against a seeded design's label, so a publish/edit resolves the right design.
+        var entries = new List<string>
+        {
+            RegistryEntryJson(4, "designer", FreePort(), FreePort()),
+        };
+        foreach (var (id, label) in targets)
+        {
+            WriteIdApp(dir, id, TargetBoolApp);
+            entries.Add(RegistryEntryJson(id, label, FreePort(), FreePort()));
+        }
+
+        File.WriteAllText(Path.Combine(dir, "kernel.json"),
+            "{\n  \"instances\": [\n    " + string.Join(",\n    ", entries) + "\n  ]\n}");
+
+        var registry = RegistryReader.Read(Path.Combine(dir, "kernel.json"));
+        Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"));
+        await Kernel.StartAsync(KernelHost.SpecsFor(registry, dir));
+
+        var designer = Kernel.Instances.Single(i => i.Spec.Id == 4);
+
+        Playwright = await Microsoft.Playwright.Playwright.CreateAsync();
+        Browser = await Playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+        Page = await Browser.NewPageAsync(new BrowserNewPageOptions
+        {
+            BaseURL = $"http://localhost:{designer.AppPort}",
+        });
+        Page.SetDefaultTimeout(5000);
+        Page.SetDefaultNavigationTimeout(5000);
+        return designer;
+    }
+
+    // A minimal valid app for a publish/edit target: an object Db with one bool. Its content is
+    // irrelevant beyond being hostable (a publish overwrites it) — the label, not the doc, ties it to
+    // a design.
+    private const string TargetBoolApp = """
+    types
+        Db
+            ready: bool
+    """;
+
+    private static void WriteIdApp(string dir, int id, string appDoc)
+    {
+        var idDir = AppPaths.IdDirFor(dir, id);
+        Directory.CreateDirectory(idDir);
+        File.WriteAllText(Path.Combine(idDir, "app.app"), appDoc);
+    }
+
+    private static string RegistryEntryJson(int id, string label, int appPort, int infraPort) =>
+        $"{{ \"id\": {id}, \"app\": \"{label}\", \"appPort\": {appPort}, \"infraPort\": {infraPort} }}";
+
+    // Grab a free TCP port by binding to :0, reading the assigned port, then releasing it — the same
+    // approach KernelSteps/TestInstanceServer use for their in-process hosts.
+    private static int FreePort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
     }
 }
