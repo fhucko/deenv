@@ -369,6 +369,56 @@
           "body": { "type": "block", "statements": [ { "type": "return", "value": { "type": "symbol", "name": "x" } } ] } } ]
       },
       "expect": { "kind": "intList", "value": [ 2, 3 ] }
+    },
+    {
+      "name": "where over the SAME collection with a predicate closing over an outer var disambiguates per value (memo-key closure)",
+      "comment": "pick(x) = nums.where(n => n == x) called for x=10 then RETURNING x=20. The lambda AST node — and the collection nums (one id, captured) — are identical across both calls, so keying the where memo on (collection id, lambda id) alone returns pick(10)'s [10] for pick(20). Folding the captured x into the key makes them distinct; the result must be [20], not [10].",
+      "expr": {
+        "type": "call", "params": [],
+        "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+          { "type": "varDec", "name": "nums", "value": { "type": "array", "items": [
+            { "type": "int", "value": 10 }, { "type": "int", "value": 20 }, { "type": "int", "value": 30 } ] } },
+          { "type": "fn", "name": "pick", "params": [ { "name": "x" } ], "body": { "type": "block", "statements": [
+            { "type": "return", "value": {
+              "type": "call",
+              "fn": { "type": "infixOp", "op": "objectProp",
+                "left": { "type": "symbol", "name": "nums" }, "right": { "type": "symbol", "name": "where" } },
+              "params": [ { "type": "fn", "params": [ { "name": "n" } ], "body": { "type": "block", "statements": [
+                { "type": "return", "value": { "type": "infixOp", "op": "equals",
+                  "left": { "type": "symbol", "name": "n" }, "right": { "type": "symbol", "name": "x" } } } ] } } ] } } ] } },
+          { "type": "varDec", "name": "a", "value": {
+            "type": "call", "fn": { "type": "symbol", "name": "pick" }, "params": [ { "type": "int", "value": 10 } ] } },
+          { "type": "return", "value": {
+            "type": "call", "fn": { "type": "symbol", "name": "pick" }, "params": [ { "type": "int", "value": 20 } ] } }
+        ] } },
+        "params": []
+      },
+      "expect": { "kind": "intList", "value": [ 20 ] }
+    },
+    {
+      "name": "orderBy over the SAME collection with a selector closing over an outer var disambiguates per value (memo-key closure)",
+      "comment": "srt(sign) = nums.orderBy(n => n * sign) called for sign=1 (ascending) then RETURNING sign=-1 (descending). Same lambda node + same captured collection across both calls, so a (collection id, lambda id) key returns srt(1)'s ascending order for srt(-1). Folding the captured sign into the key disambiguates; the result must be the descending [3, 2, 1].",
+      "expr": {
+        "type": "call", "params": [],
+        "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+          { "type": "varDec", "name": "nums", "value": { "type": "array", "items": [
+            { "type": "int", "value": 1 }, { "type": "int", "value": 2 }, { "type": "int", "value": 3 } ] } },
+          { "type": "fn", "name": "srt", "params": [ { "name": "sign" } ], "body": { "type": "block", "statements": [
+            { "type": "return", "value": {
+              "type": "call",
+              "fn": { "type": "infixOp", "op": "objectProp",
+                "left": { "type": "symbol", "name": "nums" }, "right": { "type": "symbol", "name": "orderBy" } },
+              "params": [ { "type": "fn", "params": [ { "name": "n" } ], "body": { "type": "block", "statements": [
+                { "type": "return", "value": { "type": "infixOp", "op": "multiply",
+                  "left": { "type": "symbol", "name": "n" }, "right": { "type": "symbol", "name": "sign" } } } ] } } ] } } ] } },
+          { "type": "varDec", "name": "a", "value": {
+            "type": "call", "fn": { "type": "symbol", "name": "srt" }, "params": [ { "type": "int", "value": 1 } ] } },
+          { "type": "return", "value": {
+            "type": "call", "fn": { "type": "symbol", "name": "srt" }, "params": [ { "type": "int", "value": -1 } ] } }
+        ] } },
+        "params": []
+      },
+      "expect": { "kind": "intList", "value": [ 3, 2, 1 ] }
     }
   ]
 }

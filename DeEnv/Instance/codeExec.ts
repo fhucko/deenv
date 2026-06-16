@@ -220,7 +220,7 @@ function runWithMemoBypass(f: () => void): void {
 // the next maybeRefetch round-trips for authoritative state.
 let needsServerData = false;
 
-function setMemoCache(cache: Map<string, ClientCacheEntry>): void { memoCache = cache; }
+function setMemoCache(cache: Map<string, ClientCacheEntry> | null): void { memoCache = cache; }
 
 function recordProp(objId: number, prop: string): void {
     if (depStack.length > 0) depStack[depStack.length - 1].props.push({ obj: objId, prop });
@@ -250,6 +250,24 @@ function argKey(v: ExecValue): string {
 }
 function memoKey(callee: string, args: ExecValue[]): string {
     return args.length === 0 ? callee : callee + "|" + args.map(argKey).join(",");
+}
+
+// The captured-environment part of a where/orderBy memo key — twin of CodeExecutor.cs's
+// ClosureKey. The lambda's free vars vary per call (e.g. a foreach loop var it closes
+// over) yet the lambda AST id is the SAME node every iteration, so (collection id, lambda
+// id) alone collides — every call returns the first's result. Fold in the lambda's
+// captured NON-top scope values: walk its scope chain up while !isTop (the transient
+// frames — fn calls, blocks, foreach items — holding the closed-over locals), keying each
+// bound item by argKey; stop at the first top scope (globals are stable, the collection id
+// already covers the data). Names are sorted so both interpreters enumerate a scope
+// identically. Over-keying on all captured locals (a superset of the actual free vars)
+// only costs an extra recompute; it is never stale.
+function closureKey(lambda: ExecFunction): string {
+    let key = "";
+    for (let s: ExecScope | null = lambda.scope; s != null && !s.isTop; s = s.parent)
+        for (const name of Object.keys(s.items).sort())
+            key += ":" + name + "=" + argKey(s.items[name].value);
+    return key;
 }
 
 function memoize(key: string, context: ExecContext, compute: () => ExecValue): ExecValue {
@@ -542,11 +560,11 @@ function collectionSysFunction(arr: ExecArray, method: string, context: ExecCont
         case "setEntry": return { type: "sysFn", fn: args => { setDictEntry(arr, args[0], args[1]); return { type: "nothing" }; } };
         case "where": return { type: "sysFn", fn: args => {
             const lambda = asLambda(args[0]);
-            return memoize(`where:a${arr.id}:fn${lambda.fn.id}`, context, () => whereCollection(arr, lambda, context));
+            return memoize(`where:a${arr.id}:fn${lambda.fn.id}${closureKey(lambda)}`, context, () => whereCollection(arr, lambda, context));
         } };
         case "orderBy": return { type: "sysFn", fn: args => {
             const lambda = asLambda(args[0]);
-            return memoize(`orderBy:a${arr.id}:fn${lambda.fn.id}`, context, () => orderByCollection(arr, lambda, context));
+            return memoize(`orderBy:a${arr.id}:fn${lambda.fn.id}${closureKey(lambda)}`, context, () => orderByCollection(arr, lambda, context));
         } };
         case "any": return { type: "sysFn", fn: args => {
             const lambda = asLambda(args[0]);
@@ -851,7 +869,12 @@ function sendHostAction(action: string, args: ExecValue[]): void {
 // runs the same cases in ConformanceTests; any drift fails on one side or the other.
 function runConformance(exprJson: string): string {
     const expr = JSON.parse(exprJson) as CodeValue;
+    // Memoize like the live client (and like the C# runner, whose Memo is always on): a
+    // where/orderBy memo-key collision only surfaces when the cache is active, so the
+    // conformance suite must exercise the cached path to prove both twins disambiguate.
+    setMemoCache(new Map());
     const result = executeValue(expr, { items: {}, parent: null }, { lastId: { value: 0 } }).value;
+    setMemoCache(null);
     switch (result.type) {
         case "int": return JSON.stringify({ kind: "int", value: result.value });
         case "text": return JSON.stringify({ kind: "text", value: result.value });

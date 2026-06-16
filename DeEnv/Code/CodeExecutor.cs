@@ -504,6 +504,25 @@ public sealed class CodeExecutor
         _            => "?",
     };
 
+    // The captured-environment part of a where/orderBy memo key: the lambda's free
+    // variables vary per call (e.g. a foreach loop var the predicate closes over), yet the
+    // lambda AST id is the SAME node every iteration — keying on (collection id, lambda id)
+    // alone collides and returns the first call's result for all. Fold in the lambda's
+    // captured NON-top scope values: walk its scope chain up while !IsTop (the transient
+    // frames — fn calls, blocks, foreach items — that hold the closed-over locals), and key
+    // each bound item by ArgKey. Top scopes are excluded: globals are stable and the
+    // collection id already covers the data. Names are sorted so the two interpreters
+    // enumerate a scope identically. Over-keying on all captured locals (a superset of the
+    // actual free vars) only costs an extra recompute; it is never stale.
+    private static string ClosureKey(ExecFunction lambda)
+    {
+        var key = "";
+        for (var s = lambda.Scope; s is { IsTop: false }; s = s.Parent)
+            foreach (var name in s.Items.Keys.OrderBy(n => n, StringComparer.Ordinal))
+                key += ":" + name + "=" + ArgKey(s.Items[name].Value);
+        return key;
+    }
+
     // Invoke a lambda with one already-evaluated argument (for where/orderBy).
     private IExecValue InvokeLambda(ExecFunction fn, IExecValue arg, ExecContext context)
     {
@@ -531,13 +550,13 @@ public sealed class CodeExecutor
             case "where":
             {
                 var lambda = AsLambda(args[0], scope, context);
-                return Memoize($"where:a{sysFn.Target.Id}:fn{lambda.Function.Id}", context,
+                return Memoize($"where:a{sysFn.Target.Id}:fn{lambda.Function.Id}{ClosureKey(lambda)}", context,
                     () => Where(sysFn.Target, lambda, context));
             }
             case "orderBy":
             {
                 var lambda = AsLambda(args[0], scope, context);
-                return Memoize($"orderBy:a{sysFn.Target.Id}:fn{lambda.Function.Id}", context,
+                return Memoize($"orderBy:a{sysFn.Target.Id}:fn{lambda.Function.Id}{ClosureKey(lambda)}", context,
                     () => OrderBy(sysFn.Target, lambda, context));
             }
             case "any":
