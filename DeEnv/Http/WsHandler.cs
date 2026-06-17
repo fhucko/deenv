@@ -1,9 +1,136 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using DeEnv.Instance;
 using DeEnv.Storage;
 
 namespace DeEnv.Http;
+
+// ── the wire model ─────────────────────────────────────────────────────────────
+//
+// The WS wire is the C#↔TS contract (see DeEnv/Instance/ws.ts). One incoming JSON
+// message → one outgoing JSON response. Both sides are typed here so the field names
+// are the contract; the shapes below reproduce the exact bytes the hand-built JSON
+// used to. A value/vars/args body that needs the schema/runtime to interpret stays a
+// raw JsonElement (DeserializeValue/ExecObjectValue/LeafForType read it schema-driven).
+
+// One request record covering every op (nullable fields, deserialized once per message).
+// A flat union over a tagged JSON object avoids polymorphic deserialization; each handler
+// reads the fields its op carries and validates the ones it requires.
+public sealed record WsRequest
+{
+    [JsonPropertyName("op")]       public string? Op { get; init; }
+    [JsonPropertyName("id")]       public int? Id { get; init; }        // correlation id
+    [JsonPropertyName("clientId")] public string? ClientId { get; init; }
+    [JsonPropertyName("path")]     public string? Path { get; init; }
+    [JsonPropertyName("action")]   public string? Action { get; init; }
+    [JsonPropertyName("args")]     public JsonElement? Args { get; init; }
+    [JsonPropertyName("setId")]    public int? SetId { get; init; }
+    [JsonPropertyName("objectId")] public int? ObjectId { get; init; }
+    [JsonPropertyName("typeName")] public string? TypeName { get; init; }
+    [JsonPropertyName("prop")]     public string? Prop { get; init; }
+    [JsonPropertyName("key")]      public string? Key { get; init; }
+    [JsonPropertyName("refId")]    public int? RefId { get; init; }
+    [JsonPropertyName("tempId")]   public int? TempId { get; init; }
+    [JsonPropertyName("lastId")]   public int? LastId { get; init; }
+    [JsonPropertyName("clear")]    public bool? Clear { get; init; }
+    [JsonPropertyName("value")]    public JsonElement? Value { get; init; }
+    [JsonPropertyName("vars")]     public JsonElement? Vars { get; init; }
+}
+
+// Response records — one per op. Each serializes (compact, no naming policy) to the exact
+// bytes the old JsonObject literal produced; the correlation id is still appended last by
+// WithId, so these never carry it. Field order matches the former literals.
+
+public sealed record WriteResponse
+{
+    [JsonPropertyName("op")]   public string Op => "write";
+    [JsonPropertyName("path")] public required string Path { get; init; }
+    [JsonPropertyName("ok")]   public bool Ok => true;
+}
+
+public sealed record AddEntryResponse
+{
+    [JsonPropertyName("op")]   public string Op => "addEntry";
+    [JsonPropertyName("path")] public required string Path { get; init; }
+    [JsonPropertyName("ok")]   public bool Ok => true;
+    [JsonPropertyName("key")]  public required string Key { get; init; }
+}
+
+public sealed record RemoveEntryResponse
+{
+    [JsonPropertyName("op")]   public string Op => "removeEntry";
+    [JsonPropertyName("path")] public required string Path { get; init; }
+    [JsonPropertyName("ok")]   public bool Ok => true;
+}
+
+public sealed record HelloResponse
+{
+    [JsonPropertyName("op")]           public string Op => "hello";
+    [JsonPropertyName("sessionAlive")] public required bool SessionAlive { get; init; }
+}
+
+public sealed record ObjectPropChangeResponse
+{
+    [JsonPropertyName("op")] public string Op => "objectPropChange";
+    [JsonPropertyName("ok")] public bool Ok => true;
+}
+
+public sealed record SetReferenceFieldResponse
+{
+    [JsonPropertyName("op")] public string Op => "setReferenceField";
+    [JsonPropertyName("ok")] public bool Ok => true;
+    // Present only when a new object was minted (a create-new pick), never for link/clear.
+    [JsonPropertyName("newId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? NewId { get; init; }
+}
+
+// A collection prop the store minted on a new object: its intrinsic id + element type, so
+// the client re-keys the transient array it created optimistically. Field order: id, then
+// elementTypeName (matching the former literal).
+public sealed record CollectionInfo
+{
+    [JsonPropertyName("id")]              public required int Id { get; init; }
+    [JsonPropertyName("elementTypeName")] public required string ElementTypeName { get; init; }
+}
+
+public sealed record ArrayAddResponse
+{
+    [JsonPropertyName("op")]    public string Op => "arrayAdd";
+    // `newId`, not `id` — the reply's `id` slot is the request correlation id (added by WithId).
+    [JsonPropertyName("newId")] public required int NewId { get; init; }
+    // Keyed by user prop name; serializes with the keys verbatim (no naming policy).
+    [JsonPropertyName("collections")] public required Dictionary<string, CollectionInfo> Collections { get; init; }
+    // Echoed back ONLY when the request carried one (a set add from the client).
+    [JsonPropertyName("tempId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TempId { get; init; }
+}
+
+public sealed record ArrayRemoveResponse
+{
+    [JsonPropertyName("op")] public string Op => "arrayRemove";
+    [JsonPropertyName("ok")] public bool Ok => true;
+}
+
+public sealed record RefetchResponse
+{
+    [JsonPropertyName("op")] public string Op => "refetch";
+    // The raw client-state node from RenderState; serialized inline, not reshaped.
+    [JsonPropertyName("state")] public required JsonNode State { get; init; }
+}
+
+public sealed record HostActionResponse
+{
+    [JsonPropertyName("op")] public string Op => "hostAction";
+    [JsonPropertyName("ok")] public bool Ok => true;
+}
+
+public sealed record ErrorResponse
+{
+    [JsonPropertyName("error")] public required string Error { get; init; }
+}
 
 // Transport-agnostic WebSocket message dispatcher.
 // One incoming JSON message → one outgoing JSON response (request/response model).
@@ -30,9 +157,8 @@ public sealed class WsHandler
     }
 
     // The warm per-client session a code-UI message addresses (clientId minted at SSR).
-    private ClientSession? Session(JsonElement root) =>
-        _sessions != null && root.TryGetProperty("clientId", out var c) && c.GetString() is { } id
-            ? _sessions.Get(id) : null;
+    private ClientSession? Session(WsRequest req) =>
+        _sessions != null && req.ClientId is { } id ? _sessions.Get(id) : null;
 
     // ── message dispatch ──────────────────────────────────────────────────────
 
@@ -42,29 +168,27 @@ public sealed class WsHandler
         var op = "?";
         try
         {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
+            var req = JsonSerializer.Deserialize<WsRequest>(json)
+                ?? throw new InvalidOperationException("Empty message.");
 
-            if (root.TryGetProperty("id", out var ide) && ide.ValueKind == JsonValueKind.Number)
-                id = ide.GetInt32();
-
-            op = root.GetProperty("op").GetString() ?? "";
-            var pathStr = root.TryGetProperty("path", out var pe) ? pe.GetString() ?? "/" : "/";
+            id = req.Id;
+            op = req.Op ?? "";
+            var pathStr = req.Path ?? "/";
             var path = ParsePath(pathStr);
 
             var result = op switch
             {
-                "write"            => HandleWrite(path, pathStr, root),
-                "addEntry"         => HandleAddEntry(path, pathStr, root),
-                "removeEntry"      => HandleRemoveEntry(path, pathStr, root),
-                "hello"            => HandleHello(root),
-                "objectPropChange" => HandleObjectPropChange(root),
-                "setReferenceField" => HandleSetReferenceField(root),
-                "arrayAdd"         => HandleArrayAdd(root),
-                "arrayRemove"      => HandleArrayRemove(root),
-                "refetch"          => HandleRefetch(pathStr, root),
-                "hostAction"       => HandleHostAction(root),
-                _                  => Error($"Unknown op '{op}'")
+                "write"             => HandleWrite(path, pathStr, req),
+                "addEntry"          => HandleAddEntry(path, pathStr, req),
+                "removeEntry"       => HandleRemoveEntry(path, pathStr, req),
+                "hello"             => HandleHello(req),
+                "objectPropChange"  => HandleObjectPropChange(req),
+                "setReferenceField" => HandleSetReferenceField(req),
+                "arrayAdd"          => HandleArrayAdd(req),
+                "arrayRemove"       => HandleArrayRemove(req),
+                "refetch"           => HandleRefetch(pathStr, req),
+                "hostAction"        => HandleHostAction(req),
+                _                   => Error($"Unknown op '{op}'")
             };
             return WithId(result, id);
         }
@@ -88,13 +212,13 @@ public sealed class WsHandler
 
     // ── write ─────────────────────────────────────────────────────────────────
 
-    private string HandleWrite(NodePath path, string pathStr, JsonElement root)
+    private string HandleWrite(NodePath path, string pathStr, WsRequest req)
     {
         var typeInfo = _resolver.ResolveType(path);
         if (typeInfo == null)
             return Error($"Path '{pathStr}' does not resolve.");
 
-        if (!root.TryGetProperty("value", out var valEl))
+        if (req.Value is not { } valEl)
             return Error("Missing 'value' in write message.");
 
         var value = DeserializeLeaf(valEl, typeInfo.Type);
@@ -114,51 +238,43 @@ public sealed class WsHandler
             _store.WriteLeaf(path, value);
         }
 
-        var response = new JsonObject { ["op"] = "write", ["path"] = pathStr, ["ok"] = true };
-        return response.ToJsonString(_jsonOpts);
+        return Serialize(new WriteResponse { Path = pathStr });
     }
 
     // ── addEntry (create on the create-form Save) ──────────────────────────────
 
-    private string HandleAddEntry(NodePath path, string pathStr, JsonElement root)
+    private string HandleAddEntry(NodePath path, string pathStr, WsRequest req)
     {
         var typeInfo = _resolver.ResolveType(path);
         if (typeInfo == null)
             return Error($"Path '{pathStr}' does not resolve.");
 
         if (typeInfo.Cardinality == Cardinality.Set)
-            return HandleAddSetMember(path, pathStr, typeInfo, root);
+            return HandleAddSetMember(path, pathStr, typeInfo, req);
 
         if (typeInfo.Cardinality != Cardinality.Dictionary)
             return Error($"Path '{pathStr}' is not a dictionary.");
 
-        if (!root.TryGetProperty("value", out var valueEl))
+        if (req.Value is not { } valueEl)
             return Error("Missing 'value' in addEntry message.");
-        if (!root.TryGetProperty("key", out var keyEl) || keyEl.GetString() is not { } keyStr || keyStr.Length == 0)
+        if (req.Key is not { } keyStr || keyStr.Length == 0)
             return Error("A dictionary entry requires a non-empty 'key'.");
 
         var value = DeserializeValue(valueEl, typeInfo.Type);
         var key = ParseKey(keyStr, typeInfo.KeyTypeName ?? "text");
         _store.CreateEntry(path, key, value); // throws on duplicate → caught as { error }
 
-        var response = new JsonObject
-        {
-            ["op"]   = "addEntry",
-            ["path"] = pathStr,
-            ["ok"]   = true,
-            ["key"]  = KeyString(key)
-        };
-        return response.ToJsonString(_jsonOpts);
+        return Serialize(new AddEntryResponse { Path = pathStr, Key = KeyString(key) });
     }
 
     // ── removeEntry ────────────────────────────────────────────────────────────
 
-    private string HandleRemoveEntry(NodePath path, string pathStr, JsonElement root)
+    private string HandleRemoveEntry(NodePath path, string pathStr, WsRequest req)
     {
         var typeInfo = _resolver.ResolveType(path);
         if (typeInfo == null)
             return Error($"Path '{pathStr}' does not resolve.");
-        if (!root.TryGetProperty("key", out var keyEl) || keyEl.GetString() is not { } keyStr)
+        if (req.Key is not { } keyStr)
             return Error("Missing 'key' in removeEntry message.");
 
         if (typeInfo.Cardinality == Cardinality.Set)
@@ -176,21 +292,20 @@ public sealed class WsHandler
             return Error($"Path '{pathStr}' is not a dictionary or set.");
         }
 
-        var response = new JsonObject { ["op"] = "removeEntry", ["path"] = pathStr, ["ok"] = true };
-        return response.ToJsonString(_jsonOpts);
+        return Serialize(new RemoveEntryResponse { Path = pathStr });
     }
 
     // ── set members + references (object model) ─────────────────────────────────
 
-    private string HandleAddSetMember(NodePath path, string pathStr, ResolvedTypeInfo typeInfo, JsonElement root)
+    private string HandleAddSetMember(NodePath path, string pathStr, ResolvedTypeInfo typeInfo, WsRequest req)
     {
         int id;
-        if (root.TryGetProperty("refId", out var refEl) && refEl.ValueKind == JsonValueKind.Number)
+        if (req.RefId is { } refId)
         {
-            id = refEl.GetInt32();
+            id = refId;
             _store.AddToSet(path, id); // link an existing object
         }
-        else if (root.TryGetProperty("value", out var valueEl))
+        else if (req.Value is { } valueEl)
         {
             var obj = (ObjectValue)DeserializeValue(valueEl, typeInfo.Type);
             id = _store.CreateObject(typeInfo.Type.Name, obj); // mint a new object…
@@ -201,14 +316,7 @@ public sealed class WsHandler
             return Error("addEntry on a set requires 'refId' (existing) or 'value' (new).");
         }
 
-        var response = new JsonObject
-        {
-            ["op"]  = "addEntry",
-            ["path"] = pathStr,
-            ["ok"]  = true,
-            ["key"] = id.ToString()
-        };
-        return response.ToJsonString(_jsonOpts);
+        return Serialize(new AddEntryResponse { Path = pathStr, Key = id.ToString() });
     }
 
     // ── code-owned UI mutations (the Code runtime, identity-addressed) ──────────
@@ -218,16 +326,15 @@ public sealed class WsHandler
     // object's type must declare the prop as a single scalar field, and the value
     // must fit its declared base type. (The client already applied the change
     // optimistically; a reject rolls it back.)
-    private string HandleObjectPropChange(JsonElement root)
+    private string HandleObjectPropChange(WsRequest req)
     {
-        if (!root.TryGetProperty("objectId", out var idEl) || idEl.ValueKind != JsonValueKind.Number)
+        if (req.ObjectId is not { } objectId)
             return Error("objectPropChange requires a numeric 'objectId'.");
-        if (!root.TryGetProperty("prop", out var propEl) || propEl.GetString() is not { } prop)
+        if (req.Prop is not { } prop)
             return Error("objectPropChange requires 'prop'.");
-        if (!root.TryGetProperty("value", out var valEl))
+        if (req.Value is not { } valEl)
             return Error("objectPropChange requires 'value'.");
 
-        var objectId = idEl.GetInt32();
         if (_store.ReadById(objectId) is not { } hit)
             return Error($"No object with id {objectId}.");
         var propDef = _desc.FindType(hit.TypeName)?.Props?.FirstOrDefault(p => p.Name == prop);
@@ -244,8 +351,7 @@ public sealed class WsHandler
             return Error($"'{tv.Text}' is not a value of enum '{propDef.Type}'.");
         _store.WriteField(objectId, prop, leaf);
 
-        var response = new JsonObject { ["op"] = "objectPropChange", ["ok"] = true };
-        return response.ToJsonString(_jsonOpts);
+        return Serialize(new ObjectPropChangeResponse());
     }
 
     // Set/clear a single object REFERENCE prop on the object with this intrinsic id —
@@ -254,14 +360,13 @@ public sealed class WsHandler
     // (reply carries its real id); `clear` unsets. GC runs after (an orphaned target
     // is collected). Identity-addressed so it serves both a reference route and an
     // embedded reference field uniformly.
-    private string HandleSetReferenceField(JsonElement root)
+    private string HandleSetReferenceField(WsRequest req)
     {
-        if (!root.TryGetProperty("objectId", out var idEl) || idEl.ValueKind != JsonValueKind.Number)
+        if (req.ObjectId is not { } objectId)
             return Error("setReferenceField requires a numeric 'objectId'.");
-        if (!root.TryGetProperty("prop", out var propEl) || propEl.GetString() is not { } prop)
+        if (req.Prop is not { } prop)
             return Error("setReferenceField requires 'prop'.");
 
-        var objectId = idEl.GetInt32();
         if (_store.ReadById(objectId) is not { } hit)
             return Error($"No object with id {objectId}.");
         var propDef = _desc.FindType(hit.TypeName)?.Props?.FirstOrDefault(p => p.Name == prop);
@@ -272,16 +377,16 @@ public sealed class WsHandler
         var targetType = _desc.FindType(propDef.Type)!;
 
         int? newId = null;
-        if (root.TryGetProperty("refId", out var refEl) && refEl.ValueKind == JsonValueKind.Number)
+        if (req.RefId is { } refId)
         {
-            _store.WriteReference(objectId, prop, refEl.GetInt32(), targetType.Name);
+            _store.WriteReference(objectId, prop, refId, targetType.Name);
         }
-        else if (root.TryGetProperty("value", out var valueEl))
+        else if (req.Value is { } valueEl)
         {
             newId = _store.CreateObject(targetType.Name, ExecObjectValue(valueEl, targetType));
             _store.WriteReference(objectId, prop, newId, targetType.Name);
         }
-        else if (root.TryGetProperty("clear", out _))
+        else if (req.Clear is not null)
         {
             _store.WriteReference(objectId, prop, null, targetType.Name);
         }
@@ -290,28 +395,26 @@ public sealed class WsHandler
             return Error("setReferenceField requires 'refId', 'value', or 'clear'.");
         }
 
-        var response = new JsonObject { ["op"] = "setReferenceField", ["ok"] = true };
-        if (newId is { } nid) response["newId"] = nid;
-        return response.ToJsonString(_jsonOpts);
+        return Serialize(new SetReferenceFieldResponse { NewId = newId });
     }
 
     // The WS's first message on open: claims the session minted at SSR (keeping it past
     // the claim window). The session carries no data — a refetch re-renders from a fresh
     // store load — so the report is informational; `sessionAlive: false` just means the
     // hello arrived past the window.
-    private string HandleHello(JsonElement root)
+    private string HandleHello(WsRequest req)
     {
-        var alive = Session(root) != null;
-        return new JsonObject { ["op"] = "hello", ["sessionAlive"] = alive }.ToJsonString(_jsonOpts);
+        var alive = Session(req) != null;
+        return Serialize(new HelloResponse { SessionAlive = alive });
     }
 
     // Re-render the code UI and return authoritative client state. Called when a mutation
     // leaves a cache entry the client cannot recompute locally (a hidden dependency). The
     // render runs over a FRESH load from the store — the single source of truth — so it
     // reflects every committed change, not a per-client mirror that could have diverged.
-    private string HandleRefetch(string pathStr, JsonElement root)
+    private string HandleRefetch(string pathStr, WsRequest req)
     {
-        Session(root); // slide liveness; the session holds no data
+        Session(req); // slide liveness; the session holds no data
 
         // Load the graph once from the store; object-valued vars (the client's selection)
         // resolve to the same instances the render uses, so selection-dependent data the
@@ -320,18 +423,17 @@ public sealed class WsHandler
         var byId = IndexObjects(db);
 
         var sessionVars = new Dictionary<string, Code.IExecValue>();
-        if (root.TryGetProperty("vars", out var vars) && vars.ValueKind == JsonValueKind.Object)
+        if (req.Vars is { ValueKind: JsonValueKind.Object } vars)
             foreach (var v in vars.EnumerateObject())
                 if (SessionVarFromWire(v.Value, byId) is { } value)
                     sessionVars[v.Name] = value;
 
         // Transients mint below the client's id floor (no collisions with its local drafts).
-        var lastId = root.TryGetProperty("lastId", out var le) && le.ValueKind == JsonValueKind.Number
-            ? le.GetInt32() : 0;
+        var lastId = req.LastId ?? 0;
         // The refetch renderer gets the SAME live registry provider as the SSR path, so a refetch
         // re-render reflects the kernel's current instances — no stale `instances` list.
         var state = new SsrRenderer(_store, _desc, registry: _registry).RenderState(pathStr, sessionVars, db, lastId);
-        return new JsonObject { ["op"] = "refetch", ["state"] = state }.ToJsonString(_jsonOpts);
+        return Serialize(new RefetchResponse { State = state });
     }
 
     // A server-authoritative host action (the sys.publish channel): the server alone runs the
@@ -340,15 +442,15 @@ public sealed class WsHandler
     // optimistic IInstanceStore ops — a host action is a devops effect outside the data model. A
     // failure (unknown action, bad arg, invalid design, unknown target) throws and ProcessMessage's
     // catch returns it as `{ error }`, which the client surfaces as lastError (no journal replay).
-    private string HandleHostAction(JsonElement root)
+    private string HandleHostAction(WsRequest req)
     {
-        if (!root.TryGetProperty("action", out var actionEl) || actionEl.GetString() is not { } action)
+        if (req.Action is not { } action)
             return Error("hostAction requires a string 'action'.");
-        var args = root.TryGetProperty("args", out var argsEl) ? argsEl : default;
+        var args = req.Args ?? default;
 
         _hostActions.Run(action, args); // throws on failure → caught as { error }
 
-        return new JsonObject { ["op"] = "hostAction", ["ok"] = true }.ToJsonString(_jsonOpts);
+        return Serialize(new HostActionResponse());
     }
 
     // Index every persisted object in a loaded graph by its intrinsic id (for resolving
@@ -395,24 +497,23 @@ public sealed class WsHandler
     // A new set member built on the client (its negative id is transient): mint a real
     // object into the extent, link it into the set, and echo the negative→real id mapping
     // so the client can re-key its optimistic copy.
-    private string HandleArrayAdd(JsonElement root)
+    private string HandleArrayAdd(WsRequest req)
     {
-        if (!root.TryGetProperty("setId", out var setEl) || setEl.ValueKind != JsonValueKind.Number)
+        if (req.SetId is not { } setId)
             return Error("arrayAdd requires a numeric 'setId'.");
-        if (!root.TryGetProperty("typeName", out var tnEl) || tnEl.GetString() is not { } typeName)
+        if (req.TypeName is not { } typeName)
             return Error("arrayAdd requires 'typeName'.");
         if (_desc.FindType(typeName) is not { } typeDef)
             return Error($"Unknown type '{typeName}'.");
 
         // The target set must exist and must declare exactly this element type.
-        var setId = setEl.GetInt32();
         var elementType = _store.SetElementType(setId);
         if (elementType is null)
             return Error($"No set with id {setId}.");
         if (elementType != typeName)
             return Error($"Set {setId} holds '{elementType}' members, not '{typeName}'.");
 
-        var value = root.TryGetProperty("value", out var valEl)
+        var value = req.Value is { } valEl
             ? ExecObjectValue(valEl, typeDef)
             : new ObjectValue(new Dictionary<string, NodeValue>());
         var id = _store.CreateObject(typeName, value);
@@ -422,34 +523,29 @@ public sealed class WsHandler
         // ids; echo them so the client re-keys its transient arrays (else later adds
         // into them would silently not persist).
         var minted = _store.ReadById(id);
-        var collections = new JsonObject();
+        var collections = new Dictionary<string, CollectionInfo>();
         foreach (var prop in typeDef.Props ?? [])
             if (prop.Cardinality == Cardinality.Set
                 && minted?.Fields.Fields.GetValueOrDefault(prop.Name) is SetValue sv)
-                collections[prop.Name] = new JsonObject { ["id"] = sv.Id, ["elementTypeName"] = prop.Type };
+                collections[prop.Name] = new CollectionInfo { Id = sv.Id, ElementTypeName = prop.Type };
 
         // `newId`, not `id` — the reply's `id` slot is the request correlation id.
-        var response = new JsonObject { ["op"] = "arrayAdd", ["newId"] = id, ["collections"] = collections };
-        if (root.TryGetProperty("tempId", out var te) && te.ValueKind == JsonValueKind.Number)
-            response["tempId"] = te.GetInt32();
-        return response.ToJsonString(_jsonOpts);
+        // tempId is echoed only when the request carried one (omitted otherwise).
+        return Serialize(new ArrayAddResponse { NewId = id, Collections = collections, TempId = req.TempId });
     }
 
-    private string HandleArrayRemove(JsonElement root)
+    private string HandleArrayRemove(WsRequest req)
     {
-        if (!root.TryGetProperty("setId", out var setEl) || setEl.ValueKind != JsonValueKind.Number)
+        if (req.SetId is not { } setId)
             return Error("arrayRemove requires a numeric 'setId'.");
-        if (!root.TryGetProperty("objectId", out var objEl) || objEl.ValueKind != JsonValueKind.Number)
+        if (req.ObjectId is not { } objectId)
             return Error("arrayRemove requires a numeric 'objectId'.");
 
-        var setId = setEl.GetInt32();
-        var objectId = objEl.GetInt32();
         if (_store.SetElementType(setId) is null)
             return Error($"No set with id {setId}.");
         _store.RemoveFromSet(setId, objectId);
 
-        var response = new JsonObject { ["op"] = "arrayRemove", ["ok"] = true };
-        return response.ToJsonString(_jsonOpts);
+        return Serialize(new ArrayRemoveResponse());
     }
 
     // A new object's scalar props as the client ships them ({ "props": { name: leaf } }),
@@ -491,55 +587,6 @@ public sealed class WsHandler
             (BaseType.DateTime, "text") => new DateTimeValue(DateTimeOffset.Parse(v.GetString() ?? "")),
             _ => throw new InvalidOperationException($"A '{wireType}' value does not fit the declared '{declared}' field."),
         };
-    }
-
-    // ── NodeValue serialization ───────────────────────────────────────────────
-
-    internal static JsonNode SerializeNodeValue(NodeValue node) => node switch
-    {
-        BoolValue b      => new JsonObject { ["type"] = "bool",     ["value"] = b.Value },
-        IntValue i       => new JsonObject { ["type"] = "int",      ["value"] = i.Value },
-        DecimalValue d   => new JsonObject { ["type"] = "decimal",  ["value"] = d.Value },
-        TextValue t      => new JsonObject { ["type"] = "text",     ["value"] = t.Text },
-        DateValue d      => new JsonObject { ["type"] = "date",     ["value"] = d.Value.ToString("yyyy-MM-dd") },
-        DateTimeValue dt => new JsonObject { ["type"] = "datetime", ["value"] = dt.Value.ToString("O") },
-
-        ObjectValue obj  => SerializeObject(obj),
-        DictionaryValue dv => SerializeDictionary(dv),
-        SetValue sv      => SerializeSet(sv),
-        ReferenceValue r => new JsonObject { ["type"] = "object", ["typeName"] = r.TypeName, ["id"] = r.TargetId },
-
-        _ => throw new InvalidOperationException($"Unhandled NodeValue type: {node.GetType().Name}")
-    };
-
-    private static JsonObject SerializeObject(ObjectValue obj)
-    {
-        var fields = new JsonObject();
-        foreach (var (k, v) in obj.Fields)
-            fields[k] = SerializeNodeValue(v);
-        return new JsonObject { ["type"] = "object", ["fields"] = fields };
-    }
-
-    private static JsonObject SerializeSet(SetValue sv)
-    {
-        var members = new JsonObject();
-        foreach (var (id, v) in sv.Members)
-            members[id.ToString()] = SerializeNodeValue(v);
-        return new JsonObject { ["type"] = "set", ["members"] = members };
-    }
-
-    private static JsonObject SerializeDictionary(DictionaryValue dv)
-    {
-        var entries = new JsonArray();
-        foreach (var (k, v) in dv.Entries)
-        {
-            entries.Add(new JsonObject
-            {
-                ["key"]   = SerializeNodeValue(k),
-                ["value"] = SerializeNodeValue(v)
-            });
-        }
-        return new JsonObject { ["type"] = "dictionary", ["entries"] = entries };
     }
 
     // ── NodeValue deserialization ─────────────────────────────────────────────
@@ -610,9 +657,11 @@ public sealed class WsHandler
         return NodePath.FromSegments(segs);
     }
 
-    private static string Error(string message)
-    {
-        var obj = new JsonObject { ["error"] = message };
-        return obj.ToJsonString();
-    }
+    // Serialize a typed response with the handler's options (compact, no naming policy) —
+    // the bytes the former hand-built JsonObject produced. The correlation id, when present,
+    // is still appended last by WithId.
+    private string Serialize<T>(T response) => JsonSerializer.Serialize(response, _jsonOpts);
+
+    private static string Error(string message) =>
+        JsonSerializer.Serialize(new ErrorResponse { Error = message });
 }
