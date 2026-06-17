@@ -506,16 +506,9 @@ public class InstanceContext
         return map;
     }
 
-    // Grab a free TCP port by binding to :0, reading the assigned port, then releasing it — the same
-    // approach KernelSteps/TestInstanceServer use for their in-process hosts. Public so a step that
-    // fills the create-instance form's port inputs can pick genuinely free ports (the kernel rejects a
-    // port collision, so a hard-coded pair would flake against the other in-process hosts).
-    public static int FreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    // A genuinely free TCP port, never handed out twice this run (see PortAllocator) — so two parallel
+    // scenarios can't be given the same port and have a browser reach the wrong instance. Public so a step
+    // that fills the create-instance form's port inputs can pick free ports (the kernel rejects a port
+    // collision, so a hard-coded pair would flake against the other in-process hosts).
+    public static int FreePort() => PortAllocator.Next();
 }

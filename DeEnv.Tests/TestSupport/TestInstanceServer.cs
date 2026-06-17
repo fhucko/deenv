@@ -54,13 +54,7 @@ public sealed class TestInstanceServer : IAsyncDisposable
         if (_infraHost != null) await _infraHost.StopAsync();
     }
 
-    // Grab a free TCP port by binding to :0, reading the assigned port, then releasing it.
-    private static int GetFreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    // A genuinely free TCP port, never handed out twice this run (see PortAllocator) — so two parallel
+    // in-process servers can't be dealt the same port pair.
+    private static int GetFreePort() => PortAllocator.Next();
 }

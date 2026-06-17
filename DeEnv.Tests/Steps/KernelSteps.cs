@@ -621,14 +621,7 @@ public sealed class KernelSteps(InstanceContext ctx)
         }
     }
 
-    // Grab a free TCP port by binding to :0, reading the assigned port, then releasing it —
-    // the same approach TestInstanceServer uses for its in-process hosts.
-    private static int FreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    // A genuinely free TCP port, never handed out twice this run (see PortAllocator) — so parallel kernel
+    // scenarios can't be dealt the same port and collide.
+    private static int FreePort() => PortAllocator.Next();
 }
