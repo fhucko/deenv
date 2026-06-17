@@ -96,7 +96,13 @@ public sealed class DesignerSeedGenerator
         var reparsed = AppParse.Parse(printed);
         await Assert.That(AppPrint.Print(reparsed)).IsEqualTo(printed);
 
-        File.WriteAllText(designerPath, printed);
+        // Write the committed format DIRECTLY — UTF-8 WITH BOM and CRLF line endings. AppPrint emits LF
+        // and no BOM, but the committed app.app is BOM+CRLF; emitting it here makes a regeneration produce
+        // a clean `git diff` with no manual encoding re-emit. (The escaped `\n` inside the seed strings are
+        // two literal chars, not newlines, so the CRLF conversion only touches real line terminators; the
+        // double-replace collapses any stray CRLF first so no `\r\r\n` can appear.)
+        var committedForm = printed.Replace("\r\n", "\n").Replace("\n", "\r\n");
+        File.WriteAllText(designerPath, committedForm, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
     }
 
     // Regression guard for the committed seed (runs in the normal suite — NOT explicit): every seeded
