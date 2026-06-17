@@ -9,9 +9,9 @@ public sealed class Hooks(InstanceContext ctx)
     [AfterScenario]
     public async Task TeardownAsync()
     {
-        if (ctx.Page != null)    await ctx.Page.CloseAsync();
-        if (ctx.Browser != null) await ctx.Browser.CloseAsync();
-        ctx.Playwright?.Dispose();
+        // Close the scenario's browser context (and its page with it) — the browser + driver are
+        // shared across the run and torn down once at the end (see SharedBrowser).
+        if (ctx.Page != null) await ctx.Page.Context.CloseAsync();
 
         if (ctx.Server != null) await ctx.Server.DisposeAsync();
 

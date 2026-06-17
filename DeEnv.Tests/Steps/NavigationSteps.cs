@@ -159,14 +159,7 @@ public sealed class NavigationSteps(InstanceContext ctx)
             ctx.Store = ctx.Server.Store;
         }
 
-        if (ctx.Browser == null)
-        {
-            ctx.Playwright = await Playwright.CreateAsync();
-            ctx.Browser = await ctx.Playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
-            ctx.Page = await ctx.Browser.NewPageAsync(new BrowserNewPageOptions { BaseURL = ctx.BaseUrl });
-            // Fail fast: 5s, not Playwright's 30s default (see InstanceContext.EnsureServerAndBrowserAsync).
-            ctx.Page.SetDefaultTimeout(5000);
-            ctx.Page.SetDefaultNavigationTimeout(5000);
-        }
+        // A fresh isolated page on the shared browser (launched once for the whole run; see SharedBrowser).
+        ctx.Page ??= await SharedBrowser.NewPageAsync(ctx.BaseUrl);
     }
 }

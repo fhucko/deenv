@@ -228,9 +228,8 @@ public sealed class CodeClientTests
         await server.StartAsync(desc, dataPath);
         seed(server.Store!);
 
-        using var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
-        await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
-        var page = await browser.NewPageAsync(new() { BaseURL = server.BaseUrl });
+        // Reuse the shared browser (launched once for the whole run; see SharedBrowser).
+        var page = await SharedBrowser.NewPageAsync(server.BaseUrl);
         var logs = new List<string>();
         page.Console += (_, m) => logs.Add($"[{m.Type}] {m.Text}");
         page.PageError += (_, e) => logs.Add($"[pageerror] {e}");
@@ -247,7 +246,11 @@ public sealed class CodeClientTests
         }
 
         try { await body(page, server.Store!); }
-        finally { try { File.Delete(dataPath); } catch { /* best-effort */ } }
+        finally
+        {
+            await page.Context.CloseAsync();
+            try { File.Delete(dataPath); } catch { /* best-effort */ }
+        }
     }
 
     private static void SeedTasks(IInstanceStore store)

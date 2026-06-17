@@ -398,11 +398,9 @@ public class InstanceContext
 
     // ── browser ───────────────────────────────────────────────────────────────
 
-    public IPlaywright? Playwright { get; set; }
-    public IBrowser? Browser { get; set; }
     public IPage? Page { get; set; }
 
-    // Lazily start the in-process server and a headless browser. Idempotent, so
+    // Lazily start the in-process server and a page on the shared headless browser. Idempotent, so
     // any step that drives the page can call it (not just "I navigate to …").
     public async Task EnsureServerAndBrowserAsync()
     {
@@ -413,16 +411,9 @@ public class InstanceContext
             Store = Server.Store;
         }
 
-        if (Browser == null)
-        {
-            Playwright = await Microsoft.Playwright.Playwright.CreateAsync();
-            Browser = await Playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
-            Page = await Browser.NewPageAsync(new BrowserNewPageOptions { BaseURL = BaseUrl });
-            // Fail fast: 5s for waits and navigation, not Playwright's 30s default — a genuinely
-            // stuck wait surfaces in seconds instead of hanging the suite for half a minute.
-            Page.SetDefaultTimeout(5000);
-            Page.SetDefaultNavigationTimeout(5000);
-        }
+        // A fresh isolated page on the shared browser (see SharedBrowser): the browser + driver are
+        // launched once for the whole run; each scenario just gets its own context + page.
+        Page ??= await SharedBrowser.NewPageAsync(BaseUrl);
     }
 
     // ── kernel-backed designer browser (milestone 10: the operator IDE) ─────────
@@ -469,14 +460,7 @@ public class InstanceContext
 
         var designer = Kernel.Instances.Single(i => i.Spec.Id == 1);
 
-        Playwright = await Microsoft.Playwright.Playwright.CreateAsync();
-        Browser = await Playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
-        Page = await Browser.NewPageAsync(new BrowserNewPageOptions
-        {
-            BaseURL = $"http://localhost:{designer.AppPort}",
-        });
-        Page.SetDefaultTimeout(5000);
-        Page.SetDefaultNavigationTimeout(5000);
+        Page = await SharedBrowser.NewPageAsync($"http://localhost:{designer.AppPort}");
         return designer;
     }
 

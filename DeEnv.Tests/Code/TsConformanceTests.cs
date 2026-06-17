@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DeEnv.Tests.TestSupport;
 using Microsoft.Playwright;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -25,9 +26,8 @@ public sealed class TsConformanceTests
             File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "conformance.json")), JsonOpts)!;
         var interpreterJs = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "codeExec.js"));
 
-        using var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
-        await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
-        var page = await browser.NewPageAsync();
+        // Reuse the shared browser (launched once for the whole run; see SharedBrowser).
+        var page = await SharedBrowser.NewPageAsync();
         await page.SetContentAsync("<!doctype html><html><body></body></html>");
         await page.AddScriptTagAsync(new() { Content = interpreterJs });
 
@@ -61,5 +61,7 @@ public sealed class TsConformanceTests
                     throw new InvalidOperationException($"Unknown expect kind '{c.Expect.Kind}' in case '{c.Name}'.");
             }
         }
+
+        await page.Context.CloseAsync();
     }
 }
