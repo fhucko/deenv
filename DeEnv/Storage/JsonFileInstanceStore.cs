@@ -689,21 +689,33 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         var visited = new HashSet<int>();
 
+        // Walk the object graph by DISPATCHING on each node's framework `type` tag, never by
+        // sniffing an object's keys. An object and a dictionary are the same shape — a typed node
+        // wrapping a value-map (an object's `fields`, a dict's `entries`) whose KEYS are user-chosen;
+        // a set is the same with id keys. We follow the value-map's VALUES and never read its keys,
+        // so a field or dict key named "type"/"id" is never mistaken for a structural tag.
         void Mark(JsonNode? node)
         {
-            switch (node)
+            if (node is JsonArray a) { foreach (var v in a) Mark(v); return; }
+            if (node is not JsonObject o) return;
+            switch (AsString(o["type"]))
             {
-                case JsonObject o when AsString(o["type"]) == "object" && AsInt(o["id"]) is int id:
-                    if (visited.Add(id) && ExtentEntryById(doc, id) is { } env)
-                        Mark(env["fields"]);
+                case "object": // a reference (or the root) → resolve its extent entry, walk its fields' values
+                    if (AsInt(o["id"]) is int id && visited.Add(id) && ExtentEntryById(doc, id) is { } env)
+                        MarkValues(env["fields"] as JsonObject);
                     break;
-                case JsonObject o:
-                    foreach (var (_, v) in o) Mark(v);
-                    break;
-                case JsonArray a:
-                    foreach (var v in a) Mark(v);
-                    break;
+                case "set":        MarkValues(o["members"] as JsonObject); break;
+                case "dictionary": MarkValues(o["entries"] as JsonObject); break;
+                // scalar leaves (text/int/…) reference nothing
             }
+        }
+
+        // Recurse the VALUES of a value-map (object fields / set members / dict entries); its KEYS are
+        // user- or id-controlled and are deliberately never inspected.
+        void MarkValues(JsonObject? map)
+        {
+            if (map is null) return;
+            foreach (var (_, v) in map) Mark(v);
         }
 
         Mark(doc["root"]);
