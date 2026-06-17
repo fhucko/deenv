@@ -10,6 +10,7 @@
     MetaType
         name text
         baseType text
+        values text
         order int
         props set of MetaProp
     MetaProp
@@ -210,7 +211,7 @@ ui
     var renameName = ""
 
     fn addType(design)
-        design.types.add({ name: "", baseType: "object", order: 0, props: [] })
+        design.types.add({ name: "", baseType: "object", values: "", order: 0, props: [] })
 
     fn addProp(type)
         type.props.add({ name: "", type: "text", cardinality: "", keyType: "", order: 0 })
@@ -261,6 +262,7 @@ ui
                 <div class="type-row">
                     <input class="type-name" value={type.name}>
                     <input class="type-base" value={type.baseType}>
+                    <input class="type-values" value={type.values}>
                     <button class="remove-type" onClick={() => design.types.remove(type)}>
                         "Remove type"
                     <button class="add-prop" onClick={() => addProp(type)}>

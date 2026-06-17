@@ -34,6 +34,10 @@ public sealed class DesignerSteps(InstanceContext ctx)
     private int _newInstanceAppPort;
     private int _newInstanceInfraPort;
 
+    // The name given to a just-added type (so the base-type / values steps relocate that row once it is
+    // no longer the empty-name one).
+    private string _justAddedTypeName = "";
+
     // ── Given ───────────────────────────────────────────────────────────────────
 
     [Given("the operator IDE is running on a kernel hosting instances {string} and {string}")]
@@ -215,6 +219,50 @@ public sealed class DesignerSteps(InstanceContext ctx)
                 && o.Fields.TryGetValue("keyType", out var v) && v is DeEnv.Storage.TextValue t && t.Text == keyType));
     }
 
+    [When("I name the just-added type {string}")]
+    public async Task WhenNameJustAddedType(string name)
+    {
+        // The just-added row is the one whose type-name input is still empty (the client mirrors the model
+        // name into the `value` attribute). Fill ITS name input, then wait for the autosave to reach the
+        // designer's sovereign store (so a later apply projects the named type). Remember the name so the
+        // base-type / values steps can locate the same row once it is no longer the empty one.
+        _justAddedTypeName = name;
+        await ctx.Page!.Locator(".design-editor .type-row:has(input.type-name[value=\"\"]) input.type-name")
+            .First.FillAsync(name);
+        await ctx.Page.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.type-row input.type-name')].some(e => e.value === {JsString(name)})");
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
+            .Any(o => o.Fields.TryGetValue("name", out var v)
+                && v is DeEnv.Storage.TextValue t && t.Text == name));
+    }
+
+    [When("I set the just-added type's base type to {string}")]
+    public async Task WhenSetJustAddedBaseType(string baseType)
+    {
+        // The base-type input of the row we just named (located by its now-known name). For "enum" this
+        // flips the projection branch in SchemaBridge; wait for the autosave so a later apply sees it.
+        await JustAddedTypeRow().Locator("input.type-base").FillAsync(baseType);
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.type-row input.type-base')].some(e => e.value === {JsString(baseType)})");
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
+            .Any(o => o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == _justAddedTypeName
+                && o.Fields.TryGetValue("baseType", out var v) && v is DeEnv.Storage.TextValue t && t.Text == baseType));
+    }
+
+    [When("I set the just-added type's values to {string}")]
+    public async Task WhenSetJustAddedValues(string values)
+    {
+        // The always-rendered `type-values` input (a comma-separated enum value list). It is meaningful
+        // only for an enum; SchemaBridge ignores it on non-enum types. Wait for THIS type's autosave so
+        // a later apply projects the value list.
+        await JustAddedTypeRow().Locator("input.type-values").FillAsync(values);
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.type-row input.type-values')].some(e => e.value === {JsString(values)})");
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
+            .Any(o => o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == _justAddedTypeName
+                && o.Fields.TryGetValue("values", out var v) && v is DeEnv.Storage.TextValue t && t.Text == values));
+    }
+
     [When("I add a type to the design")]
     public async Task WhenAddType()
     {
@@ -361,6 +409,22 @@ public sealed class DesignerSteps(InstanceContext ctx)
             && File.ReadAllText(target.Spec.SchemaPath).Contains(declaration), timeoutMs: 30000);
     }
 
+    [Then("the {string} instance's app document declares the enum {string} with values {string}")]
+    public async Task ThenTargetDeclaresEnum(string label, string typeName, string values)
+    {
+        // Apply deployed the projected app document; assert it declares the enum in the canonical AppPrint
+        // form -- `    Name enum\n` then each value indented 8 spaces -- proving the type name, base type
+        // "enum", and the comma-separated value list all flowed through projection. The whole block is
+        // matched (not a bare value substring that could collide elsewhere). Wide window: the deploy
+        // projects the WHOLE app + resets data, run under peak full-suite load.
+        var expected = "    " + typeName + " enum\n"
+            + string.Concat(values.Split(',').Select(v => v.Trim()).Where(v => v.Length > 0)
+                .Select(v => "        " + v + "\n"));
+        var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
+        await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
+            && File.ReadAllText(target.Spec.SchemaPath).Replace("\r\n", "\n").Contains(expected), timeoutMs: 30000);
+    }
+
     [Then("the design {string} has no unnamed type")]
     public async Task ThenNoUnnamedType(string label)
     {
@@ -393,6 +457,11 @@ public sealed class DesignerSteps(InstanceContext ctx)
     // A design-editor type-name input currently holding `name` (the type being renamed).
     private Microsoft.Playwright.ILocator TypeNameInput(string name) =>
         ctx.Page!.Locator($".design-editor .type-row input.type-name[value={CssString(name)}]");
+
+    // The type-row of the just-added type, located by the name we gave it (used by the base-type / values
+    // steps after it is no longer the empty-name row).
+    private Microsoft.Playwright.ILocator JustAddedTypeRow() =>
+        ctx.Page!.Locator($".design-editor .type-row:has(input.type-name[value={CssString(_justAddedTypeName)}])");
 
     // The prop-type input of the `.prop-row` whose `.prop-name` currently holds `propName` (the prop
     // being retyped). Scoped to that row so it targets the right prop across all the types' prop rows.

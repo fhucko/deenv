@@ -30,6 +30,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
             MetaType
                 name text
                 baseType text
+                values text
                 order int
                 props set of MetaProp
             MetaProp
@@ -134,6 +135,22 @@ public sealed class BridgeSteps(InstanceContext ctx)
     [Given("the type {string} has a set prop {string} of type {string}")]
     public void GivenSetProp(string typeName, string propName, string propType) =>
         AddProp(typeName, propName, propType, "set", "", order: 0);
+
+    [Given("a designed enum type {string} with values {string}")]
+    public void GivenDesignedEnumType(string name, string values)
+    {
+        // An enum is a MetaType with baseType "enum" and a comma-separated `values` field — exactly the
+        // designer's authoring shape. The bridge splits/trims it into the ordered Values list.
+        var id = _designer!.CreateObject("MetaType", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"]     = new TextValue(name),
+            ["baseType"] = new TextValue("enum"),
+            ["values"]   = new TextValue(values),
+            ["order"]    = new IntValue(0)
+        }));
+        _designer!.AddToSet(NodePath.Root.Field("types"), id);
+        _typeKeys[name] = id;
+    }
 
     private void AddProp(string typeName, string propName, string propType,
         string cardinality, string keyType, int order)
@@ -241,6 +258,30 @@ public sealed class BridgeSteps(InstanceContext ctx)
         await Assert.That(prop).IsNotNull();
         await Assert.That(prop!.Cardinality).IsEqualTo(Cardinality.Dictionary);
         await Assert.That(prop.Type).IsEqualTo(elemType);
+    }
+
+    [Then("the exported type {string} is an enum with values {string}")]
+    public async Task ThenExportedEnumAsync(string typeName, string values)
+    {
+        var expected = values.Split(',').Select(v => v.Trim()).Where(v => v.Length > 0).ToList();
+        var type = _exported!.FindType(typeName);
+        await Assert.That(type).IsNotNull();
+        await Assert.That(type!.BaseType).IsEqualTo(BaseType.Enum);
+        await Assert.That(type.Values).IsNotNull();
+        await Assert.That(type.Values!.ToList()).IsEquivalentTo(expected);
+    }
+
+    [Then("the exported document declares the enum {string} with values {string}")]
+    public async Task ThenExportedDocDeclaresEnumAsync(string typeName, string values)
+    {
+        // The canonical AppPrint form of an enum: `    Name enum\n` then each value indented 8 spaces.
+        // Assert the whole enum block (keyword line + each indented value), not a bare substring that
+        // could match a value name elsewhere.
+        var doc = File.ReadAllText(_exportedSchemaPath);
+        var expected = "    " + typeName + " enum\n"
+            + string.Concat(values.Split(',').Select(v => v.Trim()).Where(v => v.Length > 0)
+                .Select(v => "        " + v + "\n"));
+        await Assert.That(doc.Replace("\r\n", "\n")).Contains(expected);
     }
 
     [Then("the exported type {string} lists prop {string} before {string}")]

@@ -81,3 +81,18 @@ Feature: Schema bridge (self-hosted designer)
     And an instance is started from the exported schema
     Then I see a form for "Db"
     And the "notes" field is present
+
+  # An enum type carries a comma-separated value list (the always-rendered designer field), which the
+  # bridge projects into BaseType.Enum + the ordered, trimmed Values — so the designer can author an
+  # enum's value list, not just a type name + baseType. The exported document declares the enum in the
+  # canonical `Name enum` + indented-values form.
+  @milestone-10 @single-user
+  Scenario: The bridge projects an enum type's value list
+    Given a designer instance
+    And a designed type "Db" with base type "object"
+    And the type "Db" has a prop "status" of type "Status"
+    And a designed enum type "Status" with values "open, doing, done"
+    When the design is exported
+    Then the exported document loads successfully
+    And the exported type "Status" is an enum with values "open, doing, done"
+    And the exported document declares the enum "Status" with values "open, doing, done"

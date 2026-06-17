@@ -110,6 +110,16 @@ public static class SchemaBridge
                     // Emit props only when there are some, so a designed object type
                     // without props is rejected by the shared validation ("no props").
                     types.Add(new TypeDefinition(name, BaseType.Object, props.Count > 0 ? props : null));
+                else if (baseName == "enum")
+                {
+                    // An enum carries no props — only a value list, authored in the designer as a single
+                    // comma-separated field (the always-rendered `values` input). Split, trim, drop empties.
+                    // An enum with zero values is rejected by the shared validation ("no values"), so an
+                    // empty field yields no document — correct.
+                    var values = TextField(type, "values")
+                        .Split(',').Select(v => v.Trim()).Where(v => v.Length > 0).ToList();
+                    types.Add(new TypeDefinition(name, BaseType.Enum, Props: null, Values: values));
+                }
                 else if (BaseTypes.IsName(baseName))
                     types.Add(new TypeDefinition(name, BaseTypes.Parse(baseName), props.Count > 0 ? props : null));
                 else
@@ -195,13 +205,19 @@ public static class SchemaBridge
 
         foreach (var type in source.AllTypes())
         {
-            var typeId = designer.CreateObject("MetaType",
-                new ObjectValue(new Dictionary<string, NodeValue>
-                {
-                    ["name"]     = new TextValue(type.Name),
-                    ["baseType"] = new TextValue(JsonNamingPolicy.CamelCase.ConvertName(type.BaseType.ToString())),
-                    ["order"]    = new IntValue(typeOrder * 10)
-                }));
+            var typeFields = new Dictionary<string, NodeValue>
+            {
+                ["name"]     = new TextValue(type.Name),
+                ["baseType"] = new TextValue(JsonNamingPolicy.CamelCase.ConvertName(type.BaseType.ToString())),
+                ["order"]    = new IntValue(typeOrder * 10)
+            };
+            // An enum's value list is seeded into the comma-separated `values` field (the same form the
+            // type editor edits + SchemaBridge.Project reads back), so a published-then-reseeded enum
+            // round-trips. Object/leaf types carry no values (the field stays empty).
+            if (type.BaseType == BaseType.Enum)
+                typeFields["values"] = new TextValue(string.Join(", ", type.Values ?? []));
+
+            var typeId = designer.CreateObject("MetaType", new ObjectValue(typeFields));
             designer.AddToSet(typesPath, typeId);
 
             var propsPath = typesPath.Key(typeId.ToString()).Field("props");

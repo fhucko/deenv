@@ -119,6 +119,24 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the "instance" instance's app document declares "checked set of TodoList"
     And the "instance" instance's app document declares "text dict of text by text"
 
+  # An enum type's value list is authorable in the designer, not just in the .app text. Adding a type,
+  # setting its base type to "enum", and filling its (always-rendered, comma-separated) values input,
+  # then applying, deploys the enum through the same projection — so the designer can author an enum's
+  # values end-to-end. The deployed document declares the enum in the canonical `Name enum` + indented
+  # values form.
+  @milestone-10 @single-user
+  Scenario: An enum type authored in the designer deploys
+    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    When I open the designs list
+    And I edit the design "instance"
+    And I add a type to the design
+    And I name the just-added type "Status"
+    And I set the just-added type's base type to "enum"
+    And I set the just-added type's values to "open, doing, done"
+    When I open the instance "instance"
+    And I apply the design
+    Then the "instance" instance's app document declares the enum "Status" with values "open, doing, done"
+
   # Removing a type from a design must actually delete it. The remove drives arrayRemove on the design's
   # (nested) types set, which runs the store's garbage collector -- and the GC walks the whole meta-schema
   # graph, including a MetaProp object whose `fields` carries a key literally named "type" (the prop's data
