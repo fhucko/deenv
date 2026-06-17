@@ -381,15 +381,18 @@ public sealed class SsrRenderer
     // Page shell for a code page: optional generic chrome (a type view keeps the
     // breadcrumbs) around the `#app` mount the client reconciles into; an inline bootstrap
     // injects the bundle from the infra port (/js), which hydrates from window.initUi /
-    // window.initData. The chrome CSS ships only when there IS chrome — a full-takeover
-    // page stays unstyled (the app's own look).
+    // window.initData. The default stylesheet ships on EVERY page: the generic UI's component
+    // styles (.object-form/.set-table/.ref-editor/…) apply to its markup, and the base element
+    // styles (typography, inputs, buttons, tables) give a custom `fn render()` app a clean look
+    // too — a custom app overrides via the cascade. (Zero-config good defaults; minimal by default.)
     private static string UiLayout(
         string title, string breadcrumbs, string body, string initData, string initUi, string clientId, int infraPort) => $$"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
           <meta charset="utf-8">
-          <title>{{Escape(title)}}</title>{{(breadcrumbs.Length > 0 ? $"\n  <style>{ViewChromeCss}</style>" : "")}}
+          <title>{{Escape(title)}}</title>
+          <style>{{ViewChromeCss}}</style>
           <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initInfraPort={{infraPort}};</script>
           <script>(function(){var s=document.createElement("script");s.src=location.protocol+"//"+location.hostname+":"+window.initInfraPort+"/js";document.head.appendChild(s);})();</script>
         </head>
@@ -397,9 +400,90 @@ public sealed class SsrRenderer
         </html>
         """;
 
+    // The default stylesheet (served on every page — see UiLayout). Three layers: base element
+    // styling (typography, form controls, buttons, tables) that lifts ANY page off raw HTML;
+    // generic-UI component styling (.object-form/.set-table/.ref-editor/…); and the operator
+    // designer's row classes (.type-row/.prop-row/.instance-row/…). Semantic button intent comes
+    // from the components' own class names (add/create/save = primary green; remove/delete/clear
+    // = danger). A custom app overrides any of this via a more-specific rule (the cascade).
     private const string ViewChromeCss = """
-        body { font-family: system-ui, Arial, sans-serif; margin: 2rem; color: #222; }
-        nav.breadcrumbs { margin-bottom: 1rem; color: #666; }
+        :root {
+          --bg: #f6f8fa; --surface: #fff; --border: #d0d7de; --border-soft: #eaeef2;
+          --text: #1f2328; --muted: #57606a; --accent: #0969da; --green: #1f883d; --danger: #cf222e;
+        }
+        *, *::before, *::after { box-sizing: border-box; }
+        body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+          margin: 0; padding: 1.5rem 1.5rem 4rem; color: var(--text); background: var(--bg); line-height: 1.5; }
+        #app, body > nav.breadcrumbs { max-width: 900px; margin-left: auto; margin-right: auto; }
+        h1, h2, h3 { line-height: 1.25; margin: 1.4rem 0 0.6rem; }
+        h1 { font-size: 1.6rem; } h2 { font-size: 1.3rem; } h3 { font-size: 1.05rem; color: var(--muted); }
+        h2:first-child, h3:first-child { margin-top: 0; }
+        a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+        p { margin: 0.5rem 0; }
+        nav.breadcrumbs { margin: 0 auto 1.2rem; color: var(--muted); font-size: 0.9rem; }
+        nav.breadcrumbs a { color: var(--muted); }
+
+        label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--muted); margin-bottom: 0.2rem; }
+        input, select, textarea { font: inherit; color: inherit; padding: 0.4rem 0.55rem;
+          border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+        input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+          outline-offset: 0; border-color: var(--accent); }
+        input[type=checkbox] { width: 1.05rem; height: 1.05rem; padding: 0; vertical-align: middle; accent-color: var(--accent); }
+        textarea { width: 100%; min-height: 7rem; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.85rem; }
+
+        button { font: inherit; padding: 0.4rem 0.85rem; border: 1px solid var(--border); border-radius: 6px;
+          background: var(--surface); color: var(--text); cursor: pointer; transition: background .12s, border-color .12s; }
+        button:hover { background: #f3f4f6; }
+        button:active { background: #e9ebee; }
+        .set-add, .dict-add, .ref-create, .add-design, .add-type, .add-prop, .create-instance, .rename-save, .apply-design {
+          background: var(--green); border-color: var(--green); color: #fff; }
+        .set-add:hover, .dict-add:hover, .ref-create:hover, .add-design:hover, .add-type:hover, .add-prop:hover,
+        .create-instance:hover, .rename-save:hover, .apply-design:hover { background: #1a7f37; border-color: #1a7f37; }
+        .set-remove, .dict-remove, .ref-clear, .remove-type, .remove-prop, .delete-design, .delete-instance {
+          color: var(--danger); }
+        .set-remove:hover, .dict-remove:hover, .ref-clear:hover, .remove-type:hover, .remove-prop:hover,
+        .delete-design:hover, .delete-instance:hover { background: #fff0f0; border-color: var(--danger); }
+
+        .object-form, .ref-editor, .leaf-form { background: var(--surface); border: 1px solid var(--border);
+          border-radius: 10px; padding: 1.25rem 1.4rem; box-shadow: 0 1px 2px rgba(31,35,40,.05); }
+        .field { margin-bottom: 0.9rem; }
+        .field:last-child { margin-bottom: 0; }
+        .field > input:not([type=checkbox]), .field > select { width: 100%; max-width: 440px; }
+        a.list-title { display: inline-block; font-weight: 600; font-size: 0.95rem; }
+
+        .set-table table, .dict-table table { border-collapse: collapse; width: 100%; margin: 0.3rem 0 0.7rem;
+          background: var(--surface); border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+        .set-table th, .dict-table th, .set-table td, .dict-table td { padding: 0.45rem 0.65rem; text-align: left;
+          border-bottom: 1px solid var(--border-soft); }
+        .set-head th, .dict-head th { background: var(--bg); font-size: 0.78rem; font-weight: 600; color: var(--muted);
+          text-transform: uppercase; letter-spacing: .02em; }
+        .set-row:hover td, .dict-row:hover td { background: #f9fafb; }
+        .set-row input, .dict-row input, .set-row select, .dict-row select { max-width: 200px; }
+
+        .set-new, .dict-new, .ref-new { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
+          margin-top: 0.4rem; padding: 0.8rem; background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; }
+        .set-new input, .dict-new input, .ref-new input, .set-new select, .dict-new select, .ref-new select { max-width: 200px; }
+        .dict-error { color: var(--danger); font-size: 0.85rem; flex-basis: 100%; }
+        .ref-current { margin-bottom: 0.7rem; color: var(--muted); }
+        .ref-type { margin-top: 0; }
+        .ref-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.7rem; }
+        .ref-controls select.ref-pick { min-width: 200px; }
+
+        /* Operator designer (custom fn render) */
+        .ide { display: block; }
+        nav.ide-nav { display: flex; gap: 1rem; padding-bottom: 0.8rem; margin-bottom: 1.2rem;
+          border-bottom: 1px solid var(--border); }
+        nav.ide-nav a { font-weight: 600; }
+        .design-row, .instance-row, .type-row, .prop-row { display: flex; flex-wrap: wrap; gap: 0.5rem;
+          align-items: center; padding: 0.55rem 0; border-bottom: 1px solid var(--border-soft); }
+        .type-row { align-items: flex-start; }
+        .prop-row { padding-left: 1.2rem; }
+        .prop-row input, .prop-row select, .type-row > input { max-width: 170px; }
+        .design-label, .instance-app, .instance-port { font-weight: 600; }
+        .new-instance, .new-design { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
+          margin: 0.6rem 0 1.2rem; padding: 0.9rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+        .new-instance input, .new-instance select { max-width: 180px; }
+        .design-editor { margin-top: 1rem; }
         """;
 
     private static void DefineFunction(CodeFunction fn, ExecScope scope)

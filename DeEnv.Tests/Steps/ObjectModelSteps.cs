@@ -74,11 +74,14 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
         await ctx.Page.WaitForTimeoutAsync(400);
     }
 
-    // The self-hosted reference editor offers each candidate as a .ref-pick button.
+    // The self-hosted reference editor offers candidates in a .ref-pick <select>; pick one and commit
+    // with Set (the Set button renders for the chosen candidate, then sys.setRef).
     [When(@"I pick the existing {string} named {string}")]
     public async Task WhenPickExistingAsync(string typeName, string name)
     {
-        await ctx.Page!.Locator("button.ref-pick", new() { HasTextString = name }).First.ClickAsync();
+        await ctx.Page!.Locator("select.ref-pick").First.SelectOptionAsync(
+            new Microsoft.Playwright.SelectOptionValue { Label = name });
+        await ctx.Page.Locator("button.ref-set").First.ClickAsync();
         await ctx.Page.WaitForTimeoutAsync(400);
     }
 

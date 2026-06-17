@@ -69,7 +69,7 @@ public static class GenericUi
                             else if p.baseType == "enum"
                                 <select class={p.name} value={sys.field(obj, p.name)}>
                                     <option value="">
-                                        ""
+                                        "(none)"
                                     foreach v in p.values
                                         <option value={v}>
                                             sys.humanize(v)
@@ -77,7 +77,7 @@ public static class GenericUi
                                 <input type={inputType(p.baseType)} class={p.name} value={sys.field(obj, p.name)}>
 
             fn refEditor(parent, prop, target)
-                var state = { draft: sys.clone(target.blank) }
+                var state = { pick: 0, draft: sys.clone(target.blank) }
                 fn createNew()
                     sys.setRef(parent, prop, state.draft)
                     state.draft = sys.clone(target.blank)
@@ -91,11 +91,19 @@ public static class GenericUi
                                 "(none)"
                             else
                                 sys.field(sys.field(parent, prop), target.labelProp)
-                        foreach c in sys.extent(target.name)
-                            <button class="ref-pick" onClick={() => sys.setRef(parent, prop, c)}>
-                                sys.field(c, target.labelProp)
-                        <button class="ref-clear" onClick={() => sys.setRef(parent, prop, null)}>
-                            "Clear"
+                        <div class="ref-controls">
+                            <select class="ref-pick" value={state.pick}>
+                                <option value="0">
+                                    "(choose…)"
+                                foreach c in sys.extent(target.name)
+                                    <option value={sys.id(c)}>
+                                        sys.field(c, target.labelProp)
+                            foreach c in sys.extent(target.name)
+                                if sys.id(c) == state.pick
+                                    <button class="ref-set" onClick={() => sys.setRef(parent, prop, c)}>
+                                        "Set"
+                            <button class="ref-clear" onClick={() => sys.setRef(parent, prop, null)}>
+                                "Clear"
                         <div class="ref-new">
                             foreach p in target.props
                                 if p.baseType != "object" && p.baseType != "set"
@@ -106,7 +114,7 @@ public static class GenericUi
                                     else if p.baseType == "enum"
                                         <select class={p.name} value={sys.field(state.draft, p.name)}>
                                             <option value="">
-                                                ""
+                                                "(none)"
                                             foreach v in p.values
                                                 <option value={v}>
                                                     sys.humanize(v)
@@ -149,7 +157,7 @@ public static class GenericUi
                                     else if p.baseType == "enum"
                                         <select class={p.name} value={sys.field(state.draft, p.name)}>
                                             <option value="">
-                                                ""
+                                                "(none)"
                                             foreach v in p.values
                                                 <option value={v}>
                                                     sys.humanize(v)
@@ -206,7 +214,7 @@ public static class GenericUi
                                 if p.baseType == "enum"
                                     <select class={p.name} value={sys.field(state.draft, p.name)}>
                                         <option value="">
-                                            ""
+                                            "(none)"
                                         foreach v in p.values
                                             <option value={v}>
                                                 sys.humanize(v)

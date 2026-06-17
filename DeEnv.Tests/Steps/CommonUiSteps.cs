@@ -21,7 +21,11 @@ public sealed class CommonUiSteps(InstanceContext ctx)
     [Then("the page is a code page")]
     public async Task ThenCodePage()
     {
-        await ctx.Page!.WaitForSelectorAsync("#app [data-key]");
+        // A data-key'd element EXISTS (the page hydrated as self-hosted Code) — `Attached`, not the
+        // default `Visible`: the first keyed element may be a hidden one (e.g. a foreach'd <option>
+        // inside a <select>), which is still proof the code page rendered.
+        await ctx.Page!.WaitForSelectorAsync("#app [data-key]",
+            new Microsoft.Playwright.PageWaitForSelectorOptions { State = Microsoft.Playwright.WaitForSelectorState.Attached });
         var html = await ctx.Page.ContentAsync();
         await Assert.That(html).Contains("initInfraPort");
     }

@@ -93,7 +93,8 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         var expected = commaList.Split(',').Select(s => s.Trim()).ToArray();
         var texts = await ctx.Page!.Locator($"select.{field} option").EvaluateAllAsync<string[]>(
             "els => els.map(e => e.textContent.trim())");
-        await Assert.That(texts).IsEquivalentTo(new[] { "" }.Concat(expected).ToArray());
+        // The first option is the empty/unset placeholder ("(none)"); the humanized values follow.
+        await Assert.That(texts).IsEquivalentTo(new[] { "(none)" }.Concat(expected).ToArray());
     }
 
     // Choose an option: SelectOptionAsync fires the <select>'s change event, whose binding
@@ -179,14 +180,21 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    // Candidates are the options of the `select.ref-pick` dropdown (the picker scales past a
+    // handful of objects, unlike the old button-per-candidate list).
     [Then("a reference candidate {string} is offered")]
     public async Task ThenCandidateOffered(string label) =>
         await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('button.ref-pick')].some(e => e.textContent.trim() === {JsString(label)})");
+            $"() => [...document.querySelectorAll('select.ref-pick option')].some(e => e.textContent.trim() === {JsString(label)})");
 
+    // Pick = choose the candidate in the dropdown, then commit with Set (applyPick → sys.setRef).
     [When("I pick the reference candidate {string}")]
-    public async Task WhenPickCandidate(string label) =>
-        await ctx.Page!.Locator("button.ref-pick", new() { HasTextString = label }).First.ClickAsync();
+    public async Task WhenPickCandidate(string label)
+    {
+        await ctx.Page!.Locator("select.ref-pick").First.SelectOptionAsync(
+            new Microsoft.Playwright.SelectOptionValue { Label = label });
+        await ctx.Page.Locator("button.ref-set").First.ClickAsync();
+    }
 
     [When("I clear the reference")]
     public async Task WhenClearReference() =>

@@ -1664,6 +1664,31 @@ lenient** (the user: "not lenient, just one variant") — the colon is REJECTED,
   that the colon is rejected.
 - `INSTANCE_DESCRIPTION_FORMAT.md` updated to the colon-free syntax + the `enum` form.
 
+**Generic-UI + designer UX pass (a default stylesheet + structural fixes) — landed 2026-06-17.** The user:
+"the UX is quite bad." Diagnosis: the served stylesheet was two rules (`body { font; margin }`) — every
+generic form/table/button/reference editor rendered as RAW browser-default HTML. Fixed:
+- **A default stylesheet, shipped on EVERY page** (`SsrRenderer.ViewChromeCss`, no longer gated on
+  breadcrumbs — see its comment). Three layers: base element styling (typography, inputs, buttons, tables)
+  that lifts ANY page off raw HTML; generic-UI component styling (`.object-form` as a card, `.set-table`/
+  `.dict-table`, `.ref-editor`, the `.set-new`/`.dict-new`/`.ref-new` "add" sections); and the operator
+  designer's own rows (`.type-row`/`.prop-row`/`.instance-row`). Semantic button intent rides the
+  components' class names (add/create/save = green; remove/delete/clear = danger). **Policy change:** a
+  full-takeover `fn render()` page used to ship NO chrome CSS ("the app's own look"); now it gets the base
+  styling too (so the designer looks clean), and a custom app overrides via the cascade — minimal-by-default
+  (good defaults, zero config). CSS-only → no test churn.
+- **Enum dropdown placeholder:** the blank `<option value="">` now reads "(none)" (4 render paths).
+- **Reference picker → a `<select>` + inline Set** (was one `<button>` per extent member — unusable past a
+  handful). Built with the `designSelector` pattern: the Set button renders INSIDE `foreach c { if sys.id(c)
+  == state.pick { … } }`, capturing the picked candidate. The create form stays a styled "add" section
+  (consistent with set/dict tables). **GOTCHA (cost a debug cycle): `foreach` is a render/tag construct in
+  this Code language, NOT a statement** — a `fn applyPick() { foreach … }` is a parse error; do the action
+  inline in the render (capture the loop var in the handler), exactly as `designSelector` does.
+- **Test-infra fix:** `ThenCodePage` ("the page is a code page") waited for `#app [data-key]` to be VISIBLE,
+  but a foreach'd `<option>` now carries `data-key` and is hidden inside its `<select>` → it timed out.
+  Changed to wait for `Attached` (existence proves the code page hydrated; visibility was incidental).
+- Verified the stylesheet live via `preview_inspect` computed styles (a screenshot is impossible — the app
+  holds a persistent WS, so the page never reaches network-idle). Suite green.
+
 ## The endgame database — the storage pillars' convergence path (north star)
 
 Captures a design discussion (2026-06-16) on the full storage endgame: the
