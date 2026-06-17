@@ -19,70 +19,71 @@ namespace DeEnv.Http;
 // reads the fields its op carries and validates the ones it requires.
 public sealed record WsRequest
 {
-    [JsonPropertyName("op")]       public string? Op { get; init; }
-    [JsonPropertyName("id")]       public int? Id { get; init; }        // correlation id
-    [JsonPropertyName("clientId")] public string? ClientId { get; init; }
-    [JsonPropertyName("path")]     public string? Path { get; init; }
-    [JsonPropertyName("action")]   public string? Action { get; init; }
-    [JsonPropertyName("args")]     public JsonElement? Args { get; init; }
-    [JsonPropertyName("setId")]    public int? SetId { get; init; }
-    [JsonPropertyName("objectId")] public int? ObjectId { get; init; }
-    [JsonPropertyName("typeName")] public string? TypeName { get; init; }
-    [JsonPropertyName("prop")]     public string? Prop { get; init; }
-    [JsonPropertyName("key")]      public string? Key { get; init; }
-    [JsonPropertyName("refId")]    public int? RefId { get; init; }
-    [JsonPropertyName("tempId")]   public int? TempId { get; init; }
-    [JsonPropertyName("lastId")]   public int? LastId { get; init; }
-    [JsonPropertyName("clear")]    public bool? Clear { get; init; }
-    [JsonPropertyName("value")]    public JsonElement? Value { get; init; }
-    [JsonPropertyName("vars")]     public JsonElement? Vars { get; init; }
+    public string? Op { get; init; }
+    public int? Id { get; init; }        // correlation id
+    public string? ClientId { get; init; }
+    public string? Path { get; init; }
+    public string? Action { get; init; }
+    public JsonElement? Args { get; init; }
+    public int? SetId { get; init; }
+    public int? ObjectId { get; init; }
+    public string? TypeName { get; init; }
+    public string? Prop { get; init; }
+    public string? Key { get; init; }
+    public int? RefId { get; init; }
+    public int? TempId { get; init; }
+    public int? LastId { get; init; }
+    public bool? Clear { get; init; }
+    public JsonElement? Value { get; init; }
+    public JsonElement? Vars { get; init; }
 }
 
-// Response records — one per op. Each serializes (compact, no naming policy) to the exact
-// bytes the old JsonObject literal produced; the correlation id is still appended last by
-// WithId, so these never carry it. Field order matches the former literals.
+// Response records — one per op. Each property's camelCase (the shared `_jsonOpts`
+// PropertyNamingPolicy) is the wire key, so these serialize to the exact bytes the old
+// JsonObject literal produced; the correlation id is still appended last by WithId, so
+// these never carry it. Field order matches the former literals; the get-only computed
+// `Op`/`Ok` props serialize by default.
 
 public sealed record WriteResponse
 {
-    [JsonPropertyName("op")]   public string Op => "write";
-    [JsonPropertyName("path")] public required string Path { get; init; }
-    [JsonPropertyName("ok")]   public bool Ok => true;
+    public string Op => "write";
+    public required string Path { get; init; }
+    public bool Ok => true;
 }
 
 public sealed record AddEntryResponse
 {
-    [JsonPropertyName("op")]   public string Op => "addEntry";
-    [JsonPropertyName("path")] public required string Path { get; init; }
-    [JsonPropertyName("ok")]   public bool Ok => true;
-    [JsonPropertyName("key")]  public required string Key { get; init; }
+    public string Op => "addEntry";
+    public required string Path { get; init; }
+    public bool Ok => true;
+    public required string Key { get; init; }
 }
 
 public sealed record RemoveEntryResponse
 {
-    [JsonPropertyName("op")]   public string Op => "removeEntry";
-    [JsonPropertyName("path")] public required string Path { get; init; }
-    [JsonPropertyName("ok")]   public bool Ok => true;
+    public string Op => "removeEntry";
+    public required string Path { get; init; }
+    public bool Ok => true;
 }
 
 public sealed record HelloResponse
 {
-    [JsonPropertyName("op")]           public string Op => "hello";
-    [JsonPropertyName("sessionAlive")] public required bool SessionAlive { get; init; }
+    public string Op => "hello";
+    public required bool SessionAlive { get; init; }
 }
 
 public sealed record ObjectPropChangeResponse
 {
-    [JsonPropertyName("op")] public string Op => "objectPropChange";
-    [JsonPropertyName("ok")] public bool Ok => true;
+    public string Op => "objectPropChange";
+    public bool Ok => true;
 }
 
 public sealed record SetReferenceFieldResponse
 {
-    [JsonPropertyName("op")] public string Op => "setReferenceField";
-    [JsonPropertyName("ok")] public bool Ok => true;
-    // Present only when a new object was minted (a create-new pick), never for link/clear.
-    [JsonPropertyName("newId")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string Op => "setReferenceField";
+    public bool Ok => true;
+    // Present only when a new object was minted (a create-new pick), never for link/clear —
+    // omitted when null by the options' DefaultIgnoreCondition (WhenWritingNull).
     public int? NewId { get; init; }
 }
 
@@ -91,45 +92,45 @@ public sealed record SetReferenceFieldResponse
 // elementTypeName (matching the former literal).
 public sealed record CollectionInfo
 {
-    [JsonPropertyName("id")]              public required int Id { get; init; }
-    [JsonPropertyName("elementTypeName")] public required string ElementTypeName { get; init; }
+    public required int Id { get; init; }
+    public required string ElementTypeName { get; init; }
 }
 
 public sealed record ArrayAddResponse
 {
-    [JsonPropertyName("op")]    public string Op => "arrayAdd";
+    public string Op => "arrayAdd";
     // `newId`, not `id` — the reply's `id` slot is the request correlation id (added by WithId).
-    [JsonPropertyName("newId")] public required int NewId { get; init; }
-    // Keyed by user prop name; serializes with the keys verbatim (no naming policy).
-    [JsonPropertyName("collections")] public required Dictionary<string, CollectionInfo> Collections { get; init; }
-    // Echoed back ONLY when the request carried one (a set add from the client).
-    [JsonPropertyName("tempId")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public required int NewId { get; init; }
+    // Keyed by user prop name; the dictionary keys serialize verbatim (the naming policy
+    // renames CLR PROPERTIES, not dictionary keys — DictionaryKeyPolicy is unset).
+    public required Dictionary<string, CollectionInfo> Collections { get; init; }
+    // Echoed back ONLY when the request carried one (a set add from the client) — omitted
+    // when null by the options' DefaultIgnoreCondition (WhenWritingNull).
     public int? TempId { get; init; }
 }
 
 public sealed record ArrayRemoveResponse
 {
-    [JsonPropertyName("op")] public string Op => "arrayRemove";
-    [JsonPropertyName("ok")] public bool Ok => true;
+    public string Op => "arrayRemove";
+    public bool Ok => true;
 }
 
 public sealed record RefetchResponse
 {
-    [JsonPropertyName("op")] public string Op => "refetch";
+    public string Op => "refetch";
     // The raw client-state node from RenderState; serialized inline, not reshaped.
-    [JsonPropertyName("state")] public required JsonNode State { get; init; }
+    public required JsonNode State { get; init; }
 }
 
 public sealed record HostActionResponse
 {
-    [JsonPropertyName("op")] public string Op => "hostAction";
-    [JsonPropertyName("ok")] public bool Ok => true;
+    public string Op => "hostAction";
+    public bool Ok => true;
 }
 
 public sealed record ErrorResponse
 {
-    [JsonPropertyName("error")] public required string Error { get; init; }
+    public required string Error { get; init; }
 }
 
 // Transport-agnostic WebSocket message dispatcher.
@@ -143,7 +144,12 @@ public sealed class WsHandler
     private readonly ClientSessionStore? _sessions;
     private readonly LiveRegistry _registry;
     private readonly IHostActions _hostActions;
-    private readonly JsonSerializerOptions _jsonOpts = new() { WriteIndented = false };
+    private readonly JsonSerializerOptions _jsonOpts = new()
+    {
+        WriteIndented = false,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
 
     public WsHandler(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
         LiveRegistry? registry = null, IHostActions? hostActions = null)
@@ -168,7 +174,7 @@ public sealed class WsHandler
         var op = "?";
         try
         {
-            var req = JsonSerializer.Deserialize<WsRequest>(json)
+            var req = JsonSerializer.Deserialize<WsRequest>(json, _jsonOpts)
                 ?? throw new InvalidOperationException("Empty message.");
 
             id = req.Id;
@@ -657,11 +663,13 @@ public sealed class WsHandler
         return NodePath.FromSegments(segs);
     }
 
-    // Serialize a typed response with the handler's options (compact, no naming policy) —
-    // the bytes the former hand-built JsonObject produced. The correlation id, when present,
-    // is still appended last by WithId.
+    // Serialize a typed response with the handler's options (compact, camelCase naming
+    // policy) — the bytes the former hand-built JsonObject produced. The correlation id,
+    // when present, is still appended last by WithId.
     private string Serialize<T>(T response) => JsonSerializer.Serialize(response, _jsonOpts);
 
-    private static string Error(string message) =>
-        JsonSerializer.Serialize(new ErrorResponse { Error = message });
+    // Routes through the same options (so `Error` → the `error` wire key); instance, not
+    // static, because the naming policy lives on the instance's _jsonOpts.
+    private string Error(string message) =>
+        Serialize(new ErrorResponse { Error = message });
 }

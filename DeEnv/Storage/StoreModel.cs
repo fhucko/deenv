@@ -22,29 +22,27 @@ namespace DeEnv.Storage;
 // needs no record rebuild). The leaf format lives in ONE place — the custom converter
 // below — so the read/write shapes cannot drift.
 
-// The whole document. A mutable class (minting and writes edit it in place).
+// The whole document. A mutable class (minting and writes edit it in place). Property
+// names map to the on-disk keys (extents/root/nextId) via the store's camelCase
+// PropertyNamingPolicy — no per-property name attributes.
 public sealed class StoreDoc
 {
-    [JsonPropertyName("extents")]
     public Dictionary<string, Dictionary<int, StoredObject>> Extents { get; set; } = new();
 
     // A StoredRef for an object-typed Db; a StoredLeaf for a scalar Db.
-    [JsonPropertyName("root")]
     public StoredValue? Root { get; set; }
 
-    [JsonPropertyName("nextId")]
     public int NextId { get; set; }
 }
 
 // An extent entry: a stored object's authoritative fields. The get-only `Type` makes
-// writes emit `"type":"object"` (matching the on-disk shape); reads ignore it.
+// writes emit `"type":"object"` (matching the on-disk shape); reads ignore it. Names
+// (typeName/id/fields/type) come from the store's camelCase PropertyNamingPolicy.
 public sealed record StoredObject(
-    [property: JsonPropertyName("typeName")] string TypeName,
-    [property: JsonPropertyName("id")] int Id,
-    [property: JsonPropertyName("fields")] Dictionary<string, StoredValue> Fields)
+    string TypeName,
+    int Id,
+    Dictionary<string, StoredValue> Fields)
 {
-    [JsonPropertyName("type")]
-    [JsonInclude]
     public string Type => "object";
 }
 

@@ -27,6 +27,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private readonly JsonSerializerOptions _opts = new()
     {
         WriteIndented = true,
+        // CLR PascalCase props → camelCase JSON (the on-disk keys: extents/root/nextId,
+        // typeName/id/fields). Dictionary keys (Extents = type names, Fields = user field
+        // names) are NOT renamed — DictionaryKeyPolicy is deliberately unset.
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         Converters = { new StoredValueConverter() },
     };
 

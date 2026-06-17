@@ -17,9 +17,12 @@ namespace DeEnv.Tests.Code;
 //      (reading that key as a structural tag) unrepresentable.
 public sealed class StoreModelTests
 {
+    // Mirror JsonFileInstanceStore._opts (indented, camelCase naming policy, the
+    // StoredValue converter) so these strings are the on-disk bytes.
     private static readonly JsonSerializerOptions Opts = new()
     {
         WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         Converters = { new StoredValueConverter() },
     };
 

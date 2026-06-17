@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using DeEnv.Http;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -15,8 +16,14 @@ namespace DeEnv.Tests.Code;
 // (arrayAdd.tempId, setReferenceField.newId) and the WithId correlation-id append.
 public sealed class WsWireShapeTests
 {
-    // Mirror WsHandler._jsonOpts (compact, no naming policy) so these strings are the wire bytes.
-    private static readonly JsonSerializerOptions Opts = new() { WriteIndented = false };
+    // Mirror WsHandler._jsonOpts (compact, camelCase naming policy, omit-null-when-writing)
+    // so these strings are the wire bytes.
+    private static readonly JsonSerializerOptions Opts = new()
+    {
+        WriteIndented = false,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
 
     private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, Opts);
 
@@ -39,7 +46,7 @@ public sealed class WsWireShapeTests
         const string json =
             """{"op":"arrayAdd","id":7,"clientId":"c1","setId":3,"tempId":-2,"typeName":"Item","value":{"props":{"title":{"type":"text","value":"x"}}}}""";
 
-        var req = JsonSerializer.Deserialize<WsRequest>(json)!;
+        var req = JsonSerializer.Deserialize<WsRequest>(json, Opts)!;
 
         await Assert.That(req.Op).IsEqualTo("arrayAdd");
         await Assert.That(req.Id).IsEqualTo(7);
@@ -56,7 +63,7 @@ public sealed class WsWireShapeTests
     [Test]
     public async Task A_request_without_a_correlation_id_leaves_Id_null()
     {
-        var req = JsonSerializer.Deserialize<WsRequest>("""{"op":"hello","clientId":"c1"}""")!;
+        var req = JsonSerializer.Deserialize<WsRequest>("""{"op":"hello","clientId":"c1"}""", Opts)!;
         await Assert.That(req.Op).IsEqualTo("hello");
         await Assert.That(req.Id).IsNull();
         await Assert.That(req.ClientId).IsEqualTo("c1");
