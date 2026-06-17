@@ -273,6 +273,23 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page.Locator("button.add-type").ClickAsync();
         await ctx.Page.WaitForFunctionAsync(
             $"() => document.querySelectorAll('.design-editor .type-row').length === {before + 1}");
+        // Then wait for the persist+remap to land on the client (mirrors WhenAddDesign): the arrayAdd reply
+        // remaps the new type's transient negative id to its real positive one, and remapAddedId re-renders
+        // — refreshing the row's data-key (a foreach row carries its member object's id as data-key). Until
+        // that lands, the row is keyed by the negative id, so a name/baseType/values edit would ship an
+        // objectPropChange against an id the server has no object for → rejected, and the autosave the next
+        // steps wait for would never persist. The just-added row is the empty-name one (all seeded types are
+        // named); block until its data-key is a positive id.
+        await ctx.Page.WaitForFunctionAsync(
+            """
+            () => {
+                const row = [...document.querySelectorAll('.design-editor .type-row')]
+                    .find(r => { const i = r.querySelector('input.type-name'); return i && i.value === ''; });
+                if (!row) return false;
+                const k = row.getAttribute('data-key');
+                return k != null && Number(k) > 0;
+            }
+            """);
     }
 
     [When("I remove the just-added unnamed type")]
