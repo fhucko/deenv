@@ -693,7 +693,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         {
             switch (node)
             {
-                case JsonObject o when o["type"]?.GetValue<string>() == "object" && o["id"]?.GetValue<int>() is int id:
+                case JsonObject o when AsString(o["type"]) == "object" && AsInt(o["id"]) is int id:
                     if (visited.Add(id) && ExtentEntryById(doc, id) is { } env)
                         Mark(env["fields"]);
                     break;
@@ -714,6 +714,17 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     if (int.TryParse(key, out var n) && !visited.Contains(n))
                         p.Remove(key);
     }
+
+    // Read a scalar tag from a node ONLY when it is a JsonValue of that kind. A `fields` object
+    // can itself carry a field NAMED "type"/"id" — the designer's MetaProp has a `type` property —
+    // whose value is a tagged-value OBJECT (e.g. { "type": "text", "value": "TodoItem" }); calling
+    // GetValue on that object throws "must be of type 'JsonValue'". These safe reads let the GC walk
+    // (Mark) tell a genuine object-reference node from a fields object that happens to hold such a key.
+    private static string? AsString(JsonNode? node) =>
+        node is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+
+    private static int? AsInt(JsonNode? node) =>
+        node is JsonValue v && v.TryGetValue<int>(out var i) ? i : null;
 
     // ── helpers: tagged values ──────────────────────────────────────────────────
 

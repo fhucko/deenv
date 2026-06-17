@@ -118,3 +118,19 @@ Feature: The operator IDE (designs library + instance design selector)
     And I apply the design
     Then the "instance" instance's app document declares "checked set of TodoList"
     And the "instance" instance's app document declares "text dict of text by text"
+
+  # Removing a type from a design must actually delete it. The remove drives arrayRemove on the design's
+  # (nested) types set, which runs the store's garbage collector -- and the GC walks the whole meta-schema
+  # graph, including a MetaProp object whose `fields` carries a key literally named "type" (the prop's data
+  # type) whose value is a tagged-value object. Regression: the GC read that as a scalar tag and threw "must
+  # be of type 'JsonValue'" on EVERY nested-set remove, so the server rejected it and the client rolled the
+  # row back -- no type (or prop, or design) could be deleted in the designer. The user-reported symptom was
+  # "I can't remove a type I just added and haven't named", but it is name- and timing-independent.
+  @milestone-10 @single-user
+  Scenario: A type added to a design can be removed again
+    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    When I open the designs list
+    And I edit the design "instance"
+    And I add a type to the design
+    And I remove the just-added unnamed type
+    Then the design "instance" has no unnamed type

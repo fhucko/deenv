@@ -215,6 +215,26 @@ public sealed class DesignerSteps(InstanceContext ctx)
                 && o.Fields.TryGetValue("keyType", out var v) && v is DeEnv.Storage.TextValue t && t.Text == keyType));
     }
 
+    [When("I add a type to the design")]
+    public async Task WhenAddType()
+    {
+        // "Add type" runs addType(design): design.types.add({ name: "", baseType: "object", ... }) -- a
+        // journaled add to the design's NESTED types set. The new (empty-name) row appears immediately via
+        // the client re-render, first keyed by its transient negative id; the WS persist then remaps it.
+        var before = await ctx.Page!.Locator(".design-editor .type-row").CountAsync();
+        await ctx.Page.Locator("button.add-type").ClickAsync();
+        await ctx.Page.WaitForFunctionAsync(
+            $"() => document.querySelectorAll('.design-editor .type-row').length === {before + 1}");
+    }
+
+    [When("I remove the just-added unnamed type")]
+    public async Task WhenRemoveUnnamedType() =>
+        // The just-added row is the one whose type-name input is still empty (the client mirrors the model
+        // name into the `value` attribute, so the attribute selector matches it). Clicking ITS Remove type
+        // button drives arrayRemove on the nested types set -- the path that runs the store's GC.
+        await ctx.Page!.Locator(".design-editor .type-row:has(input.type-name[value=\"\"]) button.remove-type")
+            .First.ClickAsync();
+
     // ── When: the instance selector (on /instances/<id>) ─────────────────────────
 
     [When("I pick the design {string} in the dropdown")]
@@ -339,6 +359,24 @@ public sealed class DesignerSteps(InstanceContext ctx)
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
         await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
             && File.ReadAllText(target.Spec.SchemaPath).Contains(declaration), timeoutMs: 30000);
+    }
+
+    [Then("the design {string} has no unnamed type")]
+    public async Task ThenNoUnnamedType(string label)
+    {
+        // The remove must actually delete the empty type from the designer's sovereign store -- GC included.
+        // A failed remove (the GC-crash regression) rejects server-side and the client journal re-inserts the
+        // row, leaving the empty MetaType stranded in the extent (its set member removed in memory but never
+        // saved, since the GC threw before SaveDoc). Poll until no empty-name MetaType survives.
+        await EventuallyAsync(() => !_designer.Store.ReadExtent("MetaType").Values
+            .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == ""));
+        // ...and it stays gone across a fresh server render of the editor (no reappearance on reload).
+        await ctx.Page!.ReloadAsync();
+        await ctx.Page.WaitForSelectorAsync("main.ide-design-edit .design-editor");
+        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+        await Assert.That(
+            await ctx.Page.Locator(".design-editor .type-row input.type-name[value=\"\"]").CountAsync())
+            .IsEqualTo(0);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────
