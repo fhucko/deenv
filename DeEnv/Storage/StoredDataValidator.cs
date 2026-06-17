@@ -1,4 +1,3 @@
-using System.Text.Json.Nodes;
 using DeEnv.Instance;
 
 namespace DeEnv.Storage;
@@ -11,12 +10,17 @@ namespace DeEnv.Storage;
 // file and the offending detail named, instead of half-working over stale data
 // (mutations silently rejected, reloads losing changes).
 //
+// Validation runs over the TYPED StoreDoc (node kinds are a closed union), so the walk
+// pattern-matches on the value subtype and never sniffs a string key — the dictionary /
+// object ambiguity that produced the old "must be of type 'JsonValue'" GC bug cannot
+// arise here either.
+//
 // Deliberately tolerant of additive schema evolution: a declared prop missing from
 // the stored fields is fine (reads fall back to defaults). It never reseeds over an
 // existing file; the error names the remedy and leaves the decision to the user.
 public static class StoredDataValidator
 {
-    public static void Validate(JsonObject doc, InstanceDescription desc, string filePath) =>
+    public static void Validate(StoreDoc doc, InstanceDescription desc, string filePath) =>
         new Walk(desc, filePath).Document(doc);
 
     private sealed class Walk(InstanceDescription desc, string filePath)
@@ -28,53 +32,44 @@ public static class StoredDataValidator
             $"Data file '{filePath}' does not match the running app: {detail} " +
             "Delete or move the file to reseed it from the app's initialData.");
 
-        public void Document(JsonObject doc)
+        public void Document(StoreDoc doc)
         {
-            var extents = doc["extents"] as JsonObject ?? new JsonObject();
-            CollectExtentIds(extents);
+            CollectExtentIds(doc);
 
-            foreach (var (typeName, pool) in extents)
+            foreach (var (typeName, pool) in doc.Extents)
             {
                 var type = desc.FindType(typeName)!; // known: CollectExtentIds checked
-                foreach (var (idText, env) in (JsonObject)pool!)
-                    Fields(typeName, idText, ((JsonObject)env!)["fields"] as JsonObject
-                        ?? new JsonObject(), type);
+                foreach (var (idText, entry) in pool)
+                    Fields(typeName, idText.ToString(), entry.Fields, type);
             }
 
             Root(doc);
         }
 
-        // First pass over the extents: every type must be a declared object type and
-        // every entry envelope well-formed; collect ids for the reference checks.
-        private void CollectExtentIds(JsonObject extents)
+        // First pass over the extents: every type must be a declared object type, and
+        // every entry envelope well-formed (id matches the key, typeName matches the
+        // extent); collect ids for the reference checks.
+        private void CollectExtentIds(StoreDoc doc)
         {
-            foreach (var (typeName, pool) in extents)
+            foreach (var (typeName, pool) in doc.Extents)
             {
                 var type = desc.FindType(typeName);
                 if (type is null)
                     Fail($"the data has an extent of type '{typeName}', which the app does not declare.");
                 if (type!.BaseType != BaseType.Object)
                     Fail($"the data has an extent of type '{typeName}', which is not an object type.");
-                if (pool is not JsonObject poolObj)
-                {
-                    Fail($"the extent of '{typeName}' is malformed.");
-                    return;
-                }
 
                 var ids = _ids[typeName] = new HashSet<int>();
-                foreach (var (idText, env) in poolObj)
+                foreach (var (id, entry) in pool)
                 {
-                    if (!int.TryParse(idText, out var id)
-                        || env is not JsonObject e
-                        || e["id"]?.GetValue<int>() != id
-                        || e["typeName"]?.GetValue<string>() != typeName)
-                        Fail($"the extent entry '{typeName}/{idText}' is malformed.");
+                    if (entry.Id != id || entry.TypeName != typeName)
+                        Fail($"the extent entry '{typeName}/{id}' is malformed.");
                     ids.Add(id);
                 }
             }
         }
 
-        private void Fields(string typeName, string id, JsonObject fields, TypeDefinition type)
+        private void Fields(string typeName, string id, Dictionary<string, StoredValue> fields, TypeDefinition type)
         {
             foreach (var (name, node) in fields)
             {
@@ -84,110 +79,129 @@ public static class StoredDataValidator
                     Fail($"stored object {typeName}/{id} has a field '{name}' the app does not declare.");
                     return;
                 }
-                if (node is not JsonObject value)
-                {
-                    Fail($"field '{name}' on {typeName}/{id} is malformed.");
-                    return;
-                }
 
                 var where = $"field '{name}' on {typeName}/{id}";
                 switch (prop.Cardinality)
                 {
                     case Cardinality.Set:
-                        Collection(value, where, "set", "members", prop.Type);
-                        foreach (var (memberId, member) in value["members"] as JsonObject ?? new JsonObject())
+                        if (node is not StoredSet set)
+                        {
+                            Fail($"{where} is declared 'set of {prop.Type}' but is stored as '{KindOf(node)}'.");
+                            break;
+                        }
+                        CollectionId(set.Id, where);
+                        foreach (var (memberId, member) in set.Members)
                         {
                             Reference(member, prop.Type, where);
-                            if (!int.TryParse(memberId, out var mid)
-                                || (member as JsonObject)?["id"]?.GetValue<int>() != mid)
+                            if (member is not StoredRef mref || mref.Id != memberId)
                                 Fail($"{where} has a member keyed '{memberId}' that does not match its reference.");
                         }
                         break;
 
                     case Cardinality.Dictionary:
-                        Collection(value, where, "dictionary", "entries", prop.Type);
-                        foreach (var (_, entry) in value["entries"] as JsonObject ?? new JsonObject())
+                        if (node is not StoredDict dict)
+                        {
+                            Fail($"{where} is declared 'dictionary of {prop.Type}' but is stored as '{KindOf(node)}'.");
+                            break;
+                        }
+                        CollectionId(dict.Id, where);
+                        foreach (var (_, entry) in dict.Entries)
                         {
                             if (desc.IsObjectType(prop.Type))
                                 Reference(entry, prop.Type, where);
                             else
-                                Scalar(entry as JsonObject, prop.Type, where);
+                                Scalar(entry, prop.Type, where);
                         }
                         break;
 
                     default:
                         if (desc.IsObjectType(prop.Type))
-                            Reference(value, prop.Type, where);
+                            Reference(node, prop.Type, where);
                         else
-                            Scalar(value, prop.Type, where);
+                            Scalar(node, prop.Type, where);
                         break;
                 }
             }
         }
 
-        // A stored set/dictionary node: right kind, an intrinsic id (legacy files have
-        // none — the code UI addresses collections by id), and the member slot present.
-        private void Collection(JsonObject node, string where, string kind, string slot, string elemType)
+        // A stored collection carries an intrinsic id (legacy files have none — id 0 —
+        // and the code UI addresses collections by id).
+        private void CollectionId(int id, string where)
         {
-            if (TagOf(node) != kind)
-                Fail($"{where} is declared '{kind} of {elemType}' but is stored as '{TagOf(node)}'.");
-            if (node["id"]?.GetValue<int>() is null)
+            if (id == 0)
                 Fail($"{where} has no intrinsic id (a legacy data file).");
-            if (node[slot] is not JsonObject)
-                Fail($"{where} is malformed: it has no {slot}.");
         }
 
-        // A stored object reference: tagged "object", of exactly the declared type,
-        // pointing at an object that exists in that type's extent.
-        private void Reference(JsonNode? node, string declaredType, string where)
+        // A stored object reference: of exactly the declared type, pointing at an object
+        // that exists in that type's extent.
+        private void Reference(StoredValue? node, string declaredType, string where)
         {
-            if (node is not JsonObject reference || TagOf(reference) != "object")
+            if (node is not StoredRef reference)
             {
-                Fail($"{where} is declared as a reference to '{declaredType}' but is stored as '{TagOf(node as JsonObject)}'.");
+                Fail($"{where} is declared as a reference to '{declaredType}' but is stored as '{KindOf(node)}'.");
                 return;
             }
-            var typeName = reference["typeName"]?.GetValue<string>();
-            if (typeName != declaredType)
-                Fail($"{where} is declared as a reference to '{declaredType}' but references a '{typeName}'.");
-            if (reference["id"]?.GetValue<int>() is not int id
-                || !(_ids.TryGetValue(declaredType, out var ids) && ids.Contains(id)))
-                Fail($"{where} references object {reference["id"]} of type '{declaredType}', which is not stored.");
+            if (reference.TypeName != declaredType)
+                Fail($"{where} is declared as a reference to '{declaredType}' but references a '{reference.TypeName}'.");
+            if (!(_ids.TryGetValue(declaredType, out var ids) && ids.Contains(reference.Id)))
+                Fail($"{where} references object {reference.Id} of type '{declaredType}', which is not stored.");
         }
 
         // A stored scalar: its tag must be the declared type's base type. An enum value is
         // text-shaped, and must additionally be a declared member of its enum (or empty) —
         // the startup twin of the WS write-path check (WsHandler.HandleObjectPropChange).
-        private void Scalar(JsonObject? node, string declaredType, string where)
+        private void Scalar(StoredValue? node, string declaredType, string where)
         {
             var expected = BaseTag(declaredType);
-            if (node is null || TagOf(node) != expected)
+            if (node is not StoredLeaf leaf || ScalarTag(leaf.Scalar) != expected)
             {
-                Fail($"{where} is declared '{declaredType}' but is stored as '{TagOf(node)}'.");
+                Fail($"{where} is declared '{declaredType}' but is stored as '{KindOf(node)}'.");
                 return;
             }
             // Only an enum constrains its value set; its stored value is a string (tag "text").
             if (desc.IsEnumType(declaredType)
-                && node!["value"]?.GetValue<string>() is { } value
-                && !desc.EnumAccepts(declaredType, value))
-                Fail($"{where} holds '{value}', which is not a value of enum '{declaredType}'.");
+                && leaf.Scalar is TextValue text
+                && !desc.EnumAccepts(declaredType, text.Text))
+                Fail($"{where} holds '{text.Text}', which is not a value of enum '{declaredType}'.");
         }
 
-        private void Root(JsonObject doc)
+        private void Root(StoreDoc doc)
         {
             var db = desc.Db()!;
-            if (doc["root"] is not JsonObject root)
+            if (doc.Root is null)
             {
                 Fail("the document has no root.");
                 return;
             }
 
             if (db.BaseType == BaseType.Object)
-                Reference(root, db.Name, "the root");
+                Reference(doc.Root, db.Name, "the root");
             else
-                Scalar(root, db.Name, "the root");
+                Scalar(doc.Root, db.Name, "the root");
         }
 
-        private static string? TagOf(JsonObject? node) => node?["type"]?.GetValue<string>();
+        // The structural kind word a stored value reports — for the same "stored as 'X'"
+        // diagnostics the old raw-DOM validator produced (a leaf reports its scalar tag).
+        private static string KindOf(StoredValue? node) => node switch
+        {
+            null => "nothing",
+            StoredRef => "object",
+            StoredSet => "set",
+            StoredDict => "dictionary",
+            StoredLeaf leaf => ScalarTag(leaf.Scalar),
+            _ => node.GetType().Name,
+        };
+
+        private static string ScalarTag(NodeValue scalar) => scalar switch
+        {
+            BoolValue => "bool",
+            IntValue => "int",
+            DecimalValue => "decimal",
+            TextValue => "text",
+            DateValue => "date",
+            DateTimeValue => "datetime",
+            _ => scalar.GetType().Name,
+        };
 
         // The tag a scalar of this declared type is stored with ("text", "bool", …). An enum
         // value is stored as text (its value name), so its tag is "text" too.
