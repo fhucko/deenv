@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 
 namespace DeEnv.Code.Parsing;
@@ -21,10 +22,18 @@ public static class Parse
         return ParseText;
     }
 
+    // Each distinct pattern compiles to a Regex ONCE per process. The grammar productions are `=>`
+    // properties (CodeParse/AppParse), so each is rebuilt on every back-tracking invocation — without
+    // this cache, every touch recompiled a `Compiled` regex (IL emission), millions of times per parse:
+    // a 507-line document took ~6.4s, almost all of it regex construction. The cache makes `Compiled`
+    // pay off as intended (compile once, match many) and is purely a performance change — same patterns,
+    // same matches, so grammar semantics (and the round-trip / conformance) are unaffected.
+    private static readonly ConcurrentDictionary<string, Regex> RegexCache = new();
+
     public static Parser<string> Regex(string pattern)
     {
         // \G anchors the match at the cursor offset (^ would anchor at the string start).
-        var regex = new Regex(@"\G(?:" + pattern + ")", RegexOptions.Compiled);
+        var regex = RegexCache.GetOrAdd(pattern, p => new Regex(@"\G(?:" + p + ")", RegexOptions.Compiled));
         IEnumerable<IResult<string>> ParseRegex(Cursor input)
         {
             var match = regex.Match(input.Source, input.Offset);
