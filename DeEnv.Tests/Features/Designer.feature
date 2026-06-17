@@ -20,6 +20,18 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the designs list shows a design "instance"
     And the designs list shows a design "crm"
 
+  # The designer (instance 1) is a managed instance like any other: no special-casing in the render.
+  # It has its OWN design in db.designs (a bounded self-snapshot) and its instances-list row resolves
+  # to that design through the same explicit designId reference every other row uses — so it appears in
+  # BOTH lists uniformly. (The kernel always hosts the designer; the fixture seeds its designId.)
+  @milestone-10 @single-user
+  Scenario: The designer appears uniformly as a design and a managed instance
+    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    When I open the designs list
+    Then the designs list shows a design "designer"
+    When I open the instances list
+    Then the instances list shows the instance "designer" running design "designer"
+
   # The "instance" design is the REAL todo app: its types include TodoItem and its UI is the real
   # custom `fn render()` — so the editor (now at /designs/<id>) shows that app's actual content.
   @milestone-10 @single-user

@@ -446,10 +446,13 @@ public class InstanceContext
         // Each target references its seeded design by an EXPLICIT designId — the id of the design in the
         // committed designer seed whose label matches the target's label. Resolved from the designer's
         // initialData (the seed) so the dropdowns start correct and the instances list shows the design.
+        // The designer itself (id 1) is uniform: it carries a designId too — the id of its OWN "designer"
+        // design (a bounded self-snapshot in the seed) — so its instances-list row resolves to a design
+        // like every other row, with no special-casing. (Mirrors the committed kernel.json.)
         var designIds = DesignIdsByLabel();
         var entries = new List<string>
         {
-            RegistryEntryJson(1, "designer", FreePort(), FreePort()),
+            RegistryEntryJson(1, "designer", FreePort(), FreePort(), designIds["designer"]),
         };
         foreach (var (id, label) in targets)
         {

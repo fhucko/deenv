@@ -474,7 +474,14 @@ public sealed class SsrRenderer
         nav.ide-nav { display: flex; gap: 1rem; padding-bottom: 0.8rem; margin-bottom: 1.2rem;
           border-bottom: 1px solid var(--border); }
         nav.ide-nav a { font-weight: 600; }
-        .design-row, .instance-row, .type-row, .prop-row { display: flex; flex-wrap: wrap; gap: 0.5rem;
+        .designs-table, .instances-table { border-collapse: collapse; width: 100%; margin: 0.3rem 0 1rem;
+          background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+        .designs-table th, .instances-table th, .designs-table td, .instances-table td {
+          padding: 0.5rem 0.65rem; text-align: left; border-bottom: 1px solid var(--border-soft); }
+        .designs-head th, .instances-head th { background: var(--bg); font-size: 0.78rem; font-weight: 600;
+          color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
+        .design-row:hover td, .instance-row:hover td { background: #f9fafb; }
+        .type-row, .prop-row { display: flex; flex-wrap: wrap; gap: 0.5rem;
           align-items: center; padding: 0.55rem 0; border-bottom: 1px solid var(--border-soft); }
         .type-row { align-items: flex-start; }
         .prop-row { padding-left: 1.2rem; }

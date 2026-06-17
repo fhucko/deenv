@@ -1,6 +1,6 @@
 {
   "instances": [
-    { "id": 1, "app": "designer", "appPort": 8080, "infraPort": 8081 },
+    { "id": 1, "app": "designer", "appPort": 8080, "infraPort": 8081, "designId": 60 },
     { "id": 2, "app": "instance", "appPort": 8082, "infraPort": 8083, "designId": 13 },
     { "id": 3, "app": "crm", "appPort": 8084, "infraPort": 8085, "designId": 27 },
     { "id": 4, "app": "shop", "appPort": 8086, "infraPort": 8087, "designId": 39 }

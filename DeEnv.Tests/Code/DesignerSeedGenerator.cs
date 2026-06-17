@@ -37,9 +37,20 @@ namespace DeEnv.Tests.Code;
 // stable — AppPrintTests.The_crm_and_designer_documents_round_trip pins parse(print(it)) ≡ it.
 public sealed class DesignerSeedGenerator
 {
-    // Which committed apps become seeded designs: the kernel-hosted data apps (instance/crm/shop),
-    // NOT the designer itself (id 1 — the IDE editing them). Ordered, so the printed seed is stable.
-    private static readonly int[] SeededInstanceIds = [2, 3, 4];
+    // Which committed apps become seeded designs: the kernel-hosted data apps (instance/crm/shop) AND
+    // the designer itself (id 1). The designer is a managed instance like any other, so it is uniform —
+    // it has a design in `db.designs` and an instances-list row that resolves to it. Ordered with the
+    // designer LAST so the existing three designs keep their seeded ids (13/27/39) — the committed
+    // kernel.json pins those, so appending (not prepending) avoids churning them.
+    //
+    // The designer's design is the ONE inherent non-uniformity: a thing cannot contain itself. Its OWN
+    // initialData IS this design library, so projecting it verbatim would recurse/grow on every
+    // regeneration. So the designer design carries an EMPTY initialData (a bounded self-snapshot — its
+    // types + ui/common verbatim, no seed); everything operator-facing stays uniform. See AddDesign.
+    private static readonly int[] SeededInstanceIds = [2, 3, 4, 1];
+
+    // The id of the designer instance (and the app whose design is the bounded self-snapshot).
+    private const int DesignerId = 1;
 
     [Test, Explicit]
     public async Task Generate_the_designer_seed_from_the_committed_apps()
@@ -64,7 +75,10 @@ public sealed class DesignerSeedGenerator
         foreach (var id in SeededInstanceIds)
         {
             var appText = File.ReadAllText(Path.Combine(root, "DeEnv", "instances", id.ToString(), "app.app"));
-            designIds.Add(seed.AddDesign(labels[id], appText));
+            // The designer design is a bounded self-snapshot: project its types + ui/common verbatim, but
+            // force its initialData to "" (do NOT copy the designer's own initialData — that IS this seed,
+            // so copying it would recurse/grow each regeneration). A thing cannot contain itself.
+            designIds.Add(seed.AddDesign(labels[id], appText, emptyInitialData: id == DesignerId));
         }
         seed.AddRootDb(designIds);
 
@@ -111,6 +125,13 @@ public sealed class DesignerSeedGenerator
             {
                 var design = (ObjectValue)member;
                 var label = ((TextValue)design.Fields["label"]).Text;
+
+                // The designer's OWN design is a bounded self-snapshot, not a faithful round-trip: a thing
+                // cannot contain itself, so its initialData is intentionally empty while the committed
+                // designer (instances/1/app.app) carries the full design-library seed. Projecting it back
+                // therefore yields the designer minus its seed — NOT byte-identical to the committed file.
+                // Skip it here (the self-reference limit); the other three MUST still round-trip faithfully.
+                if (label == "designer") continue;
 
                 // The committed app this design was generated from (by label → id).
                 var committed = File.ReadAllText(InstanceContext.AppFixture(labels[label]));
@@ -199,8 +220,10 @@ public sealed class DesignerSeedGenerator
         private int _nextId = 2;
 
         // Add one committed app as a Design: structured types (reverse-projected from the parsed `types`
-        // section) + the other three sections as verbatim text. Returns the Design's id.
-        public int AddDesign(string label, string appText)
+        // section) + the other three sections as verbatim text. Returns the Design's id. When
+        // `emptyInitialData` is set (the designer's own design — a thing cannot contain itself), the
+        // initialData field is forced to "" so the self-reference is bounded and regeneration is stable.
+        public int AddDesign(string label, string appText, bool emptyInitialData = false)
         {
             var desc = AppParse.Parse(appText);
             var sections = SplitSections(appText);
@@ -214,8 +237,9 @@ public sealed class DesignerSeedGenerator
             {
                 ["label"] = label,
                 // The other sections VERBATIM (keyword + body, "" when absent). initialData / common /
-                // ui are carried as text exactly as SchemaBridge's Design text fields expect.
-                ["initialData"] = sections.GetValueOrDefault("initialData", ""),
+                // ui are carried as text exactly as SchemaBridge's Design text fields expect. The
+                // designer design's initialData is forced empty (bounded self-snapshot).
+                ["initialData"] = emptyInitialData ? "" : sections.GetValueOrDefault("initialData", ""),
                 ["common"] = sections.GetValueOrDefault("common", ""),
                 ["ui"] = sections.GetValueOrDefault("ui", ""),
                 ["types"] = IdArray(typeIds),
