@@ -131,6 +131,8 @@ public sealed class WsWireShapeTests
             .IsEqualTo("""{"op":"arrayRemove","ok":true}""");
         await Assert.That(Serialize(new HostActionResponse()))
             .IsEqualTo("""{"op":"hostAction","ok":true}""");
+        await Assert.That(Serialize(new AckRemapResponse()))
+            .IsEqualTo("""{"op":"ackRemap","ok":true}""");
     }
 
     // ── outgoing: an error, and an error WITH a correlation id (WithId appends id last) ───

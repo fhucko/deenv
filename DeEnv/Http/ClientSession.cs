@@ -19,6 +19,31 @@ public sealed class ClientSession
     public DateTime CreatedAt { get; } = DateTime.UtcNow;
     public DateTime LastTouched { get; set; } = DateTime.UtcNow;
     public bool Claimed { get; set; }
+
+    // ── transient-id remap (a just-added object's negative id → its real one) ────
+    //
+    // The Code UI mints a just-added object with a transient NEGATIVE id and keeps addressing it by
+    // that id — as the objectId of a field edit, the member id of a remove — until the arrayAdd
+    // round-trip remaps it. The client fires those follow-ups immediately (it must not wait for the
+    // round-trip), so the server reconciles instead: this per-client table records every negative→real
+    // mapping the server assigned when it minted an added object, and ResolveId translates an inbound id
+    // through it. Ordered WS delivery guarantees the minting arrayAdd is processed before any op that
+    // references its tempId, so the mapping is always present when needed. Bounded by the session
+    // lifetime (the store caps + idle-expires sessions); an int→int entry per add is negligible.
+    private readonly Dictionary<int, int> _transientIds = new();
+
+    // Record that the client's transient (negative) id now denotes the real (positive) extent id.
+    public void MapTransientId(int transientId, int realId) => _transientIds[transientId] = realId;
+
+    // Resolve a wire id through the remap: a known transient id → its real id; any other id (a real
+    // positive id, or one never mapped) is returned unchanged.
+    public int ResolveId(int id) => _transientIds.GetValueOrDefault(id, id);
+
+    // Drop a mapping once the client acks it has applied the remap: from then on the client addresses the
+    // object by its real id and never sends the transient one again, so the entry is dead. This keeps the
+    // table to just the in-flight adds (the few not-yet-acked), with session expiry only the last-resort
+    // backstop for an ack lost to a crash.
+    public void DropTransientId(int transientId) => _transientIds.Remove(transientId);
 }
 
 public sealed class ClientSessionStore

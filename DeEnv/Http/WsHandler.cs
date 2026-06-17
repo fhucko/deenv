@@ -128,6 +128,12 @@ public sealed record HostActionResponse
     public bool Ok => true;
 }
 
+public sealed record AckRemapResponse
+{
+    public string Op => "ackRemap";
+    public bool Ok => true;
+}
+
 public sealed record ErrorResponse
 {
     public required string Error { get; init; }
@@ -166,6 +172,11 @@ public sealed class WsHandler
     private ClientSession? Session(WsRequest req) =>
         _sessions != null && req.ClientId is { } id ? _sessions.Get(id) : null;
 
+    // Resolve a wire id through the session's transient-id remap: a just-added object's negative id →
+    // the real one the server minted for it. No session (or an id it never mapped) → unchanged. This is
+    // what lets the client address a just-added object before its arrayAdd round-trip has returned.
+    private static int Resolve(ClientSession? session, int id) => session?.ResolveId(id) ?? id;
+
     // ── message dispatch ──────────────────────────────────────────────────────
 
     public string ProcessMessage(string json)
@@ -194,6 +205,7 @@ public sealed class WsHandler
                 "arrayRemove"       => HandleArrayRemove(req),
                 "refetch"           => HandleRefetch(pathStr, req),
                 "hostAction"        => HandleHostAction(req),
+                "ackRemap"          => HandleAckRemap(req),
                 _                   => Error($"Unknown op '{op}'")
             };
             return WithId(result, id);
@@ -334,8 +346,9 @@ public sealed class WsHandler
     // optimistically; a reject rolls it back.)
     private string HandleObjectPropChange(WsRequest req)
     {
-        if (req.ObjectId is not { } objectId)
+        if (req.ObjectId is not { } objectIdRaw)
             return Error("objectPropChange requires a numeric 'objectId'.");
+        var objectId = Resolve(Session(req), objectIdRaw);
         if (req.Prop is not { } prop)
             return Error("objectPropChange requires 'prop'.");
         if (req.Value is not { } valEl)
@@ -368,8 +381,10 @@ public sealed class WsHandler
     // embedded reference field uniformly.
     private string HandleSetReferenceField(WsRequest req)
     {
-        if (req.ObjectId is not { } objectId)
+        var session = Session(req);
+        if (req.ObjectId is not { } objectIdRaw)
             return Error("setReferenceField requires a numeric 'objectId'.");
+        var objectId = Resolve(session, objectIdRaw);
         if (req.Prop is not { } prop)
             return Error("setReferenceField requires 'prop'.");
 
@@ -383,9 +398,9 @@ public sealed class WsHandler
         var targetType = _desc.FindType(propDef.Type)!;
 
         int? newId = null;
-        if (req.RefId is { } refId)
+        if (req.RefId is { } refIdRaw)
         {
-            _store.WriteReference(objectId, prop, refId, targetType.Name);
+            _store.WriteReference(objectId, prop, Resolve(session, refIdRaw), targetType.Name);
         }
         else if (req.Value is { } valueEl)
         {
@@ -505,8 +520,10 @@ public sealed class WsHandler
     // so the client can re-key its optimistic copy.
     private string HandleArrayAdd(WsRequest req)
     {
-        if (req.SetId is not { } setId)
+        var session = Session(req);
+        if (req.SetId is not { } setIdRaw)
             return Error("arrayAdd requires a numeric 'setId'.");
+        var setId = Resolve(session, setIdRaw);
         if (req.TypeName is not { } typeName)
             return Error("arrayAdd requires 'typeName'.");
         if (_desc.FindType(typeName) is not { } typeDef)
@@ -525,6 +542,12 @@ public sealed class WsHandler
         var id = _store.CreateObject(typeName, value);
         _store.AddToSet(setId, id);
 
+        // Record the negative→real mapping so the client's follow-up ops (a field edit, a remove) that
+        // still address this object by its transient id resolve to the real one — even if they arrive
+        // before the client has applied this reply's remap. (No tempId → an add that needs no remap.)
+        if (req.TempId is { } tempId)
+            session?.MapTransientId(tempId, id);
+
         // The store minted the new object's collection props with their own intrinsic
         // ids; echo them so the client re-keys its transient arrays (else later adds
         // into them would silently not persist).
@@ -540,12 +563,27 @@ public sealed class WsHandler
         return Serialize(new ArrayAddResponse { NewId = id, Collections = collections, TempId = req.TempId });
     }
 
+    // The client's ack that it has applied an arrayAdd's remap (re-keyed its copy from the transient
+    // negative id to the real one): drop that mapping. The client now addresses the object by its real id
+    // and will never send the transient one again, so the entry is dead — this keeps the per-session table
+    // to just the in-flight adds. A lost ack only means the entry lingers until the session expires (the
+    // backstop), never a wrong resolution.
+    private string HandleAckRemap(WsRequest req)
+    {
+        if (req.TempId is { } tempId)
+            Session(req)?.DropTransientId(tempId);
+        return Serialize(new AckRemapResponse());
+    }
+
     private string HandleArrayRemove(WsRequest req)
     {
-        if (req.SetId is not { } setId)
+        var session = Session(req);
+        if (req.SetId is not { } setIdRaw)
             return Error("arrayRemove requires a numeric 'setId'.");
-        if (req.ObjectId is not { } objectId)
+        if (req.ObjectId is not { } objectIdRaw)
             return Error("arrayRemove requires a numeric 'objectId'.");
+        var setId = Resolve(session, setIdRaw);
+        var objectId = Resolve(session, objectIdRaw);
 
         if (_store.SetElementType(setId) is null)
             return Error($"No set with id {setId}.");

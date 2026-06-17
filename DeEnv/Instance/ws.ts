@@ -294,6 +294,10 @@ function remapAddedId(arrayId: number, tempId: number, realId: number,
     }
     uiStatic.state.localToServerIds[tempId] = realId;
     uiStatic.state.serverToLocalIds[realId] = tempId;
+    // Ack the remap so the server can drop its transient→real entry for tempId: from here on we address
+    // this object by its real id and never send the transient one again (every op referencing it that we
+    // sent BEFORE this point was already ordered ahead of this ack). Uncorrelated (no journal entry).
+    wsSend({ op: "ackRemap", clientId: uiStatic.clientId, tempId });
     // The re-keyed member changes what dependents render (row data-keys), so cached
     // computations over this array must rebuild.
     invalidateMember(arrayId);
