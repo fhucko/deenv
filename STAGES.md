@@ -73,6 +73,12 @@ are one mechanism wearing three hats — git's model applied to schema (and data
 | changes immediately, without making them real | the **working copy** (dirty) |
 | making it real | **merge** to main |
 
+**The precise model (this table is the operator analogy).** An **instance is not a branch** —
+it *pins a specific commit* and holds a branch ref as a *guide* (a **checkout**, not a branch).
+So "a test instance ≈ a branch" here, and "test instance (branch)" below, are the operator's
+mental model; the literal data model is the checkout-at-a-commit one in **DECISIONS** —
+"Versioning — unified schema+data, Git-for-data, the instance pins a commit."
+
 Two loops at different scopes (they stack — not either/or):
 - **Inner loop — mini-instance.** While editing one form/type, just that slice
   renders live against representative data, updating as he edits. Instant,
