@@ -79,10 +79,10 @@ new memo key → body re-runs → draft lost); passes once components key on **s
 Exercised both SSR-then-hydrate and live, so both interpreters are on the hook.
 
 **Touch list:**
-- `DeEnv/Code/CodeExecutor.cs` — slot/position tracking on `ExecContext`; route **component** calls
-  (a fn call returning a render closure) through a **slot-keyed** lookup distinct from
-  `MemoKey`/`ArgKey` (split at `CallFunction:426`). Keep `Memoize`/`PromoteLeaves` exactly as-is for
-  value-computations.
+- `DeEnv/Code/CodeExecutor.cs` — slot/position tracking on `ExecContext`; route **tag-invoked
+  components** (recognized explicitly — per the decisions below, not by result-inspection) through a
+  **slot-keyed** lookup distinct from `MemoKey`/`ArgKey` (the split moves to the tag/component
+  invocation point). Keep `Memoize`/`PromoteLeaves` exactly as-is for value-computations.
 - `DeEnv/Instance/codeExec.ts` — the twin change (same slot tracking + component-vs-value split). The
   `foreach` keying (`:817`) is the model.
 - `DeEnv/Code/conformance.json` + the runners (`DeEnv.Tests/Code/ConformanceTests.cs` /
@@ -110,19 +110,33 @@ Exercised both SSR-then-hydrate and live, so both interpreters are on the hook.
    designed public `ObjectForm`/`Field`/… API; the generic UI rewritten to compose it). Decomposes
    into several slices; plan separately when the foundation lands.
 
-## 4. Open decisions (a call needed before/at build)
-1. **Slot key basis** — render-tree **path** (parent slot + child position; robust under
-   conditionals) vs **call-site id + occurrence counter** (simpler, closer to the existing memo-key
-   string). *Planner recommends the path approach; user's call — a new identity model in both
-   interpreters (ask-before-structural-changes).*
-2. **Conformance case shape** — add a re-render protocol (`setup` + `renders[]`) to
-   `conformance.json`'s contract, or a separate lifecycle mechanism?
-3. **How a "component" is recognized at the split point** — **structural** (any fn call returning a
-   render closure / tags is slot-keyed; zero-config, minimal-by-default) vs an **explicit marker**.
-   *Planner recommends structural; confirm.*
-4. **First-slice fixture scope** — a hand-authored component (off `GenericUi.cs`, the thin choice)
-   vs proving it directly by dropping `__descs` in the generic UI (bundles follow-up 4, larger).
-   *Planner scoped it to the hand-authored fixture.*
+## 4. Decisions (locked 2026-06-17 — Solid-aligned)
+
+Made with the user, via the React/Solid comparison. (Topic-labeled, not numbered, to avoid drift.)
+
+- **Slot key basis → render-tree PATH** (parent slot + child position), not a call-site counter.
+  React/Solid's default component identity; robust when conditionals add/remove siblings; extends
+  cleanly to the `<For>`/`<Index>`/`key` follow-ups (key augments the path at list boundaries);
+  aligns with the existing positional DOM keying. *Both interpreters must compute the identical path
+  — conformance-critical.*
+- **Component recognition → EXPLICIT (component-as-tag), not structural result-inspection.** Solid/
+  React never infer a component from its result — `<Foo/>` is a boundary, a plain `foo()` is not.
+  Result-inspection ("did this return tags?") is fragile (conditional/mixed returns) and
+  twin-drift-prone; explicit is unambiguous, AST-visible (better for conformance), and aligns with
+  the public library (components-as-tags) and with the path decision (a tag's tree position *is* its
+  slot path). **Knock-on:** slice 1 introduces the explicit tag-invoked-component boundary, and the
+  fixture component is **tag-invoked** (not the `foo()()` pattern) — a small, deliberate expansion
+  that builds the right boundary from the start rather than building structural-recognition to later
+  rip out. *(The one place we diverge from the planner's recommendation.)*
+- **Conformance shape → UNIFIED `setup + renders[]`** (a render sequence against one retained
+  context, `expect` on the last render), not a separate mechanism. The new lifecycle is the most
+  drift-prone behavior (zero coverage today), so it MUST live in the one suite both twins run —
+  exiling it defeats conformance's whole purpose. Back-compatible (single-expr cases unchanged); the
+  shared re-render protocol IS the lockstep. *Both runners spec the protocol identically.*
+- **First-slice fixture → HAND-AUTHORED thin** (off `GenericUi.cs`; no `__descs` removal), the
+  component **tag-invoked** (per the recognition decision). Isolates the mechanism from the
+  `__descs`-removal migration (follow-up 4); a failure bisects cleanly (mechanism vs migration). The
+  generic UI is proven in follow-up 4, with the existing `SelfHostedUi` scenarios as regression.
 
 ## 5. Risks / seams to honor
 - **Twin lockstep is the whole game** — the new lifecycle has zero conformance coverage today; the
