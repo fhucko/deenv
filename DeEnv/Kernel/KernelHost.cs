@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using DeEnv.Http;
 using DeEnv.Storage;
 
@@ -26,8 +27,13 @@ namespace DeEnv.Kernel;
 // dir + registry to both, so the two sources never diverge in practice.
 public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisposable
 {
-    private readonly List<HostedInstance> _instances = [];
-    public IReadOnlyList<HostedInstance> Instances => _instances;
+    // Keyed by instance id (its unique address + id-dir name). A dictionary, not a list, so every
+    // operation addresses an instance by its STABLE id — never a positional index, which a fire-and-forget
+    // restart (KernelHostActions) could race into "Index was out of range". ConcurrentDictionary is
+    // thread-safe per operation, so that restart — which can outlive its WS message and overlap a later
+    // create/delete or shutdown — needs no external lock; its hot-swap is an atomic TryUpdate (below).
+    private readonly ConcurrentDictionary<int, HostedInstance> _instances = new();
+    public IReadOnlyList<HostedInstance> Instances => _instances.Values.OrderBy(i => i.Spec.Id).ToList();
 
     // The current registry as a live DATA cell (LiveRegistry), shared BY REFERENCE with every hosted
     // instance's renderer. RefreshRegistry swaps `.Current` (an immutable snapshot) whenever the hosted
@@ -41,7 +47,7 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // sees it.
     private void Register(HostedInstance instance)
     {
-        _instances.Add(instance);
+        _instances[instance.Spec.Id] = instance;
         RefreshRegistry();
     }
 
@@ -49,7 +55,8 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // display label) — NOT the schema file name, which is "app" for every instance now that storage
     // is id-based.
     private void RefreshRegistry() =>
-        _registry.Current = _instances
+        _registry.Current = _instances.Values
+            .OrderBy(i => i.Spec.Id)
             .Select(i => new InstanceInfo(IdOf(i.Spec), i.Spec.App, i.AppPort, i.InfraPort, i.Spec.DesignId))
             .ToList();
 
@@ -67,7 +74,7 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     private IHostActions HostActionsFor(InstanceSpec spec) =>
         new KernelHostActions(
             spec.SchemaPath, spec.DataPath,
-            id => _instances.FirstOrDefault(i => i.Spec.Id == id)?.Spec,
+            id => _instances.GetValueOrDefault(id)?.Spec,
             // create projects the caller's schema into a NEW instance via the kernel's own create
             // mechanism, fed the kernel's boot baseDir/registryPath so a Code-triggered create lands
             // in the same id-layout + registry as a boot one. The design's id is recorded on the new
@@ -94,7 +101,7 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // matching no instance is a clear reject before any work. Every instance is deletable now.
     private async Task DeleteAsyncById(int id, string registryPath)
     {
-        var instance = _instances.FirstOrDefault(i => i.Spec.Id == id)
+        var instance = _instances.GetValueOrDefault(id)
             ?? throw new InvalidOperationException($"No instance with id {id} to delete.");
         await DeleteAsync(instance, registryPath);
     }
@@ -105,7 +112,7 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // unambiguous.)
     private async Task CloneAsyncById(int sourceId, int appPort, int infraPort, string baseDir, string registryPath)
     {
-        var source = _instances.FirstOrDefault(i => i.Spec.Id == sourceId)
+        var source = _instances.GetValueOrDefault(sourceId)
             ?? throw new InvalidOperationException($"No instance with id {sourceId} to clone.");
         await CloneAsync(source, appPort, infraPort, baseDir, registryPath);
     }
@@ -116,7 +123,7 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // synchronous — a registry rewrite, no port bind).
     private Task SetDesignAsyncById(int targetId, int designId, string registryPath)
     {
-        var target = _instances.FirstOrDefault(i => i.Spec.Id == targetId)
+        var target = _instances.GetValueOrDefault(targetId)
             ?? throw new InvalidOperationException($"No instance with id {targetId} to set a design on.");
         SetDesign(target, designId, registryPath);
         return Task.CompletedTask;
@@ -252,8 +259,8 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         // as boot), so a created instance can never alias a running one's store or port.
         EnsureNoCollision(
             spec,
-            new HashSet<string>(_instances.Select(i => i.Spec.DataPath), StringComparer.OrdinalIgnoreCase),
-            new HashSet<int>(_instances.SelectMany(i => new[] { i.AppPort, i.InfraPort })));
+            new HashSet<string>(_instances.Values.Select(i => i.Spec.DataPath), StringComparer.OrdinalIgnoreCase),
+            new HashSet<int>(_instances.Values.SelectMany(i => new[] { i.AppPort, i.InfraPort })));
 
         // Start it (every instance shares the LIVE registry provider, so this create shows up on
         // EVERY instance's next render — no stale list), then track + persist.
@@ -303,8 +310,8 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         // as boot/create), so the clone can never alias a running instance's store or port.
         EnsureNoCollision(
             spec,
-            new HashSet<string>(_instances.Select(i => i.Spec.DataPath), StringComparer.OrdinalIgnoreCase),
-            new HashSet<int>(_instances.SelectMany(i => new[] { i.AppPort, i.InfraPort })));
+            new HashSet<string>(_instances.Values.Select(i => i.Spec.DataPath), StringComparer.OrdinalIgnoreCase),
+            new HashSet<int>(_instances.Values.SelectMany(i => new[] { i.AppPort, i.InfraPort })));
 
         // Start it (shares the LIVE registry, so it shows up on every instance's next render), then
         // track + persist AFTER a successful start (a failed start leaves no orphan entry — the same
@@ -330,7 +337,7 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         // live set and re-project. The LiveRegistry whole-snapshot swap keeps a concurrent render
         // thread safe (it reads the old immutable list until the new one is published).
         await instance.DisposeAsync();
-        _instances.Remove(instance);
+        _instances.TryRemove(instance.Spec.Id, out _);
         RefreshRegistry();
 
         // Rewrite kernel.json without the matching entry (by its unique id), so it stays gone across a
@@ -364,15 +371,20 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         EnsureNoCollision(
             newSpec,
             new HashSet<string>(
-                _instances.Where(i => i != instance).Select(i => i.Spec.DataPath),
+                _instances.Values.Where(i => i != instance).Select(i => i.Spec.DataPath),
                 StringComparer.OrdinalIgnoreCase),
             new HashSet<int>(
-                _instances.Where(i => i != instance).SelectMany(i => new[] { i.AppPort, i.InfraPort })));
+                _instances.Values.Where(i => i != instance).SelectMany(i => new[] { i.AppPort, i.InfraPort })));
 
         // Stop the old binding, start the new one (ports are the only delta), swap it in, re-project.
         await instance.DisposeAsync();
         var restarted = await HostedInstance.StartAsync(newSpec, _registry, HostActionsFor(newSpec));
-        _instances[_instances.IndexOf(instance)] = restarted;
+        // Atomic id-keyed swap (no positional index): only replace if this instance is still the live one.
+        if (!_instances.TryUpdate(instance.Spec.Id, restarted, instance))
+        {
+            await restarted.DisposeAsync();
+            throw new InvalidOperationException($"Instance {instance.Spec.Id} changed during the switch.");
+        }
         RefreshRegistry();
 
         // Persist: rewrite kernel.json mapping the matching entry (by its unique id) to its new ports,
@@ -393,7 +405,7 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // kernel.json so the new label persists. No hosts are stopped — renaming is registry metadata only.
     public Task RenameAsync(int id, string name, string registryPath)
     {
-        var instance = _instances.FirstOrDefault(i => i.Spec.Id == id)
+        var instance = _instances.GetValueOrDefault(id)
             ?? throw new InvalidOperationException($"No instance with id {id} to rename.");
         instance.SetApp(name);
         RefreshRegistry();
@@ -405,12 +417,27 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
 
     public async Task RestartAsync(int id)
     {
-        var existing = _instances.FirstOrDefault(i => i.Spec.Id == id);
-        if (existing == null) return;
-        await existing.DisposeAsync();
-        _instances[_instances.IndexOf(existing)] =
-            await HostedInstance.StartAsync(existing.Spec, _registry, HostActionsFor(existing.Spec));
-        RefreshRegistry();
+        // Called FIRE-AND-FORGET after publish/setDesign, so it can run after its WS message returned and
+        // overlap a later delete or the kernel's shutdown. Address the instance by ID throughout (never a
+        // positional index — the source of the prior "Index was out of range"); the hot-swap is an atomic
+        // TryUpdate that replaces only while THIS instance is still the live one. If it was deleted /
+        // re-swapped meanwhile, unwind the freshly-started host rather than resurrecting a gone instance.
+        // Swallow+log rather than surface an UNOBSERVED exception — the deploy already succeeded, the
+        // restart is a best-effort hot-swap (the id-dir may have been cleaned up mid-restart).
+        try
+        {
+            if (!_instances.TryGetValue(id, out var existing)) return;
+            await existing.DisposeAsync();
+            var restarted = await HostedInstance.StartAsync(existing.Spec, _registry, HostActionsFor(existing.Spec));
+            if (_instances.TryUpdate(id, restarted, existing))
+                RefreshRegistry();
+            else
+                await restarted.DisposeAsync(); // deleted or re-swapped during restart — unwind, don't leak
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Background restart of instance {id} failed: {ex.Message}");
+        }
     }
 
     // The base directory an instance was hosted from, recovered from its schema path. Every instance
@@ -436,7 +463,7 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // Deterministic + restart-stable.
     private int NextInstanceId(string baseDir)
     {
-        var maxLive = _instances.Select(i => i.Spec.Id).DefaultIfEmpty(0).Max();
+        var maxLive = _instances.Keys.DefaultIfEmpty(0).Max();
         var dir = AppPaths.InstancesDir(baseDir);
         var maxDir = Directory.Exists(dir)
             ? Directory.EnumerateDirectories(dir)
@@ -448,9 +475,15 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var instance in _instances)
-            await instance.DisposeAsync();
-        _instances.Clear();
+        // Drain by id (TryRemove returns whatever is CURRENTLY under each key, so a fire-and-forget restart
+        // that swapped an instance in is still captured + disposed). After draining, a lingering restart's
+        // TryUpdate finds no key and unwinds its own host, so nothing leaks. Dispose OUTSIDE the dictionary.
+        var instances = new List<HostedInstance>();
+        foreach (var id in _instances.Keys.ToList())
+            if (_instances.TryRemove(id, out var instance))
+                instances.Add(instance);
         RefreshRegistry();
+        foreach (var instance in instances)
+            await instance.DisposeAsync();
     }
 }
