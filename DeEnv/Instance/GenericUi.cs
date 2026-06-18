@@ -9,7 +9,13 @@ namespace DeEnv.Instance;
 // from a custom `fn render()` — the renderer parents the app scope under the library scope, so
 // `<ObjectForm …>` &c. resolve by name and a hand-written render can compose them.
 //
-//   • ObjectForm(obj, meta, base) — an object page: a field per prop (scalar input, a nested
+//   • Input(obj, desc) — the baseType-appropriate, two-way-bound control for one prop (the desc):
+//     <input type={InputType(...)}> for a scalar, a checkbox for bool, a <select> of values for an
+//     enum. The first composition PRIMITIVE — extracted from the three places that inlined the same
+//     baseType branch (the object-form field, the reference create-new draft, the set add-form).
+//   • Field(obj, desc) — a labeled field: a <div class="field"> wrapping the prop's humanized
+//     <label> and its Input. The labeled-field composite ObjectForm and a custom render compose.
+//   • ObjectForm(obj, meta, base) — an object page: a field per prop (a Field for a scalar, a nested
 //     RefEditor for a single object reference, an inline SetTable for an object set, or an
 //     inline DictTable for a dictionary). A collection's label is a navigable list-title link
 //     to its own route. `base` is the page's URL path, so inline links nest. Edits autosave.
@@ -46,35 +52,47 @@ public static class GenericUi
 
     private const string StdlibSource = """
         ui
+            fn Input(obj, desc)
+                if desc.baseType == "bool"
+                    return <input type="checkbox" class={desc.name} checked={sys.field(obj, desc.name)}>
+                else if desc.baseType == "enum"
+                    return <select class={desc.name} value={sys.field(obj, desc.name)}>
+                        <option value="">
+                            "(none)"
+                        foreach v in desc.values
+                            <option value={v}>
+                                sys.humanize(v)
+                else
+                    return <input type={InputType(desc.baseType)} class={desc.name} value={sys.field(obj, desc.name)}>
+
+            fn Field(obj, desc)
+                return <div class="field">
+                    <label class={desc.name}>
+                        sys.humanize(desc.name)
+                    <Input obj={obj} desc={desc}>
+
             fn ObjectForm(obj, meta, base)
                 return <div class="object-form">
                     <h2>
                         meta.name
                     foreach p in meta.props
-                        <div class="field">
-                            if p.baseType == "set" || p.baseType == "dictionary"
-                                <a class="list-title" href={sys.nest(base, p.name)}>
-                                    sys.humanize(p.name)
-                            else
+                        if p.baseType == "object"
+                            <div class="field">
                                 <label class={p.name}>
                                     sys.humanize(p.name)
-                            if p.baseType == "object"
                                 <RefEditor parent={obj} prop={p.name} target={sys.schema(p.target)}>
-                            else if p.baseType == "set"
+                        else if p.baseType == "set"
+                            <div class="field">
+                                <a class="list-title" href={sys.nest(base, p.name)}>
+                                    sys.humanize(p.name)
                                 <SetTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)}>
-                            else if p.baseType == "dictionary"
+                        else if p.baseType == "dictionary"
+                            <div class="field">
+                                <a class="list-title" href={sys.nest(base, p.name)}>
+                                    sys.humanize(p.name)
                                 <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
-                            else if p.baseType == "bool"
-                                <input type="checkbox" class={p.name} checked={sys.field(obj, p.name)}>
-                            else if p.baseType == "enum"
-                                <select class={p.name} value={sys.field(obj, p.name)}>
-                                    <option value="">
-                                        "(none)"
-                                    foreach v in p.values
-                                        <option value={v}>
-                                            sys.humanize(v)
-                            else
-                                <input type={InputType(p.baseType)} class={p.name} value={sys.field(obj, p.name)}>
+                        else
+                            <Field obj={obj} desc={p}>
 
             fn RefEditor(parent, prop, target)
                 var state = { pick: 0, draft: sys.clone(target.blank) }
@@ -109,17 +127,7 @@ public static class GenericUi
                                 if p.baseType != "object" && p.baseType != "set"
                                     <label class={p.name}>
                                         sys.humanize(p.name)
-                                    if p.baseType == "bool"
-                                        <input type="checkbox" class={p.name} checked={sys.field(state.draft, p.name)}>
-                                    else if p.baseType == "enum"
-                                        <select class={p.name} value={sys.field(state.draft, p.name)}>
-                                            <option value="">
-                                                "(none)"
-                                            foreach v in p.values
-                                                <option value={v}>
-                                                    sys.humanize(v)
-                                    else
-                                        <input type={InputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
+                                    <Input obj={state.draft} desc={p}>
                             <button class="ref-create" onClick={createNew}>
                                 "Create new"
                 return render
@@ -152,17 +160,7 @@ public static class GenericUi
                         <div class="set-new">
                             foreach p in desc.props
                                 if p.baseType != "object" && p.baseType != "set"
-                                    if p.baseType == "bool"
-                                        <input type="checkbox" class={p.name} checked={sys.field(state.draft, p.name)}>
-                                    else if p.baseType == "enum"
-                                        <select class={p.name} value={sys.field(state.draft, p.name)}>
-                                            <option value="">
-                                                "(none)"
-                                            foreach v in p.values
-                                                <option value={v}>
-                                                    sys.humanize(v)
-                                    else
-                                        <input type={InputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
+                                    <Input obj={state.draft} desc={p}>
                             <button class="set-add" onClick={addNew}>
                                 "Add"
                 return render
@@ -393,14 +391,17 @@ public static class GenericUi
     // The descriptor literals threaded into the executor for `sys.schema(...)` to evaluate (the
     // replacement for the old `__descs`/`__dictDescs` globals). Two key shapes, both pure data:
     //   "TypeName"      → { name, labelProp, props, blank } — a type's descriptor (sys.schema("T")).
-    //   "Owner/prop"    → the dict prop's descriptor — for the root dict route (sys.schema("O","P")).
+    //   "Owner/prop"    → that prop's descriptor — sys.schema("O","P"). One entry per prop of every
+    //                     object type, so a caller can fetch a single prop's shape by name. The
+    //                     generic UI uses this for a dict route; a hand-written `fn render()` uses it
+    //                     to compose <Input>/<Field> over a chosen prop (e.g. sys.schema("TodoItem","text")).
     // Built once per render from the schema; the executor evaluates + caches the one a call names and
     // ships it to the client like extent.
     private static Dictionary<string, CodeObject> Descriptors(List<TypeDefinition> objectTypes, InstanceDescription desc)
     {
         var map = objectTypes.ToDictionary(t => t.Name, t => TypeDescriptor(t, desc));
         foreach (var t in objectTypes)
-            foreach (var p in (t.Props ?? []).Where(p => p.Cardinality == Cardinality.Dictionary))
+            foreach (var p in t.Props ?? [])
                 map[t.Name + "/" + p.Name] = PropDesc(p, desc);
         return map;
     }

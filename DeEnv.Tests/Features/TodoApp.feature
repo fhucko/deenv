@@ -1,52 +1,61 @@
 Feature: Todo app
-  The committed default app (DeEnv/instance.schema.json): users own todo lists,
-  lists own items. The Code milestone's end-to-end proof — hand-written ui AST +
-  normalized initialData, driven through a real browser over the live server
-  (SSR first paint, client hydration, WS persistence, lazy load via refetch).
+  The committed default app (DeEnv/instances/2/app.app): users own todo lists, lists
+  own items. Rebuilt as the M11 auto-with-overrides showcase — a hand-written custom
+  `fn render()` that COMPOSES the public component library: each item row composes the
+  library `<Input>` primitive for its checkbox and its text field (the same control the
+  generic object form uses), inside a custom card/checklist layout (the "overrides").
+  Driven end-to-end through a real browser: SSR first paint, client hydration, optimistic
+  mutations persisted over the WS, and selection-driven rendering.
 
-  @milestone-code
-  Scenario: First paint renders the seeded data
+  @milestone-11
+  Scenario: First paint renders the seeded user
     Given the todo app is running
     Then the page shows the user "User 1"
 
-  @milestone-code
-  Scenario: Selecting a user lazily loads their lists from the server
+  @milestone-11
+  Scenario: Selecting a user shows their lists as cards
     Given the todo app is running
     When I select the user "User 1"
     Then the page shows the list "List 1"
 
-  @milestone-code
+  @milestone-11
   Scenario: Adding an item shows it and persists it
     Given the todo app is running
     When I select the user "User 1"
-    And I select the list "List 1"
-    And I add a new item "Buy milk"
+    And I add a new item "Buy milk" to the list "List 1"
     Then the page shows an item "Buy milk"
     And the store eventually has a "TodoItem" whose "text" is "Buy milk"
 
-  @milestone-code
+  @milestone-11
   Scenario: Checking an item marks it done and persists
     Given the todo app is running
     When I select the user "User 1"
-    And I select the list "List 1"
-    And I add a new item "Buy milk"
-    And I check the first item
-    Then the page shows the done item "Buy milk"
+    And I add a new item "Buy milk" to the list "List 1"
+    And I check the item "Buy milk"
+    Then the item "Buy milk" is checked
     And the store eventually has a checked "TodoItem"
 
-  @milestone-code
-  Scenario: Adding and removing a user
+  @milestone-11
+  Scenario: Removing an item takes it off the list
+    Given the todo app is running
+    When I select the user "User 1"
+    And I add a new item "Buy milk" to the list "List 1"
+    And I remove the item "Buy milk"
+    Then the page does not show an item "Buy milk"
+
+  @milestone-11
+  Scenario: Adding a list to the selected user shows a new card
+    Given the todo app is running
+    When I select the user "User 1"
+    And I add a new list "Groceries"
+    Then the page shows the list "Groceries"
+    And the store eventually has a "TodoList" whose "name" is "Groceries"
+
+  @milestone-11
+  Scenario: Adding a user and selecting it
     Given the todo app is running
     When I add a new user "User 2"
     Then the page shows the user "User 2"
     And the store eventually has a "User" whose "name" is "User 2"
-    When I remove the user "User 2"
-    Then the page does not show the user "User 2"
-
-  @milestone-code
-  Scenario: Navigating between pages via the path variable
-    Given the todo app is running
-    When I open the about page
-    Then the page shows the about text
-    When I open the users page
-    Then the page shows the user "User 1"
+    When I select the user "User 2"
+    Then the page shows the selected user "User 2"

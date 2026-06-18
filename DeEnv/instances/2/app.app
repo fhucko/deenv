@@ -21,100 +21,75 @@ initialData
         name: "List 1"
         items: []
 ui
-    var title = "Todo list"
     var selectedUser
-    var selectedList
     var newUser = getNewUser()
     var newList = getNewList()
-    var newItem = getNewItem()
-
-    fn selectUser(user)
-        selectedUser = user
-        selectedList = null
 
     fn getNewUser()
         return { name: "", todoLists: [] }
 
-    fn addNewUser()
-        db.users.add(newUser)
-        newUser = getNewUser()
-
     fn getNewList()
         return { name: "", items: [] }
+
+    fn getNewItem()
+        return { text: "", checked: false }
+
+    fn addNewUser()
+        db.users.add(newUser)
+        selectedUser = newUser
+        newUser = getNewUser()
 
     fn addNewList()
         selectedUser.todoLists.add(newList)
         newList = getNewList()
 
-    fn getNewItem()
-        return { text: "", checked: false }
-
-    fn addNewItem()
-        selectedList.items.add(newItem)
-        newItem = getNewItem()
-
-    fn aboutPage()
-        return <p class="about">
-            "This is the about page"
-
-    fn usersPage()
-        return <main class="users">
-            <h2>
-                "Users"
+    fn userSelector()
+        return <section class="user-bar">
+            foreach user in db.users
+                <button class="user-chip" onClick={() => selectedUser = user}>
+                    user.name
             <input class="new-user" value={newUser.name}>
             <button class="add-user" onClick={addNewUser}>
                 "Add user"
-            foreach user in db.users
-                <div class="user-row">
-                    <span class="user-name" onClick={() => selectUser(user)}>
-                        user.name
-                    <button class="remove-user" onClick={() => db.users.remove(user)}>
-                        "Remove"
-            if selectedUser != null
-                <h2 class="selected-user">
-                    "User "
-                    selectedUser.name
-                <input class="new-list" value={newList.name}>
-                <button class="add-list" onClick={addNewList}>
-                    "Add list"
-                foreach list in selectedUser.todoLists
-                    <div class="list-row">
-                        <span class="list-name" onClick={() => selectedList = list}>
-                            list.name
-                        <button class="remove-list" onClick={() => selectedUser.todoLists.remove(list)}>
+
+    fn itemAdder(list)
+        var draft = { item: getNewItem() }
+        fn add()
+            list.items.add(draft.item)
+            draft.item = getNewItem()
+        fn view()
+            return <div class="add-item">
+                <input class="new-item" value={draft.item.text}>
+                <button class="add-item-btn" onClick={add}>
+                    "Add"
+        return view
+
+    fn listCard(list)
+        return <article class="todo-card">
+            <h3 class="list-name">
+                list.name
+            <ul class="checklist">
+                foreach item in list.items
+                    <li class="item-row">
+                        <Input obj={item} desc={sys.schema("TodoItem", "checked")}>
+                        <Input obj={item} desc={sys.schema("TodoItem", "text")}>
+                        <button class="remove-item" onClick={() => list.items.remove(item)}>
                             "Remove"
-                if selectedList != null
-                    <h2 class="selected-list">
-                        "List "
-                        selectedList.name
-                    <input class="new-item" value={newItem.text}>
-                    <button class="add-item" onClick={addNewItem}>
-                        "Add item"
-                    foreach item in selectedList.items
-                        <div class="item-row">
-                            <input type="checkbox" class="item-check" checked={item.checked}>
-                            if item.checked
-                                <span class="item-done">
-                                    item.text
-                            else
-                                <input class="item-text" value={item.text}>
-                            <button class="remove-item" onClick={() => selectedList.items.remove(item)}>
-                                "Remove"
+            <itemAdder list={list}>
 
     fn render()
-        var page
-        if path == "/about"
-            title = "About"
-            page = aboutPage
-        else
-            title = "Todo list"
-            page = usersPage
-        return <div>
+        return <main class="todo-app">
             <h1>
-                "Todo list"
-            <nav>
-                <button class="nav-users" onClick={() => path = "/"}>
-                    "Users"
-                <button class="nav-about" onClick={() => path = "/about"}>
-                    "About"
-            page()
+                "Todos"
+            userSelector()
+            if selectedUser != null
+                <section class="user-lists">
+                    <h2 class="selected-user">
+                        selectedUser.name
+                    <div class="add-list">
+                        <input class="new-list" value={newList.name}>
+                        <button class="add-list-btn" onClick={addNewList}>
+                            "Add list"
+                    <div class="cards">
+                        foreach list in selectedUser.todoLists
+                            listCard(list)

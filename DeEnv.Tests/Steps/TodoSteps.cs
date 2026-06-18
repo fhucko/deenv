@@ -1,5 +1,6 @@
 using DeEnv.Storage;
 using DeEnv.Tests.TestSupport;
+using Microsoft.Playwright;
 using Reqnroll;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -7,9 +8,12 @@ using TUnit.Assertions.Extensions;
 namespace DeEnv.Tests.Steps;
 
 // Steps for the todo app (TodoApp.feature) — the committed default instance
-// (DeEnv/instance.schema.json) driven end-to-end through a real browser: SSR
-// first paint, client hydration, optimistic mutations persisted over the WS,
-// and selection-dependent lazy loading via refetch.
+// (DeEnv/instances/2/app.app), rebuilt as the M11 auto-with-overrides showcase: a custom
+// `fn render()` (a user selector + per-user list cards + per-card item checklists) that
+// COMPOSES the public library `<Input>` primitive for each item's checkbox + text field.
+// Driven end-to-end through a real browser: SSR first paint, client hydration, optimistic
+// mutations persisted over the WS. An item's text/checked is a library-composed <Input>, so
+// the item text is read from input.text's VALUE and its done-state from input.checked.
 [Binding]
 public sealed class TodoSteps(InstanceContext ctx)
 {
@@ -26,26 +30,24 @@ public sealed class TodoSteps(InstanceContext ctx)
 
     // ── When ────────────────────────────────────────────────────────────────────
 
+    // Selecting a user clicks its chip in the user bar; the selected-user section then renders.
     [When("I select the user {string}")]
     public async Task WhenSelectUser(string name)
     {
-        await ctx.Page!.Locator($".user-name:has-text({Quoted(name)})").ClickAsync();
-        await ctx.Page.WaitForSelectorAsync(".selected-user");
+        await ctx.Page!.Locator($"button.user-chip:has-text({Quoted(name)})").First.ClickAsync();
+        await ctx.Page.WaitForSelectorAsync($"h2.selected-user:has-text({Quoted(name)})");
     }
 
-    [When("I select the list {string}")]
-    public async Task WhenSelectList(string name)
+    // Add an item to a specific list's card: fill that card's inline add-item input, click its
+    // Add button, then wait until every item row in that card carries a real (positive) data-key
+    // — i.e. the optimistic add persisted and its id remap re-rendered the row.
+    [When("I add a new item {string} to the list {string}")]
+    public async Task WhenAddItem(string text, string list)
     {
-        await ctx.Page!.Locator($".list-name:has-text({Quoted(name)})").ClickAsync();
-        await ctx.Page.WaitForSelectorAsync(".selected-list");
-    }
-
-    [When("I add a new item {string}")]
-    public async Task WhenAddItem(string text)
-    {
-        await ctx.Page!.Locator("input.new-item").FillAsync(text);
-        await ctx.Page.Locator("button.add-item").ClickAsync();
-        await AllKeysRealAsync(".item-row"); // persisted + remapped (no mid-step re-render)
+        var card = Card(list);
+        await card.Locator("input.new-item").FillAsync(text);
+        await card.Locator("button.add-item-btn").ClickAsync();
+        await AllItemKeysRealAsync(list);
     }
 
     [When("I add a new user {string}")]
@@ -53,61 +55,61 @@ public sealed class TodoSteps(InstanceContext ctx)
     {
         await ctx.Page!.Locator("input.new-user").FillAsync(name);
         await ctx.Page.Locator("button.add-user").ClickAsync();
-        await AllKeysRealAsync(".user-row");
+        await ctx.Page.WaitForSelectorAsync($"button.user-chip:has-text({Quoted(name)})");
     }
 
-    // Wait until every row of the selector carries a real (positive) data-key — i.e.
-    // the optimistic add has persisted and its id remap re-rendered the row.
-    private async Task AllKeysRealAsync(string selector) =>
+    [When("I add a new list {string}")]
+    public async Task WhenAddList(string name)
+    {
+        await ctx.Page!.Locator("input.new-list").FillAsync(name);
+        await ctx.Page.Locator("button.add-list-btn").ClickAsync();
+        await ctx.Page.WaitForSelectorAsync($"h3.list-name:has-text({Quoted(name)})");
+    }
+
+    // Wait until every item row in the given card has a real (positive) data-key — the optimistic
+    // add persisted and the negative→real id remap re-rendered the row.
+    private async Task AllItemKeysRealAsync(string list) =>
         await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('{selector}')].length > 0 && " +
-            $"[...document.querySelectorAll('{selector}')].every(e => +e.getAttribute('data-key') > 0)");
+            "card => { const rows = [...card.querySelectorAll('.item-row')];" +
+            " return rows.length > 0 && rows.every(e => +e.getAttribute('data-key') > 0); }",
+            await Card(list).ElementHandleAsync());
 
-    [When("I remove the user {string}")]
-    public async Task WhenRemoveUser(string name)
-    {
-        await ctx.Page!.Locator($".user-row:has-text({Quoted(name)}) .remove-user").ClickAsync();
-    }
+    [When("I remove the item {string}")]
+    public async Task WhenRemoveItem(string text) =>
+        await (await ItemRowAsync(text)).Locator("button.remove-item").ClickAsync();
 
-    [When("I check the first item")]
-    public async Task WhenCheckFirstItem()
-    {
-        await ctx.Page!.Locator("input.item-check").First.CheckAsync();
-    }
-
-    [When("I open the about page")]
-    public async Task WhenOpenAbout() => await ctx.Page!.Locator("button.nav-about").ClickAsync();
-
-    [When("I open the users page")]
-    public async Task WhenOpenUsers() => await ctx.Page!.Locator("button.nav-users").ClickAsync();
+    [When("I check the item {string}")]
+    public async Task WhenCheckItem(string text) =>
+        await (await ItemRowAsync(text)).Locator("input.checked").CheckAsync();
 
     // ── Then ────────────────────────────────────────────────────────────────────
 
     [Then("the page shows the user {string}")]
     public async Task ThenShowsUser(string name) =>
-        await ctx.Page!.WaitForSelectorAsync($".user-name:has-text({Quoted(name)})");
+        await ctx.Page!.WaitForSelectorAsync($"button.user-chip:has-text({Quoted(name)})");
 
-    [Then("the page does not show the user {string}")]
-    public async Task ThenDoesNotShowUser(string name) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => ![...document.querySelectorAll('.user-name')].some(e => e.textContent === '{name}')");
+    [Then("the page shows the selected user {string}")]
+    public async Task ThenShowsSelectedUser(string name) =>
+        await ctx.Page!.WaitForSelectorAsync($"h2.selected-user:has-text({Quoted(name)})");
 
     [Then("the page shows the list {string}")]
     public async Task ThenShowsList(string name) =>
-        await ctx.Page!.WaitForSelectorAsync($".list-name:has-text({Quoted(name)})");
+        await ctx.Page!.WaitForSelectorAsync($"h3.list-name:has-text({Quoted(name)})");
 
+    // The item text lives in input.text's VALUE (a composed library <Input>), so match on value.
     [Then("the page shows an item {string}")]
     public async Task ThenShowsItem(string text) =>
         await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('input.item-text')].some(e => e.value === '{text}')");
+            $"() => [...document.querySelectorAll('.item-row input.text')].some(e => e.value === {JsString(text)})");
 
-    [Then("the page shows the done item {string}")]
-    public async Task ThenShowsDoneItem(string text) =>
-        await ctx.Page!.WaitForSelectorAsync($".item-done:has-text({Quoted(text)})");
+    [Then("the page does not show an item {string}")]
+    public async Task ThenDoesNotShowItem(string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => ![...document.querySelectorAll('.item-row input.text')].some(e => e.value === {JsString(text)})");
 
-    [Then("the page shows the about text")]
-    public async Task ThenShowsAbout() =>
-        await ctx.Page!.WaitForSelectorAsync(".about");
+    [Then("the item {string} is checked")]
+    public async Task ThenItemChecked(string text) =>
+        await Assert.That(await (await ItemRowAsync(text)).Locator("input.checked").IsCheckedAsync()).IsTrue();
 
     [Then("the store eventually has a {string} whose {string} is {string}")]
     public async Task ThenStoreHasText(string typeName, string field, string expected) =>
@@ -119,8 +121,29 @@ public sealed class TodoSteps(InstanceContext ctx)
         await EventuallyAsync(() => ctx.Store!.ReadExtent(typeName).Values
             .Any(o => o.Fields.TryGetValue("checked", out var v) && v is BoolValue { Value: true }));
 
+    // ── locators ──────────────────────────────────────────────────────────────────
+
+    // The list card whose title matches (exact-ish via :has-text on the .list-name heading).
+    private ILocator Card(string list) =>
+        ctx.Page!.Locator($"article.todo-card:has(h3.list-name:has-text({Quoted(list)}))");
+
+    // The item row whose composed text <Input> (input.text) holds the given VALUE. The text is in
+    // the input's value PROPERTY (set by client render), not the attribute, so it can't be matched by
+    // a CSS attribute selector — resolve the row's index in JS (waiting for it), then take that nth row.
+    private async Task<ILocator> ItemRowAsync(string text)
+    {
+        // Resolve the 1-based row index in JS (0 would be falsy and never satisfy WaitForFunction),
+        // then take the (index-1)th row. Waits until the row whose input.text holds `text` exists.
+        var oneBased = await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const rows = [...document.querySelectorAll('.item-row')];" +
+            $" const i = rows.findIndex(r => r.querySelector('input.text')?.value === {JsString(text)});" +
+            " return i < 0 ? null : i + 1; }");
+        return ctx.Page.Locator(".item-row").Nth((int)await oneBased.JsonValueAsync<double>() - 1);
+    }
+
     // A name as a quoted :has-text() argument — quotes/backslashes in the value escaped.
     private static string Quoted(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    private static string JsString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 
     // Polls a store condition (the WS round-trip is async). An IOException is the test
     // thread reading the store file while the server writes it — transient, retried.

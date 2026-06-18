@@ -322,6 +322,22 @@ public sealed class CodeExecutor
         return descriptor;
     }
 
+    // Eagerly cache EVERY descriptor (type + prop) into the memo so they all ship on first paint.
+    // sys.schema only ships a descriptor that RAN server-side; a component composing sys.schema(...)
+    // over rows that don't exist yet (an empty set seeded with none) would otherwise hit a client
+    // cache-miss when a row is added later. Descriptors are static, pure schema data (no deps, no
+    // user data), so caching them all up front is cheap and removes that sharp edge. Called once per
+    // render before the client state is serialized.
+    public void PrewarmDescriptors(ExecContext context)
+    {
+        foreach (var (name, literal) in _descriptors)
+        {
+            var key = $"schema:{name}";
+            if (!context.Memo.ContainsKey(key))
+                context.Memo[key] = new CacheEntry { Key = key, Result = ExecuteValue(literal, new ExecScope(), context), Deps = new Deps() };
+        }
+    }
+
     // clone(obj): a fresh object with the source's SCALAR props copied (shallow; scalars
     // are immutable so the values are shared). Used to mint a new draft from a type's
     // blank template — a generic component's create-new state.
