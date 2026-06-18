@@ -88,6 +88,12 @@ function connectWs(): void {
 
     setWsHooks({
         propChange: (obj, prop, value, before) => {
+            // A negative id that is NOT a pending set add is a transient DRAFT (a `{ … }` never added to a
+            // set): it has no server object, so skip it — its fields ship with its own eventual arrayAdd,
+            // and sending now would be a "no such object" reject. A pending add (negative id IN pendingAdds)
+            // IS sent: the server resolves the transient id through the add's remap, so a field edited
+            // before the round-trip returns still saves.
+            if (obj.id <= 0 && !pendingAdds.has(obj.id)) return;
             const msgId = nextWsMsgId++;
             journal.push({
                 msgId,

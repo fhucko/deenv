@@ -354,11 +354,18 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
 // a dictionary entry has no extent id but carries its SourcePath, so it persists via the
 // PATH-addressed `write` op (a scalar entry writes at its path, an object entry at path/prop).
 function persistFieldEdit(obj: ExecObject, name: string, value: ExecValue, before: ExecValue): void {
-    if (obj.id > 0) { propValueChange(obj, name, value, before); return; }
-    if (obj.sourcePath != null) {
+    if (obj.id > 0) { propValueChange(obj, name, value, before); return; }   // server-backed extent object
+    if (obj.sourcePath != null) {                                            // a dictionary entry (no extent id)
         const path = obj.scalarEntry ? obj.sourcePath : obj.sourcePath + "/" + name;
         pathWriteChange(obj, name, path, value, before);
+        return;
     }
+    // obj.id <= 0 with no sourcePath: a just-added SET MEMBER edited before its arrayAdd round-trip remapped
+    // its transient negative id to a real one (under load the round-trip is slow, so the edit lands first).
+    // Persist by the transient id anyway — the server resolves it through the add's transient-id remap. A
+    // purely transient DRAFT (an object never added to a set) is filtered out in the ws propChange hook:
+    // it has no server object yet, and its fields ship with its own eventual arrayAdd.
+    propValueChange(obj, name, value, before);
 }
 
 // field(obj, name): dynamic by-name prop access — the reflective twin of `obj.member`,
