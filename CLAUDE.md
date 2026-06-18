@@ -59,9 +59,12 @@ where developers design data visually and use it as objects. Full mission in
    (untouched). **Slice (b)** + the dict follow-on then replaced BOTH descriptor
    registries (`__descs` type + `__dictDescs` dict) with a `sys.schema(typeName)` / `sys.schema(type,
    prop)` builtin (server-resolved + shipped like `sys.extent`) and **deleted both** — the self-hosted
-   UI reads all schema shape through `sys.schema`. Build only M11 work next; remaining: the **public
-   component library** (follow-up 5, the feature half) — promote the library from the `internal` scope
-   to a PUBLIC scope a hand-written `fn render()` can compose, with the generic UI as its first consumer. See Current focus + ROADMAP.md +
+   UI reads all schema shape through `sys.schema`. Build only M11 work next. The **public
+   component library** (follow-up 5, the feature half) is underway — **first slice DONE**: a `lib`
+   scope (`system ← lib ← app`) makes the PascalCase library components (`ObjectForm`/`RefEditor`/…)
+   composable from a hand-written `fn render()` (the generic UI is the other consumer). Remaining
+   follow-up-5 slices: publish each component as a blessed public API (`Field` extraction, etc.), the
+   operator designer as a real second consumer, then the generic-UI-as-first-consumer COLLAPSE. See Current focus + ROADMAP.md +
    `docs/plans/m11-reactivity-foundation.md`.
    Cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time, and the
    management commands stay out of scope unless explicitly asked. Schema versioning is M13 (after the
@@ -171,9 +174,13 @@ building, no conformance case). `GenericUi` threads a `typeName → descriptor` 
 executor; `ExecuteSchema` caches it directly (the `Memoize` factory guard refuses transient objects)
 with a within-render read-back for stable identity. The **dict follow-on** then gave `sys.schema` a
 2-arg form `sys.schema(type, prop)` (the dict prop's descriptor) and deleted `__dictDescs` too — so
-BOTH descriptor registries are gone. **NOT done yet:** the **public component library** (follow-up 5,
-the feature half) — promote the library from the `internal` scope to a PUBLIC scope a hand-written
-`fn render()` can compose, with the generic UI as its first consumer. Driven by the two `@milestone-11` scenarios in `SelfHostedUi.feature` +
+BOTH descriptor registries are gone. The **public component library** (follow-up 5) is underway —
+**first slice DONE:** a `lib` scope (`system ← lib ← app`) re-parents the app scope under the library,
+so a hand-written `fn render()` can compose the PascalCase `<ObjectForm>`/`<RefEditor>`/… (proven by
+`PublicLibraryFormDb`; the generic UI still composes the same components). **Remaining:** publish each
+component as a blessed public API (extract `Field`, …), the operator designer as a second consumer,
+then the generic-UI-as-first-consumer COLLAPSE (replace synthesized views with an app that calls the
+library — the largest, last). Driven by the two `@milestone-11` scenarios in `SelfHostedUi.feature` +
 `ComponentFormRebuiltDescDb`/`RowComponentListDb` (`InstanceContext.cs`) and three conformance cases.
 See `docs/plans/m11-reactivity-foundation.md`, DECISIONS.md ("UI middle-ground"), and the project memory.
 

@@ -90,7 +90,15 @@ today, no field more.
 5. **Migrate the rest** (`ObjectForm`/`SetTable`/`DictTable`/`LeafForm`) to the public API; generic UI
    fully rewritten as the library's first consumer. Each its own thin slice.
 
-**Follow-up 5 — public library, FIRST SLICE (milestone-planner, 2026-06-18; not built).** The
+**Follow-up 5 — public library, FIRST SLICE ✅ DONE 2026-06-18 (suite 315, architecture-reviewer-
+approved).** Implemented as planned: a `lib` scope (`system ← lib ← app`; `lib` = the renamed
+`internalScope`, re-parented above `app`), library functions renamed PascalCase, and `Effective`'s
+custom-app early-return removed (custom apps get the library + descriptor map, only per-type views
+stay gated). A hand-written `fn render()` composing `<ObjectForm obj={db.note} meta={sys.schema("Note")}
+base="/">` renders + autosaves (the `PublicLibraryFormDb` fixture; the generic UI is the other
+consumer). Verified: generic views in `lib` can't see `app` vars (upward-only walk); no privacy leak
+(shared `lib` holds only functions + no top-level vars); collision-clean. The notes below are the
+original plan (kept for the remaining slices). The
 structural crux is small: the library lives in `internalScope`, a SIBLING of `app` under `system`, so
 a user's `fn render()` (walking `app → system`) never reaches it — `<ObjectForm>` resolves to nothing
 → treated as an HTML element. The library is *already* tag-invoked, slot-keyed, and reads schema via

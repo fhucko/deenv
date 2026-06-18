@@ -64,6 +64,15 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.Page!.WaitForUrlContentAsync(new System.Text.RegularExpressions.Regex(@"/[0-9]+$"));
     }
 
+    // Milestone 11: a hand-written `fn render()` that composes the PUBLIC <ObjectForm> library
+    // component — proving the generic-UI library is reachable + usable from userspace.
+    [Given("the public-library form app is running")]
+    public async Task GivenPublicLibraryFormAppRunning()
+    {
+        ctx.Description = InstanceContext.PublicLibraryFormDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
     [Given("the self-hosted dict app is running")]
     public async Task GivenSelfHostedDictAppRunning()
     {

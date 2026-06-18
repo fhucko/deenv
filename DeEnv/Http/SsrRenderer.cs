@@ -26,13 +26,14 @@ public sealed class SsrRenderer
     // reserved-path-free data URL space.
     private readonly int _infraPort;
 
-    // Names of the synthesized framework members (the generic library + the dict prop-descriptor
-    // registry) — placed in the system scope, above the custom code, so they never pollute the app scope.
+    // Names of the synthesized framework members (the generic library) — placed in the lib scope,
+    // between the system scope and the app scope, so user code can compose them but they never
+    // pollute the app scope.
     private readonly IReadOnlySet<string> _systemNames;
 
     // typeName → the type's descriptor literal, threaded into the CodeExecutor so `sys.schema(typeName)`
-    // resolves a type's shape from the schema (the replacement for the `__descs` global). Empty for a
-    // custom-render app.
+    // resolves a type's shape from the schema (the replacement for the `__descs` global). Now built for
+    // every app (custom included), since `sys.schema(...)` is usable from a custom `fn render()` too.
     private readonly IReadOnlyDictionary<string, CodeObject> _descriptors;
 
     // The kernel's instance registry as a live DATA cell (app + ports per hosted instance), surfaced
@@ -251,15 +252,18 @@ public sealed class SsrRenderer
         var ui = _ui!;
         var exec = new CodeExecutor(_store, _descriptors);
 
-        // Three scopes, so the generic-UI internals are OUTSIDE userspace (not just above it):
-        //   system   — framework state (db, path, status), the shared parent both can read;
-        //   internal — the synthesized generic library + the dict prop-descriptor registry
-        //              (__dictDescs), a SIBLING of app, so user code can never reach them (type
-        //              descriptors are no longer a var — they come via the sys.schema builtin);
+        // Three scopes, chained system ← lib ← app, so the generic-UI library is a PUBLIC layer
+        // between framework state and the user's code:
+        //   system   — framework state (db, path, status), the shared root both can read;
+        //   lib      — the synthesized generic library (ObjectForm/RefEditor/SetTable/…), the PARENT
+        //              of app, so a custom `fn render()` reaches the components through the scope
+        //              chain (recognition is name-resolution) and composes them. A generic view runs
+        //              IN lib, and since app is BELOW lib it still cannot see the user's app vars
+        //              (type descriptors are no longer a var — they come via the sys.schema builtin);
         //   app      — the user's own vars/functions/render.
         var system = new ExecScope { IsTop = true };
-        var internalScope = new ExecScope { Parent = system, IsTop = true };
-        var app = new ExecScope { Parent = system, IsTop = true };
+        var lib = new ExecScope { Parent = system, IsTop = true };
+        var app = new ExecScope { Parent = lib, IsTop = true };
 
         // db root (the object graph), read-only. A recompute reuses the warm graph the
         // session holds (already reflecting the client's mutations) instead of reloading.
@@ -287,17 +291,17 @@ public sealed class SsrRenderer
         system.Items["status"] = new ExecScopeItem { Value = new ExecInt { Value = 200 }, IsReadOnly = false };
 
         // Functions first (close over their scope → mutual recursion) so var initializers may
-        // call them. The synthesized generic library goes in the internal scope; the user's
+        // call them. The synthesized generic library goes in the lib scope; the user's
         // own functions (common + ui) go in the app scope.
         foreach (var f in _desc.Common?.Functions ?? []) DefineFunction(f, app);
-        foreach (var f in ui.Functions ?? []) DefineFunction(f, _systemNames.Contains(f.Name ?? "") ? internalScope : app);
+        foreach (var f in ui.Functions ?? []) DefineFunction(f, _systemNames.Contains(f.Name ?? "") ? lib : app);
 
         // UI/session state. Each initializer is a memoized computation (`var:<name>`),
-        // evaluated in its own scope. The synthesized dict prop-descriptor registry (__dictDescs)
-        // goes in the internal scope; the user's vars go in the app scope.
+        // evaluated in its own scope. Any synthesized library var goes in the lib scope; the
+        // user's vars go in the app scope.
         foreach (var v in ui.Vars ?? [])
         {
-            var target = _systemNames.Contains(v.Name) ? internalScope : app;
+            var target = _systemNames.Contains(v.Name) ? lib : app;
             var value = v.Value is { } init
                 ? CodeExecutor.Memoize($"var:{v.Name}", context, () => exec.ExecuteValue(init, target, context))
                 : new ExecNull();
@@ -322,10 +326,10 @@ public sealed class SsrRenderer
         var match = forcedMatch ?? ResolveView(urlPath)
             ?? throw new CodeRuntimeException("No view matches this URL.");
 
-        // The synthesized generic views run in the INTERNAL scope (they use the library +
-        // registries); a custom `fn render()` runs in the APP scope. Either way the chain
-        // reaches system (db/path/status).
-        var renderScope = match.Kind == ViewKind.Render ? app : internalScope;
+        // The synthesized generic views run in the LIBRARY scope (they call the library); a custom
+        // `fn render()` runs in the APP scope (and reaches the library through its parent, the lib
+        // scope). Either way the chain reaches system (db/path/status).
+        var renderScope = match.Kind == ViewKind.Render ? app : lib;
 
         // A type view's parameters: (1) the routed object, found by walking the URL
         // segments through the SAME graph instance bound as `db` (so leaves, session
@@ -356,9 +360,9 @@ public sealed class SsrRenderer
 
         // The first-paint HTTP status: the (possibly view-assigned) `status` system var.
         var status = system.Items.TryGetValue("status", out var s) && s.Value is ExecInt si ? si.Value : 200;
-        // Ship the render scope (internal for a generic view → its __dictDescs; app for a custom
-        // render → its vars) plus the system parent (ClientState walks up). Type descriptors ride
-        // the memo cache as `schema:*` entries, not the scope.
+        // Ship the render scope (lib for a generic view; app for a custom render → its vars) plus the
+        // parents (ClientState walks up). Type descriptors ride the memo cache as `schema:*` entries,
+        // not the scope.
         return (child, title, renderScope, match, targetId, status);
     }
 

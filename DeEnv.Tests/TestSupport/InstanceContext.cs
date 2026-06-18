@@ -111,6 +111,43 @@ public class InstanceContext
             dueDate: "2026-01-01"
     """;
 
+    // Milestone 11 (public component library): a HAND-WRITTEN `fn render()` that composes the
+    // public `<ObjectForm>` library component — the second consumer proving the generic-UI library
+    // is reachable + usable from userspace (the first consumer is the @milestone-9 generic object
+    // pages, which still synthesize the same components). The Db holds the Note as a single
+    // reference (`note`); render binds it: `<ObjectForm obj={db.note} meta={sys.schema("Note")}
+    // base="/">`. A custom render now also gets the descriptor map, so sys.schema("Note") resolves;
+    // and the library scope is its parent, so <ObjectForm> recognizes as a component. Edits autosave
+    // through the composed form exactly as a synthesized object page would.
+    public static InstanceDescription PublicLibraryFormDb() =>
+        InstanceDescriptionLoader.Load(PublicLibraryFormApp);
+
+    private const string PublicLibraryFormApp = """
+    types
+        Db
+            note Note
+        Note
+            title text
+            done bool
+            count int
+            dueDate date
+
+    initialData
+        Db 1
+            note: 2
+        Note 2
+            title: "First"
+            done: false
+            count: 3
+            dueDate: "2026-01-01"
+
+    ui
+
+        fn render()
+            return <main>
+                <ObjectForm obj={db.note} meta={sys.schema("Note")} base="/">
+    """;
+
     // Enum support (first slice): an app whose Db holds a set of `Order`, where `Order.status`
     // is typed by the `OrderStatus` enum. No `ui` section, so the default self-hosted generic UI
     // renders it: the order page's status field is a <select> of the enum's values. Seeded with

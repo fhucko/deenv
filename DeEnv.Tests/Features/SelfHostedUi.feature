@@ -151,6 +151,23 @@ Feature: Self-hosted generic UI (object forms)
     Then the note list eventually shows "Buy milk"
     And the draft title is empty
 
+  # ── the public component library (milestone 11) ────────────────────────────
+  # The generic-UI library (ObjectForm/RefEditor/…) is PUBLIC: a hand-written `fn render()`
+  # composes <ObjectForm> directly — the same component the @milestone-9 object pages synthesize.
+  # This proves it both RENDERS (humanized label + field value, built from the schema via
+  # sys.schema) and is LIVE (an edit autosaves through the composed form), end-to-end.
+
+  @milestone-11 @single-user
+  Scenario: A hand-written render composes the public ObjectForm component
+    Given the public-library form app is running
+    When I open "/"
+    Then the page is a code page
+    And the page shows ".object-form"
+    And the "dueDate" label reads "Due date"
+    And the "title" field shows "First"
+    When I fill the "title" field with "Renamed"
+    Then the store eventually has a "Note" whose "title" is "Renamed"
+
   # ── reactive components: slot-path identity (milestone 11, slice 1) ─────────
   # A component invoked as a tag keys on its render-tree slot, not its arguments, so its
   # local state survives a re-render even when the argument is a fresh object each time.

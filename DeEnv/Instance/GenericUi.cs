@@ -4,16 +4,19 @@ namespace DeEnv.Instance;
 
 // The self-hosted generic UI (milestone 9), a reflective Code library over schema data,
 // synthesized into the effective ui at render time. It is the DEFAULT UI: any app without a
-// fully-custom `fn render()` (including an app with no `ui` section) renders through it.
+// fully-custom `fn render()` (including an app with no `ui` section) renders through it. The
+// library is also PUBLIC (milestone 11): its components are named in PascalCase and reachable
+// from a custom `fn render()` — the renderer parents the app scope under the library scope, so
+// `<ObjectForm …>` &c. resolve by name and a hand-written render can compose them.
 //
-//   • objectForm(obj, meta, base) — an object page: a field per prop (scalar input, a nested
-//     refEditor for a single object reference, an inline setTable for an object set, or an
-//     inline dictTable for a dictionary). A collection's label is a navigable list-title link
+//   • ObjectForm(obj, meta, base) — an object page: a field per prop (scalar input, a nested
+//     RefEditor for a single object reference, an inline SetTable for an object set, or an
+//     inline DictTable for a dictionary). A collection's label is a navigable list-title link
 //     to its own route. `base` is the page's URL path, so inline links nest. Edits autosave.
-//   • refEditor(parent, prop, target) — a reference editor: current label, a pick button
+//   • RefEditor(parent, prop, target) — a reference editor: current label, a pick button
 //     per extent() candidate, a clear button, and a create-new form. A COMPONENT: its body
 //     runs once as init (a local `state` holding a draft), and it returns a render fn.
-//   • setTable(set, desc, setPath) — a set table: header + member rows (+ an "open" link to
+//   • SetTable(set, desc, setPath) — a set table: header + member rows (+ an "open" link to
 //     the nested member URL, nest(setPath, m) → /notes/3, + Remove) + an add form. Also a
 //     COMPONENT (the add form holds a draft).
 //
@@ -43,7 +46,7 @@ public static class GenericUi
 
     private const string StdlibSource = """
         ui
-            fn objectForm(obj, meta, base)
+            fn ObjectForm(obj, meta, base)
                 return <div class="object-form">
                     <h2>
                         meta.name
@@ -56,11 +59,11 @@ public static class GenericUi
                                 <label class={p.name}>
                                     sys.humanize(p.name)
                             if p.baseType == "object"
-                                <refEditor parent={obj} prop={p.name} target={sys.schema(p.target)}>
+                                <RefEditor parent={obj} prop={p.name} target={sys.schema(p.target)}>
                             else if p.baseType == "set"
-                                <setTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)}>
+                                <SetTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)}>
                             else if p.baseType == "dictionary"
-                                <dictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
+                                <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
                             else if p.baseType == "bool"
                                 <input type="checkbox" class={p.name} checked={sys.field(obj, p.name)}>
                             else if p.baseType == "enum"
@@ -71,9 +74,9 @@ public static class GenericUi
                                         <option value={v}>
                                             sys.humanize(v)
                             else
-                                <input type={inputType(p.baseType)} class={p.name} value={sys.field(obj, p.name)}>
+                                <input type={InputType(p.baseType)} class={p.name} value={sys.field(obj, p.name)}>
 
-            fn refEditor(parent, prop, target)
+            fn RefEditor(parent, prop, target)
                 var state = { pick: 0, draft: sys.clone(target.blank) }
                 fn createNew()
                     sys.setRef(parent, prop, state.draft)
@@ -116,12 +119,12 @@ public static class GenericUi
                                                 <option value={v}>
                                                     sys.humanize(v)
                                     else
-                                        <input type={inputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
+                                        <input type={InputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
                             <button class="ref-create" onClick={createNew}>
                                 "Create new"
                 return render
 
-            fn setTable(set, desc, setPath)
+            fn SetTable(set, desc, setPath)
                 var state = { draft: sys.clone(desc.blank) }
                 fn addNew()
                     set.add(state.draft)
@@ -159,12 +162,12 @@ public static class GenericUi
                                                 <option value={v}>
                                                     sys.humanize(v)
                                     else
-                                        <input type={inputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
+                                        <input type={InputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
                             <button class="set-add" onClick={addNew}>
                                 "Add"
                 return render
 
-            fn dictTable(dict, desc, base)
+            fn DictTable(dict, desc, base)
                 var state = { key: "", draft: sys.clone(desc.blank), error: "" }
                 fn addNew()
                     if state.key == ""
@@ -216,7 +219,7 @@ public static class GenericUi
                                             <option value={v}>
                                                 sys.humanize(v)
                                 else
-                                    <input type={inputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
+                                    <input type={InputType(p.baseType)} class={p.name} value={sys.field(state.draft, p.name)}>
                             if desc.isScalar
                                 <input class="value" value={sys.field(state.draft, "value")}>
                             <button class="dict-add" onClick={addNew}>
@@ -225,13 +228,13 @@ public static class GenericUi
                                 state.error
                 return render
 
-            fn leafForm(entry, base)
+            fn LeafForm(entry, base)
                 return <div class="leaf-form">
                     <h2>
                         sys.field(entry, "__key")
                     <input class="value" value={sys.field(entry, "value")}>
 
-            fn notFoundForm()
+            fn NotFoundForm()
                 status = 404
                 return <main class="not-found">
                     <h1>
@@ -241,7 +244,7 @@ public static class GenericUi
                     <a class="home" href="/">
                         "Home"
 
-            fn inputType(baseType)
+            fn InputType(baseType)
                 if baseType == "int"
                     return "number"
                 if baseType == "decimal"
@@ -251,26 +254,30 @@ public static class GenericUi
                 return "text"
         """;
 
-    // The effective ui for rendering: the app's ui augmented with the generic library, an OBJECT
-    // view per self-hostable type, and a REFERENCE / SET view per object reference / set prop.
-    // Returns the app's ui unchanged when it does not opt in. Functions are renumbered (CodeIds)
-    // over the whole set so server and client key the memo cache alike.
+    // The effective ui for rendering: the app's ui augmented with the generic library (ALWAYS) plus,
+    // when the app has no custom `fn render()`, an OBJECT view per self-hostable type and a
+    // REFERENCE / SET / DICT view per such prop. Functions are renumbered (CodeIds) over the whole
+    // set so server and client key the memo cache alike.
+    //
+    // The library is now PUBLIC: a custom `fn render()` reaches it through the scope chain (the
+    // renderer parents the app scope under the library scope), so it can compose <ObjectForm> &c.
+    // — hence the library functions + descriptors are synthesized for EVERY app, custom or not. A
+    // custom app gets NO per-type views (it owns its own routing); only a generic-UI (no custom
+    // render) app does.
     //
     // SystemNames lists the synthesized framework members (the library functions) so the renderer
-    // places them in the SYSTEM scope, above the custom code — they never pollute the app scope.
-    // Descriptors maps "TypeName" → a type's descriptor literal and "Owner/prop" → a dict prop's
-    // descriptor, threaded into the executor so `sys.schema(...)` resolves a shape (the replacement
-    // for the old `__descs`/`__dictDescs` globals); empty for a custom-render app.
+    // places them in the LIBRARY scope, between the system scope and the app scope. Descriptors maps
+    // "TypeName" → a type's descriptor literal and "Owner/prop" → a dict prop's descriptor, threaded
+    // into the executor so `sys.schema(...)` resolves a shape (the replacement for the old
+    // `__descs`/`__dictDescs` globals).
     public static (InstanceUi? Ui, IReadOnlySet<string> SystemNames, IReadOnlyDictionary<string, CodeObject> Descriptors)
         Effective(InstanceDescription desc)
     {
-        var ui = desc.Ui;
-        // A fully-custom UI (`fn render()`) owns the whole URL space — no generic synthesis.
-        if (ui?.Render != null) return (ui, EmptyNames, EmptyDescriptors);
-        // Otherwise the self-hosted generic UI is the DEFAULT: synthesize per-type views over
-        // the (possibly absent) ui section. A plain app — no `ui` section, or only common
-        // helpers — renders entirely through the Code objectForm library.
-        ui ??= new InstanceUi();
+        // A custom `fn render()` owns the whole URL space, so it gets the library but no per-type
+        // views. A plain app — no `ui` section, or only common helpers — renders entirely through
+        // the synthesized per-type views over the Code ObjectForm library (the DEFAULT UI).
+        var ui = desc.Ui ?? new InstanceUi();
+        var isCustom = ui.Render != null;
 
         // Parse the library FRESH (distinct CodeFunction instances each call, so concurrent
         // renderers never share mutable Ids).
@@ -279,33 +286,37 @@ public static class GenericUi
 
         var objectTypes = (desc.Types ?? []).Where(t => t.BaseType == BaseType.Object).ToList();
 
+        // Per-type views only for a generic-UI app; a custom render owns its own routing.
         var synthViews = new List<UiView>();
-        foreach (var type in objectTypes)
+        if (!isCustom)
         {
-            // An object page for every object type. (Dictionaries self-host now, so there is
-            // no longer a per-type gate routing some types to the C# auto-form.)
-            synthViews.Add(SynthObjectView(type.Name));
+            foreach (var type in objectTypes)
+            {
+                // An object page for every object type. (Dictionaries self-host now, so there is
+                // no longer a per-type gate routing some types to the C# auto-form.)
+                synthViews.Add(SynthObjectView(type.Name));
 
-            // Reference-route editor per single object-reference prop (any owner — e.g. Db.lead).
-            foreach (var prop in RefProps(type, desc))
-                synthViews.Add(SynthRefView(type.Name, prop.Name, prop.Type));
+                // Reference-route editor per single object-reference prop (any owner — e.g. Db.lead).
+                foreach (var prop in RefProps(type, desc))
+                    synthViews.Add(SynthRefView(type.Name, prop.Name, prop.Type));
 
-            // Set-table page per object set prop (e.g. Db.notes → /notes).
-            foreach (var prop in SetProps(type, desc))
-                synthViews.Add(SynthSetView(type.Name, prop.Name, prop.Type));
+                // Set-table page per object set prop (e.g. Db.notes → /notes).
+                foreach (var prop in SetProps(type, desc))
+                    synthViews.Add(SynthSetView(type.Name, prop.Name, prop.Type));
 
-            // Dict-table page per dictionary prop (e.g. Db.settings → /settings).
-            foreach (var prop in DictProps(type))
-                synthViews.Add(SynthDictView(type.Name, prop.Name));
+                // Dict-table page per dictionary prop (e.g. Db.settings → /settings).
+                foreach (var prop in DictProps(type))
+                    synthViews.Add(SynthDictView(type.Name, prop.Name));
+            }
+
+            // One shared leaf editor for scalar dictionary entry pages (/settings/<key>), added
+            // only when the schema has a scalar dictionary (an object dict entry uses its type view).
+            if (objectTypes.Any(t => DictProps(t).Any(p => !desc.IsObjectType(p.Type))))
+                synthViews.Add(SynthLeafView());
+
+            // The self-hosted NotFound page for any unrouted URL (sets a 404 status).
+            synthViews.Add(SynthNotFoundView());
         }
-
-        // One shared leaf editor for scalar dictionary entry pages (/settings/<key>), added
-        // only when the schema has a scalar dictionary (an object dict entry uses its type view).
-        if (objectTypes.Any(t => DictProps(t).Any(p => !desc.IsObjectType(p.Type))))
-            synthViews.Add(SynthLeafView());
-
-        // The self-hosted NotFound page for any unrouted URL (sets a 404 status).
-        synthViews.Add(SynthNotFoundView());
 
         var functions = new List<CodeFunction>();
         functions.AddRange(library);
@@ -320,14 +331,11 @@ public static class GenericUi
         CodeIds.Assign(new InstanceDescription(Types: desc.Types, Ui: effective, Common: desc.Common));
 
         // The framework-synthesized members (the library functions) — the renderer puts these in the
-        // system scope, leaving the app scope to the user's code. Descriptors are resolved by the
+        // library scope, between the system scope and the app scope. Descriptors are resolved by the
         // `sys.schema` builtin from the threaded map (no descriptor var in scope anymore).
         var systemNames = new HashSet<string>(library.Where(f => f.Name != null).Select(f => f.Name!));
         return (effective, systemNames, Descriptors(objectTypes, desc));
     }
-
-    private static readonly IReadOnlySet<string> EmptyNames = new HashSet<string>();
-    private static readonly IReadOnlyDictionary<string, CodeObject> EmptyDescriptors = new Dictionary<string, CodeObject>();
 
     private static IEnumerable<PropDefinition> RefProps(TypeDefinition type, InstanceDescription desc) =>
         (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Single && desc.IsObjectType(p.Type));
@@ -338,43 +346,43 @@ public static class GenericUi
     private static IEnumerable<PropDefinition> DictProps(TypeDefinition type) =>
         (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Dictionary);
 
-    // `view T(obj, base)` → `return objectForm(obj, sys.schema("T"), base)`. `base` is the
+    // `view T(obj, base)` → `return ObjectForm(obj, sys.schema("T"), base)`. `base` is the
     // page's URL path, threaded so inline sets build nested member links (sys.nest(base, prop)).
     private static UiView SynthObjectView(string typeName) =>
-        new(typeName, Fn(["obj", "base"], Return(Call("objectForm", Sym("obj"), Schema(typeName), Sym("base")))));
+        new(typeName, Fn(["obj", "base"], Return(Call("ObjectForm", Sym("obj"), Schema(typeName), Sym("base")))));
 
-    // Reference route `view(parent)` → `return <refEditor parent={parent} prop="P" target={…}>` (a
+    // Reference route `view(parent)` → `return <RefEditor parent={parent} prop="P" target={…}>` (a
     // root-position component tag, keyed by its render slot). Keyed by (owner, Prop), bound to the
     // parent. Takes only `parent`: a reference builds no nested links, so it ignores the `base` arg
     // ExecuteRender passes to every type view (both interpreters bind min(args, params), so the
     // extra arg is harmless — keeping the param out of the Code is more honest than declaring it unused).
     private static UiView SynthRefView(string ownerType, string prop, string targetType) =>
-        new(ownerType, Fn(["parent"], Return(Tag("refEditor",
+        new(ownerType, Fn(["parent"], Return(Tag("RefEditor",
                 ("parent", Sym("parent")), ("prop", Text(prop)), ("target", Schema(targetType))))),
             Prop: prop);
 
-    // Set route `view(parent, base)` → `return <setTable set={parent.P} desc={…} setPath={base}>`.
+    // Set route `view(parent, base)` → `return <SetTable set={parent.P} desc={…} setPath={base}>`.
     // `base` is the set's own URL path, used for nested member links.
     private static UiView SynthSetView(string ownerType, string prop, string elementType) =>
-        new(ownerType, Fn(["parent", "base"], Return(Tag("setTable",
+        new(ownerType, Fn(["parent", "base"], Return(Tag("SetTable",
                 ("set", Field(Sym("parent"), Text(prop))), ("desc", Schema(elementType)), ("setPath", Sym("base"))))),
             Prop: prop);
 
-    // The shared scalar-entry view: `view(entry, base)` → `return leafForm(entry, base)`. Bound
+    // The shared scalar-entry view: `view(entry, base)` → `return LeafForm(entry, base)`. Bound
     // to the entry object (FindTarget resolves it by key); its value persists path-addressed.
-    // leafForm is stateless (returns tags directly), so it stays a call — no slot identity needed.
+    // LeafForm is stateless (returns tags directly), so it stays a call — no slot identity needed.
     private static UiView SynthLeafView() =>
-        new(LeafViewType, Fn(["entry", "base"], Return(Call("leafForm", Sym("entry"), Sym("base")))));
+        new(LeafViewType, Fn(["entry", "base"], Return(Call("LeafForm", Sym("entry"), Sym("base")))));
 
-    // The shared NotFound view: `view() → return notFoundForm()`. Takes no target — it reads
+    // The shared NotFound view: `view() → return NotFoundForm()`. Takes no target — it reads
     // the framework `path` var and sets a 404 status.
     private static UiView SynthNotFoundView() =>
-        new(NotFoundViewType, Fn([], Return(Call("notFoundForm"))));
+        new(NotFoundViewType, Fn([], Return(Call("NotFoundForm"))));
 
-    // Dict route `view(parent, base)` → `return <dictTable dict={parent.P} desc={__dictDescs["O/P"]}
+    // Dict route `view(parent, base)` → `return <DictTable dict={parent.P} desc={__dictDescs["O/P"]}
     // base={base}>` (a root-position component tag, slot-keyed so its draft state survives renders).
     private static UiView SynthDictView(string ownerType, string prop) =>
-        new(ownerType, Fn(["parent", "base"], Return(Tag("dictTable",
+        new(ownerType, Fn(["parent", "base"], Return(Tag("DictTable",
                 ("dict", Field(Sym("parent"), Text(prop))),
                 ("desc", Schema(ownerType, prop)),
                 ("base", Sym("base"))))),
@@ -478,8 +486,8 @@ public static class GenericUi
     // prop at its root route), the replacement for the old `__dictDescs["Owner/prop"]` registry read.
     private static CodeCall Schema(string typeName, string prop) =>
         new() { Fn = SysMember("schema"), Params = [Text(typeName), Text(prop)] };
-    // A childless tag `<name a={…} b={…}>` — used to invoke a synthesized component (refEditor /
-    // setTable / dictTable) BY TAG, so it keys on its render-tree slot rather than its arguments.
+    // A childless tag `<Name a={…} b={…}>` — used to invoke a synthesized component (RefEditor /
+    // SetTable / DictTable) BY TAG, so it keys on its render-tree slot rather than its arguments.
     private static CodeTag Tag(string name, params (string Name, ICodeValue Value)[] attrs) => new()
     {
         Name = name,

@@ -98,9 +98,11 @@ public static class ClientState
         foreach (var (coll, item) in context.AccessedItems)
             if (item != null) CollectionRef(coll);
 
-        // Ship the app scope AND its system parent (db, path) flat — the client rebuilds a
-        // single scope; resolution is by name, so the system/app split need not survive the
-        // wire. A child var shadows a parent of the same name (none do today).
+        // Ship the render scope AND its parents flat (a custom render walks app → lib → system;
+        // a generic view lib → system) — the client rebuilds a single scope; resolution is by
+        // name, so the system/lib/app split need not survive the wire. Library functions are
+        // skipped (they ride initUi); the first-writer-wins skip below means an app var correctly
+        // shadows a lib/system var of the same name on the wire too.
         var scope = new JsonObject();
         for (var s = topScope; s != null; s = s.Parent)
             foreach (var (key, item) in s.Items)

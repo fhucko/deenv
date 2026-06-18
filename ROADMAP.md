@@ -204,9 +204,11 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   write-only → server renders once), proven by the `@milestone-11` Gherkin scenarios; a new unified
   `setup + renders[]` conformance protocol proves the deterministic core (recognition, by-name
   binding, splice, local-component capture, sibling + foreach-row slot uniqueness) on both twins.
-  Remaining: the **public component library** + generic-UI-as-first-consumer (follow-up 5, the
-  feature half) — promote the library from the `internal` scope to a PUBLIC scope a hand-written
-  `fn render()` can compose, with the generic UI rewritten as the library's first consumer. See
+  The **public component library** (follow-up 5, the feature half) is underway — **first slice
+  DONE:** a `lib` scope (`system ← lib ← app`) makes the PascalCase library components composable
+  from a hand-written `fn render()` (proven by a fixture; the generic UI is the other consumer).
+  Remaining: publish each component as a blessed API, the operator designer as a second consumer,
+  then the generic-UI-as-first-consumer collapse. See
   `docs/plans/m11-reactivity-foundation.md`. Delivers pillar 8's "auto with
   overrides" (modify/extend
   *parts* of the generic UI) via the mechanism settled in DECISIONS ("UI middle-ground"):
