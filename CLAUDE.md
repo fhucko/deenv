@@ -47,14 +47,16 @@ where developers design data visually and use it as objects. Full mission in
    runs; create/list/switch/delete mechanism + host-action channel `sys.publish`/`sys.create`/
    `sys.cloneInstance`/`sys.delete`/`sys.rename`; the operator designer + id-based identity). **The
    active milestone is Milestone 11 — SolidJS-style reactive components + the public component library
-   (the UI middle-ground). SLICE 1 (the reactivity FOUNDATION: slot-path component identity) LANDED
-   2026-06-18 (suite 308).** Components are recognized by **pure name-resolution** (a tag whose name
-   resolves to an in-scope function — any function, top-level or local) and keyed by their **render-tree
-   slot** (not their arguments), so a component runs once per slot and its state survives a re-render
-   with rebuilt arguments — built on the **existing** memo cache (untouched). Build only M11 work next;
-   remaining follow-ups: lists/keys (the `foreach` row key), an explicit per-call `key`, **dissolving
-   `__descs`** (rewrite the generic UI's components to tag-invoked — the payoff), then the **public
-   component library** (the feature half). See Current focus + ROADMAP.md +
+   (the UI middle-ground). SLICES 1-2 (the reactivity FOUNDATION) LANDED 2026-06-18 (suite 310).**
+   Components are recognized by **pure name-resolution** (a tag whose name resolves to an in-scope
+   function — any function, top-level or local) and keyed by their **render-tree slot** (not their
+   arguments), so a component runs once per slot and its state survives a re-render with rebuilt
+   arguments; slice 2 extends the slot path through `foreach` (per-row, by member identity) so a
+   component in a list keeps independent state that follows the object across reorder/remove — all on
+   the **existing** memo cache (untouched). Build only M11 work next; remaining follow-ups: an explicit
+   per-call `key`, then **tag-invoking the generic UI's components + dissolving `__descs`** (note:
+   `__descs` is ALSO a cross-type descriptor registry, not just reference-stability, so its removal is
+   entangled with the **public component library** / schema-as-data reflection — the feature half). See Current focus + ROADMAP.md +
    `docs/plans/m11-reactivity-foundation.md`.
    Cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time, and the
    management commands stay out of scope unless explicitly asked. Schema versioning is M13 (after the
@@ -134,8 +136,8 @@ steps, when reached, use Playwright.)
 ## Current focus
 
 **Milestone 11 — SolidJS-style reactive components + the public component library (the UI
-middle-ground) — is the ACTIVE milestone. SLICE 1 (the reactivity FOUNDATION) LANDED 2026-06-18
-(suite 308).** Slice 1 gives components a **render-tree-positional ("slot path") identity**
+middle-ground) — is the ACTIVE milestone. SLICES 1-2 (the reactivity FOUNDATION) LANDED 2026-06-18
+(suite 310).** Slice 1 gives components a **render-tree-positional ("slot path") identity**
 decoupled from the argument-keyed memo, so a component runs its body **once per slot** and its
 local state survives a re-render even when its argument is rebuilt fresh. Components are recognized
 by **pure name-resolution** — a tag whose name resolves to a function in scope is a component (any
@@ -145,14 +147,20 @@ keyed by the slot via the **existing** `Memoize` (untouched — additive). **Run
 is a CLIENT behavior** (C#'s `Memoize` is write-only — the server renders once), so the **Gherkin
 scenario** proves it while a new **unified `setup + renders[]` conformance protocol** proves the
 deterministic shared core (recognition, by-name attribute binding, splicing, local-component
-capture, sibling slot-key uniqueness) on both twins. GOTCHAs: a component inside a `foreach` is
-**follow-up 2** (slot path is static indices only — flagged with a `HAZARD` comment in
-`ExecuteComponent`); the name-resolution footgun hit once (renamed the designer's `fn nav`→`navBar`,
-which returned `<nav>`). NOT done yet (per plan): **dissolving `__descs`** (follow-up 4 — the payoff)
-and the **public component library** (follow-up 5, the feature half). Driven by the `@milestone-11`
-scenario in `SelfHostedUi.feature` + `ComponentFormRebuiltDescDb` (`InstanceContext.cs`) and the two
-conformance cases. See `docs/plans/m11-reactivity-foundation.md`, DECISIONS.md ("UI middle-ground"),
-and the project memory.
+capture, sibling slot-key uniqueness) on both twins. **Slice 2 (lists/keys)** extends the slot path
+through `foreach`: each row pushes a per-row segment = the member's identity (object id, else item
+key — the SAME key the DOM reconciler uses), so a component inside a list gets a distinct,
+identity-stable slot per row — its state is independent and follows the object across reorder/remove
+(proven by a foreach-row conformance case + the "Per-row component state … across reorder"
+scenario). GOTCHA: the name-resolution footgun hit once (renamed the designer's `fn nav`→`navBar`,
+which returned `<nav>`). **NOT done yet:** an explicit per-call `key` (follow-up 3), then
+**tag-invoking the generic UI's components + dissolving `__descs`** (follow-up 4) — but note
+`__descs` is ALSO a **cross-type descriptor registry** (a ref/set prop carries the other type's
+NAME, resolved via `field(__descs, name)` — cycle-free), not just reference-stability, so its
+removal is entangled with the **public component library** / schema-as-data reflection (follow-up 5,
+the feature half). Driven by the two `@milestone-11` scenarios in `SelfHostedUi.feature` +
+`ComponentFormRebuiltDescDb`/`RowComponentListDb` (`InstanceContext.cs`) and three conformance cases.
+See `docs/plans/m11-reactivity-foundation.md`, DECISIONS.md ("UI middle-ground"), and the project memory.
 
 **Milestone 10 (multi-instance management — the kernel host) is COMPLETE (refocused 2026-06-14, no
 run modes — the kernel host is the entry point; the operator designer + id-based identity + named

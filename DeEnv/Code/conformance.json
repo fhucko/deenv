@@ -481,6 +481,31 @@
         { "type": "symbol", "name": "last" }
       ],
       "expect": { "kind": "int", "value": 2 }
+    },
+    {
+      "name": "a component inside a foreach gets a distinct slot per row (by member identity)",
+      "comment": "The SAME component `c` is rendered once per row of a 2-object list, recording each member's `n`. The foreach folds each member's identity (its object id) into the slot path, so the two rows get DISTINCT slot keys and BOTH run — last reaches 20. If foreach rows shared a key, the client would cache-hit the first row for the second (last stuck at 10) and diverge from the write-only C# side (20). This is the lists/keys foundation that lets the generic UI's per-prop components (refEditor/setTable/dictTable, rendered in `foreach p in meta.props`) be tag-invoked.",
+      "setup": [
+        { "type": "varDec", "name": "last", "value": { "type": "int", "value": 0 } },
+        { "type": "fn", "name": "c", "params": [ { "name": "d" } ], "body": { "type": "block", "statements": [
+          { "type": "assign", "target": { "type": "symbol", "name": "last" }, "value": {
+            "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "d" }, "right": { "type": "symbol", "name": "n" } } },
+          { "type": "return", "value": {
+            "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "d" }, "right": { "type": "symbol", "name": "n" } } }
+        ] } }
+      ],
+      "renders": [
+        { "type": "tag", "name": "main", "attributes": [], "children": [
+          { "type": "foreach", "item": { "type": "symbol", "name": "x" },
+            "collection": { "type": "array", "items": [
+              { "type": "object", "props": [ { "name": "n", "value": { "type": "int", "value": 10 } } ] },
+              { "type": "object", "props": [ { "name": "n", "value": { "type": "int", "value": 20 } } ] } ] },
+            "body": [
+              { "type": "tag", "name": "c", "attributes": [
+                { "name": "d", "value": { "type": "symbol", "name": "x" } } ], "children": [] } ] } ] },
+        { "type": "symbol", "name": "last" }
+      ],
+      "expect": { "kind": "int", "value": 20 }
     }
   ]
 }

@@ -702,11 +702,10 @@ public sealed class CodeExecutor
     // which splice into the parent's children (the component tag is not itself an element).
     private IExecTagChild[] ExecuteComponent(CodeTag tag, ExecFunction component, ExecScope scope, ExecContext context)
     {
-        // HAZARD (follow-up 2 — lists/keys): the slot path is static child indices only, so a
-        // component inside a `foreach` body gets the SAME key for every row (the row identity is
-        // not folded in yet) and the rows would collide. Components-in-`foreach` are out of this
-        // slice; tag-invoking the generic UI's per-row components (follow-up 4) MUST wait until the
-        // foreach row key is mixed into the path here, or it will resurface the state-reset bug.
+        // The slot path is the chain of static child indices PLUS each enclosing `foreach`'s
+        // per-row identity segment (ExecuteTagForEach), so a component inside a list gets a
+        // distinct, identity-stable key per row — its state moves with the member across
+        // reorder/remove, not with the row position.
         var slotKey = "comp:" + string.Join("/", context.SlotPath);
         // Attributes evaluate in the CALLER's context (their deps are the caller's), exactly
         // like ordinary call arguments — so a rebuilt-literal descriptor is fresh each render.
@@ -762,7 +761,14 @@ public sealed class CodeExecutor
             OnValueAccessed(context, item.Value);
             var itemScope = new ExecScope { Parent = scope };
             itemScope.Items[codeForEach.Item.Name] = new ExecScopeItem { Value = item.Value, IsReadOnly = true };
-            children.AddRange(ExecuteTagChildren(codeForEach.Body, itemScope, context));
+            // Push a per-row segment onto the slot path so a component inside this row keys on the
+            // member's IDENTITY — its object id (else the item key), the SAME key the DOM
+            // reconciler uses (codeExec.ts) — so each row's component state is independent and moves
+            // with the object across reorder/insert/remove, not with the row position.
+            var rowKey = item.Value is ExecObject o ? o.Id : item.Key;
+            context.SlotPath.Add("row" + rowKey);
+            try { children.AddRange(ExecuteTagChildren(codeForEach.Body, itemScope, context)); }
+            finally { context.SlotPath.RemoveAt(context.SlotPath.Count - 1); }
         }
         return [.. children];
     }

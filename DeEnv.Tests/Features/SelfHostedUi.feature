@@ -166,6 +166,21 @@ Feature: Self-hosted generic UI (object forms)
     Then the note list eventually shows "Buy mi"
     And the draft title is empty
 
+  # A component used inside a foreach keys on the member's identity, so each row's local state
+  # is independent and follows the object across a reorder (slice 2 — lists/keys).
+  @milestone-11 @single-user
+  Scenario: Per-row component state is independent and follows the row's identity across reorder
+    Given the row-component list app is running
+    When I open "/"
+    And I type "X" into the scratch of the row titled "Alpha"
+    And I type "Y" into the scratch of the row titled "Beta"
+    Then the scratch of the row titled "Alpha" is "X"
+    And the scratch of the row titled "Beta" is "Y"
+    When I reorder the rows
+    Then the first row is titled "Beta"
+    And the scratch of the row titled "Alpha" is "X"
+    And the scratch of the row titled "Beta" is "Y"
+
   # ── set tables (slice 3) ───────────────────────────────────────────────────
 
   @milestone-9 @single-user

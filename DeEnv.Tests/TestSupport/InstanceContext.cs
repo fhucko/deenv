@@ -428,6 +428,54 @@ public class InstanceContext
                         n.title
     """;
 
+    // Milestone 11, slice 2 (lists/keys): a list whose rows are COMPONENTS, each with its own
+    // local `scratch` state (not persisted). `rowEditor` is invoked as a tag inside `foreach`, so
+    // each row keys on its member's identity — the per-row state is independent (no bleed between
+    // rows) and follows the object across a reorder (it does NOT stick to the row position). The
+    // `sign` flip reverses the orderBy so the two rows swap places. Proves slot identity through
+    // foreach.
+    public static InstanceDescription RowComponentListDb() =>
+        InstanceDescriptionLoader.Load(RowComponentListApp);
+
+    private const string RowComponentListApp = """
+    types
+        Db
+            notes set of Note
+        Note
+            title text
+            rank int
+
+    initialData
+        Db 1
+            notes: [2, 3]
+        Note 2
+            title: "Alpha"
+            rank: 1
+        Note 3
+            title: "Beta"
+            rank: 2
+
+    ui
+
+        var sign = 1
+
+        fn rowEditor(note)
+            var state = { scratch: "" }
+            fn render()
+                return <div class="note-row">
+                    <span class="row-title">
+                        note.title
+                    <input class="scratch" value={state.scratch}>
+            return render
+
+        fn render()
+            return <main>
+                <button class="reorder" onClick={() => sign = -1}>
+                    "Reorder"
+                foreach n in db.notes.orderBy(o => o.rank * sign)
+                    <rowEditor note={n}>
+    """;
+
     // ── storage ───────────────────────────────────────────────────────────────
 
     public string DataFilePath { get; set; } = Path.GetTempFileName();

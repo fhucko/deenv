@@ -851,10 +851,9 @@ function tryResolveComponent(name: string, scope: ExecScope): ExecFunction | nul
 // we invoke that — itself slot-keyed, so it recomputes on its own deps and never collides with
 // another slot — to produce the tags, which splice into the parent's children.
 function executeComponent(tag: CodeTag, component: ExecFunction, scope: ExecScope, context: ExecContext): ExecTagChild[] {
-    // HAZARD (follow-up 2 — lists/keys): static child indices only, so a component inside a `foreach`
-    // body gets the SAME key for every row (row identity not folded in yet) and rows would collide.
-    // Components-in-`foreach` are out of this slice; tag-invoking the generic UI's per-row components
-    // (follow-up 4) MUST wait until the foreach row key is mixed in here, or the state-reset bug returns.
+    // The slot path is the chain of static child indices PLUS each enclosing `foreach`'s per-row
+    // identity segment (executeTagForEach), so a component inside a list gets a distinct,
+    // identity-stable key per row — its state moves with the member across reorder/remove.
     const slotKey = "comp:" + slotPath.join("/");
     // Attributes evaluate in the CALLER's context, like ordinary call arguments — so a
     // rebuilt-literal descriptor is fresh each render.
@@ -911,7 +910,13 @@ function executeTagForEach(codeTagForEach: CodeTagForEach, scope: ExecScope, con
         const key = item.value.type === "object" ? item.value.id : item.key;
         const itemScope: ExecScope = { parent: scope, items: {} };
         itemScope.items[codeTagForEach.item.name] = { value: item.value, isReadOnly: true };
-        const produced = executeTagChildren(codeTagForEach.body, itemScope, context);
+        // The SAME identity keys the component slot path (twin of ExecuteTagForEach), so a
+        // component inside this row gets a distinct, identity-stable slot — its state moves with the
+        // member across reorder/remove, not with the row position.
+        slotPath.push("row" + key);
+        let produced: ExecTagChild[];
+        try { produced = executeTagChildren(codeTagForEach.body, itemScope, context); }
+        finally { slotPath.pop(); }
         for (const c of produced) if (c.type === "tag" && c.key == null) c.key = key;
         children.push(...produced);
     }

@@ -1,6 +1,6 @@
 # M11 — Reactivity foundation: analysis + first-slice plan
 
-**Status: SLICE 1 LANDED 2026-06-18 (suite 308).** M11 is SolidJS-style reactive components +
+**Status: SLICES 1–2 LANDED 2026-06-18 (suite 310).** M11 is SolidJS-style reactive components +
 the public component library (the UI middle-ground); this doc is the **foundation half** (the
 reactivity refactor) and its **first slice**. See DECISIONS "UI middle-ground — one public
 component library + SolidJS-style reactivity" and ROADMAP M11. *Grounded by codebase-navigator +
@@ -21,8 +21,21 @@ milestone-planner, 2026-06-17; built 2026-06-18.*
   **existing** `Memoize` (untouched). `foreach`-row disambiguation is **follow-up 2** (flagged with
   a `HAZARD` comment in `ExecuteComponent`, both twins — follow-up 4 must honor it). The
   name-resolution footgun hit once: renamed the designer's `fn nav`→`navBar` (it returned `<nav>`).
-- **Still NOT done (per plan):** `__descs` removal (follow-up 4) and the public library (follow-up
-  5). Implementation memory: [[project_m11_reactive_components]].
+- **Slice 2 (lists/keys) landed too:** `ExecuteTagForEach`/`executeTagForEach` push a per-row slot
+  segment = the member's identity (object id, else item key — the same key the DOM reconciler uses),
+  so a component inside a `foreach` gets a distinct, identity-stable slot per row (independent state
+  that follows the object across reorder/remove). Proven by a foreach-row conformance case + the
+  "Per-row component state … across reorder" scenario.
+- **Follow-up 4 is meatier than this plan said — `__descs` does TWO jobs:** (1) reference-stability
+  (slices 1–2 fix this) AND (2) a **cycle-free cross-type descriptor registry** (a ref/set prop
+  carries the OTHER type's NAME; the component resolves that type's descriptor via
+  `field(__descs, p.target)` — `GenericUi.cs:414-416`). Slot identity removes (1) but not (2), so
+  "delete `__descs`" needs a replacement for the cross-type data, entangled with follow-up 5
+  (schema-as-data reflection). Clean split: **4a** = tag-invoke the generic UI components now (relies
+  on slot identity; `__descs` stays as a now-just-data registry), then **4b/5** = schema reflection.
+- **Still NOT done:** an explicit per-call `key` (follow-up 3); tag-invoking the generic UI +
+  `__descs` removal (follow-up 4); the public library (follow-up 5). Implementation memory:
+  [[project_m11_reactive_components]].
 
 ## 1. Analysis — how reactivity works today, and what M11 changes
 

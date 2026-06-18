@@ -199,6 +199,37 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             $"() => document.querySelector('input.draft-title')?.value === {JsString(value)}");
 
+    // ── reactive components in a list: per-row slot identity (milestone 11, slice 2) ──
+
+    [Given("the row-component list app is running")]
+    public async Task GivenRowComponentListAppRunning()
+    {
+        ctx.Description = InstanceContext.RowComponentListDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    [When("I type {string} into the scratch of the row titled {string}")]
+    public async Task WhenTypeScratchOfRow(string value, string title) =>
+        await ctx.Page!.Locator(".note-row").Filter(new() { HasText = title })
+            .Locator("input.scratch").FillAsync(value);
+
+    // Locate the row by its title text (robust across a reorder, which moves rows in the DOM).
+    [Then("the scratch of the row titled {string} is {string}")]
+    public async Task ThenScratchOfRowIs(string title, string value) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const r = [...document.querySelectorAll('.note-row')]" +
+            $".find(e => e.querySelector('.row-title')?.textContent.includes({JsString(title)}));" +
+            $" return r?.querySelector('input.scratch')?.value === {JsString(value)}; }}");
+
+    [When("I reorder the rows")]
+    public async Task WhenReorderRows() =>
+        await ctx.Page!.Locator("button.reorder").ClickAsync();
+
+    [Then("the first row is titled {string}")]
+    public async Task ThenFirstRowTitled(string title) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('.note-row .row-title')?.textContent.includes({JsString(title)})");
+
     // ── references (slice 2) ───────────────────────────────────────────────────────
 
     [Given("the self-hosted reference app is running")]
