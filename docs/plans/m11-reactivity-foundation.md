@@ -33,6 +33,10 @@ milestone-planner, 2026-06-17; built 2026-06-18.*
   "delete `__descs`" needs a replacement for the cross-type data, entangled with follow-up 5
   (schema-as-data reflection). Clean split: **4a** = tag-invoke the generic UI components now (relies
   on slot identity; `__descs` stays as a now-just-data registry), then **4b/5** = schema reflection.
+  **4a LANDED 2026-06-18** (suite 310, behavior-preserving): `objectForm`'s nested
+  `refEditor`/`setTable`/`dictTable` are now tag-invoked (`GenericUi.cs:62-66`); the synthesized
+  ROOT-component views stay call-form (value-position recognition is a 4b/5 design point), so
+  `__descs` stays stable for now.
 - **Still NOT done:** an explicit per-call `key` (follow-up 3); tag-invoking the generic UI +
   `__descs` removal (follow-up 4); the public library (follow-up 5). Implementation memory:
   [[project_m11_reactive_components]].

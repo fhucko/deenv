@@ -59,11 +59,11 @@ public static class GenericUi
                                 <label class={p.name}>
                                     sys.humanize(p.name)
                             if p.baseType == "object"
-                                refEditor(obj, p.name, sys.field(__descs, p.target))()
+                                <refEditor parent={obj} prop={p.name} target={sys.field(__descs, p.target)}>
                             else if p.baseType == "set"
-                                setTable(sys.field(obj, p.name), sys.field(__descs, p.element), sys.nest(base, p.name))()
+                                <setTable set={sys.field(obj, p.name)} desc={sys.field(__descs, p.element)} setPath={sys.nest(base, p.name)}>
                             else if p.baseType == "dictionary"
-                                dictTable(sys.field(obj, p.name), p, sys.nest(base, p.name))()
+                                <dictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
                             else if p.baseType == "bool"
                                 <input type="checkbox" class={p.name} checked={sys.field(obj, p.name)}>
                             else if p.baseType == "enum"

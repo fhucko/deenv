@@ -153,12 +153,14 @@ key — the SAME key the DOM reconciler uses), so a component inside a list gets
 identity-stable slot per row — its state is independent and follows the object across reorder/remove
 (proven by a foreach-row conformance case + the "Per-row component state … across reorder"
 scenario). GOTCHA: the name-resolution footgun hit once (renamed the designer's `fn nav`→`navBar`,
-which returned `<nav>`). **NOT done yet:** an explicit per-call `key` (follow-up 3), then
-**tag-invoking the generic UI's components + dissolving `__descs`** (follow-up 4) — but note
+which returned `<nav>`). **Follow-up 4a landed** (2026-06-18, behavior-preserving): `objectForm`'s nested
+`refEditor`/`setTable`/`dictTable` are now TAG-invoked (slot-keyed per prop), so the generic UI
+exercises the component-tag mechanism on the real renderer. **NOT done yet:** an explicit per-call
+`key` (follow-up 3); the synthesized ROOT-component views are still call-form (value-position
+recognition pending), so `__descs` stays STABLE; full `__descs` removal (4b) is entangled with the
+**public component library** / schema-as-data reflection (follow-up 5, the feature half) — because
 `__descs` is ALSO a **cross-type descriptor registry** (a ref/set prop carries the other type's
-NAME, resolved via `field(__descs, name)` — cycle-free), not just reference-stability, so its
-removal is entangled with the **public component library** / schema-as-data reflection (follow-up 5,
-the feature half). Driven by the two `@milestone-11` scenarios in `SelfHostedUi.feature` +
+NAME, resolved via `field(__descs, name)` — cycle-free), not just reference-stability. Driven by the two `@milestone-11` scenarios in `SelfHostedUi.feature` +
 `ComponentFormRebuiltDescDb`/`RowComponentListDb` (`InstanceContext.cs`) and three conformance cases.
 See `docs/plans/m11-reactivity-foundation.md`, DECISIONS.md ("UI middle-ground"), and the project memory.
 
