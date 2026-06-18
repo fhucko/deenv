@@ -188,6 +188,14 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    // A `fn render()` that returns a component directly (value/root position) — slice 4b.
+    [Given("the root-component app is running")]
+    public async Task GivenRootComponentAppRunning()
+    {
+        ctx.Description = InstanceContext.RootComponentDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
     // Bumps an unrelated page-level counter, forcing the page to re-render and rebuild the
     // component's descriptor argument — the re-render the slot identity must survive.
     [When("I toggle the unrelated flag")]

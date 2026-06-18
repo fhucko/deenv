@@ -108,7 +108,11 @@ public sealed class CodeExecutor
         CodeInt codeInt        => new ExecInt { Value = codeInt.Value },
         CodeFunction codeFn    => ExecuteFunction(codeFn, scope),
         CodeCall codeCall      => ExecuteCall(codeCall, scope, context),
-        CodeTag codeTag        => ExecuteTag(codeTag, scope, context),
+        // A tag in VALUE position whose name resolves to a function is a component (a root/returned
+        // component) — run it slot-keyed and yield its view value; otherwise it's an HTML element.
+        CodeTag codeTag        => TryResolveComponent(codeTag.Name, scope) is { } component
+                                      ? ExecuteComponentValue(codeTag, component, scope, context)
+                                      : ExecuteTag(codeTag, scope, context),
         CodeText codeText      => new ExecText { Value = codeText.Value },
         CodeBool codeBool      => new ExecBool { Value = codeBool.Value },
         CodeInfixOp codeInfix  => ExecuteInfixOp(codeInfix, scope, context),
@@ -700,14 +704,23 @@ public sealed class CodeExecutor
     // reactive view (a render closure); we invoke that — itself slot-keyed, so it recomputes
     // on its own dependencies and never collides with another slot — to produce the tags,
     // which splice into the parent's children (the component tag is not itself an element).
-    private IExecTagChild[] ExecuteComponent(CodeTag tag, ExecFunction component, ExecScope scope, ExecContext context)
+    // A component in tag-child position: render it and splice its view into the parent's children.
+    private IExecTagChild[] ExecuteComponent(CodeTag tag, ExecFunction component, ExecScope scope, ExecContext context) =>
+        SpliceView(ExecuteComponentValue(tag, component, scope, context));
+
+    // Run a component (slot-keyed setup + the auto-invoked reactive view) and return its VIEW VALUE.
+    // This is the form used in VALUE / return position — a component at the page root, e.g. a
+    // synthesized `view(parent) → return <refEditor …>`. The tag-child form (ExecuteComponent)
+    // splices this value into the parent's children instead.
+    private IExecValue ExecuteComponentValue(CodeTag tag, ExecFunction component, ExecScope scope, ExecContext context)
     {
         // Attributes evaluate in the CALLER's context (their deps are the caller's), in tag order,
         // exactly like ordinary call arguments — so a rebuilt-literal descriptor is fresh each render.
         var attrs = tag.Attributes.ToDictionary(a => a.Name, a => ExecuteValue(a.Value, scope, context));
         // The slot path is the chain of static child indices PLUS each enclosing `foreach`'s per-row
         // identity segment (ExecuteTagForEach), so a component inside a list gets a distinct,
-        // identity-stable key per row — its state moves with the member across reorder/remove.
+        // identity-stable key per row — its state moves with the member across reorder/remove. A
+        // value/root component keys on the (empty/root) path — one component per render, so unique.
         var slotKey = "comp:" + string.Join("/", context.SlotPath);
         // `key={...}` is a RESERVED directive (not a param): its value folds into the slot key, so
         // changing it gives the component a NEW identity — a caller-controlled "reset when X changes".
@@ -718,7 +731,7 @@ public sealed class CodeExecutor
         if (view is ExecFunction renderClosure)
             view = Memoize(slotKey + ":view", context,
                 () => InvokeFunction(renderClosure.Function, [], renderClosure.Scope, context));
-        return SpliceView(view);
+        return view;
     }
 
     // Bind evaluated attributes to the component's params BY NAME (desc={d} → the `desc` param), in

@@ -39,9 +39,9 @@ milestone-planner, 2026-06-17; built 2026-06-18.*
   `refEditor`/`setTable`/`dictTable` are now tag-invoked (`GenericUi.cs:62-66`); the synthesized
   ROOT-component views stay call-form (value-position recognition is a 4b/5 design point), so
   `__descs` stays stable for now.
-- **Still NOT done:** tag-invoking the generic UI's ROOT views + `__descs` removal (follow-up 4b);
-  the public library (follow-up 5). (Slice 3 = the per-call `key`, and 4a = the generic UI's
-  object-form components, both LANDED.) Implementation memory: [[project_m11_reactive_components]].
+- **Still NOT done:** schema-as-data reflection + `__descs` removal (slice b); the public library
+  (follow-up 5). (Slices 1–3 + follow-ups 4a & 4b all LANDED — the generic UI's components, nested
+  and root, are tag-invoked; `__descs` is now purely a data registry.) Implementation memory: [[project_m11_reactive_components]].
 
 ## Feature half (4b → 5) — decomposition (planned 2026-06-18; milestone-planner + vision-keeper)
 
@@ -58,13 +58,13 @@ not a versioning vehicle — M13); expose **exactly** what the generic UI must r
 today, no field more.
 
 **Sequence (shortest-dependency-first; milestone-planner):**
-1. **4b — root/value-position component recognition.** Recognize a component tag in value/return
-   position (not just as a tag-child) → route through the slot-keyed lifecycle; rewrite
-   `SynthRefView`/`SynthSetView`/`SynthDictView` (`GenericUi.cs:355-383`) from `refEditor(…)()`
-   call-form to a `return <refEditor …>` tag. Pure twin-interpreter + synth change; `__descs` stays
-   as a now-pure DATA registry (its last stability reliance gone). **Proof:** a root-position
-   component (a `/lead`-style ref route) keeps its draft across a rebuilt-arg re-render (Gherkin) +
-   a value-position-recognition conformance case (both twins). Decision-free; the clean next slice.
+1. **4b — root/value-position component recognition. ✅ DONE (suite 314).** `ExecuteValue` /
+   `executeValue` now recognize a component tag in value/return position and route it through a
+   value-returning `ExecuteComponentValue` (the tag-child form splices that value); a `Tag(...)` AST
+   builder was added and `SynthRefView`/`SynthSetView`/`SynthDictView` rewritten from `refEditor(…)()`
+   to `return <refEditor …>`. So NO component relies on `__descs` stability anymore — it's a pure
+   DATA registry. Proven by a value-position conformance case (both twins) + the "root-position
+   component's state survives a re-render with a rebuilt argument" scenario.
 2. **(b) Schema-as-data reflection** — the `__descs` job-2 (cross-type registry) replacement; a
    component resolves a referenced type's descriptor by reflecting the schema at the call site. **This
    slice carries the one structural decision (below) — settle it before building.**

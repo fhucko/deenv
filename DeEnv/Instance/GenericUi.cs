@@ -347,26 +347,26 @@ public static class GenericUi
     private static UiView SynthObjectView(string typeName) =>
         new(typeName, Fn(["obj", "base"], Return(Call("objectForm", Sym("obj"), Desc(typeName), Sym("base")))));
 
-    // Reference route `view(parent)` → `return refEditor(parent, "P", sys.field(__descs, "T"))()`
-    // (the component is invoked). Keyed by (owner, Prop), bound to the parent. Takes only
-    // `parent`: a reference builds no nested links, so it ignores the `base` arg ExecuteRender
-    // passes to every type view (both interpreters bind min(args, params), so the extra arg is
-    // harmless — keeping the param out of the Code is more honest than declaring it unused).
+    // Reference route `view(parent)` → `return <refEditor parent={parent} prop="P" target={…}>` (a
+    // root-position component tag, keyed by its render slot). Keyed by (owner, Prop), bound to the
+    // parent. Takes only `parent`: a reference builds no nested links, so it ignores the `base` arg
+    // ExecuteRender passes to every type view (both interpreters bind min(args, params), so the
+    // extra arg is harmless — keeping the param out of the Code is more honest than declaring it unused).
     private static UiView SynthRefView(string ownerType, string prop, string targetType) =>
-        new(ownerType, Fn(["parent"], Return(Invoke(Call("refEditor", Sym("parent"), Text(prop), Desc(targetType))))),
+        new(ownerType, Fn(["parent"], Return(Tag("refEditor",
+                ("parent", Sym("parent")), ("prop", Text(prop)), ("target", Desc(targetType))))),
             Prop: prop);
 
-    // Set route `view(parent, base)` → `return setTable(sys.field(parent, "P"), sys.field(__descs,
-    // "T"), base)()`. `base` is the set's own URL path, used for nested member links.
+    // Set route `view(parent, base)` → `return <setTable set={parent.P} desc={…} setPath={base}>`.
+    // `base` is the set's own URL path, used for nested member links.
     private static UiView SynthSetView(string ownerType, string prop, string elementType) =>
-        new(ownerType, Fn(["parent", "base"], Return(Invoke(Call("setTable", Field(Sym("parent"), Text(prop)), Desc(elementType), Sym("base"))))),
+        new(ownerType, Fn(["parent", "base"], Return(Tag("setTable",
+                ("set", Field(Sym("parent"), Text(prop))), ("desc", Desc(elementType)), ("setPath", Sym("base"))))),
             Prop: prop);
 
-    // Dict route `view(parent, base)` → `return dictTable(sys.field(parent, "P"), __dictDescs["O/P"],
-    // base)()`. The prop descriptor comes from the STABLE __dictDescs registry (not a literal),
-    // so the dictTable component's memoized init runs once and its draft state survives renders.
     // The shared scalar-entry view: `view(entry, base)` → `return leafForm(entry, base)`. Bound
     // to the entry object (FindTarget resolves it by key); its value persists path-addressed.
+    // leafForm is stateless (returns tags directly), so it stays a call — no slot identity needed.
     private static UiView SynthLeafView() =>
         new(LeafViewType, Fn(["entry", "base"], Return(Call("leafForm", Sym("entry"), Sym("base")))));
 
@@ -375,11 +375,13 @@ public static class GenericUi
     private static UiView SynthNotFoundView() =>
         new(NotFoundViewType, Fn([], Return(Call("notFoundForm"))));
 
+    // Dict route `view(parent, base)` → `return <dictTable dict={parent.P} desc={__dictDescs["O/P"]}
+    // base={base}>` (a root-position component tag, slot-keyed so its draft state survives renders).
     private static UiView SynthDictView(string ownerType, string prop) =>
-        new(ownerType, Fn(["parent", "base"], Return(Invoke(Call("dictTable",
-                Field(Sym("parent"), Text(prop)),
-                Field(Sym(DictDescsVar), Text(ownerType + "/" + prop)),
-                Sym("base"))))),
+        new(ownerType, Fn(["parent", "base"], Return(Tag("dictTable",
+                ("dict", Field(Sym("parent"), Text(prop))),
+                ("desc", Field(Sym(DictDescsVar), Text(ownerType + "/" + prop))),
+                ("base", Sym("base"))))),
             Prop: prop);
 
     // ── the descriptor registry ──────────────────────────────────────────────────────
@@ -474,7 +476,14 @@ public static class GenericUi
     private static CodeInfixOp SysMember(string name) =>
         new() { Op = CodeInfixOpType.ObjectProp, Left = Sym("sys"), Right = Sym(name) };
     private static CodeCall Desc(string typeName) => Field(Sym(DescsVar), Text(typeName));
-    private static CodeCall Invoke(ICodeValue fn) => new() { Fn = fn, Params = [] };
+    // A childless tag `<name a={…} b={…}>` — used to invoke a synthesized component (refEditor /
+    // setTable / dictTable) BY TAG, so it keys on its render-tree slot rather than its arguments.
+    private static CodeTag Tag(string name, params (string Name, ICodeValue Value)[] attrs) => new()
+    {
+        Name = name,
+        Attributes = attrs.Select(a => new CodeTagAttribute { Name = a.Name, Value = a.Value }).ToArray(),
+        Children = [],
+    };
     private static CodeBlock Return(ICodeValue value) => new() { Statements = [new CodeReturn { Value = value }] };
     private static CodeFunction Fn(string[] @params, CodeBlock body) =>
         new() { Name = null, Params = @params.Select(p => new CodeFunctionParam { Name = p }).ToArray(), Body = body };

@@ -192,6 +192,19 @@ Feature: Self-hosted generic UI (object forms)
     When I rekey the component
     Then the box scratch is ""
 
+  # A component returned directly by `fn render()` (value/root position, not a tag-child) is
+  # recognized and slot-keyed, so its state survives a rebuilt-argument re-render (slice 4b).
+  @milestone-11 @single-user
+  Scenario: A root-position component's state survives a re-render with a rebuilt argument
+    Given the root-component app is running
+    When I open "/"
+    And I fill the draft title with "Buy mi"
+    And I toggle the unrelated flag
+    Then the draft title is still "Buy mi"
+    When I click create
+    Then the note list eventually shows "Buy mi"
+    And the draft title is empty
+
   # ── set tables (slice 3) ───────────────────────────────────────────────────
 
   @milestone-9 @single-user

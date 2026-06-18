@@ -530,6 +530,19 @@
         { "type": "symbol", "name": "bumps" }
       ],
       "expect": { "kind": "int", "value": 2 }
+    },
+    {
+      "name": "a component in value position is recognized and returns its view value",
+      "comment": "A component tag in VALUE / return position (not a tag-child) is recognized by name-resolution and run slot-keyed, returning its view VALUE (not a spliced child list). Here `c` returns its bound arg as the view, so `<c d={5}>` evaluated as a value yields 5 — proving value-position recognition + by-name binding + value-return, identically on both twins. (On main, value position is NOT recognized, so `<c>` would be an HTML element / non-scalar tag — this case is new with slice 4b. It unblocks the generic UI's synthesized ROOT views being tag-invoked.)",
+      "setup": [
+        { "type": "fn", "name": "c", "params": [ { "name": "d" } ], "body": { "type": "block", "statements": [
+          { "type": "return", "value": { "type": "symbol", "name": "d" } }
+        ] } }
+      ],
+      "renders": [
+        { "type": "tag", "name": "c", "attributes": [ { "name": "d", "value": { "type": "int", "value": 5 } } ], "children": [] }
+      ],
+      "expect": { "kind": "int", "value": 5 }
     }
   ]
 }

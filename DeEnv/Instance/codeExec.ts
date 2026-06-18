@@ -150,7 +150,12 @@ function executeValue(value: CodeValue, scope: ExecScope, context: ExecContext):
         case "bool": return { value: { type: "bool", value: value.value } };
         case "null": return { value: { type: "null" } };
         case "fn": return { value: executeFunction(value, scope) };
-        case "tag": return { value: executeTag(value, scope, context) };
+        // A tag in VALUE position whose name resolves to a function is a component (a root/returned
+        // component) — run it slot-keyed and yield its view value; otherwise it's an HTML element.
+        case "tag": {
+            const component = tryResolveComponent(value.name, scope);
+            return { value: component ? executeComponentValue(value, component, scope, context) : executeTag(value, scope, context) };
+        }
         case "infixOp": return executeInfixOp(value, scope, context);
         // sys.field(obj, name) is a bindable lvalue (two-way binding needs its setValue), so it
         // is resolved here rather than through executeCall (which drops setValue). Its callee is
@@ -850,14 +855,23 @@ function tryResolveComponent(name: string, scope: ExecScope): ExecFunction | nul
 // argument is a fresh object each render. The body returns its reactive view (a render closure);
 // we invoke that — itself slot-keyed, so it recomputes on its own deps and never collides with
 // another slot — to produce the tags, which splice into the parent's children.
+// A component in tag-child position: render it and splice its view into the parent's children.
 function executeComponent(tag: CodeTag, component: ExecFunction, scope: ExecScope, context: ExecContext): ExecTagChild[] {
+    return spliceView(executeComponentValue(tag, component, scope, context));
+}
+
+// Run a component (slot-keyed setup + the auto-invoked reactive view) and return its VIEW VALUE —
+// the form used in VALUE / return position (a root/returned component). The tag-child form splices
+// this value into the parent's children instead.
+function executeComponentValue(tag: CodeTag, component: ExecFunction, scope: ExecScope, context: ExecContext): ExecValue {
     // Attributes evaluate in the CALLER's context, in tag order, like ordinary call arguments — so a
     // rebuilt-literal descriptor is fresh each render.
     const attrs: { [name: string]: ExecValue } = {};
     for (const attr of tag.attributes) attrs[attr.name] = executeValue(attr.value, scope, context).value;
     // The slot path is the chain of static child indices PLUS each enclosing `foreach`'s per-row
     // identity segment (executeTagForEach), so a component inside a list gets a distinct,
-    // identity-stable key per row — its state moves with the member across reorder/remove.
+    // identity-stable key per row — its state moves with the member across reorder/remove. A
+    // value/root component keys on the (empty/root) path — one component per render, so unique.
     let slotKey = "comp:" + slotPath.join("/");
     // `key={...}` is a RESERVED directive (not a param): its value folds into the slot key, so
     // changing it gives the component a NEW identity (caller-controlled "reset when X changes").
@@ -868,7 +882,7 @@ function executeComponent(tag: CodeTag, component: ExecFunction, scope: ExecScop
         const renderClosure = view;
         view = memoize(slotKey + ":view", context, () => invokeFn(renderClosure, [], context));
     }
-    return spliceView(view);
+    return view;
 }
 
 // Invoke a function value with already-evaluated args (twin of C# InvokeFunction) — a child

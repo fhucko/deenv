@@ -508,6 +508,53 @@ public class InstanceContext
                 <box key={k}>
     """;
 
+    // Milestone 11, slice 4b (root/value-position recognition): the page's `fn render()` RETURNS a
+    // component directly (`return <rootForm desc={…}>`) — a component in value/return position, not a
+    // tag-child. It must be recognized and slot-keyed, so its draft survives a re-render that rebuilds
+    // the descriptor (the root analogue of the slice-1 scenario). Mirrors ComponentFormRebuiltDescApp
+    // but with the form at the ROOT; reuses the slice-1 draft/create/note-list steps.
+    public static InstanceDescription RootComponentDb() =>
+        InstanceDescriptionLoader.Load(RootComponentApp);
+
+    private const string RootComponentApp = """
+    types
+        Db
+            notes set of Note
+        Note
+            title text
+
+    ui
+
+        var ticks = 0
+
+        fn getNewNote()
+            return { title: "" }
+
+        fn rootForm(desc)
+            var state = { draft: getNewNote() }
+            fn create()
+                db.notes.add(state.draft)
+                state.draft = getNewNote()
+            fn render()
+                return <div class="root-form">
+                    <input class="draft-title" value={state.draft.title}>
+                    <button class="create" onClick={create}>
+                        "Create"
+                    <button class="toggle" onClick={() => ticks = ticks + 1}>
+                        "Toggle"
+                    <span class="tick-count">
+                        ticks
+                    <h2>
+                        "Notes"
+                    foreach n in db.notes
+                        <div class="note-row">
+                            n.title
+            return render
+
+        fn render()
+            return <rootForm desc={getNewNote()}>
+    """;
+
     // ── storage ───────────────────────────────────────────────────────────────
 
     public string DataFilePath { get; set; } = Path.GetTempFileName();
