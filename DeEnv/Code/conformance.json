@@ -506,6 +506,30 @@
         { "type": "symbol", "name": "last" }
       ],
       "expect": { "kind": "int", "value": 20 }
+    },
+    {
+      "name": "an explicit key on a component folds into its slot identity",
+      "comment": "<c key={...}> — `key` is a reserved directive (not a param): its value folds into the component's slot key, so the SAME component at the SAME render-tree position but with a DIFFERENT key is a DISTINCT identity. Rendered twice (key 1, then key 2): both setups run, bumps=2 on both twins. If `key` did NOT fold in, the two renders would share a slot and the client would cache-hit the first (bumps=1) and diverge from write-only C# (2). The opt-in RESET itself (same path, key changes -> fresh state) is a client behavior, proven by the SelfHostedUi scenario.",
+      "setup": [
+        { "type": "varDec", "name": "bumps", "value": { "type": "int", "value": 0 } },
+        { "type": "fn", "name": "c", "params": [ { "name": "d" } ], "body": { "type": "block", "statements": [
+          { "type": "assign", "target": { "type": "symbol", "name": "bumps" }, "value": {
+            "type": "infixOp", "op": "add", "left": { "type": "symbol", "name": "bumps" }, "right": { "type": "int", "value": 1 } } },
+          { "type": "return", "value": { "type": "symbol", "name": "d" } }
+        ] } }
+      ],
+      "renders": [
+        { "type": "tag", "name": "main", "attributes": [], "children": [
+          { "type": "tag", "name": "c", "attributes": [
+            { "name": "key", "value": { "type": "int", "value": 1 } },
+            { "name": "d", "value": { "type": "int", "value": 9 } } ], "children": [] } ] },
+        { "type": "tag", "name": "main", "attributes": [], "children": [
+          { "type": "tag", "name": "c", "attributes": [
+            { "name": "key", "value": { "type": "int", "value": 2 } },
+            { "name": "d", "value": { "type": "int", "value": 9 } } ], "children": [] } ] },
+        { "type": "symbol", "name": "bumps" }
+      ],
+      "expect": { "kind": "int", "value": 2 }
     }
   ]
 }

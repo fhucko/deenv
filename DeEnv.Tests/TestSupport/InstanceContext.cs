@@ -476,6 +476,38 @@ public class InstanceContext
                     <rowEditor note={n}>
     """;
 
+    // Milestone 11, slice 3 (explicit per-call key): `<box key={k}>` resets when `k` changes.
+    // `key` is a reserved directive that folds into the component's slot identity, so flipping `k`
+    // gives `box` a NEW slot — its run-once setup re-runs and the local `scratch` clears. The
+    // common case (no key) keeps state; this is the opt-in "reset when X changes" escape hatch.
+    public static InstanceDescription KeyedComponentDb() =>
+        InstanceDescriptionLoader.Load(KeyedComponentApp);
+
+    private const string KeyedComponentApp = """
+    types
+        Db
+            notes set of Note
+        Note
+            title text
+
+    ui
+
+        var k = 1
+
+        fn box()
+            var state = { scratch: "" }
+            fn render()
+                return <div class="box">
+                    <input class="scratch" value={state.scratch}>
+            return render
+
+        fn render()
+            return <main>
+                <button class="rekey" onClick={() => k = 2}>
+                    "Rekey"
+                <box key={k}>
+    """;
+
     // ── storage ───────────────────────────────────────────────────────────────
 
     public string DataFilePath { get; set; } = Path.GetTempFileName();

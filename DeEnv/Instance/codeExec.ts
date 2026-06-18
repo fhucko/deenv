@@ -851,13 +851,18 @@ function tryResolveComponent(name: string, scope: ExecScope): ExecFunction | nul
 // we invoke that — itself slot-keyed, so it recomputes on its own deps and never collides with
 // another slot — to produce the tags, which splice into the parent's children.
 function executeComponent(tag: CodeTag, component: ExecFunction, scope: ExecScope, context: ExecContext): ExecTagChild[] {
+    // Attributes evaluate in the CALLER's context, in tag order, like ordinary call arguments — so a
+    // rebuilt-literal descriptor is fresh each render.
+    const attrs: { [name: string]: ExecValue } = {};
+    for (const attr of tag.attributes) attrs[attr.name] = executeValue(attr.value, scope, context).value;
     // The slot path is the chain of static child indices PLUS each enclosing `foreach`'s per-row
     // identity segment (executeTagForEach), so a component inside a list gets a distinct,
     // identity-stable key per row — its state moves with the member across reorder/remove.
-    const slotKey = "comp:" + slotPath.join("/");
-    // Attributes evaluate in the CALLER's context, like ordinary call arguments — so a
-    // rebuilt-literal descriptor is fresh each render.
-    const args = bindComponentArgs(tag, component, scope, context);
+    let slotKey = "comp:" + slotPath.join("/");
+    // `key={...}` is a RESERVED directive (not a param): its value folds into the slot key, so
+    // changing it gives the component a NEW identity (caller-controlled "reset when X changes").
+    if ("key" in attrs) slotKey += "#" + argKey(attrs["key"]);
+    const args = component.fn.params.map(p => (p.name !== "key" && p.name in attrs) ? attrs[p.name] : { type: "null" } as ExecValue);
     let view = memoize(slotKey, context, () => invokeFn(component, args, context));
     if (view.type === "fn") {
         const renderClosure = view;
@@ -874,14 +879,6 @@ function invokeFn(fn: ExecFunction, args: ExecValue[], context: ExecContext): Ex
     for (let i = 0; i < args.length && i < fn.fn.params.length; i++)
         callScope.items[fn.fn.params[i].name] = { value: args[i], isReadOnly: true };
     return executeBlock(fn.fn.body, callScope, context) ?? { type: "nothing" };
-}
-
-// Bind a component's attributes to its params BY NAME (desc={d} → the `desc` param), in param
-// order; a param with no matching attribute binds to null, an unknown attribute is ignored.
-function bindComponentArgs(tag: CodeTag, component: ExecFunction, scope: ExecScope, context: ExecContext): ExecValue[] {
-    const byName: { [name: string]: ExecValue } = {};
-    for (const attr of tag.attributes) byName[attr.name] = executeValue(attr.value, scope, context).value;
-    return component.fn.params.map(p => byName[p.name] ?? { type: "null" });
 }
 
 // A component's view splices into the parent's children: an array (a fragment) splices flat, a

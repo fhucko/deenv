@@ -185,23 +185,25 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   features. See DECISIONS.md.
 
 - **M11 — SolidJS-style reactive components + the public component library (the UI
-  middle-ground).  ← ACTIVE; reactivity-foundation SLICES 1–2 DONE 2026-06-18.** *(Scheduled as
-  M11 by user decision 2026-06-16, pulled ahead of schema versioning, which moves to M13.)*
-  **Slices 1–2 landed (suite 310):** components get a **render-tree-positional ("slot path")
-  identity** decoupled from the argument-keyed memo, so a component runs once per slot and its
+  middle-ground).  ← ACTIVE; reactivity-foundation SLICES 1–3 + follow-up 4a DONE 2026-06-18.**
+  *(Scheduled as M11 by user decision 2026-06-16, pulled ahead of schema versioning, which moves to
+  M13.)* **Slices 1–3 + 4a landed (suite 312):** components get a **render-tree-positional ("slot
+  path") identity** decoupled from the argument-keyed memo, so a component runs once per slot and its
   state survives a re-render with rebuilt arguments; slice 2 extends the slot path through
   `foreach` (per-row, by member identity — the same key the DOM reconciler uses), so a component
-  in a list keeps independent state that follows the object across reorder/remove. **Recognition =
+  in a list keeps independent state that follows the object across reorder/remove; slice 3 adds an
+  opt-in `key={...}` directive that folds into the slot identity (caller-controlled reset); 4a moved
+  the generic UI's object-form components onto tag-invocation. **Recognition =
   pure name-resolution** (a tag whose name is an in-scope function — any function, top-level or
   local — is a component; `<div>` stays an element), keyed by slot via the **existing** memo
   (untouched, additive). Run-once-across-re-renders is a client behavior (C#'s `Memoize` is
   write-only → server renders once), proven by the `@milestone-11` Gherkin scenarios; a new unified
   `setup + renders[]` conformance protocol proves the deterministic core (recognition, by-name
   binding, splice, local-component capture, sibling + foreach-row slot uniqueness) on both twins.
-  Remaining follow-ups: an explicit per-call `key`, then **tag-invoking the generic UI's components
-  + dissolving `__descs`** (follow-up 4) — but `__descs` is ALSO a cross-type descriptor registry
-  (not just reference-stability), so its removal is entangled with the **public component library**
-  + generic-UI-as-first-consumer / schema-as-data reflection (the feature half). See
+  Remaining: **4b** (root/value-position component recognition + `__descs` removal) then the
+  **public component library** + generic-UI-as-first-consumer / schema-as-data reflection (follow-up
+  5, the feature half) — `__descs` is ALSO a cross-type descriptor registry (not just
+  reference-stability), so its removal is entangled with the public library. See
   `docs/plans/m11-reactivity-foundation.md`. Delivers pillar 8's "auto with
   overrides" (modify/extend
   *parts* of the generic UI) via the mechanism settled in DECISIONS ("UI middle-ground"):

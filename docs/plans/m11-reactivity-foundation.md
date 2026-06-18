@@ -1,6 +1,8 @@
 # M11 — Reactivity foundation: analysis + first-slice plan
 
-**Status: SLICES 1–2 LANDED 2026-06-18 (suite 310).** M11 is SolidJS-style reactive components +
+**Status: FOUNDATION (slices 1–3) + follow-up 4a LANDED 2026-06-18 (suite 312).** Slice 3 = the
+opt-in per-call `key={...}` directive (folds into slot identity → caller-controlled reset).
+M11 is SolidJS-style reactive components +
 the public component library (the UI middle-ground); this doc is the **foundation half** (the
 reactivity refactor) and its **first slice**. See DECISIONS "UI middle-ground — one public
 component library + SolidJS-style reactivity" and ROADMAP M11. *Grounded by codebase-navigator +

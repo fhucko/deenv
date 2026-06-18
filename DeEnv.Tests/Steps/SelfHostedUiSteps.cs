@@ -230,6 +230,29 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             $"() => document.querySelector('.note-row .row-title')?.textContent.includes({JsString(title)})");
 
+    // ── explicit per-call key: opt-in reset (milestone 11, slice 3) ─────────────────
+
+    [Given("the keyed component app is running")]
+    public async Task GivenKeyedComponentAppRunning()
+    {
+        ctx.Description = InstanceContext.KeyedComponentDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    [When("I type {string} into the box scratch")]
+    public async Task WhenTypeBoxScratch(string value) =>
+        await ctx.Page!.Locator(".box input.scratch").FillAsync(value);
+
+    [Then("the box scratch is {string}")]
+    public async Task ThenBoxScratchIs(string value) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('.box input.scratch')?.value === {JsString(value)}");
+
+    // Flips the key bound to the component, which must reset it (new slot identity → fresh state).
+    [When("I rekey the component")]
+    public async Task WhenRekeyComponent() =>
+        await ctx.Page!.Locator("button.rekey").ClickAsync();
+
     // ── references (slice 2) ───────────────────────────────────────────────────────
 
     [Given("the self-hosted reference app is running")]

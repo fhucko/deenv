@@ -181,6 +181,17 @@ Feature: Self-hosted generic UI (object forms)
     And the scratch of the row titled "Alpha" is "X"
     And the scratch of the row titled "Beta" is "Y"
 
+  # An explicit key on a component folds into its slot identity, so changing the key resets it
+  # (fresh setup + state) — the opt-in "reset when X changes" escape hatch (slice 3).
+  @milestone-11 @single-user
+  Scenario: An explicit key resets a component when the key changes
+    Given the keyed component app is running
+    When I open "/"
+    And I type "Z" into the box scratch
+    Then the box scratch is "Z"
+    When I rekey the component
+    Then the box scratch is ""
+
   # ── set tables (slice 3) ───────────────────────────────────────────────────
 
   @milestone-9 @single-user

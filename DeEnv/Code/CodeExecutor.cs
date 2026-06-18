@@ -702,14 +702,18 @@ public sealed class CodeExecutor
     // which splice into the parent's children (the component tag is not itself an element).
     private IExecTagChild[] ExecuteComponent(CodeTag tag, ExecFunction component, ExecScope scope, ExecContext context)
     {
-        // The slot path is the chain of static child indices PLUS each enclosing `foreach`'s
-        // per-row identity segment (ExecuteTagForEach), so a component inside a list gets a
-        // distinct, identity-stable key per row — its state moves with the member across
-        // reorder/remove, not with the row position.
+        // Attributes evaluate in the CALLER's context (their deps are the caller's), in tag order,
+        // exactly like ordinary call arguments — so a rebuilt-literal descriptor is fresh each render.
+        var attrs = tag.Attributes.ToDictionary(a => a.Name, a => ExecuteValue(a.Value, scope, context));
+        // The slot path is the chain of static child indices PLUS each enclosing `foreach`'s per-row
+        // identity segment (ExecuteTagForEach), so a component inside a list gets a distinct,
+        // identity-stable key per row — its state moves with the member across reorder/remove.
         var slotKey = "comp:" + string.Join("/", context.SlotPath);
-        // Attributes evaluate in the CALLER's context (their deps are the caller's), exactly
-        // like ordinary call arguments — so a rebuilt-literal descriptor is fresh each render.
-        var args = BindComponentArgs(tag, component, scope, context);
+        // `key={...}` is a RESERVED directive (not a param): its value folds into the slot key, so
+        // changing it gives the component a NEW identity — a caller-controlled "reset when X changes".
+        // Absent → identity is the slot path alone (the zero-config default).
+        if (attrs.TryGetValue("key", out var keyVal)) slotKey += "#" + ArgKey(keyVal);
+        var args = BindParams(component, attrs);
         var view = Memoize(slotKey, context, () => InvokeFunction(component.Function, args, component.Scope, context));
         if (view is ExecFunction renderClosure)
             view = Memoize(slotKey + ":view", context,
@@ -717,16 +721,15 @@ public sealed class CodeExecutor
         return SpliceView(view);
     }
 
-    // Bind a component's attributes to its function's params BY NAME (desc={d} → the `desc`
-    // param). Args are produced in param order so InvokeFunction binds them positionally;
-    // a param with no matching attribute binds to null, an unknown attribute is ignored.
-    private IExecValue[] BindComponentArgs(CodeTag tag, ExecFunction component, ExecScope scope, ExecContext context)
+    // Bind evaluated attributes to the component's params BY NAME (desc={d} → the `desc` param), in
+    // param order so InvokeFunction binds them positionally; a param with no matching attribute binds
+    // to null. `key` is the reserved reset directive, never a param.
+    private static IExecValue[] BindParams(ExecFunction component, IReadOnlyDictionary<string, IExecValue> attrs)
     {
-        var byName = tag.Attributes.ToDictionary(a => a.Name, a => ExecuteValue(a.Value, scope, context));
         var ps = component.Function.Params;
         var args = new IExecValue[ps.Length];
         for (var i = 0; i < ps.Length; i++)
-            args[i] = byName.TryGetValue(ps[i].Name, out var v) ? v : new ExecNull();
+            args[i] = ps[i].Name != "key" && attrs.TryGetValue(ps[i].Name, out var v) ? v : new ExecNull();
         return args;
     }
 
