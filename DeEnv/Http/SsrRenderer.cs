@@ -523,7 +523,9 @@ public sealed class SsrRenderer
           padding: 0.8rem; margin-bottom: 1.4rem; background: var(--surface);
           border: 1px solid var(--border); border-radius: 10px; }
         .user-chip { border-radius: 100px; padding: 0.35rem 0.85rem; }
-        .user-bar input.new-user { margin-left: auto; max-width: 160px; }
+        .user-chip:not(.selected):hover { border-color: var(--accent); color: var(--accent); }
+        .user-chip.selected { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .user-bar input.new-user { max-width: 160px; }
         .selected-user { margin-top: 0; }
         .user-lists .add-list { display: flex; gap: 0.5rem; align-items: center; margin: 0.4rem 0 1.2rem; }
         .user-lists .add-list input.new-list { max-width: 220px; }
@@ -537,8 +539,9 @@ public sealed class SsrRenderer
         .item-row:last-child { border-bottom: none; }
         .item-row input.text { flex: 1; min-width: 0; }
         .item-row input.checked:checked + input.text { color: var(--muted); text-decoration: line-through; }
-        .item-row .remove-item { padding: 0.2rem 0.5rem; font-size: 0.8rem; border-color: transparent;
-          background: transparent; color: var(--muted); }
+        .item-row .remove-item { opacity: 0; transition: opacity .12s; padding: 0.05rem 0.4rem; font-size: 1.05rem;
+          line-height: 1; border-color: transparent; background: transparent; color: var(--muted); }
+        .item-row:hover .remove-item, .item-row .remove-item:focus-visible { opacity: 1; }
         .item-row .remove-item:hover { color: var(--danger); background: #fff0f0; border-color: var(--danger); }
         .todo-card .add-item { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
         .todo-card .add-item input.new-item { flex: 1; min-width: 0; }

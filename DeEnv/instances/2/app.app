@@ -43,10 +43,17 @@ ui
         selectedUser.todoLists.add(newList)
         newList = getNewList()
 
+    fn chipClass(user)
+        if selectedUser == null
+            return "user-chip"
+        if sys.id(user) == sys.id(selectedUser)
+            return "user-chip selected"
+        return "user-chip"
+
     fn userSelector()
         return <section class="user-bar">
             foreach user in db.users
-                <button class="user-chip" onClick={() => selectedUser = user}>
+                <button class={chipClass(user)} onClick={() => selectedUser = user}>
                     user.name
             <input class="new-user" value={newUser.name}>
             <button class="add-user" onClick={addNewUser}>
@@ -74,7 +81,7 @@ ui
                         <Input obj={item} desc={sys.schema("TodoItem", "checked")}>
                         <Input obj={item} desc={sys.schema("TodoItem", "text")} variant="standard">
                         <button class="remove-item" onClick={() => list.items.remove(item)}>
-                            "Remove"
+                            "×"
             <itemAdder list={list}>
 
     fn render()
