@@ -1,11 +1,28 @@
 # M11 — Reactivity foundation: analysis + first-slice plan
 
-**Status:** design/plan for a dedicated implementation session — *not built*. M11 is
-SolidJS-style reactive components + the public component library (the UI middle-ground);
-this doc is the **foundation half** (the reactivity refactor) and its **first slice**.
-Land M10 first — don't interleave. See DECISIONS "UI middle-ground — one public component
-library + SolidJS-style reactivity" and ROADMAP M11. *Grounded by codebase-navigator +
-milestone-planner, 2026-06-17.*
+**Status: SLICE 1 LANDED 2026-06-18 (suite 308).** M11 is SolidJS-style reactive components +
+the public component library (the UI middle-ground); this doc is the **foundation half** (the
+reactivity refactor) and its **first slice**. See DECISIONS "UI middle-ground — one public
+component library + SolidJS-style reactivity" and ROADMAP M11. *Grounded by codebase-navigator +
+milestone-planner, 2026-06-17; built 2026-06-18.*
+
+**What shipped (and two decisions that evolved during the build):**
+- **Component recognition = PURE NAME-RESOLUTION, not capitalization** (user decision 2026-06-18).
+  A tag is a component iff its name resolves to a function in scope (`<div>` element; `<noteForm>`
+  component). Any function — top-level OR locally defined in another component's constructor and
+  used in its render (proven by conformance case B). Still "explicit component-as-tag" (the tag is
+  the boundary), just split element-vs-component by scope lookup, not casing.
+- **Run-once-across-re-renders is CLIENT-only, so it's proven by the Gherkin scenario, not
+  conformance.** C#'s `Memoize` (`CodeExecutor.cs:448`) is write-only (the server renders once);
+  only the TS client cache-hits on re-render. The conformance cases (must agree on both twins,
+  single render) therefore prove the deterministic shared core — recognition, by-name binding,
+  splice, local-component capture, and sibling slot-key uniqueness (a collision diverges the twins).
+- Slot key = `"comp:"` + the static-AST-child-index path; setup + view both go through the
+  **existing** `Memoize` (untouched). `foreach`-row disambiguation is **follow-up 2** (flagged with
+  a `HAZARD` comment in `ExecuteComponent`, both twins — follow-up 4 must honor it). The
+  name-resolution footgun hit once: renamed the designer's `fn nav`→`navBar` (it returned `<nav>`).
+- **Still NOT done (per plan):** `__descs` removal (follow-up 4) and the public library (follow-up
+  5). Implementation memory: [[project_m11_reactive_components]].
 
 ## 1. Analysis — how reactivity works today, and what M11 changes
 

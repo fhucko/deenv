@@ -179,6 +179,26 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task ThenDraftTitleEmpty() =>
         await ctx.Page!.WaitForFunctionAsync("() => document.querySelector('input.draft-title')?.value === ''");
 
+    // ── reactive components: slot-path identity (milestone 11) ──────────────────────
+
+    [Given("the rebuilt-descriptor component app is running")]
+    public async Task GivenRebuiltDescriptorComponentAppRunning()
+    {
+        ctx.Description = InstanceContext.ComponentFormRebuiltDescDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    // Bumps an unrelated page-level counter, forcing the page to re-render and rebuild the
+    // component's descriptor argument — the re-render the slot identity must survive.
+    [When("I toggle the unrelated flag")]
+    public async Task WhenToggleUnrelatedFlag() =>
+        await ctx.Page!.Locator("button.toggle").ClickAsync();
+
+    [Then("the draft title is still {string}")]
+    public async Task ThenDraftTitleStill(string value) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('input.draft-title')?.value === {JsString(value)}");
+
     // ── references (slice 2) ───────────────────────────────────────────────────────
 
     [Given("the self-hosted reference app is running")]

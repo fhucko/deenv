@@ -18,7 +18,11 @@ public sealed class ConformanceTests
     private static readonly JsonSerializerOptions JsonOpts = SchemaJson.Options;
 
     private sealed record Suite(Case[] Cases);
-    public sealed record Case(string Name, JsonElement Expr, Expectation Expect, string? Text = null);
+    // A case is either a single `Expr` (evaluated once) or the lifecycle protocol — optional
+    // `Setup` statements run once into a retained scope, then `Renders` value-exprs evaluated in
+    // order against that same scope+context, with `Expect` checked on the LAST render.
+    public sealed record Case(string Name, Expectation Expect, JsonElement? Expr = null,
+        string? Text = null, JsonElement? Setup = null, JsonElement? Renders = null);
     public sealed record Expectation(string Kind, JsonElement Value);
 
     public static IEnumerable<Func<Case>> Cases()
@@ -38,9 +42,28 @@ public sealed class ConformanceTests
     [MethodDataSource(nameof(Cases))]
     public async Task Conformance_case_evaluates(Case c)
     {
-        var expr = c.Expr.Deserialize<ICodeValue>(JsonOpts)!;
-        var result = new CodeExecutor().ExecuteValue(expr, new ExecScope(), new ExecContext());
+        var result = EvaluateCase(c);
         await AssertExpectation(c, result);
+    }
+
+    // A single-expr case evaluates `Expr` once; a lifecycle case runs `Setup` statements once
+    // and then each `Renders` expr against ONE retained scope+context (so the memo cache and the
+    // component slot identities persist across the render sequence), returning the last result.
+    private static IExecValue EvaluateCase(Case c)
+    {
+        var executor = new CodeExecutor();
+        var scope = new ExecScope();
+        var context = new ExecContext();
+        if (c.Renders is not { } renders)
+            return executor.ExecuteValue(c.Expr!.Value.Deserialize<ICodeValue>(JsonOpts)!, scope, context);
+
+        if (c.Setup is { } setup)
+            foreach (var stmt in setup.EnumerateArray())
+                executor.ExecuteStatement(stmt.Deserialize<ICodeStatement>(JsonOpts)!, scope, context);
+        IExecValue result = new ExecNothing();
+        foreach (var render in renders.EnumerateArray())
+            result = executor.ExecuteValue(render.Deserialize<ICodeValue>(JsonOpts)!, scope, context);
+        return result;
     }
 
     // The same cases through the TEXT form (Stage 1 of the text-syntax milestone):

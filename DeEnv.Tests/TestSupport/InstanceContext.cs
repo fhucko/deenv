@@ -379,6 +379,55 @@ public class InstanceContext
                         n.title
     """;
 
+    // Milestone 11, slice 1: the rebuilt-descriptor component. `noteForm` is invoked as a
+    // TAG (`<noteForm desc={...}>`) with a FRESH descriptor object every render, and an
+    // unrelated `ticks` counter the toggle button bumps — forcing the page to re-render and
+    // rebuild the descriptor. With slot-path component identity the form's setup runs once per
+    // slot, so the draft survives the re-render; with the old argument-keyed memo the rebuilt
+    // descriptor would re-run the body and reset the draft. Proves the foundation end-to-end.
+    public static InstanceDescription ComponentFormRebuiltDescDb() =>
+        InstanceDescriptionLoader.Load(ComponentFormRebuiltDescApp);
+
+    private const string ComponentFormRebuiltDescApp = """
+    types
+        Db
+            notes set of Note
+        Note
+            title text
+
+    ui
+
+        var ticks = 0
+
+        fn getNewNote()
+            return { title: "" }
+
+        fn noteForm(desc)
+            var state = { draft: getNewNote() }
+            fn create()
+                db.notes.add(state.draft)
+                state.draft = getNewNote()
+            fn render()
+                return <div class="new-form">
+                    <input class="draft-title" value={state.draft.title}>
+                    <button class="create" onClick={create}>
+                        "Create"
+            return render
+
+        fn render()
+            return <main>
+                <noteForm desc={getNewNote()}>
+                <button class="toggle" onClick={() => ticks = ticks + 1}>
+                    "Toggle"
+                <span class="tick-count">
+                    ticks
+                <h2>
+                    "Notes"
+                foreach n in db.notes
+                    <div class="note-row">
+                        n.title
+    """;
+
     // ── storage ───────────────────────────────────────────────────────────────
 
     public string DataFilePath { get; set; } = Path.GetTempFileName();

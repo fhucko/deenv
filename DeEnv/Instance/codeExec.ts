@@ -208,6 +208,13 @@ interface ClientCacheEntry { result: ExecValue; deps: CacheDeps; stale: boolean;
 let memoCache: Map<string, ClientCacheEntry> | null = null;
 const depStack: CacheDeps[] = [];
 
+// The render-tree slot path (twin of ExecContext.SlotPath) — executeTagChildren pushes each
+// child's static AST index so a tag-invoked component keys its run-once setup on its render-tree
+// position, not its argument identities. Module-level like depStack; balanced push/pop returns it
+// to empty between renders, and the render entry (renderUi) resets it defensively.
+const slotPath: string[] = [];
+function resetSlotPath(): void { slotPath.length = 0; }
+
 // True while an event handler runs: handlers may be side-effecting (assignments,
 // factory calls), so their calls must never hit or fill the cache.
 let memoBypass = false;
@@ -800,7 +807,13 @@ function executeTag(codeTag: CodeTag, scope: ExecScope, context: ExecContext): E
 
 function executeTagChild(child: CodeTagChild, scope: ExecScope, context: ExecContext): ExecTagChild[] {
     switch (child.type) {
-        case "tag": return [executeTag(child, scope, context)];
+        case "tag": {
+            // A tag whose name resolves to a function in scope is a COMPONENT (run-once setup,
+            // slot-keyed identity); any other tag name is an HTML element.
+            const component = tryResolveComponent(child.name, scope);
+            return component ? executeComponent(child, component, scope, context)
+                             : [executeTag(child, scope, context)];
+        }
         case "foreach": return executeTagForEach(child, scope, context);
         case "if": return executeTagIf(child as CodeTagIf, scope, context);
         default: return [executeValue(child as CodeValue, scope, context).value];
@@ -810,8 +823,72 @@ function executeTagChild(child: CodeTagChild, scope: ExecScope, context: ExecCon
 function executeTagChildren(body: CodeTagChild[], scope: ExecScope, context: ExecContext): ExecTagChild[] {
     const children: ExecTagChild[] = [];
     const innerScope: ExecScope = { parent: scope, items: {} };
-    for (const child of body) children.push(...executeTagChild(child, innerScope, context));
+    // Push each child's STATIC AST index onto the slot path while it renders (twin of the C#
+    // ExecuteTagChildren) — a component child keys on its render-tree position. Balanced push/pop.
+    for (let i = 0; i < body.length; i++) {
+        slotPath.push(String(i));
+        try { children.push(...executeTagChild(body[i], innerScope, context)); }
+        finally { slotPath.pop(); }
+    }
     return children;
+}
+
+// ── components (Milestone 11; twin of CodeExecutor.cs's component path) ────────────
+
+// A tag is a component iff its name resolves to a function in the scope chain (pure
+// name-resolution): <div> is an element because `div` is unbound; <noteForm> is a component
+// because `noteForm` is a function. Non-throwing — a name not in scope, or bound to a
+// non-function, is an HTML element. Stops at the first binding (shadowing).
+function tryResolveComponent(name: string, scope: ExecScope): ExecFunction | null {
+    for (let s: ExecScope | null = scope; s != null; s = s.parent)
+        if (s.items[name]) return s.items[name].value.type === "fn" ? s.items[name].value as ExecFunction : null;
+    return null;
+}
+
+// Render a component tag (<noteForm desc={...}>): runs ONCE PER RENDER-TREE SLOT (keyed on the
+// slot path, not its argument identities) so its local state survives re-renders even when an
+// argument is a fresh object each render. The body returns its reactive view (a render closure);
+// we invoke that — itself slot-keyed, so it recomputes on its own deps and never collides with
+// another slot — to produce the tags, which splice into the parent's children.
+function executeComponent(tag: CodeTag, component: ExecFunction, scope: ExecScope, context: ExecContext): ExecTagChild[] {
+    // HAZARD (follow-up 2 — lists/keys): static child indices only, so a component inside a `foreach`
+    // body gets the SAME key for every row (row identity not folded in yet) and rows would collide.
+    // Components-in-`foreach` are out of this slice; tag-invoking the generic UI's per-row components
+    // (follow-up 4) MUST wait until the foreach row key is mixed in here, or the state-reset bug returns.
+    const slotKey = "comp:" + slotPath.join("/");
+    // Attributes evaluate in the CALLER's context, like ordinary call arguments — so a
+    // rebuilt-literal descriptor is fresh each render.
+    const args = bindComponentArgs(tag, component, scope, context);
+    let view = memoize(slotKey, context, () => invokeFn(component, args, context));
+    if (view.type === "fn") {
+        const renderClosure = view;
+        view = memoize(slotKey + ":view", context, () => invokeFn(renderClosure, [], context));
+    }
+    return spliceView(view);
+}
+
+// Invoke a function value with already-evaluated args (twin of C# InvokeFunction) — a child
+// scope of the closure's captured scope, params bound positionally, the body run directly
+// (no memoization; executeComponent wraps the slot-keyed memo around this).
+function invokeFn(fn: ExecFunction, args: ExecValue[], context: ExecContext): ExecValue {
+    const callScope: ExecScope = { parent: fn.scope, items: {} };
+    for (let i = 0; i < args.length && i < fn.fn.params.length; i++)
+        callScope.items[fn.fn.params[i].name] = { value: args[i], isReadOnly: true };
+    return executeBlock(fn.fn.body, callScope, context) ?? { type: "nothing" };
+}
+
+// Bind a component's attributes to its params BY NAME (desc={d} → the `desc` param), in param
+// order; a param with no matching attribute binds to null, an unknown attribute is ignored.
+function bindComponentArgs(tag: CodeTag, component: ExecFunction, scope: ExecScope, context: ExecContext): ExecValue[] {
+    const byName: { [name: string]: ExecValue } = {};
+    for (const attr of tag.attributes) byName[attr.name] = executeValue(attr.value, scope, context).value;
+    return component.fn.params.map(p => byName[p.name] ?? { type: "null" });
+}
+
+// A component's view splices into the parent's children: an array (a fragment) splices flat, a
+// single tag/value becomes one child.
+function spliceView(view: ExecValue): ExecTagChild[] {
+    return view.type === "array" ? view.items.map(i => i.value) : [view];
 }
 
 function executeTagIf(codeTagIf: CodeTagIf, scope: ExecScope, context: ExecContext): ExecTagChild[] {
@@ -895,16 +972,27 @@ function sendHostAction(action: string, args: ExecValue[]): void {
 
 // ── conformance entry point ───────────────────────────────────────────────────────
 
-// Evaluates a Code AST expression (the exact JSON shape from instance.schema.json /
-// conformance.json) and returns the scalar result as { kind, value }. The C# side
-// runs the same cases in ConformanceTests; any drift fails on one side or the other.
-function runConformance(exprJson: string): string {
-    const expr = JSON.parse(exprJson) as CodeValue;
+// Runs a conformance case (the exact JSON shape from conformance.json) and returns the scalar
+// result as { kind, value }. A case is either a single `expr` (evaluated once) or the lifecycle
+// protocol — optional `setup` statements run once into a retained scope, then `renders`
+// value-exprs evaluated in order against that same scope+context, returning the LAST result. The
+// C# side runs the identical protocol in ConformanceTests; any drift fails on one side or the other.
+function runConformance(caseJson: string): string {
+    const c = JSON.parse(caseJson) as { expr?: CodeValue; setup?: CodeStatement[]; renders?: CodeValue[] };
     // Memoize like the live client (and like the C# runner, whose Memo is always on): a
-    // where/orderBy memo-key collision only surfaces when the cache is active, so the
-    // conformance suite must exercise the cached path to prove both twins disambiguate.
+    // where/orderBy memo-key collision — and the component slot identity — only surface when the
+    // cache is active, so the conformance suite must exercise the cached path to prove both twins agree.
     setMemoCache(new Map());
-    const result = executeValue(expr, { items: {}, parent: null }, { lastId: { value: 0 } }).value;
+    resetSlotPath();
+    const scope: ExecScope = { items: {}, parent: null };
+    const context: ExecContext = { lastId: { value: 0 } };
+    let result: ExecValue = { type: "nothing" };
+    if (c.renders) {
+        for (const stmt of c.setup ?? []) executeStatement(stmt, scope, context);
+        for (const render of c.renders) result = executeValue(render, scope, context).value;
+    } else {
+        result = executeValue(c.expr!, scope, context).value;
+    }
     setMemoCache(null);
     switch (result.type) {
         case "int": return JSON.stringify({ kind: "int", value: result.value });

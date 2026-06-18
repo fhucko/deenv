@@ -8,6 +8,7 @@
 
 function renderUi(): void {
     const context: ExecContext = { lastId: uiStatic.lastId };
+    resetSlotPath(); // a fresh render tree starts at the root slot (defensive; push/pop is balanced)
     let result: ExecValue;
     try {
         result = callFunction(uiStatic.renderFn, context, uiStatic.renderArgs);

@@ -151,6 +151,21 @@ Feature: Self-hosted generic UI (object forms)
     Then the note list eventually shows "Buy milk"
     And the draft title is empty
 
+  # ── reactive components: slot-path identity (milestone 11, slice 1) ─────────
+  # A component invoked as a tag keys on its render-tree slot, not its arguments, so its
+  # local state survives a re-render even when the argument is a fresh object each time.
+
+  @milestone-11 @single-user
+  Scenario: A component's draft survives a render even when its argument is rebuilt fresh
+    Given the rebuilt-descriptor component app is running
+    When I open "/"
+    And I fill the draft title with "Buy mi"
+    And I toggle the unrelated flag
+    Then the draft title is still "Buy mi"
+    When I click create
+    Then the note list eventually shows "Buy mi"
+    And the draft title is empty
+
   # ── set tables (slice 3) ───────────────────────────────────────────────────
 
   @milestone-9 @single-user

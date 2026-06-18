@@ -42,14 +42,20 @@ where developers design data visually and use it as objects. Full mission in
    deleted** — the self-hosted UI is the sole renderer. Infra (`/ws`, `/js` bundle) is on
    a separate port so the app owns a clean data URL space; framework context (`db`,
    `path`, `status`) lives in a system scope and the generic-UI internals in a sibling
-   `internal` scope outside userspace. **Multi-instance management (the kernel host) is the
-   active milestone (Milestone 10, refocused 2026-06-14; first slice landed 2026-06-14)** — the
-   kernel host is the entry point (NO run modes; `kernel.json` is the single source of what
-   runs). Build only M10 work next — the operator-facing create/switch/delete COMMANDS/UI as image Code
-   (the C# mechanism is done; the host-action channel + `sys.publish(schema, targetId)` AND
-   `sys.create(schema, name, appPort, infraPort)` — both project a passed schema object — have landed,
-   as have named create + per-instance `sys.rename(id, name)`); remaining: richer editing. See Current
-   focus + ROADMAP.md.
+   `internal` scope outside userspace. Multi-instance management (the kernel host, **Milestone 10**)
+   is **DONE** (kernel host as entry point — NO run modes, `kernel.json` is the single source of what
+   runs; create/list/switch/delete mechanism + host-action channel `sys.publish`/`sys.create`/
+   `sys.cloneInstance`/`sys.delete`/`sys.rename`; the operator designer + id-based identity). **The
+   active milestone is Milestone 11 — SolidJS-style reactive components + the public component library
+   (the UI middle-ground). SLICE 1 (the reactivity FOUNDATION: slot-path component identity) LANDED
+   2026-06-18 (suite 308).** Components are recognized by **pure name-resolution** (a tag whose name
+   resolves to an in-scope function — any function, top-level or local) and keyed by their **render-tree
+   slot** (not their arguments), so a component runs once per slot and its state survives a re-render
+   with rebuilt arguments — built on the **existing** memo cache (untouched). Build only M11 work next;
+   remaining follow-ups: lists/keys (the `foreach` row key), an explicit per-call `key`, **dissolving
+   `__descs`** (rewrite the generic UI's components to tag-invoked — the payoff), then the **public
+   component library** (the feature half). See Current focus + ROADMAP.md +
+   `docs/plans/m11-reactivity-foundation.md`.
    Cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time, and the
    management commands stay out of scope unless explicitly asked. Schema versioning is M13 (after the
    UI milestones M11–M12); it sits on instance management.
@@ -127,10 +133,31 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
-**Milestone 10 is multi-instance management (the kernel host) — refocused 2026-06-14,
-first slice LANDED 2026-06-14 (no run modes — the kernel host is the entry point). (Schema
-versioning, briefly scoped as M10, stepped back to M13 — it sits on instance management.)
-Milestone 9 (self-hosted generic UI) is COMPLETE (2026-06-14).** The generic UI is re-expressed in Code as a reflective library
+**Milestone 11 — SolidJS-style reactive components + the public component library (the UI
+middle-ground) — is the ACTIVE milestone. SLICE 1 (the reactivity FOUNDATION) LANDED 2026-06-18
+(suite 308).** Slice 1 gives components a **render-tree-positional ("slot path") identity**
+decoupled from the argument-keyed memo, so a component runs its body **once per slot** and its
+local state survives a re-render even when its argument is rebuilt fresh. Components are recognized
+by **pure name-resolution** — a tag whose name resolves to a function in scope is a component (any
+function, top-level OR defined locally in another component's constructor and used in its render);
+`<div>` stays an element. The setup + the returned render closure (the reactive view) are both
+keyed by the slot via the **existing** `Memoize` (untouched — additive). **Run-once-across-re-renders
+is a CLIENT behavior** (C#'s `Memoize` is write-only — the server renders once), so the **Gherkin
+scenario** proves it while a new **unified `setup + renders[]` conformance protocol** proves the
+deterministic shared core (recognition, by-name attribute binding, splicing, local-component
+capture, sibling slot-key uniqueness) on both twins. GOTCHAs: a component inside a `foreach` is
+**follow-up 2** (slot path is static indices only — flagged with a `HAZARD` comment in
+`ExecuteComponent`); the name-resolution footgun hit once (renamed the designer's `fn nav`→`navBar`,
+which returned `<nav>`). NOT done yet (per plan): **dissolving `__descs`** (follow-up 4 — the payoff)
+and the **public component library** (follow-up 5, the feature half). Driven by the `@milestone-11`
+scenario in `SelfHostedUi.feature` + `ComponentFormRebuiltDescDb` (`InstanceContext.cs`) and the two
+conformance cases. See `docs/plans/m11-reactivity-foundation.md`, DECISIONS.md ("UI middle-ground"),
+and the project memory.
+
+**Milestone 10 (multi-instance management — the kernel host) is COMPLETE (refocused 2026-06-14, no
+run modes — the kernel host is the entry point; the operator designer + id-based identity + named
+create/rename landed 2026-06-16). (Schema versioning, briefly scoped as M10, stepped back to M13 —
+it sits on instance management.) Milestone 9 (self-hosted generic UI) is COMPLETE (2026-06-14).** The generic UI is re-expressed in Code as a reflective library
 (`objectForm`/`refEditor`/`setTable`/`dictTable`/`leafForm` over schema-as-data;
 builtins `field`/`humanize`/`extent`/`setRef`/`nest`/`clone`; component pattern with
 `var state = { draft: clone(…) }` + `obj.prop = x`) and is the **default** renderer —

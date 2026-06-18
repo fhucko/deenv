@@ -419,6 +419,68 @@
         "params": []
       },
       "expect": { "kind": "intList", "value": [ 3, 2, 1 ] }
+    },
+    {
+      "name": "a tag-invoked component is recognized by name and binds its attribute to the param",
+      "comment": "<c d={42}> is a tag-invoked component: the name `c` resolves to a function, so it is invoked (not rendered as an HTML element), and the `d` attribute binds to the `d` param BY NAME — c records it in `seen` and the probe reads 42. Both twins recognize and bind identically. (Run-once-ACROSS-re-renders is a client-cache behavior — C#'s Memoize is write-only, the server renders once — so it is proven by the SelfHostedUi Gherkin scenario, not here.)",
+      "setup": [
+        { "type": "varDec", "name": "seen", "value": { "type": "int", "value": 0 } },
+        { "type": "fn", "name": "c", "params": [ { "name": "d" } ], "body": { "type": "block", "statements": [
+          { "type": "assign", "target": { "type": "symbol", "name": "seen" }, "value": { "type": "symbol", "name": "d" } },
+          { "type": "return", "value": { "type": "symbol", "name": "d" } }
+        ] } }
+      ],
+      "renders": [
+        { "type": "tag", "name": "main", "attributes": [], "children": [
+          { "type": "tag", "name": "c", "attributes": [
+            { "name": "d", "value": { "type": "int", "value": 42 } } ], "children": [] } ] },
+        { "type": "symbol", "name": "seen" }
+      ],
+      "expect": { "kind": "int", "value": 42 }
+    },
+    {
+      "name": "a component defined inside another component is usable as a tag",
+      "comment": "outer is a component whose constructor defines a LOCAL function `inner` and whose view renders <inner>. Name-resolution finds the captured local, so <inner> is recognized as a component and its body runs (hits -> 1) — proving a component can be defined in a constructor and used in render. <inner> sits at slot comp:0/0, nested under outer's comp:0.",
+      "setup": [
+        { "type": "varDec", "name": "hits", "value": { "type": "int", "value": 0 } },
+        { "type": "fn", "name": "outer", "params": [], "body": { "type": "block", "statements": [
+          { "type": "fn", "name": "inner", "params": [], "body": { "type": "block", "statements": [
+            { "type": "assign", "target": { "type": "symbol", "name": "hits" }, "value": {
+              "type": "infixOp", "op": "add",
+              "left": { "type": "symbol", "name": "hits" }, "right": { "type": "int", "value": 1 } } },
+            { "type": "return", "value": { "type": "int", "value": 7 } }
+          ] } },
+          { "type": "fn", "name": "view", "params": [], "body": { "type": "block", "statements": [
+            { "type": "return", "value": { "type": "tag", "name": "section", "attributes": [], "children": [
+              { "type": "tag", "name": "inner", "attributes": [], "children": [] } ] } }
+          ] } },
+          { "type": "return", "value": { "type": "symbol", "name": "view" } }
+        ] } }
+      ],
+      "renders": [
+        { "type": "tag", "name": "main", "attributes": [], "children": [
+          { "type": "tag", "name": "outer", "attributes": [], "children": [] } ] },
+        { "type": "symbol", "name": "hits" }
+      ],
+      "expect": { "kind": "int", "value": 1 }
+    },
+    {
+      "name": "two sibling components get distinct slot keys",
+      "comment": "The SAME component `c` appears at two sibling slots in one render (comp:0 with d=1, comp:1 with d=2), each recording its arg in `last`. Both twins must compute DISTINCT slot keys per static child index: if they collided, the client (which cache-hits) would return the first sibling's result for the second and leave last=1, while the write-only C# side would run both and reach last=2 — so a collision diverges the twins. With distinct keys both reach last=2. This is the one cross-twin-observable check of slot-key uniqueness (run-once itself is client-only — see case above).",
+      "setup": [
+        { "type": "varDec", "name": "last", "value": { "type": "int", "value": 0 } },
+        { "type": "fn", "name": "c", "params": [ { "name": "d" } ], "body": { "type": "block", "statements": [
+          { "type": "assign", "target": { "type": "symbol", "name": "last" }, "value": { "type": "symbol", "name": "d" } },
+          { "type": "return", "value": { "type": "symbol", "name": "d" } }
+        ] } }
+      ],
+      "renders": [
+        { "type": "tag", "name": "main", "attributes": [], "children": [
+          { "type": "tag", "name": "c", "attributes": [ { "name": "d", "value": { "type": "int", "value": 1 } } ], "children": [] },
+          { "type": "tag", "name": "c", "attributes": [ { "name": "d", "value": { "type": "int", "value": 2 } } ], "children": [] } ] },
+        { "type": "symbol", "name": "last" }
+      ],
+      "expect": { "kind": "int", "value": 2 }
     }
   ]
 }

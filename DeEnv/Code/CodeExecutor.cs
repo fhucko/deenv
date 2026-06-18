@@ -653,6 +653,10 @@ public sealed class CodeExecutor
 
     private IExecTagChild[] ExecuteTagChild(ICodeTagChild child, ExecScope scope, ExecContext context) => child switch
     {
+        // A tag whose name resolves to a function in scope is a COMPONENT (run-once setup,
+        // slot-keyed identity); any other tag name is an HTML element.
+        CodeTag codeTag when TryResolveComponent(codeTag.Name, scope) is { } component
+                                      => ExecuteComponent(codeTag, component, scope, context),
         CodeTag codeTag               => [ExecuteTag(codeTag, scope, context)],
         CodeTagForEach codeForEach    => ExecuteTagForEach(codeForEach, scope, context),
         CodeTagIf codeTagIf           => ExecuteTagIf(codeTagIf, scope, context),
@@ -664,10 +668,76 @@ public sealed class CodeExecutor
     {
         var children = new List<IExecTagChild>();
         var innerScope = new ExecScope { Parent = scope };
-        foreach (var child in body)
-            children.AddRange(ExecuteTagChild(child, innerScope, context));
+        // Push each child's STATIC AST index onto the slot path while it renders, so a
+        // component child keys on its render-tree position (robust to a hidden conditional
+        // sibling — the static indices don't shift). Balanced push/pop keeps the path clean.
+        for (var i = 0; i < body.Length; i++)
+        {
+            context.SlotPath.Add(i.ToString());
+            try { children.AddRange(ExecuteTagChild(body[i], innerScope, context)); }
+            finally { context.SlotPath.RemoveAt(context.SlotPath.Count - 1); }
+        }
         return [.. children];
     }
+
+    // ── components (Milestone 11) ───────────────────────────────────────────────
+
+    // A tag is a component iff its name resolves to a function in the scope chain (pure
+    // name-resolution): <div> is an element because `div` is unbound; <noteForm> is a
+    // component because `noteForm` is a function. Non-throwing — a name not in scope, or
+    // bound to a non-function, is an HTML element. Stops at the first binding (shadowing).
+    private static ExecFunction? TryResolveComponent(string name, ExecScope scope)
+    {
+        for (var s = scope; s != null; s = s.Parent)
+            if (s.Items.TryGetValue(name, out var item))
+                return item.Value as ExecFunction;
+        return null;
+    }
+
+    // Render a component tag (<noteForm desc={...}>). The component runs ONCE PER RENDER-TREE
+    // SLOT (keyed on the slot path, not its argument identities), so its local state survives
+    // re-renders even when an argument is a fresh object each render. The body returns its
+    // reactive view (a render closure); we invoke that — itself slot-keyed, so it recomputes
+    // on its own dependencies and never collides with another slot — to produce the tags,
+    // which splice into the parent's children (the component tag is not itself an element).
+    private IExecTagChild[] ExecuteComponent(CodeTag tag, ExecFunction component, ExecScope scope, ExecContext context)
+    {
+        // HAZARD (follow-up 2 — lists/keys): the slot path is static child indices only, so a
+        // component inside a `foreach` body gets the SAME key for every row (the row identity is
+        // not folded in yet) and the rows would collide. Components-in-`foreach` are out of this
+        // slice; tag-invoking the generic UI's per-row components (follow-up 4) MUST wait until the
+        // foreach row key is mixed into the path here, or it will resurface the state-reset bug.
+        var slotKey = "comp:" + string.Join("/", context.SlotPath);
+        // Attributes evaluate in the CALLER's context (their deps are the caller's), exactly
+        // like ordinary call arguments — so a rebuilt-literal descriptor is fresh each render.
+        var args = BindComponentArgs(tag, component, scope, context);
+        var view = Memoize(slotKey, context, () => InvokeFunction(component.Function, args, component.Scope, context));
+        if (view is ExecFunction renderClosure)
+            view = Memoize(slotKey + ":view", context,
+                () => InvokeFunction(renderClosure.Function, [], renderClosure.Scope, context));
+        return SpliceView(view);
+    }
+
+    // Bind a component's attributes to its function's params BY NAME (desc={d} → the `desc`
+    // param). Args are produced in param order so InvokeFunction binds them positionally;
+    // a param with no matching attribute binds to null, an unknown attribute is ignored.
+    private IExecValue[] BindComponentArgs(CodeTag tag, ExecFunction component, ExecScope scope, ExecContext context)
+    {
+        var byName = tag.Attributes.ToDictionary(a => a.Name, a => ExecuteValue(a.Value, scope, context));
+        var ps = component.Function.Params;
+        var args = new IExecValue[ps.Length];
+        for (var i = 0; i < ps.Length; i++)
+            args[i] = byName.TryGetValue(ps[i].Name, out var v) ? v : new ExecNull();
+        return args;
+    }
+
+    // A component's view splices into the parent's children: a single tag/value becomes one
+    // child; an array (a fragment) splices flat.
+    private static IExecTagChild[] SpliceView(IExecValue view) => view switch
+    {
+        ExecArray arr => [.. arr.Items.Select(i => (IExecTagChild)i.Value)],
+        _             => [view],
+    };
 
     private IExecTagChild[] ExecuteTagIf(CodeTagIf codeTagIf, ExecScope scope, ExecContext context)
     {

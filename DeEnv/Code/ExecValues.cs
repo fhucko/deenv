@@ -174,4 +174,12 @@ public sealed class ExecContext
     public Dictionary<string, CacheEntry> Memo { get; } = [];
     public Stack<Deps> DepStack { get; } = new();
     public Stack<LeafFrame> LeafStack { get; } = new();
+
+    // ── component slot path (Milestone 11) ───────────────────────────────────────
+    // The render-tree position of the node currently being rendered. ExecuteTagChildren
+    // pushes each child's static AST index; a tag-invoked component keys its run-once setup
+    // on this path (not on its argument identities), so its local state survives a re-render
+    // — even when an argument object is rebuilt fresh every render. Push/pop is balanced, so
+    // it returns to empty between renders.
+    public List<string> SlotPath { get; } = [];
 }
