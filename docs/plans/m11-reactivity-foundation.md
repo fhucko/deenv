@@ -1,9 +1,11 @@
 # M11 — Reactivity foundation: analysis + first-slice plan
 
-**Status: FOUNDATION (slices 1–3) + follow-ups 4a & 4b LANDED 2026-06-18 (suite 314).** Slice 3 =
-the opt-in per-call `key={...}` directive (folds into slot identity → caller-controlled reset); 4a +
-4b moved the generic UI's components (nested + ref/set/dict ROOT views) onto tag-invocation, so
-`__descs` is now purely a data registry. M11 is SolidJS-style reactive components +
+**Status: FOUNDATION (slices 1–3) + follow-ups 4a & 4b + slice (b) LANDED 2026-06-18 (suite 314).**
+Slice 3 = the opt-in per-call `key={...}` directive (folds into slot identity → caller-controlled
+reset); 4a + 4b moved the generic UI's components (nested + ref/set/dict ROOT views) onto
+tag-invocation; **slice (b)** replaced the `__descs` type-descriptor registry with a
+`sys.schema(typeName)` builtin (server-resolved + shipped like `sys.extent`) and **deleted `__descs`**
+(the dict `__dictDescs` registry remains — a follow-on). M11 is SolidJS-style reactive components +
 the public component library (the UI middle-ground); this doc is the **foundation half** (the
 reactivity refactor) and its **first slice**. See DECISIONS "UI middle-ground — one public
 component library + SolidJS-style reactivity" and ROADMAP M11. *Grounded by codebase-navigator +
@@ -66,11 +68,18 @@ today, no field more.
    to `return <refEditor …>`. So NO component relies on `__descs` stability anymore — it's a pure
    DATA registry. Proven by a value-position conformance case (both twins) + the "root-position
    component's state survives a re-render with a rebuilt argument" scenario.
-2. **(b) Schema-as-data reflection** — the `__descs` job-2 (cross-type registry) replacement; a
-   component resolves a referenced type's descriptor by reflecting the schema at the call site. **This
-   slice carries the one structural decision (below) — settle it before building.**
-3. **Delete `__descs`/`__dictDescs`** — both jobs replaced (1 by slot identity, 2 by schema-as-data);
-   pure deletion, existing `SelfHostedUi` scenarios are the regression net. *Where `__descs` finally dies.*
+2. **(b) Schema-as-data reflection. ✅ DONE (suite 314, architecture-reviewer-approved).** A
+   `sys.schema(typeName)` builtin returns the type's descriptor, **server-resolved + shipped like
+   `sys.extent`** (C# computes from the schema-derived literal map threaded into the executor; the
+   client throws → reads the shipped cache — no twin descriptor-building, no conformance case).
+   `GenericUi` exposes a `typeName → CodeObject` map (`Registry`→`Descriptors`); the library's
+   `sys.field(__descs, …)` became `sys.schema(…)`; **`__descs` deleted.** GOTCHA: plain `Memoize`
+   won't cache a transient negative-id object (factory guard), so `ExecuteSchema` writes the
+   `schema:<type>` cache entry directly (empty Deps) + reads it back for within-render identity. The
+   **dict `__dictDescs`** registry is untouched (a per-owner/prop descriptor — a separate follow-on).
+3. **Delete `__dictDescs`** (the dict follow-on) — migrate the dict prop-descriptor off `__dictDescs`
+   the same `sys.schema`-style way (it doesn't fit `sys.schema(typeName)` directly — a per-owner/prop
+   descriptor). Existing `SelfHostedUi` dict scenarios are the regression net.
 4. **(c) Promote ONE component to a clean PUBLIC API + prove two consumers** — e.g. `RefEditor`/`Field`
    out of the `internal` `StdlibSource` into a public component, consumed by BOTH the generic UI (first
    consumer) AND a hand-written `fn render()` — the real second consumer is the **operator designer**

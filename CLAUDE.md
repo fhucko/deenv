@@ -47,7 +47,7 @@ where developers design data visually and use it as objects. Full mission in
    runs; create/list/switch/delete mechanism + host-action channel `sys.publish`/`sys.create`/
    `sys.cloneInstance`/`sys.delete`/`sys.rename`; the operator designer + id-based identity). **The
    active milestone is Milestone 11 — SolidJS-style reactive components + the public component library
-   (the UI middle-ground). SLICES 1-3 (the reactivity FOUNDATION) + follow-ups 4a & 4b LANDED 2026-06-18 (suite 314).**
+   (the UI middle-ground). SLICES 1-3 (the reactivity FOUNDATION) + follow-ups 4a & 4b + slice (b) LANDED 2026-06-18 (suite 314).**
    Components are recognized by **pure name-resolution** (a tag whose name resolves to an in-scope
    function — any function, top-level or local) and keyed by their **render-tree slot** (not their
    arguments), so a component runs once per slot and its state survives a re-render with rebuilt
@@ -55,11 +55,12 @@ where developers design data visually and use it as objects. Full mission in
    component in a list keeps independent state that follows the object across reorder/remove; slice 3
    adds an opt-in `key={...}` directive that folds into the slot identity (caller-controlled reset);
    4a + 4b moved the generic UI's components (object-form NESTED + the ref/set/dict ROOT views, the
-   latter via value-position recognition) onto tag-invocation — so NO component relies on `__descs`
-   being reference-stable anymore (it's now purely a DATA registry) — all on the **existing** memo
-   cache (untouched). Build only M11 work next; remaining: **(b)** schema-as-data reflection (the
-   cross-type-registry replacement) → delete `__descs` → the **public component library** (follow-up
-   5, the feature half). `__descs`'s job-2 (cross-type registry) is why (b) is entangled with 5. See Current focus + ROADMAP.md +
+   latter via value-position recognition) onto tag-invocation — all on the **existing** memo cache
+   (untouched). **Slice (b)** then replaced the `__descs` TYPE-descriptor registry with a
+   `sys.schema(typeName)` builtin (server-resolved + shipped like `sys.extent`) and **deleted `__descs`**.
+   Build only M11 work next; remaining: the **dict** follow-on (`__dictDescs` → `sys.schema`-style) →
+   the **public component library** (follow-up 5, the feature half), where the generic UI becomes the
+   library's first consumer. See Current focus + ROADMAP.md +
    `docs/plans/m11-reactivity-foundation.md`.
    Cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time, and the
    management commands stay out of scope unless explicitly asked. Schema versioning is M13 (after the
@@ -140,7 +141,7 @@ steps, when reached, use Playwright.)
 
 **Milestone 11 — SolidJS-style reactive components + the public component library (the UI
 middle-ground) — is the ACTIVE milestone. SLICES 1-3 (the reactivity FOUNDATION) + follow-ups 4a & 4b
-LANDED 2026-06-18 (suite 314).** Slice 1 gives components a **render-tree-positional ("slot path") identity**
++ slice (b) LANDED 2026-06-18 (suite 314).** Slice 1 gives components a **render-tree-positional ("slot path") identity**
 decoupled from the argument-keyed memo, so a component runs its body **once per slot** and its
 local state survives a re-render even when its argument is rebuilt fresh. Components are recognized
 by **pure name-resolution** — a tag whose name resolves to a function in scope is a component (any
@@ -161,12 +162,16 @@ value into the component's slot identity, so changing it resets the component (f
 the caller-controlled "reset when X changes" escape hatch; the no-key common case stays zero-config.
 **Follow-ups 4a & 4b** moved the generic UI's components onto TAG-invocation: 4a the object-form
 NESTED `refEditor`/`setTable`/`dictTable`, 4b the ref/set/dict ROOT views (via value-position
-recognition — a component returned in value position is now recognized + slot-keyed). So NO
-component relies on `__descs` being reference-stable; it's now purely a DATA registry. **NOT done
-yet:** **(b)** schema-as-data reflection (the cross-type-registry replacement) → delete `__descs` →
-the **public component library** (follow-up 5, the feature half). `__descs` is ALSO a **cross-type
-descriptor registry** (a ref/set prop carries the other type's NAME, resolved via `field(__descs,
-name)` — cycle-free), which is why (b) is entangled with the public library. Driven by the two `@milestone-11` scenarios in `SelfHostedUi.feature` +
+recognition — a component returned in value position is now recognized + slot-keyed). So no
+component relied on `__descs` being reference-stable. **Slice (b)** then replaced the `__descs`
+TYPE-descriptor registry with a **`sys.schema(typeName)` builtin** — server-resolved from the schema
+and shipped like `sys.extent` (the client throws → reads the shipped cache; no twin descriptor-
+building, no conformance case). `GenericUi` threads a `typeName → descriptor` literal map into the
+executor; `ExecuteSchema` caches it directly (the `Memoize` factory guard refuses transient objects)
+with a within-render read-back for stable identity. `__descs` is **deleted**. **NOT done yet:** the
+**dict** follow-on (`__dictDescs` is a per-owner/prop descriptor, untouched — `sys.schema(type)`
+doesn't fit it) → the **public component library** (follow-up 5, the feature half — the generic UI as
+its first consumer). Driven by the two `@milestone-11` scenarios in `SelfHostedUi.feature` +
 `ComponentFormRebuiltDescDb`/`RowComponentListDb` (`InstanceContext.cs`) and three conformance cases.
 See `docs/plans/m11-reactivity-foundation.md`, DECISIONS.md ("UI middle-ground"), and the project memory.
 

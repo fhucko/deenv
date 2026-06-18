@@ -501,6 +501,17 @@ function execExtent(codeCall: CodeCall, scope: ExecScope, context: ExecContext):
     return memoize("extent:" + v.value, context, () => { throw new Error("Value not available"); });
 }
 
+// schema(typeName): a type's descriptor — { name, labelProp, props, blank } — the reflective shape
+// the self-hosted generic UI walks. The twin of execExtent: the descriptor is SERVER-RESOLVED
+// (computed from the schema, which never crosses the wire), shipped as a cached value, and the
+// client reuses it. No store/schema on the client, so a cache miss throws "Value not available",
+// which the memoize wrapper turns into a refetch (the same server-resolved-dependency path).
+function execSchema(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const v = executeValue(codeCall.params[0], scope, context).value;
+    if (v.type !== "text") throw new Error("schema() expects a text type name.");
+    return memoize("schema:" + v.value, context, () => { throw new Error("Value not available"); });
+}
+
 // setRef(obj, prop, value): set/clear an object REFERENCE prop and persist it. value is an
 // existing candidate (id>0 → refId), a fresh draft (id<0 → its scalar props), or null
 // (clear). Stages in memory (UI reflects it), then sends the id-addressed WS op.
@@ -773,6 +784,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "field": return fieldResult(codeCall, scope, context).value;
         case "humanize": return execHumanize(codeCall, scope, context);
         case "extent": return execExtent(codeCall, scope, context);
+        case "schema": return execSchema(codeCall, scope, context);
         case "setRef": return execSetRef(codeCall, scope, context);
         case "publish": return execPublish(codeCall, scope, context);
         case "create": return execCreate(codeCall, scope, context);

@@ -26,9 +26,14 @@ public sealed class SsrRenderer
     // reserved-path-free data URL space.
     private readonly int _infraPort;
 
-    // Names of the synthesized framework members (the generic library + descriptor registries)
-    // — placed in the system scope, above the custom code, so they never pollute the app scope.
+    // Names of the synthesized framework members (the generic library + the dict prop-descriptor
+    // registry) — placed in the system scope, above the custom code, so they never pollute the app scope.
     private readonly IReadOnlySet<string> _systemNames;
+
+    // typeName → the type's descriptor literal, threaded into the CodeExecutor so `sys.schema(typeName)`
+    // resolves a type's shape from the schema (the replacement for the `__descs` global). Empty for a
+    // custom-render app.
+    private readonly IReadOnlyDictionary<string, CodeObject> _descriptors;
 
     // The kernel's instance registry as a live DATA cell (app + ports per hosted instance), surfaced
     // to image Code as the read-only `instances` system global. Read PER RENDER (`.Current`), so every
@@ -46,7 +51,7 @@ public sealed class SsrRenderer
         _sessions = sessions;
         _infraPort = infraPort;
         _registry = registry ?? new LiveRegistry();
-        (_ui, _systemNames) = GenericUi.Effective(desc);
+        (_ui, _systemNames, _descriptors) = GenericUi.Effective(desc);
     }
 
     // The rendered HTML plus the first-paint HTTP status (200 unless code set it, e.g. the
@@ -244,12 +249,13 @@ public sealed class SsrRenderer
         ExecObject? warmDb = null, ViewMatch? forcedMatch = null)
     {
         var ui = _ui!;
-        var exec = new CodeExecutor(_store);
+        var exec = new CodeExecutor(_store, _descriptors);
 
         // Three scopes, so the generic-UI internals are OUTSIDE userspace (not just above it):
         //   system   — framework state (db, path, status), the shared parent both can read;
-        //   internal — the synthesized generic library + descriptor registries (__descs/
-        //              __dictDescs), a SIBLING of app, so user code can never reach them;
+        //   internal — the synthesized generic library + the dict prop-descriptor registry
+        //              (__dictDescs), a SIBLING of app, so user code can never reach them (type
+        //              descriptors are no longer a var — they come via the sys.schema builtin);
         //   app      — the user's own vars/functions/render.
         var system = new ExecScope { IsTop = true };
         var internalScope = new ExecScope { Parent = system, IsTop = true };
@@ -287,8 +293,8 @@ public sealed class SsrRenderer
         foreach (var f in ui.Functions ?? []) DefineFunction(f, _systemNames.Contains(f.Name ?? "") ? internalScope : app);
 
         // UI/session state. Each initializer is a memoized computation (`var:<name>`),
-        // evaluated in its own scope. The synthesized registries (__descs/__dictDescs) go in
-        // the internal scope; the user's vars go in the app scope.
+        // evaluated in its own scope. The synthesized dict prop-descriptor registry (__dictDescs)
+        // goes in the internal scope; the user's vars go in the app scope.
         foreach (var v in ui.Vars ?? [])
         {
             var target = _systemNames.Contains(v.Name) ? internalScope : app;
@@ -350,8 +356,9 @@ public sealed class SsrRenderer
 
         // The first-paint HTTP status: the (possibly view-assigned) `status` system var.
         var status = system.Items.TryGetValue("status", out var s) && s.Value is ExecInt si ? si.Value : 200;
-        // Ship the render scope (internal for a generic view → its __descs; app for a custom
-        // render → its vars) plus the system parent (ClientState walks up).
+        // Ship the render scope (internal for a generic view → its __dictDescs; app for a custom
+        // render → its vars) plus the system parent (ClientState walks up). Type descriptors ride
+        // the memo cache as `schema:*` entries, not the scope.
         return (child, title, renderScope, match, targetId, status);
     }
 

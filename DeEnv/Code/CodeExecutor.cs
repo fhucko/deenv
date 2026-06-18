@@ -14,7 +14,18 @@ public sealed class CodeExecutor
 
     private readonly IInstanceStore? _store;
 
-    public CodeExecutor(IInstanceStore? store = null) => _store = store;
+    // typeName → the type's descriptor literal (a pure data CodeObject — { name, labelProp,
+    // props, blank }), built by GenericUi from the schema and threaded in the same way as
+    // _store. `sys.schema(typeName)` evaluates the matching literal under the memo cache, so
+    // the self-hosted UI reads a type's shape WITHOUT a standing `__descs` global. Empty for a
+    // custom-render app (which uses no descriptors).
+    private readonly IReadOnlyDictionary<string, CodeObject> _descriptors;
+
+    public CodeExecutor(IInstanceStore? store = null, IReadOnlyDictionary<string, CodeObject>? descriptors = null)
+    {
+        _store = store;
+        _descriptors = descriptors ?? new Dictionary<string, CodeObject>();
+    }
 
     // ── statements ──────────────────────────────────────────────────────────────
 
@@ -273,6 +284,35 @@ public sealed class CodeExecutor
         return Memoize($"extent:{typeName.Value}", context, () => DbBridge.LoadExtent(_store, typeName.Value, context));
     }
 
+    // schema(typeName): a type's descriptor — { name, labelProp, props, blank } — the reflective
+    // shape the self-hosted generic UI walks (objectForm/refEditor/setTable). The replacement for
+    // the old `__descs` registry global: the descriptor is computed from the schema (the literal
+    // GenericUi threads in), keyed by type, and shipped so the client reuses it (like extent).
+    //
+    // The descriptor is pure, deterministic, immutable schema data with NO dependencies, so it is
+    // cached DIRECTLY (an empty-deps CacheEntry) rather than through Memoize: Memoize's factory
+    // guard refuses to cache a transient negative-id OBJECT minted inside the computation (it
+    // assumes a `getNewX()`-style mutable factory), but a descriptor is a constant — caching it is
+    // correct, and the cache entry is exactly what ships it to the client (DtValue ships a negative-id
+    // object complete). A cache hit returns the SAME descriptor for the rest of the render (no rebuild).
+    private IExecValue ExecuteSchema(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 1)
+            throw new CodeRuntimeException("schema(typeName) takes one argument.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecText typeName)
+            throw new CodeRuntimeException("schema() expects a text type name.");
+        var key = $"schema:{typeName.Value}";
+        if (context.Memo.TryGetValue(key, out var cached)) return cached.Result;
+        if (!_descriptors.TryGetValue(typeName.Value, out var literal))
+            throw new CodeRuntimeException($"No descriptor for type '{typeName.Value}'.");
+        // Evaluate the descriptor literal in a FRESH EMPTY scope: it is a pure data literal (text /
+        // bool / int / nested objects + arrays of the same), so it reads no variables — the empty
+        // scope makes that structural (any stray symbol would fail loudly, not capture a binding).
+        var descriptor = ExecuteValue(literal, new ExecScope(), context);
+        context.Memo[key] = new CacheEntry { Key = key, Result = descriptor, Deps = new Deps() };
+        return descriptor;
+    }
+
     // clone(obj): a fresh object with the source's SCALAR props copied (shallow; scalars
     // are immutable so the values are shared). Used to mint a new draft from a type's
     // blank template — a generic component's create-new state.
@@ -392,6 +432,7 @@ public sealed class CodeExecutor
         "field" => ExecuteField(call, scope, context),
         "humanize" => ExecuteHumanize(call, scope, context),
         "extent" => ExecuteExtent(call, scope, context),
+        "schema" => ExecuteSchema(call, scope, context),
         "nest" => ExecuteNest(call, scope, context),
         "segment" => ExecuteSegment(call, scope, context),
         "toInt" => ExecuteToInt(call, scope, context),

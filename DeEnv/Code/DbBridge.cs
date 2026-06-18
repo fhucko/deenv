@@ -20,8 +20,8 @@ public static class DbBridge
     // root schema object the designer passes to sys.create / sys.publish (`db`, id 1).
     public const int RootId = 1;
 
-    // The reserved field a dictionary entry object carries its key in (the `__descs`
-    // convention). The stdlib reads field(entry, "__key"); descriptors exclude it.
+    // The reserved field a dictionary entry object carries its key in (the `__`-prefixed
+    // framework-field convention). The stdlib reads field(entry, "__key"); descriptors exclude it.
     public const string EntryKeyProp = "__key";
 
     // Load the Db root object graph as a runtime ExecObject (positive id ⇒ in db).

@@ -18,15 +18,15 @@ namespace DeEnv.Instance;
 //     COMPONENT (the add form holds a draft).
 //
 // Builtins do the reflective work, all under the framework `sys` namespace: sys.field (dynamic
-// access), sys.humanize (labels), sys.extent (a type's objects), sys.setRef (set/clear a
-// reference), sys.nest (a URL path-join for nested member links), sys.clone (a fresh draft from
-// a blank template). `obj.prop = x` resets a component's draft after Create.
+// access), sys.humanize (labels), sys.extent (a type's objects), sys.schema (a type's descriptor),
+// sys.setRef (set/clear a reference), sys.nest (a URL path-join for nested member links), sys.clone
+// (a fresh draft from a blank template). `obj.prop = x` resets a component's draft after Create.
 //
-// Descriptors are a single stable top-scope registry var `__descs` (typeName → descriptor),
-// synthesized once — so the component functions receive a stable descriptor argument every
-// render, which is what lets the memo cache run their init exactly once (the same pattern
-// hand-authored forms use; no separate synthesized draft vars). Cross-type references are
-// stored by type NAME (cycle-safe); a component resolves them with sys.field(__descs, name).
+// A type's descriptor — { name, labelProp, props, blank } — is fetched by `sys.schema(typeName)`,
+// resolved server-side from the schema (the descriptor literal GenericUi threads into the executor)
+// and shipped to the client like extent. Components are tag-invoked and slot-keyed, so a descriptor
+// is now plain argument data (its identity carries no reactivity). Cross-type references are stored
+// by type NAME (cycle-safe); a component resolves them with sys.schema(name).
 //
 // Synthesis is render-time only: the canonical InstanceDescription (what AppPrint emits)
 // carries no UI at all for a plain app. A synthesized OBJECT view (Type=T, Prop=null) binds the
@@ -34,7 +34,6 @@ namespace DeEnv.Instance;
 // the prop — both reuse the M8 type-view client binding (no new wire shape).
 public static class GenericUi
 {
-    private const string DescsVar = "__descs";
     private const string DictDescsVar = "__dictDescs";
 
     // The reserved view "type" for the shared scalar leaf editor (a scalar dictionary
@@ -59,9 +58,9 @@ public static class GenericUi
                                 <label class={p.name}>
                                     sys.humanize(p.name)
                             if p.baseType == "object"
-                                <refEditor parent={obj} prop={p.name} target={sys.field(__descs, p.target)}>
+                                <refEditor parent={obj} prop={p.name} target={sys.schema(p.target)}>
                             else if p.baseType == "set"
-                                <setTable set={sys.field(obj, p.name)} desc={sys.field(__descs, p.element)} setPath={sys.nest(base, p.name)}>
+                                <setTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)}>
                             else if p.baseType == "dictionary"
                                 <dictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
                             else if p.baseType == "bool"
@@ -254,20 +253,22 @@ public static class GenericUi
                 return "text"
         """;
 
-    // The effective ui for rendering: the app's ui augmented with the generic library, the
-    // stable `__descs` descriptor registry, an OBJECT view per self-hostable type, and a
-    // REFERENCE / SET view per object reference / set prop. Returns the app's ui unchanged
-    // when it does not opt in. Functions are renumbered (CodeIds) over the whole set so
-    // server and client key the memo cache alike.
+    // The effective ui for rendering: the app's ui augmented with the generic library, an OBJECT
+    // view per self-hostable type, and a REFERENCE / SET view per object reference / set prop.
+    // Returns the app's ui unchanged when it does not opt in. Functions are renumbered (CodeIds)
+    // over the whole set so server and client key the memo cache alike.
     //
-    // SystemNames lists the synthesized framework members (the library functions + the
-    // descriptor registries) so the renderer places them in the SYSTEM scope, above the
-    // custom code — they never pollute the app scope.
-    public static (InstanceUi? Ui, IReadOnlySet<string> SystemNames) Effective(InstanceDescription desc)
+    // SystemNames lists the synthesized framework members (the library functions + the dict
+    // prop-descriptor registry) so the renderer places them in the SYSTEM scope, above the custom
+    // code — they never pollute the app scope. Descriptors maps typeName → the type's descriptor
+    // literal, threaded into the executor so `sys.schema(typeName)` resolves a type's shape (the
+    // replacement for the old `__descs` global); empty for a custom-render app.
+    public static (InstanceUi? Ui, IReadOnlySet<string> SystemNames, IReadOnlyDictionary<string, CodeObject> Descriptors)
+        Effective(InstanceDescription desc)
     {
         var ui = desc.Ui;
         // A fully-custom UI (`fn render()`) owns the whole URL space — no generic synthesis.
-        if (ui?.Render != null) return (ui, EmptyNames);
+        if (ui?.Render != null) return (ui, EmptyNames, EmptyDescriptors);
         // Otherwise the self-hosted generic UI is the DEFAULT: synthesize per-type views over
         // the (possibly absent) ui section. A plain app — no `ui` section, or only common
         // helpers — renders entirely through the Code objectForm library.
@@ -310,7 +311,6 @@ public static class GenericUi
 
         var vars = new List<UiVar>();
         vars.AddRange(ui.Vars ?? []);
-        vars.Add(new UiVar(DescsVar, Registry(objectTypes, desc)));        // stable type-descriptor registry
         vars.Add(new UiVar(DictDescsVar, DictRegistry(objectTypes, desc))); // stable dict prop-descriptor registry
         var functions = new List<CodeFunction>();
         functions.AddRange(library);
@@ -324,14 +324,15 @@ public static class GenericUi
         // server and the shipped client key the memo cache identically.
         CodeIds.Assign(new InstanceDescription(Types: desc.Types, Ui: effective, Common: desc.Common));
 
-        // The framework-synthesized members (library functions + descriptor registries) — the
-        // renderer puts these in the system scope, leaving the app scope to the user's code.
+        // The framework-synthesized members (library functions + the dict prop-descriptor registry)
+        // — the renderer puts these in the system scope, leaving the app scope to the user's code.
         var systemNames = new HashSet<string>(library.Where(f => f.Name != null).Select(f => f.Name!))
-            { DescsVar, DictDescsVar };
-        return (effective, systemNames);
+            { DictDescsVar };
+        return (effective, systemNames, Descriptors(objectTypes, desc));
     }
 
     private static readonly IReadOnlySet<string> EmptyNames = new HashSet<string>();
+    private static readonly IReadOnlyDictionary<string, CodeObject> EmptyDescriptors = new Dictionary<string, CodeObject>();
 
     private static IEnumerable<PropDefinition> RefProps(TypeDefinition type, InstanceDescription desc) =>
         (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Single && desc.IsObjectType(p.Type));
@@ -342,10 +343,10 @@ public static class GenericUi
     private static IEnumerable<PropDefinition> DictProps(TypeDefinition type) =>
         (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Dictionary);
 
-    // `view T(obj, base)` → `return objectForm(obj, sys.field(__descs, "T"), base)`. `base` is the
+    // `view T(obj, base)` → `return objectForm(obj, sys.schema("T"), base)`. `base` is the
     // page's URL path, threaded so inline sets build nested member links (sys.nest(base, prop)).
     private static UiView SynthObjectView(string typeName) =>
-        new(typeName, Fn(["obj", "base"], Return(Call("objectForm", Sym("obj"), Desc(typeName), Sym("base")))));
+        new(typeName, Fn(["obj", "base"], Return(Call("objectForm", Sym("obj"), Schema(typeName), Sym("base")))));
 
     // Reference route `view(parent)` → `return <refEditor parent={parent} prop="P" target={…}>` (a
     // root-position component tag, keyed by its render slot). Keyed by (owner, Prop), bound to the
@@ -354,14 +355,14 @@ public static class GenericUi
     // extra arg is harmless — keeping the param out of the Code is more honest than declaring it unused).
     private static UiView SynthRefView(string ownerType, string prop, string targetType) =>
         new(ownerType, Fn(["parent"], Return(Tag("refEditor",
-                ("parent", Sym("parent")), ("prop", Text(prop)), ("target", Desc(targetType))))),
+                ("parent", Sym("parent")), ("prop", Text(prop)), ("target", Schema(targetType))))),
             Prop: prop);
 
     // Set route `view(parent, base)` → `return <setTable set={parent.P} desc={…} setPath={base}>`.
     // `base` is the set's own URL path, used for nested member links.
     private static UiView SynthSetView(string ownerType, string prop, string elementType) =>
         new(ownerType, Fn(["parent", "base"], Return(Tag("setTable",
-                ("set", Field(Sym("parent"), Text(prop))), ("desc", Desc(elementType)), ("setPath", Sym("base"))))),
+                ("set", Field(Sym("parent"), Text(prop))), ("desc", Schema(elementType)), ("setPath", Sym("base"))))),
             Prop: prop);
 
     // The shared scalar-entry view: `view(entry, base)` → `return leafForm(entry, base)`. Bound
@@ -386,11 +387,12 @@ public static class GenericUi
 
     // ── the descriptor registry ──────────────────────────────────────────────────────
 
-    // { TypeName: { name, labelProp, props, blank }, … } — one stable top-scope object.
-    private static CodeObject Registry(List<TypeDefinition> objectTypes, InstanceDescription desc) =>
-        new() { Props = objectTypes
-            .Select(t => new CodeObjectProp { Name = t.Name, Value = TypeDescriptor(t, desc) })
-            .ToArray() };
+    // typeName → { name, labelProp, props, blank } — the per-type descriptor literals threaded into
+    // the executor for `sys.schema(typeName)` to evaluate (the replacement for the `__descs` global).
+    // A pure data literal per type, built once per render from the schema; the executor evaluates and
+    // caches the one a `sys.schema` call names, shipping it to the client like extent.
+    private static Dictionary<string, CodeObject> Descriptors(List<TypeDefinition> objectTypes, InstanceDescription desc) =>
+        objectTypes.ToDictionary(t => t.Name, t => TypeDescriptor(t, desc));
 
     // { "Owner/prop": <dict prop descriptor>, … } — a stable top-scope object so a dict-route
     // view hands dictTable the SAME descriptor every render (memo init-once for its add form).
@@ -415,7 +417,7 @@ public static class GenericUi
 
     // A prop descriptor: scalar { name, baseType }; reference { name, baseType:"object",
     // target } and set { name, baseType:"set", element } carry the OTHER type's name (the
-    // component resolves it via field(__descs, name) — cycle-safe). A dictionary
+    // component resolves it via sys.schema(name) — cycle-safe). A dictionary
     // { name, baseType:"dictionary", keyType, isScalar, valueProps, blank } is self-contained
     // (dictTable reads it directly): valueProps are the element's scalar columns (empty for a
     // scalar dict, where isScalar=true and a single "Value" column is shown), blank seeds the
@@ -475,7 +477,9 @@ public static class GenericUi
     private static CodeCall Field(ICodeValue obj, ICodeValue name) => new() { Fn = SysMember("field"), Params = [obj, name] };
     private static CodeInfixOp SysMember(string name) =>
         new() { Op = CodeInfixOpType.ObjectProp, Left = Sym("sys"), Right = Sym(name) };
-    private static CodeCall Desc(string typeName) => Field(Sym(DescsVar), Text(typeName));
+    // `sys.schema("T")` — the descriptor for type T, resolved server-side from the schema (the
+    // replacement for the old `sys.field(__descs, "T")` registry read). Mirrors the Field/Call helpers.
+    private static CodeCall Schema(string typeName) => new() { Fn = SysMember("schema"), Params = [Text(typeName)] };
     // A childless tag `<name a={…} b={…}>` — used to invoke a synthesized component (refEditor /
     // setTable / dictTable) BY TAG, so it keys on its render-tree slot rather than its arguments.
     private static CodeTag Tag(string name, params (string Name, ICodeValue Value)[] attrs) => new()
