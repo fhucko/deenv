@@ -79,11 +79,21 @@ today, no field more.
 5. **Migrate the rest** (`ObjectForm`/`SetTable`/`DictTable`/`LeafForm`) to the public API; generic UI
    fully rewritten as the library's first consumer. Each its own thin slice.
 
-**Decisions for the user (gate slice b/c, not 4b):**
-- **Schema-as-data meta-model shape** (the structural one): (i) keep synthesizing a descriptor passed
-  positionally (no new global/wire); (ii) a first-class `schema`/meta-model **global** the library
-  reflects over with existing `foreach`/`.prop` (planner + M9's "schema-as-data, not new builtins"
-  decision lean here); (iii) a new `sys.schema`/`sys.typeOf` builtin. Lean **(ii)**.
+**Decisions:**
+- **Schema-as-data meta-model shape — DECIDED 2026-06-18: a `sys.schema(typeName)` builtin** (the
+  user chose an explicit builtin over a standing `schema` global — lazy, explicit, keeps userspace
+  scope clean). `sys.schema(typeName)` returns a type's descriptor (`{name, labelProp, props, blank}`,
+  the shape `Registry`/`PropDesc` build today); the library's `sys.field(__descs, p.target)` /
+  `sys.field(__descs, p.element)` become `sys.schema(p.target)` / `sys.schema(p.element)`, then
+  `__descs` deletes. **Slice-(b) sub-questions to settle when building** (both are real wire/twin
+  decisions — scope before coding): **(1)** how the descriptor data reaches both interpreters — ship
+  the raw **type-model** and have BOTH twins build the descriptor on demand (twin descriptor-building
+  logic — the `PropDesc` reflection ported to TS), OR have C# build the registry once and ship it as
+  framework data that `sys.schema` looks up (no twin building, but still ships a registry). **(2)**
+  the **dict** case: `__dictDescs` is a per-owner/prop descriptor (`ownerType + "/" + prop`), not a
+  type descriptor — `sys.schema` may need a prop-descriptor variant, or the dict view builds its
+  descriptor differently. This makes slice (b) a wire-touching, twin-heavy slice — best built fresh
+  with a slice-builder + architecture-reviewer pass, not improvised.
 - **Which component promoted first** — `Field` (smallest/lowest-risk) vs `RefEditor` (stateful, more
   convincing completeness proof). Lean `Field` then `RefEditor`.
 - **Public naming** — `ObjectForm`/`Field`/`RefEditor` (capitalized, as DECISIONS writes them) vs the
