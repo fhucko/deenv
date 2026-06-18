@@ -1,8 +1,9 @@
 # M11 — Reactivity foundation: analysis + first-slice plan
 
-**Status: FOUNDATION (slices 1–3) + follow-up 4a LANDED 2026-06-18 (suite 312).** Slice 3 = the
-opt-in per-call `key={...}` directive (folds into slot identity → caller-controlled reset).
-M11 is SolidJS-style reactive components +
+**Status: FOUNDATION (slices 1–3) + follow-ups 4a & 4b LANDED 2026-06-18 (suite 314).** Slice 3 =
+the opt-in per-call `key={...}` directive (folds into slot identity → caller-controlled reset); 4a +
+4b moved the generic UI's components (nested + ref/set/dict ROOT views) onto tag-invocation, so
+`__descs` is now purely a data registry. M11 is SolidJS-style reactive components +
 the public component library (the UI middle-ground); this doc is the **foundation half** (the
 reactivity refactor) and its **first slice**. See DECISIONS "UI middle-ground — one public
 component library + SolidJS-style reactivity" and ROADMAP M11. *Grounded by codebase-navigator +
