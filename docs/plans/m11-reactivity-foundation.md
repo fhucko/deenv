@@ -39,9 +39,54 @@ milestone-planner, 2026-06-17; built 2026-06-18.*
   `refEditor`/`setTable`/`dictTable` are now tag-invoked (`GenericUi.cs:62-66`); the synthesized
   ROOT-component views stay call-form (value-position recognition is a 4b/5 design point), so
   `__descs` stays stable for now.
-- **Still NOT done:** an explicit per-call `key` (follow-up 3); tag-invoking the generic UI +
-  `__descs` removal (follow-up 4); the public library (follow-up 5). Implementation memory:
-  [[project_m11_reactive_components]].
+- **Still NOT done:** tag-invoking the generic UI's ROOT views + `__descs` removal (follow-up 4b);
+  the public library (follow-up 5). (Slice 3 = the per-call `key`, and 4a = the generic UI's
+  object-form components, both LANDED.) Implementation memory: [[project_m11_reactive_components]].
+
+## Feature half (4b → 5) — decomposition (planned 2026-06-18; milestone-planner + vision-keeper)
+
+**vision-keeper verdict: ALIGNS, forecloses nothing.** Squarely pillar 8 ("auto with overrides")
++ the self-hosting principle (deleting `__descs` removes `internal`-scope machinery — nothing moves
+into C#). Confirmed "schema-as-data reflection + value-position components" is **forced, not chosen**:
+deleting `__descs` *entails* the cross-type replacement, and value/root recognition is the minimal
+unblock for "generic UI as first consumer." **Guardrails (keep OUT):** value/root recognition must
+stay a name-resolution-**site** extension, NOT new render syntax (any new keyword/`for…in` = M12 /
+pillar 6); the public library must land in a genuinely **public** scope, not a renamed `internal`
+(that's what makes the 2026-06-15 rejection-reversal sound); schema-as-data stays **render-time
+reflection** and `instance.app` stays the sole authoring surface (the meta-model is not editable and
+not a versioning vehicle — M13); expose **exactly** what the generic UI must reflect over to render
+today, no field more.
+
+**Sequence (shortest-dependency-first; milestone-planner):**
+1. **4b — root/value-position component recognition.** Recognize a component tag in value/return
+   position (not just as a tag-child) → route through the slot-keyed lifecycle; rewrite
+   `SynthRefView`/`SynthSetView`/`SynthDictView` (`GenericUi.cs:355-383`) from `refEditor(…)()`
+   call-form to a `return <refEditor …>` tag. Pure twin-interpreter + synth change; `__descs` stays
+   as a now-pure DATA registry (its last stability reliance gone). **Proof:** a root-position
+   component (a `/lead`-style ref route) keeps its draft across a rebuilt-arg re-render (Gherkin) +
+   a value-position-recognition conformance case (both twins). Decision-free; the clean next slice.
+2. **(b) Schema-as-data reflection** — the `__descs` job-2 (cross-type registry) replacement; a
+   component resolves a referenced type's descriptor by reflecting the schema at the call site. **This
+   slice carries the one structural decision (below) — settle it before building.**
+3. **Delete `__descs`/`__dictDescs`** — both jobs replaced (1 by slot identity, 2 by schema-as-data);
+   pure deletion, existing `SelfHostedUi` scenarios are the regression net. *Where `__descs` finally dies.*
+4. **(c) Promote ONE component to a clean PUBLIC API + prove two consumers** — e.g. `RefEditor`/`Field`
+   out of the `internal` `StdlibSource` into a public component, consumed by BOTH the generic UI (first
+   consumer) AND a hand-written `fn render()` — the real second consumer is the **operator designer**
+   (`instances/1/app.app`), whose hand-rolled ref/list controls DECISIONS names as the deferred library
+   consumer. The completeness-proof move.
+5. **Migrate the rest** (`ObjectForm`/`SetTable`/`DictTable`/`LeafForm`) to the public API; generic UI
+   fully rewritten as the library's first consumer. Each its own thin slice.
+
+**Decisions for the user (gate slice b/c, not 4b):**
+- **Schema-as-data meta-model shape** (the structural one): (i) keep synthesizing a descriptor passed
+  positionally (no new global/wire); (ii) a first-class `schema`/meta-model **global** the library
+  reflects over with existing `foreach`/`.prop` (planner + M9's "schema-as-data, not new builtins"
+  decision lean here); (iii) a new `sys.schema`/`sys.typeOf` builtin. Lean **(ii)**.
+- **Which component promoted first** — `Field` (smallest/lowest-risk) vs `RefEditor` (stateful, more
+  convincing completeness proof). Lean `Field` then `RefEditor`.
+- **Public naming** — `ObjectForm`/`Field`/`RefEditor` (capitalized, as DECISIONS writes them) vs the
+  current lowercase. Casing is pure style now (recognition is name-resolution, not capitalization).
 
 ## 1. Analysis — how reactivity works today, and what M11 changes
 
