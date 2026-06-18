@@ -187,7 +187,8 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
 - **M11 — SolidJS-style reactive components + the public component library (the UI
   middle-ground).  ← ACTIVE; reactivity-foundation SLICES 1–3 + follow-ups 4a & 4b + slice (b) DONE
   2026-06-18.** *(Scheduled as M11 by user decision 2026-06-16, pulled ahead of schema versioning,
-  which moves to M13.)* **Slices 1–3 + 4a/4b + (b) landed (suite 314):** components get a **render-tree-positional ("slot
+  which moves to M13.)* **Slices 1–3 + 4a/4b + (b) + the dict follow-on + the public library's first
+  slice landed (suite 315):** components get a **render-tree-positional ("slot
   path") identity** decoupled from the argument-keyed memo, so a component runs once per slot and its
   state survives a re-render with rebuilt arguments; slice 2 extends the slot path through
   `foreach` (per-row, by member identity — the same key the DOM reconciler uses), so a component

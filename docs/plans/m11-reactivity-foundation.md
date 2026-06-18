@@ -1,6 +1,6 @@
 # M11 — Reactivity foundation: analysis + first-slice plan
 
-**Status: FOUNDATION (slices 1–3) + follow-ups 4a & 4b + slice (b) LANDED 2026-06-18 (suite 314).**
+**Status: FOUNDATION (slices 1–3) + 4a/4b + slice (b) + dict follow-on + public-library FIRST SLICE LANDED 2026-06-18 (suite 315).**
 Slice 3 = the opt-in per-call `key={...}` directive (folds into slot identity → caller-controlled
 reset); 4a + 4b moved the generic UI's components (nested + ref/set/dict ROOT views) onto
 tag-invocation; **slice (b)** + the **dict follow-on** replaced BOTH descriptor registries (`__descs`

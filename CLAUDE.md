@@ -47,7 +47,9 @@ where developers design data visually and use it as objects. Full mission in
    runs; create/list/switch/delete mechanism + host-action channel `sys.publish`/`sys.create`/
    `sys.cloneInstance`/`sys.delete`/`sys.rename`; the operator designer + id-based identity). **The
    active milestone is Milestone 11 — SolidJS-style reactive components + the public component library
-   (the UI middle-ground). SLICES 1-3 (the reactivity FOUNDATION) + follow-ups 4a & 4b + slice (b) LANDED 2026-06-18 (suite 314).**
+   (the UI middle-ground). The reactivity FOUNDATION (slices 1-3), the generic-UI tag-invocation
+   migration (4a/4b), the `sys.schema` descriptor-registry replacement (slice (b) + the dict follow-on),
+   and the public library's FIRST SLICE all LANDED 2026-06-18 (suite 315).**
    Components are recognized by **pure name-resolution** (a tag whose name resolves to an in-scope
    function — any function, top-level or local) and keyed by their **render-tree slot** (not their
    arguments), so a component runs once per slot and its state survives a re-render with rebuilt
@@ -145,7 +147,7 @@ steps, when reached, use Playwright.)
 
 **Milestone 11 — SolidJS-style reactive components + the public component library (the UI
 middle-ground) — is the ACTIVE milestone. SLICES 1-3 (the reactivity FOUNDATION) + follow-ups 4a & 4b
-+ slice (b) LANDED 2026-06-18 (suite 314).** Slice 1 gives components a **render-tree-positional ("slot path") identity**
++ slice (b) + the dict follow-on + the public library's first slice LANDED 2026-06-18 (suite 315).** Slice 1 gives components a **render-tree-positional ("slot path") identity**
 decoupled from the argument-keyed memo, so a component runs its body **once per slot** and its
 local state survives a re-render even when its argument is rebuilt fresh. Components are recognized
 by **pure name-resolution** — a tag whose name resolves to a function in scope is a component (any
