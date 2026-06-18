@@ -3,9 +3,9 @@
 **Status: FOUNDATION (slices 1–3) + follow-ups 4a & 4b + slice (b) LANDED 2026-06-18 (suite 314).**
 Slice 3 = the opt-in per-call `key={...}` directive (folds into slot identity → caller-controlled
 reset); 4a + 4b moved the generic UI's components (nested + ref/set/dict ROOT views) onto
-tag-invocation; **slice (b)** replaced the `__descs` type-descriptor registry with a
-`sys.schema(typeName)` builtin (server-resolved + shipped like `sys.extent`) and **deleted `__descs`**
-(the dict `__dictDescs` registry remains — a follow-on). M11 is SolidJS-style reactive components +
+tag-invocation; **slice (b)** + the **dict follow-on** replaced BOTH descriptor registries (`__descs`
+type via `sys.schema(typeName)`, `__dictDescs` dict via `sys.schema(type, prop)`) — server-resolved +
+shipped like `sys.extent` — and **deleted both**. M11 is SolidJS-style reactive components +
 the public component library (the UI middle-ground); this doc is the **foundation half** (the
 reactivity refactor) and its **first slice**. See DECISIONS "UI middle-ground — one public
 component library + SolidJS-style reactivity" and ROADMAP M11. *Grounded by codebase-navigator +
@@ -77,9 +77,11 @@ today, no field more.
    won't cache a transient negative-id object (factory guard), so `ExecuteSchema` writes the
    `schema:<type>` cache entry directly (empty Deps) + reads it back for within-render identity. The
    **dict `__dictDescs`** registry is untouched (a per-owner/prop descriptor — a separate follow-on).
-3. **Delete `__dictDescs`** (the dict follow-on) — migrate the dict prop-descriptor off `__dictDescs`
-   the same `sys.schema`-style way (it doesn't fit `sys.schema(typeName)` directly — a per-owner/prop
-   descriptor). Existing `SelfHostedUi` dict scenarios are the regression net.
+3. **Delete `__dictDescs` (the dict follow-on). ✅ DONE (suite 314).** `sys.schema` gained a 2-arg
+   form `sys.schema(type, prop)` returning the dict prop's descriptor (keyed "Owner/prop", folded into
+   the same threaded descriptor map); `SynthDictView` uses it; `__dictDescs`/`DictRegistry`/`DictDescsVar`
+   deleted. Both descriptor registries are now gone — the existing `SelfHostedUi` dict scenarios stayed
+   green.
 4. **(c) Promote ONE component to a clean PUBLIC API + prove two consumers** — e.g. `RefEditor`/`Field`
    out of the `internal` `StdlibSource` into a public component, consumed by BOTH the generic UI (first
    consumer) AND a hand-written `fn render()` — the real second consumer is the **operator designer**
@@ -87,6 +89,29 @@ today, no field more.
    consumer. The completeness-proof move.
 5. **Migrate the rest** (`ObjectForm`/`SetTable`/`DictTable`/`LeafForm`) to the public API; generic UI
    fully rewritten as the library's first consumer. Each its own thin slice.
+
+**Follow-up 5 — public library, FIRST SLICE (milestone-planner, 2026-06-18; not built).** The
+structural crux is small: the library lives in `internalScope`, a SIBLING of `app` under `system`, so
+a user's `fn render()` (walking `app → system`) never reaches it — `<ObjectForm>` resolves to nothing
+→ treated as an HTML element. The library is *already* tag-invoked, slot-keyed, and reads schema via
+`sys.schema` — the only thing private is **visibility**. First slice: insert a **`lib` scope as a
+common parent of both `app` and `internal`** (`app → lib → system`, `internal → lib → system`), move
+the library functions there, **rename them PascalCase** (`ObjectForm`/`RefEditor`/…), and **remove
+`Effective`'s early-return for `fn render()` apps** so a custom app also gets the library synthesized
+into `lib`. Proof: a hand-written `fn render()` returning `<ObjectForm obj={…} meta={sys.schema("…")}
+base="/">` renders the same object page (a new `PublicLibraryFormDb` fixture + one `Given`; reuses
+existing field/label/autosave steps) — and the generic UI still composes the renamed component (the
+"two consumers, one library" proof). No new builtin / AST / recognition rule / wire shape → no new
+conformance case; existing scenarios are the regression net. Touch: `SsrRenderer.cs` scope chain
+(~254-262), `GenericUi.cs` (PascalCase rename in `StdlibSource` + synth builders; drop the early
+return), `InstanceContext.cs` + `SelfHostedUiSteps.cs`. **Open decisions for the user:** (1) the `lib`
+scope shape — shared parent of `app`+`internal` (planner's lean) vs `app`'s parent = `internal`; (2)
+`ObjectForm` first (lean — exists as-is, exercises the full lifecycle) vs `Field` (must be EXTRACTED
+from `objectForm`'s inline branch first); (3) PascalCase public names (lean, matches DECISIONS) vs
+keep lowercase; (4) accept the custom `fn render()` fixture as the second consumer (lean) vs require
+the operator designer (`instances/1/app.app`) to compose it first (larger). Caution (not a cut):
+dropping the early return means a custom-render app now ships the library functions even if unused —
+the correct shape (they must be present to be callable), no wire change.
 
 **Decisions:**
 - **Schema-as-data meta-model shape — DECIDED 2026-06-18: a `sys.schema(typeName)` builtin** (the

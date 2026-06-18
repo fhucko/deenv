@@ -509,7 +509,14 @@ function execExtent(codeCall: CodeCall, scope: ExecScope, context: ExecContext):
 function execSchema(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const v = executeValue(codeCall.params[0], scope, context).value;
     if (v.type !== "text") throw new Error("schema() expects a text type name.");
-    return memoize("schema:" + v.value, context, () => { throw new Error("Value not available"); });
+    // Two-arg form: a specific PROP's descriptor (a dict prop at its root route), keyed "Type/prop".
+    let lookup = v.value;
+    if (codeCall.params.length === 2) {
+        const p = executeValue(codeCall.params[1], scope, context).value;
+        if (p.type !== "text") throw new Error("schema() expects a text prop name.");
+        lookup += "/" + p.value;
+    }
+    return memoize("schema:" + lookup, context, () => { throw new Error("Value not available"); });
 }
 
 // setRef(obj, prop, value): set/clear an object REFERENCE prop and persist it. value is an

@@ -297,14 +297,23 @@ public sealed class CodeExecutor
     // object complete). A cache hit returns the SAME descriptor for the rest of the render (no rebuild).
     private IExecValue ExecuteSchema(CodeCall call, ExecScope scope, ExecContext context)
     {
-        if (call.Params.Length != 1)
-            throw new CodeRuntimeException("schema(typeName) takes one argument.");
+        if (call.Params.Length is not (1 or 2))
+            throw new CodeRuntimeException("schema(typeName[, propName]) takes one or two arguments.");
         if (ExecuteValue(call.Params[0], scope, context) is not ExecText typeName)
             throw new CodeRuntimeException("schema() expects a text type name.");
-        var key = $"schema:{typeName.Value}";
+        // Two-arg form: a specific PROP's descriptor (a dict prop at its root route), keyed
+        // "Type/prop" — the replacement for the old `__dictDescs` registry.
+        var lookup = typeName.Value;
+        if (call.Params.Length == 2)
+        {
+            if (ExecuteValue(call.Params[1], scope, context) is not ExecText propName)
+                throw new CodeRuntimeException("schema() expects a text prop name.");
+            lookup += "/" + propName.Value;
+        }
+        var key = $"schema:{lookup}";
         if (context.Memo.TryGetValue(key, out var cached)) return cached.Result;
-        if (!_descriptors.TryGetValue(typeName.Value, out var literal))
-            throw new CodeRuntimeException($"No descriptor for type '{typeName.Value}'.");
+        if (!_descriptors.TryGetValue(lookup, out var literal))
+            throw new CodeRuntimeException($"No descriptor for '{lookup}'.");
         // Evaluate the descriptor literal in a FRESH EMPTY scope: it is a pure data literal (text /
         // bool / int / nested objects + arrays of the same), so it reads no variables — the empty
         // scope makes that structural (any stray symbol would fail loudly, not capture a binding).

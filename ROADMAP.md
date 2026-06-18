@@ -194,19 +194,19 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   in a list keeps independent state that follows the object across reorder/remove; slice 3 adds an
   opt-in `key={...}` directive that folds into the slot identity (caller-controlled reset); 4a + 4b
   moved the generic UI's components onto tag-invocation (object-form nested ones + the ref/set/dict
-  ROOT views via value-position recognition); and slice (b) replaced the `__descs` type-descriptor
-  registry with a `sys.schema(typeName)` builtin (server-resolved + shipped like `sys.extent`) and
-  deleted `__descs`. **Recognition =
+  ROOT views via value-position recognition); and slice (b) + the dict follow-on replaced BOTH
+  descriptor registries (`__descs` type + `__dictDescs` dict) with a `sys.schema(typeName)` /
+  `sys.schema(type, prop)` builtin (server-resolved + shipped like `sys.extent`) and deleted both.
+  **Recognition =
   pure name-resolution** (a tag whose name is an in-scope function — any function, top-level or
   local — is a component; `<div>` stays an element), keyed by slot via the **existing** memo
   (untouched, additive). Run-once-across-re-renders is a client behavior (C#'s `Memoize` is
   write-only → server renders once), proven by the `@milestone-11` Gherkin scenarios; a new unified
   `setup + renders[]` conformance protocol proves the deterministic core (recognition, by-name
   binding, splice, local-component capture, sibling + foreach-row slot uniqueness) on both twins.
-  Remaining: the **dict** follow-on (`__dictDescs`, a per-owner/prop descriptor, is still a
-  registry — migrate it `sys.schema`-style) → the **public component library** +
-  generic-UI-as-first-consumer (follow-up 5, the feature half), where the generic UI becomes the
-  library's first consumer. See
+  Remaining: the **public component library** + generic-UI-as-first-consumer (follow-up 5, the
+  feature half) — promote the library from the `internal` scope to a PUBLIC scope a hand-written
+  `fn render()` can compose, with the generic UI rewritten as the library's first consumer. See
   `docs/plans/m11-reactivity-foundation.md`. Delivers pillar 8's "auto with
   overrides" (modify/extend
   *parts* of the generic UI) via the mechanism settled in DECISIONS ("UI middle-ground"):

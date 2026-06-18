@@ -34,8 +34,6 @@ namespace DeEnv.Instance;
 // the prop — both reuse the M8 type-view client binding (no new wire shape).
 public static class GenericUi
 {
-    private const string DictDescsVar = "__dictDescs";
-
     // The reserved view "type" for the shared scalar leaf editor (a scalar dictionary
     // entry page). SsrRenderer.ResolveView dispatches a scalar dict entry to it.
     public const string LeafViewType = "__leaf";
@@ -258,11 +256,11 @@ public static class GenericUi
     // Returns the app's ui unchanged when it does not opt in. Functions are renumbered (CodeIds)
     // over the whole set so server and client key the memo cache alike.
     //
-    // SystemNames lists the synthesized framework members (the library functions + the dict
-    // prop-descriptor registry) so the renderer places them in the SYSTEM scope, above the custom
-    // code — they never pollute the app scope. Descriptors maps typeName → the type's descriptor
-    // literal, threaded into the executor so `sys.schema(typeName)` resolves a type's shape (the
-    // replacement for the old `__descs` global); empty for a custom-render app.
+    // SystemNames lists the synthesized framework members (the library functions) so the renderer
+    // places them in the SYSTEM scope, above the custom code — they never pollute the app scope.
+    // Descriptors maps "TypeName" → a type's descriptor literal and "Owner/prop" → a dict prop's
+    // descriptor, threaded into the executor so `sys.schema(...)` resolves a shape (the replacement
+    // for the old `__descs`/`__dictDescs` globals); empty for a custom-render app.
     public static (InstanceUi? Ui, IReadOnlySet<string> SystemNames, IReadOnlyDictionary<string, CodeObject> Descriptors)
         Effective(InstanceDescription desc)
     {
@@ -309,9 +307,6 @@ public static class GenericUi
         // The self-hosted NotFound page for any unrouted URL (sets a 404 status).
         synthViews.Add(SynthNotFoundView());
 
-        var vars = new List<UiVar>();
-        vars.AddRange(ui.Vars ?? []);
-        vars.Add(new UiVar(DictDescsVar, DictRegistry(objectTypes, desc))); // stable dict prop-descriptor registry
         var functions = new List<CodeFunction>();
         functions.AddRange(library);
         functions.AddRange(ui.Functions ?? []);
@@ -319,15 +314,15 @@ public static class GenericUi
         views.AddRange(ui.Views ?? []);
         views.AddRange(synthViews);
 
-        var effective = ui with { Vars = vars, Functions = functions, Views = views };
+        var effective = ui with { Functions = functions, Views = views };
         // Number every function (library + app + synthesized) deterministically so the
         // server and the shipped client key the memo cache identically.
         CodeIds.Assign(new InstanceDescription(Types: desc.Types, Ui: effective, Common: desc.Common));
 
-        // The framework-synthesized members (library functions + the dict prop-descriptor registry)
-        // — the renderer puts these in the system scope, leaving the app scope to the user's code.
-        var systemNames = new HashSet<string>(library.Where(f => f.Name != null).Select(f => f.Name!))
-            { DictDescsVar };
+        // The framework-synthesized members (the library functions) — the renderer puts these in the
+        // system scope, leaving the app scope to the user's code. Descriptors are resolved by the
+        // `sys.schema` builtin from the threaded map (no descriptor var in scope anymore).
+        var systemNames = new HashSet<string>(library.Where(f => f.Name != null).Select(f => f.Name!));
         return (effective, systemNames, Descriptors(objectTypes, desc));
     }
 
@@ -381,27 +376,26 @@ public static class GenericUi
     private static UiView SynthDictView(string ownerType, string prop) =>
         new(ownerType, Fn(["parent", "base"], Return(Tag("dictTable",
                 ("dict", Field(Sym("parent"), Text(prop))),
-                ("desc", Field(Sym(DictDescsVar), Text(ownerType + "/" + prop))),
+                ("desc", Schema(ownerType, prop)),
                 ("base", Sym("base"))))),
             Prop: prop);
 
     // ── the descriptor registry ──────────────────────────────────────────────────────
 
-    // typeName → { name, labelProp, props, blank } — the per-type descriptor literals threaded into
-    // the executor for `sys.schema(typeName)` to evaluate (the replacement for the `__descs` global).
-    // A pure data literal per type, built once per render from the schema; the executor evaluates and
-    // caches the one a `sys.schema` call names, shipping it to the client like extent.
-    private static Dictionary<string, CodeObject> Descriptors(List<TypeDefinition> objectTypes, InstanceDescription desc) =>
-        objectTypes.ToDictionary(t => t.Name, t => TypeDescriptor(t, desc));
-
-    // { "Owner/prop": <dict prop descriptor>, … } — a stable top-scope object so a dict-route
-    // view hands dictTable the SAME descriptor every render (memo init-once for its add form).
-    private static CodeObject DictRegistry(List<TypeDefinition> objectTypes, InstanceDescription desc) =>
-        new() { Props = objectTypes
-            .SelectMany(t => (t.Props ?? [])
-                .Where(p => p.Cardinality == Cardinality.Dictionary)
-                .Select(p => new CodeObjectProp { Name = t.Name + "/" + p.Name, Value = PropDesc(p, desc) }))
-            .ToArray() };
+    // The descriptor literals threaded into the executor for `sys.schema(...)` to evaluate (the
+    // replacement for the old `__descs`/`__dictDescs` globals). Two key shapes, both pure data:
+    //   "TypeName"      → { name, labelProp, props, blank } — a type's descriptor (sys.schema("T")).
+    //   "Owner/prop"    → the dict prop's descriptor — for the root dict route (sys.schema("O","P")).
+    // Built once per render from the schema; the executor evaluates + caches the one a call names and
+    // ships it to the client like extent.
+    private static Dictionary<string, CodeObject> Descriptors(List<TypeDefinition> objectTypes, InstanceDescription desc)
+    {
+        var map = objectTypes.ToDictionary(t => t.Name, t => TypeDescriptor(t, desc));
+        foreach (var t in objectTypes)
+            foreach (var p in (t.Props ?? []).Where(p => p.Cardinality == Cardinality.Dictionary))
+                map[t.Name + "/" + p.Name] = PropDesc(p, desc);
+        return map;
+    }
 
     private static CodeObject TypeDescriptor(TypeDefinition t, InstanceDescription desc)
     {
@@ -480,6 +474,10 @@ public static class GenericUi
     // `sys.schema("T")` — the descriptor for type T, resolved server-side from the schema (the
     // replacement for the old `sys.field(__descs, "T")` registry read). Mirrors the Field/Call helpers.
     private static CodeCall Schema(string typeName) => new() { Fn = SysMember("schema"), Params = [Text(typeName)] };
+    // `sys.schema("Owner", "prop")` — the descriptor of a specific PROP of a type (e.g. a dictionary
+    // prop at its root route), the replacement for the old `__dictDescs["Owner/prop"]` registry read.
+    private static CodeCall Schema(string typeName, string prop) =>
+        new() { Fn = SysMember("schema"), Params = [Text(typeName), Text(prop)] };
     // A childless tag `<name a={…} b={…}>` — used to invoke a synthesized component (refEditor /
     // setTable / dictTable) BY TAG, so it keys on its render-tree slot rather than its arguments.
     private static CodeTag Tag(string name, params (string Name, ICodeValue Value)[] attrs) => new()

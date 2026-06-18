@@ -56,11 +56,12 @@ where developers design data visually and use it as objects. Full mission in
    adds an opt-in `key={...}` directive that folds into the slot identity (caller-controlled reset);
    4a + 4b moved the generic UI's components (object-form NESTED + the ref/set/dict ROOT views, the
    latter via value-position recognition) onto tag-invocation — all on the **existing** memo cache
-   (untouched). **Slice (b)** then replaced the `__descs` TYPE-descriptor registry with a
-   `sys.schema(typeName)` builtin (server-resolved + shipped like `sys.extent`) and **deleted `__descs`**.
-   Build only M11 work next; remaining: the **dict** follow-on (`__dictDescs` → `sys.schema`-style) →
-   the **public component library** (follow-up 5, the feature half), where the generic UI becomes the
-   library's first consumer. See Current focus + ROADMAP.md +
+   (untouched). **Slice (b)** + the dict follow-on then replaced BOTH descriptor
+   registries (`__descs` type + `__dictDescs` dict) with a `sys.schema(typeName)` / `sys.schema(type,
+   prop)` builtin (server-resolved + shipped like `sys.extent`) and **deleted both** — the self-hosted
+   UI reads all schema shape through `sys.schema`. Build only M11 work next; remaining: the **public
+   component library** (follow-up 5, the feature half) — promote the library from the `internal` scope
+   to a PUBLIC scope a hand-written `fn render()` can compose, with the generic UI as its first consumer. See Current focus + ROADMAP.md +
    `docs/plans/m11-reactivity-foundation.md`.
    Cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time, and the
    management commands stay out of scope unless explicitly asked. Schema versioning is M13 (after the
@@ -168,10 +169,11 @@ TYPE-descriptor registry with a **`sys.schema(typeName)` builtin** — server-re
 and shipped like `sys.extent` (the client throws → reads the shipped cache; no twin descriptor-
 building, no conformance case). `GenericUi` threads a `typeName → descriptor` literal map into the
 executor; `ExecuteSchema` caches it directly (the `Memoize` factory guard refuses transient objects)
-with a within-render read-back for stable identity. `__descs` is **deleted**. **NOT done yet:** the
-**dict** follow-on (`__dictDescs` is a per-owner/prop descriptor, untouched — `sys.schema(type)`
-doesn't fit it) → the **public component library** (follow-up 5, the feature half — the generic UI as
-its first consumer). Driven by the two `@milestone-11` scenarios in `SelfHostedUi.feature` +
+with a within-render read-back for stable identity. The **dict follow-on** then gave `sys.schema` a
+2-arg form `sys.schema(type, prop)` (the dict prop's descriptor) and deleted `__dictDescs` too — so
+BOTH descriptor registries are gone. **NOT done yet:** the **public component library** (follow-up 5,
+the feature half) — promote the library from the `internal` scope to a PUBLIC scope a hand-written
+`fn render()` can compose, with the generic UI as its first consumer. Driven by the two `@milestone-11` scenarios in `SelfHostedUi.feature` +
 `ComponentFormRebuiltDescDb`/`RowComponentListDb` (`InstanceContext.cs`) and three conformance cases.
 See `docs/plans/m11-reactivity-foundation.md`, DECISIONS.md ("UI middle-ground"), and the project memory.
 
