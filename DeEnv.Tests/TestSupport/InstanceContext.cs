@@ -492,7 +492,7 @@ public class InstanceContext
 
     // Map each seeded design's label → its id, read from the committed designer seed (instances/1's
     // initialData). The IDE's instance↔design link is the explicit designId, so a target labelled
-    // "instance" gets the id of the design labelled "instance" — making its dropdown pre-select and its
+    // "todo" gets the id of the design labelled "todo" — making its dropdown pre-select and its
     // instances-list row resolve to that design.
     private static Dictionary<string, int> DesignIdsByLabel()
     {

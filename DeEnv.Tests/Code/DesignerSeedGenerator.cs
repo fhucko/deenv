@@ -14,7 +14,7 @@ namespace DeEnv.Tests.Code;
 // Authoring-time generator for the operator IDE's seed (DeEnv/instances/1/app.app).
 //
 // The designer seeds its `db.designs` set with a faithful `Design` of every committed app the kernel
-// hosts (instances/2 "instance" = todo, 3 = crm, 4 = shop — see kernel.json). Hand-authoring those
+// hosts (instances/2 = todo, 3 = crm, 4 = shop — see kernel.json). Hand-authoring those
 // apps' full ui/common/initialData as `\n`-escaped string literals inside instances/1/app.app is
 // impractical, so this GENERATES the file at authoring time (NOT a runtime/boot load — the no-load
 // model stands): it reads the committed sources, splits each into its top-level sections, parses the

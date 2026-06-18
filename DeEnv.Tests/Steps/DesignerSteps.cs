@@ -447,7 +447,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     // ── helpers ─────────────────────────────────────────────────────────────────
 
-    // The instances-list row for an instance, located by its app-name cell (exact match, so "instance"
+    // The instances-list row for an instance, located by its app-name cell (exact match, so "todo"
     // never matches "designer"/"crm").
     private Microsoft.Playwright.ILocator RowFor(string label) =>
         ctx.Page!.Locator($".instance-row:has(.instance-app:text-is({CssString(label)}))");

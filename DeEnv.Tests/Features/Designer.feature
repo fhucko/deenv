@@ -10,14 +10,14 @@ Feature: The operator IDE (designs library + instance design selector)
   instance AND deploys it. The instance↔design link is an EXPLICIT reference: each instance stores a
   `designId` (the id of a design in the designer's `db.designs`), seeded so the dropdowns start
   correct and read back to pre-select. The seeded designs are FAITHFUL copies of the committed apps
-  the kernel runs (instance = the todo app, crm, shop). Driven against a REAL kernel host (the
+  the kernel runs (todo, crm, shop). Driven against a REAL kernel host (the
   designer needs a non-empty `sys.instances`), through a browser. Milestone 10.
 
   @milestone-10 @single-user
   Scenario: The designs route lists the design library
-    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
-    Then the designs list shows a design "instance"
+    Then the designs list shows a design "todo"
     And the designs list shows a design "crm"
 
   # The designer (instance 1) is a managed instance like any other: no special-casing in the render.
@@ -26,64 +26,64 @@ Feature: The operator IDE (designs library + instance design selector)
   # BOTH lists uniformly. (The kernel always hosts the designer; the fixture seeds its designId.)
   @milestone-10 @single-user
   Scenario: The designer appears uniformly as a design and a managed instance
-    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
     Then the designs list shows a design "designer"
     When I open the instances list
     Then the instances list shows the instance "designer" running design "designer"
 
-  # The "instance" design is the REAL todo app: its types include TodoItem and its UI is the real
+  # The "todo" design is the REAL todo app: its types include TodoItem and its UI is the real
   # custom `fn render()` — so the editor (now at /designs/<id>) shows that app's actual content.
   @milestone-10 @single-user
   Scenario: Editing a design shows its real types and its UI text
-    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
-    And I edit the design "instance"
+    And I edit the design "todo"
     Then the design editor shows a type named "TodoItem"
     And the design editor shows the design's UI text in a textarea
 
   # The instances list shows each instance alongside the design it currently runs, resolved by the
-  # explicit designId reference (instance → its seeded "instance" design).
+  # explicit designId reference (todo → its seeded "todo" design).
   @milestone-10 @single-user
   Scenario: The instances route lists the hosted instances with their current design
-    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the instances list
-    Then the instances list shows the instance "instance" running design "instance"
+    Then the instances list shows the instance "todo" running design "todo"
     And the instances list shows the instance "crm" running design "crm"
 
   # /instances/<id> is ONLY a selector: a <select> dropdown of the designs, the instance's current
   # design pre-selected (the explicit reference read back through the <select> binding).
   @milestone-10 @single-user
   Scenario: The instance page is a design selector with the current design pre-selected
-    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the instances list
-    And I open the instance "instance"
-    Then the design dropdown has the design "instance" selected
+    And I open the instance "todo"
+    Then the design dropdown has the design "todo" selected
 
   # Apply is the deploy: picking a different design and applying records it on the instance (the
   # registry designId changes) AND projects the chosen design onto the instance's app document.
   @milestone-10 @single-user
   Scenario: Applying a different design records it and deploys it to the instance
-    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the instances list
-    And I open the instance "instance"
+    And I open the instance "todo"
     And I pick the design "crm" in the dropdown
     And I apply the design
-    Then the instance "instance" records the design "crm"
-    And the "instance" instance's app document describes the type "Customer"
+    Then the instance "todo" records the design "crm"
+    And the "todo" instance's app document describes the type "Customer"
 
   # The end-to-end split: edit a design in /designs/<id> (rename a type + retype its reference), then
   # apply that design to its instance — the edited design is what gets deployed.
   @milestone-10 @single-user
   Scenario: Editing a design then applying it deploys the edit
-    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
-    And I edit the design "instance"
+    And I edit the design "todo"
     And I rename the type "TodoItem" to "Widget"
     And I retype the prop "items" to "Widget"
-    When I open the instance "instance"
+    When I open the instance "todo"
     And I apply the design
-    Then the "instance" instance's app document describes the type "Widget"
+    Then the "todo" instance's app document describes the type "Widget"
 
   # Create a design: the inline "New design" form on /designs adds a fresh, empty, labelled design to
   # db.designs. It appears in the library via the client re-render (no nav — race-free), and opening it
@@ -91,7 +91,7 @@ Feature: The operator IDE (designs library + instance design selector)
   # deploy until it gains types.
   @milestone-10 @single-user
   Scenario: Adding a design from the list form puts it in the library and it opens in the editor
-    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
     And I add a design named "blank"
     Then the designs list shows a design "blank"
@@ -105,7 +105,7 @@ Feature: The operator IDE (designs library + instance design selector)
   # opening it pre-selects that design in the selector.
   @milestone-10 @single-user
   Scenario: Creating an instance from the list form spawns it running the picked design
-    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the instances list
     And I create an instance named "myapp" from the design "crm" on a free port pair
     Then a new instance "myapp" running design "crm" appears in the instances list
@@ -119,17 +119,17 @@ Feature: The operator IDE (designs library + instance design selector)
   # only single-valued props.
   @milestone-10 @single-user
   Scenario: A prop's cardinality and key type are editable and deploy
-    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
-    And I edit the design "instance"
+    And I edit the design "todo"
     And I retype the prop "checked" to "TodoList"
     And I set the prop "checked" cardinality to "set"
     And I set the prop "text" cardinality to "dictionary"
     And I set the prop "text" key type to "text"
-    When I open the instance "instance"
+    When I open the instance "todo"
     And I apply the design
-    Then the "instance" instance's app document declares "checked set of TodoList"
-    And the "instance" instance's app document declares "text dict of text by text"
+    Then the "todo" instance's app document declares "checked set of TodoList"
+    And the "todo" instance's app document declares "text dict of text by text"
 
   # An enum type's value list is authorable in the designer, not just in the .app text. Adding a type,
   # setting its base type to "enum", and filling its (always-rendered, comma-separated) values input,
@@ -138,16 +138,16 @@ Feature: The operator IDE (designs library + instance design selector)
   # values form.
   @milestone-10 @single-user
   Scenario: An enum type authored in the designer deploys
-    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
-    And I edit the design "instance"
+    And I edit the design "todo"
     And I add a type to the design
     And I name the just-added type "Status"
     And I set the just-added type's base type to "enum"
     And I set the just-added type's values to "open, doing, done"
-    When I open the instance "instance"
+    When I open the instance "todo"
     And I apply the design
-    Then the "instance" instance's app document declares the enum "Status" with values "open, doing, done"
+    Then the "todo" instance's app document declares the enum "Status" with values "open, doing, done"
 
   # Removing a type from a design must actually delete it. The remove drives arrayRemove on the design's
   # (nested) types set, which runs the store's garbage collector -- and the GC walks the whole meta-schema
@@ -158,9 +158,9 @@ Feature: The operator IDE (designs library + instance design selector)
   # "I can't remove a type I just added and haven't named", but it is name- and timing-independent.
   @milestone-10 @single-user
   Scenario: A type added to a design can be removed again
-    Given the operator IDE is running on a kernel hosting instances "instance" and "crm"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
-    And I edit the design "instance"
+    And I edit the design "todo"
     And I add a type to the design
     And I remove the just-added unnamed type
-    Then the design "instance" has no unnamed type
+    Then the design "todo" has no unnamed type
