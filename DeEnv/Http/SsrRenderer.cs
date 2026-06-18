@@ -423,6 +423,7 @@ public sealed class SsrRenderer
     // = danger). A custom app overrides any of this via a more-specific rule (the cascade).
     private const string ViewChromeCss = """
         :root {
+          color-scheme: light;
           --bg: #f6f8fa; --surface: #fff; --border: #d0d7de; --border-soft: #eaeef2;
           --text: #1f2328; --muted: #57606a; --accent: #0969da; --green: #1f883d; --danger: #cf222e;
         }
@@ -445,6 +446,12 @@ public sealed class SsrRenderer
           outline-offset: 0; border-color: var(--accent); }
         input[type=checkbox] { width: 1.05rem; height: 1.05rem; padding: 0; vertical-align: middle; accent-color: var(--accent); }
         textarea { width: 100%; min-height: 7rem; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.85rem; }
+        /* The "standard" Input variant (MUI-style): the library owns this look; callers opt in with
+           <Input variant="standard">, never via their own CSS. Reads as plain text, reveals an
+           underline affordance on hover, accent underline on focus. */
+        input[variant="standard"] { border: 1px solid transparent; border-radius: 0; background: transparent; }
+        input[variant="standard"]:hover { border-bottom-color: var(--border); }
+        input[variant="standard"]:focus { outline: none; background: transparent; border-bottom-color: var(--accent); }
 
         button { font: inherit; padding: 0.4rem 0.85rem; border: 1px solid var(--border); border-radius: 6px;
           background: var(--surface); color: var(--text); cursor: pointer; transition: background .12s, border-color .12s; }
@@ -456,11 +463,10 @@ public sealed class SsrRenderer
         .set-add:hover, .dict-add:hover, .ref-create:hover, .add-design:hover, .add-type:hover, .add-prop:hover,
         .create-instance:hover, .rename-save:hover, .apply-design:hover,
         .add-user:hover, .add-list-btn:hover, .add-item-btn:hover { background: #1a7f37; border-color: #1a7f37; }
-        .set-remove, .dict-remove, .ref-clear, .remove-type, .remove-prop, .delete-design, .delete-instance,
-        .remove-item {
+        .set-remove, .dict-remove, .ref-clear, .remove-type, .remove-prop, .delete-design, .delete-instance {
           color: var(--danger); }
         .set-remove:hover, .dict-remove:hover, .ref-clear:hover, .remove-type:hover, .remove-prop:hover,
-        .delete-design:hover, .delete-instance:hover, .remove-item:hover { background: #fff0f0; border-color: var(--danger); }
+        .delete-design:hover, .delete-instance:hover { background: #fff0f0; border-color: var(--danger); }
 
         .object-form, .ref-editor, .leaf-form { background: var(--surface); border: 1px solid var(--border);
           border-radius: 10px; padding: 1.25rem 1.4rem; box-shadow: 0 1px 2px rgba(31,35,40,.05); }
@@ -510,7 +516,9 @@ public sealed class SsrRenderer
         .new-instance input, .new-instance select { max-width: 180px; }
         .design-editor { margin-top: 1rem; }
 
-        /* Todo showcase (the committed default app — a custom fn render composing the library) */
+        /* Todo showcase (the committed default app — a custom fn render composing the library).
+           These rules are the todo's own LAYOUT only (cards, grid, row arrangement, widths); the
+           components' visual appearance lives in the component rules above, never re-skinned here. */
         .todo-app .user-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
           padding: 0.8rem; margin-bottom: 1.4rem; background: var(--surface);
           border: 1px solid var(--border); border-radius: 10px; }
@@ -519,7 +527,7 @@ public sealed class SsrRenderer
         .selected-user { margin-top: 0; }
         .user-lists .add-list { display: flex; gap: 0.5rem; align-items: center; margin: 0.4rem 0 1.2rem; }
         .user-lists .add-list input.new-list { max-width: 220px; }
-        .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
         .todo-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
           padding: 1rem 1.1rem; box-shadow: 0 1px 2px rgba(31,35,40,.05); }
         .todo-card .list-name { margin: 0 0 0.6rem; color: var(--text); font-size: 1.05rem; }
@@ -527,10 +535,11 @@ public sealed class SsrRenderer
         .item-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0;
           border-bottom: 1px solid var(--border-soft); }
         .item-row:last-child { border-bottom: none; }
-        .item-row input.text { flex: 1; min-width: 0; border-color: transparent; background: transparent; }
-        .item-row input.text:focus { border-color: var(--accent); background: var(--surface); }
+        .item-row input.text { flex: 1; min-width: 0; }
         .item-row input.checked:checked + input.text { color: var(--muted); text-decoration: line-through; }
-        .item-row .remove-item { padding: 0.2rem 0.5rem; font-size: 0.8rem; }
+        .item-row .remove-item { padding: 0.2rem 0.5rem; font-size: 0.8rem; border-color: transparent;
+          background: transparent; color: var(--muted); }
+        .item-row .remove-item:hover { color: var(--danger); background: #fff0f0; border-color: var(--danger); }
         .todo-card .add-item { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
         .todo-card .add-item input.new-item { flex: 1; min-width: 0; }
         """;

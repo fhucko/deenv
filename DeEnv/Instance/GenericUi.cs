@@ -9,10 +9,14 @@ namespace DeEnv.Instance;
 // from a custom `fn render()` — the renderer parents the app scope under the library scope, so
 // `<ObjectForm …>` &c. resolve by name and a hand-written render can compose them.
 //
-//   • Input(obj, desc) — the baseType-appropriate, two-way-bound control for one prop (the desc):
-//     <input type={InputType(...)}> for a scalar, a checkbox for bool, a <select> of values for an
-//     enum. The first composition PRIMITIVE — extracted from the three places that inlined the same
-//     baseType branch (the object-form field, the reference create-new draft, the set add-form).
+//   • Input(obj, desc, variant) — the baseType-appropriate, two-way-bound control for one prop (the
+//     desc): <input type={InputType(...)}> for a scalar, a checkbox for bool, a <select> of values
+//     for an enum. The first composition PRIMITIVE — extracted from the three places that inlined the
+//     same baseType branch (the object-form field, the reference create-new draft, the set add-form).
+//     `variant` is an optional MUI-style presentation choice OWNED by the library (callers never
+//     restyle via their own CSS): omitted → "outlined" (bordered, the form default); "standard" → a
+//     borderless control that reads as plain text and reveals an underline on hover/focus (for inline
+//     contexts like a checklist row). The only thing a caller passes for looks; styling is internal.
 //   • Field(obj, desc) — a labeled field: a <div class="field"> wrapping the prop's humanized
 //     <label> and its Input. The labeled-field composite ObjectForm and a custom render compose.
 //   • ObjectForm(obj, meta, base) — an object page: a field per prop (a Field for a scalar, a nested
@@ -52,7 +56,7 @@ public static class GenericUi
 
     private const string StdlibSource = """
         ui
-            fn Input(obj, desc)
+            fn Input(obj, desc, variant)
                 if desc.baseType == "bool"
                     return <input type="checkbox" class={desc.name} checked={sys.field(obj, desc.name)}>
                 else if desc.baseType == "enum"
@@ -62,6 +66,8 @@ public static class GenericUi
                         foreach v in desc.values
                             <option value={v}>
                                 sys.humanize(v)
+                else if variant == "standard"
+                    return <input type={InputType(desc.baseType)} class={desc.name} value={sys.field(obj, desc.name)} variant="standard">
                 else
                     return <input type={InputType(desc.baseType)} class={desc.name} value={sys.field(obj, desc.name)}>
 

@@ -72,7 +72,7 @@ ui
                 foreach item in list.items
                     <li class="item-row">
                         <Input obj={item} desc={sys.schema("TodoItem", "checked")}>
-                        <Input obj={item} desc={sys.schema("TodoItem", "text")}>
+                        <Input obj={item} desc={sys.schema("TodoItem", "text")} variant="standard">
                         <button class="remove-item" onClick={() => list.items.remove(item)}>
                             "Remove"
             <itemAdder list={list}>
