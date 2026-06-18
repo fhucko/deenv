@@ -56,22 +56,31 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
     [When(@"I create a new {string} named {string} in the set")]
     public async Task WhenCreateNewInSetAsync(string typeName, string name)
     {
+        await ctx.Page!.WaitHydratedAsync(); // the set page was reached by a read-only nav
         await ctx.Page!.Locator(".set-new input.name").FillAsync(name);
         await ctx.Page.Locator("button.set-add").ClickAsync();
         await ctx.Page.Locator(".set-row", new() { HasTextString = name }).First.WaitForAsync();
-        await ctx.Page.WaitForTimeoutAsync(500); // negative→real id remap settles
+        // Wait for the negative→real id remap to land in the DOM: the row's open link now addresses a
+        // real (positive) identity, so following it reaches the member page, not a transient id.
+        await ctx.Page.WaitForFunctionAsync(
+            @"n => { for (const r of document.querySelectorAll('.set-row')) if (r.textContent.includes(n)) { const a = r.querySelector('a.set-open'); if (a && /\/[0-9]+$/.test(new URL(a.href).pathname)) return true; } return false; }",
+            name);
         await ctx.Page.Locator(".set-row", new() { HasTextString = name })
                       .First.Locator("a.set-open").ClickAsync();
-        await ctx.Page.WaitForTimeoutAsync(400);
+        // Following the open link is a real navigation; wait for the member page URL.
+        await ctx.Page.WaitForUrlContentAsync(new Regex(@"/[0-9]+$"));
     }
 
     // The self-hosted reference editor's create-new: fill the .ref-new draft, then Create.
     [When(@"I create a new {string} named {string} through the reference")]
     public async Task WhenCreateNewThroughReferenceAsync(string typeName, string name)
     {
+        await ctx.Page!.WaitHydratedAsync(); // the reference page was reached by a read-only nav
         await ctx.Page!.Locator(".ref-new input.name").FillAsync(name);
         await ctx.Page.Locator("button.ref-create").ClickAsync();
-        await ctx.Page.WaitForTimeoutAsync(400);
+        // Wait for the created object to be minted + referenced — the editor shows it as current.
+        await ctx.Page.WaitForFunctionAsync(
+            "n => document.querySelector('.ref-current')?.textContent.includes(n)", name);
     }
 
     // The self-hosted reference editor offers candidates in a .ref-pick <select>; pick one and commit
@@ -79,21 +88,26 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
     [When(@"I pick the existing {string} named {string}")]
     public async Task WhenPickExistingAsync(string typeName, string name)
     {
+        await ctx.Page!.WaitHydratedAsync(); // the reference page was reached by a read-only nav
         await ctx.Page!.Locator("select.ref-pick").First.SelectOptionAsync(
             new Microsoft.Playwright.SelectOptionValue { Label = name });
         await ctx.Page.Locator("button.ref-set").First.ClickAsync();
-        await ctx.Page.WaitForTimeoutAsync(400);
+        // Wait for the reference to be set — the editor shows the picked object as current.
+        await ctx.Page.WaitForFunctionAsync(
+            "n => document.querySelector('.ref-current')?.textContent.includes(n)", name);
     }
 
     [When(@"I remove {string} from the set {string}")]
     public async Task WhenRemoveFromSetAsync(string name, string setName)
     {
         await ctx.EnsureServerAndBrowserAsync();
-        await ctx.Page!.GotoAsync(ctx.BaseUrl + "/" + setName);
+        await ctx.Page!.GotoReadyAsync(ctx.BaseUrl + "/" + setName);
         // The self-hosted setTable's per-row Remove button (.set-remove) unlinks the member.
-        await ctx.Page.Locator(".set-row", new() { HasTextString = name })
+        await ctx.Page!.Locator(".set-row", new() { HasTextString = name })
                       .Locator("button.set-remove").First.ClickAsync();
-        await ctx.Page.WaitForTimeoutAsync(700); // unlink + GC
+        // The row disappears once the server confirms the unlink (and its GC ran) — poll for that.
+        await ctx.Page.Locator(".set-row", new() { HasTextString = name }).First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
     }
 
     // ── Then ────────────────────────────────────────────────────────────────────
@@ -112,11 +126,11 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
 
         // Following it opens the member object (name shows), then re-reading the
         // member's link yields the same identity address — it is one object.
-        await ctx.Page!.GotoAsync(ctx.BaseUrl + href1);
-        var shown = await ctx.Page.Locator("input.name").First.GetAttributeAsync("value") ?? "";
+        await ctx.Page!.GotoContentAsync(ctx.BaseUrl + href1);
+        var shown = await ctx.Page!.Locator("input.name").First.GetAttributeAsync("value") ?? "";
         await Assert.That(shown).IsEqualTo(name);
 
-        await ctx.Page.GotoAsync(ctx.BaseUrl + "/" + setName);
+        await ctx.Page.GotoContentAsync(ctx.BaseUrl + "/" + setName);
         var href2 = await MemberHrefAsync(setName, name);
         await Assert.That(href2).IsEqualTo(href1);
     }
@@ -129,8 +143,8 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
     public async Task ThenNavigatingShowsFieldAsync(string path, string field, string expected)
     {
         await ctx.EnsureServerAndBrowserAsync();
-        await ctx.Page!.GotoAsync(ctx.BaseUrl + path);
-        var selfHosted = ctx.Page.Locator($"input.{field}");
+        await ctx.Page!.GotoContentAsync(ctx.BaseUrl + path);
+        var selfHosted = ctx.Page!.Locator($"input.{field}");
         var input = await selfHosted.CountAsync() > 0 ? selfHosted.First
             : ctx.Page.Locator($"input[data-path$='/{field}']").First;
         var value = await input.GetAttributeAsync("value") ?? "";

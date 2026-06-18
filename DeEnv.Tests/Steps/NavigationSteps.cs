@@ -58,7 +58,11 @@ public sealed class NavigationSteps(InstanceContext ctx)
     public async Task WhenNavigateToAsync(string path)
     {
         await EnsureServerAndBrowserAsync();
-        await ctx.Page!.GotoAsync(ctx.BaseUrl + path);
+        // This step is the entry point for read-only checks (Navigation.feature) AND for scenarios that
+        // go on to interact — add a dict/set entry, edit a field (Entries/ObjectModel). So wait for
+        // hydration: a click/fill before the client hydrates silently no-ops. The cost to the read-only
+        // callers is one hydration wait (cheap; the marker is set right after the first client render).
+        await ctx.Page!.GotoReadyAsync(ctx.BaseUrl + path);
     }
 
     // Matches: When I click the row for key "42" in the customers table
@@ -68,7 +72,7 @@ public sealed class NavigationSteps(InstanceContext ctx)
     public async Task WhenClickRowAsync(string key)
     {
         await ctx.Page!.Locator($"table a:text-is('{key}')").First.ClickAsync();
-        await ctx.Page.WaitForURLAsync(new System.Text.RegularExpressions.Regex($".*/customers/{key}$"));
+        await ctx.Page.WaitForUrlContentAsync(new System.Text.RegularExpressions.Regex($".*/customers/{key}$"));
     }
 
     // ── Then ──────────────────────────────────────────────────────────────────

@@ -1,17 +1,33 @@
+using TUnit.Core;
+using TUnit.Core.Interfaces;
+
 namespace DeEnv.Tests.Features;
 
-// The operator-IDE scenarios are the suite's heaviest: each boots a REAL kernel hosting THREE
-// instances (the designer + two targets = six GenHTTP hosts) plus a Playwright browser. Run amid the
-// suite's default test parallelism, three of those at once starve the thread pool (GenHTTP host start
-// blocks a thread), which both slows them to minutes and times out the publish round-trip. Marking the
-// generated feature class [NotInParallel] serializes them against the rest of the suite, so each runs
-// with the machine to itself — fast and deterministic. (A partial declaration of the Reqnroll-generated
-// class; the attribute applies to its discovered tests.)
+// The operator-IDE scenarios are the suite's heaviest: each boots a REAL kernel hosting THREE instances
+// (six GenHTTP hosts) plus a browser page. The dozen of them used to be [NotInParallel] — run strictly
+// one-at-a-time against the whole suite — which is a ~6.5s hard-serial floor on the run. They were
+// serialized because letting them all loose spikes a 6-core box hard enough to tip the suite's tight
+// fail-fast waits over (a load-induced timeout flake, not a data race; ports are collision-free via
+// PortAllocator). The fix is TWO parts that have to go together:
+//
+//   1) This limiter BOUNDS the heavy scenarios to a few concurrent, so the load spike stays in check
+//      (no oversubscription of the 6 cores) while still folding them into the parallel run — no serial
+//      floor. 2 is the empirical sweet spot: it keeps concurrent publish/deploy round-trips low enough
+//      that the kernel's fire-and-forget restart isn't starved under real machine load (3 occasionally
+//      let a deploy poll time out during a heavy spike), while still removing the serial floor.
+//   2) The fail-fast timeouts were raised from 5s to load-tolerant values (SharedBrowser page waits,
+//      KernelSteps' HTTP probe, DesignerSteps' EventuallyAsync) — 5s sat BELOW the loaded worst-case once
+//      these scenarios overlap the pool, so it produced false-timeout flakes. The new values sit above it.
 //
 // NOTE: this class name MUST match the Reqnroll-generated class, which derives from the Feature TITLE in
-// Designer.feature. If that title changes, regenerate the name (else this becomes a dead orphan partial
-// and the real tests silently lose [NotInParallel] — they then starve under full parallelism).
-[TUnit.Core.NotInParallel]
+// Designer.feature. If that title changes, regenerate the name (else this becomes a dead orphan partial and
+// the real tests silently lose the limiter — they then run fully parallel and the load flake returns).
+public sealed class DesignerScenarioLimit : IParallelLimit
+{
+    public int Limit => 2;
+}
+
+[ParallelLimiter<DesignerScenarioLimit>]
 public partial class TheOperatorIDEDesignsLibraryInstanceDesignSelectorFeature
 {
 }

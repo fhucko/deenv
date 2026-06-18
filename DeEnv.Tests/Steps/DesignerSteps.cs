@@ -54,18 +54,18 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [When("I open the designs list")]
     public async Task WhenOpenDesignsList()
     {
-        await ctx.Page!.GotoAsync("/designs");
-        await ctx.Page.WaitForSelectorAsync("main.ide-designs .design-row");
+        await ctx.Page!.GotoReadyAsync("/designs");
+        await ctx.Page!.WaitForSelectorAsync("main.ide-designs .design-row");
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
     }
 
     [When("I open the instances list")]
     public async Task WhenOpenList()
     {
-        await ctx.Page!.GotoAsync("/instances");
+        await ctx.Page!.GotoReadyAsync("/instances");
         // Hydration checkpoint: the SSR instance rows are present AND the client bundle has bootstrapped
         // (window.initUi set), so the hand-rolled links/handlers are attached before we interact.
-        await ctx.Page.WaitForSelectorAsync("main.ide-list .instance-row");
+        await ctx.Page!.WaitForSelectorAsync("main.ide-list .instance-row");
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
     }
 
@@ -101,8 +101,8 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // selector page (a fresh SSR over the kernel's now-refreshed live set), exactly as the Open link
         // on the list would.
         var created = ctx.Kernel!.Instances.Single(i => i.Spec.AppPort == _newInstanceAppPort);
-        await ctx.Page!.GotoAsync($"/instances/{created.Spec.Id}");
-        await ctx.Page.WaitForSelectorAsync("main.ide-instance select.design-pick");
+        await ctx.Page!.GotoReadyAsync($"/instances/{created.Spec.Id}");
+        await ctx.Page!.WaitForSelectorAsync("main.ide-instance select.design-pick");
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
     }
 
@@ -352,15 +352,15 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // suite — a wide window keeps it deterministic (same reasoning as ThenTargetDescribesType's deploy).
         var designId = ctx.DesignIdForLabel(designLabel);
         await EventuallyAsync(() => ctx.Kernel!.Instances
-            .Any(i => i.Spec.AppPort == _newInstanceAppPort && i.Spec.DesignId == designId), timeoutMs: 30000);
+            .Any(i => i.Spec.AppPort == _newInstanceAppPort && i.Spec.DesignId == designId), timeoutMs: 45000);
 
         // The instances list is a live VIEW, not a live PUSH (a host-action ok does not re-render the open
         // page), so reload /instances — a fresh SSR over the kernel's refreshed live set now shows the new
         // row. The created instance carries the name we typed; assert a row for it shows the picked design
         // (its design-label resolves through the new designId reference) — proving name + design both flowed
         // through create → registry → list.
-        await ctx.Page!.GotoAsync("/instances");
-        await ctx.Page.WaitForSelectorAsync("main.ide-list .instance-row");
+        await ctx.Page!.GotoReadyAsync("/instances");
+        await ctx.Page!.WaitForSelectorAsync("main.ide-list .instance-row");
         var newRow = ctx.Page.Locator($".instance-row:has(.instance-app:text-is({CssString(name)}))");
         await Assert.That(await newRow.CountAsync()).IsGreaterThanOrEqualTo(1);
         await Assert.That(
@@ -396,7 +396,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // browser scenarios run [NotInParallel], so the last one's deploy lands under peak load).
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
         await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
-            && File.ReadAllText(target.Spec.SchemaPath).Contains(typeName), timeoutMs: 30000);
+            && File.ReadAllText(target.Spec.SchemaPath).Contains(typeName), timeoutMs: 45000);
     }
 
     [Then("the {string} instance's app document declares {string}")]
@@ -408,7 +408,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // Wide window: the deploy projects the WHOLE app + resets data, run under peak full-suite load.
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
         await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
-            && File.ReadAllText(target.Spec.SchemaPath).Contains(declaration), timeoutMs: 30000);
+            && File.ReadAllText(target.Spec.SchemaPath).Contains(declaration), timeoutMs: 45000);
     }
 
     [Then("the {string} instance's app document declares the enum {string} with values {string}")]
@@ -424,7 +424,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
                 .Select(v => "        " + v + "\n"));
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
         await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
-            && File.ReadAllText(target.Spec.SchemaPath).Replace("\r\n", "\n").Contains(expected), timeoutMs: 30000);
+            && File.ReadAllText(target.Spec.SchemaPath).Replace("\r\n", "\n").Contains(expected), timeoutMs: 45000);
     }
 
     [Then("the design {string} has no unnamed type")]
@@ -485,7 +485,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     // Polls a condition (a WS round-trip / file write is async). An IOException is the test thread
     // reading a store/app file mid-write — transient, retried. Mirrors TodoSteps.EventuallyAsync.
-    private static async Task EventuallyAsync(Func<bool> condition, int timeoutMs = 8000)
+    private static async Task EventuallyAsync(Func<bool> condition, int timeoutMs = 20000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (DateTime.UtcNow < deadline)

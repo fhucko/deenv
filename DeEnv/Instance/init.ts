@@ -84,6 +84,12 @@ function init(): void {
     });
 
     renderUi();
+
+    // Hydration is complete: the first client render has run, so the reconciled DOM and its event
+    // handlers are in place. Expose a deterministic marker so a test can wait for "the page is
+    // interactive" instead of guessing (the Load event waits for unrelated subresources; window.initUi
+    // is set by an inline script BEFORE this bundle even loads). Harmless in production — an attribute.
+    document.documentElement.setAttribute("data-hydrated", "1");
 }
 
 // The bundle is injected dynamically (from the infra port), so it is not `defer`red —

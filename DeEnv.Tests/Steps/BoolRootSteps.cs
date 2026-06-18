@@ -29,16 +29,20 @@ public sealed class BoolRootSteps(InstanceContext ctx)
     public async Task WhenNavigateToRootAsync(string path)
     {
         await EnsureServerAndBrowserAsync();
-        await ctx.Page!.GotoAsync(ctx.BaseUrl + path);
-        // Wait for JS to load and the WebSocket 'open' event to fire (attachHandlers runs then).
-        await ctx.Page!.WaitForTimeoutAsync(800);
+        // GotoReadyAsync waits for the client to hydrate (data-hydrated), so the checkbox handler is
+        // attached before we click — the deterministic replacement for the old fixed 800ms sleep. (A
+        // click before the WS opens is fine: the client queues sends and flushes them on open, see ws.ts.)
+        await ctx.Page!.GotoReadyAsync(ctx.BaseUrl + path);
     }
 
     [When("I click the checkbox")]
     public async Task WhenClickCheckboxAsync()
     {
         await ctx.Page!.Locator("input[type='checkbox']").ClickAsync();
-        await ctx.Page.WaitForTimeoutAsync(500); // allow WS write to reach server and persist
+        // Poll the sovereign store until the toggle has persisted (replaces a fixed 500ms guess).
+        await Polling.EventuallyAsync(
+            () => ctx.Store!.ReadNode(NodePath.Root.Field("ready")) is BoolValue { Value: true },
+            "the checkbox toggle to persist");
     }
 
     [When("I reload")]

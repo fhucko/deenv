@@ -24,8 +24,11 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     // objectForm gives each field input (and its label) the class of its prop name
     // (class={p.name}).
     [When("I fill the {string} field with {string}")]
-    public async Task WhenFillField(string field, string value) =>
+    public async Task WhenFillField(string field, string value)
+    {
+        await ctx.Page!.WaitHydratedAsync(); // the bound input's handler must be attached before we type
         await ctx.Page!.Locator($"input.{field}").FillAsync(value);
+    }
 
     [Then("the {string} field is a {string} input")]
     public async Task ThenFieldInputKind(string field, string kind)
@@ -53,8 +56,13 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     // location.pathname) — following it confirms both agree and that the nested URL resolves
     // to a self-hosted page (not a C# fallback / not-found).
     [When("I follow the set member open link")]
-    public async Task WhenFollowSetMember() =>
+    public async Task WhenFollowSetMember()
+    {
         await ctx.Page!.Locator("a.set-open").First.ClickAsync();
+        // Wait for the member page nav to land before the next step interacts, so its hydration check
+        // sees the NEW page's marker, not the set page's.
+        await ctx.Page!.WaitForUrlContentAsync(new System.Text.RegularExpressions.Regex(@"/[0-9]+$"));
+    }
 
     [Given("the self-hosted dict app is running")]
     public async Task GivenSelfHostedDictAppRunning()

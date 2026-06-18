@@ -23,7 +23,8 @@ public sealed class PresentationSteps(InstanceContext ctx)
     {
         await ctx.Page!.Locator($"a.list-title:text-is('{title}'), .list-title a:text-is('{title}')")
             .First.ClickAsync();
-        await ctx.Page.WaitForLoadStateAsync();
+        // Wait for the navigation's HTML to parse, NOT the full Load (the /js bundle) — see PageNav.
+        await ctx.Page.WaitForLoadStateAsync(Microsoft.Playwright.LoadState.DOMContentLoaded);
     }
 
     // The "create form" is the self-hosted inline add form (.set-new / .dict-new, inputs

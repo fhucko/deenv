@@ -14,8 +14,11 @@ public sealed class CommonUiSteps(InstanceContext ctx)
     [When("I open {string}")]
     public async Task WhenOpen(string path)
     {
-        await ctx.Page!.GotoAsync(path);
-        await ctx.Page.WaitForSelectorAsync("body");
+        // "I open" is the entry point for the self-hosted-UI scenarios, which then interact (pick/clear a
+        // reference, add a set/dict row, edit a bound field), so wait for hydration here — one gate covers
+        // them all. (The read-only Navigation scenarios use "I navigate to", which stays DOMContentLoaded.)
+        await ctx.Page!.GotoReadyAsync(path);
+        await ctx.Page!.WaitForSelectorAsync("body");
     }
 
     [Then("the page is a code page")]

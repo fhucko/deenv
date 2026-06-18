@@ -198,7 +198,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
 
         // A fresh isolated page on the shared browser (launched once for the whole run; see SharedBrowser).
         ctx.Page = await SharedBrowser.NewPageAsync(ctx.BaseUrl);
-        await ctx.Page.GotoAsync(ctx.BaseUrl + "/");
+        await ctx.Page.GotoContentAsync(ctx.BaseUrl + "/");
     }
 
     // ── Then: exported document ─────────────────────────────────────────────────

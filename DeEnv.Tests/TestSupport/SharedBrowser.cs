@@ -31,18 +31,25 @@ public static class SharedBrowser
     }
 
     /// <summary>
-    /// A fresh, isolated page (on its own context) on the shared browser, carrying the suite's
-    /// fail-fast 5s timeouts — a genuinely stuck wait surfaces in seconds, not Playwright's 30s default.
-    /// Close <c>page.Context</c> to tear the scenario down (it disposes the page with it).
+    /// A fresh, isolated page (on its own context) on the shared browser. Close <c>page.Context</c> to
+    /// tear the scenario down (it disposes the page with it).
     /// </summary>
+    /// <remarks>
+    /// The default wait is 10s — a backstop, not a tuning knob. Navigation is made load-independent by
+    /// <see cref="PageNav"/> (it waits for DOMContentLoaded, not the /js bundle), so what this bounds is
+    /// deterministic element/hydration waits. The old 5s was tuned for the serialized world; once the
+    /// heavy operator-IDE scenarios overlap the pool (bounded, not serialized), hydration can briefly
+    /// exceed 5s under load, so 10s gives honest headroom while still surfacing a stuck wait well under
+    /// Playwright's 30s default.
+    /// </remarks>
     public static async Task<IPage> NewPageAsync(string? baseUrl = null)
     {
         var browser = await BrowserAsync();
         var context = await browser.NewContextAsync(
             baseUrl is null ? new BrowserNewContextOptions() : new BrowserNewContextOptions { BaseURL = baseUrl });
         var page = await context.NewPageAsync();
-        page.SetDefaultTimeout(5000);
-        page.SetDefaultNavigationTimeout(5000);
+        page.SetDefaultTimeout(10000);
+        page.SetDefaultNavigationTimeout(10000);
         return page;
     }
 

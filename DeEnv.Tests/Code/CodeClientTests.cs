@@ -233,7 +233,7 @@ public sealed class CodeClientTests
         var logs = new List<string>();
         page.Console += (_, m) => logs.Add($"[{m.Type}] {m.Text}");
         page.PageError += (_, e) => logs.Add($"[pageerror] {e}");
-        await page.GotoAsync("/");
+        await page.GotoContentAsync("/");
         try
         {
             await page.WaitForSelectorAsync("[data-key]"); // wait for the client to hydrate

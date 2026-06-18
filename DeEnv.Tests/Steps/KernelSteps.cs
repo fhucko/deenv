@@ -606,10 +606,12 @@ public sealed class KernelSteps(InstanceContext ctx)
     }
 
     // True if an instance is serving its root on this app port, false if the port refuses the
-    // connection (the host has been stopped). A short timeout keeps a refused connection from hanging.
+    // connection (the host has been stopped). A refused connection returns immediately; the timeout only
+    // bounds a LIVE-but-slow response, so 15s gives a live instance headroom under concurrent suite load
+    // (5s produced false negatives) without making the refused case any slower.
     private static async Task<bool> ServesRootAsync(int appPort)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         try
         {
             var resp = await http.GetAsync($"http://localhost:{appPort}/");

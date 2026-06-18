@@ -20,8 +20,8 @@ public sealed class TodoSteps(InstanceContext ctx)
     {
         ctx.Description = InstanceContext.TodoDb();
         await ctx.EnsureServerAndBrowserAsync();
-        await ctx.Page!.GotoAsync("/");
-        await ctx.Page.WaitForSelectorAsync("[data-key]"); // hydrated (client adds keys)
+        await ctx.Page!.GotoContentAsync("/");
+        await ctx.Page!.WaitForSelectorAsync("[data-key]"); // hydrated (client adds keys)
     }
 
     // ── When ────────────────────────────────────────────────────────────────────

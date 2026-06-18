@@ -18,6 +18,9 @@ public sealed class CrmSteps(InstanceContext ctx)
     private readonly Dictionary<string, int> _customerIds = new();
     private readonly Dictionary<string, int> _orderIds    = new();
 
+    // Values typed into fields since the last save — polled for persistence by the "I save" step.
+    private readonly List<string> _pendingEditValues = new();
+
     // ── Given (instance + seed data) ───────────────────────────────────────────
 
     [Given("a CRM instance")]
@@ -68,14 +71,14 @@ public sealed class CrmSteps(InstanceContext ctx)
     public async Task WhenNavigateToCustomerAsync(string key)
     {
         await ctx.EnsureServerAndBrowserAsync();
-        await ctx.Page!.GotoAsync(ctx.BaseUrl + "/customers/" + _customerIds[key]);
+        await ctx.Page!.GotoContentAsync(ctx.BaseUrl + "/customers/" + _customerIds[key]);
     }
 
     [When(@"I navigate to the order {string} of customer {string}")]
     public async Task WhenNavigateToOrderAsync(string orderKey, string customerKey)
     {
         await ctx.EnsureServerAndBrowserAsync();
-        await ctx.Page!.GotoAsync(ctx.BaseUrl
+        await ctx.Page!.GotoContentAsync(ctx.BaseUrl
             + "/customers/" + _customerIds[customerKey]
             + "/orders/" + _orderIds[orderKey]);
     }
@@ -87,21 +90,28 @@ public sealed class CrmSteps(InstanceContext ctx)
     {
         // Self-hosted forms class inputs by prop name (input.name) and autosave each edit;
         // the retiring C# auto-form keyed them with data-field and committed on Save.
+        await ctx.Page!.WaitHydratedAsync(); // the bound input's handler must be attached before we type
         var selfHosted = ctx.Page!.Locator($"input.{field}");
         var input = await selfHosted.CountAsync() > 0 ? selfHosted.First
             : ctx.Page!.Locator($"input[data-field='{field}']").First;
         await input.FillAsync(value);
+        _pendingEditValues.Add(value);
     }
 
     [When("I save")]
     public async Task WhenSaveAsync()
     {
-        // The self-hosted UI autosaves each edit (no Save button) — here we just wait for the
-        // WS write to flush. The retiring C# auto-form commits on its Save button; click it
-        // when present. [data-wired] ensures the WS is open and the handler attached.
+        // The self-hosted UI autosaves each edit (no Save button); the retiring C# auto-form commits on
+        // its Save button — click it when present ([data-wired] = WS open + handler attached).
         var saveButton = ctx.Page!.Locator("form#node-form[data-wired] button[type='submit']");
         if (await saveButton.CountAsync() > 0) await saveButton.ClickAsync();
-        await ctx.Page.WaitForTimeoutAsync(500); // let the WS write reach the server
+        // Poll the persisted store file until every edit has flushed to it — replaces a fixed 500ms guess
+        // and, unlike a DOM check, actually proves the autosave reached disk.
+        foreach (var value in _pendingEditValues)
+            await Polling.EventuallyAsync(
+                () => File.ReadAllText(ctx.DataFilePath).Contains(value),
+                $"the edit '{value}' to persist");
+        _pendingEditValues.Clear();
     }
 
     // ── When (create entry) ────────────────────────────────────────────────────
