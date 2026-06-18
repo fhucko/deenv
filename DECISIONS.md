@@ -981,6 +981,22 @@ library on top. Land M10 first (no interleaving), then plan the thin first slice
 **milestone-planner** and check the reprioritization via **vision-keeper** before
 building.
 
+**Extensibility = composition-first, emergent (decided 2026-06-18, with the user).** The library is
+made to fit more use cases by exposing finer **composable primitives** (a descriptor-driven bound
+input, a labeled `Field`, …) that callers assemble — NOT by piling configuration onto monolithic
+components (the road to a 30-prop component that still can't express the next case). The big
+components (`ObjectForm`/`SetTable`) stay the zero-config default, built *from* the same primitives.
+Primitives are **extracted demand-driven** (rule of three — the input-rendering branch is already
+triplicated inside the library, a justified first seed) and grown **in parallel with real feature
+work** ("let it fall in place by using it naturally"), with a light periodic consolidation pass to
+stay coherent — done **before M12** (the visual designer composes the library, so dogfooding now is
+its completeness proof + de-risks it). Guards: don't resurrect the dropped M8 path-coupled `view`
+middle layer (composition keyed on types/data, not paths); composing leaf primitives in an app's own
+`foreach`/layout needs **no slot/template mechanism** (templates are M12's `for…in`/DataTemplate
+concern — kept out of M11). The **example apps are the showcase**: `instances/3` (CRM) is already
+pure-auto; the todo (`instances/2`) is rebuilt as the **auto-with-overrides** example — a clean custom
+`fn render()` composing the library — so potential users see both UI modes, polished.
+
 **Visual component designer (a further-future layer on the above).** Settled in
 discussion 2026-06-16: once the public component library exists, a **WinForms/XAML-style
 visual designer** composes it — drag/arrange/configure components on a canvas instead of
