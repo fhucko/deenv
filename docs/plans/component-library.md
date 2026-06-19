@@ -53,12 +53,29 @@ A *proper* library is consistent on two axes, not one:
   public components — the completeness proof (if the library can build the whole generic UI, it's
   complete + first-class).
 
-## 4. Sequencing
-- **M11 (in flight):** mechanism ✓ + `Input`/`Field` ✓; remaining — publish more primitives, the
-  operator designer as a 2nd consumer, the generic-UI-as-first-consumer collapse. The families the first
-  apps + the generic UI need land here.
-- **Then (ongoing):** fill out the families per example app, against the catalog.
-- **Later (M12+ / future):** the heavy components above.
+## 4. Pair with the visual designer (M12)
+The library and the visual designer (M12) are **coupled** — the designer *composes* the library — so
+they're built as a **pair**, not library-then-designer (which would mean retrofitting design-time
+support onto every component). Split it in two:
+- **Designer *core* (M12):** the canvas, drag-drop, property-panel framework, live preview, and the
+  round-trip-printer sync. Built **once**, bootstrapped on the first primitives. Component-independent.
+- **Per-component designer support:** each component's design-time metadata — canvas rendering, editable
+  props, defaults. Built **with the component.**
+
+So after the designer core lands, **every new component ships designer-ready** — the library and the
+designer's coverage grow together, app-driven, never retrofitted. The designer becomes **another
+always-validated consumer** of the library (same spirit as the generic UI), dogfooded continuously.
+**Free discipline:** building the designer early *forces* a designable component API (declarative,
+props-configurable, drag-droppable) — which you want anyway.
+
+## 5. Sequencing
+- **M11 (in flight):** the reactivity mechanism ✓ + `Input`/`Field` ✓; remaining — publish more
+  primitives, the operator designer as a 2nd consumer, the generic-UI-as-first-consumer collapse.
+- **M12 = the designer *core*** — bootstrapped on the M11 primitives.
+- **Then (ongoing):** fill out the families per example app, **each component paired with its designer
+  support** (§4), against the catalog.
+- **Later / heavy:** the full data grid (grouping / pivot / virtualization), the window manager, the
+  visual workflow builder.
 
 ## The honest framing
 The library is a **track, not a milestone with a finish line.** "Done" = "the catalog is covered,"
