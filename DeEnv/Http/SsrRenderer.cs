@@ -449,7 +449,16 @@ public sealed class SsrRenderer
           border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
         input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
           outline-offset: 0; border-color: var(--accent); }
-        input[type=checkbox] { width: 1.05rem; height: 1.05rem; padding: 0; vertical-align: middle; accent-color: var(--accent); }
+        /* Checkbox styled to match the input family (same border + radius + accent), not the bare
+           native control — a custom box with a white check on :checked. Library-owned default. */
+        input[type=checkbox] { appearance: none; -webkit-appearance: none; width: 1.15rem; height: 1.15rem;
+          margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 5px; background: var(--surface);
+          vertical-align: middle; cursor: pointer; position: relative; transition: background .12s, border-color .12s; }
+        input[type=checkbox]:hover { border-color: var(--accent); }
+        input[type=checkbox]:checked { background: var(--accent); border-color: var(--accent); }
+        input[type=checkbox]:checked::after { content: ""; position: absolute; left: 0.38rem; top: 0.17rem;
+          width: 0.27rem; height: 0.55rem; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+        input[type=checkbox]:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent); outline-offset: 1px; }
         textarea { width: 100%; min-height: 7rem; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.85rem; }
         /* The "standard" Input variant (MUI-style): the library owns this look; callers opt in with
            <Input variant="standard">, never via their own CSS. Reads as plain text, reveals an
