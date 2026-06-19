@@ -51,13 +51,13 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
 
     // ── When ────────────────────────────────────────────────────────────────────
 
-    // The self-hosted setTable shows its add form (.set-new) inline; Add stays on the list
-    // (no save-and-open), so we follow the new member's open link to its own page.
+    // The self-hosted setTable's create form is flag-gated (revealed by `+ New`); Save stays on the
+    // list (no save-and-open), so we follow the new member's open link to its own page.
     [When(@"I create a new {string} named {string} in the set")]
     public async Task WhenCreateNewInSetAsync(string typeName, string name)
     {
-        await ctx.Page!.WaitHydratedAsync(); // the set page was reached by a read-only nav
-        await ctx.Page!.Locator(".set-new input.name").FillAsync(name);
+        await ctx.Page!.RevealCreateFormAsync(); // reveal the gated create form (the set page was a read-only nav)
+        await ctx.Page!.Locator(".create-form input.name").FillAsync(name);
         await ctx.Page.Locator("button.set-add").ClickAsync();
         await ctx.Page.Locator(".set-row", new() { HasTextString = name }).First.WaitForAsync();
         // Wait for the negative→real id remap to land in the DOM: the row's link now addresses a

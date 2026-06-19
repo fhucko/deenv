@@ -27,8 +27,9 @@ public sealed class PresentationSteps(InstanceContext ctx)
         await ctx.Page.WaitForLoadStateAsync(Microsoft.Playwright.LoadState.DOMContentLoaded);
     }
 
-    // The "create form" is the self-hosted inline add form (.set-new / .dict-new, inputs
-    // classed by prop name) or the retiring C# create form (inputs keyed by name=).
+    // The "create form" is the self-hosted, flag-gated create form (.create-form, revealed by `+ New`):
+    // a labeled .field per scalar prop, its input classed by prop name. A set/dict prop is omitted
+    // (collections are added on the entry's own page after it exists — the create-then-populate model).
     [Then(@"the create form has a {string} field")]
     public async Task ThenCreateHasFieldAsync(string name)
     {
@@ -44,7 +45,5 @@ public sealed class PresentationSteps(InstanceContext ctx)
     }
 
     private async Task<int> CreateFieldCountAsync(string name) =>
-        await ctx.Page!.Locator(
-            $".set-new input.{name}, .dict-new input.{name}, form.create-form input[name='{name}']")
-            .CountAsync();
+        await ctx.Page!.Locator($".create-form input.{name}").CountAsync();
 }

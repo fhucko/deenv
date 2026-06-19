@@ -142,6 +142,41 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await Assert.That(pathname).IsEqualTo(expected);
     }
 
+    // ── flag-gated create view (milestone 11) ───────────────────────────────────────
+    // The always-visible inline add row (.set-new/.dict-new) is replaced by a `+ New` button that
+    // reveals a labeled create form (.create-form), swapping out the table; Save commits + returns to
+    // the table, Cancel discards. These steps drive that swap directly (the (a)-(e) coverage).
+
+    // A selector is ABSENT (the inline add form is gone; the table is replaced while creating; the
+    // create form is gone after Save/Cancel). WaitForFunction so a still-reconciling DOM settles.
+    [Then("the page does not show {string}")]
+    public async Task ThenPageDoesNotShow(string selector) =>
+        await ctx.Page!.WaitForFunctionAsync($"() => document.querySelector({JsString(selector)}) === null");
+
+    // Click the `+ New` button to reveal the create form (the table → create-form swap). Hydration
+    // is awaited because the click runs a JS handler that flips the component's `creating` state.
+    [When("I click the new button")]
+    public async Task WhenClickNewButton()
+    {
+        await ctx.Page!.WaitHydratedAsync();
+        await ctx.Page!.Locator(".new-btn").First.ClickAsync();
+        await ctx.Page!.Locator(".create-form").First.WaitForAsync();
+    }
+
+    // Cancel the create form (discard the draft, return to the table without committing).
+    [When("I cancel the create form")]
+    public async Task WhenCancelCreateForm() =>
+        await ctx.Page!.Locator(".create-form button.cancel").First.ClickAsync();
+
+    // A create-form field is LABELED: a <label> with the prop's class sits in the form (the same
+    // label+Input composite the edit/object page uses), proving the form is the labeled edit form, not
+    // a row of bare inputs.
+    [Then("the create form has a labeled {string} field")]
+    public async Task ThenCreateFormLabeledField(string field) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('.create-form label.{field}') !== null " +
+            $"&& document.querySelector('.create-form input.{field}, .create-form select.{field}') !== null");
+
     // Milestone 11: a hand-written `fn render()` that composes the PUBLIC <ObjectForm> library
     // component — proving the generic-UI library is reachable + usable from userspace.
     [Given("the public-library form app is running")]
@@ -377,17 +412,35 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task WhenClearReference() =>
         await ctx.Page!.Locator("button.ref-clear").First.ClickAsync();
 
-    // The reference create-new, set add, and dict new forms class their inputs by prop name.
+    // The set/dict create form (flag-gated: revealed by `+ New`) and the reference create-new form
+    // class their inputs by prop name. For a set/dict, reveal the create form first (idempotent), then
+    // fill its labeled .create-form field; the reference editor keeps its always-visible .ref-new form.
     [When("I fill the new {string} with {string}")]
-    public async Task WhenFillNewField(string field, string value) =>
-        await ctx.Page!.Locator($".ref-new input.{field}, .set-new input.{field}, .dict-new input.{field}").First.FillAsync(value);
+    public async Task WhenFillNewField(string field, string value)
+    {
+        // A reference route/field has a .ref-new form with no `+ New`; a set/dict route has the gated
+        // create form. Reveal the create form when one is gated (a .new-btn is present).
+        if (await ctx.Page!.Locator(".new-btn").CountAsync() > 0)
+            await ctx.Page!.RevealCreateFormAsync();
+        var input = ctx.Page!.Locator($".create-form input.{field}, .ref-new input.{field}").First;
+        await input.FillAsync(value);
+        // FillAsync sets .value and fires `input` for a text input, but NOT reliably for an
+        // <input type="date"> — so the two-way binding's `oninput` (which writes the draft) can miss
+        // a date fill. Dispatch a native `input` explicitly so the draft updates as it does for a real
+        // user's keystroke (idempotent for a text input: the binding just re-reads the same value).
+        await input.DispatchEventAsync("input");
+    }
 
     // ── dictionaries ───────────────────────────────────────────────────────────────
 
     [When("I fill the new key with {string}")]
-    public async Task WhenFillNewKey(string key) =>
-        await ctx.Page!.Locator("input.dict-key").First.FillAsync(key);
+    public async Task WhenFillNewKey(string key)
+    {
+        await ctx.Page!.RevealCreateFormAsync();
+        await ctx.Page!.Locator(".create-form input.dict-key").First.FillAsync(key);
+    }
 
+    // The dict create form's Save button (commits the entry) keeps the .dict-add class (primary look).
     [When("I add the dict entry")]
     public async Task WhenAddDictEntry() =>
         await ctx.Page!.Locator("button.dict-add").First.ClickAsync();
@@ -413,6 +466,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task WhenCreateNewObject() =>
         await ctx.Page!.Locator("button.ref-create").First.ClickAsync();
 
+    // The set create form's Save button (commits the new member) keeps the .set-add class (primary look).
     [When("I add to the set")]
     public async Task WhenAddToSet() =>
         await ctx.Page!.Locator("button.set-add").First.ClickAsync();

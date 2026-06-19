@@ -473,7 +473,7 @@ public sealed class SsrRenderer
         .set-remove:hover, .dict-remove:hover, .ref-clear:hover, .remove-type:hover, .remove-prop:hover,
         .delete-design:hover, .delete-instance:hover { background: #fff0f0; border-color: var(--danger); }
 
-        .object-form, .ref-editor, .leaf-form { background: var(--surface); border: 1px solid var(--border);
+        .object-form, .ref-editor, .leaf-form, .create-form { background: var(--surface); border: 1px solid var(--border);
           border-radius: 10px; padding: 1.25rem 1.4rem; box-shadow: 0 1px 2px rgba(31,35,40,.05); }
         .field { margin-bottom: 0.9rem; }
         .field:last-child { margin-bottom: 0; }
@@ -506,10 +506,20 @@ public sealed class SsrRenderer
         .set-remove:hover, .dict-remove:hover { color: var(--danger); background: #fff0f0; border-color: var(--danger); }
         .bool-cell { font-size: 1rem; line-height: 1; color: var(--muted); }
 
-        .set-new, .dict-new, .ref-new { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
+        .ref-new { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
           margin-top: 0.4rem; padding: 0.8rem; background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; }
-        .set-new input, .dict-new input, .ref-new input, .set-new select, .dict-new select, .ref-new select { max-width: 200px; }
-        .dict-error { color: var(--danger); font-size: 0.85rem; flex-basis: 100%; }
+        .ref-new input, .ref-new select { max-width: 200px; }
+        .dict-error { color: var(--danger); font-size: 0.85rem; margin-top: 0.4rem; }
+
+        /* Flag-gated create view: the `+ New` button replaces the old always-visible inline add row,
+           and clicking it SWAPS the table for a labeled create form (.create-form, reusing the
+           .object-form card + .field labels) with Save (primary green, .set-add/.dict-add) and a plain
+           Cancel. Hidden until asked — the create-then-populate model; collections are added on the
+           entry's own page after it exists. */
+        .new-btn { margin-top: 0.3rem; border-color: var(--accent); color: var(--accent); }
+        .new-btn:hover { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); border-color: var(--accent); }
+        .create-form > .field > input:not([type=checkbox]), .create-form > .field > select { width: 100%; max-width: 440px; }
+        .create-actions { display: flex; gap: 0.5rem; align-items: center; margin-top: 1.1rem; }
         .ref-current { margin-bottom: 0.7rem; color: var(--muted); }
         .ref-type { margin-top: 0; }
         .ref-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.7rem; }

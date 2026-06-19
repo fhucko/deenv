@@ -116,11 +116,11 @@ public sealed class CrmSteps(InstanceContext ctx)
 
     // ── When (create entry) ────────────────────────────────────────────────────
 
-    // The self-hosted set/dict tables show their add form (.set-new/.dict-new) inline —
-    // there is no New button to click — so this just waits for the add form to be present.
+    // The self-hosted set/dict create form is flag-gated: clicking `+ New` swaps the table for the
+    // labeled create form (hidden until asked).
     [When("I click New")]
     public async Task WhenClickNewAsync() =>
-        await ctx.Page!.Locator(".set-new, .dict-new").First.WaitForAsync();
+        await ctx.Page!.RevealCreateFormAsync();
 
     // ── Then ───────────────────────────────────────────────────────────────────
 

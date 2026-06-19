@@ -60,4 +60,20 @@ public static class PageNav
     /// </summary>
     public static Task WaitHydratedAsync(this IPage page) =>
         page.WaitForSelectorAsync("html[data-hydrated]", new() { State = WaitForSelectorState.Attached });
+
+    /// <summary>
+    /// Reveal a set/dict table's flag-gated create form (milestone 11): the inline add row was replaced
+    /// with a <c>+ New</c> button that swaps the table for a labeled create form. Idempotent — clicks
+    /// <c>.new-btn</c> only when the create form is not already shown — so an add-flow step that reveals
+    /// and a later fill step that also calls this never double-toggle. Waits for hydration first (the
+    /// reveal click runs a JS handler). Scoped to the first table on the page (every add-flow scenario is
+    /// on a single-collection page).
+    /// </summary>
+    public static async Task RevealCreateFormAsync(this IPage page)
+    {
+        await page.WaitHydratedAsync();
+        if (await page.Locator(".create-form").CountAsync() == 0)
+            await page.Locator(".new-btn").First.ClickAsync();
+        await page.Locator(".create-form").First.WaitForAsync();
+    }
 }

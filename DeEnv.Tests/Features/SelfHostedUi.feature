@@ -236,6 +236,74 @@ Feature: Self-hosted generic UI (object forms)
     Then a set row eventually shows "Second note"
     And the store eventually has a "Note" whose "title" is "Second note"
 
+  # ── flag-gated create view (milestone 11) ──────────────────────────────────
+  # The always-visible inline add row is replaced by a `+ New` button that reveals a
+  # labeled create form (the same Field label+Input the edit page uses), swapping out
+  # the table; Save commits + returns to the table, Cancel discards. Hidden until asked.
+
+  @milestone-11 @single-user
+  Scenario: A set table shows a New button, not an inline add form, on load
+    Given the self-hosted form app is running
+    When I open "/notes"
+    Then the page shows ".set-table"
+    And the page shows ".new-btn"
+    And the page does not show ".set-new"
+
+  @milestone-11 @single-user
+  Scenario: Clicking New reveals a labeled create form in place of the set table
+    Given the self-hosted form app is running
+    When I open "/notes"
+    And I click the new button
+    Then the page shows ".create-form"
+    And the create form has a labeled "title" field
+    And the page does not show ".set-table"
+
+  # The Note has a `dueDate date` prop, so the create form has a date field; fill it (an empty
+  # date is rejected on add — a pre-existing model gap in empty-date handling, NOT specific to the
+  # create form), proving the labeled multi-field create flow commits end-to-end.
+  @milestone-11 @single-user
+  Scenario: Saving the create form adds the member and returns to the table
+    Given the self-hosted form app is running
+    When I open "/notes"
+    And I click the new button
+    And I fill the new "title" with "Second"
+    And I fill the new "dueDate" with "2026-02-02"
+    And I add to the set
+    Then a set row eventually shows "Second"
+    And the store eventually has a "Note" whose "title" is "Second"
+    And the page does not show ".create-form"
+
+  @milestone-11 @single-user
+  Scenario: Cancelling the create form returns to the table with no new member
+    Given the self-hosted form app is running
+    When I open "/notes"
+    And I click the new button
+    And I fill the new "title" with "Discarded"
+    And I cancel the create form
+    Then the page shows ".set-table"
+    And the page does not show ".create-form"
+    And no set row eventually shows "Discarded"
+
+  @milestone-11 @single-user
+  Scenario: A dictionary create form reveals labeled Key and value fields
+    Given the self-hosted dict app is running
+    When I open "/"
+    And I click the new button
+    Then the page shows ".create-form"
+    And the create form has a labeled "dict-key" field
+    And the create form has a labeled "value" field
+    And the page does not show ".dict-table"
+
+  @milestone-11 @single-user
+  Scenario: A dictionary create form with a missing key shows a validation error and adds nothing
+    Given the self-hosted dict app is running
+    When I open "/"
+    And I click the new button
+    And I fill the new "value" with "Orphan"
+    And I add the dict entry
+    Then I see a create error
+    And the page shows ".create-form"
+
   # ── navigable tables (milestone 11: the UI middle-ground) ───────────────────
   # A whole table row navigates to its entry via a stretched row-link anchor; the
   # header aligns with the body (one cell per body column, incl. the Remove column);

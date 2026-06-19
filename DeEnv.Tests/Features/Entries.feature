@@ -1,8 +1,9 @@
 Feature: Collection entry create and delete
   Adding members to a set and entries to a dictionary, and deleting them, on the
-  Milestone 2 CRM instance. The self-hosted set/dict tables show an inline add form
-  that persists on Add (set members on /customers, dictionary entries on /settings).
-  A duplicate dictionary key is rejected with an error. There is no create URL, so an
+  Milestone 2 CRM instance. The self-hosted set/dict tables gate creation behind a
+  `+ New` button that reveals a labeled create form; Save persists (set members on
+  /customers, dictionary entries on /settings). A duplicate dictionary key is rejected
+  with an error shown in the still-open create form. There is no create URL, so an
   entry keyed "new" is unaffected; navigating into a dictionary entry still resolves.
 
   Background:

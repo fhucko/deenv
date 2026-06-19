@@ -1,7 +1,7 @@
 Feature: Presentation and form refinements
   Readability and correctness refinements on the rendered instance: humanized
-  field labels, navigable list titles, bordered tables, and a create form that
-  omits dictionary (navigation-boundary) fields.
+  field labels, navigable list titles, bordered tables, and a flag-gated create form
+  (revealed by `+ New`) that omits set/dictionary (navigation-boundary) fields.
 
   Background:
     Given a CRM instance
