@@ -60,6 +60,14 @@ public sealed class ExecObject : IExecValue
     public string? SourcePath { get; set; }
     public bool ScalarEntry { get; set; }
 
+    // A provably-constant, user-data-FREE value (a sys.schema descriptor: built from schema
+    // metadata only, in a fresh empty scope, so it cannot reference db). ClientState ships a
+    // Constant object/array WHOLE — every prop, every item, recursively — because a consumer
+    // (sys.new / a generic-UI walk) reads its full interior and there is nothing private inside.
+    // Default false: an ordinary minted object/array stays ACCESS-SCOPED (ships only what was
+    // displayed), so a where/orderBy/literal collection never spills its undisplayed membership.
+    public bool Constant { get; set; }
+
     object IExecValue.Value => this;
 }
 
@@ -85,6 +93,13 @@ public sealed class ExecArray : IExecValue
     // key under a path (M5), unlike a set member reached by its own identity. Set/list are
     // null. Ships to the client so its add/remove sends carry the path.
     public string? SourcePath { get; set; }
+
+    // Part of a provably-constant, user-data-free value (a sys.schema descriptor's nested array,
+    // e.g. `props`/`values`/`valueProps`). ClientState ships a Constant array WHOLE — every item —
+    // since the descriptor's consumer walks all of it and there is nothing private inside. Default
+    // false: a where/orderBy result or an array literal stays ACCESS-SCOPED (ships only displayed
+    // items), so an undisplayed row's membership never leaks. See ExecObject.Constant.
+    public bool Constant { get; set; }
 
     object IExecValue.Value => this;
 }

@@ -57,11 +57,18 @@ public static class ClientState
                     entry["scalarEntry"] = o.ScalarEntry;
                 }
                 objects[o.Id.ToString()] = entry;
-                if (o.Id < 0)
+                // Two ship-WHOLE cases, both shipping every prop:
+                //   • a Constant (a sys.schema descriptor): provably user-data-free, and its consumer
+                //     walks the whole tree — its children are Constant too, so the recursion ships the
+                //     nested props/values arrays full (fixes the empty-descriptor-array bug);
+                //   • a NEGATIVE-id transient: the client's own draft state — it owns it, a refetch
+                //     never refreshes it (the merge skips draft vars), so a withheld prop could never
+                //     arrive later. (Pre-dates the descriptor work; an established rule.)
+                // Everything else (a positive-id db object) ships only its ACCESSED props — privacy by
+                // construction. A non-Constant negative-id object that nests a where/orderBy/literal
+                // collection therefore does NOT ship that collection whole: it stays access-scoped below.
+                if (o.Constant || o.Id < 0)
                 {
-                    // A transient is the client's own draft state: it ships complete —
-                    // the client owns it, and a refetch never refreshes it (the merge
-                    // skips draft vars), so a withheld prop could never arrive later.
                     foreach (var (name, pv) in o.Props) props[name] = DtValue(pv);
                 }
                 else if (accessedProps.TryGetValue(o, out var names))
@@ -85,8 +92,13 @@ public static class ClientState
                     ["sourcePath"] = a.SourcePath,   // dicts persist via their path (add/removeEntry)
                     ["items"] = items,
                 };
+                // A Constant array (a descriptor's prop list — props/values/valueProps) ships ALL its
+                // items; its element objects are Constant too, so they recurse whole. Otherwise only the
+                // DISPLAYED items ship — so a where/orderBy result or array literal (negative-id, NOT
+                // Constant) never spills its undisplayed membership, even when nested in a shipped
+                // (negative-id) object. Privacy stays STRUCTURAL: what ships is what was accessed.
                 foreach (var item in a.Items)
-                    if (accessedItems.Contains(item))
+                    if (a.Constant || accessedItems.Contains(item))
                         items.Add(new JsonObject { ["key"] = item.Key, ["value"] = DtValue(item.Value) });
             }
             return new JsonObject { ["type"] = "array", ["id"] = a.Id };

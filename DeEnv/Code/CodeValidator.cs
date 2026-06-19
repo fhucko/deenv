@@ -81,6 +81,7 @@ public static class CodeValidator
         ["toInt"] = 1,
         ["id"] = 1,
         ["new"] = 1,
+        ["resolve"] = 1, // (pathText) → { kind, target, parent, prop, typeName, parentType }
     };
 
     // A callee of the form `sys.<name>` (a member access on the bare `sys` symbol) — the

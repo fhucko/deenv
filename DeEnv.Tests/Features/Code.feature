@@ -134,6 +134,23 @@
     And the page does not include "999"
     And the page does not include "Bob"
 
+  # The privacy invariant when a filtered collection is nested inside a MINTED object that ships:
+  # `var box = { rows: db.people.where(p => p.salary > 100) }` is a top-scope var, so it ships; the
+  # render DISPLAYS only the > 600 subset (Ada), so Cleo (matches the box filter, salary 500) is
+  # never displayed. The minted `box` must ship `rows` ACCESS-SCOPED — only the displayed Ada — never
+  # Cleo's membership. Pins the ship-whole boundary: only a provably-constant sys.schema descriptor
+  # ships its full interior; a minted object wrapping a where-result stays access-scoped. (Rows are
+  # positive-id db objects, so no field VALUE of an undisplayed row ever ships; the broad "ship any
+  # negative-id array nested in a complete object" rule leaked the undisplayed rows' MEMBERSHIP — the
+  # array item + an empty object stub — which the client-state count assertion below pins.)
+  @milestone-11 @single-user
+  Scenario: A filtered collection nested in a minted object never spills its undisplayed rows
+    Given the nested-filter privacy instance seeded with salaries
+    When the page at "/" is rendered
+    Then the rendered HTML contains "Ada"
+    And the page does not include "Cleo"
+    And the minted collection ships only its displayed rows
+
   # A <select value={x}> marks the <option> whose value equals x as `selected` — and `value`
   # is NOT emitted on the <select> itself (it is not real HTML there; it drives the selection).
   # The bound value is a NON-first option (the 2nd), so this proves the SSR selection is driven

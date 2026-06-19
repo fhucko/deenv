@@ -294,6 +294,45 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    // ── sys.resolve probe (milestone 11, collapse increment 1) ──────────────────────
+    // A hand-written `fn render()` calls sys.resolve(path) and renders its fields into spans. The
+    // server resolves for first paint (over the schema's TypeResolver); the client RE-resolves on
+    // hydrate (over the SHIPPED descriptors) and reconciles the SAME spans — so each assertion below
+    // reads the POST-HYDRATE value (WaitForFunction observes the live DOM after the client render),
+    // proving BOTH twins resolve the URL identically (a divergence would change the span text).
+
+    [Given("the resolve-probe app is running")]
+    public async Task GivenResolveProbeAppRunning()
+    {
+        ctx.Description = InstanceContext.ResolveProbeDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    [Then("the resolve probe kind is {string}")]
+    public async Task ThenResolveKind(string expected) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('.kind')?.textContent.trim() === {JsString(expected)}");
+
+    [Then("the resolve probe prop is {string}")]
+    public async Task ThenResolveProp(string expected) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('.prop')?.textContent.trim() === {JsString(expected)}");
+
+    [Then("the resolve probe type name is {string}")]
+    public async Task ThenResolveTypeName(string expected) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('.type-name')?.textContent.trim() === {JsString(expected)}");
+
+    [Then("the resolve probe parent type is {string}")]
+    public async Task ThenResolveParentType(string expected) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('.parent-type')?.textContent.trim() === {JsString(expected)}");
+
+    [Then("the resolve probe target title is {string}")]
+    public async Task ThenResolveTargetTitle(string expected) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('.target-title')?.textContent.trim() === {JsString(expected)}");
+
     // ── optional date/decimal/datetime left empty (pre-existing bug fix) ─────────
 
     [Given("the optional-leaves app is running")]

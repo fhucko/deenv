@@ -420,6 +420,36 @@ public class InstanceContext
                         p.name
     """;
 
+    // Code milestone, Stage 4 / Milestone 11: the privacy invariant when a filtered collection is
+    // nested inside a MINTED object that itself SHIPS. `var box = { rows: db.people.where(p => p.salary
+    // > 100) }` is a top-scope var, so ClientState serializes it; its `rows` array holds the matching
+    // rows (Ada 999, Cleo 500). But the render DISPLAYS only the > 600 subset (Ada), so only Ada is an
+    // accessed item. The minted box must ship `rows` ACCESS-SCOPED — only the displayed Ada — never the
+    // undisplayed-but-matching Cleo's membership. Pins the ship-whole boundary: only a provably-constant
+    // sys.schema descriptor ships its full interior; a minted object wrapping a where-result does not.
+    // (With the broad "ship any negative-id array nested in a complete object" rule, `rows` shipped its
+    // FULL membership — Cleo's object entry leaked even though she was never displayed.)
+    public static InstanceDescription NestedFilterPrivacyDb() =>
+        InstanceDescriptionLoader.Load(NestedFilterPrivacyApp);
+
+    private const string NestedFilterPrivacyApp = """
+    types
+        Db
+            people set of Person
+        Person
+            name text
+            salary int
+
+    ui
+        var box = { rows: db.people.where(p => p.salary > 100) }
+
+        fn render()
+            return <main>
+                foreach p in box.rows.where(q => q.salary > 600)
+                    <div class="earner">
+                        p.name
+    """;
+
     // Code milestone, Stage 4b: a hidden-dependency recompute. `people` is rendered by
     // name, but the earners list is `db.people.where(p => p.salary > 100)` — salary is
     // read only inside the predicate, so it is a dependency, never shipped. Adding a
@@ -669,6 +699,55 @@ public class InstanceContext
 
         fn render()
             return <rootForm desc={getNewNote()}>
+    """;
+
+    // Milestone 11 (generic-UI collapse, increment 1): a HAND-WRITTEN `fn render()` that calls the
+    // new `sys.resolve(path)` builtin and renders its fields as text — the probe that proves
+    // resolve binds a URL to its view-kind + objects IDENTICALLY on both twins (server resolves for
+    // first paint over the schema's TypeResolver; client resolves on hydrate over the SHIPPED
+    // descriptors). A custom render owns the whole URL space, so the probe runs at EVERY URL and the
+    // generic per-type views are not synthesized. The schema covers the owner-bound outcomes a single
+    // page exercises: a `notes` object set (set route + member object page), a `lead` reference
+    // (single-reference route), and a scalar `settings` dict (dict route + scalar-entry leaf). One
+    // note is seeded (title "First", id 2) so the object route binds a real target; settings is left
+    // empty (the leaf outcome is schema-decided, target binding is incidental). A test fixture, not a
+    // committed app — so no designer-seed regen.
+    public static InstanceDescription ResolveProbeDb() =>
+        InstanceDescriptionLoader.Load(ResolveProbeApp);
+
+    private const string ResolveProbeApp = """
+    types
+        Db
+            notes set of Note
+            lead Person
+            settings dict of text by text
+        Note
+            title text
+        Person
+            name text
+
+    initialData
+        Db 1
+            notes: [2]
+        Note 2
+            title: "First"
+
+    ui
+
+        fn render()
+            var r = sys.resolve(path)
+            return <main>
+                <span class="kind">
+                    r.kind
+                <span class="prop">
+                    r.prop
+                <span class="type-name">
+                    r.typeName
+                <span class="parent-type">
+                    r.parentType
+                if r.kind == "object"
+                    <span class="target-title">
+                        sys.field(r.target, "title")
     """;
 
     // ── storage ───────────────────────────────────────────────────────────────

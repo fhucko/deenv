@@ -1,3 +1,4 @@
+using DeEnv.Instance;
 using DeEnv.Storage;
 
 namespace DeEnv.Code;
@@ -21,10 +22,20 @@ public sealed class CodeExecutor
     // custom-render app (which uses no descriptors).
     private readonly IReadOnlyDictionary<string, CodeObject> _descriptors;
 
-    public CodeExecutor(IInstanceStore? store = null, IReadOnlyDictionary<string, CodeObject>? descriptors = null)
+    // The schema-driven URL→type resolver, threaded in like _store/_descriptors so the
+    // `sys.resolve(path)` builtin reuses the SAME cardinality-walk SsrRenderer.ResolveView does
+    // (one server-side source of truth). Null for a bare executor (conformance) — `sys.resolve`
+    // then throws, as it needs the schema. The client twin (codeExec.ts) has no resolver/schema,
+    // so it ports the walk over the SHIPPED descriptors instead — proven identical by the
+    // SelfHostedUi SSR+hydrate "resolve probe" scenarios.
+    private readonly TypeResolver? _resolver;
+
+    public CodeExecutor(IInstanceStore? store = null, IReadOnlyDictionary<string, CodeObject>? descriptors = null,
+        TypeResolver? resolver = null)
     {
         _store = store;
         _descriptors = descriptors ?? new Dictionary<string, CodeObject>();
+        _resolver = resolver;
     }
 
     // ── statements ──────────────────────────────────────────────────────────────
@@ -357,9 +368,33 @@ public sealed class CodeExecutor
         // Evaluate the descriptor literal in a FRESH EMPTY scope: it is a pure data literal (text /
         // bool / int / nested objects + arrays of the same), so it reads no variables — the empty
         // scope makes that structural (any stray symbol would fail loudly, not capture a binding).
-        var descriptor = ExecuteValue(literal, new ExecScope(), context);
+        var descriptor = MarkConstant(ExecuteValue(literal, new ExecScope(), context));
         context.Memo[key] = new CacheEntry { Key = key, Result = descriptor, Deps = new Deps() };
         return descriptor;
+    }
+
+    // Mark a freshly-evaluated descriptor tree as Constant — recursively, through every nested
+    // ExecObject and ExecArray. A descriptor is provably constant and user-data-free (built by
+    // GenericUi.TypeDescriptor/PropDesc from schema metadata only, evaluated in a fresh empty scope
+    // so it cannot reference `db`), so ClientState may ship the WHOLE tree (every prop + item) rather
+    // than only the accessed parts. This is what fixes the empty-array bug (a descriptor's nested
+    // `props`/`values`/`valueProps` must arrive full so a consumer that walks it sees every entry),
+    // and — being descriptor-SPECIFIC rather than negative-id-based — it cannot ship a where/orderBy/
+    // literal collection's full membership (those are never Constant). Returns its argument for chaining.
+    private static IExecValue MarkConstant(IExecValue value)
+    {
+        switch (value)
+        {
+            case ExecObject o:
+                o.Constant = true;
+                foreach (var pv in o.Props.Values) MarkConstant(pv);
+                break;
+            case ExecArray a:
+                a.Constant = true;
+                foreach (var item in a.Items) MarkConstant(item.Value);
+                break;
+        }
+        return value;
     }
 
     // Eagerly cache EVERY descriptor (type + prop) into the memo so they all ship on first paint.
@@ -374,7 +409,7 @@ public sealed class CodeExecutor
         {
             var key = $"schema:{name}";
             if (!context.Memo.ContainsKey(key))
-                context.Memo[key] = new CacheEntry { Key = key, Result = ExecuteValue(literal, new ExecScope(), context), Deps = new Deps() };
+                context.Memo[key] = new CacheEntry { Key = key, Result = MarkConstant(ExecuteValue(literal, new ExecScope(), context)), Deps = new Deps() };
         }
     }
 
@@ -495,6 +530,153 @@ public sealed class CodeExecutor
         return new ExecInt { Value = obj.Id };
     }
 
+    // resolve(pathText): the Code-level twin of SsrRenderer.ResolveView — resolve a URL to its
+    // view-KIND plus the bound object(s), as ONE object:
+    //   { kind, target, parent, prop, typeName, parentType }
+    // kind ∈ object | set | ref | dict | leaf | notFound (the six ResolveView outcomes). target is
+    // the routed object (object page / scalar-dict-entry leaf), else null; parent is the OWNER
+    // object for an owner-bound route (set/ref/dict), else null; prop the owner-bound prop name;
+    // typeName the type whose descriptor to fetch (object→its type, set→element, ref→target, else
+    // ""); parentType the owner type (the dict's sys.schema(parentType, prop)), else "".
+    //
+    // The cardinality DECISION reuses the threaded TypeResolver (the same walk ResolveView uses —
+    // one server-side source of truth); the object BINDING walks the SAME `db` graph bound in scope
+    // (a FindTarget-style member/field walk). The client twin (codeExec.ts) has no schema, so it
+    // ports the identical walk over the SHIPPED descriptors + its own db graph; both must produce
+    // the same result, proven by the SelfHostedUi resolve-probe SSR+hydrate scenarios. Pure /
+    // not memoized (a fresh resolution per render, like nest/segment/id).
+    private IExecValue ExecuteResolve(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 1)
+            throw new CodeRuntimeException("resolve(path) takes one argument.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecText pathText)
+            throw new CodeRuntimeException("resolve() expects a text path.");
+        if (_resolver == null)
+            throw new CodeRuntimeException("resolve() requires a schema resolver.");
+
+        // The db graph to bind against: the SAME read-only root the render reads as `db`, so the
+        // bound objects share identity with everything else the render touches (leaves line up).
+        var db = FindScope("db", scope).Items["db"].Value as ExecObject
+            ?? throw new CodeRuntimeException("resolve() requires a db root object.");
+
+        var path = ParseUrlPath(pathText.Value);
+        var typeInfo = _resolver.ResolveType(path);
+
+        // An unrouted URL (a bad segment, a leaf navigated into): the self-hosted NotFound outcome.
+        if (typeInfo == null) return ResolveResult(context, "notFound");
+
+        // A set route (object set): owner-bound — bind the OWNER, fetch the ELEMENT type's descriptor.
+        if (typeInfo is { Cardinality: Cardinality.Set, Type.BaseType: BaseType.Object })
+            return OwnerBound(context, db, path, "set", typeName: typeInfo.Type.Name);
+
+        // A dictionary route: owner-bound — bind the OWNER; the dict reads sys.schema(parentType, prop),
+        // so typeName is "" and parentType carries the owner's type.
+        if (typeInfo is { Cardinality: Cardinality.Dictionary })
+            return OwnerBound(context, db, path, "dict", parentType: OwnerType(path));
+
+        // A SCALAR dictionary entry (a single non-object reached by traversing a dict): the shared
+        // leaf editor, bound to the entry object.
+        if (typeInfo is { Cardinality: Cardinality.Single, Type.BaseType: not BaseType.Object }
+            && _resolver.TraversesDictionary(path))
+            return ResolveResult(context, "leaf", target: FindTarget(db, path, context));
+
+        if (typeInfo is not { Cardinality: Cardinality.Single, Type.BaseType: BaseType.Object })
+            return ResolveResult(context, "notFound");
+
+        // A single-reference route (the last field is a single object reference): owner-bound — bind
+        // the OWNER (never the maybe-unset target), fetch the TARGET type's descriptor.
+        if (typeInfo.IsReference)
+            return OwnerBound(context, db, path, "ref", typeName: typeInfo.Type.Name);
+
+        // An ordinary object page (the Db root, or a set/object-dict member): bind the routed object.
+        return ResolveResult(context, "object",
+            target: FindTarget(db, path, context), typeName: typeInfo.Type.Name);
+    }
+
+    // An owner-bound route (set / ref / dict): the parent is the object owning the final prop
+    // (path minus its last segment), the prop is that last segment.
+    private IExecValue OwnerBound(ExecContext context, ExecObject db, NodePath path, string kind,
+        string typeName = "", string parentType = "")
+    {
+        var prop = path.Segments[^1];
+        var parentPath = NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1));
+        var parent = FindTarget(db, parentPath, context);
+        return ResolveResult(context, kind, parent: parent, prop: prop, typeName: typeName, parentType: parentType);
+    }
+
+    // The owner type for an owner-bound route — the type at the path minus its last segment
+    // (mirrors SsrRenderer.ResolveOwnerBoundView), e.g. "Db" for /settings.
+    private string OwnerType(NodePath path) =>
+        _resolver!.ResolveType(NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1)))?.Type.Name ?? "";
+
+    // Build the resolve result object. A negative transient id (a render-local literal); its scalar
+    // fields ship complete (ClientState ships a negative-id object whole), and target/parent are the
+    // already-bound graph objects (which ship via the FindTarget walk's recorded leaves).
+    private ExecObject ResolveResult(ExecContext context, string kind,
+        IExecValue? target = null, IExecValue? parent = null, string prop = "", string typeName = "", string parentType = "") =>
+        new()
+        {
+            Id = --context.LastId.Value,
+            Props = new Dictionary<string, IExecValue>
+            {
+                ["kind"] = new ExecText { Value = kind },
+                ["target"] = target ?? new ExecNull(),
+                ["parent"] = parent ?? new ExecNull(),
+                ["prop"] = new ExecText { Value = prop },
+                ["typeName"] = new ExecText { Value = typeName },
+                ["parentType"] = new ExecText { Value = parentType },
+            },
+        };
+
+    // Walk URL segments through the loaded `db` graph to BIND the routed object — the twin of
+    // SsrRenderer.FindTarget. A set member segment is the member's identity id; a dict entry segment
+    // is its __key; a field segment is a prop. Each step records its read as an accessed leaf
+    // (membership + the descended item + the bound object) so the GRAPH PATH ships — the client's own
+    // resolve walk then re-binds the same nodes on hydrate. Null when anything is missing.
+    private static IExecValue? FindTarget(ExecObject root, NodePath path, ExecContext context)
+    {
+        IExecValue current = root;
+        context.AccessedObjectProps.Add((root, null));
+        foreach (var segment in path.Segments)
+        {
+            if (current is ExecArray { Kind: ArrayKind.Dict } dict)
+            {
+                context.AccessedItems.Add((dict, null));
+                var item = dict.Items.FirstOrDefault(i =>
+                    (i.Value as ExecObject)?.Props.GetValueOrDefault(DbBridge.EntryKeyProp) is ExecText k
+                    && k.Value == segment);
+                if (item == null) return null;
+                context.AccessedItems.Add((dict, item));
+                current = item.Value;
+            }
+            else if (current is ExecArray arr && int.TryParse(segment, out var id))
+            {
+                context.AccessedItems.Add((arr, null));
+                var item = arr.Items.FirstOrDefault(i => i.Key == id);
+                if (item == null) return null;
+                context.AccessedItems.Add((arr, item));
+                current = item.Value;
+            }
+            else if (current is ExecObject obj && obj.Props.TryGetValue(segment, out var value))
+            {
+                context.AccessedObjectProps.Add((obj, segment));
+                current = value;
+                if (current is ExecObject co) context.AccessedObjectProps.Add((co, null));
+            }
+            else
+            {
+                return null;
+            }
+        }
+        return current as ExecObject;
+    }
+
+    private static NodePath ParseUrlPath(string urlPath)
+    {
+        var segs = urlPath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return NodePath.FromSegments(segs);
+    }
+
     private static int AsInt(IExecValue v) => v is ExecInt i ? i.Value
         : throw new CodeRuntimeException("Expected an int.");
     private static bool AsBool(IExecValue v) => v is ExecBool b ? b.Value
@@ -550,6 +732,7 @@ public sealed class CodeExecutor
         "toInt" => ExecuteToInt(call, scope, context),
         "id" => ExecuteId(call, scope, context),
         "new" => ExecuteNew(call, scope, context),
+        "resolve" => ExecuteResolve(call, scope, context),
         // setRef(obj, prop, value) persists on the client (the reference editor). Server-side
         // (SSR / refetch) never runs the click handler, so it no-ops.
         "setRef" => new ExecNothing(),

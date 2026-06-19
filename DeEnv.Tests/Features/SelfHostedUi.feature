@@ -406,6 +406,60 @@ Feature: Self-hosted generic UI (object forms)
     And the dict table header has a trailing action column
     And the dict table header column count equals the body row column count
 
+  # ── sys.resolve: URL → view-kind + bound objects (milestone 11, collapse increment 1) ──
+  # `sys.resolve(path)` is the Code-level twin of the C# SsrRenderer.ResolveView dispatch: it
+  # resolves a URL to { kind, target, parent, prop, typeName, parentType } — the six outcomes
+  # (object / set / ref / dict / leaf / notFound) with the bound object(s). The builtin runs on
+  # BOTH twins (server resolves for first paint over the schema's TypeResolver; client resolves on
+  # hydrate over the SHIPPED descriptors), so a probe `fn render()` that renders the resolution as
+  # text must show the SAME result before AND after hydrate — a divergence would change the DOM.
+  # This proves the binding end-to-end on both interpreters; increment 2 rewrites the generic UI's
+  # per-URL dispatch as a Code `fn render()` composing this builtin.
+
+  @milestone-11 @single-user
+  Scenario: sys.resolve binds an object page route
+    Given the resolve-probe app is running
+    When I open "/notes/2"
+    Then the resolve probe kind is "object"
+    And the resolve probe target title is "First"
+    And the resolve probe type name is "Note"
+
+  @milestone-11 @single-user
+  Scenario: sys.resolve binds a set route to its owner and prop
+    Given the resolve-probe app is running
+    When I open "/notes"
+    Then the resolve probe kind is "set"
+    And the resolve probe prop is "notes"
+    And the resolve probe type name is "Note"
+
+  @milestone-11 @single-user
+  Scenario: sys.resolve binds a single-reference route to its owner
+    Given the resolve-probe app is running
+    When I open "/lead"
+    Then the resolve probe kind is "ref"
+    And the resolve probe prop is "lead"
+    And the resolve probe type name is "Person"
+
+  @milestone-11 @single-user
+  Scenario: sys.resolve binds a dictionary route to its owner and prop
+    Given the resolve-probe app is running
+    When I open "/settings"
+    Then the resolve probe kind is "dict"
+    And the resolve probe prop is "settings"
+    And the resolve probe parent type is "Db"
+
+  @milestone-11 @single-user
+  Scenario: sys.resolve binds a scalar dictionary entry as a leaf
+    Given the resolve-probe app is running
+    When I open "/settings/lang"
+    Then the resolve probe kind is "leaf"
+
+  @milestone-11 @single-user
+  Scenario: sys.resolve reports an unrouted URL as notFound
+    Given the resolve-probe app is running
+    When I open "/does-not-exist"
+    Then the resolve probe kind is "notFound"
+
   # ── breadcrumbs on a collection/route page (milestone 11 bug fix) ───────────
   # The breadcrumb trail is the REQUEST url path, segment for segment — not the
   # view's argument-binding path (which, for an owner-bound set route, is the

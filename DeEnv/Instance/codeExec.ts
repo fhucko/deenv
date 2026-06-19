@@ -549,6 +549,171 @@ function execNew(codeCall: CodeCall, scope: ExecScope, context: ExecContext): Ex
     return { type: "object", props, id: --context.lastId.value };
 }
 
+// resolve(pathText): the Code-level twin of SsrRenderer.ResolveView (and of the C#
+// CodeExecutor.ExecuteResolve) — resolve a URL to its view-KIND plus the bound object(s):
+//   { kind, target, parent, prop, typeName, parentType }
+// kind ∈ object | set | ref | dict | leaf | notFound. The CLIENT has no schema/store (unlike the
+// server, which reuses the TypeResolver), so it ports the SAME cardinality-walk over the SHIPPED
+// `sys.schema` descriptors + its own `db` graph: at each segment the descriptor decides cardinality
+// (a prop's baseType: object | set | dictionary | scalar) and the graph binds the object. Both twins
+// MUST produce the identical result — SSR (server) and hydrate (client) resolve the SAME URL, so a
+// divergence would flash/reroute the page; proven by the SelfHostedUi resolve-probe scenarios.
+//
+// A descriptor read mirrors execSchema: a cache miss throws "Value not available" (→ refetch), but
+// the server prewarms EVERY descriptor, so the walk finds each type/prop shape it needs.
+function resolveDescriptor(lookup: string, context: ExecContext): ExecObject {
+    const d = memoize("schema:" + lookup, context, () => { throw new Error("Value not available"); });
+    if (d.type !== "object") throw new Error("Value not available");
+    return d;
+}
+
+// The prop descriptors of a TYPE descriptor (its `props` array), by name.
+function typeProp(typeDesc: ExecObject, name: string): ExecObject | null {
+    return descProps(typeDesc, "props").find(p => propName(p) === name) ?? null;
+}
+function propText(p: ExecObject, key: string): string {
+    const v = p.props[key];
+    return v != null && v.type === "text" ? v.value : "";
+}
+function propBool(p: ExecObject, key: string): boolean {
+    const v = p.props[key];
+    return v != null && v.type === "bool" && v.value;
+}
+
+// Bind a URL segment within the db graph (twin of the C# FindTarget step): a set member by its
+// identity id, a dict entry by its __key, a field by name. Records the read so a re-render's deps
+// match the server. Returns null when the node is missing.
+function bindSegment(current: ExecValue, segment: string): ExecValue | null {
+    if (current.type === "array" && current.kind === "dict") {
+        recordMember(current.id);
+        const item = current.items.find(i =>
+            i.value.type === "object" && i.value.props["__key"]?.type === "text" && i.value.props["__key"].value === segment);
+        return item ? item.value : null;
+    }
+    if (current.type === "array" && /^-?\d+$/.test(segment)) {
+        recordMember(current.id);
+        const item = current.items.find(i => i.key === Number(segment));
+        return item ? item.value : null;
+    }
+    if (current.type === "object" && current.props[segment] != null) {
+        recordProp(current.id, segment);
+        return current.props[segment];
+    }
+    return null;
+}
+
+function resolveResult(context: ExecContext, kind: string,
+    opts: { target?: ExecValue; parent?: ExecValue; prop?: string; typeName?: string; parentType?: string } = {}): ExecObject {
+    return {
+        type: "object", id: --context.lastId.value,
+        props: {
+            kind: { type: "text", value: kind },
+            target: opts.target ?? { type: "null" },
+            parent: opts.parent ?? { type: "null" },
+            prop: { type: "text", value: opts.prop ?? "" },
+            typeName: { type: "text", value: opts.typeName ?? "" },
+            parentType: { type: "text", value: opts.parentType ?? "" },
+        },
+    };
+}
+
+function execResolve(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    if (codeCall.params.length !== 1) throw new Error("resolve(path) takes one argument.");
+    const pathV = executeValue(codeCall.params[0], scope, context).value;
+    if (pathV.type !== "text") throw new Error("resolve() expects a text path.");
+    const db = findScope({ type: "symbol", name: "db" }, scope).items["db"].value;
+    if (db.type !== "object") throw new Error("resolve() requires a db root object.");
+    const segments = pathV.value.split("/").filter(s => s.length > 0);
+
+    // One combined pass — the type-walk (over descriptors) AND the graph-bind (over db) in lockstep,
+    // tracking the owning object/prop for an owner-bound route and whether any step entered a dict
+    // (the scalar-dict-entry → leaf distinction). The root type is the well-known "Db".
+    let typeName = "Db";              // current declared type name
+    let isObject = true;              // current type is an object (vs a scalar leaf)
+    let cardinality = "single";       // single | set | dict
+    let isReference = false;          // the last field was a single object reference
+    let traversedDict = false;
+    let current: ExecValue = db;      // the currently-bound graph node
+    let ownerType = "";               // the type owning the last field (for an owner-bound route)
+    let prop = "";                    // the last field name
+    let bound = true;                 // the graph walk is still binding (a deleted member → notFound)
+
+    for (const segment of segments) {
+        if (cardinality === "set" || cardinality === "dict") {
+            // The segment addresses a MEMBER: descend into the element. A set element is always an
+            // object; a dict element may be scalar (its descriptor's isScalar) — then the member is a leaf.
+            if (cardinality === "dict") traversedDict = true;
+            // element type was recorded when we entered the collection (typeName/isObject already set).
+            cardinality = "single";
+            isReference = false;
+            prop = "";
+        } else if (isObject) {
+            const typeDesc = resolveDescriptor(typeName, context);
+            const pd = typeProp(typeDesc, segment);
+            if (pd == null) return resolveResult(context, "notFound");
+            const baseType = propBaseType(pd);
+            ownerType = typeName;
+            prop = segment;
+            if (baseType === "set") {
+                cardinality = "set"; isReference = false;
+                typeName = propText(pd, "element"); isObject = true; // set elements are objects
+            } else if (baseType === "dictionary") {
+                cardinality = "dict"; isReference = false;
+                // The dict's element kind is known now (isScalar); the type for an object element.
+                if (propBool(pd, "isScalar")) { isObject = false; typeName = propText(pd, "element"); }
+                else { isObject = true; typeName = propText(pd, "element"); }
+            } else if (baseType === "object") {
+                cardinality = "single"; isReference = true;
+                typeName = propText(pd, "target"); isObject = true;
+            } else {
+                cardinality = "single"; isReference = false;
+                typeName = baseType; isObject = false; // a scalar field
+            }
+        } else {
+            return resolveResult(context, "notFound"); // can't navigate into a leaf
+        }
+
+        // Bind the segment in the graph (parallel to the type-walk). A missing node → notFound below.
+        if (bound) {
+            const next = bindSegment(current, segment);
+            if (next == null) bound = false; else current = next;
+        }
+    }
+
+    // Dispatch — the faithful port of SsrRenderer.ResolveView.
+    if (cardinality === "set" && isObject)
+        return ownerBound(context, db, segments, "set", { typeName });
+    if (cardinality === "dict")
+        return ownerBound(context, db, segments, "dict", { parentType: ownerType });
+    if (cardinality === "single" && !isObject && traversedDict)
+        return resolveResult(context, "leaf", { target: bound && current.type === "object" ? current : undefined });
+    if (!(cardinality === "single" && isObject))
+        return resolveResult(context, "notFound");
+    if (isReference)
+        return ownerBound(context, db, segments, "ref", { typeName });
+    return resolveResult(context, "object",
+        { target: bound && current.type === "object" ? current : undefined, typeName });
+}
+
+// An owner-bound route (set / ref / dict): the parent is the object owning the final prop (the path
+// minus its last segment); the prop is that last segment. Re-binds the parent from db (a small,
+// cheap walk that records the same leaves the server's parent FindTarget does).
+function ownerBound(context: ExecContext, db: ExecObject, segments: string[], kind: string,
+    opts: { typeName?: string; parentType?: string }): ExecObject {
+    const prop = segments[segments.length - 1];
+    let parent: ExecValue = db;
+    let bound = true;
+    for (let i = 0; i < segments.length - 1; i++) {
+        const next = bindSegment(parent, segments[i]);
+        if (next == null) { bound = false; break; }
+        parent = next;
+    }
+    return resolveResult(context, kind, {
+        parent: bound && parent.type === "object" ? parent : undefined,
+        prop, typeName: opts.typeName, parentType: opts.parentType,
+    });
+}
+
 // extent(typeName): the reference picker's candidates — all objects of a type. Memoized
 // like where/orderBy; the server shipped the displayed list and the client reuses it. No
 // store on the client, so a cache miss/stale throws "Value not available", which the
@@ -863,6 +1028,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "toInt": return execToInt(codeCall, scope, context);
         case "id": return execId(codeCall, scope, context);
         case "new": return execNew(codeCall, scope, context);
+        case "resolve": return execResolve(codeCall, scope, context);
     }
     const fn = executeValue(codeCall.fn, scope, context).value;
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));

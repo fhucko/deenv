@@ -252,7 +252,7 @@ public sealed class SsrRenderer
         ExecObject? warmDb = null, ViewMatch? forcedMatch = null)
     {
         var ui = _ui!;
-        var exec = new CodeExecutor(_store, _descriptors);
+        var exec = new CodeExecutor(_store, _descriptors, _resolver);
         // Ship EVERY schema descriptor on first paint (not lazily on first use), so a component
         // composing sys.schema(...) over a row that appears only after a client-side add still finds
         // its descriptor in the cache instead of missing. Descriptors are static, user-data-free.

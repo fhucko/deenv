@@ -65,6 +65,19 @@ public sealed class CodeSteps(InstanceContext ctx)
         SeedPerson(store, "Bob", salary: 5);   // not an earner
     }
 
+    // Same seed, but the app wraps the where-result in a top-scope minted object (NestedFilterPrivacyDb):
+    // a shipping object whose nested filtered array must stay access-scoped, not spill its membership.
+    [Given("the nested-filter privacy instance seeded with salaries")]
+    public void GivenNestedFilterPrivacySeeded()
+    {
+        ctx.Description = InstanceContext.NestedFilterPrivacyDb();
+        var store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+        ctx.Store = store;
+        SeedPerson(store, "Ada", salary: 999);  // matches box filter (> 100) AND displayed (> 600)
+        SeedPerson(store, "Cleo", salary: 500); // matches box filter, NOT displayed (< 600)
+        SeedPerson(store, "Bob", salary: 5);    // no match
+    }
+
     private static void SeedPerson(IInstanceStore store, string name, int salary)
     {
         var id = store.CreateObject("Person", new ObjectValue(new Dictionary<string, NodeValue>
@@ -127,6 +140,38 @@ public sealed class CodeSteps(InstanceContext ctx)
     public async Task ThenHtmlContainsCount(string fragment, int count)
     {
         await Assert.That(Occurrences(RenderedBody(), fragment)).IsEqualTo(count);
+    }
+
+    // Privacy membership pin (Milestone 11): a minted object that ships and nests a filtered
+    // collection must ship that collection ACCESS-SCOPED — only its DISPLAYED items, never its full
+    // membership. The rows are positive-id db objects, so an undisplayed row's FIELD values never
+    // ship regardless (only accessed props of a positive-id object ship); the leak the broad
+    // "ship any negative-id array nested in a complete object" rule caused is STRUCTURAL — the
+    // undisplayed row's array item + empty object stub. So we assert on the shipped client state
+    // (window.initData): the minted collection's shipped item count equals the displayed row count.
+    [Then("the minted collection ships only its displayed rows")]
+    public async Task ThenMintedCollectionShipsOnlyDisplayed()
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        var displayed = Occurrences(RenderedBody(), "class=\"earner\"");
+
+        var state = ExtractInitData(ctx.RenderedHtml!);
+        // The minted box is a negative-id object in the shipped scope; follow its single array prop.
+        var boxId = state["scope"]!["box"]!["value"]!["id"]!.GetValue<int>();
+        var box = state["leaves"]!["objects"]![boxId.ToString()]!;
+        var rowsArrayId = box["props"]!["rows"]!["id"]!.GetValue<int>();
+        var rows = state["leaves"]!["arrays"]![rowsArrayId.ToString()]!["items"]!.AsArray();
+
+        // Red under the broad rule (ships the full where-membership), green under the fix.
+        await Assert.That(rows.Count).IsEqualTo(displayed);
+    }
+
+    private static System.Text.Json.Nodes.JsonNode ExtractInitData(string html)
+    {
+        const string marker = "window.initData=";
+        var start = html.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
+        var end = html.IndexOf(";window.initUi=", start, StringComparison.Ordinal);
+        return System.Text.Json.Nodes.JsonNode.Parse(html[start..end])!;
     }
 
     // The content between <body> and </body> of the rendered page.
