@@ -61,7 +61,11 @@ where developers design data visually and use it as objects. Full mission in
    (untouched). **Slice (b)** + the dict follow-on then replaced BOTH descriptor
    registries (`__descs` type + `__dictDescs` dict) with a `sys.schema(typeName)` / `sys.schema(type,
    prop)` builtin (server-resolved + shipped like `sys.extent`) and **deleted both** — the self-hosted
-   UI reads all schema shape through `sys.schema`. Build only M11 work next. The **public
+   UI reads all schema shape through `sys.schema`. Build only M11 work next. **(2026-06-19: a
+   thin non-destructive-apply slice — *data survives schema changes* — is now judged
+   MVP-critical and may be pulled ahead of / interleaved with M11; it is migration, the
+   substrate for the full M13 versioning, not M13 itself. See DECISIONS "Data must survive
+   schema changes" + ROADMAP M13.)** The **public
    component library** (follow-up 5, the feature half) is underway — **first slice DONE**: a `lib`
    scope (`system ← lib ← app`) makes the PascalCase library components (`ObjectForm`/`RefEditor`/…)
    composable from a hand-written `fn render()` (the generic UI is the other consumer). Remaining

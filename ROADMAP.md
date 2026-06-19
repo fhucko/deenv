@@ -296,6 +296,14 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   identity-based diff is already designed — renames are exact because
   non-constants carry identity (Milestone 5).
 
+  **MVP-critical slice pulled forward (decided 2026-06-19):** a thin **non-destructive
+  apply** — *data survives a schema change* — is required for DeEnv to be genuinely useful
+  (an app you cannot evolve without losing data is useless). Scope: stop resetting data on
+  schema change; additive changes non-destructive (new field → default); identity-based
+  rename preservation (M5); structural/destructive changes refused loudly, deferred. This is
+  *migration* (the substrate), thinner than the full versioning below, and is prioritized
+  ahead of / interleaved with M11–M12. See DECISIONS ("Data must survive schema changes").
+
   **First slice:** in the self-hosted designer, *commit* the current schema-as-
   data as an immutable version (parent pointer → linear history) and *diff* a
   version against its parent by matching types/props on **identity**, so a rename

@@ -287,6 +287,42 @@ implemented **in the environment itself, after a code milestone exists.** Reason
   the snapshot/branch/merge machinery waits. Branches and 3-way structural merge
   are themselves later sub-milestones.
 
+## Data must survive schema changes (non-destructive apply) — MVP-critical, ahead of full versioning
+
+**Decided 2026-06-19.** For DeEnv to be *useful*, existing data must survive a schema
+change. A schema edit that wipes data makes any real app unusable — apps always evolve
+(add a field, add a type), and you cannot start over each time. So a thin **non-destructive
+apply** capability is **MVP-critical** and pulled forward — ahead of, or interleaved with,
+the UI milestones (M11–M12). The aim is a genuinely useful MVP, and data-survival outranks
+UI polish for real reliance.
+
+**This is *migration*, not the full *versioning* of M13 — and it is its substrate.** What
+usefulness needs is that an *apply* preserves data; it does **not** need the git-style
+history / commit / diff / checkout machinery (that stays M13). The non-destructive apply
+built here is exactly the step M13's *apply* later sits on — on the path, not throwaway.
+
+**Scope — deliberately thin:**
+- **Stop resetting data on schema change.** Today publish "resets data for now"; that
+  specific behavior is what makes it useless.
+- **Additive changes are non-destructive:** a new field → existing objects lack it, read as
+  default/null; a new type → nothing to migrate; a removed field → drop that value. This
+  covers the most common evolution and is small (don't reset + tolerate missing fields).
+- **Renames preserve data**, leveraging M5: types/props carry intrinsic identity, so the
+  diff matches by **identity, not name**, and remaps the stored key (renames exact — as the
+  versioning diff was already designed to be).
+- **Structural / destructive changes** (type change, split/merge, single→set) are **NOT**
+  in scope — **refuse loudly** ("not supported yet") rather than silently corrupt. An honest
+  partial, not a cheap correctness gap.
+
+**Honor the versioning seams:** persist through the storage interface in the model's terms,
+never side files (else forecloses pillar 4 / temporal versioning).
+
+**Reprioritization is a conscious call.** It pulls a slice of M13 ahead of M11–M12,
+justified only because the goal is a *useful* MVP (if the goal were funder-readiness it
+would not be needed — funders fund early work). First step before coding: confirm what
+actually happens to data today on an additive change, then a tests-first Gherkin scenario
+(add a field to a populated type, republish, rows survive with the field defaulted).
+
 ## Concurrency, saving, and locking (eshop/CRM)
 
 Primary early use cases are custom eshop and CRM — multi-user domains where
