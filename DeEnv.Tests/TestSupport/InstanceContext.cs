@@ -228,6 +228,36 @@ public class InstanceContext
             label: "Second"
     """;
 
+    // An object with OPTIONAL leaf fields of every non-empty-parseable kind: `due` (date),
+    // `amount` (decimal), `at` (datetime), plus a required `title`. Rendered by the default
+    // self-hosted generic UI (no `ui` section). The Db holds a `reminders` set, so `/reminders`
+    // is the set route (create form) and `/reminders/2` the member page (edit form). One reminder
+    // is seeded with `due` set so the clear-then-empty edit scenario has a value to clear; its
+    // `amount`/`at` are left out of the seed (unset). Proves an EMPTY date/decimal/datetime means
+    // UNSET — the server round-trips it as the empty leaf instead of force-parsing "" (the bug).
+    // A dedicated fixture (NOT a committed app, like the enum fixture) — it isolates the empty-leaf
+    // behavior and avoids dragging the designer seed / SchemaBridge into the change.
+    public static InstanceDescription OptionalLeavesDb() =>
+        InstanceDescriptionLoader.Load(OptionalLeavesApp);
+
+    private const string OptionalLeavesApp = """
+    types
+        Db
+            reminders set of Reminder
+        Reminder
+            title text
+            due date
+            amount decimal
+            at datetime
+
+    initialData
+        Db 1
+            reminders: [2]
+        Reminder 2
+            title: "Seeded"
+            due: "2026-01-01"
+    """;
+
     // Milestone 9: an app whose Db holds an arbitrary-key DICTIONARY, rendered by the default
     // self-hosted generic UI. The Db root self-hosts, rendering the dictionary inline via the
     // `dictTable` library component. `Setting` (all-scalar) self-hosts too.

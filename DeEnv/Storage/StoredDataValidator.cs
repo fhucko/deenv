@@ -153,6 +153,12 @@ public static class StoredDataValidator
         private void Scalar(StoredValue? node, string declaredType, string where)
         {
             var expected = BaseTag(declaredType);
+            // An UNSET optional decimal/date/datetime is the empty text leaf (those typed values have
+            // no "empty"), so an empty-text leaf is accepted for such a field — the startup twin of the
+            // WS write-path's OptionalLeaf. A non-empty leaf must still carry the declared tag.
+            if (node is StoredLeaf { Scalar: TextValue { Text: "" } }
+                && expected is "decimal" or "date" or "datetime")
+                return;
             if (node is not StoredLeaf leaf || ScalarTag(leaf.Scalar) != expected)
             {
                 Fail($"{where} is declared '{declaredType}' but is stored as '{KindOf(node)}'.");

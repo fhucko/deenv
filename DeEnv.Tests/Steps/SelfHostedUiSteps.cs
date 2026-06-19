@@ -76,6 +76,19 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.Page!.Locator($"input.{field}").FillAsync(value);
     }
 
+    // Clear a field to empty. FillAsync("") sets .value and fires `input` for a text input but NOT
+    // reliably for an <input type="date">, so the staged draft's `oninput` can miss the clear — and
+    // Save would then replay the OLD value. Dispatch a native `input` explicitly so the draft records
+    // the empty value as it does for a real keystroke (idempotent for a text input).
+    [When("I clear the {string} field")]
+    public async Task WhenClearField(string field)
+    {
+        await ctx.Page!.WaitHydratedAsync();
+        var input = ctx.Page!.Locator($"input.{field}");
+        await input.FillAsync("");
+        await input.DispatchEventAsync("input");
+    }
+
     [Then("the {string} field is a {string} input")]
     public async Task ThenFieldInputKind(string field, string kind)
     {
@@ -280,6 +293,62 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         ctx.Description = InstanceContext.SelfHostedDictDb();
         await ctx.EnsureServerAndBrowserAsync();
     }
+
+    // ── optional date/decimal/datetime left empty (pre-existing bug fix) ─────────
+
+    [Given("the optional-leaves app is running")]
+    public async Task GivenOptionalLeavesAppRunning()
+    {
+        ctx.Description = InstanceContext.OptionalLeavesDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    // The object of `typeName` whose `title` matches (the test data has unique titles), eventually.
+    private async Task<ObjectValue> ReminderTitledAsync(string typeName, string title)
+    {
+        ObjectValue? found = null;
+        await EventuallyAsync(() =>
+        {
+            found = ctx.Store!.ReadExtent(typeName).Values
+                .FirstOrDefault(o => o.Fields.TryGetValue("title", out var v) && v is TextValue t && t.Text == title);
+            return found != null;
+        });
+        return found!;
+    }
+
+    // An optional date/decimal/datetime left empty means UNSET: it round-trips as the empty leaf
+    // (TextValue "") — the server must not force-parse "". A never-set seed field is absent; an
+    // explicitly-emptied field is the empty text leaf. Both read as unset.
+    [Then("the store has a {string} titled {string} whose {string} is unset")]
+    public async Task ThenStoreFieldUnset(string typeName, string title, string field)
+    {
+        var obj = await ReminderTitledAsync(typeName, title);
+        var unset = !obj.Fields.TryGetValue(field, out var v) || v is TextValue { Text: "" };
+        await Assert.That(unset).IsTrue();
+    }
+
+    // A non-empty optional leaf still parses + persists. The Code runtime projects a date/decimal
+    // to its text form (DbBridge.ScalarToExec), so the stored value reads back as that text.
+    [Then("the store has a {string} titled {string} whose {string} is {string}")]
+    public async Task ThenStoreFieldText(string typeName, string title, string field, string expected)
+    {
+        var obj = await ReminderTitledAsync(typeName, title);
+        var actual = obj.Fields.TryGetValue(field, out var v) ? StoredLeafText(v) : null;
+        await Assert.That(actual).IsEqualTo(expected);
+    }
+
+    // The text projection of a stored scalar leaf (matches DbBridge.ScalarToExec / the wire form),
+    // so a date persists+reads as "yyyy-MM-dd" and a decimal as its invariant string.
+    private static string? StoredLeafText(NodeValue v) => v switch
+    {
+        TextValue t => t.Text,
+        DecimalValue d => d.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        DateValue d => d.Value.ToString("yyyy-MM-dd"),
+        DateTimeValue dt => dt.Value.ToString("O"),
+        IntValue i => i.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        BoolValue b => b.Value ? "true" : "false",
+        _ => null,
+    };
 
     // ── enum support (first slice) ──────────────────────────────────────────────
 

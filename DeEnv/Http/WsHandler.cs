@@ -616,7 +616,9 @@ public sealed class WsHandler
     // Convert a wire scalar ({ type, value }) to the prop's DECLARED base type. The
     // wire's claimed type must agree: int/bool/text exactly; decimal/date/datetime
     // arrive as the Code runtime's text projection (see DbBridge.ScalarToExec) and
-    // are parsed. Anything else is a type mismatch → reject.
+    // are parsed. An EMPTY decimal/date/datetime means UNSET — it round-trips as the
+    // empty leaf (TextValue ""), never force-parsed (DateOnly.Parse("") threw). Anything
+    // else is a type mismatch → reject.
     private static NodeValue LeafForType(JsonElement el, BaseType declared)
     {
         var wireType = el.TryGetProperty("type", out var t) ? t.GetString() : null;
@@ -626,12 +628,20 @@ public sealed class WsHandler
             (BaseType.Int, "int")       => new IntValue(v.GetInt32()),
             (BaseType.Bool, "bool")     => new BoolValue(v.GetBoolean()),
             (BaseType.Text, "text")     => new TextValue(v.GetString() ?? ""),
-            (BaseType.Decimal, "text")  => new DecimalValue(decimal.Parse(v.GetString() ?? "", System.Globalization.CultureInfo.InvariantCulture)),
-            (BaseType.Date, "text")     => new DateValue(DateOnly.Parse(v.GetString() ?? "")),
-            (BaseType.DateTime, "text") => new DateTimeValue(DateTimeOffset.Parse(v.GetString() ?? "")),
+            (BaseType.Decimal, "text")  => OptionalLeaf(v.GetString() ?? "", s => new DecimalValue(decimal.Parse(s, System.Globalization.CultureInfo.InvariantCulture))),
+            (BaseType.Date, "text")     => OptionalLeaf(v.GetString() ?? "", s => new DateValue(DateOnly.Parse(s))),
+            (BaseType.DateTime, "text") => OptionalLeaf(v.GetString() ?? "", s => new DateTimeValue(DateTimeOffset.Parse(s))),
             _ => throw new InvalidOperationException($"A '{wireType}' value does not fit the declared '{declared}' field."),
         };
     }
+
+    // A decimal/date/datetime leaf, where the empty string is UNSET. An optional leaf has no typed
+    // "empty" (DateOnly/decimal/DateTimeOffset are non-nullable), so an unset one is the empty leaf
+    // (TextValue "") — exactly how an enum's unset value is stored. A non-empty value parses as before.
+    // The store, validator (the empty-text-for-an-optional carve-out), and DbBridge.ScalarToExec all
+    // round-trip the empty leaf back to the blank field.
+    private static NodeValue OptionalLeaf(string s, Func<string, NodeValue> parse) =>
+        s.Length == 0 ? new TextValue("") : parse(s);
 
     // ── NodeValue deserialization ─────────────────────────────────────────────
 
@@ -640,12 +650,13 @@ public sealed class WsHandler
         {
             BaseType.Bool     => new BoolValue(el.GetBoolean()),
             BaseType.Int      => new IntValue(el.ValueKind == JsonValueKind.String ? int.Parse(el.GetString()!, System.Globalization.CultureInfo.InvariantCulture) : el.GetInt32()),
-            BaseType.Decimal  => new DecimalValue(el.ValueKind == JsonValueKind.String ? decimal.Parse(el.GetString()!, System.Globalization.CultureInfo.InvariantCulture) : el.GetDecimal()),
+            BaseType.Decimal  => el.ValueKind == JsonValueKind.String ? OptionalLeaf(el.GetString() ?? "", s => new DecimalValue(decimal.Parse(s, System.Globalization.CultureInfo.InvariantCulture))) : new DecimalValue(el.GetDecimal()),
             BaseType.Text     => new TextValue(el.GetString() ?? ""),
             // An enum value is its value name — text-shaped, no new value-kind.
             BaseType.Enum     => new TextValue(el.GetString() ?? ""),
-            BaseType.Date     => new DateValue(DateOnly.Parse(el.GetString() ?? "")),
-            BaseType.DateTime => new DateTimeValue(DateTimeOffset.Parse(el.GetString() ?? "")),
+            // An empty date/datetime means UNSET — the empty leaf, not a force-parse of "" (which threw).
+            BaseType.Date     => OptionalLeaf(el.GetString() ?? "", s => new DateValue(DateOnly.Parse(s))),
+            BaseType.DateTime => OptionalLeaf(el.GetString() ?? "", s => new DateTimeValue(DateTimeOffset.Parse(s))),
             _ => throw new InvalidOperationException($"Cannot deserialize leaf of type {type.BaseType}")
         };
 

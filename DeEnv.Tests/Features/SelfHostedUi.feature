@@ -461,3 +461,48 @@ Feature: Self-hosted generic UI (object forms)
     And the page shows ".ref-editor"
     When I pick the reference candidate "Grace"
     Then the current reference is "Grace"
+
+  # ── optional date/decimal/datetime left empty (pre-existing bug fix) ─────────
+  # An optional `date`/`decimal`/`datetime` field left EMPTY means UNSET: the server must
+  # NOT force-parse "" (which threw "String '' was not recognized as a valid DateOnly").
+  # An unset optional round-trips as the empty leaf — it persists without error, the field
+  # shows blank, and it reads back empty. The fixture's Reminder has all three optional
+  # leaf kinds plus a required `title`, so a create that fills only the title and an edit
+  # that clears a set field both exercise the empty path.
+
+  @milestone-11 @single-user
+  Scenario: Creating an object with empty date/decimal/datetime fields succeeds and round-trips empty
+    Given the optional-leaves app is running
+    When I open "/reminders"
+    And I click the new button
+    And I fill the new "title" with "Call dentist"
+    And I add to the set
+    Then a set row eventually shows "Call dentist"
+    And the store eventually has a "Reminder" whose "title" is "Call dentist"
+    And the store has a "Reminder" titled "Call dentist" whose "due" is unset
+    And the store has a "Reminder" titled "Call dentist" whose "amount" is unset
+    And the store has a "Reminder" titled "Call dentist" whose "at" is unset
+
+  @milestone-11 @single-user
+  Scenario: Creating an object with non-empty optional leaf values still parses and persists
+    Given the optional-leaves app is running
+    When I open "/reminders"
+    And I click the new button
+    And I fill the new "title" with "Pay rent"
+    And I fill the new "due" with "2026-03-01"
+    And I fill the new "amount" with "12.50"
+    And I add to the set
+    Then a set row eventually shows "Pay rent"
+    And the store has a "Reminder" titled "Pay rent" whose "due" is "2026-03-01"
+    And the store has a "Reminder" titled "Pay rent" whose "amount" is "12.50"
+
+  @milestone-11 @single-user
+  Scenario: Clearing a set date field on an existing object persists as empty
+    Given the optional-leaves app is running
+    When I open "/reminders/2"
+    Then the "due" field shows "2026-01-01"
+    When I clear the "due" field
+    And I save the form
+    Then the store has a "Reminder" titled "Seeded" whose "due" is unset
+    When I open "/reminders/2"
+    Then the "due" field shows ""
