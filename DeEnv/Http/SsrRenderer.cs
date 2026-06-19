@@ -192,11 +192,13 @@ public sealed class SsrRenderer
 
             // A type view (and the NotFound page) keeps the generic breadcrumb chrome (plain
             // links) around its content, so a missing page can still navigate back up; a
-            // full-custom render owns the whole page.
+            // full-custom render owns the whole page. The trail is derived from the REQUEST url
+            // path — segment for segment, per INSTANCE_MODEL.md — NOT the view's argument-binding
+            // path (`match.TargetPath`, which for an owner-bound route — a set/dict/reference — is
+            // the PARENT object, so a collection page like /customers would show only "Db").
             var breadcrumbs = match.Kind switch
             {
-                ViewKind.Type => Breadcrumbs(match.TargetPath!),
-                ViewKind.NotFound => Breadcrumbs(ParsePath(urlPath)),
+                ViewKind.Type or ViewKind.NotFound => Breadcrumbs(ParsePath(urlPath)),
                 _ => "",
             };
 
@@ -355,10 +357,13 @@ public sealed class SsrRenderer
             throw new CodeRuntimeException("The view did not return a renderable value.");
 
         // Title: the app's `title` var (in the app scope) when set; a type-view page falls back
-        // to the generic page title (its node path), the NotFound page to "Not found", else "DeEnv".
+        // to the generic page title derived from the REQUEST url path (segment for segment — the same
+        // location-mirrors-URL invariant as the breadcrumb; NOT match.TargetPath, which for an
+        // owner-bound route is the parent and would title /notes as just "Db"), the NotFound page to
+        // "Not found", else "DeEnv".
         var title = app.Items.TryGetValue("title", out var t) && t.Value is ExecText titleText
             ? titleText.Value
-            : match.Kind == ViewKind.Type ? PageTitle(match.TargetPath!)
+            : match.Kind == ViewKind.Type ? PageTitle(ParsePath(urlPath))
             : match.Kind == ViewKind.NotFound ? "Not found"
             : "DeEnv";
 
@@ -483,6 +488,23 @@ public sealed class SsrRenderer
           text-transform: uppercase; letter-spacing: .02em; }
         .set-row:hover td, .dict-row:hover td { background: #f9fafb; }
         .set-row input, .dict-row input, .set-row select, .dict-row select { max-width: 200px; }
+
+        /* Whole-row navigation: each data row is relatively positioned so a stretched real anchor
+           (a.row-link) covers it via ::after — the entire row is one click target (keyboard + mouse +
+           new-tab, since it is a real <a>), while the identity text in the first cell still reads as
+           plain text. A per-row Remove is z-raised above the overlay and revealed on hover/focus, so
+           clicking it (which stops propagation) removes WITHOUT navigating. */
+        .set-row, .dict-row { position: relative; cursor: pointer; }
+        .set-row td.row-id a.row-link, .dict-row td.row-id a.row-link { color: inherit; font-weight: 600; }
+        .set-row td.row-id a.row-link:hover, .dict-row td.row-id a.row-link:hover { text-decoration: none; }
+        a.row-link::after { content: ""; position: absolute; inset: 0; }
+        .set-row td.row-action, .dict-row td.row-action { text-align: right; width: 1%; white-space: nowrap; }
+        .set-remove, .dict-remove { position: relative; z-index: 1; opacity: 0; transition: opacity .12s;
+          padding: 0.15rem 0.55rem; border-color: transparent; background: transparent; color: var(--muted); }
+        .set-row:hover .set-remove, .dict-row:hover .dict-remove,
+        .set-remove:focus-visible, .dict-remove:focus-visible { opacity: 1; }
+        .set-remove:hover, .dict-remove:hover { color: var(--danger); background: #fff0f0; border-color: var(--danger); }
+        .bool-cell { font-size: 1rem; line-height: 1; color: var(--muted); }
 
         .set-new, .dict-new, .ref-new { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
           margin-top: 0.4rem; padding: 0.8rem; background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; }

@@ -26,9 +26,12 @@ namespace DeEnv.Instance;
 //   • RefEditor(parent, prop, target) — a reference editor: current label, a pick button
 //     per extent() candidate, a clear button, and a create-new form. A COMPONENT: its body
 //     runs once as init (a local `state` holding a draft), and it returns a render fn.
-//   • SetTable(set, desc, setPath) — a set table: header + member rows (+ an "open" link to
-//     the nested member URL, nest(setPath, m) → /notes/3, + Remove) + an add form. Also a
-//     COMPONENT (the add form holds a draft).
+//   • SetTable(set, desc, setPath) — a set table: an aligned header + member rows + an add form.
+//     A whole data row is navigable — its first cell wraps the member's identity (labelProp value)
+//     in a stretched `<a class="row-link" href=nest(setPath, m)>` (CSS `::after { inset:0 }` covers
+//     the row); a per-row Remove sits z-raised above the overlay. A bool column renders a read-only
+//     ✓/✗ glyph, never "true"/"false". Shared structure with DictTable (row-link + Remove + bool
+//     cell), differing only in the identity source. Also a COMPONENT (the add form holds a draft).
 //
 // Builtins do the reflective work, all under the framework `sys` namespace: sys.field (dynamic
 // access), sys.humanize (labels), sys.extent (a type's objects), sys.schema (a type's descriptor),
@@ -147,20 +150,27 @@ public static class GenericUi
                     return <div class="set-table">
                         <table>
                             <tr class="set-head">
+                                <th>
+                                    sys.humanize(desc.labelProp)
                                 foreach p in desc.props
-                                    if p.baseType != "object" && p.baseType != "set"
+                                    if p.baseType != "object" && p.baseType != "set" && p.name != desc.labelProp
                                         <th>
                                             sys.humanize(p.name)
+                                <th>
                             foreach m in set
                                 <tr class="set-row">
+                                    <td class="row-id">
+                                        <a class="row-link" href={sys.nest(setPath, m)}>
+                                            sys.field(m, desc.labelProp)
                                     foreach p in desc.props
-                                        if p.baseType != "object" && p.baseType != "set"
+                                        if p.baseType != "object" && p.baseType != "set" && p.name != desc.labelProp
                                             <td>
-                                                sys.field(m, p.name)
-                                    <td>
-                                        <a class="set-open" href={sys.nest(setPath, m)}>
-                                            "open"
-                                    <td>
+                                                if p.baseType == "bool"
+                                                    <span class="bool-cell">
+                                                        boolGlyph(sys.field(m, p.name))
+                                                else
+                                                    sys.field(m, p.name)
+                                    <td class="row-action">
                                         <button class="set-remove" onClick={() => set.remove(m)}>
                                             "Remove"
                         <div class="set-new">
@@ -198,18 +208,23 @@ public static class GenericUi
                                 if desc.isScalar
                                     <th>
                                         "Value"
+                                <th>
                             foreach m in dict
                                 <tr class="dict-row">
-                                    <td>
-                                        <a class="dict-open" href={sys.nest(base, sys.field(m, "__key"))}>
+                                    <td class="row-id">
+                                        <a class="row-link" href={sys.nest(base, sys.field(m, "__key"))}>
                                             sys.field(m, "__key")
                                     foreach p in desc.valueProps
                                         <td>
-                                            sys.field(m, p.name)
+                                            if p.baseType == "bool"
+                                                <span class="bool-cell">
+                                                    boolGlyph(sys.field(m, p.name))
+                                            else
+                                                sys.field(m, p.name)
                                     if desc.isScalar
                                         <td>
                                             sys.field(m, "value")
-                                    <td>
+                                    <td class="row-action">
                                         <button class="dict-remove" onClick={() => dict.remove(m)}>
                                             "Remove"
                         <div class="dict-new">
@@ -256,6 +271,11 @@ public static class GenericUi
                 if baseType == "date"
                     return "date"
                 return "text"
+
+            fn boolGlyph(v)
+                if v
+                    return "✓"
+                return "✗"
         """;
 
     // The effective ui for rendering: the app's ui augmented with the generic library (ALWAYS) plus,

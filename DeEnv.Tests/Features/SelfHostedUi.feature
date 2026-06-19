@@ -31,13 +31,13 @@ Feature: Self-hosted generic UI (object forms)
     And the page shows ".object-form"
     And the page shows ".set-table"
     And a set row shows "First"
-    And a set member open link points at "/notes/2"
+    And the set row link points at "/notes/2"
 
   @milestone-9 @single-user
   Scenario: A nested member link from the root resolves to its self-hosted page
     Given the self-hosted form app is running
     When I open "/"
-    And I follow the set member open link
+    And I follow the set row link
     Then the page is a code page
     And the page shows ".object-form"
     And the "title" field is a "text" input
@@ -235,6 +235,67 @@ Feature: Self-hosted generic UI (object forms)
     And I add to the set
     Then a set row eventually shows "Second note"
     And the store eventually has a "Note" whose "title" is "Second note"
+
+  # ── navigable tables (milestone 11: the UI middle-ground) ───────────────────
+  # A whole table row navigates to its entry via a stretched row-link anchor; the
+  # header aligns with the body (one cell per body column, incl. the Remove column);
+  # bool columns render a read-only ✓/✗ glyph; a per-row Remove deletes without
+  # navigating (the handled click is consumed, not bubbled to the row link).
+
+  @milestone-11 @single-user
+  Scenario: Clicking a set member row navigates to that member's page
+    Given the self-hosted form app is running
+    When I open "/notes"
+    And I click the set row titled "First"
+    Then the URL path becomes "/notes/2"
+    And the page shows ".object-form"
+    And the "title" field shows "First"
+
+  @milestone-11 @single-user
+  Scenario: Clicking a row's Remove removes the member and does not navigate
+    Given the self-hosted form app is running
+    When I open "/notes"
+    Then a set row shows "First"
+    When I remove the set row titled "First"
+    Then no set row eventually shows "First"
+    And the URL path is still "/notes"
+
+  @milestone-11 @single-user
+  Scenario: A set table's header aligns with its body rows
+    Given the self-hosted form app is running
+    When I open "/notes"
+    Then the page shows ".set-table"
+    And the set table header has a trailing action column
+    And the set table header column count equals the body row column count
+
+  @milestone-11 @single-user
+  Scenario: A bool column renders a read-only glyph, not the text true/false
+    Given the self-hosted form app is running
+    When I open "/notes"
+    Then a set row shows "First"
+    And the "First" row's "done" cell shows the bool glyph for false
+    And no set row shows the text "false"
+
+  @milestone-11 @single-user
+  Scenario: A dictionary table's header aligns with its body rows
+    Given the self-hosted dict app is running
+    When I open "/"
+    And I fill the new key with "alpha"
+    And I add the dict entry
+    Then a dict row eventually shows "alpha"
+    And the dict table header has a trailing action column
+    And the dict table header column count equals the body row column count
+
+  # ── breadcrumbs on a collection/route page (milestone 11 bug fix) ───────────
+  # The breadcrumb trail is the REQUEST url path, segment for segment — not the
+  # view's argument-binding path (which, for an owner-bound set route, is the
+  # PARENT object and so showed only "Db").
+
+  @milestone-11 @single-user
+  Scenario: The breadcrumb trail on a set route shows the full URL path
+    Given the self-hosted form app is running
+    When I open "/notes"
+    Then the breadcrumbs read "Db / notes"
 
   # ── references: the self-hosted pick-or-clear editor (slice 2) ──────────────
 

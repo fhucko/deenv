@@ -60,13 +60,13 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
         await ctx.Page!.Locator(".set-new input.name").FillAsync(name);
         await ctx.Page.Locator("button.set-add").ClickAsync();
         await ctx.Page.Locator(".set-row", new() { HasTextString = name }).First.WaitForAsync();
-        // Wait for the negative→real id remap to land in the DOM: the row's open link now addresses a
+        // Wait for the negative→real id remap to land in the DOM: the row's link now addresses a
         // real (positive) identity, so following it reaches the member page, not a transient id.
         await ctx.Page.WaitForFunctionAsync(
-            @"n => { for (const r of document.querySelectorAll('.set-row')) if (r.textContent.includes(n)) { const a = r.querySelector('a.set-open'); if (a && /\/[0-9]+$/.test(new URL(a.href).pathname)) return true; } return false; }",
+            @"n => { for (const r of document.querySelectorAll('.set-row')) if (r.textContent.includes(n)) { const a = r.querySelector('a.row-link'); if (a && /\/[0-9]+$/.test(new URL(a.href).pathname)) return true; } return false; }",
             name);
         await ctx.Page.Locator(".set-row", new() { HasTextString = name })
-                      .First.Locator("a.set-open").ClickAsync();
+                      .First.Locator("a.row-link").ClickAsync();
         // Following the open link is a real navigation; wait for the member page URL.
         await ctx.Page.WaitForUrlContentAsync(new Regex(@"/[0-9]+$"));
     }
@@ -137,7 +137,7 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
 
     private async Task<string> MemberHrefAsync(string setName, string name) =>
         await ctx.Page!.Locator(".set-row", new() { HasTextString = name })
-                      .First.Locator("a.set-open").First.GetAttributeAsync("href") ?? "";
+                      .First.Locator("a.row-link").First.GetAttributeAsync("href") ?? "";
 
     [Then(@"navigating to {string} shows the {string} field {string}")]
     public async Task ThenNavigatingShowsFieldAsync(string path, string field, string expected)

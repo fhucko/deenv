@@ -66,8 +66,8 @@ public sealed class NavigationSteps(InstanceContext ctx)
     }
 
     // Matches: When I click the row for key "42" in the customers table
-    // The self-hosted dictTable links each row's key cell to the nested entry URL
-    // (a.dict-open); the retiring C# table used tr[data-nav].
+    // The self-hosted dictTable links each row's key cell to the nested entry URL via the
+    // stretched row anchor (a.row-link); the retiring C# table used tr[data-nav].
     [When(@"I click the row for key {string} in the customers table")]
     public async Task WhenClickRowAsync(string key)
     {

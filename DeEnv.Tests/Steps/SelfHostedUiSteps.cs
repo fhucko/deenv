@@ -44,24 +44,102 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await Assert.That(actual.Trim()).IsEqualTo(text);
     }
 
-    // A set rendered inline links each member by its nested member URL (path-walk),
-    // e.g. /notes/2 — not the /~/<id> id-route.
-    [Then("a set member open link points at {string}")]
-    public async Task ThenSetMemberLink(string href) =>
+    // A set row navigates via a stretched row-link anchor (a.row-link wrapping the identity
+    // value), addressed by the member's nested URL (path-walk), e.g. /notes/2 — not /~/<id>.
+    [Then("the set row link points at {string}")]
+    public async Task ThenSetRowLink(string href) =>
         await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('a.set-open')].some(e => e.getAttribute('href') === {JsString(href)})");
+            $"() => [...document.querySelectorAll('.set-row a.row-link')].some(e => e.getAttribute('href') === {JsString(href)})");
 
-    // Click the inline member link and follow it. End-to-end parity: the link string is
-    // built by `nest` on the server (SSR) AND re-built by the client on hydrate (from
-    // location.pathname) — following it confirms both agree and that the nested URL resolves
-    // to a self-hosted page (not a C# fallback / not-found).
-    [When("I follow the set member open link")]
-    public async Task WhenFollowSetMember()
+    // Click the row-link and follow it. End-to-end parity: the link string is built by `nest`
+    // on the server (SSR) AND re-built by the client on hydrate (from location.pathname) —
+    // following it confirms both agree and that the nested URL resolves to a self-hosted page.
+    [When("I follow the set row link")]
+    public async Task WhenFollowSetRow()
     {
-        await ctx.Page!.Locator("a.set-open").First.ClickAsync();
+        await ctx.Page!.Locator(".set-row a.row-link").First.ClickAsync();
         // Wait for the member page nav to land before the next step interacts, so its hydration check
         // sees the NEW page's marker, not the set page's.
         await ctx.Page!.WaitForUrlContentAsync(new System.Text.RegularExpressions.Regex(@"/[0-9]+$"));
+    }
+
+    // ── navigable tables (milestone 11) ─────────────────────────────────────────────
+
+    // Click the row's stretched anchor (its accessible name is the identity value). Clicking the
+    // real link is robust under Playwright actionability; the overlay covering the rest of the row
+    // is confirmed visually (the `::after { inset:0 }` rule).
+    [When("I click the set row titled {string}")]
+    public async Task WhenClickSetRow(string title) =>
+        await ctx.Page!.Locator(".set-row", new() { HasTextString = title })
+            .Locator("a.row-link").First.ClickAsync();
+
+    // Per-row Remove (.set-remove), z-raised above the row-link overlay. With the stopPropagation
+    // wiring, clicking it removes the member WITHOUT bubbling to the row link (no navigation).
+    [When("I remove the set row titled {string}")]
+    public async Task WhenRemoveSetRow(string title) =>
+        await ctx.Page!.Locator(".set-row", new() { HasTextString = title })
+            .Locator("button.set-remove").First.ClickAsync();
+
+    [Then("no set row eventually shows {string}")]
+    public async Task ThenNoSetRow(string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => ![...document.querySelectorAll('.set-row')].some(e => e.textContent.includes({JsString(text)}))");
+
+    // A set/dict row never prints the literal text "true"/"false" (a bool renders as a glyph).
+    [Then("no set row shows the text {string}")]
+    public async Task ThenNoSetRowText(string text) =>
+        await Assert.That(await ctx.Page!.Locator(".set-row").AllInnerTextsAsync())
+            .DoesNotContain(t => t.Contains(text));
+
+    // The trailing action (Remove) column header: the last header cell, present and empty so the
+    // header aligns with the body's Remove cell (the #1 bug — header had N cells, body had N+2).
+    [Then("the set table header has a trailing action column")]
+    public async Task ThenSetHeaderTrailingColumn() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const th = [...document.querySelectorAll('.set-head th')]; " +
+            "return th.length > 0 && th[th.length - 1].textContent.trim() === ''; }");
+
+    [Then("the set table header column count equals the body row column count")]
+    public async Task ThenSetHeaderAligns() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const h = document.querySelectorAll('.set-head th').length; " +
+            "const row = document.querySelector('.set-row'); " +
+            "return row != null && h > 0 && row.querySelectorAll('td').length === h; }");
+
+    [Then("the dict table header has a trailing action column")]
+    public async Task ThenDictHeaderTrailingColumn() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const th = [...document.querySelectorAll('.dict-head th')]; " +
+            "return th.length > 0 && th[th.length - 1].textContent.trim() === ''; }");
+
+    [Then("the dict table header column count equals the body row column count")]
+    public async Task ThenDictHeaderAligns() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const h = document.querySelectorAll('.dict-head th').length; " +
+            "const row = document.querySelector('.dict-row'); " +
+            "return row != null && h > 0 && row.querySelectorAll('td').length === h; }");
+
+    // A bool cell renders a read-only glyph: ✓ for true, ✗ for false (never the text "true"/"false").
+    [Then("the {string} row's {string} cell shows the bool glyph for false")]
+    public async Task ThenBoolGlyphFalse(string rowTitle, string _) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const r = [...document.querySelectorAll('.set-row')].find(e => e.textContent.includes({JsString(rowTitle)})); " +
+            "return r != null && r.querySelector('.bool-cell')?.textContent.trim() === '\\u2717'; }");
+
+    // The exact pathname after a navigation lands (the row link pushed history) — stricter than the
+    // substring "the URL is", so a wrong navigation to /notes/2 can't satisfy a "/notes" assertion.
+    [Then("the URL path becomes {string}")]
+    public async Task ThenUrlPathBecomes(string expected) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => new URL(location.href).pathname === {JsString(expected)}");
+
+    // The pathname is STILL exactly this (a handled Remove must not have navigated). The preceding
+    // step already settled the removal, so this reads the now-stable URL.
+    [Then("the URL path is still {string}")]
+    public async Task ThenUrlPathStill(string expected)
+    {
+        var pathname = new Uri(ctx.Page!.Url).AbsolutePath;
+        await Assert.That(pathname).IsEqualTo(expected);
     }
 
     // Milestone 11: a hand-written `fn render()` that composes the PUBLIC <ObjectForm> library

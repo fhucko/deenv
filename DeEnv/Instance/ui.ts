@@ -222,7 +222,12 @@ function wireEvents(el: HTMLElement, tag: ExecTag): void {
         const fn = onClick;
         // Handlers may be side-effecting (assignments, factory calls): bypass the memo
         // cache while one runs, so a repeated call never skips its effects.
-        el.onclick = () => {
+        // A handled click is CONSUMED — stop it bubbling first, so a nested control (e.g. a
+        // Remove button inside a whole-row navigable link) fires its OWN handler and does not
+        // also trigger an ancestor's onClick (the row-link navigation). Native anchors without an
+        // onClick handler still navigate as usual (this only guards code-wired handlers).
+        el.onclick = (e: MouseEvent) => {
+            e.stopPropagation();
             runWithMemoBypass(() => callFunction(fn, { lastId: uiStatic.lastId }));
             renderUi();
         };

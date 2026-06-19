@@ -55,7 +55,7 @@ Feature: The object model — identity, references, sets, GC
     Given a person "Ada" in the extent referenced by the set "people"
     And the single reference "lead" references the person "Ada"
     When I navigate to "/people"
-    And I follow the set member open link
+    And I follow the set row link
     And I fill the "name" field with "Ada Lovelace"
     And I save
     And I navigate to "/lead"
