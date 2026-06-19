@@ -34,23 +34,16 @@ public record TypeDefinition(
 // newItem). Client-held; for SSR the initializer seeds its first-paint value.
 public record UiVar(string Name, ICodeValue? Value = null);
 
-// A SYNTHESIZED generic-UI view (render-time only; never authored or printed — user
-// `view` declarations were dropped in favour of two modes, fully auto / fully custom).
-// `Type` is the type it renders; `Prop` (when set) marks a reference- or set-route view
-// owning the page for prop `Type.Prop` (e.g. Db.lead / Db.notes), bound to the parent
-// object. The function is anonymous — the target rides here, never on Fn.Name.
-public record UiView(string? Type, CodeFunction Fn, string? Prop = null);
-
-// The `ui` section: client-held state variables, shared component functions, the
-// synthesized generic views, and the optional entry-point `render` function. With
-// `fn render()` the code owns the whole URL space (fully-custom UI); without it the
-// self-hosted generic UI is the default (synthesized into per-type Views at render
-// time by GenericUi.Effective). `Views` is never authored — only synthesized.
+// The `ui` section: client-held state variables, shared component functions, and the
+// entry-point `render` function. With a custom `fn render()` the code owns the whole URL
+// space (fully-custom UI); without it the self-hosted generic UI is the default — and
+// GenericUi.Effective then synthesizes a generic `fn render()` (a router that calls
+// sys.resolve + composes the library) as the effective Render. Either way every page is
+// one render; there is no per-URL view dispatch.
 public record InstanceUi(
     IReadOnlyList<UiVar>? Vars = null,
     IReadOnlyList<CodeFunction>? Functions = null,
-    CodeFunction? Render = null,
-    IReadOnlyList<UiView>? Views = null);
+    CodeFunction? Render = null);
 
 // The `common` section: functions shared by server and client. A function may be
 // marked server-only (CodeFunction.ServerOnly) so it is never shipped to the client.

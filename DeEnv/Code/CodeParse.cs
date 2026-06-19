@@ -368,8 +368,8 @@ public static class CodeParse
                     break;
             }
         // An app is fully custom (`fn render()`) or fully auto (the self-hosted generic UI,
-        // the default when there is no render). The synthesized generic views
-        // (InstanceUi.Views) are added at render time by GenericUi.Effective, never here.
-        return new InstanceUi(vars, functions, render, Views: null);
+        // the default when there is no render). The synthesized generic render is supplied at
+        // render time by GenericUi.Effective when there is no custom render, never here.
+        return new InstanceUi(vars, functions, render);
     }
 }

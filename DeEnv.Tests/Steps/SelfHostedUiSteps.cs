@@ -333,6 +333,21 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             $"() => document.querySelector('.target-title')?.textContent.trim() === {JsString(expected)}");
 
+    // The generic-UI collapse: a default app ships a SINGLE render (the framework-synthesized
+    // generic router, set as initUi.ui.render) with NO per-type view binding — the old
+    // `initUi.view` ViewInfo (kind/index/objectId) that drove the deleted per-URL dispatch is
+    // gone. Reads the live window.initUi the SSR page injected. Before the collapse this object
+    // page shipped `view.kind === "type"` and a per-type view index; after, render is present and
+    // `view` is absent — proving routing now lives in the one Code render, not C#.
+    [Then("the page routes through a single code render with no per-type view binding")]
+    public async Task ThenSingleCodeRender()
+    {
+        var hasRender = await ctx.Page!.EvaluateAsync<bool>("() => !!(window.initUi && window.initUi.ui && window.initUi.ui.render)");
+        var hasViewInfo = await ctx.Page!.EvaluateAsync<bool>("() => !!(window.initUi && window.initUi.view)");
+        await Assert.That(hasRender).IsTrue();
+        await Assert.That(hasViewInfo).IsFalse();
+    }
+
     // ── optional date/decimal/datetime left empty (pre-existing bug fix) ─────────
 
     [Given("the optional-leaves app is running")]

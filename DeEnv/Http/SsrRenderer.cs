@@ -26,10 +26,16 @@ public sealed class SsrRenderer
     // reserved-path-free data URL space.
     private readonly int _infraPort;
 
-    // Names of the synthesized framework members (the generic library) — placed in the lib scope,
-    // between the system scope and the app scope, so user code can compose them but they never
-    // pollute the app scope.
+    // Names of the synthesized framework members (the generic library + the generic render) — placed
+    // in the lib scope, between the system scope and the app scope, so user code can compose them but
+    // they never pollute the app scope.
     private readonly IReadOnlySet<string> _systemNames;
+
+    // True when the rendered `fn render()` is the framework-synthesized generic router (the app has
+    // no custom render): it runs in the lib scope (to resolve the library components by name) and the
+    // page keeps the generic breadcrumb/title chrome. A custom render runs in the app scope and owns
+    // the whole page. The single signal that replaced the per-URL ViewKind dispatch.
+    private readonly bool _isGeneric;
 
     // typeName → the type's descriptor literal, threaded into the CodeExecutor so `sys.schema(typeName)`
     // resolves a type's shape from the schema (the replacement for the `__descs` global). Now built for
@@ -52,109 +58,27 @@ public sealed class SsrRenderer
         _sessions = sessions;
         _infraPort = infraPort;
         _registry = registry ?? new LiveRegistry();
-        (_ui, _systemNames, _descriptors) = GenericUi.Effective(desc);
+        (_ui, _systemNames, _isGeneric, _descriptors) = GenericUi.Effective(desc);
     }
 
     // The rendered HTML plus the first-paint HTTP status (200 unless code set it, e.g. the
     // self-hosted NotFound view sets 404).
-    public (string Html, int Status) Render(string urlPath) => RenderUi(urlPath);
+    public (string Html, int Status) Render(string urlPath) => RenderPage(urlPath);
 
-    // ── the rendering-function decision ─────────────────────────────────────────
+    // ── code-owned UI (every page is `fn render()`) ─────────────────────────────
+    //
+    // Every app — custom or generic — renders through a single `fn render()`. A custom render is
+    // the app's own; a generic app's render is the framework-synthesized router (GenericUi), which
+    // calls `sys.resolve(path)` and composes the library. The C# per-URL view dispatch is gone — its
+    // routing now lives in Code (sys.resolve), proven by the SelfHostedUi generic-UI + resolve-probe
+    // scenarios. A runtime error on first paint becomes an SSR error page.
 
-    private enum ViewKind { Render, Type, NotFound }
-
-    private sealed record ViewMatch(ViewKind Kind, CodeFunction Fn, UiView? View, NodePath? TargetPath);
-
-    // Which render function (if any) owns this URL:
-    //   1. `fn render()` — the fully-custom UI, owns the whole URL space;
-    //   2. else, the synthesized generic view for the routed node (object page, or a
-    //      reference / set route) — the self-hosted generic UI is the default, so this
-    //      covers every app without a custom render, as long as no traversal segment
-    //      walks INTO a dictionary entry (those entry pages still fall to the C# form);
-    //   3. else null: the C# auto-form (a dict route/entry, the `/~/{id}` id-route).
-    private ViewMatch? ResolveView(string urlPath)
-    {
-        var ui = _ui;
-        if (ui == null) return null;
-
-        if (ui.Render != null)
-            return new ViewMatch(ViewKind.Render, ui.Render, null, null);
-
-        if (ui.Views is not { Count: > 0 }) return null;
-        var nodePath = ParsePath(urlPath);
-        var typeInfo = _resolver.ResolveType(nodePath);
-        if (typeInfo == null) return null;
-
-        // A set route (/notes): the self-hosted set table, bound to the OWNER object that
-        // holds the set (keyed by owner type + prop) — like a reference route.
-        if (typeInfo is { Cardinality: Cardinality.Set, Type.BaseType: BaseType.Object })
-            return ResolveOwnerBoundView(ui, nodePath);
-
-        // A dictionary route (/settings): the self-hosted dict table, bound to the OWNER.
-        if (typeInfo is { Cardinality: Cardinality.Dictionary })
-            return ResolveOwnerBoundView(ui, nodePath);
-
-        // A SCALAR dictionary entry (/settings/<key>): a single value reached by traversing a
-        // dict. The shared leaf editor renders it, bound to the entry object (its value
-        // persists path-addressed). Object entries fall through to the object view below.
-        if (typeInfo is { Cardinality: Cardinality.Single, Type.BaseType: not BaseType.Object }
-            && _resolver.TraversesDictionary(nodePath))
-        {
-            var leaf = ui.Views.FirstOrDefault(v => v.Type == GenericUi.LeafViewType);
-            return leaf == null ? null : new ViewMatch(ViewKind.Type, leaf.Fn, leaf, nodePath);
-        }
-
-        if (typeInfo is not { Cardinality: Cardinality.Single, Type.BaseType: BaseType.Object }) return null;
-
-        // A single-reference route (e.g. /lead): the reference editor, bound to the PARENT
-        // object — never the (maybe-unset) target — so an unset reference is the empty
-        // editor, not NotFound.
-        if (typeInfo.IsReference)
-            return ResolveOwnerBoundView(ui, nodePath);
-
-        // An ordinary object page (a set member / the routed object): the object view
-        // (Prop == null excludes the synthesized reference / set views).
-        var typeView = ui.Views.FirstOrDefault(v => v.Type == typeInfo.Type.Name && v.Prop == null);
-        return typeView == null ? null : new ViewMatch(ViewKind.Type, typeView.Fn, typeView, nodePath);
-    }
-
-    // A view that owns the route of a prop (a reference or a set), keyed by (owner type,
-    // prop) and bound to the parent object that holds it.
-    private ViewMatch? ResolveOwnerBoundView(InstanceUi ui, NodePath nodePath)
-    {
-        var prop = nodePath.Segments[^1];
-        var parentPath = NodePath.FromSegments(nodePath.Segments.Take(nodePath.Segments.Count - 1));
-        var ownerType = _resolver.ResolveType(parentPath)?.Type.Name;
-        var view = (ui.Views ?? []).FirstOrDefault(v => v.Type == ownerType && v.Prop == prop);
-        return view == null ? null : new ViewMatch(ViewKind.Type, view.Fn, view, parentPath);
-    }
-
-    // The routed object of a type view was deleted (or a reference is unset): the
-    // page is NotFound, not a code error.
-    private sealed class ViewTargetNotFoundException : Exception;
-
-    // ── code-owned UI (view pages; `fn render()` is the root view) ──────────────
-
-    // The synthesized NotFound view (a self-hosted 404 page), used for an unrouted URL or a
-    // deleted view target.
-    private ViewMatch NotFoundMatch()
-    {
-        var v = (_ui?.Views ?? []).FirstOrDefault(x => x.Type == GenericUi.NotFoundViewType)
-            ?? throw new InvalidOperationException("No NotFound view was synthesized.");
-        return new ViewMatch(ViewKind.NotFound, v.Fn, v, null);
-    }
-
-    // Resolve the view for this URL (an unrouted URL falls to the self-hosted NotFound) and
-    // render it. A runtime error on first paint becomes an SSR error page.
-    private (string Html, int Status) RenderUi(string urlPath) =>
-        RenderPage(urlPath, ResolveView(urlPath) ?? NotFoundMatch());
-
-    private (string Html, int Status) RenderPage(string urlPath, ViewMatch match)
+    private (string Html, int Status) RenderPage(string urlPath)
     {
         var context = new ExecContext();
         try
         {
-            var (result, title, scope, _, targetId, status) = ExecuteRender(urlPath, context, forcedMatch: match);
+            var (result, title, scope, status) = ExecuteRender(urlPath, context);
             var body = new StringBuilder();
             SerializeChild(result, body);
 
@@ -171,47 +95,25 @@ public sealed class SsrRenderer
             var clientUi = new InstanceUi(
                 Vars: null,
                 Functions: _ui!.Functions?.Where(f => !f.ServerOnly).ToList(),
-                Render: _ui.Render,
-                Views: _ui.Views);
+                Render: _ui.Render);
             var clientCommon = _desc.Common?.Functions is { } common
                 ? new InstanceCommon(common.Where(f => !f.ServerOnly).ToList())
                 : null;
-
-            // The resolved rendering-function decision, so the client re-renders the
-            // same view: which view, and (type views) the routed object's id.
-            var viewInfo = new JsonObject { ["kind"] = match.Kind.ToString().ToLowerInvariant() };
-            if (match.View != null) viewInfo["index"] = _ui.Views!.ToList().IndexOf(match.View);
-            if (targetId is { } id) viewInfo["objectId"] = id;
 
             var initUi = new JsonObject
             {
                 ["ui"] = JsonSerializer.SerializeToNode(clientUi, SchemaJson.Options),
                 ["common"] = clientCommon is null ? null : JsonSerializer.SerializeToNode(clientCommon, SchemaJson.Options),
-                ["view"] = viewInfo,
             }.ToJsonString();
 
-            // A type view (and the NotFound page) keeps the generic breadcrumb chrome (plain
-            // links) around its content, so a missing page can still navigate back up; a
-            // full-custom render owns the whole page. The trail is derived from the REQUEST url
-            // path — segment for segment, per INSTANCE_MODEL.md — NOT the view's argument-binding
-            // path (`match.TargetPath`, which for an owner-bound route — a set/dict/reference — is
-            // the PARENT object, so a collection page like /customers would show only "Db").
-            var breadcrumbs = match.Kind switch
-            {
-                ViewKind.Type or ViewKind.NotFound => Breadcrumbs(ParsePath(urlPath)),
-                _ => "",
-            };
+            // A generic-UI page keeps the breadcrumb chrome (plain links) around its content, so a
+            // routed/collection/missing page can still navigate back up; a full-custom render owns the
+            // whole page. The trail is derived from the REQUEST url path — segment for segment, per
+            // INSTANCE_MODEL.md (the same location-mirrors-URL invariant the client preserves).
+            var breadcrumbs = _isGeneric ? Breadcrumbs(ParsePath(urlPath)) : "";
 
             return (UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi), clientId, _infraPort),
                 status);
-        }
-        catch (ViewTargetNotFoundException)
-        {
-            // The routed object was deleted (or a reference is unset): render the self-hosted
-            // NotFound view (404), unless we were already rendering it.
-            return match.Kind == ViewKind.NotFound
-                ? (Layout("Not found", "<main><h1>Not found</h1></main>"), 404)
-                : RenderPage(urlPath, NotFoundMatch());
         }
         catch (CodeRuntimeException ex)
         {
@@ -243,13 +145,13 @@ public sealed class SsrRenderer
     {
         var context = new ExecContext();
         context.LastId.Value = Math.Min(0, lastIdFloor);
-        var (_, _, scope, _, _, _) = ExecuteRender(urlPath, context, sessionVars, warmDb);
+        var (_, _, scope, _) = ExecuteRender(urlPath, context, sessionVars, warmDb);
         return ClientState.Serialize(scope, context);
     }
 
-    private (IExecTagChild Result, string Title, ExecScope Scope, ViewMatch Match, int? TargetId, int Status) ExecuteRender(
+    private (IExecTagChild Result, string Title, ExecScope Scope, int Status) ExecuteRender(
         string urlPath, ExecContext context, IReadOnlyDictionary<string, IExecValue>? sessionVars = null,
-        ExecObject? warmDb = null, ViewMatch? forcedMatch = null)
+        ExecObject? warmDb = null)
     {
         var ui = _ui!;
         var exec = new CodeExecutor(_store, _descriptors, _resolver);
@@ -261,11 +163,12 @@ public sealed class SsrRenderer
         // Three scopes, chained system ← lib ← app, so the generic-UI library is a PUBLIC layer
         // between framework state and the user's code:
         //   system   — framework state (db, path, status), the shared root both can read;
-        //   lib      — the synthesized generic library (ObjectForm/RefEditor/SetTable/…), the PARENT
-        //              of app, so a custom `fn render()` reaches the components through the scope
-        //              chain (recognition is name-resolution) and composes them. A generic view runs
-        //              IN lib, and since app is BELOW lib it still cannot see the user's app vars
-        //              (type descriptors are no longer a var — they come via the sys.schema builtin);
+        //   lib      — the synthesized generic library (ObjectForm/RefEditor/SetTable/…) plus the
+        //              synthesized generic render, the PARENT of app, so a custom `fn render()` reaches
+        //              the components through the scope chain (recognition is name-resolution) and
+        //              composes them. The generic render runs IN lib (it composes the library), and
+        //              since app is BELOW lib it still cannot see the user's app vars (type descriptors
+        //              are no longer a var — they come via the sys.schema builtin);
         //   app      — the user's own vars/functions/render.
         var system = new ExecScope { IsTop = true };
         var lib = new ExecScope { Parent = system, IsTop = true };
@@ -326,79 +229,41 @@ public sealed class SsrRenderer
         // the client mirrors it to location.pathname and updates it on navigation).
         system.Items["path"] = new ExecScopeItem { Value = new ExecText { Value = urlPath }, IsReadOnly = false };
 
-        // The rendering-function decision: the caller's forced match (RenderPage passes the
-        // resolved view, incl. NotFound), or re-resolved here so the refetch path
-        // (RenderState → ExecuteRender) renders the same view as the page did.
-        var match = forcedMatch ?? ResolveView(urlPath)
-            ?? throw new CodeRuntimeException("No view matches this URL.");
+        // The render: the app's own (custom) or the framework-synthesized generic router — already
+        // chosen by GenericUi.Effective and stored as _ui.Render. The generic render runs in the
+        // LIBRARY scope (it composes the library, resolving ObjectForm/… by name); a custom render
+        // runs in the APP scope (and reaches the library through its parent, the lib scope). Either
+        // way the chain reaches system (db/path/status). It takes no arguments: routing is internal
+        // (the generic render calls sys.resolve(path); a custom render reads path itself).
+        var renderFn = ui.Render
+            ?? throw new CodeRuntimeException("No render function for this instance.");
+        var renderScope = _isGeneric ? lib : app;
 
-        // The synthesized generic views run in the LIBRARY scope (they call the library); a custom
-        // `fn render()` runs in the APP scope (and reaches the library through its parent, the lib
-        // scope). Either way the chain reaches system (db/path/status).
-        var renderScope = match.Kind == ViewKind.Render ? app : lib;
-
-        // A type view's parameters: (1) the routed object, found by walking the URL
-        // segments through the SAME graph instance bound as `db` (so leaves, session
-        // mirroring and identity all line up); (2) the request URL as `base`, so the
-        // generic UI builds nested member links (nest(base, prop) → /notes/3). Bound as
-        // call arguments — never top-scope vars — so they can't be overridden or shipped.
-        int? targetId = null;
-        IExecValue[] args = [];
-        if (match.Kind == ViewKind.Type)
-        {
-            var target = FindTarget(db, match.TargetPath!) ?? throw new ViewTargetNotFoundException();
-            targetId = target.Id;
-            args = [target, new ExecText { Value = urlPath }];
-        }
-
-        var result = exec.InvokeFunction(match.Fn, args, renderScope, context);
+        var result = exec.InvokeFunction(renderFn, [], renderScope, context);
 
         if (result is not IExecTagChild child)
-            throw new CodeRuntimeException("The view did not return a renderable value.");
+            throw new CodeRuntimeException("The render did not return a renderable value.");
 
-        // Title: the app's `title` var (in the app scope) when set; a type-view page falls back
-        // to the generic page title derived from the REQUEST url path (segment for segment — the same
-        // location-mirrors-URL invariant as the breadcrumb; NOT match.TargetPath, which for an
-        // owner-bound route is the parent and would title /notes as just "Db"), the NotFound page to
-        // "Not found", else "DeEnv".
+        // The first-paint HTTP status: the (possibly render-assigned) `status` system var. The
+        // generic render's NotFound branch sets it to 404; read back here.
+        var status = system.Items.TryGetValue("status", out var s) && s.Value is ExecInt si ? si.Value : 200;
+
+        // Title: the app's `title` var (in the app scope) when set; otherwise — a generic-UI page —
+        // the generic page title derived from the REQUEST url path (segment for segment, the same
+        // location-mirrors-URL invariant as the breadcrumb), or "Not found" when the generic render
+        // resolved to NotFound (status 404); else "DeEnv".
         var title = app.Items.TryGetValue("title", out var t) && t.Value is ExecText titleText
             ? titleText.Value
-            : match.Kind == ViewKind.Type ? PageTitle(ParsePath(urlPath))
-            : match.Kind == ViewKind.NotFound ? "Not found"
+            : _isGeneric ? (status == 404 ? "Not found" : PageTitle(ParsePath(urlPath)))
             : "DeEnv";
 
-        // The first-paint HTTP status: the (possibly view-assigned) `status` system var.
-        var status = system.Items.TryGetValue("status", out var s) && s.Value is ExecInt si ? si.Value : 200;
-        // Ship the render scope (lib for a generic view; app for a custom render → its vars) plus the
-        // parents (ClientState walks up). Type descriptors ride the memo cache as `schema:*` entries,
-        // not the scope.
-        return (child, title, renderScope, match, targetId, status);
+        // Ship the render scope (lib for the generic render; app for a custom render → its vars) plus
+        // the parents (ClientState walks up). Type descriptors ride the memo cache as `schema:*`
+        // entries, not the scope.
+        return (child, title, renderScope, status);
     }
 
-    // Walk URL segments through the loaded object graph: a set member segment is the
-    // item's identity key, a field segment is a prop. Null when anything is missing
-    // (deleted member, unset reference) — the caller renders NotFound.
-    private static ExecObject? FindTarget(ExecObject root, NodePath path)
-    {
-        IExecValue current = root;
-        foreach (var segment in path.Segments)
-        {
-            if (current is ExecArray { Kind: ArrayKind.Dict } dict)
-                // A dict entry segment is its key; match the entry carrying that __key.
-                current = dict.Items.FirstOrDefault(i =>
-                    (i.Value as ExecObject)?.Props.GetValueOrDefault(DbBridge.EntryKeyProp) is ExecText k
-                    && k.Value == segment)?.Value ?? new ExecNull();
-            else if (current is ExecArray arr && int.TryParse(segment, out var id))
-                current = arr.Items.FirstOrDefault(i => i.Key == id)?.Value ?? new ExecNull();
-            else if (current is ExecObject obj && obj.Props.TryGetValue(segment, out var value))
-                current = value;
-            else
-                return null;
-        }
-        return current as ExecObject;
-    }
-
-    // Page shell for a code page: optional generic chrome (a type view keeps the
+    // Page shell for a code page: optional generic chrome (a generic-UI page keeps the
     // breadcrumbs) around the `#app` mount the client reconciles into; an inline bootstrap
     // injects the bundle from the infra port (/js), which hydrates from window.initUi /
     // window.initData. The default stylesheet ships on EVERY page: the generic UI's component

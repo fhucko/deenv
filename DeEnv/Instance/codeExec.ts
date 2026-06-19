@@ -549,8 +549,9 @@ function execNew(codeCall: CodeCall, scope: ExecScope, context: ExecContext): Ex
     return { type: "object", props, id: --context.lastId.value };
 }
 
-// resolve(pathText): the Code-level twin of SsrRenderer.ResolveView (and of the C#
-// CodeExecutor.ExecuteResolve) — resolve a URL to its view-KIND plus the bound object(s):
+// resolve(pathText): the URL→view-kind dispatch (the client twin of C# CodeExecutor.ExecuteResolve;
+// it replaced the deleted SsrRenderer.ResolveView). Resolves a URL to its view-KIND plus the bound
+// object(s):
 //   { kind, target, parent, prop, typeName, parentType }
 // kind ∈ object | set | ref | dict | leaf | notFound. The CLIENT has no schema/store (unlike the
 // server, which reuses the TypeResolver), so it ports the SAME cardinality-walk over the SHIPPED

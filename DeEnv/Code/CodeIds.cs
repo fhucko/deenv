@@ -69,12 +69,12 @@ public static class CodeIds
         }
 
         // Common is walked even without a ui section, so a common-only document still
-        // gets distinct function ids (memo keys must never collide). Views must be
-        // walked too: lambdas inside their bodies key the memo cache by fn id.
+        // gets distinct function ids (memo keys must never collide). The render (a custom
+        // one, or the framework-synthesized generic router) is walked too: its nested
+        // functions + lambdas key the memo cache by fn id.
         foreach (var v in desc.Ui?.Vars ?? []) Walk(v.Value);
         foreach (var f in desc.Ui?.Functions ?? []) Walk(f);
         Walk(desc.Ui?.Render);
-        foreach (var view in desc.Ui?.Views ?? []) Walk(view.Fn);
         foreach (var f in desc.Common?.Functions ?? []) Walk(f);
     }
 }

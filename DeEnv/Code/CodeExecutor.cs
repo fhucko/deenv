@@ -23,11 +23,13 @@ public sealed class CodeExecutor
     private readonly IReadOnlyDictionary<string, CodeObject> _descriptors;
 
     // The schema-driven URL→type resolver, threaded in like _store/_descriptors so the
-    // `sys.resolve(path)` builtin reuses the SAME cardinality-walk SsrRenderer.ResolveView does
-    // (one server-side source of truth). Null for a bare executor (conformance) — `sys.resolve`
-    // then throws, as it needs the schema. The client twin (codeExec.ts) has no resolver/schema,
-    // so it ports the walk over the SHIPPED descriptors instead — proven identical by the
-    // SelfHostedUi SSR+hydrate "resolve probe" scenarios.
+    // `sys.resolve(path)` builtin can do the cardinality-walk that decides a URL's view kind. This
+    // walk USED to live in C# (the now-deleted SsrRenderer.ResolveView per-URL dispatch); the
+    // generic-UI collapse moved it into Code — `sys.resolve` is the sole source of truth, called by
+    // the framework-synthesized generic `fn render()`. Null for a bare executor (conformance) —
+    // `sys.resolve` then throws, as it needs the schema. The client twin (codeExec.ts) has no
+    // resolver/schema, so it ports the walk over the SHIPPED descriptors instead — proven identical
+    // by the SelfHostedUi SSR+hydrate "resolve probe" scenarios.
     private readonly TypeResolver? _resolver;
 
     public CodeExecutor(IInstanceStore? store = null, IReadOnlyDictionary<string, CodeObject>? descriptors = null,
@@ -530,17 +532,19 @@ public sealed class CodeExecutor
         return new ExecInt { Value = obj.Id };
     }
 
-    // resolve(pathText): the Code-level twin of SsrRenderer.ResolveView — resolve a URL to its
-    // view-KIND plus the bound object(s), as ONE object:
+    // resolve(pathText): the URL→view-kind dispatch, now in Code (it replaced the deleted C#
+    // SsrRenderer.ResolveView). Resolves a URL to its view-KIND plus the bound object(s), as ONE
+    // object:
     //   { kind, target, parent, prop, typeName, parentType }
-    // kind ∈ object | set | ref | dict | leaf | notFound (the six ResolveView outcomes). target is
-    // the routed object (object page / scalar-dict-entry leaf), else null; parent is the OWNER
-    // object for an owner-bound route (set/ref/dict), else null; prop the owner-bound prop name;
-    // typeName the type whose descriptor to fetch (object→its type, set→element, ref→target, else
-    // ""); parentType the owner type (the dict's sys.schema(parentType, prop)), else "".
+    // kind ∈ object | set | ref | dict | leaf | notFound (the six view outcomes the synthesized
+    // generic render switches on). target is the routed object (object page / scalar-dict-entry
+    // leaf), else null; parent is the OWNER object for an owner-bound route (set/ref/dict), else
+    // null; prop the owner-bound prop name; typeName the type whose descriptor to fetch (object→its
+    // type, set→element, ref→target, else ""); parentType the owner type (the dict's
+    // sys.schema(parentType, prop)), else "".
     //
-    // The cardinality DECISION reuses the threaded TypeResolver (the same walk ResolveView uses —
-    // one server-side source of truth); the object BINDING walks the SAME `db` graph bound in scope
+    // The cardinality DECISION reuses the threaded TypeResolver (one server-side source of truth);
+    // the object BINDING walks the SAME `db` graph bound in scope
     // (a FindTarget-style member/field walk). The client twin (codeExec.ts) has no schema, so it
     // ports the identical walk over the SHIPPED descriptors + its own db graph; both must produce
     // the same result, proven by the SelfHostedUi resolve-probe SSR+hydrate scenarios. Pure /
@@ -604,8 +608,8 @@ public sealed class CodeExecutor
         return ResolveResult(context, kind, parent: parent, prop: prop, typeName: typeName, parentType: parentType);
     }
 
-    // The owner type for an owner-bound route — the type at the path minus its last segment
-    // (mirrors SsrRenderer.ResolveOwnerBoundView), e.g. "Db" for /settings.
+    // The owner type for an owner-bound route — the type at the path minus its last segment,
+    // e.g. "Db" for /settings.
     private string OwnerType(NodePath path) =>
         _resolver!.ResolveType(NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1)))?.Type.Name ?? "";
 

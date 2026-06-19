@@ -460,6 +460,35 @@ Feature: Self-hosted generic UI (object forms)
     When I open "/does-not-exist"
     Then the resolve probe kind is "notFound"
 
+  # ── the generic-UI collapse: one synthesized Code render (milestone 11, increment 2+3) ──
+  # The per-URL C# view dispatch is GONE. A default (no-custom-render) app now renders an object
+  # page through a SINGLE framework-synthesized `fn render()` — the same custom-render path a
+  # hand-written app uses — that routes via sys.resolve + composes the library. Observable proof:
+  # the page still self-hosts the object form, and the shipped client UI carries a `render` (the
+  # one render) with NO per-type view binding (the old `view` ViewInfo is gone). This is the
+  # defining assertion of the collapse; the ~44 generic-UI scenarios above are its behavior net.
+
+  @milestone-11 @single-user
+  Scenario: A default app routes through a single synthesized Code render, not a per-type view
+    Given the self-hosted form app is running
+    When I open "/notes/2"
+    Then the page is a code page
+    And the page shows ".object-form"
+    And the page routes through a single code render with no per-type view binding
+
+  # The synthesized generic render's notFound branch self-hosts the 404 page through the SAME one
+  # render, on the CLIENT too: `I open` waits for `data-hydrated`, which init() sets only AFTER the
+  # client render completes — so if the synth render's `else` branch (`status = 404` + return
+  # NotFoundForm()) threw on the client, this step would time out. It passing proves the collapse's
+  # NotFound path runs client-side (not only the SSR 404 the "I request" scenario above checks); the
+  # `.not-found` selector confirms the right branch rendered. (No data-key "code page" assertion: the
+  # not-found tree has no foreach, hence no keyed element.)
+  @milestone-11 @single-user
+  Scenario: An unrouted URL self-hosts the not-found page through the single render
+    Given the self-hosted form app is running
+    When I open "/does-not-exist"
+    Then the page shows ".not-found"
+
   # ── breadcrumbs on a collection/route page (milestone 11 bug fix) ───────────
   # The breadcrumb trail is the REQUEST url path, segment for segment — not the
   # view's argument-binding path (which, for an owner-bound set route, is the

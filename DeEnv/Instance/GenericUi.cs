@@ -60,21 +60,31 @@ namespace DeEnv.Instance;
 // is now plain argument data (its identity carries no reactivity). Cross-type references are stored
 // by type NAME (cycle-safe); a component resolves them with sys.schema(name).
 //
-// Synthesis is render-time only: the canonical InstanceDescription (what AppPrint emits)
-// carries no UI at all for a plain app. A synthesized OBJECT view (Type=T, Prop=null) binds the
-// routed object; a REFERENCE / SET view (Type=O, Prop=P) binds the parent object that owns
-// the prop — both reuse the M8 type-view client binding (no new wire shape).
+// Synthesis is render-time only: the canonical InstanceDescription (what AppPrint emits) carries no
+// UI at all for a plain app. For a generic-UI app the framework synthesizes a single `fn render()`
+// (below) that routes every URL by calling `sys.resolve(path)` — the Code twin of the old C#
+// per-URL dispatch — and composing the library component for the resolved kind. There are no
+// per-type views anymore: every page runs through this one render, exactly as a custom render does.
 public static class GenericUi
 {
-    // The reserved view "type" for the shared scalar leaf editor (a scalar dictionary
-    // entry page). SsrRenderer.ResolveView dispatches a scalar dict entry to it.
-    public const string LeafViewType = "__leaf";
-
-    // The reserved view "type" for the self-hosted NotFound page (an unrouted URL).
-    public const string NotFoundViewType = "__notFound";
-
     private const string StdlibSource = """
         ui
+            fn render()
+                var r = sys.resolve(path)
+                if r.kind == "object" && r.target != null
+                    return <ObjectForm obj={r.target} meta={sys.schema(r.typeName)} base={path}>
+                else if r.kind == "set"
+                    return <SetTable set={sys.field(r.parent, r.prop)} desc={sys.schema(r.typeName)} setPath={path}>
+                else if r.kind == "ref"
+                    return <RefEditor parent={r.parent} prop={r.prop} target={sys.schema(r.typeName)}>
+                else if r.kind == "dict"
+                    return <DictTable dict={sys.field(r.parent, r.prop)} desc={sys.schema(r.parentType, r.prop)} base={path}>
+                else if r.kind == "leaf" && r.target != null
+                    return <LeafForm entry={r.target} base={path}>
+                else
+                    status = 404
+                    return NotFoundForm()
+
             fn Input(obj, desc, variant)
                 if desc.baseType == "bool"
                     return <input type="checkbox" class={desc.name} checked={sys.field(obj, desc.name)}>
@@ -342,145 +352,68 @@ public static class GenericUi
                 return "✗"
         """;
 
-    // The effective ui for rendering: the app's ui augmented with the generic library (ALWAYS) plus,
-    // when the app has no custom `fn render()`, an OBJECT view per self-hostable type and a
-    // REFERENCE / SET / DICT view per such prop. Functions are renumbered (CodeIds) over the whole
-    // set so server and client key the memo cache alike.
+    // The effective ui for rendering: the app's ui augmented with the generic library (ALWAYS), plus —
+    // when the app has no custom `fn render()` — a single synthesized generic `fn render()` that routes
+    // every URL itself by composing the library (the DEFAULT UI). Functions are renumbered (CodeIds)
+    // over the whole set so server and client key the memo cache alike.
     //
-    // The library is now PUBLIC: a custom `fn render()` reaches it through the scope chain (the
-    // renderer parents the app scope under the library scope), so it can compose <ObjectForm> &c.
-    // — hence the library functions + descriptors are synthesized for EVERY app, custom or not. A
-    // custom app gets NO per-type views (it owns its own routing); only a generic-UI (no custom
-    // render) app does.
+    // The library is PUBLIC: a custom `fn render()` reaches it through the scope chain (the renderer
+    // parents the app scope under the library scope), so it can compose <ObjectForm> &c. — hence the
+    // library functions + descriptors are synthesized for EVERY app, custom or not. The synthesized
+    // generic render is added ONLY for a generic-UI app (no custom render); a custom app owns its own
+    // routing.
     //
-    // SystemNames lists the synthesized framework members (the library functions) so the renderer
-    // places them in the LIBRARY scope, between the system scope and the app scope. Descriptors maps
+    // The generic render IS the collapse of the old per-URL C# dispatch (SsrRenderer.ResolveView +
+    // the Synth*View builders): instead of synthesizing one anonymous view per type/prop and a C#
+    // cardinality-walk to pick one, a single render calls `sys.resolve(path)` (the Code twin of that
+    // walk) and switches on the resolved kind, binding the SAME library components the views used to.
+    // So every page is now the custom-render path — the client always runs `render` with no ViewInfo.
+    //
+    // SystemNames lists the synthesized framework members (the library functions + the generic render)
+    // so the renderer places them in the LIBRARY scope, between the system scope and the app scope.
+    // IsGeneric is true when the synthesized generic render is in play (no custom render): the renderer
+    // runs the render in the lib scope and keeps the generic breadcrumb/title chrome. Descriptors maps
     // "TypeName" → a type's descriptor literal and "Owner/prop" → a dict prop's descriptor, threaded
-    // into the executor so `sys.schema(...)` resolves a shape (the replacement for the old
-    // `__descs`/`__dictDescs` globals).
-    public static (InstanceUi? Ui, IReadOnlySet<string> SystemNames, IReadOnlyDictionary<string, CodeObject> Descriptors)
-        Effective(InstanceDescription desc)
+    // into the executor so `sys.schema(...)` resolves a shape.
+    public static (InstanceUi? Ui, IReadOnlySet<string> SystemNames, bool IsGeneric,
+        IReadOnlyDictionary<string, CodeObject> Descriptors) Effective(InstanceDescription desc)
     {
-        // A custom `fn render()` owns the whole URL space, so it gets the library but no per-type
-        // views. A plain app — no `ui` section, or only common helpers — renders entirely through
-        // the synthesized per-type views over the Code ObjectForm library (the DEFAULT UI).
+        // A custom `fn render()` owns the whole URL space, so it gets the library but no generic
+        // render. A plain app — no `ui` section, or only common helpers — renders entirely through
+        // the synthesized generic render over the Code ObjectForm library (the DEFAULT UI).
         var ui = desc.Ui ?? new InstanceUi();
         var isCustom = ui.Render != null;
 
         // Parse the library FRESH (distinct CodeFunction instances each call, so concurrent
-        // renderers never share mutable Ids).
+        // renderers never share mutable Ids). StdlibSource defines the library functions plus a
+        // `fn render()` (the generic router) — MapUi pulls the latter into libUi.Render.
         var (_, libUi) = CodeParse.ParseDocument(StdlibSource);
         var library = libUi.Functions ?? [];
+        var genericRender = libUi.Render
+            ?? throw new InvalidOperationException("The generic library must define `fn render()`.");
 
         var objectTypes = (desc.Types ?? []).Where(t => t.BaseType == BaseType.Object).ToList();
 
-        // Per-type views only for a generic-UI app; a custom render owns its own routing.
-        var synthViews = new List<UiView>();
-        if (!isCustom)
-        {
-            foreach (var type in objectTypes)
-            {
-                // An object page for every object type. (Dictionaries self-host now, so there is
-                // no longer a per-type gate routing some types to the C# auto-form.)
-                synthViews.Add(SynthObjectView(type.Name));
-
-                // Reference-route editor per single object-reference prop (any owner — e.g. Db.lead).
-                foreach (var prop in RefProps(type, desc))
-                    synthViews.Add(SynthRefView(type.Name, prop.Name, prop.Type));
-
-                // Set-table page per object set prop (e.g. Db.notes → /notes).
-                foreach (var prop in SetProps(type, desc))
-                    synthViews.Add(SynthSetView(type.Name, prop.Name, prop.Type));
-
-                // Dict-table page per dictionary prop (e.g. Db.settings → /settings).
-                foreach (var prop in DictProps(type))
-                    synthViews.Add(SynthDictView(type.Name, prop.Name));
-            }
-
-            // One shared leaf editor for scalar dictionary entry pages (/settings/<key>), added
-            // only when the schema has a scalar dictionary (an object dict entry uses its type view).
-            if (objectTypes.Any(t => DictProps(t).Any(p => !desc.IsObjectType(p.Type))))
-                synthViews.Add(SynthLeafView());
-
-            // The self-hosted NotFound page for any unrouted URL (sets a 404 status).
-            synthViews.Add(SynthNotFoundView());
-        }
+        // The render: the app's own when custom; otherwise the synthesized generic router (which
+        // composes the library to route every URL via sys.resolve).
+        var render = isCustom ? ui.Render : genericRender;
 
         var functions = new List<CodeFunction>();
         functions.AddRange(library);
         functions.AddRange(ui.Functions ?? []);
-        var views = new List<UiView>();
-        views.AddRange(ui.Views ?? []);
-        views.AddRange(synthViews);
 
-        var effective = ui with { Functions = functions, Views = views };
-        // Number every function (library + app + synthesized) deterministically so the
+        var effective = ui with { Functions = functions, Render = render };
+        // Number every function (library + app + the render) deterministically so the
         // server and the shipped client key the memo cache identically.
         CodeIds.Assign(new InstanceDescription(Types: desc.Types, Ui: effective, Common: desc.Common));
 
-        // The framework-synthesized members (the library functions) — the renderer puts these in the
-        // library scope, between the system scope and the app scope. Descriptors are resolved by the
-        // `sys.schema` builtin from the threaded map (no descriptor var in scope anymore).
+        // The framework-synthesized members — the renderer puts these in the library scope, between
+        // the system scope and the app scope. The library functions are always synthesized; the
+        // generic render joins them only when it is in play (a generic app), so it runs in the lib
+        // scope and resolves the library components by name. Descriptors are resolved by `sys.schema`.
         var systemNames = new HashSet<string>(library.Where(f => f.Name != null).Select(f => f.Name!));
-        return (effective, systemNames, Descriptors(objectTypes, desc));
+        return (effective, systemNames, IsGeneric: !isCustom, Descriptors(objectTypes, desc));
     }
-
-    private static IEnumerable<PropDefinition> RefProps(TypeDefinition type, InstanceDescription desc) =>
-        (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Single && desc.IsObjectType(p.Type));
-
-    private static IEnumerable<PropDefinition> SetProps(TypeDefinition type, InstanceDescription desc) =>
-        (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Set && desc.IsObjectType(p.Type));
-
-    private static IEnumerable<PropDefinition> DictProps(TypeDefinition type) =>
-        (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Dictionary);
-
-    // `view T(obj, base)` → `return <ObjectForm obj={obj} meta={sys.schema("T")} base={base}>`.
-    // `base` is the page's URL path, threaded so inline sets build nested member links
-    // (sys.nest(base, prop)). A TAG (not a call) because ObjectForm is now a COMPONENT — it holds a
-    // staged-edit draft (local state) and returns its reactive render — so it must be slot-keyed (its
-    // draft survives a re-render) and have its returned render auto-invoked. `autosave` is omitted →
-    // it binds to null → falsy → the DEFAULT staged-edit + Save flow (true would be today's live
-    // autosave). Keyed by its render-tree slot, bound to the routed object.
-    private static UiView SynthObjectView(string typeName) =>
-        new(typeName, Fn(["obj", "base"], Return(Tag("ObjectForm",
-                ("obj", Sym("obj")), ("meta", Schema(typeName)), ("base", Sym("base"))))));
-
-    // Reference route `view(parent)` → `return <RefEditor parent={parent} prop="P" target={…}>` (a
-    // root-position component tag, keyed by its render slot). Keyed by (owner, Prop), bound to the
-    // parent. Takes only `parent`: a reference builds no nested links, so it ignores the `base` arg
-    // ExecuteRender passes to every type view (both interpreters bind min(args, params), so the
-    // extra arg is harmless — keeping the param out of the Code is more honest than declaring it unused).
-    private static UiView SynthRefView(string ownerType, string prop, string targetType) =>
-        new(ownerType, Fn(["parent"], Return(Tag("RefEditor",
-                ("parent", Sym("parent")), ("prop", Text(prop)), ("target", Schema(targetType))))),
-            Prop: prop);
-
-    // Set route `view(parent, base)` → `return <SetTable set={parent.P} desc={…} setPath={base}>`.
-    // `base` is the set's own URL path, used for nested member links.
-    private static UiView SynthSetView(string ownerType, string prop, string elementType) =>
-        new(ownerType, Fn(["parent", "base"], Return(Tag("SetTable",
-                ("set", Field(Sym("parent"), Text(prop))), ("desc", Schema(elementType)), ("setPath", Sym("base"))))),
-            Prop: prop);
-
-    // The shared scalar-entry view: `view(entry, base)` → `return LeafForm(entry, base)`. Bound
-    // to the entry object (FindTarget resolves it by key); its value persists path-addressed.
-    // LeafForm is stateless (returns tags directly), so it stays a call — no slot identity needed.
-    private static UiView SynthLeafView() =>
-        new(LeafViewType, Fn(["entry", "base"], Return(Call("LeafForm", Sym("entry"), Sym("base")))));
-
-    // The shared NotFound view: `view() → return NotFoundForm()`. Takes no target — it reads
-    // the framework `path` var and sets a 404 status.
-    private static UiView SynthNotFoundView() =>
-        new(NotFoundViewType, Fn([], Return(Call("NotFoundForm"))));
-
-    // Dict route `view(parent, base)` → `return <DictTable dict={parent.P} desc={__dictDescs["O/P"]}
-    // base={base}>` (a root-position component tag, slot-keyed so its draft state survives renders).
-    private static UiView SynthDictView(string ownerType, string prop) =>
-        new(ownerType, Fn(["parent", "base"], Return(Tag("DictTable",
-                ("dict", Field(Sym("parent"), Text(prop))),
-                ("desc", Schema(ownerType, prop)),
-                ("base", Sym("base"))))),
-            Prop: prop);
 
     // ── the descriptor registry ──────────────────────────────────────────────────────
 
@@ -569,35 +502,12 @@ public static class GenericUi
         .Where(p => p.Cardinality == Cardinality.Single && (BaseTypes.IsName(p.Type) || desc.IsEnumType(p.Type)))
         .ToList();
 
-    // ── tiny AST builders ───────────────────────────────────────────────────────────
+    // ── tiny AST builders (the descriptor literals only) ──────────────────────────────
+    // The generic UI's per-URL views are now a single synthesized `fn render()` written in
+    // StdlibSource, so the only ASTs built in C# are the pure-data type/prop descriptors below.
 
     private static CodeText Text(string v) => new() { Value = v };
-    private static CodeSymbol Sym(string n) => new() { Name = n };
     private static CodeObject Obj(params (string Name, ICodeValue Value)[] props) =>
         new() { Props = props.Select(p => new CodeObjectProp { Name = p.Name, Value = p.Value }).ToArray() };
     private static CodeArray Arr(IEnumerable<ICodeValue> items) => new() { Items = items.ToArray() };
-    private static CodeCall Call(string fn, params ICodeValue[] args) => new() { Fn = Sym(fn), Params = args };
-    // The builtin `field` is namespaced under `sys` — its callee is `sys.field` (a member access
-    // on the `sys` symbol), the shape both interpreters dispatch on.
-    private static CodeCall Field(ICodeValue obj, ICodeValue name) => new() { Fn = SysMember("field"), Params = [obj, name] };
-    private static CodeInfixOp SysMember(string name) =>
-        new() { Op = CodeInfixOpType.ObjectProp, Left = Sym("sys"), Right = Sym(name) };
-    // `sys.schema("T")` — the descriptor for type T, resolved server-side from the schema (the
-    // replacement for the old `sys.field(__descs, "T")` registry read). Mirrors the Field/Call helpers.
-    private static CodeCall Schema(string typeName) => new() { Fn = SysMember("schema"), Params = [Text(typeName)] };
-    // `sys.schema("Owner", "prop")` — the descriptor of a specific PROP of a type (e.g. a dictionary
-    // prop at its root route), the replacement for the old `__dictDescs["Owner/prop"]` registry read.
-    private static CodeCall Schema(string typeName, string prop) =>
-        new() { Fn = SysMember("schema"), Params = [Text(typeName), Text(prop)] };
-    // A childless tag `<Name a={…} b={…}>` — used to invoke a synthesized component (RefEditor /
-    // SetTable / DictTable) BY TAG, so it keys on its render-tree slot rather than its arguments.
-    private static CodeTag Tag(string name, params (string Name, ICodeValue Value)[] attrs) => new()
-    {
-        Name = name,
-        Attributes = attrs.Select(a => new CodeTagAttribute { Name = a.Name, Value = a.Value }).ToArray(),
-        Children = [],
-    };
-    private static CodeBlock Return(ICodeValue value) => new() { Statements = [new CodeReturn { Value = value }] };
-    private static CodeFunction Fn(string[] @params, CodeBlock body) =>
-        new() { Name = null, Params = @params.Select(p => new CodeFunctionParam { Name = p }).ToArray(), Body = body };
 }
