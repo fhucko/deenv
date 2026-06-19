@@ -116,9 +116,11 @@ public class InstanceContext
     // is reachable + usable from userspace (the first consumer is the @milestone-9 generic object
     // pages, which still synthesize the same components). The Db holds the Note as a single
     // reference (`note`); render binds it: `<ObjectForm obj={db.note} meta={sys.schema("Note")}
-    // base="/">`. A custom render now also gets the descriptor map, so sys.schema("Note") resolves;
-    // and the library scope is its parent, so <ObjectForm> recognizes as a component. Edits autosave
-    // through the composed form exactly as a synthesized object page would.
+    // base="/" autosave={true}>`. A custom render now also gets the descriptor map, so
+    // sys.schema("Note") resolves; and the library scope is its parent, so <ObjectForm> recognizes
+    // as a component. `autosave={true}` is the OPT-IN that keeps today's live per-keystroke save (no
+    // Save/Discard buttons) — the synthesized object pages omit it and stage instead. So edits
+    // autosave through the composed form, proving the opt-in works from userspace.
     public static InstanceDescription PublicLibraryFormDb() =>
         InstanceDescriptionLoader.Load(PublicLibraryFormApp);
 
@@ -145,7 +147,7 @@ public class InstanceContext
 
         fn render()
             return <main>
-                <ObjectForm obj={db.note} meta={sys.schema("Note")} base="/">
+                <ObjectForm obj={db.note} meta={sys.schema("Note")} base="/" autosave={true}>
     """;
 
     // Enum support (first slice): an app whose Db holds a set of `Order`, where `Order.status`

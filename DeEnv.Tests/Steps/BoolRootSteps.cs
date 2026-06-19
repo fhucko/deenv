@@ -35,15 +35,20 @@ public sealed class BoolRootSteps(InstanceContext ctx)
         await ctx.Page!.GotoReadyAsync(ctx.BaseUrl + path);
     }
 
+    // The single bool field renders inside the generic ObjectForm, which now STAGES scalar edits
+    // (autosave off by default) — so clicking the checkbox toggles the staged draft (the DOM updates),
+    // and persistence happens on Save (the shared "I save the form" step). This step just clicks.
     [When("I click the checkbox")]
-    public async Task WhenClickCheckboxAsync()
-    {
+    public async Task WhenClickCheckboxAsync() =>
         await ctx.Page!.Locator("input[type='checkbox']").ClickAsync();
-        // Poll the sovereign store until the toggle has persisted (replaces a fixed 500ms guess).
+
+    // The staged toggle has reached the sovereign store (Save's WS op flushed) — awaited before a
+    // reload so the SSR re-read sees the committed value (replaces a fixed sleep).
+    [Then("the root bool eventually persists as checked")]
+    public async Task ThenRootBoolPersists() =>
         await Polling.EventuallyAsync(
             () => ctx.Store!.ReadNode(NodePath.Root.Field("ready")) is BoolValue { Value: true },
             "the checkbox toggle to persist");
-    }
 
     [When("I reload")]
     public async Task WhenReloadAsync()

@@ -407,6 +407,33 @@ function fieldResult(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     };
 }
 
+// setFields(target, source): copy EVERY prop of `source` onto `target` — the bulk, dynamic write the
+// self-hosted ObjectForm uses for BOTH directions of its staged edit: the edit-draft's initial fill
+// (sys.setFields(state.draft, obj) — copy the live object's values into a fresh sys.new draft so the
+// inputs show them) and the Save commit (sys.setFields(obj, draft) — write the draft's values back).
+// A bulk primitive (not per-field) because Code has no statement-position iteration (`foreach` is
+// render-only), so a handler cannot loop over schema-iterated prop names — the framework loops here.
+// recordProp registers the source read (twin of the server, which also ships it as a displayed leaf so
+// the client's setup re-run can re-fill the draft). Each prop is set in place, the SAME write path
+// two-way binding and `obj.member = value` use — invalidate readers, and persist when the target is
+// server-backed (persistFieldEdit: id > 0 commits via objectPropChange; a transient draft does not).
+// Returns the target.
+function execSetFields(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    if (codeCall.params.length !== 2) throw new Error("setFields(target, source) takes two arguments.");
+    const target = executeValue(codeCall.params[0], scope, context).value;
+    const source = executeValue(codeCall.params[1], scope, context).value;
+    if (target.type !== "object") throw new Error("setFields() expects a target object.");
+    if (source.type !== "object") throw new Error("setFields() expects a source object.");
+    for (const [name, value] of Object.entries(source.props)) {
+        recordProp(source.id, name);
+        const before = target.props[name];
+        target.props[name] = value;
+        invalidateProp(target.id, name);
+        persistFieldEdit(target, name, value, before);
+    }
+    return target;
+}
+
 // humanize(text): a prop name → a human label ("companyName" → "Company name").
 // Twin of DeEnv.Code.TextUtil.Humanize; pinned by the conformance suite.
 function humanizeText(name: string): string {
@@ -480,14 +507,45 @@ function execId(codeCall: CodeCall, scope: ExecScope, context: ExecContext): Exe
     return { type: "int", value: obj.id };
 }
 
-// clone(obj): a fresh object with the source's SCALAR props copied (a new draft from a
-// type's blank template — a generic component's create-new state).
-function execClone(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
-    const obj = executeValue(codeCall.params[0], scope, context).value;
-    if (obj.type !== "object") throw new Error("clone() expects an object.");
+// new(desc): a FRESH object of a type, built REFLECTIVELY from its descriptor — each scalar prop set
+// to its baseType default (twin of CodeExecutor.DefaultExec / GenericUi.DefaultFor). The constructor
+// for the self-hosted UI's drafts: a create-new form's blank state, and the seed of ObjectForm's edit
+// draft (then filled from the live object via sys.setFields). A fresh object every call (no aliasing).
+// Privacy-trivial: reads NO source object — only the already-shipped descriptor — and emits constant
+// defaults, so the client's setup re-run mints the same defaults. Two descriptor shapes (the two the
+// UI passes): a TYPE descriptor → one field per SCALAR `props` entry; a dictionary PROP descriptor →
+// a `value` for a scalar dict (defaulted by `element`) or one field per `valueProps` entry.
+function defaultValue(baseType: string): ExecValue {
+    if (baseType === "bool") return { type: "bool", value: false };
+    if (baseType === "int") return { type: "int", value: 0 };
+    return { type: "text", value: "" };   // text/date/datetime/decimal/enum are text-shaped, default ""
+}
+function descProps(desc: ExecObject, field: string): ExecObject[] {
+    const arr = desc.props[field];
+    return arr != null && arr.type === "array"
+        ? arr.items.map(i => i.value).filter((v): v is ExecObject => v.type === "object")
+        : [];
+}
+function propName(p: ExecObject): string { const n = p.props["name"]; return n != null && n.type === "text" ? n.value : ""; }
+function propBaseType(p: ExecObject): string { const b = p.props["baseType"]; return b != null && b.type === "text" ? b.value : ""; }
+function execNew(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    if (codeCall.params.length !== 1) throw new Error("new(desc) takes one argument.");
+    const desc = executeValue(codeCall.params[0], scope, context).value;
+    if (desc.type !== "object") throw new Error("new() expects a descriptor object.");
     const props: { [name: string]: ExecValue } = {};
-    for (const [name, v] of Object.entries(obj.props))
-        if (v.type === "int" || v.type === "text" || v.type === "bool" || v.type === "null") props[name] = v;
+    const bt = desc.props["baseType"];
+    if (bt != null && bt.type === "text" && bt.value === "dictionary") {
+        const isScalar = desc.props["isScalar"];
+        const element = desc.props["element"];
+        if (isScalar != null && isScalar.type === "bool" && isScalar.value)
+            props["value"] = defaultValue(element != null && element.type === "text" ? element.value : "");
+        else
+            for (const vp of descProps(desc, "valueProps")) props[propName(vp)] = defaultValue(propBaseType(vp));
+    } else {
+        for (const p of descProps(desc, "props"))
+            if (propBaseType(p) !== "object" && propBaseType(p) !== "set" && propBaseType(p) !== "dictionary")
+                props[propName(p)] = defaultValue(propBaseType(p));
+    }
     return { type: "object", props, id: --context.lastId.value };
 }
 
@@ -789,6 +847,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     // for its setValue; in statement position the value form is enough.
     switch (sysBuiltinName(codeCall.fn)) {
         case "field": return fieldResult(codeCall, scope, context).value;
+        case "setFields": return execSetFields(codeCall, scope, context);
         case "humanize": return execHumanize(codeCall, scope, context);
         case "extent": return execExtent(codeCall, scope, context);
         case "schema": return execSchema(codeCall, scope, context);
@@ -803,7 +862,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "segment": return execSegment(codeCall, scope, context);
         case "toInt": return execToInt(codeCall, scope, context);
         case "id": return execId(codeCall, scope, context);
-        case "clone": return execClone(codeCall, scope, context);
+        case "new": return execNew(codeCall, scope, context);
     }
     const fn = executeValue(codeCall.fn, scope, context).value;
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));

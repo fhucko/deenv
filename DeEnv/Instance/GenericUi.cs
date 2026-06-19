@@ -19,10 +19,19 @@ namespace DeEnv.Instance;
 //     contexts like a checklist row). The only thing a caller passes for looks; styling is internal.
 //   • Field(obj, desc) — a labeled field: a <div class="field"> wrapping the prop's humanized
 //     <label> and its Input. The labeled-field composite ObjectForm and a custom render compose.
-//   • ObjectForm(obj, meta, base) — an object page: a field per prop (a Field for a scalar, a nested
-//     RefEditor for a single object reference, an inline SetTable for an object set, or an
-//     inline DictTable for a dictionary). A collection's label is a navigable list-title link
-//     to its own route. `base` is the page's URL path, so inline links nest. Edits autosave.
+//   • ObjectForm(obj, meta, base, autosave) — an object page: a field per prop (a Field for a
+//     scalar, a nested RefEditor for a single object reference, an inline SetTable for an object set,
+//     or an inline DictTable for a dictionary). A collection's label is a navigable list-title link to
+//     its own route. `base` is the page's URL path, so inline links nest. A COMPONENT: it holds a
+//     local draft — a fresh `sys.new(meta)` object filled from the live object's scalars by
+//     `sys.setFields(state.draft, obj)` — and returns a render fn. `autosave` (bool) controls when
+//     scalar edits commit: omitted/false (the DEFAULT, what the synthesized object view passes)
+//     STAGES scalar edits into the draft and commits them on a Save button (`sys.setFields(obj,
+//     draft)`); Discard copies the object's scalars back ONTO the draft (`sys.setFields(draft, obj)`
+//     — in place, so the draft keeps its identity and the slot-keyed Fields re-read it). true keeps
+//     live per-keystroke autosave with no buttons. Either way COLLECTION props (reference/set/
+//     dictionary) bind to the LIVE object — never staged (each manages its own members, which
+//     persist on their own).
 //   • RefEditor(parent, prop, target) — a reference editor: current label, a pick button
 //     per extent() candidate, a clear button, and a create-new form. A COMPONENT: its body
 //     runs once as init (a local `state` holding a draft), and it returns a render fn.
@@ -39,10 +48,13 @@ namespace DeEnv.Instance;
 //
 // Builtins do the reflective work, all under the framework `sys` namespace: sys.field (dynamic
 // access), sys.humanize (labels), sys.extent (a type's objects), sys.schema (a type's descriptor),
-// sys.setRef (set/clear a reference), sys.nest (a URL path-join for nested member links), sys.clone
-// (a fresh draft from a blank template). `obj.prop = x` resets a component's draft after Create.
+// sys.setRef (set/clear a reference), sys.nest (a URL path-join for nested member links), sys.new (a
+// fresh default-valued object built from a descriptor — a create-new draft, or the seed of an edit
+// draft), sys.setFields (bulk-copy one object's props onto another — fill or commit a draft).
+// `obj.prop = x` resets a component's draft after Create.
 //
-// A type's descriptor — { name, labelProp, props, blank } — is fetched by `sys.schema(typeName)`,
+// A type's descriptor — { name, labelProp, props } (plus a now-unused `blank`) — is fetched by
+// `sys.schema(typeName)`,
 // resolved server-side from the schema (the descriptor literal GenericUi threads into the executor)
 // and shipped to the client like extent. Components are tag-invoked and slot-keyed, so a descriptor
 // is now plain argument data (its identity carries no reactivity). Cross-type references are stored
@@ -84,34 +96,50 @@ public static class GenericUi
                         sys.humanize(desc.name)
                     <Input obj={obj} desc={desc}>
 
-            fn ObjectForm(obj, meta, base)
-                return <div class="object-form">
-                    <h2>
-                        meta.name
-                    foreach p in meta.props
-                        if p.baseType == "object"
-                            <div class="field">
-                                <label class={p.name}>
-                                    sys.humanize(p.name)
-                                <RefEditor parent={obj} prop={p.name} target={sys.schema(p.target)}>
-                        else if p.baseType == "set"
-                            <div class="field">
-                                <a class="list-title" href={sys.nest(base, p.name)}>
-                                    sys.humanize(p.name)
-                                <SetTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)}>
-                        else if p.baseType == "dictionary"
-                            <div class="field">
-                                <a class="list-title" href={sys.nest(base, p.name)}>
-                                    sys.humanize(p.name)
-                                <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
-                        else
-                            <Field obj={obj} desc={p}>
+            fn ObjectForm(obj, meta, base, autosave)
+                var state = { draft: sys.new(meta) }
+                sys.setFields(state.draft, obj)
+                fn save()
+                    sys.setFields(obj, state.draft)
+                fn discard()
+                    sys.setFields(state.draft, obj)
+                fn render()
+                    return <div class="object-form">
+                        <h2>
+                            meta.name
+                        foreach p in meta.props
+                            if p.baseType == "object"
+                                <div class="field">
+                                    <label class={p.name}>
+                                        sys.humanize(p.name)
+                                    <RefEditor parent={obj} prop={p.name} target={sys.schema(p.target)}>
+                            else if p.baseType == "set"
+                                <div class="field">
+                                    <a class="list-title" href={sys.nest(base, p.name)}>
+                                        sys.humanize(p.name)
+                                    <SetTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)}>
+                            else if p.baseType == "dictionary"
+                                <div class="field">
+                                    <a class="list-title" href={sys.nest(base, p.name)}>
+                                        sys.humanize(p.name)
+                                    <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
+                            else if autosave == true
+                                <Field obj={obj} desc={p}>
+                            else
+                                <Field obj={state.draft} desc={p}>
+                        if autosave != true
+                            <div class="form-actions">
+                                <button class="save" onClick={save}>
+                                    "Save"
+                                <button class="discard" onClick={discard}>
+                                    "Discard"
+                return render
 
             fn RefEditor(parent, prop, target)
-                var state = { pick: 0, draft: sys.clone(target.blank) }
+                var state = { pick: 0, draft: sys.new(target) }
                 fn createNew()
                     sys.setRef(parent, prop, state.draft)
-                    state.draft = sys.clone(target.blank)
+                    state.draft = sys.new(target)
                 fn render()
                     return <div class="ref-editor">
                         <h3 class="ref-type">
@@ -146,15 +174,15 @@ public static class GenericUi
                 return render
 
             fn SetTable(set, desc, setPath)
-                var state = { draft: sys.clone(desc.blank), creating: false }
+                var state = { draft: sys.new(desc), creating: false }
                 fn save()
                     set.add(state.draft)
-                    state.draft = sys.clone(desc.blank)
+                    state.draft = sys.new(desc)
                     state.creating = false
                 fn startCreate()
                     state.creating = true
                 fn cancel()
-                    state.draft = sys.clone(desc.blank)
+                    state.draft = sys.new(desc)
                     state.creating = false
                 fn render()
                     if state.creating
@@ -202,7 +230,7 @@ public static class GenericUi
                 return render
 
             fn DictTable(dict, desc, base)
-                var state = { key: "", draft: sys.clone(desc.blank), error: "", creating: false }
+                var state = { key: "", draft: sys.new(desc), error: "", creating: false }
                 fn save()
                     if state.key == ""
                         state.error = "Key is required"
@@ -214,14 +242,14 @@ public static class GenericUi
                         else
                             dict.setEntry(state.key, state.draft)
                         state.key = ""
-                        state.draft = sys.clone(desc.blank)
+                        state.draft = sys.new(desc)
                         state.error = ""
                         state.creating = false
                 fn startCreate()
                     state.creating = true
                 fn cancel()
                     state.key = ""
-                    state.draft = sys.clone(desc.blank)
+                    state.draft = sys.new(desc)
                     state.error = ""
                     state.creating = false
                 fn render()
@@ -406,10 +434,16 @@ public static class GenericUi
     private static IEnumerable<PropDefinition> DictProps(TypeDefinition type) =>
         (type.Props ?? []).Where(p => p.Cardinality == Cardinality.Dictionary);
 
-    // `view T(obj, base)` → `return ObjectForm(obj, sys.schema("T"), base)`. `base` is the
-    // page's URL path, threaded so inline sets build nested member links (sys.nest(base, prop)).
+    // `view T(obj, base)` → `return <ObjectForm obj={obj} meta={sys.schema("T")} base={base}>`.
+    // `base` is the page's URL path, threaded so inline sets build nested member links
+    // (sys.nest(base, prop)). A TAG (not a call) because ObjectForm is now a COMPONENT — it holds a
+    // staged-edit draft (local state) and returns its reactive render — so it must be slot-keyed (its
+    // draft survives a re-render) and have its returned render auto-invoked. `autosave` is omitted →
+    // it binds to null → falsy → the DEFAULT staged-edit + Save flow (true would be today's live
+    // autosave). Keyed by its render-tree slot, bound to the routed object.
     private static UiView SynthObjectView(string typeName) =>
-        new(typeName, Fn(["obj", "base"], Return(Call("ObjectForm", Sym("obj"), Schema(typeName), Sym("base")))));
+        new(typeName, Fn(["obj", "base"], Return(Tag("ObjectForm",
+                ("obj", Sym("obj")), ("meta", Schema(typeName)), ("base", Sym("base"))))));
 
     // Reference route `view(parent)` → `return <RefEditor parent={parent} prop="P" target={…}>` (a
     // root-position component tag, keyed by its render slot). Keyed by (owner, Prop), bound to the
@@ -452,7 +486,10 @@ public static class GenericUi
 
     // The descriptor literals threaded into the executor for `sys.schema(...)` to evaluate (the
     // replacement for the old `__descs`/`__dictDescs` globals). Two key shapes, both pure data:
-    //   "TypeName"      → { name, labelProp, props, blank } — a type's descriptor (sys.schema("T")).
+    //   "TypeName"      → { name, labelProp, props } — a type's descriptor (sys.schema("T")). (Also
+    //                     carries a `blank` template, now UNUSED — sys.new(desc) mints drafts
+    //                     reflectively from `props` — but kept so the public descriptor shape is
+    //                     unchanged; harmless pure data.)
     //   "Owner/prop"    → that prop's descriptor — sys.schema("O","P"). One entry per prop of every
     //                     object type, so a caller can fetch a single prop's shape by name. The
     //                     generic UI uses this for a dict route; a hand-written `fn render()` uses it
@@ -477,16 +514,19 @@ public static class GenericUi
             ("name", Text(t.Name)),
             ("labelProp", Text(labelProp)),
             ("props", Arr((t.Props ?? []).Select(p => (ICodeValue)PropDesc(p, desc)))),
+            // `blank`: a default-valued draft template. UNUSED since sys.new(desc) builds drafts
+            // reflectively from `props`; kept so the public sys.schema descriptor shape is unchanged.
             ("blank", Obj(scalars.Select(p => (p.Name, DefaultFor(p.Type))).ToArray())));
     }
 
     // A prop descriptor: scalar { name, baseType }; reference { name, baseType:"object",
     // target } and set { name, baseType:"set", element } carry the OTHER type's name (the
     // component resolves it via sys.schema(name) — cycle-safe). A dictionary
-    // { name, baseType:"dictionary", keyType, isScalar, valueProps, blank } is self-contained
+    // { name, baseType:"dictionary", keyType, element, isScalar, valueProps } is self-contained
     // (dictTable reads it directly): valueProps are the element's scalar columns (empty for a
-    // scalar dict, where isScalar=true and a single "Value" column is shown), blank seeds the
-    // New-entry draft.
+    // scalar dict, where isScalar=true and a single "Value" column is shown). sys.new(desc) reads
+    // these to mint the New-entry draft — a `value` for a scalar dict (defaulted by `element`), else
+    // one field per valueProp. (A `blank` template is also emitted but UNUSED, kept for shape-stability.)
     private static CodeObject PropDesc(PropDefinition p, InstanceDescription desc)
     {
         if (p.Cardinality == Cardinality.Dictionary)

@@ -66,6 +66,7 @@ public static class CodeValidator
     private static readonly Dictionary<string, int> BuiltinArities = new()
     {
         ["field"] = 2,
+        ["setFields"] = 2,
         ["humanize"] = 1,
         ["extent"] = 1,
         ["setRef"] = 3,
@@ -79,7 +80,7 @@ public static class CodeValidator
         ["segment"] = 2,
         ["toInt"] = 1,
         ["id"] = 1,
-        ["clone"] = 1,
+        ["new"] = 1,
     };
 
     // A callee of the form `sys.<name>` (a member access on the bare `sys` symbol) — the

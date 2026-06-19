@@ -1,3 +1,4 @@
+using DeEnv.Instance;
 using DeEnv.Storage;
 using DeEnv.Tests.TestSupport;
 using Reqnroll;
@@ -20,6 +21,51 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         ctx.Description = InstanceContext.SelfHostedFormDb();
         await ctx.EnsureServerAndBrowserAsync();
     }
+
+    // The committed shop (instances/4) — the fully-auto generic UI over a customer set. Loaded
+    // from its real id-dir document so the staged-edit scenarios drive the single source of truth.
+    [Given("the shop app is running")]
+    public async Task GivenShopAppRunning()
+    {
+        ctx.Description = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(4));
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    // ── staged edits + Save/Discard (milestone 11) ──────────────────────────────────
+    // The generic ObjectForm now stages scalar edits in a local draft and commits them on Save
+    // (autosave OFF by default). These drive that form-level flow.
+
+    // Commit the staged scalar edits: the ObjectForm's Save button (.object-form button.save) writes
+    // the draft's scalars back onto the live object via sys.setFields (id-addressed objectPropChange).
+    [When("I save the form")]
+    public async Task WhenSaveTheForm()
+    {
+        await ctx.Page!.WaitHydratedAsync();
+        await ctx.Page!.Locator(".object-form button.save").First.ClickAsync();
+    }
+
+    // Discard the staged edits: the Discard button copies the live object's scalars back ONTO the
+    // draft in place (sys.setFields(state.draft, obj)), so the bound inputs re-render to the stored
+    // values (the draft keeps its identity, so the slot-keyed Fields re-read it).
+    [When("I discard the form")]
+    public async Task WhenDiscardTheForm()
+    {
+        await ctx.Page!.WaitHydratedAsync();
+        await ctx.Page!.Locator(".object-form button.discard").First.ClickAsync();
+    }
+
+    // The autosave-mode ObjectForm (autosave={true}) shows NO Save button — edits persist live.
+    [Then("the form has no Save button")]
+    public async Task ThenNoSaveButton() =>
+        await Assert.That(await ctx.Page!.Locator(".object-form button.save").CountAsync()).IsEqualTo(0);
+
+    // A staged edit must NOT reach the store: the named type's stored object STILL holds the
+    // original value. A direct read (not "eventually") — a staged edit fires no WS op, so the store
+    // cannot have changed by the time the awaited fill/discard completed.
+    [Then("the store still has a {string} whose {string} is {string}")]
+    public async Task ThenStoreStillHas(string typeName, string field, string expected) =>
+        await Assert.That(ctx.Store!.ReadExtent(typeName).Values
+            .Any(o => o.Fields.TryGetValue(field, out var v) && v is TextValue t && t.Text == expected)).IsTrue();
 
     // objectForm gives each field input (and its label) the class of its prop name
     // (class={p.name}).

@@ -15,7 +15,7 @@ public sealed class CodeExecutor
     private readonly IInstanceStore? _store;
 
     // typeName → the type's descriptor literal (a pure data CodeObject — { name, labelProp,
-    // props, blank }), built by GenericUi from the schema and threaded in the same way as
+    // props }), built by GenericUi from the schema and threaded in the same way as
     // _store. `sys.schema(typeName)` evaluates the matching literal under the memo cache, so
     // the self-hosted UI reads a type's shape WITHOUT a standing `__descs` global. Empty for a
     // custom-render app (which uses no descriptors).
@@ -259,6 +259,46 @@ public sealed class CodeExecutor
         return value;
     }
 
+    // setFields(target, source): copy EVERY prop of `source` onto `target` — the bulk, dynamic
+    // write the self-hosted ObjectForm uses for BOTH directions of its staged edit: the edit-draft's
+    // initial fill (`sys.setFields(state.draft, obj)`, copying the live object's current values into a
+    // fresh `sys.new` draft so the inputs show them) and the Save commit (`sys.setFields(obj, draft)`,
+    // writing the draft's values back onto the live object). A bulk primitive (not per-field) because
+    // Code has no statement-position iteration — `foreach` is render-only — so a handler cannot loop
+    // over schema-iterated prop names; the framework loops here instead.
+    //
+    // SHIPPING (the privacy-relevant part): a `source` prop is copied AND recorded as a displayed leaf
+    // (ungated, like the old clone) — because the copied values ARE the values about to be shown/edited
+    // in the bound inputs, and this copy runs in a component SETUP whose result is a render CLOSURE, not
+    // tags, so the normal leaf-promotion would drop the reads (the routed object would ship empty and
+    // the client's setup re-run would re-fill the draft from a blank object — the inputs would vanish).
+    // It is an EXPLICIT copy of displayed values, not a generic "ship whatever I touched" hack: only the
+    // props named in `source` ship, and they ship precisely because they are the draft's contents.
+    //
+    // Each prop is set in place, the SAME write path two-way binding and `obj.member = value` use.
+    // Server-side it only sets (the server never persists from the executor — the WS handlers do); the
+    // client twin (codeExec.ts) also invalidates readers and persists each field when the target is
+    // server-backed (id > 0), so a Save onto a stored object commits and the draft's initial fill (a
+    // transient target) does not. Returns the target.
+    private IExecValue ExecuteSetFields(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 2)
+            throw new CodeRuntimeException("setFields(target, source) takes two arguments.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject target)
+            throw new CodeRuntimeException("setFields() expects a target object.");
+        if (ExecuteValue(call.Params[1], scope, context) is not ExecObject source)
+            throw new CodeRuntimeException("setFields() expects a source object.");
+        foreach (var (name, value) in source.Props)
+        {
+            target.Props[name] = value;
+            // Ship the source's prop: it is a displayed/edited value (it lands in the bound draft).
+            // Ungated because a setup's closure result is not tags, so leaf-promotion would drop it.
+            if (context.DepStack.Count > 0) context.DepStack.Peek().Props.Add(new PropDep(source.Id, name));
+            context.AccessedObjectProps.Add((source, name));
+        }
+        return target;
+    }
+
     // humanize(text): a prop name → a human label ("companyName" → "Company name").
     // Pure; runs identically on server and client (TextUtil / codeExec.ts twin).
     private IExecValue ExecuteHumanize(CodeCall call, ExecScope scope, ExecContext context)
@@ -284,7 +324,7 @@ public sealed class CodeExecutor
         return Memoize($"extent:{typeName.Value}", context, () => DbBridge.LoadExtent(_store, typeName.Value, context));
     }
 
-    // schema(typeName): a type's descriptor — { name, labelProp, props, blank } — the reflective
+    // schema(typeName): a type's descriptor — { name, labelProp, props } — the reflective
     // shape the self-hosted generic UI walks (objectForm/refEditor/setTable). The replacement for
     // the old `__descs` registry global: the descriptor is computed from the schema (the literal
     // GenericUi threads in), keyed by type, and shipped so the client reuses it (like extent).
@@ -338,20 +378,66 @@ public sealed class CodeExecutor
         }
     }
 
-    // clone(obj): a fresh object with the source's SCALAR props copied (shallow; scalars
-    // are immutable so the values are shared). Used to mint a new draft from a type's
-    // blank template — a generic component's create-new state.
-    private IExecValue ExecuteClone(CodeCall call, ExecScope scope, ExecContext context)
+    // new(desc): a FRESH object of a type, built REFLECTIVELY from its descriptor — each scalar prop
+    // set to its baseType default (the runtime twin of GenericUi.DefaultFor: bool→false, int→0, every
+    // other leaf/enum → ""). The constructor for the self-hosted UI's drafts: a create-new form's
+    // blank state, and the seed of ObjectForm's edit draft (then filled from the live object via
+    // sys.setFields). A fresh object every call (no shared template → no aliasing).
+    //
+    // Privacy-trivial by construction: it reads NO source object — only the (already-shipped)
+    // descriptor — and emits constant defaults, so there is nothing private to leak and nothing to
+    // ship. The descriptor is plain schema data the client already has (sys.schema), so the client's
+    // setup re-run mints the same defaults.
+    //
+    // Two descriptor shapes, the two the self-hosted UI passes:
+    //   • a TYPE descriptor { name, labelProp, props, … } → one field per SCALAR entry of `props`
+    //     (object/set/dictionary props are collections, never in a draft).
+    //   • a dictionary PROP descriptor { baseType:"dictionary", isScalar, element, valueProps, … } →
+    //     a scalar dict gets a single `value` (defaulted by `element`); an object dict gets one field
+    //     per `valueProps` entry. (Mirrors the draft shape the old `blank` seeded for each.)
+    private IExecValue ExecuteNew(CodeCall call, ExecScope scope, ExecContext context)
     {
         if (call.Params.Length != 1)
-            throw new CodeRuntimeException("clone(obj) takes one argument.");
-        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject obj)
-            throw new CodeRuntimeException("clone() expects an object.");
+            throw new CodeRuntimeException("new(desc) takes one argument.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject desc)
+            throw new CodeRuntimeException("new() expects a descriptor object.");
         var props = new Dictionary<string, IExecValue>();
-        foreach (var (name, v) in obj.Props)
-            if (v is ExecInt or ExecText or ExecBool or ExecNull) props[name] = v;
+        if (desc.Props.TryGetValue("baseType", out var bt) && bt is ExecText { Value: "dictionary" })
+        {
+            if (desc.Props.TryGetValue("isScalar", out var sc) && sc is ExecBool { Value: true })
+                props["value"] = DefaultExec((desc.Props.GetValueOrDefault("element") as ExecText)?.Value ?? "");
+            else
+                foreach (var vp in DescriptorProps(desc, "valueProps"))
+                    props[PropName(vp)] = DefaultExec(PropBaseType(vp));
+        }
+        else
+            foreach (var p in DescriptorProps(desc, "props"))
+                if (!IsCollectionBaseType(PropBaseType(p)))
+                    props[PropName(p)] = DefaultExec(PropBaseType(p));
         return new ExecObject { Props = props, Id = --context.LastId.Value };
     }
+
+    // The scalar baseType default — the runtime twin of GenericUi.DefaultFor (kept in lockstep with
+    // codeExec.ts's defaultValue). A leaf-only switch: enum values are text-shaped, so they default ""
+    // by falling through, exactly as the old `blank` literal did.
+    private static IExecValue DefaultExec(string baseType) => baseType switch
+    {
+        "bool" => new ExecBool { Value = false },
+        "int" => new ExecInt { Value = 0 },
+        _ => new ExecText { Value = "" },
+    };
+
+    private static bool IsCollectionBaseType(string baseType) =>
+        baseType is "object" or "set" or "dictionary";
+
+    // A descriptor's prop list (`props` / `valueProps`) — a Code array of prop-descriptor objects.
+    private static IEnumerable<ExecObject> DescriptorProps(ExecObject desc, string field) =>
+        desc.Props.TryGetValue(field, out var v) && v is ExecArray arr
+            ? arr.Items.Select(i => i.Value).OfType<ExecObject>()
+            : [];
+
+    private static string PropName(ExecObject prop) => (prop.Props.GetValueOrDefault("name") as ExecText)?.Value ?? "";
+    private static string PropBaseType(ExecObject prop) => (prop.Props.GetValueOrDefault("baseType") as ExecText)?.Value ?? "";
 
     // nest(base, seg): a URL path-join ("/notes" + a member → "/notes/3") — Code has no
     // string concatenation, so building nested member links needs a builtin. `seg` is a
@@ -455,6 +541,7 @@ public sealed class CodeExecutor
     private IExecValue? ExecuteBuiltin(string name, CodeCall call, ExecScope scope, ExecContext context) => name switch
     {
         "field" => ExecuteField(call, scope, context),
+        "setFields" => ExecuteSetFields(call, scope, context),
         "humanize" => ExecuteHumanize(call, scope, context),
         "extent" => ExecuteExtent(call, scope, context),
         "schema" => ExecuteSchema(call, scope, context),
@@ -462,7 +549,7 @@ public sealed class CodeExecutor
         "segment" => ExecuteSegment(call, scope, context),
         "toInt" => ExecuteToInt(call, scope, context),
         "id" => ExecuteId(call, scope, context),
-        "clone" => ExecuteClone(call, scope, context),
+        "new" => ExecuteNew(call, scope, context),
         // setRef(obj, prop, value) persists on the client (the reference editor). Server-side
         // (SSR / refetch) never runs the click handler, so it no-ops.
         "setRef" => new ExecNothing(),

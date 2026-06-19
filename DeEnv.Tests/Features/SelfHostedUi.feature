@@ -121,12 +121,38 @@ Feature: Self-hosted generic UI (object forms)
     Then the "dueDate" label reads "Due date"
     And the "title" field shows "First"
 
-  @milestone-9 @single-user
-  Scenario: Editing a field autosaves over the WebSocket
+  # The generic edit form now STAGES scalar edits and commits on a Save button (autosave is
+  # OFF by default — the synthesized object view omits the `autosave` arg → falsy → staged).
+  # Editing the field does not touch the store until Save; Save persists it.
+  @milestone-11 @single-user
+  Scenario: Editing a scalar field stages until Save, then persists
     Given the self-hosted form app is running
     When I open "/notes/2"
     And I fill the "title" field with "Renamed"
+    Then the store still has a "Note" whose "title" is "First"
+    When I save the form
     Then the store eventually has a "Note" whose "title" is "Renamed"
+
+  # The committed shop (instances/4, fully-auto generic UI) on a real customer page. The full
+  # staged flow on three distinct outcomes: a staged edit leaves the store unchanged; Save commits
+  # it; a Discard after an edit reverts the input to the stored value and leaves the store unchanged.
+  @milestone-11 @single-user
+  Scenario: A staged edit on a customer page does not persist until Save
+    Given the shop app is running
+    When I open "/customers/2"
+    And I fill the "name" field with "Ada L."
+    Then the store still has a "Customer" whose "name" is "Ada Lovelace"
+    When I save the form
+    Then the store eventually has a "Customer" whose "name" is "Ada L."
+
+  @milestone-11 @single-user
+  Scenario: Discarding a staged edit reverts the field and leaves the store unchanged
+    Given the shop app is running
+    When I open "/customers/2"
+    And I fill the "name" field with "Throwaway"
+    And I discard the form
+    Then the "name" field shows "Ada Lovelace"
+    And the store still has a "Customer" whose "name" is "Ada Lovelace"
 
   # ── enum support (first slice) ─────────────────────────────────────────────
 
@@ -138,6 +164,7 @@ Feature: Self-hosted generic UI (object forms)
     And the "status" field is a select with options "pending, shipped, delivered"
     And the "status" select displays options "Pending, Shipped, Delivered"
     When I choose "delivered" in the "status" select
+    And I save the form
     Then the store eventually has a "Order" whose "status" is "delivered"
 
   # ── component-local state (creation prototype) ─────────────────────────────
@@ -154,17 +181,20 @@ Feature: Self-hosted generic UI (object forms)
   # ── the public component library (milestone 11) ────────────────────────────
   # The generic-UI library (ObjectForm/RefEditor/…) is PUBLIC: a hand-written `fn render()`
   # composes <ObjectForm> directly — the same component the @milestone-9 object pages synthesize.
-  # This proves it both RENDERS (humanized label + field value, built from the schema via
-  # sys.schema) and is LIVE (an edit autosaves through the composed form), end-to-end.
+  # This fixture passes autosave={true}, the opt-in that keeps today's LIVE per-keystroke save (no
+  # Save/Discard buttons). It proves the form RENDERS (humanized label + field value, built from the
+  # schema via sys.schema), is LIVE (an edit autosaves through the composed form), and that the
+  # autosave mode shows NO Save/Discard buttons — end-to-end.
 
   @milestone-11 @single-user
-  Scenario: A hand-written render composes the public ObjectForm component
+  Scenario: A hand-written render composes the public ObjectForm component with autosave
     Given the public-library form app is running
     When I open "/"
     Then the page is a code page
     And the page shows ".object-form"
     And the "dueDate" label reads "Due date"
     And the "title" field shows "First"
+    And the form has no Save button
     When I fill the "title" field with "Renamed"
     Then the store eventually has a "Note" whose "title" is "Renamed"
 

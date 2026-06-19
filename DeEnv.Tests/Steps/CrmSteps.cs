@@ -101,12 +101,15 @@ public sealed class CrmSteps(InstanceContext ctx)
     [When("I save")]
     public async Task WhenSaveAsync()
     {
-        // The self-hosted UI autosaves each edit (no Save button); the retiring C# auto-form commits on
-        // its Save button — click it when present ([data-wired] = WS open + handler attached).
-        var saveButton = ctx.Page!.Locator("form#node-form[data-wired] button[type='submit']");
-        if (await saveButton.CountAsync() > 0) await saveButton.ClickAsync();
+        // The self-hosted ObjectForm now STAGES scalar edits and commits on a Save button
+        // (.object-form button.save → sys.setField writes the draft's scalars back). Click it when
+        // present. (The leaf/scalar-dict-entry editor still autosaves, so a form Save is just absent
+        // there — nothing to click, and the edit has already flushed.)
+        await ctx.Page!.WaitHydratedAsync();
+        var saveButton = ctx.Page!.Locator(".object-form button.save");
+        if (await saveButton.CountAsync() > 0) await saveButton.First.ClickAsync();
         // Poll the persisted store file until every edit has flushed to it — replaces a fixed 500ms guess
-        // and, unlike a DOM check, actually proves the autosave reached disk.
+        // and, unlike a DOM check, actually proves the commit reached disk.
         foreach (var value in _pendingEditValues)
             await Polling.EventuallyAsync(
                 () => File.ReadAllText(ctx.DataFilePath).Contains(value),
