@@ -150,6 +150,53 @@ public class InstanceContext
                 <ObjectForm obj={db.note} meta={sys.schema("Note")} base="/" autosave={true}>
     """;
 
+    // Milestone 11 (same object, two independent editing contexts): a HAND-WRITTEN `fn render()` that
+    // composes TWO STAGED `<ObjectForm>`s over the SAME object (`db.note`). Pure composition of the
+    // existing per-form overlay — no new builtin or mechanism. Each form is a COMPONENT, so its
+    // run-once setup mints its OWN draft (`sys.new` + `sys.setFields(draft, obj)`); M11 keys a
+    // component by its render-tree SLOT, not its arguments, so the two forms — distinct render-tree
+    // positions — get distinct slots and therefore INDEPENDENT drafts. Editing one form's field stages
+    // into that form's draft only; the other is untouched, and the store is untouched until a Save.
+    // The two `<section>` markers (`.context-a`/`.context-b`) let a test address each form's title
+    // input + Save button separately. autosave is omitted → the DEFAULT staged-edit + Save flow.
+    // The seeded `dueDate` is non-empty so a Save commits cleanly (an empty date is rejected on
+    // commit — a pre-existing model gap, NOT this slice's concern); the scenario edits/asserts `title`.
+    public static InstanceDescription TwoContextsDb() =>
+        InstanceDescriptionLoader.Load(TwoContextsApp);
+
+    private const string TwoContextsApp = """
+    types
+        Db
+            note Note
+        Note
+            title text
+            done bool
+            count int
+            dueDate date
+
+    initialData
+        Db 1
+            note: 2
+        Note 2
+            title: "First"
+            done: false
+            count: 3
+            dueDate: "2026-01-01"
+
+    ui
+
+        fn render()
+            return <main>
+                <section class="context-a">
+                    <h2>
+                        "Context A"
+                    <ObjectForm obj={db.note} meta={sys.schema("Note")} base="/">
+                <section class="context-b">
+                    <h2>
+                        "Context B"
+                    <ObjectForm obj={db.note} meta={sys.schema("Note")} base="/">
+    """;
+
     // Enum support (first slice): an app whose Db holds a set of `Order`, where `Order.status`
     // is typed by the `OrderStatus` enum. No `ui` section, so the default self-hosted generic UI
     // renders it: the order page's status field is a <select> of the enum's values. Seeded with

@@ -198,6 +198,28 @@ Feature: Self-hosted generic UI (object forms)
     When I fill the "title" field with "Renamed"
     Then the store eventually has a "Note" whose "title" is "Renamed"
 
+  # ── same object, two independent editing contexts (milestone 11) ────────────
+  # Two STAGED ObjectForms compose over the SAME object (db.note). Each is a component, so it keys on
+  # its render-tree SLOT, not its arguments — the two distinct positions get two INDEPENDENT drafts.
+  # Editing one form's field stages into that form's draft only (the other input is untouched) and the
+  # store is untouched until a Save; Saving each commits its own draft (single-client, last-write-wins).
+  # No cross-context observation/merge/conflict handling — that is the deferred real-time/multi-user
+  # pillar. Pure composition of the existing per-form overlay: no new builtin or mechanism.
+
+  @milestone-11 @single-user
+  Scenario: Two editing contexts over the same object stage independently and commit last-write-wins
+    Given the two-contexts form app is running
+    When I open "/"
+    And I fill the title field in context "A" with "Left edit"
+    And I fill the title field in context "B" with "Right edit"
+    Then the store still has a "Note" whose "title" is "First"
+    And the title field in context "A" shows "Left edit"
+    And the title field in context "B" shows "Right edit"
+    When I save context "A"
+    Then the store eventually has a "Note" whose "title" is "Left edit"
+    When I save context "B"
+    Then the store eventually has a "Note" whose "title" is "Right edit"
+
   # ── reactive components: slot-path identity (milestone 11, slice 1) ─────────
   # A component invoked as a tag keys on its render-tree slot, not its arguments, so its
   # local state survives a re-render even when the argument is a fresh object each time.

@@ -232,6 +232,48 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    // Milestone 11: a hand-written `fn render()` composing TWO staged <ObjectForm>s over the SAME
+    // object. Proves "same object, two independent editing contexts" on the EXISTING per-form overlay —
+    // each form, a distinct render-tree slot, gets its own draft; a staged edit in one doesn't touch the
+    // other or the store until Save (single-client, last-write-wins).
+    [Given("the two-contexts form app is running")]
+    public async Task GivenTwoContextsFormAppRunning()
+    {
+        ctx.Description = InstanceContext.TwoContextsDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    // The title input of the ObjectForm inside the named context (.context-a / .context-b). The form
+    // classes each scalar input by prop name (input.title), so scoping under the section marker
+    // addresses exactly one of the two forms.
+    [When("I fill the title field in context {string} with {string}")]
+    public async Task WhenFillTitleInContext(string context, string value)
+    {
+        await ctx.Page!.WaitHydratedAsync(); // the bound input's handler must be attached before we type
+        await ContextLocator(context).Locator("input.title").FillAsync(value);
+    }
+
+    // The title input in the named context still shows the given value — proves the two drafts are
+    // INDEPENDENT (editing the other context didn't write this one's draft).
+    [Then("the title field in context {string} shows {string}")]
+    public async Task ThenTitleInContextShows(string context, string expected) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "([sel, val]) => document.querySelector(sel + ' input.title')?.value === val",
+            new[] { ContextSelector(context), expected });
+
+    // Commit the named context's staged edits: that form's Save button (.object-form button.save,
+    // scoped to the section). Replays the draft's scalars onto the live object via objectPropChange.
+    [When("I save context {string}")]
+    public async Task WhenSaveContext(string context)
+    {
+        await ctx.Page!.WaitHydratedAsync();
+        await ContextLocator(context).Locator(".object-form button.save").First.ClickAsync();
+    }
+
+    private Microsoft.Playwright.ILocator ContextLocator(string context) => ctx.Page!.Locator(ContextSelector(context));
+
+    private static string ContextSelector(string context) => ".context-" + context.ToLowerInvariant();
+
     [Given("the self-hosted dict app is running")]
     public async Task GivenSelfHostedDictAppRunning()
     {
