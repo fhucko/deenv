@@ -280,13 +280,21 @@ public sealed class CodeExecutor
     // Code has no statement-position iteration — `foreach` is render-only — so a handler cannot loop
     // over schema-iterated prop names; the framework loops here instead.
     //
-    // SHIPPING (the privacy-relevant part): a `source` prop is copied AND recorded as a displayed leaf
-    // (ungated, like the old clone) — because the copied values ARE the values about to be shown/edited
-    // in the bound inputs, and this copy runs in a component SETUP whose result is a render CLOSURE, not
-    // tags, so the normal leaf-promotion would drop the reads (the routed object would ship empty and
-    // the client's setup re-run would re-fill the draft from a blank object — the inputs would vanish).
-    // It is an EXPLICIT copy of displayed values, not a generic "ship whatever I touched" hack: only the
-    // props named in `source` ship, and they ship precisely because they are the draft's contents.
+    // SCALARS ONLY (the staged-edit invariant): only a SCALAR leaf prop is copied; a prop whose value
+    // is an object (a reference) or an array (a set/dict) is SKIPPED. The ObjectForm's draft is meant
+    // to be scalar-only — it binds collection props (reference/set/dict) to the LIVE object via its own
+    // RefEditor/SetTable/DictTable, never the draft — so a copied collection has no business in the
+    // draft, and persisting one on Save is a bug: a Save does objectPropChange per prop, which the
+    // server rejects for a non-scalar field (a set/dict is not a scalar; a reference persists via
+    // setReferenceField, not objectPropChange). This matches `sys.new`, which already mints only
+    // scalar leaves, so the draft stays scalar-only in both directions of the staged edit.
+    //
+    // SHIPPING (the privacy-relevant part): a copied scalar is recorded as a displayed leaf (ungated,
+    // like the old clone) — because it IS a value about to be shown/edited in a bound input, and this
+    // copy runs in a component SETUP whose result is a render CLOSURE, not tags, so the normal
+    // leaf-promotion would drop the reads (the routed object would ship empty and the client's setup
+    // re-run would re-fill the draft from a blank object — the inputs would vanish). It is an EXPLICIT
+    // copy of displayed scalar values, not a generic "ship whatever I touched" hack.
     //
     // Each prop is set in place, the SAME write path two-way binding and `obj.member = value` use.
     // Server-side it only sets (the server never persists from the executor — the WS handlers do); the
@@ -303,6 +311,8 @@ public sealed class CodeExecutor
             throw new CodeRuntimeException("setFields() expects a source object.");
         foreach (var (name, value) in source.Props)
         {
+            // Skip collections/references — only scalar leaves are staged (see the invariant above).
+            if (value is ExecObject or ExecArray) continue;
             target.Props[name] = value;
             // Ship the source's prop: it is a displayed/edited value (it lands in the bound draft).
             // Ungated because a setup's closure result is not tags, so leaf-promotion would drop it.

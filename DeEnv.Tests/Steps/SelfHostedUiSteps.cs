@@ -67,6 +67,52 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await Assert.That(ctx.Store!.ReadExtent(typeName).Values
             .Any(o => o.Fields.TryGetValue(field, out var v) && v is TextValue t && t.Text == expected)).IsTrue();
 
+    // ── Save must not persist a SET prop (regression) ───────────────────────────────
+    // Capture every WS frame the page SENDS, so a later assertion can prove a staged Save never tried
+    // to persist a collection prop. The discriminator is the SENT frame, not a server reply or a
+    // console message: the frame is emitted synchronously when Save runs (before any round-trip), so
+    // asserting on it is deterministic and race-free. (The server rejects an `objectPropChange` for a
+    // SET before writing anything, so the stored set is untouched EITHER WAY — the bug's only effect is
+    // the wrongly-sent frame + the rollback's console error; the sent frame is the robust signal.)
+    // Must be wired BEFORE the navigation opens the WS, so it observes the connection from the start.
+    private readonly List<string> _sentWsFrames = new();
+
+    [When("I watch the websocket")]
+    public Task WhenWatchWebSocket()
+    {
+        ctx.Page!.WebSocket += (_, ws) =>
+            ws.FrameSent += (_, frame) => { lock (_sentWsFrames) _sentWsFrames.Add(frame.Text ?? ""); };
+        return Task.CompletedTask;
+    }
+
+    // The named-by-scalar object still holds a set prop with the expected member count — proving Save
+    // left the live SET untouched (the staged draft is scalar-only; the set binds to the live object).
+    // Eventually, since Save's scalar commit is async; once it lands the set is read from fresh storage.
+    [Then("the {string} whose {string} is {string} still has {int} {word}")]
+    public async Task ThenObjectStillHasSet(string typeName, string field, string value, int count, string setProp) =>
+        await EventuallyAsync(() =>
+        {
+            var obj = ctx.Store!.ReadExtent(typeName).Values
+                .FirstOrDefault(o => o.Fields.TryGetValue(field, out var v) && v is TextValue t && t.Text == value);
+            return obj != null && obj.Fields.TryGetValue(setProp, out var sv)
+                && sv is SetValue set && set.Members.Count == count;
+        });
+
+    // No `objectPropChange` for the named (collection) prop was ever SENT — proving the staged Save
+    // persisted only scalars and left the set live. The preceding "eventually has … name" + "still has
+    // N orders" steps already waited for the Save's WS round-trip to complete, so every frame the Save
+    // emits is captured by now; this reads the settled buffer (no sleep).
+    [Then("no objectPropChange was sent for {string}")]
+    public async Task ThenNoPropChangeSentFor(string prop)
+    {
+        string[] offending;
+        lock (_sentWsFrames)
+            offending = _sentWsFrames
+                .Where(f => f.Contains("\"op\":\"objectPropChange\"") && f.Contains($"\"prop\":\"{prop}\""))
+                .ToArray();
+        await Assert.That(offending).IsEmpty();
+    }
+
     // objectForm gives each field input (and its label) the class of its prop name
     // (class={p.name}).
     [When("I fill the {string} field with {string}")]

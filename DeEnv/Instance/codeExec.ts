@@ -407,17 +407,21 @@ function fieldResult(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     };
 }
 
-// setFields(target, source): copy EVERY prop of `source` onto `target` — the bulk, dynamic write the
-// self-hosted ObjectForm uses for BOTH directions of its staged edit: the edit-draft's initial fill
-// (sys.setFields(state.draft, obj) — copy the live object's values into a fresh sys.new draft so the
-// inputs show them) and the Save commit (sys.setFields(obj, draft) — write the draft's values back).
-// A bulk primitive (not per-field) because Code has no statement-position iteration (`foreach` is
-// render-only), so a handler cannot loop over schema-iterated prop names — the framework loops here.
-// recordProp registers the source read (twin of the server, which also ships it as a displayed leaf so
-// the client's setup re-run can re-fill the draft). Each prop is set in place, the SAME write path
-// two-way binding and `obj.member = value` use — invalidate readers, and persist when the target is
-// server-backed (persistFieldEdit: id > 0 commits via objectPropChange; a transient draft does not).
-// Returns the target.
+// setFields(target, source): copy the SCALAR props of `source` onto `target` — the bulk, dynamic write
+// the self-hosted ObjectForm uses for BOTH directions of its staged edit: the edit-draft's initial fill
+// (sys.setFields(state.draft, obj) — copy the live object's scalars into a fresh sys.new draft so the
+// inputs show them) and the Save commit (sys.setFields(obj, draft) — write the draft's scalars back).
+// SCALARS ONLY: a prop whose value is an object (a reference) or an array (a set/dict) is SKIPPED — the
+// draft is scalar-only (collection props bind to the LIVE object via RefEditor/SetTable/DictTable, never
+// the draft), so persisting one on Save would be a bug (objectPropChange per prop, which the server
+// rejects for a non-scalar field; a reference persists via setReferenceField, not objectPropChange).
+// Matches sys.new, which mints only scalar leaves. A bulk primitive (not per-field) because Code has no
+// statement-position iteration (`foreach` is render-only), so a handler cannot loop over schema-iterated
+// prop names — the framework loops here. recordProp registers the source read (twin of the server, which
+// also ships it as a displayed leaf so the client's setup re-run can re-fill the draft). Each prop is set
+// in place, the SAME write path two-way binding and `obj.member = value` use — invalidate readers, and
+// persist when the target is server-backed (persistFieldEdit: id > 0 commits via objectPropChange; a
+// transient draft does not). Returns the target.
 function execSetFields(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     if (codeCall.params.length !== 2) throw new Error("setFields(target, source) takes two arguments.");
     const target = executeValue(codeCall.params[0], scope, context).value;
@@ -425,6 +429,8 @@ function execSetFields(codeCall: CodeCall, scope: ExecScope, context: ExecContex
     if (target.type !== "object") throw new Error("setFields() expects a target object.");
     if (source.type !== "object") throw new Error("setFields() expects a source object.");
     for (const [name, value] of Object.entries(source.props)) {
+        // Skip collections/references — only scalar leaves are staged (see the invariant above).
+        if (value.type === "object" || value.type === "array") continue;
         recordProp(source.id, name);
         const before = target.props[name];
         target.props[name] = value;

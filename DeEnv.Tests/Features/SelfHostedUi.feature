@@ -154,6 +154,26 @@ Feature: Self-hosted generic UI (object forms)
     Then the "name" field shows "Ada Lovelace"
     And the store still has a "Customer" whose "name" is "Ada Lovelace"
 
+  # Regression: Saving a staged ObjectForm for an object that HAS a SET prop (a customer with
+  # orders) must NOT try to persist the set. The staged draft is scalar-only by design (the form
+  # binds collection props to the LIVE object, never the draft), so Save (sys.setFields(obj, draft))
+  # must copy/persist only scalars. Before the fix, the edit-init sys.setFields(state.draft, obj)
+  # copied EVERY prop of the live customer into the draft — including `orders` — so Save fired an
+  # objectPropChange for the set, which the server rejected ("Field 'orders' on 'Customer' is not a
+  # scalar field") and the journal rolled back, logging a console error on every Save (the scalar
+  # still persisted, masking the failure). The edited scalar persists, the orders set keeps its
+  # members, and the set's objectPropChange is never even sent.
+  @milestone-11 @single-user
+  Scenario: Saving an object with a set prop persists the scalar and leaves the set untouched
+    Given the shop app is running
+    When I watch the websocket
+    And I open "/customers/2"
+    And I fill the "name" field with "Ada L."
+    And I save the form
+    Then the store eventually has a "Customer" whose "name" is "Ada L."
+    And the "Customer" whose "name" is "Ada L." still has 2 orders
+    And no objectPropChange was sent for "orders"
+
   # ── enum support (first slice) ─────────────────────────────────────────────
 
   @milestone-enum @single-user
