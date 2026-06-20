@@ -1,5 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using DeEnv.Instance;
 using DeEnv.Storage;
 
@@ -228,65 +226,6 @@ public static class SchemaBridge
         }
     }
 
-    // TEMPORARY (testing scaffolding — not a product feature; remove later):
-    // reverse of the bridge — seed the designer's data from an existing schema
-    // document so Designer mode opens on the current instance schema rather than a
-    // blank slate while we try the designer out. Only seeds when the designer has no
-    // types yet, so it never clobbers designed-but-unexported edits.
-    public static void SeedDesignerData(string metaSchemaPath, string designerDataPath, string sourceSchemaPath)
-    {
-        var meta = InstanceDescriptionLoader.LoadFile(metaSchemaPath);
-        var designer = new JsonFileInstanceStore(designerDataPath, meta);
-
-        if (designer.ReadNode(NodePath.Root) is ObjectValue root
-            && root.Fields.TryGetValue("types", out var existing)
-            && existing is SetValue { Members.Count: > 0 })
-            return; // already has designed data — leave it alone
-
-        var source = InstanceDescriptionLoader.LoadFile(sourceSchemaPath);
-        var typesPath = NodePath.Root.Field("types");
-        var typeOrder = 1;
-
-        foreach (var type in source.AllTypes())
-        {
-            var typeFields = new Dictionary<string, NodeValue>
-            {
-                ["name"]     = new TextValue(type.Name),
-                ["baseType"] = new TextValue(JsonNamingPolicy.CamelCase.ConvertName(type.BaseType.ToString())),
-                ["order"]    = new IntValue(typeOrder * 10)
-            };
-            // An enum's value list is seeded into the comma-separated `values` field (the same form the
-            // type editor edits + SchemaBridge.Project reads back), so a published-then-reseeded enum
-            // round-trips. Object/leaf types carry no values (the field stays empty).
-            if (type.BaseType == BaseType.Enum)
-                typeFields["values"] = new TextValue(string.Join(", ", type.Values ?? []));
-
-            var typeId = designer.CreateObject("MetaType", new ObjectValue(typeFields));
-            designer.AddToSet(typesPath, typeId);
-
-            var propsPath = typesPath.Key(typeId.ToString()).Field("props");
-            var propOrder = 1;
-            foreach (var prop in type.Props ?? [])
-            {
-                var fields = new Dictionary<string, NodeValue>
-                {
-                    ["name"]  = new TextValue(prop.Name),
-                    ["type"]  = new TextValue(prop.Type),
-                    ["order"] = new IntValue(propOrder * 10)
-                };
-                if (prop.Cardinality != Cardinality.Single)
-                    fields["cardinality"] = new TextValue(prop.Cardinality == Cardinality.Set ? "set" : "dictionary");
-                if (prop.Cardinality == Cardinality.Dictionary)
-                    fields["keyType"] = new TextValue((prop.KeyType ?? "text"));
-
-                var propId = designer.CreateObject("MetaProp", new ObjectValue(fields));
-                designer.AddToSet(propsPath, propId);
-                propOrder++;
-            }
-            typeOrder++;
-        }
-    }
-
     // ── helpers ─────────────────────────────────────────────────────────────────
 
     // Member objects of a set node, sorted by the `order` field then by identity
@@ -308,10 +247,4 @@ public static class SchemaBridge
 
     private static int IntField(ObjectValue o, string name) =>
         o.Fields.TryGetValue(name, out var v) && v is IntValue i ? i.Value : 0;
-
-    private static void AddIfPresent(JsonObject obj, string key, string value)
-    {
-        if (!string.IsNullOrEmpty(value))
-            obj[key] = value;
-    }
 }
