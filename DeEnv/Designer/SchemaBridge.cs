@@ -170,18 +170,53 @@ public static class SchemaBridge
         WriteDocument(AppPrint.Print(desc), targetAppPath, targetDataPath);
     }
 
-    // Write an already-projected, already-validated app document onto a target instance and
-    // RESET its data (publish's write half — no migration; that is M11). Shared by Export (the
-    // M4 root-Db path) and the kernel's passed-Design publish, so both write + reset identically.
+    // Write an already-projected, already-validated app document onto a target instance, PRESERVING
+    // its existing data across the schema change when the data still fits (non-destructive apply — the
+    // migration substrate under M13 versioning; see DECISIONS "Data must survive schema changes").
+    // Shared by Export (the M4 root-Db path) and the kernel's passed-Design publish, so both apply
+    // identically.
+    //
+    // Non-destructive apply, first slice — preserve-or-reseed:
+    //   • The new data still fits the new schema (ADDITIVE evolution — a newly declared prop reads its
+    //     default) → KEEP it untouched. This is the win: data survives a schema change.
+    //   • No data yet (a fresh target), OR a change this slice cannot yet carry forward (a removed/
+    //     renamed field, a type/cardinality change, a wholesale different app) → reseed the new
+    //     schema's initial document, today's behavior. Carrying that data forward (rename remap,
+    //     value conversion on a type change) is the follow-up slices that progressively replace this
+    //     reseed with a migration; until then an incompatible apply still resets, as it always has.
     public static void WriteDocument(string documentText, string targetAppPath, string targetDataPath)
     {
+        var newDesc = InstanceDescriptionLoader.Load(documentText);
         File.WriteAllText(targetAppPath, documentText);
-        // Reset the instance's data through the storage seam: reinitialize to the new schema's
-        // initial document immediately (no stale data until next start). The old file goes first —
-        // a publish deliberately replaces the instance's data, and opening a store over it would
-        // (rightly) trip the startup guard. The document is re-parsed for the seed shape.
-        File.Delete(targetDataPath);
-        new JsonFileInstanceStore(targetDataPath, InstanceDescriptionLoader.Load(documentText)).Reset();
+
+        var preserved = File.Exists(targetDataPath)
+            && new FileInfo(targetDataPath).Length > 0
+            && DataFits(targetDataPath, newDesc);
+        if (!preserved)
+        {
+            // Drop any prior (possibly incompatible or absent) data, then reseed. Delete first because
+            // opening a store over incompatible data would (rightly) trip the startup guard.
+            File.Delete(targetDataPath);
+            new JsonFileInstanceStore(targetDataPath, newDesc).Reset();
+        }
+    }
+
+    // Whether the data file still satisfies the schema — i.e. opening a store over it passes the
+    // startup guard (StoredDataValidator), which tolerates additive evolution (a newly declared prop
+    // absent from stored data reads its default) and rejects removed/changed fields. A clean open means
+    // the data carries forward unchanged; a StoredDataException (incompatible, or unreadable) means it
+    // does not. The opened store is discarded — a successful open leaves a compatible file untouched.
+    private static bool DataFits(string dataPath, InstanceDescription desc)
+    {
+        try
+        {
+            _ = new JsonFileInstanceStore(dataPath, desc);
+            return true;
+        }
+        catch (StoredDataException)
+        {
+            return false;
+        }
     }
 
     // TEMPORARY (testing scaffolding — not a product feature; remove later):

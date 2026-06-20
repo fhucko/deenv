@@ -49,6 +49,23 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     Then the host action reply is an error
     And the target app document is unchanged
 
+  # ── non-destructive apply: data survives a schema change (the migration substrate) ──
+  # Applying an EVOLVED schema PRESERVES the target's existing data — apply no longer wipes and
+  # reseeds. Here the published design adds a field to a populated type; the stored row survives
+  # and the new field reads its default. The storage layer already tolerates a declared-but-absent
+  # prop (StoredData.feature), so the change is purely in the apply path: reconcile-and-keep
+  # instead of delete-and-reset. Pulled ahead of M13 versioning per DECISIONS "Data must survive
+  # schema changes".
+  @milestone-13 @single-user @persistence
+  Scenario: Apply preserves existing rows and defaults a newly added field
+    Given a target instance holding an "Item" labelled "Keep me"
+    And a designer instance holding a design that adds a "motto" field to "Item"
+    When the designer publishes that design to the target's id over the WS
+    Then the host action reply is ok
+    And the target app document describes the designed type "Item"
+    And the target still holds an "Item" labelled "Keep me", with "motto" defaulted to ""
+    And the target instance was restarted
+
   @milestone-10 @single-user
   Scenario: Create projects the passed design into a new named instance on the given ports
     Given a designer instance holding a design with a type "Item" and a custom render

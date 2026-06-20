@@ -301,27 +301,44 @@ usefulness needs is that an *apply* preserves data; it does **not** need the git
 history / commit / diff / checkout machinery (that stays M13). The non-destructive apply
 built here is exactly the step M13's *apply* later sits on — on the path, not throwaway.
 
-**Scope — deliberately thin:**
+**Scope — deliberately thin, built in slices:**
 - **Stop resetting data on schema change.** Today publish "resets data for now"; that
   specific behavior is what makes it useless.
 - **Additive changes are non-destructive:** a new field → existing objects lack it, read as
-  default/null; a new type → nothing to migrate; a removed field → drop that value. This
-  covers the most common evolution and is small (don't reset + tolerate missing fields).
+  default/null; a new type → nothing to migrate. The most common evolution, and small (don't
+  reset + the storage layer already tolerates missing fields).
+- **Removed field → drop that value** (the stored value is pruned; the rest of the object
+  survives).
 - **Renames preserve data**, leveraging M5: types/props carry intrinsic identity, so the
   diff matches by **identity, not name**, and remaps the stored key (renames exact — as the
   versioning diff was already designed to be).
-- **Structural / destructive changes** (type change, split/merge, single→set) are **NOT**
-  in scope — **refuse loudly** ("not supported yet") rather than silently corrupt. An honest
-  partial, not a cheap correctness gap.
+- **Type changes — apply and *convert*, do NOT refuse** (user direction 2026-06-19,
+  **supersedes** the earlier "refuse loudly on structural/destructive change"). Apply attempts
+  to carry the data forward: a *lossless/widening* conversion (`int→decimal`, `int→text`) is
+  applied; an *unconvertible* value (`text "abc"→int`) or any change a slice cannot yet carry
+  is handled **non-silently** — the value defaults **and is reported**, never silent corruption
+  (vision-keeper's guardrail). "Don't refuse" keeps the operator's deploy flow working (a hard
+  refuse blocked every existing browser deploy of a non-additive change).
 
 **Honor the versioning seams:** persist through the storage interface in the model's terms,
 never side files (else forecloses pillar 4 / temporal versioning).
 
 **Reprioritization is a conscious call.** It pulls a slice of M13 ahead of M11–M12,
 justified only because the goal is a *useful* MVP (if the goal were funder-readiness it
-would not be needed — funders fund early work). First step before coding: confirm what
-actually happens to data today on an additive change, then a tests-first Gherkin scenario
-(add a field to a populated type, republish, rows survive with the field defaulted).
+would not be needed — funders fund early work).
+
+**Status — built in slices (2026-06-19+):**
+1. **Additive preserve-or-reseed — DONE (2026-06-19, suite 350).** `SchemaBridge.WriteDocument`
+   PRESERVES the target's data when it still fits the new schema (additive → new field reads its
+   default), and reseeds otherwise. Server-side C# only (no twin/conformance). **Known gap, flagged,
+   not a regression:** an *incompatible* apply (rename, type change, different app) still reseeds —
+   today's behavior; the slices below replace that reseed with carry-forward, and an unavoidable
+   reset must become *reported* rather than silent.
+2. **Removed field → drop the value.** Touches the startup guard (`StoredDataValidator` rejects an
+   undeclared stored field); prune on apply, keep the startup guard strict.
+3. **Scalar type conversion** (`int↔decimal↔text` where parseable) **+ the unconvertible-value
+   policy** (non-silent: drop-to-default + report).
+4. **Rename via M5 identity** (needs an old↔new schema diff). 5. **Cardinality reshaping.**
 
 ## Concurrency, saving, and locking (eshop/CRM)
 

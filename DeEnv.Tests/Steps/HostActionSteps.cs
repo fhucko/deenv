@@ -23,9 +23,8 @@ namespace DeEnv.Tests.Steps;
 [Binding]
 public sealed class HostActionSteps
 {
-    // Sentinels distinguishing "written by the publish" from "left untouched".
+    // Sentinel distinguishing "written by the publish" from "left untouched" (the app document).
     private const string TargetAppSentinel = "UNCHANGED-TARGET-APP-SENTINEL";
-    private const string TargetDataSentinel = "{ \"unchanged\": \"target-data-sentinel\" }";
 
     // A test-local designer meta-schema: a Db holding a SET of Designs, where a Design is a whole app
     // (a structured `types` set + the other app-document sections — initialData/common/ui — as text).
@@ -148,6 +147,22 @@ public sealed class HostActionSteps
         DesignType("Db", "object");
     }
 
+    // A design that EVOLVES the target's schema by ADDING a field to the element type:
+    // Db { items set of Item }, Item { label, <newField> } + the custom UI. The target (above) is
+    // seeded under the SAME app WITHOUT <newField>, so publishing this design is a purely additive
+    // schema change — the proof that apply preserves the row and defaults the new field.
+    [Given("a designer instance holding a design that adds a {string} field to {string}")]
+    public void GivenDesignerHoldingAdditiveDesign(string newField, string typeName)
+    {
+        OpenDesigner();
+        AddDesign(CustomUiSection);
+        DesignType("Db", "object");
+        DesignType(typeName, "object");
+        DesignProp(typeName, "label", "text");
+        DesignProp(typeName, newField, "text");
+        DesignSetProp("Db", typeName.ToLowerInvariant() + "s", typeName);
+    }
+
     // ── Given: a target instance addressed by an id ─────────────────────────────
 
     [Given("a target instance addressed by an id")]
@@ -157,7 +172,40 @@ public sealed class HostActionSteps
         _targetAppPath = Path.Combine(_dir, "target.app");
         _targetDataPath = Path.Combine(_dir, "target-data.json");
         File.WriteAllText(_targetAppPath, TargetAppSentinel);
-        File.WriteAllText(_targetDataPath, TargetDataSentinel);
+        // No data file: this is a FRESH-publish target (nothing to preserve), so a publish/apply seeds
+        // the new schema's initial document. A target with prior data uses GivenTargetHoldingItem.
+        // (Apply now PRESERVES existing data; a garbage sentinel here would be refused, not reset.)
+    }
+
+    // A target instance seeded with REAL data under the element type's PREVIOUS schema —
+    // Db { items set of <Type> }, <Type> { label } — holding one object. Publishing an ADDITIVE design
+    // (the type gains a field) over this must preserve the object and default the new field. Seeded
+    // THROUGH the store seam (CreateObject/AddToSet) so the data is genuine stored shape, valid for the
+    // prior schema; the apply reconciles it against the new schema without wiping it.
+    [Given("a target instance holding an {string} labelled {string}")]
+    public void GivenTargetHoldingItem(string typeName, string label)
+    {
+        Directory.CreateDirectory(_dir);
+        _targetAppPath = Path.Combine(_dir, "target.app");
+        _targetDataPath = Path.Combine(_dir, "target-data.json");
+        File.WriteAllText(_targetAppPath, TargetAppSentinel);
+
+        var set = typeName.ToLowerInvariant() + "s";
+        var priorApp =
+            $"""
+            types
+                Db
+                    {set} set of {typeName}
+                {typeName}
+                    label text
+            """;
+        var prior = InstanceDescriptionLoader.Load(priorApp);
+        var store = new JsonFileInstanceStore(_targetDataPath, prior);
+        var id = store.CreateObject(typeName, new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["label"] = new TextValue(label),
+        }));
+        store.AddToSet(NodePath.Root.Field(set), id);
     }
 
     // ── When: publish over the WS ───────────────────────────────────────────────
@@ -325,11 +373,26 @@ public sealed class HostActionSteps
     [Then("the target instance's data is reset")]
     public async Task ThenTargetDataReset()
     {
-        // The publish deletes the old data file and reseeds the NEW schema's initial document, so the
-        // sentinel is gone and what's there now loads cleanly against the published schema.
-        await Assert.That(File.ReadAllText(_targetDataPath)).IsNotEqualTo(TargetDataSentinel);
+        // A FRESH-publish target (no prior data) is seeded with the NEW schema's initial document on
+        // publish/apply, so the data file now exists and loads cleanly against the published schema.
+        // (Apply PRESERVES prior data — proven separately; a fresh target has none, so it seeds.)
         var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
-        _ = new JsonFileInstanceStore(_targetDataPath, published); // throws if the reset data is invalid
+        _ = new JsonFileInstanceStore(_targetDataPath, published); // seeded data is present + valid
+    }
+
+    [Then("the target still holds an {string} labelled {string}, with {string} defaulted to {string}")]
+    public async Task ThenTargetPreservedWithDefault(string typeName, string label, string newField, string expected)
+    {
+        // Open a store over the PRESERVED data with the now-published (wider) schema. The row survived
+        // the apply (found by its label), and the newly added field — absent from the older stored
+        // data — reads its default: additive evolution shown end-to-end through apply, not a wipe.
+        var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
+        var store = new JsonFileInstanceStore(_targetDataPath, published);
+        var item = store.ReadExtent(typeName).Values
+            .FirstOrDefault(o => o.Fields.GetValueOrDefault("label") is TextValue t && t.Text == label);
+        await Assert.That(item).IsNotNull();
+        var field = item!.Fields.GetValueOrDefault(newField);
+        await Assert.That(field is TextValue ft ? ft.Text : null).IsEqualTo(expected);
     }
 
     [Then("the target instance was restarted")]

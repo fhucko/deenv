@@ -73,6 +73,7 @@ public interface IInstanceStore
 
     // Reinitialize the data to the schema's initial document (the initialData seed
     // when the schema carries one, else the default empty root). Destructive; used
-    // by the designer bridge when publishing a new schema.
+    // for a FRESH publish (a target with no prior data — apply otherwise PRESERVES
+    // existing data) and by tests.
     void Reset();
 }

@@ -10,7 +10,7 @@ namespace DeEnv.Kernel;
 // project a DESIGN (passed by its id — the designer passes one `Design` out of its `db.designs`
 // set) into an app document, or address an instance by its id:
 //   • publish(design, targetId) — project the design onto an EXISTING instance (resolved by id over
-//     the live hosted set), replacing its document and resetting its data.
+//     the live hosted set), replacing its document while PRESERVING its data (non-destructive apply).
 //   • create(design, appPort, infraPort) — project the design into a NEW instance on the given
 //     ports, via the kernel create delegate (the C# create mechanism: write the doc, hot-start,
 //     append the registry, refresh the live set).
@@ -55,11 +55,13 @@ public sealed class KernelHostActions(
     }
 
     // publish(design, targetId): project the PASSED design (one of the caller's `db.designs`) onto an
-    // EXISTING target and reset the target's data. arg 0 is the design object's id (resolved against
-    // the caller's store — see ResolveDesign), arg 1 the target id. Any instance is a publish target
-    // (resolution is purely by id); an id that matches no hosted instance is rejected — never a write
-    // to the wrong store. ProjectDesignDocument validates the design before WriteDocument writes, so an
-    // invalid design (it throws) also writes nothing. No migration on reset (that is M11).
+    // EXISTING target, PRESERVING the target's data (non-destructive apply). arg 0 is the design
+    // object's id (resolved against the caller's store — see ResolveDesign), arg 1 the target id. Any
+    // instance is a publish target (resolution is purely by id); an id that matches no hosted instance
+    // is rejected — never a write to the wrong store. ProjectDesignDocument validates the design before
+    // WriteDocument writes, so an invalid design (it throws) also writes nothing; WriteDocument keeps
+    // existing data across an additive change and reseeds on an incompatible one (until the migration
+    // slices carry it forward).
     private void Publish(JsonElement args)
     {
         var design = ResolveDesign(ArgInt(args, 0));
@@ -70,7 +72,7 @@ public sealed class KernelHostActions(
 
         var appDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
         SchemaBridge.WriteDocument(appDoc, target.SchemaPath, target.DataPath);
-        // Restart the target so the new schema and reset data take effect immediately. Fire-and-forget:
+        // Restart the target so the new schema and preserved data take effect immediately. Fire-and-forget:
         // the "ok" is sent before the restart begins, avoiding self-restart deadlock on the WS thread.
         _ = restartInstance(targetId);
     }
@@ -80,8 +82,8 @@ public sealed class KernelHostActions(
     // `db.designs`, resolved against the caller's store), arg 1 the target instance id. Project FIRST so
     // an invalid design throws before any registry write or document overwrite (records nothing, writes
     // nothing); then record the reference (the kernel rewrites kernel.json's designId + refreshes the live
-    // view); then write the projected doc + reset the target's data — exactly Publish, with the registry
-    // write in front. An unknown target id is rejected before any work. No migration on reset (that is M11).
+    // view); then write the projected doc, PRESERVING the target's data — exactly Publish (non-destructive
+    // apply), with the registry write in front. An unknown target id is rejected before any work.
     private void SetDesign(JsonElement args)
     {
         var designId = ArgInt(args, 0);

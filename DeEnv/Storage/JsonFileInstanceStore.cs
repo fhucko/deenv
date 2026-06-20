@@ -470,7 +470,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     // Reinitialize the data to the schema's initial document (the initialData seed when
     // the schema carries one, else the default empty root) — in memory and on disk.
-    // Used by the designer bridge when publishing a new schema.
+    // Used for a FRESH publish (a target with no prior data — apply otherwise PRESERVES
+    // existing data) and by tests.
     public void Reset()
     {
         lock (_sync)
