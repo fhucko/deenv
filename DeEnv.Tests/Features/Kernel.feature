@@ -167,3 +167,52 @@ Feature: Kernel host (multi-instance)
     When the operator switches the first instance onto the second instance's port
     Then the switch is rejected with a clear kernel-config error
     And both instances still serve their roots on their original ports
+
+  # The design-host (the designer, holding `db.designs`) is seeded over a FRESH store from each registered
+  # app's OWN app.app — the designer no longer embeds a duplicated copy of every app. For every registered
+  # instance that references a design (carries a `designId`), the kernel reverse-projects that instance's
+  # app document into a Design and writes it into the design-host's store AT id == the designId (so
+  # kernel.json's references key off the same ids by construction). A registered instance with NO designId
+  # contributes no Design. (This is the fresh-store case of the boot sync below — same result.) Driven
+  # against a kernel booted from the REAL committed apps + their designIds.
+  @milestone-10 @single-user
+  Scenario: The design-host is seeded at first boot, each design id pinned to its instance's designId
+    Given a kernel booted from the committed designer, todo and crm apps plus a no-design app
+    Then the design-host holds a design with id 13 labelled "todo"
+    And the design-host holds a design with id 27 labelled "crm"
+    And the design-host holds a design with id 60 labelled "designer"
+    And the seeded design 13 has a type named "TodoItem"
+    And the no-design app contributes no design
+
+  # The design-host's derived library is a BOOT SYNC, not a fresh-only seed: every boot reconciles
+  # `db.designs` with the current app files, so adding or editing an app document is reflected on the
+  # next restart WITHOUT ever deleting the store. The app file is the source of truth for a file-backed
+  # design: an edit to an app's app.app (here, a new prop) is reflected in its design after a restart.
+  @milestone-10 @single-user
+  Scenario: An edited app document is reflected in its design after restart
+    Given a kernel booted from the committed designer, todo and crm apps plus a no-design app
+    And the todo app's document gains a new type "Tag"
+    When the kernel restarts from its persisted registry
+    Then the design-host's design 13 has a type named "Tag"
+
+  # The merge OVERWRITES file-backed designs (the file wins) but PRESERVES designs that have no backing
+  # instance — a design created in the UI that no operator has linked to an instance yet. Its id is not
+  # among the current designIds, so the boot sync must keep it (never clobber it back to the file set).
+  @milestone-10 @single-user
+  Scenario: A UI-created design without a backing instance survives a restart
+    Given a kernel booted from the committed designer, todo and crm apps plus a no-design app
+    And the operator adds a design labelled "scratch" to the design-host
+    When the kernel restarts from its persisted registry
+    Then the design-host holds a design labelled "scratch"
+    And the design-host still holds a design with id 13 labelled "todo"
+
+  # A newly-LINKED app — a registered instance with a designId whose design the store does not yet hold
+  # — gets its design on the next boot (the add half of the upsert). Here the design-host store starts
+  # WITHOUT todo's design (id 13 removed from db.designs), but todo's instance still references it, so
+  # the boot sync reverse-projects todo's app.app into the design at id 13.
+  @milestone-10 @single-user
+  Scenario: A newly-linked app's design appears after restart
+    Given a kernel booted from the committed designer, todo and crm apps plus a no-design app
+    And the design-host's design 13 is removed from its store
+    When the kernel restarts from its persisted registry
+    Then the design-host still holds a design with id 13 labelled "todo"

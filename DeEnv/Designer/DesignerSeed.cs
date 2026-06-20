@@ -1,0 +1,344 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using DeEnv.Instance;
+using DeEnv.Storage;
+
+namespace DeEnv.Designer;
+
+// The INVERSE of SchemaBridge's forward projection: build the operator IDE's `db.designs` seed from a
+// set of committed app documents. Where SchemaBridge.ProjectDesignDocument turns a `Design` node back
+// INTO an app document (publish), this turns an app document INTO a `Design` — parsing its `types`
+// section into the structured MetaType/MetaProp the type editor edits, and carrying its
+// initialData/common/ui sections as VERBATIM source text (the exact representation SchemaBridge's three
+// Design text fields expect, so the round-trip Design → app document → Design is faithful).
+//
+// It produces an InstanceInitialData (the friendly normalized extents the store seeds from on first
+// run) so the kernel can seed the design-host's store through the normal seeding path
+// (JsonFileInstanceStore's BuildSeededDoc), with NO new storage write path — the seed is plain
+// model-terms data, honoring the storage seam.
+//
+// CRITICAL: each Design's id is the caller-supplied designId (the instance's kernel.json `designId`),
+// NOT a freshly-minted sequential id — so kernel.json's references (and future per-design version
+// history) key off the SAME ids by construction. MetaType/MetaProp sub-ids are minted arbitrarily
+// (not load-bearing) from a counter started ABOVE the highest designId, so they never collide with a
+// Design id or each other.
+//
+// This is authoring-time-free: the duplicated escaped-string seed inside instances/1/app.app is gone —
+// each app's own instances/<id>/app.app is the single source of truth, and the kernel reverse-projects
+// it at first boot. A peer app whose initialData becomes a Design field is carried verbatim; the
+// designer's OWN app document carries an empty initialData (it no longer embeds the design library), so
+// reverse-projecting it yields a Design with empty initialData and there is no recursion.
+//
+// The kernel runs this on EVERY boot as a SYNC (KernelHost.SyncDesignHost): a fresh store gets `Build`
+// (all designs from the files); an existing store gets `Merge` (file-backed designs UPSERTED at their
+// designIds, UI-created designs with no backing file PRESERVED). Merge is the inverse-then-forward that
+// keeps the design library reflecting the app files without ever deleting the store.
+public static class DesignerSeed
+{
+    // Build the design-host's `db.designs` seed from the given designs (each an instance's display
+    // label, its kernel.json designId, and its committed app-document text). Returns the friendly
+    // InstanceInitialData the store seeds from: a single root Db holding a `designs` set of the Design
+    // ids, plus the Design / MetaType / MetaProp extents. The designs are emitted in the given order;
+    // the root Db's `designs` set lists their ids in that order.
+    public static InstanceInitialData Build(IReadOnlyList<(string Label, int DesignId, string AppText)> designs)
+    {
+        var builder = new SeedBuilder(designs.Select(d => d.DesignId));
+        var designIds = new List<int>();
+        foreach (var (label, designId, appText) in designs)
+            designIds.Add(builder.AddDesign(label, designId, appText));
+        builder.AddRootDb(designIds);
+        return builder.Build();
+    }
+
+    // Reconcile the design-host's EXISTING designs with the current app files — the boot sync over a
+    // non-empty store. `existing` is the design-host's live `Design` extent (its objects read inline via
+    // IInstanceStore.ReadExtent, keyed by id; each `types` member is itself an inline object keyed by its
+    // MetaType id, and so on for `props`). `fileBacked` is the same (Label, DesignId, AppText) tuples as
+    // Build — one per registered instance that references a design.
+    //
+    // The merge:
+    //   • UPSERT each file-backed design at id == its designId (reverse-projected from the file — the
+    //     file is the source of truth, so an existing same-id design is overwritten, not kept).
+    //   • PRESERVE every existing design whose id is NOT a current designId (a UI-created design with no
+    //     backing instance) verbatim — its Design + its MetaTypes + their MetaProps at their existing ids.
+    //
+    // Both are emitted by ONE SeedBuilder, whose mint counter starts above every id in play (file-backed
+    // designIds AND all preserved Design/MetaType/MetaProp ids), so a freshly-minted file-backed sub-id
+    // can never collide with a preserved one. The root Db's `designs` set lists the preserved ids first,
+    // then the file-backed ids (order is incidental; ids are the identity).
+    public static InstanceInitialData Merge(
+        IReadOnlyDictionary<int, ObjectValue> existing,
+        IReadOnlyList<(string Label, int DesignId, string AppText)> fileBacked)
+    {
+        var fileBackedIds = fileBacked.Select(d => d.DesignId).ToHashSet();
+        var preserved = existing
+            .Where(e => !fileBackedIds.Contains(e.Key))
+            .OrderBy(e => e.Key)
+            .ToList();
+
+        // Start the mint counter above EVERY id in play so a minted sub-id never collides with a
+        // preserved Design/MetaType/MetaProp id or a file-backed designId.
+        var preservedIds = preserved.SelectMany(e => DesignSubgraphIds(e.Value).Append(e.Key));
+        var builder = new SeedBuilder(fileBackedIds.Concat(preservedIds));
+
+        var designIds = new List<int>();
+        foreach (var (id, design) in preserved)
+            designIds.Add(builder.AddPreservedDesign(id, design));
+        foreach (var (label, designId, appText) in fileBacked)
+            designIds.Add(builder.AddDesign(label, designId, appText));
+
+        builder.AddRootDb(designIds);
+        return builder.Build();
+    }
+
+    // Every id inside a preserved Design's subgraph (its MetaType ids and their MetaProp ids), read off
+    // the inline `types`/`props` set members — the set member KEY is the member object's id. Used only to
+    // seed the mint counter above them.
+    private static IEnumerable<int> DesignSubgraphIds(ObjectValue design)
+    {
+        if (design.Fields.GetValueOrDefault("types") is not SetValue types) yield break;
+        foreach (var (typeId, typeNode) in types.Members)
+        {
+            yield return typeId;
+            if (typeNode is ObjectValue type && type.Fields.GetValueOrDefault("props") is SetValue props)
+                foreach (var propId in props.Members.Keys)
+                    yield return propId;
+        }
+    }
+
+    // Split an app document into its top-level sections, keyed by section keyword (types / initialData /
+    // common / ui), each value the VERBATIM section text INCLUDING its keyword line and trailing newline
+    // (e.g. "ui\n    fn render()\n        return <main>\n"). A section runs from its column-0 keyword
+    // line through the line before the next column-0 keyword (or EOF), with trailing blank lines trimmed
+    // and a single closing newline — the exact form SchemaBridge's Design text fields carry, so the
+    // reverse → forward round-trip is faithful. Only the four known keywords start a section (an
+    // unindented blank line never does); every app document begins with `types`, so there is no leading
+    // non-section content. Public so the kernel-seed tests can assert section boundaries directly.
+    public static IReadOnlyDictionary<string, string> SplitSections(string appText)
+    {
+        var keywords = new HashSet<string> { "types", "initialData", "common", "ui" };
+        var lines = appText.Replace("\r\n", "\n").Split('\n');
+        var sections = new Dictionary<string, string>();
+
+        string? current = null;
+        var body = new List<string>();
+        void Flush()
+        {
+            if (current == null) return;
+            while (body.Count > 0 && body[^1].Length == 0) body.RemoveAt(body.Count - 1);
+            sections[current] = string.Join("\n", body) + "\n";
+        }
+
+        foreach (var line in lines)
+        {
+            if (keywords.Contains(line))
+            {
+                Flush();
+                current = line;
+                body = [line];
+            }
+            else if (current != null)
+            {
+                body.Add(line);
+            }
+        }
+        Flush();
+        return sections;
+    }
+
+    // Accumulates the flat, id-keyed initialData pools (Db / Design / MetaType / MetaProp) the design
+    // seed expresses: every object is a top-level entry with a unique id, sets are arrays of member ids.
+    // Design ids are caller-supplied (the load-bearing kernel.json designIds); every OTHER minted id (the
+    // root Db, file-backed MetaTypes/MetaProps) comes from a counter started ABOVE every FIXED id (the
+    // designIds, and on a merge the preserved designs' existing sub-ids), so a minted id never collides
+    // with a Design id or a preserved id. A PRESERVED design keeps its own existing sub-ids verbatim.
+    private sealed class SeedBuilder
+    {
+        private readonly Dictionary<string, Dictionary<string, JsonElement>> _pools = new();
+        private int _nextId;
+
+        // `fixedIds` = every id that must NOT be re-minted: the file-backed designIds plus (on a merge)
+        // the preserved designs' existing Design/MetaType/MetaProp ids. The counter starts above them all.
+        public SeedBuilder(IEnumerable<int> fixedIds) =>
+            _nextId = fixedIds.DefaultIfEmpty(0).Max() + 1;
+
+        // Add one committed app as a Design AT its caller-supplied id (the kernel.json designId): the
+        // structured types (reverse-projected from the parsed `types` section) + the other three sections
+        // as verbatim text. Returns the Design's id (== designId). The designer's own app document carries
+        // an empty initialData, so this is uniform — no self-snapshot special case is needed.
+        public int AddDesign(string label, int designId, string appText)
+        {
+            var desc = AppParse.Parse(appText);
+            var sections = SplitSections(appText);
+
+            var typeIds = new List<int>();
+            var typeOrder = 1;
+            foreach (var type in desc.AllTypes())
+                typeIds.Add(AddType(type, typeOrder++ * 10));
+
+            var fields = new JsonObject
+            {
+                ["label"] = label,
+                // The other sections VERBATIM (keyword + body, "" when absent) — exactly what
+                // SchemaBridge's Design text fields expect and ProjectDesignDocument reassembles.
+                ["initialData"] = sections.GetValueOrDefault("initialData", ""),
+                ["common"] = sections.GetValueOrDefault("common", ""),
+                ["ui"] = sections.GetValueOrDefault("ui", ""),
+                ["types"] = IdArray(typeIds),
+            };
+            Pool("Design")[designId.ToString()] = ToElement(fields);
+            return designId;
+        }
+
+        // Re-emit an EXISTING (UI-created, no backing file) design VERBATIM at its existing id, carrying
+        // its MetaTypes and their MetaProps at THEIR existing ids (read off the inline set members — the
+        // set member key is the member's id). The inverse of the store's load: scalars become JSON values,
+        // sets become id arrays. Preserving the ids keeps the design's identity stable across the boot sync.
+        public int AddPreservedDesign(int designId, ObjectValue design)
+        {
+            var typeIds = new List<int>();
+            if (design.Fields.GetValueOrDefault("types") is SetValue types)
+                foreach (var (typeId, typeNode) in types.Members)
+                    if (typeNode is ObjectValue type)
+                        typeIds.Add(AddPreservedType(typeId, type));
+
+            var fields = new JsonObject
+            {
+                ["label"] = Text(design, "label"),
+                ["initialData"] = Text(design, "initialData"),
+                ["common"] = Text(design, "common"),
+                ["ui"] = Text(design, "ui"),
+                ["types"] = IdArray(typeIds),
+            };
+            Pool("Design")[designId.ToString()] = ToElement(fields);
+            return designId;
+        }
+
+        private int AddPreservedType(int typeId, ObjectValue type)
+        {
+            var propIds = new List<int>();
+            if (type.Fields.GetValueOrDefault("props") is SetValue props)
+                foreach (var (propId, propNode) in props.Members)
+                    if (propNode is ObjectValue prop)
+                        propIds.Add(AddPreservedProp(propId, prop));
+
+            var fields = new JsonObject
+            {
+                ["name"] = Text(type, "name"),
+                ["baseType"] = Text(type, "baseType"),
+                ["values"] = Text(type, "values"),
+                ["order"] = Int(type, "order"),
+                ["props"] = IdArray(propIds),
+            };
+            Pool("MetaType")[typeId.ToString()] = ToElement(fields);
+            return typeId;
+        }
+
+        private int AddPreservedProp(int propId, ObjectValue prop)
+        {
+            var fields = new JsonObject
+            {
+                ["name"] = Text(prop, "name"),
+                ["type"] = Text(prop, "type"),
+                ["order"] = Int(prop, "order"),
+                ["cardinality"] = Text(prop, "cardinality"),
+            };
+            // keyType is meaningful (and stored) only for a dictionary prop — carry it when present.
+            if (prop.Fields.GetValueOrDefault("keyType") is TextValue { Text.Length: > 0 } keyType)
+                fields["keyType"] = keyType.Text;
+            Pool("MetaProp")[propId.ToString()] = ToElement(fields);
+            return propId;
+        }
+
+        // Read a scalar leaf off an inline-loaded object (the design subgraph is all text + the int
+        // `order`). A missing/empty field reads as "" / 0 — the same friendly defaults the seed uses.
+        private static string Text(ObjectValue obj, string name) =>
+            obj.Fields.GetValueOrDefault(name) is TextValue t ? t.Text : "";
+
+        private static int Int(ObjectValue obj, string name) =>
+            obj.Fields.GetValueOrDefault(name) is IntValue i ? i.Value : 0;
+
+        public void AddRootDb(IReadOnlyList<int> designIds) =>
+            Pool("Db")[MintId().ToString()] = ToElement(new JsonObject { ["designs"] = IdArray(designIds) });
+
+        public InstanceInitialData Build()
+        {
+            var extents = _pools.ToDictionary(
+                e => e.Key,
+                e => (IReadOnlyDictionary<string, JsonElement>)e.Value);
+            return new InstanceInitialData(extents);
+        }
+
+        // A MetaType seed (name + baseType + values + order + its props), reverse-projecting a
+        // TypeDefinition the same way the type editor / SchemaBridge.Project round-trip it. An enum's
+        // value list is seeded into the comma-separated `values` field (the always-rendered enum-values
+        // input the type editor edits + SchemaBridge.Project reads back); object/leaf types carry "".
+        private int AddType(TypeDefinition type, int order)
+        {
+            var propIds = new List<int>();
+            var propOrder = 1;
+            foreach (var prop in type.Props ?? [])
+                propIds.Add(AddProp(prop, propOrder++ * 10));
+
+            var fields = new JsonObject
+            {
+                ["name"] = type.Name,
+                // `object` for object types; the lowercase leaf/enum name for a leaf alias or enum.
+                // Mirrors how SchemaBridge.Project reads baseType back (== "object", "enum", or a base).
+                ["baseType"] = type.BaseType == BaseType.Object ? "object"
+                    : type.BaseType == BaseType.Enum ? "enum"
+                    : BaseTypes.NameOf(type.BaseType),
+                ["values"] = string.Join(", ", type.Values ?? []),
+                ["order"] = order,
+                ["props"] = IdArray(propIds),
+            };
+            return Add("MetaType", fields);
+        }
+
+        // A MetaProp seed. cardinality is written EXPLICITLY for every prop — "single" included — so the
+        // value matches an option in the designer's cardinality <select> (a blank cardinality would
+        // leave that bound <select> with no selected option after hydration). SchemaBridge.Project reads
+        // "single" and "" alike as Single, so this changes nothing about what projects back. keyType is
+        // emitted only for a dictionary (the one cardinality it is meaningful for).
+        private int AddProp(PropDefinition prop, int order)
+        {
+            var fields = new JsonObject
+            {
+                ["name"] = prop.Name,
+                ["type"] = prop.Type,
+                ["order"] = order,
+                ["cardinality"] = prop.Cardinality switch
+                {
+                    Cardinality.Set => "set",
+                    Cardinality.Dictionary => "dictionary",
+                    _ => "single",
+                },
+            };
+            if (prop.Cardinality == Cardinality.Dictionary)
+                fields["keyType"] = prop.KeyType ?? "text";
+            return Add("MetaProp", fields);
+        }
+
+        private int Add(string type, JsonObject fields)
+        {
+            var id = MintId();
+            Pool(type)[id.ToString()] = ToElement(fields);
+            return id;
+        }
+
+        private int MintId() => _nextId++;
+
+        private Dictionary<string, JsonElement> Pool(string type)
+        {
+            if (!_pools.TryGetValue(type, out var pool))
+                _pools[type] = pool = new Dictionary<string, JsonElement>();
+            return pool;
+        }
+
+        private static JsonArray IdArray(IReadOnlyList<int> ids) =>
+            new(ids.Select(i => (JsonNode?)JsonValue.Create(i)).ToArray());
+
+        private static JsonElement ToElement(JsonObject obj) =>
+            JsonSerializer.SerializeToElement(obj);
+    }
+}

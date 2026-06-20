@@ -547,6 +547,147 @@ public sealed class KernelSteps(InstanceContext ctx)
             await Assert.That(_consoleHtml).Contains(port.ToString());
     }
 
+    // ── design-host first-boot seed (the designer's `db.designs`) ────────────────
+
+    // Boot a kernel from the REAL committed apps the way production does: the designer (instances/1,
+    // holding `db.designs`) as id 1, the real todo + crm apps as ids 2 + 3, and an extra no-design bool
+    // app as id 4. The designIds match the committed kernel.json (designer 60, todo 13, crm 27); the
+    // no-design app carries no designId. The kernel's first-boot seed reverse-projects each design-bearing
+    // app's OWN app.app into a Design at id == its designId — the design-host store is then asserted.
+    [Given("a kernel booted from the committed designer, todo and crm apps plus a no-design app")]
+    public async Task GivenKernelFromCommittedAppsAsync()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "deenv-seed-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        ctx.KernelDir = dir;
+
+        // The real committed app documents in their id-dirs, exactly as the kernel hosts them.
+        WriteApp(dir, 1, File.ReadAllText(InstanceContext.AppFixture(1))); // designer (db.designs)
+        WriteApp(dir, 2, File.ReadAllText(InstanceContext.AppFixture(2))); // todo
+        WriteApp(dir, 3, File.ReadAllText(InstanceContext.AppFixture(3))); // crm
+        WriteApp(dir, 4, BoolApp);                                          // a no-design instance
+
+        int dApp = FreePort(), dInfra = FreePort(),
+            tApp = FreePort(), tInfra = FreePort(),
+            cApp = FreePort(), cInfra = FreePort(),
+            nApp = FreePort(), nInfra = FreePort();
+
+        // designIds pin each design's id to its instance's reference (designer 60, todo 13, crm 27 — the
+        // committed values). The fourth instance has NO designId, so it must contribute no design.
+        File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
+        {
+          "instances": [
+            { "id": 1, "app": "designer", "appPort": {{dApp}}, "infraPort": {{dInfra}}, "designId": 60 },
+            { "id": 2, "app": "todo",     "appPort": {{tApp}}, "infraPort": {{tInfra}}, "designId": 13 },
+            { "id": 3, "app": "crm",      "appPort": {{cApp}}, "infraPort": {{cInfra}}, "designId": 27 },
+            { "id": 4, "app": "nodesign", "appPort": {{nApp}}, "infraPort": {{nInfra}} }
+          ]
+        }
+        """);
+
+        var registry = RegistryReader.Read(Path.Combine(dir, "kernel.json"));
+        ctx.Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"));
+        await ctx.Kernel.StartAsync(KernelHost.SpecsFor(registry, dir));
+    }
+
+    // The design-host: the instance holding `db.designs` (the designer, id 1). Its store's `Design`
+    // extent is the seeded design library, keyed by id.
+    private IReadOnlyDictionary<int, ObjectValue> SeededDesigns() =>
+        ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store.ReadExtent("Design");
+
+    [Then("the design-host holds a design with id {int} labelled {string}")]
+    public async Task ThenDesignHostHoldsDesignAsync(int id, string label)
+    {
+        var designs = SeededDesigns();
+        await Assert.That(designs.ContainsKey(id)).IsTrue();
+        await Assert.That(LabelOf(designs[id])).IsEqualTo(label);
+    }
+
+    [Then("the seeded design {int} has a type named {string}")]
+    [Then("the design-host's design {int} has a type named {string}")]
+    public async Task ThenSeededDesignHasTypeAsync(int id, string typeName)
+    {
+        // The design's `types` set holds the reverse-projected MetaTypes; one carries the named type — so
+        // the seed reverse-projected the app's REAL types, not a placeholder. Resolve the design's types
+        // set members (the design-host store loads them inline as objects) and look for the name.
+        var design = SeededDesigns()[id];
+        var types = (SetValue)design.Fields["types"];
+        var names = types.Members.Values
+            .OfType<ObjectValue>()
+            .Select(t => t.Fields.TryGetValue("name", out var v) && v is TextValue n ? n.Text : "")
+            .ToList();
+        await Assert.That(names).Contains(typeName);
+    }
+
+    // ── boot sync: app-file edits reflect into the design library on restart ──────
+
+    // Edit a HOSTED app's committed document on disk (the file is the source of truth). The boot sync
+    // reverse-projects each instance's app.app on every boot, so this new type must appear in todo's
+    // design (id 13) after a restart. Append a new object type to instances/2's app.app.
+    [Given("the todo app's document gains a new type {string}")]
+    public void GivenTodoAppGainsType(string typeName)
+    {
+        var schemaPath = AppPaths.SchemaPathForId(ctx.KernelDir!, 2); // todo is instance id 2
+        var doc = File.ReadAllText(schemaPath);
+        // Splice a new object type into the `types` section, right after the `types` keyword line, so it is
+        // a top-level type regardless of what the rest of the document holds (initialData/ui below stay put).
+        var lines = doc.Replace("\r\n", "\n").Split('\n').ToList();
+        var typesLine = lines.FindIndex(l => l == "types");
+        lines.Insert(typesLine + 1, $"    {typeName}\n        label text");
+        File.WriteAllText(schemaPath, string.Join("\n", lines));
+    }
+
+    // Drop a design from the design-host's live store (then GC sweeps it), simulating a store that does
+    // not yet hold a design its instance still references — so the boot sync's ADD half re-creates it.
+    [Given("the design-host's design {int} is removed from its store")]
+    public void GivenDesignRemovedFromStore(int id)
+    {
+        var store = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store;
+        store.RemoveFromSet(NodePath.Root.Field("designs"), id);
+    }
+
+    [Then("the design-host still holds a design with id {int} labelled {string}")]
+    public async Task ThenDesignHostStillHoldsDesignAsync(int id, string label)
+    {
+        var designs = SeededDesigns();
+        await Assert.That(designs.ContainsKey(id)).IsTrue();
+        await Assert.That(LabelOf(designs[id])).IsEqualTo(label);
+    }
+
+    [Then("the no-design app contributes no design")]
+    public async Task ThenNoDesignAppContributesNothingAsync()
+    {
+        // The fourth instance ("nodesign") carries no designId, so the seed produced exactly the three
+        // design-bearing apps' designs (designer/todo/crm) — no fourth design.
+        var designs = SeededDesigns();
+        await Assert.That(designs.Count).IsEqualTo(3);
+        await Assert.That(designs.Values.Select(LabelOf)).DoesNotContain("nodesign");
+    }
+
+    [Given("the operator adds a design labelled {string} to the design-host")]
+    public void GivenOperatorAddsDesign(string label)
+    {
+        // An operator edit straight through the design-host's own store (the IDE does this over the WS):
+        // mint a new Design with a label and add it to `db.designs`. It must survive a restart — the seed
+        // is first-run-only, so a restart loads the existing store (with this edit), never reseeds.
+        var store = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store;
+        var id = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["label"] = new TextValue(label),
+            ["initialData"] = new TextValue(""),
+            ["common"] = new TextValue(""),
+            ["ui"] = new TextValue(""),
+        }));
+        store.AddToSet(NodePath.Root.Field("designs"), id);
+    }
+
+    [Then("the design-host holds a design labelled {string}")]
+    public async Task ThenDesignHostHoldsLabelAsync(string label) =>
+        await Assert.That(SeededDesigns().Values.Select(LabelOf)).Contains(label);
+
+    private static string LabelOf(ObjectValue design) =>
+        design.Fields.TryGetValue("label", out var v) && v is TextValue t ? t.Text : "";
+
     // ── registry validation (fail loudly on aliased stores) ─────────────────────
 
     [Given("a registry of two instances that resolve to the same data file")]

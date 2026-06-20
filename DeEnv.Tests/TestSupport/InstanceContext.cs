@@ -805,12 +805,15 @@ public class InstanceContext
         // hosted by the kernel exactly as production would.
         WriteIdApp(dir, 1, File.ReadAllText(AppFixture(1)));
 
-        // Each target references its seeded design by an EXPLICIT designId — the id of the design in the
-        // committed designer seed whose label matches the target's label. Resolved from the designer's
-        // initialData (the seed) so the dropdowns start correct and the instances list shows the design.
-        // The designer itself (id 1) is uniform: it carries a designId too — the id of its OWN "designer"
-        // design (a bounded self-snapshot in the seed) — so its instances-list row resolves to a design
-        // like every other row, with no special-casing. (Mirrors the committed kernel.json.)
+        // Each target hosts the REAL committed app whose label it carries (todo → instances/2's app, crm
+        // → instances/3's, …), exactly as production hosts them — so the kernel's first-boot seed
+        // reverse-projects each into its REAL Design (real types + real ui). (Previously the targets were
+        // throwaway bool apps and the designer's designs came from an EMBEDDED seed; now each app's own
+        // app.app is the single source of truth, so the target must BE the real app.) Each references its
+        // design by an EXPLICIT designId — the committed kernel.json's designId for that label — so the
+        // dropdowns start correct and the instances list shows the design. The designer itself (id 1) is
+        // uniform: it carries a designId too (its OWN "designer" self-design), so its instances-list row
+        // resolves to a design like every other row, with no special-casing. (Mirrors kernel.json.)
         var designIds = DesignIdsByLabel();
         var entries = new List<string>
         {
@@ -818,7 +821,7 @@ public class InstanceContext
         };
         foreach (var (id, label) in targets)
         {
-            WriteIdApp(dir, id, TargetBoolApp);
+            WriteIdApp(dir, id, File.ReadAllText(CommittedAppForLabel(label)));
             entries.Add(RegistryEntryJson(id, label, FreePort(), FreePort(), designIds[label]));
         }
 
@@ -835,14 +838,18 @@ public class InstanceContext
         return designer;
     }
 
-    // A minimal valid app for a publish/edit target: an object Db with one bool. Its content is
-    // irrelevant beyond being hostable (a publish overwrites it) — the label, not the doc, ties it to
-    // a design.
-    private const string TargetBoolApp = """
-    types
-        Db
-            ready bool
-    """;
+    // The committed app document file for a label (e.g. "todo" → instances/2/app.app): the SAME app the
+    // production kernel hosts for that label, located by reading the committed kernel.json (app label →
+    // its instance id) and resolving its id-dir. The kernel reverse-projects this file into the design,
+    // so hosting the real app here gives the designer the real design (real types + real ui).
+    private static string CommittedAppForLabel(string label)
+    {
+        var registry = RegistryReader.Read(
+            Path.Combine(AppContext.BaseDirectory, "kernel.json"));
+        var entry = registry.Instances.FirstOrDefault(e => e.App == label)
+            ?? throw new InvalidOperationException($"No committed instance labelled '{label}' in kernel.json.");
+        return AppFixture(entry.Id);
+    }
 
     private static void WriteIdApp(string dir, int id, string appDoc)
     {
@@ -858,22 +865,26 @@ public class InstanceContext
     }
 
     // The seeded design id for a label (e.g. "crm") — so a step can assert an instance now records that
-    // design's id after Apply. Reads the same committed designer seed the fixture seeds designIds from.
+    // design's id after Apply. Reads the SAME source of truth the kernel seeds from: kernel.json maps an
+    // instance's display label to its designId, and the kernel's first-boot seed mints each Design AT its
+    // instance's designId. The designer no longer embeds the design library in its initialData, so this
+    // reads the registry, not instances/1's (now-empty) initialData.
     public int DesignIdForLabel(string label) => DesignIdsByLabel()[label];
 
-    // Map each seeded design's label → its id, read from the committed designer seed (instances/1's
-    // initialData). The IDE's instance↔design link is the explicit designId, so a target labelled
-    // "todo" gets the id of the design labelled "todo" — making its dropdown pre-select and its
-    // instances-list row resolve to that design.
+    // Map each design's label → its id, read from the committed kernel.json (the registry). The kernel
+    // seeds the design-host with one Design per registered instance that has a `designId`, at id ==
+    // designId, labelled with the instance's `app` name — so a target labelled "todo" resolves to the
+    // design id its kernel.json entry references, the same value the fixture writes into its own
+    // kernel.json. Reading the registry (not instances/1's initialData) matches the new single-source
+    // model: each app's own app.app is its design, kernel.json holds the link.
     private static Dictionary<string, int> DesignIdsByLabel()
     {
-        var designer = InstanceDescriptionLoader.LoadFile(AppFixture(1));
-        var designs = designer.InitialData?.Extents?.GetValueOrDefault("Design")
-            ?? throw new InvalidOperationException("The designer seed has no Design extent.");
+        var registry = RegistryReader.Read(
+            Path.Combine(AppContext.BaseDirectory, "kernel.json"));
         var map = new Dictionary<string, int>();
-        foreach (var (key, env) in designs)
-            if (env.TryGetProperty("label", out var label) && label.ValueKind == System.Text.Json.JsonValueKind.String)
-                map[label.GetString()!] = int.Parse(key);
+        foreach (var entry in registry.Instances)
+            if (entry.DesignId is { } designId)
+                map[entry.App] = designId;
         return map;
     }
 

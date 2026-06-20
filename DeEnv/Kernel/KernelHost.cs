@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using DeEnv.Designer;
 using DeEnv.Http;
+using DeEnv.Instance;
 using DeEnv.Storage;
 
 namespace DeEnv.Kernel;
@@ -202,6 +204,15 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
     // guard), the already-started instances are stopped so the process never leaks half-bound ports.
     public async Task StartAsync(IReadOnlyList<InstanceSpec> specs)
     {
+        // BOOT SYNC of the operator IDE's design library, BEFORE any host opens its store. The
+        // design-host (the designer) holds `db.designs` — a Design per kernel-hosted app — but its own
+        // app document no longer embeds those designs as escaped text; each app's instances/<id>/app.app
+        // is the single source of truth. So on EVERY boot the kernel reconciles the design-host's store
+        // with the current app files: a fresh store is seeded with all of them; an existing store is
+        // MERGED (file-backed designs upserted at their designIds, UI-created designs preserved). This is
+        // the one sanctioned BOOTSTRAP-ONLY peer-file read; it never happens in request handling.
+        SyncDesignHost(specs);
+
         // Start every instance CONCURRENTLY. Each binds its own (collision-checked) ports and opens
         // its own store, so they have no startup-time dependency. GenHTTP's host start blocks its
         // thread synchronously (seconds each), so plain async concurrency would NOT overlap them —
@@ -229,6 +240,83 @@ public sealed class KernelHost(string baseDir, string registryPath) : IAsyncDisp
         // All up — register them, refreshing the shared LiveRegistry with the full set in one go.
         foreach (var start in starts)
             Register(start.Result);
+    }
+
+    // ── boot sync of the design library (the design-host's `db.designs`) ──────────────
+
+    // Reconcile the design-host's `db.designs` with the current app files on EVERY boot. The design-host
+    // is the instance whose schema is the meta-schema (a `Db` holding `designs: set of Design`) — the SAME
+    // `db.designs` shape KernelHostActions.ResolveDesign resolves a publish against, recognized
+    // structurally rather than by a hardcoded id, so there is no new "which instance is the designer"
+    // mechanism. For every registered instance that HAS a designId, the design-host gets a Design
+    // reverse-projected from that instance's own app.app, AT id == its designId (load-bearing:
+    // kernel.json's references key off these exact ids). A registered instance with no designId
+    // contributes no Design.
+    //
+    //   • FRESH store (no data file, or an empty one) → seed all file-backed designs (unchanged from the
+    //     original first-boot behavior — DesignerSeed.Build).
+    //   • EXISTING store → MERGE (DesignerSeed.Merge): file-backed designs are UPSERTED at their designIds
+    //     (the app file is the source of truth, so a same-id design is overwritten — adding or editing an
+    //     app.app is reflected after a restart); designs whose id is NOT a current designId (UI-created,
+    //     no backing instance) are PRESERVED. So the library tracks the files without the store ever being
+    //     deleted, and a UI-created design is never clobbered.
+    //
+    // CRITICAL: only the DESIGN-HOST's derived library is touched — no other instance's data is read,
+    // reseeded, or migrated here (the no-reseed invariant for real app data still holds; this sync is
+    // scoped to the design-host store alone). All persistence is through IInstanceStore (ReadExtent +
+    // Reset) in the model's terms — no side files. No design-host (or no design-bearing instance) → nothing.
+    private static void SyncDesignHost(IReadOnlyList<InstanceSpec> specs)
+    {
+        var designHost = specs.FirstOrDefault(IsDesignHost);
+        if (designHost is null) return;
+
+        // One file-backed design per registered instance that references a design (by its designId),
+        // reverse-projected from that instance's own committed app.app — the BOOTSTRAP-ONLY peer-file read.
+        // Ordered by id so the seed is deterministic. An instance with no designId contributes nothing.
+        var fileBacked = specs
+            .Where(s => s.DesignId is not null)
+            .OrderBy(s => s.Id)
+            .Select(s => (s.App, DesignId: s.DesignId!.Value, AppText: File.ReadAllText(s.SchemaPath)))
+            .ToList();
+        if (fileBacked.Count == 0) return;
+
+        var description = InstanceDescriptionLoader.LoadFile(designHost.SchemaPath);
+        var fresh = !File.Exists(designHost.DataPath) || new FileInfo(designHost.DataPath).Length == 0;
+
+        if (fresh)
+        {
+            // First run: give the description the built initialData and open a store over the (fresh) data
+            // path — JsonFileInstanceStore's first-run seeding writes it via BuildSeededDoc, honoring the
+            // authored Design ids exactly. The store is discarded; StartAsync re-opens it normally.
+            _ = new JsonFileInstanceStore(designHost.DataPath, description with { InitialData = DesignerSeed.Build(fileBacked) });
+            return;
+        }
+
+        // Existing store: read the live designs in the model's terms, merge with the files (upsert
+        // file-backed at their designIds, preserve UI-created), then Reset the store to the merged seed.
+        // ReadExtent loads each design's subgraph inline (types/props as nested set members keyed by id),
+        // which DesignerSeed.Merge re-emits verbatim for the preserved ones. The reader store is discarded.
+        var existing = new JsonFileInstanceStore(designHost.DataPath, description).ReadExtent("Design");
+        var merged = DesignerSeed.Merge(existing, fileBacked);
+        new JsonFileInstanceStore(designHost.DataPath, description with { InitialData = merged }).Reset();
+    }
+
+    // Whether an instance is the design-host: its schema declares the meta-schema — a `Db` whose
+    // `designs` prop is a `set of Design`, where `Design` is a declared object type. This is exactly the
+    // shape a publish/setDesign resolves designs against (KernelHostActions), so recognizing it here
+    // reuses that convention without a separate marker. Unambiguous: no other app holds `db.designs`.
+    private static bool IsDesignHost(InstanceSpec spec)
+    {
+        InstanceDescription desc;
+        try { desc = InstanceDescriptionLoader.LoadFile(spec.SchemaPath); }
+        catch { return false; } // unreadable/invalid app — not the design-host
+
+        return desc.Db()?.Props?.Any(p =>
+                   p.Name == "designs"
+                   && p.Cardinality == Cardinality.Set
+                   && desc.IsObjectType(p.Type)
+                   && p.Type == "Design")
+               == true;
     }
 
     // Create one new instance in a RUNNING kernel and persist it to the registry. The kernel's
