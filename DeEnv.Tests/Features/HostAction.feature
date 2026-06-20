@@ -99,6 +99,17 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     Then the host action reply is ok
     And the target's "Item" reads "code" as "int" "0"
 
+  # An UNSET optional decimal/date/datetime is stored as the empty-text leaf (the canonical "unset"
+  # form the validator accepts). It is NOT a value needing conversion — a republish/additive apply must
+  # leave it empty, not clobber it to 0/today and falsely report it as unconvertible.
+  @milestone-13 @single-user @persistence
+  Scenario: Apply leaves an unset optional decimal untouched
+    Given a target instance whose "Item" has an unset optional decimal "price"
+    And a designer instance holding a design with "Item" field "price" typed "decimal"
+    When the designer publishes that design to the target's id over the WS
+    Then the host action reply is ok
+    And the target's "Item" reads "price" as "decimal" ""
+
   @milestone-10 @single-user
   Scenario: Create projects the passed design into a new named instance on the given ports
     Given a designer instance holding a design with a type "Item" and a custom render

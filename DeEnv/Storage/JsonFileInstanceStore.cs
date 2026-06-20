@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using DeEnv.Instance;
 
@@ -490,7 +491,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     //     report — never silent corruption. Structural changes (leaf↔object/set/dict, a removed type's
     //     extent, a rename) are left for the apply to reseed until later slices carry them.
     // Returns the cells whose value could not be converted and were defaulted (the caller surfaces them).
-    public static IReadOnlyList<string> MigrateTowardSchema(string dataPath, InstanceDescription desc)
+    // OFFLINE pass — assumes no live writer on the file (the same single-process assumption as the rest
+    // of the store); call it during apply, not against a running store.
+    internal static IReadOnlyList<string> MigrateTowardSchema(string dataPath, InstanceDescription desc)
     {
         var unconvertible = new List<string>();
         StoreDoc doc;
@@ -519,7 +522,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     if (prop.Cardinality == Cardinality.Single
                         && !desc.IsObjectType(prop.Type)
                         && obj.Fields[name] is StoredLeaf leaf
-                        && ScalarTag(leaf.Scalar) != LeafTag(prop.Type, desc))
+                        && ScalarTag(leaf.Scalar) != LeafTag(prop.Type, desc)
+                        && !IsUnsetOptionalLeaf(leaf.Scalar, prop.Type, desc))
                     {
                         var converted = ConvertScalar(leaf.Scalar, prop.Type, desc);
                         obj.Fields[name] = new StoredLeaf(converted ?? DefaultBase(LeafBase(prop.Type, desc)));
@@ -554,6 +558,14 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         return b == BaseType.Enum ? "text" : b.ToString().ToLowerInvariant();
     }
 
+    // An unset optional decimal/date/datetime is stored as an empty-text leaf (the validator's canonical
+    // "unset" form — those typed values have no "empty"). It is NOT a value to convert: an empty text
+    // already IS the unset form for the new type, so leave it untouched (mirrors StoredDataValidator's
+    // optional-empty rule), rather than default-and-report it as unconvertible.
+    private static bool IsUnsetOptionalLeaf(NodeValue scalar, string typeName, InstanceDescription desc) =>
+        scalar is TextValue { Text: "" }
+        && LeafBase(typeName, desc) is BaseType.Decimal or BaseType.Date or BaseType.DateTime;
+
     // Convert a scalar to a leaf type, or null when the value cannot be represented (the caller defaults
     // and reports it — never silent corruption). Widening (int→decimal, anything→text) is lossless;
     // narrowing parses (text→int, decimal→int when whole/in range) and yields null when it cannot.
@@ -576,14 +588,17 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         };
     }
 
+    // Stored numbers are wire/JSON-invariant (the converter reads/writes them as numbers), and stored
+    // dates are ISO — so the round-trip through text here is pinned to InvariantCulture, not the server
+    // locale (else a value converts on one machine and defaults on another).
     private static string? ScalarToText(NodeValue v) => v switch
     {
         TextValue t      => t.Text,
-        IntValue i       => i.Value.ToString(),
-        DecimalValue d   => d.Value.ToString(),
+        IntValue i       => i.Value.ToString(CultureInfo.InvariantCulture),
+        DecimalValue d   => d.Value.ToString(CultureInfo.InvariantCulture),
         BoolValue b      => b.Value ? "true" : "false",
-        DateValue d      => d.Value.ToString("yyyy-MM-dd"),
-        DateTimeValue dt => dt.Value.ToString("O"),
+        DateValue d      => d.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+        DateTimeValue dt => dt.Value.ToString("O", CultureInfo.InvariantCulture),
         _ => null,
     };
 
@@ -592,7 +607,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         IntValue i => i,
         DecimalValue d when decimal.Truncate(d.Value) == d.Value
                             && d.Value >= int.MinValue && d.Value <= int.MaxValue => new IntValue((int)d.Value),
-        TextValue t when int.TryParse(t.Text, out var n) => new IntValue(n),
+        TextValue t when int.TryParse(t.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) => new IntValue(n),
         _ => null,
     };
 
@@ -600,7 +615,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         DecimalValue d => d,
         IntValue i     => new DecimalValue(i.Value),
-        TextValue t when decimal.TryParse(t.Text, out var d) => new DecimalValue(d),
+        TextValue t when decimal.TryParse(t.Text, NumberStyles.Number, CultureInfo.InvariantCulture, out var d) => new DecimalValue(d),
         _ => null,
     };
 
@@ -615,7 +630,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         DateValue d      => d,
         DateTimeValue dt => new DateValue(DateOnly.FromDateTime(dt.Value.DateTime)),
-        TextValue t when DateOnly.TryParse(t.Text, out var d) => new DateValue(d),
+        TextValue t when DateOnly.TryParse(t.Text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) => new DateValue(d),
         _ => null,
     };
 
@@ -623,7 +638,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         DateTimeValue dt => dt,
         DateValue d      => new DateTimeValue(new DateTimeOffset(d.Value.ToDateTime(TimeOnly.MinValue))),
-        TextValue t when DateTimeOffset.TryParse(t.Text, out var dt) => new DateTimeValue(dt),
+        TextValue t when DateTimeOffset.TryParse(t.Text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt) => new DateTimeValue(dt),
         _ => null,
     };
 

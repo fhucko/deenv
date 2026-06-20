@@ -267,6 +267,35 @@ public sealed class HostActionSteps
         store.AddToSet(NodePath.Root.Field(set), id);
     }
 
+    // A target whose <Type> has an UNSET optional decimal — stored as the canonical empty-text leaf
+    // (the form the UI/WS write produces for a blank optional number), NOT DecimalValue(0). Seeded
+    // explicitly so a republish/additive apply must leave it empty rather than convert-and-clobber it.
+    [Given("a target instance whose {string} has an unset optional decimal {string}")]
+    public void GivenTargetUnsetOptionalDecimal(string typeName, string field)
+    {
+        Directory.CreateDirectory(_dir);
+        _targetAppPath = Path.Combine(_dir, "target.app");
+        _targetDataPath = Path.Combine(_dir, "target-data.json");
+        File.WriteAllText(_targetAppPath, TargetAppSentinel);
+
+        var set = typeName.ToLowerInvariant() + "s";
+        var priorApp =
+            $"""
+            types
+                Db
+                    {set} set of {typeName}
+                {typeName}
+                    {field} decimal
+            """;
+        var prior = InstanceDescriptionLoader.Load(priorApp);
+        var store = new JsonFileInstanceStore(_targetDataPath, prior);
+        var id = store.CreateObject(typeName, new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            [field] = new TextValue(""), // unset optional decimal — the empty-text leaf
+        }));
+        store.AddToSet(NodePath.Root.Field(set), id);
+    }
+
     // A design whose element type carries ONE scalar field of the given (possibly RE-typed) base type.
     [Given("a designer instance holding a design with {string} field {string} typed {string}")]
     public void GivenDesignTypedField(string typeName, string field, string fieldType)
