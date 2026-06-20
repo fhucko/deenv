@@ -327,18 +327,20 @@ never side files (else forecloses pillar 4 / temporal versioning).
 justified only because the goal is a *useful* MVP (if the goal were funder-readiness it
 would not be needed — funders fund early work).
 
-**Status — built in slices (2026-06-19+):**
-1. **Additive preserve-or-reseed — DONE (2026-06-19, suite 350).** `SchemaBridge.WriteDocument`
-   PRESERVES the target's data when it still fits the new schema (additive → new field reads its
-   default), and reseeds otherwise. Server-side C# only (no twin/conformance). **Known gap, flagged,
-   not a regression:** an *incompatible* apply (rename, type change, different app) still reseeds —
-   today's behavior; the slices below replace that reseed with carry-forward, and an unavoidable
-   reset must become *reported* rather than silent.
-2. **Removed field → drop the value.** Touches the startup guard (`StoredDataValidator` rejects an
-   undeclared stored field); prune on apply, keep the startup guard strict.
-3. **Scalar type conversion** (`int↔decimal↔text` where parseable) **+ the unconvertible-value
-   policy** (non-silent: drop-to-default + report).
-4. **Rename via M5 identity** (needs an old↔new schema diff). 5. **Cardinality reshaping.**
+**Status — built in slices (2026-06-19+), server-side C# only (no twin/conformance):**
+1. **Additive preserve-or-reseed — DONE.** `SchemaBridge.WriteDocument` PRESERVES the target's data
+   when it still fits the new schema (additive → new field reads its default), and reseeds otherwise.
+2. **Removed field → drop the value — DONE.** `JsonFileInstanceStore.MigrateTowardSchema` prunes
+   stored fields the new schema no longer declares, BEFORE the (still strict) startup guard.
+3. **Scalar type conversion + unconvertible policy — DONE.** MigrateTowardSchema converts a
+   type-changed leaf (`int→text`, `text "3"→int`, widening, enum membership, …); an unconvertible
+   value (`text "abc"→int`) resets to the new type's default and is REPORTED (logged by WriteDocument)
+   — never silent corruption.
+4. **Rename via M5 identity** (needs an old↔new schema diff). 5. **Cardinality reshaping**
+   (single↔set↔dictionary). Until these land, a rename / cardinality change / wholesale different app
+   still reseeds — today's behavior, **not a regression** — and an unavoidable reset should become
+   *reported* (like the unconvertible case) rather than silent. The report is server-logged for now;
+   surfacing it in the operator UI is a follow-up.
 
 ## Concurrency, saving, and locking (eshop/CRM)
 

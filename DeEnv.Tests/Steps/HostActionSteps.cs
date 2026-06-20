@@ -239,6 +239,46 @@ public sealed class HostActionSteps
         store.AddToSet(NodePath.Root.Field(set), id);
     }
 
+    // A target seeded under a prior schema where <Type> has ONE scalar field of the given base type +
+    // value. Publishing a design that RETYPES that field exercises the value conversion on a type change.
+    [Given("a target instance whose {string} has {string} of type {string} set to {string}")]
+    public void GivenTargetTypedField(string typeName, string field, string baseType, string value)
+    {
+        Directory.CreateDirectory(_dir);
+        _targetAppPath = Path.Combine(_dir, "target.app");
+        _targetDataPath = Path.Combine(_dir, "target-data.json");
+        File.WriteAllText(_targetAppPath, TargetAppSentinel);
+
+        var set = typeName.ToLowerInvariant() + "s";
+        var priorApp =
+            $"""
+            types
+                Db
+                    {set} set of {typeName}
+                {typeName}
+                    {field} {baseType}
+            """;
+        var prior = InstanceDescriptionLoader.Load(priorApp);
+        var store = new JsonFileInstanceStore(_targetDataPath, prior);
+        var id = store.CreateObject(typeName, new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            [field] = ParseScalar(baseType, value),
+        }));
+        store.AddToSet(NodePath.Root.Field(set), id);
+    }
+
+    // A design whose element type carries ONE scalar field of the given (possibly RE-typed) base type.
+    [Given("a designer instance holding a design with {string} field {string} typed {string}")]
+    public void GivenDesignTypedField(string typeName, string field, string fieldType)
+    {
+        OpenDesigner();
+        AddDesign(CustomUiSection);
+        DesignType("Db", "object");
+        DesignType(typeName, "object");
+        DesignProp(typeName, field, fieldType);
+        DesignSetProp("Db", typeName.ToLowerInvariant() + "s", typeName);
+    }
+
     // ── When: publish over the WS ───────────────────────────────────────────────
 
     [When("the designer publishes that design to the target's id over the WS")]
@@ -424,6 +464,28 @@ public sealed class HostActionSteps
         await Assert.That(item).IsNotNull();
     }
 
+    [Then("the target's {string} reads {string} as {string} {string}")]
+    public async Task ThenTargetFieldReads(string typeName, string field, string baseType, string value)
+    {
+        // Open under the now-published schema (strict guard) and read the field back. The row survived
+        // the apply, and the field holds the CONVERTED value (or its default when unconvertible) — read
+        // as the new declared type. Compared via canonical text (a surviving row under the new schema
+        // guarantees the stored value already matches the new declared type, else apply would reseed).
+        var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
+        var store = new JsonFileInstanceStore(_targetDataPath, published);
+        var item = store.ReadExtent(typeName).Values.FirstOrDefault();
+        await Assert.That(item).IsNotNull();
+        var actual = item!.Fields.GetValueOrDefault(field) switch
+        {
+            TextValue t    => t.Text,
+            IntValue i     => i.Value.ToString(),
+            DecimalValue d => d.Value.ToString(),
+            BoolValue b    => b.Value ? "true" : "false",
+            var other      => other?.ToString(),
+        };
+        await Assert.That(actual).IsEqualTo(value);
+    }
+
     [Then("the target still holds an {string} labelled {string}, with {string} defaulted to {string}")]
     public async Task ThenTargetPreservedWithDefault(string typeName, string label, string newField, string expected)
     {
@@ -594,4 +656,13 @@ public sealed class HostActionSteps
         var id = _designer.CreateObject("MetaProp", new ObjectValue(fields));
         _designer.AddToSet(propsPath, id);
     }
+
+    // A base-typed scalar NodeValue from its base-type name + text value (for seeding typed fields).
+    private static NodeValue ParseScalar(string baseType, string value) => baseType switch
+    {
+        "int"     => new IntValue(int.Parse(value)),
+        "decimal" => new DecimalValue(decimal.Parse(value)),
+        "bool"    => new BoolValue(bool.Parse(value)),
+        _         => new TextValue(value),
+    };
 }

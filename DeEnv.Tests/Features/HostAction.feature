@@ -79,6 +79,26 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     And the target still holds an "Item" labelled "Keep me"
     And the target instance was restarted
 
+  # A field's TYPE change CONVERTS its stored values where possible (slice 3): int → text keeps the
+  # value ("3"). An unconvertible value (text "abc" → int) resets that ONE field to its default and is
+  # reported (server log) — never silent corruption; the rest of the data survives either way.
+  @milestone-13 @single-user @persistence
+  Scenario: Apply converts a scalar field's value when its type changes
+    Given a target instance whose "Item" has "qty" of type "int" set to "3"
+    And a designer instance holding a design with "Item" field "qty" typed "text"
+    When the designer publishes that design to the target's id over the WS
+    Then the host action reply is ok
+    And the target's "Item" reads "qty" as "text" "3"
+    And the target instance was restarted
+
+  @milestone-13 @single-user @persistence
+  Scenario: Apply defaults an unconvertible value on a type change
+    Given a target instance whose "Item" has "code" of type "text" set to "abc"
+    And a designer instance holding a design with "Item" field "code" typed "int"
+    When the designer publishes that design to the target's id over the WS
+    Then the host action reply is ok
+    And the target's "Item" reads "code" as "int" "0"
+
   @milestone-10 @single-user
   Scenario: Create projects the passed design into a new named instance on the given ports
     Given a designer instance holding a design with a type "Item" and a custom render

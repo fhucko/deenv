@@ -484,29 +484,148 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     //
     //   • Slice 2 — removed field → drop the value: on each extent of a STILL-DECLARED type, remove
     //     stored fields the type no longer declares (the object survives; the orphaned value is pruned).
-    //     A removed TYPE's extent, and a field whose declared TYPE changed, are deliberately left — the
-    //     apply reseeds those until later slices (conversion, rename) carry them forward.
-    public static void MigrateTowardSchema(string dataPath, InstanceDescription desc)
+    //   • Slice 3 — scalar TYPE change → convert the value: a single leaf prop whose stored value is a
+    //     leaf of a different base tag is converted to the new type (int→text "3", text "3"→int 3, …).
+    //     An UNCONVERTIBLE value (text "abc"→int) is reset to the new type's default and RETURNED in the
+    //     report — never silent corruption. Structural changes (leaf↔object/set/dict, a removed type's
+    //     extent, a rename) are left for the apply to reseed until later slices carry them.
+    // Returns the cells whose value could not be converted and were defaulted (the caller surfaces them).
+    public static IReadOnlyList<string> MigrateTowardSchema(string dataPath, InstanceDescription desc)
     {
+        var unconvertible = new List<string>();
         StoreDoc doc;
         try { doc = LoadRaw(dataPath); }
-        catch (StoredDataException) { return; } // unreadable → leave for the caller to reseed
+        catch (StoredDataException) { return unconvertible; } // unreadable → leave for the caller to reseed
 
         var changed = false;
         foreach (var (typeName, pool) in doc.Extents)
         {
             if (desc.FindType(typeName) is not { } type) continue; // removed type → leave (→ reseed)
-            var declared = (type.Props ?? []).Select(p => p.Name).ToHashSet();
-            foreach (var obj in pool.Values)
-                foreach (var name in obj.Fields.Keys.Where(k => !declared.Contains(k)).ToList())
+            var props = (type.Props ?? []).ToDictionary(p => p.Name);
+
+            foreach (var (id, obj) in pool)
+                foreach (var name in obj.Fields.Keys.ToList())
                 {
-                    obj.Fields.Remove(name);
-                    changed = true;
+                    // Removed field → drop the value (slice 2).
+                    if (!props.TryGetValue(name, out var prop))
+                    {
+                        obj.Fields.Remove(name);
+                        changed = true;
+                        continue;
+                    }
+
+                    // Scalar type change → convert (slice 3). Only a single leaf prop whose stored value
+                    // is a leaf of a different base tag; a structural change is left for the apply to reseed.
+                    if (prop.Cardinality == Cardinality.Single
+                        && !desc.IsObjectType(prop.Type)
+                        && obj.Fields[name] is StoredLeaf leaf
+                        && ScalarTag(leaf.Scalar) != LeafTag(prop.Type, desc))
+                    {
+                        var converted = ConvertScalar(leaf.Scalar, prop.Type, desc);
+                        obj.Fields[name] = new StoredLeaf(converted ?? DefaultBase(LeafBase(prop.Type, desc)));
+                        if (converted is null) unconvertible.Add($"{typeName}/{id}.{name}");
+                        changed = true;
+                    }
                 }
         }
 
         if (changed) SaveRaw(dataPath, doc);
+        return unconvertible;
     }
+
+    // ── scalar conversion (type-change migration) ───────────────────────────────
+
+    private static string ScalarTag(NodeValue scalar) => scalar switch
+    {
+        BoolValue => "bool", IntValue => "int", DecimalValue => "decimal",
+        TextValue => "text", DateValue => "date", DateTimeValue => "datetime",
+        _ => scalar.GetType().Name,
+    };
+
+    // The BaseType a leaf prop's stored value carries (an enum stores as text → BaseType.Enum, whose
+    // DefaultBase is empty text), and the on-disk tag that base uses (enum → "text").
+    private static BaseType LeafBase(string typeName, InstanceDescription desc) =>
+        BaseTypes.IsName(typeName) ? BaseTypes.Parse(typeName)
+        : desc.FindType(typeName)?.BaseType ?? BaseType.Text;
+
+    private static string LeafTag(string typeName, InstanceDescription desc)
+    {
+        var b = LeafBase(typeName, desc);
+        return b == BaseType.Enum ? "text" : b.ToString().ToLowerInvariant();
+    }
+
+    // Convert a scalar to a leaf type, or null when the value cannot be represented (the caller defaults
+    // and reports it — never silent corruption). Widening (int→decimal, anything→text) is lossless;
+    // narrowing parses (text→int, decimal→int when whole/in range) and yields null when it cannot.
+    private static NodeValue? ConvertScalar(NodeValue from, string toTypeName, InstanceDescription desc)
+    {
+        if (desc.IsEnumType(toTypeName))
+        {
+            var s = ScalarToText(from);
+            return s != null && desc.EnumAccepts(toTypeName, s) ? new TextValue(s) : null;
+        }
+        return BaseTypes.Parse(toTypeName) switch
+        {
+            BaseType.Text     => new TextValue(ScalarToText(from) ?? ""),
+            BaseType.Int      => ToInt(from),
+            BaseType.Decimal  => ToDecimal(from),
+            BaseType.Bool     => ToBool(from),
+            BaseType.Date     => ToDate(from),
+            BaseType.DateTime => ToDateTime(from),
+            _ => null,
+        };
+    }
+
+    private static string? ScalarToText(NodeValue v) => v switch
+    {
+        TextValue t      => t.Text,
+        IntValue i       => i.Value.ToString(),
+        DecimalValue d   => d.Value.ToString(),
+        BoolValue b      => b.Value ? "true" : "false",
+        DateValue d      => d.Value.ToString("yyyy-MM-dd"),
+        DateTimeValue dt => dt.Value.ToString("O"),
+        _ => null,
+    };
+
+    private static NodeValue? ToInt(NodeValue v) => v switch
+    {
+        IntValue i => i,
+        DecimalValue d when decimal.Truncate(d.Value) == d.Value
+                            && d.Value >= int.MinValue && d.Value <= int.MaxValue => new IntValue((int)d.Value),
+        TextValue t when int.TryParse(t.Text, out var n) => new IntValue(n),
+        _ => null,
+    };
+
+    private static NodeValue? ToDecimal(NodeValue v) => v switch
+    {
+        DecimalValue d => d,
+        IntValue i     => new DecimalValue(i.Value),
+        TextValue t when decimal.TryParse(t.Text, out var d) => new DecimalValue(d),
+        _ => null,
+    };
+
+    private static NodeValue? ToBool(NodeValue v) => v switch
+    {
+        BoolValue b => b,
+        TextValue t when bool.TryParse(t.Text, out var b) => new BoolValue(b),
+        _ => null,
+    };
+
+    private static NodeValue? ToDate(NodeValue v) => v switch
+    {
+        DateValue d      => d,
+        DateTimeValue dt => new DateValue(DateOnly.FromDateTime(dt.Value.DateTime)),
+        TextValue t when DateOnly.TryParse(t.Text, out var d) => new DateValue(d),
+        _ => null,
+    };
+
+    private static NodeValue? ToDateTime(NodeValue v) => v switch
+    {
+        DateTimeValue dt => dt,
+        DateValue d      => new DateTimeValue(new DateTimeOffset(d.Value.ToDateTime(TimeOnly.MinValue))),
+        TextValue t when DateTimeOffset.TryParse(t.Text, out var dt) => new DateTimeValue(dt),
+        _ => null,
+    };
 
     // Reinitialize the data to the schema's initial document (the initialData seed when
     // the schema carries one, else the default empty root) — in memory and on disk.

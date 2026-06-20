@@ -191,7 +191,15 @@ public static class SchemaBridge
 
         var hasData = File.Exists(targetDataPath) && new FileInfo(targetDataPath).Length > 0;
         if (hasData)
-            JsonFileInstanceStore.MigrateTowardSchema(targetDataPath, newDesc);
+        {
+            // Carry the data forward (drop removed fields, convert type-changed scalars). Values that
+            // could not be converted are reset to default and REPORTED here — non-silent, not corruption.
+            var reset = JsonFileInstanceStore.MigrateTowardSchema(targetDataPath, newDesc);
+            if (reset.Count > 0)
+                Console.Error.WriteLine(
+                    $"[non-destructive apply] {reset.Count} value(s) could not be converted to the new " +
+                    $"type and were reset to default: {string.Join(", ", reset)}");
+        }
 
         if (!(hasData && DataFits(targetDataPath, newDesc)))
         {
