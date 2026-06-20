@@ -14,7 +14,13 @@ using DeEnv.Storage;
 // devops action (the host-side "publish" primitive), which is where instance management belongs
 // ("C# is the kernel — app logic belongs in the app"). See DECISIONS.
 
-var baseDir = AppContext.BaseDirectory;
+// The kernel's home: where it reads kernel.json and resolves instances/<id>/ (app docs + data).
+// Defaults to the executable's directory (local/dev). A deployment can point it at a persistent
+// data location via DEENV_HOME (e.g. /var/lib/deenv under systemd), separate from the binaries, so
+// an update replaces the binaries without touching data. Backward compatible: unset → old behavior.
+var baseDir = Environment.GetEnvironmentVariable("DEENV_HOME") is { Length: > 0 } home
+    ? home
+    : AppContext.BaseDirectory;
 
 IReadOnlyList<InstanceSpec> specs;
 try
