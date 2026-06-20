@@ -185,9 +185,10 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   features. See DECISIONS.md.
 
 - **M11 — SolidJS-style reactive components + the public component library (the UI
-  middle-ground).  ← ACTIVE; reactivity-foundation SLICES 1–3 + follow-ups 4a & 4b + slice (b) DONE
-  2026-06-18.** *(Scheduled as M11 by user decision 2026-06-16, pulled ahead of schema versioning,
-  which moves to M13.)* **Slices 1–3 + 4a/4b + (b) + the dict follow-on + the public library's first
+  middle-ground).  ← DONE 2026-06-19 (suite 348): the generic-UI-as-first-consumer COLLAPSE landed —
+  `sys.resolve(path)` + ONE synthesized Code `fn render()` composing the library replaced the C#
+  per-URL dispatch; a generic app is now literally the custom-render path.** *(Scheduled as M11 by user
+  decision 2026-06-16, pulled ahead of schema versioning, which moves to M13.)* **Slices 1–3 + 4a/4b + (b) + the dict follow-on + the public library's first
   slice landed (suite 315):** components get a **render-tree-positional ("slot
   path") identity** decoupled from the argument-keyed memo, so a component runs once per slot and its
   state survives a re-render with rebuilt arguments; slice 2 extends the slot path through

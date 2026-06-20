@@ -46,10 +46,14 @@ where developers design data visually and use it as objects. Full mission in
    is **DONE** (kernel host as entry point — NO run modes, `kernel.json` is the single source of what
    runs; create/list/switch/delete mechanism + host-action channel `sys.publish`/`sys.create`/
    `sys.cloneInstance`/`sys.delete`/`sys.rename`; the operator designer + id-based identity). **The
-   active milestone is Milestone 11 — SolidJS-style reactive components + the public component library
-   (the UI middle-ground). The reactivity FOUNDATION (slices 1-3), the generic-UI tag-invocation
-   migration (4a/4b), the `sys.schema` descriptor-registry replacement (slice (b) + the dict follow-on),
-   and the public library's FIRST SLICE all LANDED 2026-06-18 (suite 315).**
+   Milestone 11 (SolidJS-style reactive components + the public component library, the UI
+   middle-ground) is DONE — the generic-UI-as-first-consumer COLLAPSE landed 2026-06-19 (suite 348):
+   `sys.resolve(path)` (twin URL→target builtin) + ONE synthesized Code `fn render()` dispatching via
+   it and composing the library, replacing ~470 lines of C# per-URL dispatch (a generic app is now
+   literally the custom-render path). The reactivity FOUNDATION (slices 1-3), the generic-UI
+   tag-invocation migration (4a/4b), the `sys.schema` descriptor-registry replacement (slice (b) + the
+   dict follow-on), the public library (`lib` scope + `Input`/`Field` primitives), and the COLLAPSE all
+   landed.**
    Components are recognized by **pure name-resolution** (a tag whose name resolves to an in-scope
    function — any function, top-level or local) and keyed by their **render-tree slot** (not their
    arguments), so a component runs once per slot and its state survives a re-render with rebuilt
@@ -61,16 +65,15 @@ where developers design data visually and use it as objects. Full mission in
    (untouched). **Slice (b)** + the dict follow-on then replaced BOTH descriptor
    registries (`__descs` type + `__dictDescs` dict) with a `sys.schema(typeName)` / `sys.schema(type,
    prop)` builtin (server-resolved + shipped like `sys.extent`) and **deleted both** — the self-hosted
-   UI reads all schema shape through `sys.schema`. Build only M11 work next. **(2026-06-19: a
-   thin non-destructive-apply slice — *data survives schema changes* — is now judged
-   MVP-critical and may be pulled ahead of / interleaved with M11; it is migration, the
-   substrate for the full M13 versioning, not M13 itself. See DECISIONS "Data must survive
-   schema changes" + ROADMAP M13.)** The **public
-   component library** (follow-up 5, the feature half) is underway — **first slice DONE**: a `lib`
-   scope (`system ← lib ← app`) makes the PascalCase library components (`ObjectForm`/`RefEditor`/…)
-   composable from a hand-written `fn render()` (the generic UI is the other consumer). Remaining
-   follow-up-5 slices: publish each component as a blessed public API (`Field` extraction, etc.), the
-   operator designer as a real second consumer, then the generic-UI-as-first-consumer COLLAPSE. See Current focus + ROADMAP.md +
+   UI reads all schema shape through `sys.schema`. **The non-destructive-apply MVP substrate (data
+   survives a schema change) LANDED 2026-06-20 (suite 355)** — additive, removed-field, scalar
+   value-conversion, and single→set cardinality all survive an apply (rename → M13). **Current focus:
+   the usable-MVP gates** (DECISIONS "Data must survive schema changes" + the usable-MVP plan): gate #1
+   non-destructive apply ✅, next gate #2 = minimal real deploy, then gate #3 = dogfood one real app.
+   **M12 (visual component designer) is deferred** until after the usable MVP. The public component
+   library (the M11 feature half) is complete — a `lib` scope (`system ← lib ← app`) makes the
+   PascalCase components (`ObjectForm`/`RefEditor`/`Input`/`Field`/…) composable from a hand-written
+   `fn render()`, with the generic UI as the library's first consumer (the collapse). See Current focus + ROADMAP.md +
    `docs/plans/m11-reactivity-foundation.md`.
    Cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time, and the
    management commands stay out of scope unless explicitly asked. Schema versioning is M13 (after the
@@ -150,8 +153,11 @@ steps, when reached, use Playwright.)
 ## Current focus
 
 **Milestone 11 — SolidJS-style reactive components + the public component library (the UI
-middle-ground) — is the ACTIVE milestone. SLICES 1-3 (the reactivity FOUNDATION) + follow-ups 4a & 4b
-+ slice (b) + the dict follow-on + the public library's first slice LANDED 2026-06-18 (suite 315).** Slice 1 gives components a **render-tree-positional ("slot path") identity**
+middle-ground) — is DONE (the generic-UI-as-first-consumer COLLAPSE landed 2026-06-19, suite 348).
+The non-destructive-apply MVP substrate then landed 2026-06-20 (suite 355 — see DECISIONS "Data must
+survive schema changes"). CURRENT FOCUS is the usable-MVP gates: gate #1 (non-destructive apply) ✅,
+next gate #2 = minimal real deploy, then gate #3 = dogfood a real app; M12 (visual designer) is
+deferred until after the MVP. The M11 detail below is retained as history.** Slice 1 gives components a **render-tree-positional ("slot path") identity**
 decoupled from the argument-keyed memo, so a component runs its body **once per slot** and its
 local state survives a re-render even when its argument is rebuilt fresh. Components are recognized
 by **pure name-resolution** — a tag whose name resolves to a function in scope is a component (any
