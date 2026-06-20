@@ -287,9 +287,12 @@ public sealed class DesignerSeedGenerator
             return Add("MetaType", fields);
         }
 
-        // A MetaProp seed. cardinality / keyType are emitted only when they deviate from the single,
-        // keyless default (matching the existing seed + SchemaBridge.Project's reverse mapping, which
-        // reads an absent cardinality as single) — minimal by default.
+        // A MetaProp seed. cardinality is written EXPLICITLY for every prop — "single" included — so the
+        // value matches an option in the designer's cardinality <select> (sourced from the system
+        // `cardinalities` vocab); a blank cardinality would leave that bound <select> with no selected
+        // option after hydration. SchemaBridge.Project reads "single" and "" alike as Single, so this
+        // changes nothing about what the seed projects back to (a single prop still prints as `name type`).
+        // keyType is emitted only for a dictionary (the one cardinality it is meaningful for).
         private int AddProp(PropDefinition prop, int order)
         {
             var fields = new JsonObject
@@ -297,14 +300,15 @@ public sealed class DesignerSeedGenerator
                 ["name"] = prop.Name,
                 ["type"] = prop.Type,
                 ["order"] = order,
+                ["cardinality"] = prop.Cardinality switch
+                {
+                    Cardinality.Set => "set",
+                    Cardinality.Dictionary => "dictionary",
+                    _ => "single",
+                },
             };
-            if (prop.Cardinality == Cardinality.Set)
-                fields["cardinality"] = "set";
-            else if (prop.Cardinality == Cardinality.Dictionary)
-            {
-                fields["cardinality"] = "dictionary";
+            if (prop.Cardinality == Cardinality.Dictionary)
                 fields["keyType"] = prop.KeyType ?? "text";
-            }
             return Add("MetaProp", fields);
         }
 

@@ -93,10 +93,10 @@ public static class SchemaBridge
                             var other => throw new SchemaValidationException(
                                 $"Prop on type '{name}' has unknown cardinality '{other}'."),
                         };
-                        // keyType is meaningful ONLY for a dictionary. The designer always renders the
-                        // key-type field (a conditional one fails to reconcile when it appears), so a
-                        // single/set prop may carry a leftover value — ignore it here (a set that declared
-                        // a keyType would be rejected on load), keeping the always-shown field harmless.
+                        // keyType is meaningful ONLY for a dictionary. The designer now renders the key-type
+                        // field only when the cardinality IS dictionary (progressive disclosure), but a
+                        // single/set prop could still carry a leftover value from a hand-written document —
+                        // ignore it here unless dictionary (a set that declared a keyType is rejected on load).
                         var keyType = cardinality == Cardinality.Dictionary
                             && TextField(prop, "keyType") is { Length: > 0 } key ? key : null;
                         props.Add(new PropDefinition(

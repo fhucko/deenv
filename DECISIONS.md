@@ -1671,7 +1671,10 @@ was missing. Added a cardinality `<select>` (single=`""`/set/dictionary) + a key
     (`fn:<renderId>`) is identical for every instance — `closureKey` (which folds in captured locals) is used
     only for where/orderBy lambdas, not plain calls. `designSelector` escapes this ONLY because it is a
     singleton (one selector per page), never a list.
-- **What landed: inline row, keyType input ALWAYS rendered (no conditional).** No structural change on a
+- **What landed: inline row, keyType input ALWAYS rendered (no conditional).** _[SUPERSEDED 2026-06-19 — see
+  "Designer type-editor UX overhaul": keyType is hidden again unless dictionary, but via a CSS class on the
+  stable row (`prop-row is-dict`) — it stays in the DOM (all-stable children), so the reconciliation lesson
+  below still holds; only its visibility flips.]_ No structural change on a
   cardinality change → the row reconciles like the other always-present inputs (which work). The cost: the
   key-type field shows on every prop. To keep that harmless, **`SchemaBridge.Project` now reads `keyType`
   ONLY for a dictionary** (a single/set prop's stray keyType is dropped — a set that declared one is rejected
@@ -1719,9 +1722,14 @@ print → store → validate → generic-UI `<select>` → WS persist).
   the meta-schema, and `DesignerSeedGenerator` were NOT touched. Specced by `@milestone-enum` scenarios
   (`Schema.feature` round-trip + off-list reject; `SelfHostedUi.feature` `<select>` render + persist;
   `AppPrintTests` round-trip). Suite 283/283.
-- **Follow-ups (sequenced):** (1) designer can DEFINE enums (meta-schema + `SchemaBridge` learn the kind);
+- **Follow-ups (sequenced):** (1) designer can DEFINE enums (meta-schema + `SchemaBridge` learn the kind)
+  — DONE 2026-06-17;
   (2) convert the designer's own free-text-that-are-really-enums (`cardinality`/`baseType`/`keyType`) into
-  enum props and DELETE the hand-rolled cardinality `<select>` — the dogfood. Deferred features (YAGNI): int-
+  enum props and DELETE the hand-rolled cardinality `<select>` — the dogfood. _[REVISED 2026-06-19 — (2)
+  rejected: converting them to meta-schema enum props mixes system vocab into the user's schema (user's
+  rule, "don't mix system with user"). Instead `cardinality`/`baseType` became C#-pinned system constants
+  read in the designer, and the cardinality/kind `<select>`s stay (now sourced from those). See "Designer
+  type-editor UX overhaul".]_ Deferred features (YAGNI): int-
   backed/renamable members (renaming wants M5 identity + the M13 versioning diff), enum dict-keys, per-value labels.
 - Doc follow-up: `INSTANCE_DESCRIPTION_FORMAT.md` records `enum` as of the colon-removal change below
   (deferred until then so it captured the final syntax once).
@@ -1900,6 +1908,50 @@ engine (pillar 5) — which is *why* data temporal versioning (pillar 4) sits be
 **Scope:** storage endgame (pillars 3+4+5), far future. M13 stays linear-schema-only. Recorded
 now because the seams are cheap to honor, expensive to retrofit (a content-addressed store;
 instances carrying commit/branch refs).
+
+## Designer type-editor UX overhaul — landed 2026-06-19
+
+The operator designer's type editor was a flat wall of free-text inputs (every type: name + free-text
+baseType + values; every prop: name + free-text type + a cardinality `<select>` + an always-shown
+keyType) — the user found it confusing ("too many inputs and buttons"). Reworked into a structured,
+progressively-disclosed editor. **No model/format change** — the meta-schema (`MetaType`/`MetaProp`) and
+`SchemaBridge` projection are untouched; this is all the designer's own `fn render()` + CSS.
+
+- **What landed:** each type is a CARD — name + an Object/Enum **kind** `<select>` + a `×`; below it
+  EITHER a labeled prop grid (Name/Type/Cardinality columns, one row per prop, a `+ Field` button) for
+  an object OR a Values field for an enum. The prop **type** is now a `<select>` grouped into `<optgroup>`s
+  — built-in scalars vs. THIS design's own types — not free text. Verbose buttons became `×` / `+ Type` /
+  `+ Field`. The raw ui/common/initialData `<textarea>`s moved into a collapsed `<details>` ("Advanced
+  (code)"). The create-instance ports were deliberately KEPT (user's call). Two `Designer.feature`
+  scenarios drive it (progressive disclosure; the grouped picker).
+- **The dropdown vocabulary stays SYSTEM, sourced from C#, NOT mixed into user space.** The kind /
+  cardinality / scalar-type option lists ARE the framework's vocabulary (the C# `BaseType` / `Cardinality`
+  enums). The user's rule (**do not mix system things into user-defined things**) ruled out two routes:
+  (a) injecting `Cardinality`/`Kind` as enum TYPES into the meta-schema so they could be read via
+  `sys.schema` — that puts framework vocab in the same type space as the operator's designs (this REVISES
+  the enum follow-up (2) above); (b) putting the lists on the global `sys` namespace — dead weight in every
+  user app, and useless outside the one schema-editor. They live as three constants (`scalarTypes` /
+  `typeKinds` / `cardinalities`) in the designer's own (system/IDE) Code, **pinned to the C# enums by a
+  guard test** (`DesignerVocabularyTests`) so C# stays the single source of truth and they cannot drift.
+  The UI keeps the split too (the prop-type picker groups built-in vs. design types in separate
+  `<optgroup>`s) — system vocabulary and user-authored content stay separated end-to-end.
+- **Progressive disclosure is CSS-class-driven, not conditional DOM (SUPERSEDES "keyType ALWAYS
+  rendered" under "Prop cardinality + key-type editing").** keyType shows only for a dictionary prop; a
+  type shows its props editor (object) XOR its values field (enum). The first attempt used real
+  conditionals (`if prop.cardinality == "dictionary"`) and hit EXACTLY the documented limit — a field
+  appearing/disappearing inside a `foreach` row does not reconcile. The fix keeps the field ALWAYS in the
+  DOM (all-stable children — the reconciliation lesson still holds) and flips visibility via a CLASS on the
+  stable container (`type-card is-enum` / `prop-row is-dict`): an attribute/class change on a reused node
+  reconciles reliably where a child add/remove does not. `SchemaBridge.Project` already ignores a hidden
+  field's value (keyType only for dictionary, values only for enum), so the always-rendered-but-hidden
+  fields are harmless — the same property the old always-visible approach relied on.
+- **SSR fix:** a `<select value=x>`'s selection now threads through an `<optgroup>` to its option children
+  (`SerializeTag`), so a grouped option is marked `selected` on first paint — previously the selection was
+  dropped at the optgroup boundary (the client fixed it post-hydration, but SSR's first paint was wrong).
+- **Seed:** `DesignerSeedGenerator` now writes a single prop's cardinality EXPLICITLY as `"single"` (was
+  omitted), so the value matches a cardinality `<select>` option — a blank would leave the bound select
+  with no option selected after hydration. `SchemaBridge.Project` reads `""` and `"single"` alike, so what
+  the seed projects back to is unchanged (a single prop still prints as `name type`). Suite 360.
 
 ## Testing: BDD with Gherkin
 

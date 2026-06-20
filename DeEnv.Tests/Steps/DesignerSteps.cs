@@ -164,7 +164,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await TypeNameInput(from).FillAsync(to);
         // The bound input re-renders the model name to the new value (the client edit landed)…
         await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('.type-row input.type-name')].some(e => e.value === {JsString(to)})");
+            $"() => [...document.querySelectorAll('.type-card input.type-name')].some(e => e.value === {JsString(to)})");
         // …then wait for the autosave (objectPropChange) to reach the designer's sovereign store, so a
         // later apply projects the renamed design (the apply reads the store fresh).
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
@@ -176,12 +176,14 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task WhenRetypeProp(string propName, string newType)
     {
         // Renaming a referenced type requires retyping the prop that points at it, so the projected app
-        // stays valid (a prop whose `type` names a missing type is rejected at deploy). The prop's type
-        // input is the `.prop-type` in the `.prop-row` whose `.prop-name` currently holds `propName`.
-        await PropTypeInput(propName).FillAsync(newType);
-        // The bound input re-renders the new value (the client edit landed)…
+        // stays valid (a prop whose `type` names a missing type is rejected at deploy). The prop's type is
+        // a <select> (built-in scalars + this design's own types) in the `.prop-row` whose `.prop-name`
+        // currently holds `propName`; selecting the target type writes prop.type through the binding.
+        await PropTypeSelect(propName).SelectOptionAsync(
+            new Microsoft.Playwright.SelectOptionValue { Value = newType });
+        // The bound select reflects the new value (the client edit landed)…
         await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('.prop-row input.prop-type')].some(e => e.value === {JsString(newType)})");
+            $"() => [...document.querySelectorAll('.prop-row select.prop-type')].some(e => e.value === {JsString(newType)})");
         // …then wait for the autosave to reach the designer's store, so a later apply projects the
         // retyped prop (the apply reads the store fresh).
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
@@ -193,24 +195,25 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task WhenSetCardinality(string propName, string cardinality)
     {
         // The cardinality <select> in the prop's row (single / set / dictionary). Selecting an option
-        // writes prop.cardinality through the two-way <select> binding and autosaves it. The option
-        // labels are the cardinality words; "single"'s value is "" (the model's default), so the stored
-        // value is "" for single, the word otherwise.
+        // writes prop.cardinality through the two-way <select> binding and autosaves it. Options come from
+        // the system `cardinalities` vocab — their VALUE is the raw word, the visible label is humanized —
+        // so select by value. The designer now stores "single" explicitly (so the value matches its
+        // dropdown option), hence the stored value is the word itself for every cardinality.
         await PropCardinalitySelect(propName).SelectOptionAsync(
-            new Microsoft.Playwright.SelectOptionValue { Label = cardinality });
-        var stored = cardinality == "single" ? "" : cardinality;
+            new Microsoft.Playwright.SelectOptionValue { Value = cardinality });
         // Wait for THIS prop's autosave (matched by name, so a same-cardinality prop in another seeded
         // design doesn't satisfy it early), so a later apply projects this prop's new cardinality.
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
             .Any(o => o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
-                && o.Fields.TryGetValue("cardinality", out var v) && v is DeEnv.Storage.TextValue t && t.Text == stored));
+                && o.Fields.TryGetValue("cardinality", out var v) && v is DeEnv.Storage.TextValue t && t.Text == cardinality));
     }
 
     [When("I set the prop {string} key type to {string}")]
     public async Task WhenSetKeyType(string propName, string keyType)
     {
-        // The key-type field is always present (rendered for every prop); it is only meaningful for a
-        // dictionary — SchemaBridge ignores it for single/set props.
+        // The key-type field now renders only for a dictionary prop (progressive disclosure); this step
+        // runs after the prop's cardinality has been set to dictionary, so the field is present (FillAsync
+        // auto-waits for it).
         await PropKeytypeInput(propName).FillAsync(keyType);
         await ctx.Page!.WaitForFunctionAsync(
             $"() => [...document.querySelectorAll('.prop-row input.prop-keytype')].some(e => e.value === {JsString(keyType)})");
@@ -227,10 +230,10 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // designer's sovereign store (so a later apply projects the named type). Remember the name so the
         // base-type / values steps can locate the same row once it is no longer the empty one.
         _justAddedTypeName = name;
-        await ctx.Page!.Locator(".design-editor .type-row:has(input.type-name[value=\"\"]) input.type-name")
+        await ctx.Page!.Locator(".design-editor .type-card:has(input.type-name[value=\"\"]) input.type-name")
             .First.FillAsync(name);
         await ctx.Page.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('.type-row input.type-name')].some(e => e.value === {JsString(name)})");
+            $"() => [...document.querySelectorAll('.type-card input.type-name')].some(e => e.value === {JsString(name)})");
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
             .Any(o => o.Fields.TryGetValue("name", out var v)
                 && v is DeEnv.Storage.TextValue t && t.Text == name));
@@ -239,11 +242,14 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [When("I set the just-added type's base type to {string}")]
     public async Task WhenSetJustAddedBaseType(string baseType)
     {
-        // The base-type input of the row we just named (located by its now-known name). For "enum" this
-        // flips the projection branch in SchemaBridge; wait for the autosave so a later apply sees it.
-        await JustAddedTypeRow().Locator("input.type-base").FillAsync(baseType);
+        // The kind <select> of the row we just named (located by its now-known name) — Object / Enum,
+        // sourced from the system `typeKinds` vocab (option VALUE is the raw word, label humanized), so
+        // select by value. For "enum" this flips the projection branch in SchemaBridge; wait for the
+        // autosave so a later apply sees it.
+        await JustAddedTypeRow().Locator("select.type-kind").SelectOptionAsync(
+            new Microsoft.Playwright.SelectOptionValue { Value = baseType });
         await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('.type-row input.type-base')].some(e => e.value === {JsString(baseType)})");
+            $"() => [...document.querySelectorAll('.type-card select.type-kind')].some(e => e.value === {JsString(baseType)})");
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
             .Any(o => o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == _justAddedTypeName
                 && o.Fields.TryGetValue("baseType", out var v) && v is DeEnv.Storage.TextValue t && t.Text == baseType));
@@ -257,7 +263,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // a later apply projects the value list.
         await JustAddedTypeRow().Locator("input.type-values").FillAsync(values);
         await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('.type-row input.type-values')].some(e => e.value === {JsString(values)})");
+            $"() => [...document.querySelectorAll('.type-card input.type-values')].some(e => e.value === {JsString(values)})");
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
             .Any(o => o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == _justAddedTypeName
                 && o.Fields.TryGetValue("values", out var v) && v is DeEnv.Storage.TextValue t && t.Text == values));
@@ -271,10 +277,10 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // the client re-render, first keyed by its transient negative id; the WS persist then remaps it. The
         // next steps may edit/remove the row by that STILL-negative id -- the server resolves it through its
         // per-session transient-id remap (see TransientId.feature), so no wait for the round-trip is needed.
-        var before = await ctx.Page!.Locator(".design-editor .type-row").CountAsync();
+        var before = await ctx.Page!.Locator(".design-editor .type-card").CountAsync();
         await ctx.Page.Locator("button.add-type").ClickAsync();
         await ctx.Page.WaitForFunctionAsync(
-            $"() => document.querySelectorAll('.design-editor .type-row').length === {before + 1}");
+            $"() => document.querySelectorAll('.design-editor .type-card').length === {before + 1}");
     }
 
     [When("I remove the just-added unnamed type")]
@@ -282,7 +288,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // The just-added row is the one whose type-name input is still empty (the client mirrors the model
         // name into the `value` attribute, so the attribute selector matches it). Clicking ITS Remove type
         // button drives arrayRemove on the nested types set -- the path that runs the store's GC.
-        await ctx.Page!.Locator(".design-editor .type-row:has(input.type-name[value=\"\"]) button.remove-type")
+        await ctx.Page!.Locator(".design-editor .type-card:has(input.type-name[value=\"\"]) button.remove-type")
             .First.ClickAsync();
 
     // ── When: the instance selector (on /instances/<id>) ─────────────────────────
@@ -314,7 +320,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [Then("the design editor shows a type named {string}")]
     public async Task ThenEditorShowsType(string name) =>
         await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('.design-editor .type-row input.type-name')].some(e => e.value === {JsString(name)})");
+            $"() => [...document.querySelectorAll('.design-editor .type-card input.type-name')].some(e => e.value === {JsString(name)})");
 
     [Then("the design editor shows the design's label {string}")]
     public async Task ThenEditorShowsLabel(string label) =>
@@ -441,8 +447,62 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page.WaitForSelectorAsync("main.ide-design-edit .design-editor");
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
         await Assert.That(
-            await ctx.Page.Locator(".design-editor .type-row input.type-name[value=\"\"]").CountAsync())
+            await ctx.Page.Locator(".design-editor .type-card input.type-name[value=\"\"]").CountAsync())
             .IsEqualTo(0);
+    }
+
+    // ── Then: progressive disclosure (fields hidden until their shape is chosen) ──
+
+    [Then("the prop {string} shows no key-type field")]
+    public async Task ThenPropNoKeyType(string propName) =>
+        // A single/set prop's key-type field is hidden (it is meaningful only for a dictionary). The field
+        // stays in the DOM — progressive disclosure flips visibility via the row's class — so assert it is
+        // HIDDEN, not absent.
+        await PropKeytypeInput(propName).First.WaitForAsync(Hidden);
+
+    [Then("the prop {string} shows a key-type field")]
+    public async Task ThenPropKeyType(string propName) =>
+        // Set to dictionary, the key-type field becomes visible via the row's class change — wait for it
+        // (proving the disclosure reconciles when cardinality changes).
+        await PropKeytypeInput(propName).First.WaitForAsync();
+
+    [Then("the just-added type shows a props editor")]
+    public async Task ThenJustAddedPropsEditor() =>
+        await JustAddedTypeRow().Locator(".props-editor").First.WaitForAsync();
+
+    [Then("the just-added type shows no props editor")]
+    public async Task ThenJustAddedNoPropsEditor() =>
+        await JustAddedTypeRow().Locator(".props-editor").First.WaitForAsync(Hidden);
+
+    [Then("the just-added type shows a values field")]
+    public async Task ThenJustAddedValuesField() =>
+        await JustAddedTypeRow().Locator("input.type-values").First.WaitForAsync();
+
+    [Then("the just-added type shows no values field")]
+    public async Task ThenJustAddedNoValuesField() =>
+        await JustAddedTypeRow().Locator("input.type-values").First.WaitForAsync(Hidden);
+
+    // ── Then: the grouped prop-type picker ───────────────────────────────────────
+
+    [Then("the prop {string} type picker offers the built-in type {string}")]
+    public async Task ThenPickerOffersBuiltin(string propName, string typeName) =>
+        await Assert.That(await PropTypeSelect(propName)
+            .Locator($"optgroup[label=\"Built-in\"] option[value={CssString(typeName)}]").CountAsync())
+            .IsGreaterThanOrEqualTo(1);
+
+    [Then("the prop {string} type picker offers the design type {string}")]
+    public async Task ThenPickerOffersDesignType(string propName, string typeName) =>
+        await Assert.That(await PropTypeSelect(propName)
+            .Locator($"optgroup[label=\"This design\"] option[value={CssString(typeName)}]").CountAsync())
+            .IsGreaterThanOrEqualTo(1);
+
+    [Then("the prop {string} type picker keeps built-in and design types in separate groups")]
+    public async Task ThenPickerGrouped(string propName)
+    {
+        // The system scalars and the user's own types live in SEPARATE <optgroup>s — not flatly intermixed.
+        var select = PropTypeSelect(propName);
+        await Assert.That(await select.Locator("optgroup[label=\"Built-in\"]").CountAsync()).IsGreaterThanOrEqualTo(1);
+        await Assert.That(await select.Locator("optgroup[label=\"This design\"]").CountAsync()).IsGreaterThanOrEqualTo(1);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────
@@ -458,17 +518,17 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     // A design-editor type-name input currently holding `name` (the type being renamed).
     private Microsoft.Playwright.ILocator TypeNameInput(string name) =>
-        ctx.Page!.Locator($".design-editor .type-row input.type-name[value={CssString(name)}]");
+        ctx.Page!.Locator($".design-editor .type-card input.type-name[value={CssString(name)}]");
 
     // The type-row of the just-added type, located by the name we gave it (used by the base-type / values
     // steps after it is no longer the empty-name row).
     private Microsoft.Playwright.ILocator JustAddedTypeRow() =>
-        ctx.Page!.Locator($".design-editor .type-row:has(input.type-name[value={CssString(_justAddedTypeName)}])");
+        ctx.Page!.Locator($".design-editor .type-card:has(input.type-name[value={CssString(_justAddedTypeName)}])");
 
-    // The prop-type input of the `.prop-row` whose `.prop-name` currently holds `propName` (the prop
+    // The prop-type <select> of the `.prop-row` whose `.prop-name` currently holds `propName` (the prop
     // being retyped). Scoped to that row so it targets the right prop across all the types' prop rows.
-    private Microsoft.Playwright.ILocator PropTypeInput(string propName) =>
-        ctx.Page!.Locator($".design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) input.prop-type");
+    private Microsoft.Playwright.ILocator PropTypeSelect(string propName) =>
+        ctx.Page!.Locator($".design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) select.prop-type");
 
     // The cardinality <select> / key-type input of the `.prop-row` whose `.prop-name` holds `propName`,
     // scoped to that row (the key-type input only exists once the prop is a dictionary).
@@ -477,6 +537,11 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     private Microsoft.Playwright.ILocator PropKeytypeInput(string propName) =>
         ctx.Page!.Locator($".design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) input.prop-keytype");
+
+    // Wait for a locator to become HIDDEN (display:none) — progressive-disclosure fields stay in the DOM
+    // and only flip visibility, so "shows no X" means hidden, not detached.
+    private static readonly Microsoft.Playwright.LocatorWaitForOptions Hidden =
+        new() { State = Microsoft.Playwright.WaitForSelectorState.Hidden };
 
     private static string JsString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 

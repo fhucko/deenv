@@ -411,11 +411,48 @@ public sealed class SsrRenderer
         .designs-head th, .instances-head th { background: var(--bg); font-size: 0.78rem; font-weight: 600;
           color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
         .design-row:hover td, .instance-row:hover td { background: #f9fafb; }
-        .type-row, .prop-row { display: flex; flex-wrap: wrap; gap: 0.5rem;
-          align-items: center; padding: 0.55rem 0; border-bottom: 1px solid var(--border-soft); }
-        .type-row { align-items: flex-start; }
-        .prop-row { padding-left: 1.2rem; }
-        .prop-row input, .prop-row select, .type-row > input { max-width: 170px; }
+        /* Each type is a CARD: a head (name + kind + remove) and, below, either its props editor
+           (object kind) or its enum-values field (enum kind) — never both. */
+        .design-editor > .add-type { margin: 0.3rem 0 0.2rem; }
+        .type-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+          padding: 0.85rem 1rem; margin: 0.7rem 0; box-shadow: 0 1px 2px rgba(31,35,40,.05); }
+        .type-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+        .type-head input.type-name { font-weight: 600; flex: 1 1 200px; min-width: 0; }
+        .type-head select.type-kind { flex: 0 0 auto; }
+        .type-head button.remove-type { margin-left: auto; }
+        .enum-values { margin-top: 0.75rem; }
+        .props-editor { margin-top: 0.75rem; }
+        /* Props are a labeled grid: a header row of column names, then one row per prop. Flex (not a
+           fixed grid) so the conditional key-type field slots in without breaking a column template. */
+        /* Header and rows share ONE grid template, so columns line up by construction. The key-type
+           column (4) is meaningful only for a dictionary, so it COLLAPSES — and its "Key type" header is
+           omitted — unless this type actually has a dictionary prop. :has() keys off the row's is-dict
+           class, so the column + header appear (and collapse) live, and on first paint, as cardinalities
+           change. Name/Type/Cardinality keep columns 1–3; the remove button stays in column 5. */
+        .prop-head, .prop-row { display: grid; gap: 0.5rem; align-items: center;
+          grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.3fr) minmax(0, 1fr) 0 auto; }
+        .props-editor:has(.prop-row.is-dict) .prop-head,
+        .props-editor:has(.prop-row.is-dict) .prop-row {
+          grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) auto; }
+        .prop-head { font-size: 0.72rem; font-weight: 600; color: var(--muted); text-transform: uppercase;
+          letter-spacing: .03em; padding: 0 0.1rem 0.25rem; }
+        .props-editor:has(.prop-row.is-dict) .prop-head::after { content: "Key type"; grid-column: 4; }
+        .prop-row input, .prop-row select { min-width: 0; width: 100%; }
+        .prop-row input.prop-keytype { grid-column: 4; }
+        .prop-row button.remove-prop { grid-column: 5; padding: 0.2rem 0.5rem; }
+        .props-editor > button.add-prop { margin-top: 0.55rem; }
+        /* Progressive disclosure — driven by a class on the container, not by conditional DOM (a field
+           appearing/disappearing inside a foreach row does not reliably reconcile; an attribute/class
+           change on the stable container does). The fields stay in the DOM; only their visibility flips.
+           keyType matters only for a dictionary; a type shows EITHER its props editor (object) OR its
+           enum-values field (enum), never both. SchemaBridge already ignores the hidden field's value. */
+        .prop-row:not(.is-dict) input.prop-keytype { display: none; }
+        .type-card:not(.is-enum) .enum-values { display: none; }
+        .type-card.is-enum .props-editor { display: none; }
+        /* Raw code areas tucked behind a disclosure so the type editor reads as just types by default. */
+        details.code-areas { margin-top: 1.4rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
+        details.code-areas summary.code-summary { font-weight: 600; color: var(--muted); cursor: pointer; padding: 0.3rem 0; }
+        details.code-areas[open] summary.code-summary { margin-bottom: 0.6rem; }
         .design-label, .instance-app, .instance-port { font-weight: 600; }
         .new-instance, .new-design { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
           margin: 0.6rem 0 1.2rem; padding: 0.9rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
@@ -507,8 +544,13 @@ public sealed class SsrRenderer
         // <select> (the browser ignores it), so it is skipped in the attribute loop and instead passed
         // down to the option children. An <option> whose own `value` equals the selection gets `selected`.
         var isSelect = tag.Name == "select";
+        // The selection threads from <select value={x}> down to its <option>s — including through an
+        // <optgroup>, which is a transparent grouping container (it inherits the selection so a grouped
+        // option still marks itself `selected`). Any other tag stops the thread.
         var childSelectValue =
-            isSelect && tag.Attributes.TryGetValue("value", out var selVal) ? selVal : null;
+            isSelect && tag.Attributes.TryGetValue("value", out var selVal) ? selVal
+            : tag.Name == "optgroup" ? selectValue
+            : null;
         var isSelectedOption =
             tag.Name == "option" && selectValue != null
             && tag.Attributes.TryGetValue("value", out var optVal) && ScalarsEqual(optVal, selectValue);

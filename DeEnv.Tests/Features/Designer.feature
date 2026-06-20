@@ -164,3 +164,36 @@ Feature: The operator IDE (designs library + instance design selector)
     And I add a type to the design
     And I remove the just-added unnamed type
     Then the design "todo" has no unnamed type
+
+  # Progressive disclosure: a field that is only meaningful in one shape is hidden until that shape is
+  # chosen, so the editor is not a wall of permanently-blank inputs. The key-type field appears only for
+  # a dictionary prop; a type's props editor shows for the object kind and its enum-values field for the
+  # enum kind (never both). The kind is a dropdown sourced from the system vocabulary, not free text.
+  # This also proves the conditional fields reconcile on the client when cardinality / kind change.
+  @milestone-10 @single-user
+  Scenario: Irrelevant fields are hidden until their shape is chosen
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    Then the prop "text" shows no key-type field
+    When I set the prop "text" cardinality to "dictionary"
+    Then the prop "text" shows a key-type field
+    When I add a type to the design
+    And I name the just-added type "Status"
+    Then the just-added type shows a props editor
+    And the just-added type shows no values field
+    When I set the just-added type's base type to "enum"
+    Then the just-added type shows a values field
+    And the just-added type shows no props editor
+
+  # The prop-type picker is a dropdown, not a free-text input: it offers the built-in scalar types AND
+  # this design's own types, kept in SEPARATE groups so system vocabulary is not flatly intermixed with
+  # user-defined types. Picking a type writes it through the <select> binding exactly as before.
+  @milestone-10 @single-user
+  Scenario: The prop-type picker offers built-in scalars and the design's own types, grouped
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    Then the prop "text" type picker offers the built-in type "text"
+    And the prop "text" type picker offers the design type "TodoList"
+    And the prop "text" type picker keeps built-in and design types in separate groups
