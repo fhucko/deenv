@@ -530,11 +530,40 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         if (converted is null) unconvertible.Add($"{typeName}/{id}.{name}");
                         changed = true;
                     }
+                    // Cardinality change → reshape the stored value (same-name). single object ref -> set:
+                    // wrap the one reference into a fresh one-member set (lossless one -> many). The reverse
+                    // (set -> single) and dictionary combos are left for the apply to reseed.
+                    else if (prop.Cardinality == Cardinality.Set
+                             && desc.IsObjectType(prop.Type)
+                             && obj.Fields[name] is StoredRef objRef)
+                    {
+                        obj.Fields[name] = new StoredSet(MintCollectionId(doc),
+                            new Dictionary<int, StoredValue> { [objRef.Id] = objRef });
+                        changed = true;
+                    }
                 }
         }
 
         if (changed) SaveRaw(dataPath, doc);
         return unconvertible;
+    }
+
+    // Mint a fresh intrinsic id on a doc being migrated (a reshaped collection needs one). Mirrors the
+    // instance MintId: bump NextId, falling back to the max extent id for a counter-less legacy doc.
+    private static int MintCollectionId(StoreDoc doc)
+    {
+        var basis = doc.NextId != 0 ? doc.NextId : MaxExtentId(doc);
+        doc.NextId = basis + 1;
+        return doc.NextId;
+    }
+
+    private static int MaxExtentId(StoreDoc doc)
+    {
+        var max = 0;
+        foreach (var pool in doc.Extents.Values)
+            foreach (var id in pool.Keys)
+                if (id > max) max = id;
+        return max;
     }
 
     // ── scalar conversion (type-change migration) ───────────────────────────────

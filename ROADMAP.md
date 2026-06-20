@@ -296,13 +296,17 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   identity-based diff is already designed — renames are exact because
   non-constants carry identity (Milestone 5).
 
-  **MVP-critical slice pulled forward (decided 2026-06-19):** a thin **non-destructive
-  apply** — *data survives a schema change* — is required for DeEnv to be genuinely useful
-  (an app you cannot evolve without losing data is useless). Scope: stop resetting data on
-  schema change; additive changes non-destructive (new field → default); identity-based
-  rename preservation (M5); structural/destructive changes refused loudly, deferred. This is
-  *migration* (the substrate), thinner than the full versioning below, and is prioritized
-  ahead of / interleaved with M11–M12. See DECISIONS ("Data must survive schema changes").
+  **MVP-critical substrate pulled forward — LANDED 2026-06-19/20.** A thin **non-destructive
+  apply** — *data survives a schema change* — was built ahead of / interleaved with M11–M12
+  (an app you cannot evolve without losing data is useless). What landed (server-side C#,
+  `SchemaBridge.WriteDocument` + `JsonFileInstanceStore.MigrateTowardSchema`): an apply PRESERVES
+  data that still fits the new schema and carries it forward — additive (new field → default),
+  removed-field (dropped), scalar **value conversion** on a type change (int↔text↔decimal, …;
+  unconvertible → default + reported), and **single→set** cardinality reshape. Only a **rename**
+  (a name change) still reseeds: detecting it needs to match props by INTRINSIC IDENTITY, which the
+  name-keyed schema does not carry — so rename rides **this milestone's structural diff** (match a
+  version against its parent by identity), not the thin substrate. This is *migration* (the
+  substrate), thinner than the full versioning below. See DECISIONS ("Data must survive schema changes").
 
   **First slice:** in the self-hosted designer, *commit* the current schema-as-
   data as an immutable version (parent pointer → linear history) and *diff* a

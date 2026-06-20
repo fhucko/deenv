@@ -336,11 +336,21 @@ would not be needed — funders fund early work).
    type-changed leaf (`int→text`, `text "3"→int`, widening, enum membership, …); an unconvertible
    value (`text "abc"→int`) resets to the new type's default and is REPORTED (logged by WriteDocument)
    — never silent corruption.
-4. **Rename via M5 identity** (needs an old↔new schema diff). 5. **Cardinality reshaping**
-   (single↔set↔dictionary). Until these land, a rename / cardinality change / wholesale different app
-   still reseeds — today's behavior, **not a regression** — and an unavoidable reset should become
-   *reported* (like the unconvertible case) rather than silent. The report is server-logged for now;
-   surfacing it in the operator UI is a follow-up.
+4. **Cardinality reshape (single object → set) — DONE.** A single object reference is wrapped into a
+   fresh one-member set (lossless one→many, same-name). The reverse (set→single) and dictionary combos
+   still reseed (rarer/lossy) — further slices if needed.
+5. **Rename → M13, NOT a thin slice (decided 2026-06-20).** A rename is a NAME change, so detecting it
+   needs to match old↔new props by INTRINSIC IDENTITY — which the name-keyed schema
+   (`TypeDefinition`/`PropDefinition`) does **not** carry; the M5 identity lives only on the designer's
+   MetaType/MetaProp data and is lost in projection to the name-based app document. "Renames exact, as
+   the versioning diff was designed" ties it to **M13's version diff** (match a version against its
+   PARENT by identity), which needs committed version history. So rename rides M13's structural diff,
+   not the thin substrate.
+
+**The thin substrate is complete:** additive, removed-field, scalar value-conversion, and single→set
+cardinality all survive an apply; only a NAME change (rename) and the rarer reverse/dict reshapes still
+reseed. An unavoidable reset / unconvertible value is *reported* (server-logged; operator-UI surfacing
+is a follow-up).
 
 ## Concurrency, saving, and locking (eshop/CRM)
 

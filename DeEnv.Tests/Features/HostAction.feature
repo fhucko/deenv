@@ -110,6 +110,18 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     Then the host action reply is ok
     And the target's "Item" reads "price" as "decimal" ""
 
+  # A field's CARDINALITY change reshapes the stored value (same-name — no identity needed): a single
+  # object reference becomes a one-member set (one -> many, lossless). The stored ref is wrapped into a
+  # fresh set rather than reseeded. (Rename, a NAME change, needs M13's identity diff and is deferred there.)
+  @milestone-13 @single-user @persistence
+  Scenario: Apply reshapes a single object reference into a set
+    Given a target instance whose Db has a single "lead" referencing a "Person" named "Ada"
+    And a designer instance holding a design with Db's "lead" as a set of "Person"
+    When the designer publishes that design to the target's id over the WS
+    Then the host action reply is ok
+    And the target's Db "lead" set holds the "Person" named "Ada"
+    And the target instance was restarted
+
   @milestone-10 @single-user
   Scenario: Create projects the passed design into a new named instance on the given ports
     Given a designer instance holding a design with a type "Item" and a custom render

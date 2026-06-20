@@ -296,6 +296,46 @@ public sealed class HostActionSteps
         store.AddToSet(NodePath.Root.Field(set), id);
     }
 
+    // A target whose Db holds a SINGLE object reference (Db has one object-typed prop pointing at a
+    // referenced object). Publishing a design that makes that prop a SET exercises the cardinality
+    // reshape (single object ref -> one-member set).
+    [Given("a target instance whose Db has a single {string} referencing a {string} named {string}")]
+    public void GivenTargetSingleRef(string field, string refType, string name)
+    {
+        Directory.CreateDirectory(_dir);
+        _targetAppPath = Path.Combine(_dir, "target.app");
+        _targetDataPath = Path.Combine(_dir, "target-data.json");
+        File.WriteAllText(_targetAppPath, TargetAppSentinel);
+
+        var priorApp =
+            $"""
+            types
+                Db
+                    {field} {refType}
+                {refType}
+                    name text
+            """;
+        var prior = InstanceDescriptionLoader.Load(priorApp);
+        var store = new JsonFileInstanceStore(_targetDataPath, prior);
+        var pid = store.CreateObject(refType, new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name),
+        }));
+        store.SetReference(NodePath.Root.Field(field), pid); // Db.<field> -> the referenced object
+    }
+
+    // A design whose Db holds the named prop as a SET of the element type (its element type carries `name`).
+    [Given("a designer instance holding a design with Db's {string} as a set of {string}")]
+    public void GivenDesignDbSetOf(string field, string elemType)
+    {
+        OpenDesigner();
+        AddDesign(CustomUiSection);
+        DesignType("Db", "object");
+        DesignType(elemType, "object");
+        DesignProp(elemType, "name", "text");
+        DesignSetProp("Db", field, elemType);
+    }
+
     // A design whose element type carries ONE scalar field of the given (possibly RE-typed) base type.
     [Given("a designer instance holding a design with {string} field {string} typed {string}")]
     public void GivenDesignTypedField(string typeName, string field, string fieldType)
@@ -513,6 +553,20 @@ public sealed class HostActionSteps
             var other      => other?.ToString(),
         };
         await Assert.That(actual).IsEqualTo(value);
+    }
+
+    [Then("the target's Db {string} set holds the {string} named {string}")]
+    public async Task ThenDbSetHolds(string field, string elemType, string name)
+    {
+        // The single reference was reshaped into a one-member set, preserved across the apply. Open
+        // under the new (set) schema, read the set, and confirm its one member is the referenced object.
+        var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
+        var store = new JsonFileInstanceStore(_targetDataPath, published);
+        var set = store.ReadNode(NodePath.Root.Field(field)) as SetValue;
+        await Assert.That(set).IsNotNull();
+        await Assert.That(set!.Members.Count).IsEqualTo(1);
+        var member = set.Members.Values.First() as ObjectValue;
+        await Assert.That((member?.Fields.GetValueOrDefault("name") as TextValue)?.Text).IsEqualTo(name);
     }
 
     [Then("the target still holds an {string} labelled {string}, with {string} defaulted to {string}")]
