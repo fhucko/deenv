@@ -20,6 +20,18 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the designs list shows a design "todo"
     And the designs list shows a design "crm"
 
+  # The designs list is rendered by the generic <SetTable> (label-only column) with a per-row action
+  # cell carrying an Edit link (/designs/<id>) and a Delete button. Opening the list CLIENT-SIDE (the
+  # step waits for window.initUi) proves the client now hydrates over the <SetTable>-rendered page —
+  # the prior build crashed on hydration (a function-equality twin divergence) and timed out here.
+  @milestone-10 @single-user
+  Scenario: Each designs-list row shows its label, an Edit link, and a Delete button via SetTable
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    Then the designs list shows a design "todo"
+    And the design "todo" row has an Edit link and a Delete button
+    And the design "crm" row has an Edit link and a Delete button
+
   # The designer (instance 1) is a managed instance like any other: no special-casing in the render.
   # It has its OWN design in db.designs (a bounded self-snapshot) and its instances-list row resolves
   # to that design through the same explicit designId reference every other row uses — so it appears in

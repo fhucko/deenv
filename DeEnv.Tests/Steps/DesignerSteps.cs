@@ -55,7 +55,9 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task WhenOpenDesignsList()
     {
         await ctx.Page!.GotoReadyAsync("/designs");
-        await ctx.Page!.WaitForSelectorAsync("main.ide-designs .design-row");
+        // The designs list now renders via the generic <SetTable> (a .set-row per design, the label in
+        // a stretched a.row-link, with a per-row action cell carrying the Edit link + Delete button).
+        await ctx.Page!.WaitForSelectorAsync("main.ide-designs .set-row");
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
     }
 
@@ -117,17 +119,18 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // NEGATIVE transient id; the WS persist then remaps it to the real positive id.
         await ctx.Page!.Locator("input.new-design-label").FillAsync(label);
         await ctx.Page.Locator("button.add-design").ClickAsync();
-        // Confirm the new row shows in the list (the race-free client re-render).
+        // Confirm the new row shows in the list (the race-free client re-render). The list renders via
+        // the generic <SetTable>, so a row is .set-row and the label is the stretched a.row-link.
         await ctx.Page.WaitForSelectorAsync(
-            $".design-row:has(.design-label:text-is({CssString(label)}))");
+            $".set-row:has(a.row-link:text-is({CssString(label)}))");
         // Then wait for the persist+remap to land on the client — the row's Edit link must point at the
         // real (positive) id, so a later Edit click navigates to the now-persisted design, not its
         // transient negative id. The href is /designs/<id> via sys.nest, so match a positive trailing id.
         await ctx.Page.WaitForFunctionAsync(
             $$"""
             () => {
-                const rows = [...document.querySelectorAll('.design-row')];
-                const row = rows.find(r => { const l = r.querySelector('.design-label'); return l && l.textContent.trim() === {{JsString(label)}}; });
+                const rows = [...document.querySelectorAll('.set-row')];
+                const row = rows.find(r => { const l = r.querySelector('a.row-link'); return l && l.textContent.trim() === {{JsString(label)}}; });
                 if (!row) return false;
                 const a = row.querySelector('a.edit-design');
                 return a != null && /\/designs\/[0-9]+$/.test(a.getAttribute('href') || '');
@@ -314,8 +317,25 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     [Then("the designs list shows a design {string}")]
     public async Task ThenDesignsListShows(string label) =>
-        await Assert.That(await ctx.Page!.Locator($".design-row .design-label:text-is({CssString(label)})").CountAsync())
+        // The designs list renders via the generic <SetTable>: each design is a .set-row whose label
+        // is the stretched a.row-link (label-only column), with an Edit link + Delete button per row.
+        await Assert.That(await ctx.Page!.Locator($".set-row a.row-link:text-is({CssString(label)})").CountAsync())
             .IsGreaterThanOrEqualTo(1);
+
+    [Then("the design {string} row has an Edit link and a Delete button")]
+    public async Task ThenDesignRowHasActions(string label)
+    {
+        // The action cell is the SetTable's per-row `rowActions` slot (the designer's `designActions`
+        // local fn): an Edit link to /designs/<id> + a Delete button. Asserting both render proves the
+        // SetTable `rowActions` opt-in works through tag-invocation AND that the page hydrated (the
+        // WhenOpenDesignsList step already gated on window.initUi).
+        var row = DesignRowFor(label);
+        var edit = row.Locator("a.edit-design");
+        await Assert.That(await edit.CountAsync()).IsEqualTo(1);
+        var href = await edit.GetAttributeAsync("href") ?? "";
+        await Assert.That(System.Text.RegularExpressions.Regex.IsMatch(href, @"/designs/[0-9]+$")).IsTrue();
+        await Assert.That(await row.Locator("button.delete-design").CountAsync()).IsEqualTo(1);
+    }
 
     [Then("the design editor shows a type named {string}")]
     public async Task ThenEditorShowsType(string name) =>
@@ -512,9 +532,11 @@ public sealed class DesignerSteps(InstanceContext ctx)
     private Microsoft.Playwright.ILocator RowFor(string label) =>
         ctx.Page!.Locator($".instance-row:has(.instance-app:text-is({CssString(label)}))");
 
-    // The designs-list row for a design, located by its label cell (exact match).
+    // The designs-list row for a design, located by its label (the <SetTable> stretched row link,
+    // exact match). The list renders via the generic <SetTable>, so a row is .set-row and the label
+    // lives in a.row-link.
     private Microsoft.Playwright.ILocator DesignRowFor(string label) =>
-        ctx.Page!.Locator($".design-row:has(.design-label:text-is({CssString(label)}))");
+        ctx.Page!.Locator($".set-row:has(a.row-link:text-is({CssString(label)}))");
 
     // A design-editor type-name input currently holding `name` (the type being renamed).
     private Microsoft.Playwright.ILocator TypeNameInput(string name) =>

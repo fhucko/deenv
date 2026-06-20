@@ -974,6 +974,10 @@ function getCompareValue(value: ExecValue): any {
     switch (value.type) {
         case "int": case "bool": case "text": return value.value;
         case "object": case "array": return value;
+        // A function compares by reference identity (mirrors C#'s ExecFunction.Value => this,
+        // compared via object.Equals): return the function value itself, so `fn == null` is
+        // false and `fn != null` / `fn == sameFn` work. Without this the `default` threw.
+        case "fn": return value;
         case "null": return null;
         default: throw new Error("NotImplementedException");
     }

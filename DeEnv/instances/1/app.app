@@ -68,6 +68,12 @@ ui
                 "Designs"
 
     fn designsListPage()
+        fn designActions(d)
+            return <td class="design-actions">
+                <a class="edit-design" href={sys.nest("/designs", sys.id(d))}>
+                    "Edit"
+                <button class="delete-design" onClick={() => db.designs.remove(d)}>
+                    "Delete"
         return <main class="ide-designs">
             <h1>
                 "Designs"
@@ -75,21 +81,7 @@ ui
                 <input class="new-design-label" value={newLabel}>
                 <button class="add-design" onClick={() => addDesign()}>
                     "Add"
-            <table class="designs-table">
-                <tr class="designs-head">
-                    <th>
-                        "Design"
-                    <th>
-                        "Actions"
-                foreach d in db.designs
-                    <tr class="design-row">
-                        <td class="design-label">
-                            d.label
-                        <td>
-                            <a class="edit-design" href={sys.nest("/designs", sys.id(d))}>
-                                "Edit"
-                            <button class="delete-design" onClick={() => db.designs.remove(d)}>
-                                "Delete"
+            <SetTable set={db.designs} desc={sys.schema("Design")} setPath="/designs" columns={["label"]} rowActions={designActions}>
 
     fn designEditor(design)
         return <section class="design-editor">

@@ -183,7 +183,7 @@ public static class GenericUi
                                 "Create new"
                 return render
 
-            fn SetTable(set, desc, setPath)
+            fn SetTable(set, desc, setPath, columns, rowActions)
                 var state = { draft: sys.new(desc), creating: false }
                 fn save()
                     set.add(state.draft)
@@ -211,29 +211,53 @@ public static class GenericUi
                     return <div class="set-table">
                         <table>
                             <tr class="set-head">
-                                <th>
-                                    sys.humanize(desc.labelProp)
-                                foreach p in desc.props
-                                    if p.baseType != "object" && p.baseType != "set" && p.name != desc.labelProp
-                                        <th>
-                                            sys.humanize(p.name)
+                                if columns != null
+                                    foreach name in columns
+                                        foreach p in desc.props.where(c => c.name == name)
+                                            <th>
+                                                sys.humanize(p.name)
+                                else
+                                    <th>
+                                        sys.humanize(desc.labelProp)
+                                    foreach p in desc.props
+                                        if p.baseType != "object" && p.baseType != "set" && p.name != desc.labelProp
+                                            <th>
+                                                sys.humanize(p.name)
                                 <th>
                             foreach m in set
                                 <tr class="set-row">
-                                    <td class="row-id">
-                                        <a class="row-link" href={sys.nest(setPath, m)}>
-                                            sys.field(m, desc.labelProp)
-                                    foreach p in desc.props
-                                        if p.baseType != "object" && p.baseType != "set" && p.name != desc.labelProp
-                                            <td>
-                                                if p.baseType == "bool"
-                                                    <span class="bool-cell">
-                                                        boolGlyph(sys.field(m, p.name))
+                                    if columns != null
+                                        foreach name in columns
+                                            foreach p in desc.props.where(c => c.name == name)
+                                                if p.name == desc.labelProp
+                                                    <td class="row-id">
+                                                        <a class="row-link" href={sys.nest(setPath, m)}>
+                                                            sys.field(m, p.name)
                                                 else
-                                                    sys.field(m, p.name)
-                                    <td class="row-action">
-                                        <button class="set-remove" onClick={() => set.remove(m)}>
-                                            "Remove"
+                                                    <td>
+                                                        if p.baseType == "bool"
+                                                            <span class="bool-cell">
+                                                                boolGlyph(sys.field(m, p.name))
+                                                        else
+                                                            sys.field(m, p.name)
+                                    else
+                                        <td class="row-id">
+                                            <a class="row-link" href={sys.nest(setPath, m)}>
+                                                sys.field(m, desc.labelProp)
+                                        foreach p in desc.props
+                                            if p.baseType != "object" && p.baseType != "set" && p.name != desc.labelProp
+                                                <td>
+                                                    if p.baseType == "bool"
+                                                        <span class="bool-cell">
+                                                            boolGlyph(sys.field(m, p.name))
+                                                    else
+                                                        sys.field(m, p.name)
+                                    if rowActions != null
+                                        rowActions(m)
+                                    else
+                                        <td class="row-action">
+                                            <button class="set-remove" onClick={() => set.remove(m)}>
+                                                "Remove"
                         <button class="new-btn" onClick={startCreate}>
                             "New "
                             sys.humanize(desc.name)

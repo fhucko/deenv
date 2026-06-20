@@ -454,6 +454,13 @@ public sealed class SsrRenderer
         details.code-areas summary.code-summary { font-weight: 600; color: var(--muted); cursor: pointer; padding: 0.3rem 0; }
         details.code-areas[open] summary.code-summary { margin-bottom: 0.6rem; }
         .design-label, .instance-app, .instance-port { font-weight: 600; }
+        /* The designs list renders via the generic <SetTable> (whole-row a.row-link overlay to the
+           editor). Its per-row action cell (the designer's `rowActions` slot) carries the Edit link +
+           Delete button; raise the cell above the row-link ::after overlay so both stay clickable and
+           always visible (unlike the set table's hover-revealed Remove). */
+        .set-row td.design-actions { position: relative; z-index: 1; width: 1%; white-space: nowrap;
+          text-align: right; }
+        .set-row td.design-actions a, .set-row td.design-actions button { margin-left: 0.4rem; }
         .new-instance, .new-design { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
           margin: 0.6rem 0 1.2rem; padding: 0.9rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
         .new-instance input, .new-instance select { max-width: 180px; }
