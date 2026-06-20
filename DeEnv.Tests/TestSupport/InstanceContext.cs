@@ -755,6 +755,29 @@ public class InstanceContext
     public string DataFilePath { get; set; } = Path.GetTempFileName();
     public IInstanceStore? Store { get; set; }
 
+    // Field values typed since the last Save — the persistence gate shared by ALL fill paths and
+    // BOTH Save steps. A fill step ("I set the … field to" / "I fill the … field with") records the
+    // value here; a Save step ("I save" / "I save the form") then polls the persisted store for each,
+    // so the edit is provably on disk before the scenario reads it (or navigates and re-renders from
+    // it). The gate lives on the shared context, not in one step class, so it covers a scenario that
+    // fills via one binding and saves via another (e.g. ObjectModel's fill → CRM's save → navigate).
+    public readonly List<string> PendingEditValues = new();
+
+    // Block until every pending edit has reached the persisted store, then clear them. Polls the
+    // store FILE (the WS commit rewrites it atomically) via the blessed Polling.EventuallyAsync — the
+    // instant all values are present it returns. A no-op when nothing was filled (a Save with no prior
+    // fill — e.g. a checkbox toggle — gates on its own assertion instead). Empty/cleared fields are
+    // not gated here (an empty string is always "contained"); their assertions poll the field itself.
+    public async Task AwaitPendingEditsAsync()
+    {
+        foreach (var value in PendingEditValues)
+            if (value.Length > 0)
+                await Polling.EventuallyAsync(
+                    () => File.ReadAllText(DataFilePath).Contains(value),
+                    $"the edit '{value}' to persist");
+        PendingEditValues.Clear();
+    }
+
     // ── server ────────────────────────────────────────────────────────────────
 
     public TestInstanceServer? Server { get; set; }

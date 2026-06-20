@@ -18,9 +18,6 @@ public sealed class CrmSteps(InstanceContext ctx)
     private readonly Dictionary<string, int> _customerIds = new();
     private readonly Dictionary<string, int> _orderIds    = new();
 
-    // Values typed into fields since the last save — polled for persistence by the "I save" step.
-    private readonly List<string> _pendingEditValues = new();
-
     // ── Given (instance + seed data) ───────────────────────────────────────────
 
     [Given("a CRM instance")]
@@ -95,7 +92,7 @@ public sealed class CrmSteps(InstanceContext ctx)
         var input = await selfHosted.CountAsync() > 0 ? selfHosted.First
             : ctx.Page!.Locator($"input[data-field='{field}']").First;
         await input.FillAsync(value);
-        _pendingEditValues.Add(value);
+        ctx.PendingEditValues.Add(value);
     }
 
     [When("I save")]
@@ -108,13 +105,11 @@ public sealed class CrmSteps(InstanceContext ctx)
         await ctx.Page!.WaitHydratedAsync();
         var saveButton = ctx.Page!.Locator(".object-form button.save");
         if (await saveButton.CountAsync() > 0) await saveButton.First.ClickAsync();
-        // Poll the persisted store file until every edit has flushed to it — replaces a fixed 500ms guess
-        // and, unlike a DOM check, actually proves the commit reached disk.
-        foreach (var value in _pendingEditValues)
-            await Polling.EventuallyAsync(
-                () => File.ReadAllText(ctx.DataFilePath).Contains(value),
-                $"the edit '{value}' to persist");
-        _pendingEditValues.Clear();
+        // Poll the persisted store until every edit has flushed to it — replaces a fixed 500ms guess
+        // and, unlike a DOM check, actually proves the commit reached disk. The pending edits live on
+        // the shared context, so this gates edits made via ANY fill binding (not only "I set the …
+        // field to") before the scenario reads the store or navigates and re-renders from it.
+        await ctx.AwaitPendingEditsAsync();
     }
 
     // ── When (create entry) ────────────────────────────────────────────────────

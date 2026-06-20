@@ -37,21 +37,29 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
 
     // Commit the staged scalar edits: the ObjectForm's Save button (.object-form button.save) writes
     // the draft's scalars back onto the live object via sys.setFields (id-addressed objectPropChange).
+    // The commit is an async WS round-trip, so gate on it landing in the persisted store before the
+    // scenario reads it (or navigates and re-renders from it) — the pending edits recorded by the fill
+    // steps. (A non-emptying assertion that follows — "the store eventually has …" — would also poll,
+    // but a save→navigate flow has no such gate, so awaiting here makes every Save path safe.)
     [When("I save the form")]
     public async Task WhenSaveTheForm()
     {
         await ctx.Page!.WaitHydratedAsync();
         await ctx.Page!.Locator(".object-form button.save").First.ClickAsync();
+        await ctx.AwaitPendingEditsAsync();
     }
 
     // Discard the staged edits: the Discard button copies the live object's scalars back ONTO the
     // draft in place (sys.setFields(state.draft, obj)), so the bound inputs re-render to the stored
-    // values (the draft keeps its identity, so the slot-keyed Fields re-read it).
+    // values (the draft keeps its identity, so the slot-keyed Fields re-read it). Drop the pending
+    // edits too — a discard abandons them, so a later Save in the same scenario must not wait for a
+    // value that will never persist.
     [When("I discard the form")]
     public async Task WhenDiscardTheForm()
     {
         await ctx.Page!.WaitHydratedAsync();
         await ctx.Page!.Locator(".object-form button.discard").First.ClickAsync();
+        ctx.PendingEditValues.Clear();
     }
 
     // The autosave-mode ObjectForm (autosave={true}) shows NO Save button — edits persist live.
@@ -114,12 +122,16 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     }
 
     // objectForm gives each field input (and its label) the class of its prop name
-    // (class={p.name}).
+    // (class={p.name}). Record the value as a pending edit so a following Save ("I save"/"I save the
+    // form") gates on it reaching the store before the scenario reads it or navigates — the same
+    // tracking the "I set the … field to" path uses, unified on the shared context so it works
+    // regardless of which fill/save bindings a scenario mixes.
     [When("I fill the {string} field with {string}")]
     public async Task WhenFillField(string field, string value)
     {
         await ctx.Page!.WaitHydratedAsync(); // the bound input's handler must be attached before we type
         await ctx.Page!.Locator($"input.{field}").FillAsync(value);
+        ctx.PendingEditValues.Add(value);
     }
 
     // Clear a field to empty. FillAsync("") sets .value and fires `input` for a text input but NOT
@@ -403,39 +415,38 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
-    // The object of `typeName` whose `title` matches (the test data has unique titles), eventually.
-    private async Task<ObjectValue> ReminderTitledAsync(string typeName, string title)
-    {
-        ObjectValue? found = null;
+    // Poll until the object of `typeName` whose `title` matches (the test data has unique titles)
+    // exists AND its `field` satisfies `fieldOk`. Gating on the FIELD, not just the object's
+    // existence, is the fix for root-cause A here: a clear-then-Save edits a field of an
+    // ALREADY-SEEDED object (which is present instantly), so a poll that only waited for the object
+    // would read the field before the async WS write landed and assert the stale value. Polling the
+    // field condition returns the instant the edit is on disk (same Polling budget, just the right
+    // predicate).
+    private async Task EventuallyFieldAsync(string typeName, string title, string field, Func<NodeValue?, bool> fieldOk) =>
         await EventuallyAsync(() =>
         {
-            found = ctx.Store!.ReadExtent(typeName).Values
+            var obj = ctx.Store!.ReadExtent(typeName).Values
                 .FirstOrDefault(o => o.Fields.TryGetValue("title", out var v) && v is TextValue t && t.Text == title);
-            return found != null;
+            if (obj == null) return false;
+            obj.Fields.TryGetValue(field, out var fv);
+            return fieldOk(fv);
         });
-        return found!;
-    }
 
     // An optional date/decimal/datetime left empty means UNSET: it round-trips as the empty leaf
     // (TextValue "") — the server must not force-parse "". A never-set seed field is absent; an
-    // explicitly-emptied field is the empty text leaf. Both read as unset.
+    // explicitly-emptied field is the empty text leaf. Both read as unset. Polls until the field is
+    // unset (not just until the object exists), so a clear→Save that empties a previously-set field
+    // is awaited rather than read stale.
     [Then("the store has a {string} titled {string} whose {string} is unset")]
-    public async Task ThenStoreFieldUnset(string typeName, string title, string field)
-    {
-        var obj = await ReminderTitledAsync(typeName, title);
-        var unset = !obj.Fields.TryGetValue(field, out var v) || v is TextValue { Text: "" };
-        await Assert.That(unset).IsTrue();
-    }
+    public async Task ThenStoreFieldUnset(string typeName, string title, string field) =>
+        await EventuallyFieldAsync(typeName, title, field, v => v is null or TextValue { Text: "" });
 
     // A non-empty optional leaf still parses + persists. The Code runtime projects a date/decimal
-    // to its text form (DbBridge.ScalarToExec), so the stored value reads back as that text.
+    // to its text form (DbBridge.ScalarToExec), so the stored value reads back as that text. Polls
+    // until the field equals the expected value (the create's WS write is async).
     [Then("the store has a {string} titled {string} whose {string} is {string}")]
-    public async Task ThenStoreFieldText(string typeName, string title, string field, string expected)
-    {
-        var obj = await ReminderTitledAsync(typeName, title);
-        var actual = obj.Fields.TryGetValue(field, out var v) ? StoredLeafText(v) : null;
-        await Assert.That(actual).IsEqualTo(expected);
-    }
+    public async Task ThenStoreFieldText(string typeName, string title, string field, string expected) =>
+        await EventuallyFieldAsync(typeName, title, field, v => v is not null && StoredLeafText(v) == expected);
 
     // The text projection of a stored scalar leaf (matches DbBridge.ScalarToExec / the wire form),
     // so a date persists+reads as "yyyy-MM-dd" and a decimal as its invariant string.
