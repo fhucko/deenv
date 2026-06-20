@@ -208,6 +208,37 @@ public sealed class HostActionSteps
         store.AddToSet(NodePath.Root.Field(set), id);
     }
 
+    // A target seeded under a WIDER prior schema — <Type> { label, note } — holding one object with
+    // BOTH fields. Publishing a design that DROPS `note` must keep the object and prune the orphaned
+    // `note` value (proven by the survival check, which re-opens under the narrower schema's strict guard).
+    [Given("a target instance holding an {string} with label {string} and note {string}")]
+    public void GivenTargetHoldingItemWithNote(string typeName, string label, string note)
+    {
+        Directory.CreateDirectory(_dir);
+        _targetAppPath = Path.Combine(_dir, "target.app");
+        _targetDataPath = Path.Combine(_dir, "target-data.json");
+        File.WriteAllText(_targetAppPath, TargetAppSentinel);
+
+        var set = typeName.ToLowerInvariant() + "s";
+        var priorApp =
+            $"""
+            types
+                Db
+                    {set} set of {typeName}
+                {typeName}
+                    label text
+                    note text
+            """;
+        var prior = InstanceDescriptionLoader.Load(priorApp);
+        var store = new JsonFileInstanceStore(_targetDataPath, prior);
+        var id = store.CreateObject(typeName, new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["label"] = new TextValue(label),
+            ["note"]  = new TextValue(note),
+        }));
+        store.AddToSet(NodePath.Root.Field(set), id);
+    }
+
     // ── When: publish over the WS ───────────────────────────────────────────────
 
     [When("the designer publishes that design to the target's id over the WS")]
@@ -378,6 +409,19 @@ public sealed class HostActionSteps
         // (Apply PRESERVES prior data — proven separately; a fresh target has none, so it seeds.)
         var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
         _ = new JsonFileInstanceStore(_targetDataPath, published); // seeded data is present + valid
+    }
+
+    [Then("the target still holds an {string} labelled {string}")]
+    public async Task ThenTargetStillHolds(string typeName, string label)
+    {
+        // Open a store over the preserved data with the now-published schema. The construction runs the
+        // STRICT startup guard, so a lingering undeclared field (a removed field NOT pruned) would throw
+        // here — a clean open that finds the row proves both survival and the prune.
+        var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
+        var store = new JsonFileInstanceStore(_targetDataPath, published);
+        var item = store.ReadExtent(typeName).Values
+            .FirstOrDefault(o => o.Fields.GetValueOrDefault("label") is TextValue t && t.Text == label);
+        await Assert.That(item).IsNotNull();
     }
 
     [Then("the target still holds an {string} labelled {string}, with {string} defaulted to {string}")]

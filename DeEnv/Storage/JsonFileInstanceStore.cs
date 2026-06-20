@@ -24,7 +24,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private readonly string _filePath;
     private readonly InstanceDescription _desc;
     private readonly TypeResolver _resolver;
-    private readonly JsonSerializerOptions _opts = new()
+    // Shared, read-only after first use (the recommended JsonSerializerOptions pattern): both the
+    // instance load/save and the static migrate/load/save helpers serialize through it.
+    private static readonly JsonSerializerOptions Opts = new()
     {
         WriteIndented = true,
         // CLR PascalCase props → camelCase JSON (the on-disk keys: extents/root/nextId,
@@ -67,18 +69,23 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     // Deserialize the file to the typed model. A malformed / garbage file (not a readable
     // document) becomes a StoredDataException — same remedy message as before.
-    private StoreDoc LoadDocFromFile()
+    private StoreDoc LoadDocFromFile() => LoadRaw(_filePath);
+
+    // Deserialize a data file to the typed model WITHOUT the startup guard (the instance ctor validates
+    // separately; the static migrate pass re-validates after reconciling). A garbage / unreadable file
+    // becomes a StoredDataException with the same remedy message.
+    private static StoreDoc LoadRaw(string path)
     {
         try
         {
-            if (JsonSerializer.Deserialize<StoreDoc>(File.ReadAllText(_filePath), _opts) is { } doc)
+            if (JsonSerializer.Deserialize<StoreDoc>(File.ReadAllText(path), Opts) is { } doc)
                 return doc;
         }
         catch (JsonException)
         {
         }
         throw new StoredDataException(
-            $"Data file '{_filePath}' is not a readable data document. " +
+            $"Data file '{path}' is not a readable data document. " +
             "Delete or move the file to reseed it from the app's initialData.");
     }
 
@@ -468,6 +475,39 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
     }
 
+    // ── non-destructive apply: migrate a data file toward a new schema ──────────────
+
+    // Best-effort, in-place reconciliation of an existing data file TOWARD a new schema — the apply's
+    // data-carry step (non-destructive apply). It runs BEFORE the startup guard (which stays STRICT),
+    // so the migrated file then passes that guard; a change a slice cannot yet carry is left as-is for
+    // the apply's fit check to fall back to a reseed, and a garbage/unreadable file is left untouched.
+    //
+    //   • Slice 2 — removed field → drop the value: on each extent of a STILL-DECLARED type, remove
+    //     stored fields the type no longer declares (the object survives; the orphaned value is pruned).
+    //     A removed TYPE's extent, and a field whose declared TYPE changed, are deliberately left — the
+    //     apply reseeds those until later slices (conversion, rename) carry them forward.
+    public static void MigrateTowardSchema(string dataPath, InstanceDescription desc)
+    {
+        StoreDoc doc;
+        try { doc = LoadRaw(dataPath); }
+        catch (StoredDataException) { return; } // unreadable → leave for the caller to reseed
+
+        var changed = false;
+        foreach (var (typeName, pool) in doc.Extents)
+        {
+            if (desc.FindType(typeName) is not { } type) continue; // removed type → leave (→ reseed)
+            var declared = (type.Props ?? []).Select(p => p.Name).ToHashSet();
+            foreach (var obj in pool.Values)
+                foreach (var name in obj.Fields.Keys.Where(k => !declared.Contains(k)).ToList())
+                {
+                    obj.Fields.Remove(name);
+                    changed = true;
+                }
+        }
+
+        if (changed) SaveRaw(dataPath, doc);
+    }
+
     // Reinitialize the data to the schema's initial document (the initialData seed when
     // the schema carries one, else the default empty root) — in memory and on disk.
     // Used for a FRESH publish (a target with no prior data — apply otherwise PRESERVES
@@ -552,13 +592,15 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     }
 
     // Write-temp-then-move: a reader never sees a half-written file.
-    private void Save() => WriteAtomic(JsonSerializer.Serialize(_doc, _opts));
+    private void Save() => SaveRaw(_filePath, _doc);
 
-    private void WriteAtomic(string content)
+    // Serialize a doc to a file atomically (temp-then-move). Shared by the instance save and the
+    // static migrate pass.
+    private static void SaveRaw(string path, StoreDoc doc)
     {
-        var tmp = _filePath + ".tmp";
-        File.WriteAllText(tmp, content);
-        File.Move(tmp, _filePath, overwrite: true);
+        var tmp = path + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(doc, Opts));
+        File.Move(tmp, path, overwrite: true);
     }
 
     // The object a reference (or the root) points at, via its extent. Null if dangling.

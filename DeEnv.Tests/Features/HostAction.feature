@@ -66,6 +66,19 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     And the target still holds an "Item" labelled "Keep me", with "motto" defaulted to ""
     And the target instance was restarted
 
+  # Removing a field from a populated type DROPS that stored value (not reseed): the row survives,
+  # the orphaned value is pruned on apply. The startup guard stays strict — re-opening the preserved
+  # data against the new (narrower) schema would REJECT a lingering undeclared field, so a clean open
+  # proves the prune happened. (Slice 2 of the non-destructive-apply substrate.)
+  @milestone-13 @single-user @persistence
+  Scenario: Apply drops a removed field and preserves the rest of the row
+    Given a target instance holding an "Item" with label "Keep me" and note "scratch"
+    And a designer instance holding a design with a type "Item" and a custom render
+    When the designer publishes that design to the target's id over the WS
+    Then the host action reply is ok
+    And the target still holds an "Item" labelled "Keep me"
+    And the target instance was restarted
+
   @milestone-10 @single-user
   Scenario: Create projects the passed design into a new named instance on the given ports
     Given a designer instance holding a design with a type "Item" and a custom render

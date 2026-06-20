@@ -176,26 +176,27 @@ public static class SchemaBridge
     // Shared by Export (the M4 root-Db path) and the kernel's passed-Design publish, so both apply
     // identically.
     //
-    // Non-destructive apply, first slice — preserve-or-reseed:
-    //   • The new data still fits the new schema (ADDITIVE evolution — a newly declared prop reads its
-    //     default) → KEEP it untouched. This is the win: data survives a schema change.
-    //   • No data yet (a fresh target), OR a change this slice cannot yet carry forward (a removed/
-    //     renamed field, a type/cardinality change, a wholesale different app) → reseed the new
-    //     schema's initial document, today's behavior. Carrying that data forward (rename remap,
-    //     value conversion on a type change) is the follow-up slices that progressively replace this
-    //     reseed with a migration; until then an incompatible apply still resets, as it always has.
+    // Non-destructive apply — migrate-toward-then-preserve-or-reseed:
+    //   • Migrate the existing data TOWARD the new schema (drop removed fields, …), then KEEP it when it
+    //     fits — additive (a new prop reads its default) AND subtractive (a removed field is pruned)
+    //     changes survive. This is the win: data survives a schema change.
+    //   • No data yet (a fresh target), OR a change a slice cannot yet carry forward (a rename, a
+    //     type/cardinality change, a wholesale different app) → reseed the new schema's initial
+    //     document. Carrying those forward (value conversion, rename remap) is the follow-up slices that
+    //     progressively replace this reseed; until then such an apply still resets, as it always has.
     public static void WriteDocument(string documentText, string targetAppPath, string targetDataPath)
     {
         var newDesc = InstanceDescriptionLoader.Load(documentText);
         File.WriteAllText(targetAppPath, documentText);
 
-        var preserved = File.Exists(targetDataPath)
-            && new FileInfo(targetDataPath).Length > 0
-            && DataFits(targetDataPath, newDesc);
-        if (!preserved)
+        var hasData = File.Exists(targetDataPath) && new FileInfo(targetDataPath).Length > 0;
+        if (hasData)
+            JsonFileInstanceStore.MigrateTowardSchema(targetDataPath, newDesc);
+
+        if (!(hasData && DataFits(targetDataPath, newDesc)))
         {
-            // Drop any prior (possibly incompatible or absent) data, then reseed. Delete first because
-            // opening a store over incompatible data would (rightly) trip the startup guard.
+            // No prior data, or a change this slice cannot carry — drop any prior data and reseed.
+            // Delete first because opening a store over incompatible data would trip the startup guard.
             File.Delete(targetDataPath);
             new JsonFileInstanceStore(targetDataPath, newDesc).Reset();
         }
