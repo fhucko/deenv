@@ -108,17 +108,26 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
     }
 
-    // ── When: creating (the inline list forms) ──────────────────────────────────
+    // ── When: creating (the GENERIC SetTable create) ─────────────────────────────
+
+    // Both phrasings drive the SAME generic-create flow (the designer no longer has a bespoke Add box):
+    // the SetTable's "New" button reveals its create form, which the designs list customizes to a
+    // LABEL-ONLY field (the `createForm` slot), then Save runs the generic set.add(draft).
+    [When("I create a design named {string}")]
+    public async Task WhenCreateDesign(string label) => await CreateDesignViaGenericNew(label);
 
     [When("I add a design named {string}")]
-    public async Task WhenAddDesign(string label)
+    public async Task WhenAddDesign(string label) => await CreateDesignViaGenericNew(label);
+
+    private async Task CreateDesignViaGenericNew(string label)
     {
-        // The inline "New design" form on /designs: type the label, click Add. Add runs
-        // db.designs.add({ label, types: [], initialData: "" }) — a journaled mutation. The new row
-        // appears immediately via the client re-render (no nav — race-free), first carrying the draft's
-        // NEGATIVE transient id; the WS persist then remaps it to the real positive id.
-        await ctx.Page!.Locator("input.new-design-label").FillAsync(label);
-        await ctx.Page.Locator("button.add-design").ClickAsync();
+        // Click the SetTable's "New " button to reveal its create form (the table → create-form swap),
+        // then fill the customized label-only field and Save. Save runs db.designs.add(draft) — a
+        // journaled mutation. The new row appears immediately via the client re-render (no nav —
+        // race-free), first carrying the draft's NEGATIVE transient id; the WS persist then remaps it.
+        await ctx.Page!.Locator("main.ide-designs .new-btn").ClickAsync();
+        await ctx.Page.Locator("main.ide-designs .create-form input.label").FillAsync(label);
+        await ctx.Page.Locator("main.ide-designs .create-form button.set-add").ClickAsync();
         // Confirm the new row shows in the list (the race-free client re-render). The list renders via
         // the generic <SetTable>, so a row is .set-row and the label is the stretched a.row-link.
         await ctx.Page.WaitForSelectorAsync(
@@ -313,6 +322,39 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task WhenApply() =>
         await ctx.Page!.Locator("button.apply-design").ClickAsync();
 
+    // ── When: deleting a design (the two-step inline confirm) ────────────────────
+
+    [When("I click Delete on the design {string}")]
+    public async Task WhenClickDelete(string label) =>
+        // The plain (un-armed) Delete button on the design's action cell. Clicking it does NOT remove the
+        // design; it arms the inline confirm (sets the designer's `confirmDeleteId` ui var to this design's
+        // id), so the row re-renders to show Delete? [Yes] [Cancel].
+        await DesignRowFor(label).Locator("button.delete-design").ClickAsync();
+
+    [When("I cancel the delete of the design {string}")]
+    public async Task WhenCancelDelete(string label) =>
+        // The Cancel button in the armed confirm clears `confirmDeleteId`, restoring the plain Delete.
+        await DesignRowFor(label).Locator("button.delete-cancel").ClickAsync();
+
+    [When("I confirm the delete of the design {string}")]
+    public async Task WhenConfirmDelete(string label) =>
+        // The Yes button in the armed confirm runs db.designs.remove(d) — a journaled mutation that drops
+        // the design (and persists over the WS, running the store GC).
+        await DesignRowFor(label).Locator("button.delete-yes").ClickAsync();
+
+    // ── When: a non-existent design id ───────────────────────────────────────────
+
+    [When("I open a non-existent design")]
+    public async Task WhenOpenMissingDesign()
+    {
+        // Navigate straight to a design-editor URL whose id resolves to no design in db.designs (a high id
+        // that the seeded library never reaches). The editor page renders its heading + Back link, then a
+        // not-found message because the foreach finds no match.
+        await ctx.Page!.GotoReadyAsync("/designs/999999");
+        await ctx.Page!.WaitForSelectorAsync("main.ide-design-edit");
+        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+    }
+
     // ── Then ────────────────────────────────────────────────────────────────────
 
     [Then("the designs list shows a design {string}")]
@@ -337,6 +379,129 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await Assert.That(await row.Locator("button.delete-design").CountAsync()).IsEqualTo(1);
     }
 
+    // ── Then: the single create control is the generic New (the blocker fix) ─────
+
+    [Then("the designs list shows the generic SetTable New as its only create control")]
+    public async Task ThenListHasGenericNew()
+    {
+        // The designs list now uses the generic create: the SetTable's own "New " button is present and is
+        // the SINGLE create affordance. (Its create form is hidden until clicked, so .create-form is not
+        // shown on load.)
+        await Assert.That(await ctx.Page!.Locator("main.ide-designs .new-btn").CountAsync()).IsEqualTo(1);
+        await Assert.That(await ctx.Page!.Locator("main.ide-designs .create-form").CountAsync()).IsEqualTo(0);
+    }
+
+    [Then("the designs list does not show a bespoke Add box")]
+    public async Task ThenListNoBespokeAdd()
+    {
+        // The old bespoke .new-design "Add" box (a label input + an Add button) is gone — the generic New
+        // is the only create control, so neither the box nor its Add button is in the DOM.
+        await Assert.That(await ctx.Page!.Locator("main.ide-designs .new-design").CountAsync()).IsEqualTo(0);
+        await Assert.That(await ctx.Page!.Locator("main.ide-designs button.add-design").CountAsync()).IsEqualTo(0);
+    }
+
+    [When("I reveal the generic create form")]
+    public async Task WhenRevealCreateForm()
+    {
+        // Click the SetTable's "New " button to reveal its create form (the table → create-form swap).
+        await ctx.Page!.Locator("main.ide-designs .new-btn").ClickAsync();
+        await ctx.Page.WaitForSelectorAsync("main.ide-designs .create-form");
+    }
+
+    [Then("the create form shows no code-section textareas")]
+    public async Task ThenCreateFormNoCodeSections()
+    {
+        // The designs list's createForm slot renders a LABEL-ONLY field, so the create form must NOT expose
+        // a Design's code sections (ui/common/initialData) — neither as the editor's <textarea>s nor as the
+        // default all-scalars form's raw <input>s for those props. Their absence proves the slot replaced
+        // the default per-scalar form (which WOULD render them).
+        await Assert.That(await ctx.Page!.Locator("main.ide-designs .create-form textarea").CountAsync()).IsEqualTo(0);
+        await Assert.That(await ctx.Page!.Locator(
+            "main.ide-designs .create-form input.ui, main.ide-designs .create-form input.common, main.ide-designs .create-form input.initialData").CountAsync()).IsEqualTo(0);
+    }
+
+    // ── Then: Edit/Delete are clickable (no whole-row overlay) ───────────────────
+
+    [Then("the design {string} Edit link receives the click")]
+    public async Task ThenEditClickable(string label) =>
+        // A trial click performs ALL of Playwright's actionability checks — including that THIS element (not
+        // an overlay) would receive the event — WITHOUT actually clicking. It throws if the row-link overlay
+        // sits over the Edit link. Passing proves the action-managed table suppresses the overlay, so the
+        // band-aid z-index rule is unnecessary.
+        await DesignRowFor(label).Locator("a.edit-design").ClickAsync(new() { Trial = true });
+
+    [Then("the design {string} Delete button receives the click")]
+    public async Task ThenDeleteClickable(string label) =>
+        // Same hit-test for the always-visible Delete button: it must receive the click, not the overlay
+        // (a mis-click on a stretched overlay would navigate to the editor — or worse, the overlay over the
+        // button would let the row-link swallow a Delete). Trial = actionability only, no real click.
+        await DesignRowFor(label).Locator("button.delete-design").ClickAsync(new() { Trial = true });
+
+    // ── Then: the two-step delete confirm ────────────────────────────────────────
+
+    [Then("the design {string} shows a delete confirmation")]
+    public async Task ThenShowsConfirm(string label)
+    {
+        // Armed, the action cell shows the confirm: a Yes and a Cancel button (replacing the plain Delete).
+        var row = DesignRowFor(label);
+        await row.Locator("button.delete-yes").WaitForAsync();
+        await Assert.That(await row.Locator("button.delete-yes").CountAsync()).IsEqualTo(1);
+        await Assert.That(await row.Locator("button.delete-cancel").CountAsync()).IsEqualTo(1);
+        // The plain (un-armed) Delete is gone while armed.
+        await Assert.That(await row.Locator("button.delete-design").CountAsync()).IsEqualTo(0);
+    }
+
+    [Then("the design {string} shows no delete confirmation")]
+    public async Task ThenShowsNoConfirm(string label)
+    {
+        // Cancelled, the row reconciles back to the plain Delete with no Yes/Cancel.
+        var row = DesignRowFor(label);
+        await row.Locator("button.delete-design").WaitForAsync();
+        await Assert.That(await row.Locator("button.delete-design").CountAsync()).IsEqualTo(1);
+        await Assert.That(await row.Locator("button.delete-yes").CountAsync()).IsEqualTo(0);
+        await Assert.That(await row.Locator("button.delete-cancel").CountAsync()).IsEqualTo(0);
+    }
+
+    [Then("the design {string} is still listed")]
+    public async Task ThenStillListed(string label) =>
+        // Clicking the plain Delete (and Cancel) must NOT remove the design — only Yes does.
+        await Assert.That(await ctx.Page!.Locator($".set-row a.row-link:text-is({CssString(label)})").CountAsync())
+            .IsGreaterThanOrEqualTo(1);
+
+    [Then("the designs list eventually drops the design {string}")]
+    public async Task ThenEventuallyDropped(string label)
+    {
+        // Yes runs db.designs.remove(d) — the row disappears client-side (the re-render), and the WS persist
+        // commits it to the designer's sovereign store (GC included). Confirm both: the row leaves the DOM…
+        await ctx.Page!.Locator($".set-row:has(a.row-link:text-is({CssString(label)}))")
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+        // …and the design is gone from the store (no Design object with that label survives).
+        await EventuallyAsync(() => !_designer.Store.ReadExtent("Design").Values
+            .Any(o => o.Fields.TryGetValue("label", out var v) && v is DeEnv.Storage.TextValue t && t.Text == label));
+    }
+
+    // ── Then: nav active-state ───────────────────────────────────────────────────
+
+    [Then("the nav {string} link is active")]
+    public async Task ThenNavActive(string label) =>
+        await Assert.That(await ctx.Page!.Locator($"nav.ide-nav a.is-active:text-is({CssString(label)})").CountAsync())
+            .IsEqualTo(1);
+
+    [Then("the nav {string} link is not active")]
+    public async Task ThenNavNotActive(string label) =>
+        await Assert.That(await ctx.Page!.Locator($"nav.ide-nav a:not(.is-active):text-is({CssString(label)})").CountAsync())
+            .IsEqualTo(1);
+
+    // ── Then: a non-existent design id ───────────────────────────────────────────
+
+    [Then("the design editor shows a not-found message")]
+    public async Task ThenEditorNotFound() =>
+        await ctx.Page!.WaitForSelectorAsync("main.ide-design-edit .not-found");
+
+    [Then("the design editor keeps its Back link")]
+    public async Task ThenEditorKeepsBack() =>
+        await Assert.That(await ctx.Page!.Locator("main.ide-design-edit a.back").CountAsync()).IsEqualTo(1);
+
     [Then("the design editor shows a type named {string}")]
     public async Task ThenEditorShowsType(string name) =>
         await ctx.Page!.WaitForFunctionAsync(
@@ -344,11 +509,59 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     [Then("the design editor shows the design's label {string}")]
     public async Task ThenEditorShowsLabel(string label) =>
-        // The editor's heading binds the design's label (h2.design-label = design.label); a freshly-added
-        // design opens here with its label and otherwise-empty fields (an empty types list, empty code
-        // areas) — a valid library entry, only invalid to DEPLOY until it gains types.
-        await ctx.Page!.WaitForSelectorAsync(
-            $".design-editor h2.design-label:text-is({CssString(label)})");
+        // The editor's label is now an editable two-way-bound <input> (input.design-label = design.label);
+        // a freshly-created design opens here with its label and otherwise-empty fields (an empty types
+        // list, empty code areas) — a valid library entry, only invalid to DEPLOY until it gains types.
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const e = document.querySelector('.design-editor input.design-label'); return e != null && e.value === {JsString(label)}; }}");
+
+    // ── Then/When: the editable design label (rename in the editor) ──────────────
+
+    [When("I rename the design's label to {string}")]
+    public async Task WhenRenameDesignLabel(string newLabel)
+    {
+        // The editor's label input is two-way-bound to design.label; filling it edits the model and
+        // autosaves a journaled scalar change (objectPropChange) to the designer's sovereign store.
+        await ctx.Page!.Locator(".design-editor input.design-label").FillAsync(newLabel);
+        await ctx.Page.WaitForFunctionAsync(
+            $"() => {{ const e = document.querySelector('.design-editor input.design-label'); return e != null && e.value === {JsString(newLabel)}; }}");
+        // Wait for the autosave to reach the store, so a fresh server render (a reload) shows the new label.
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values
+            .Any(o => o.Fields.TryGetValue("label", out var v) && v is DeEnv.Storage.TextValue t && t.Text == newLabel));
+    }
+
+    [When("I reload the design editor")]
+    public async Task WhenReloadEditor()
+    {
+        // A fresh server render of the SAME editor URL (the design's label comes from the store), so the
+        // input's value is the persisted label — proving the rename survived as data, not just in the DOM.
+        await ctx.Page!.ReloadAsync();
+        await ctx.Page.WaitForSelectorAsync("main.ide-design-edit .design-editor");
+        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+    }
+
+    [Then("the design editor's label input holds {string}")]
+    public async Task ThenEditorLabelInputHolds(string label) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const e = document.querySelector('.design-editor input.design-label'); return e != null && e.value === {JsString(label)}; }}");
+
+    [Then("the design {string} has a stored type named {string}")]
+    public async Task ThenDesignHasStoredType(string designLabel, string typeName)
+    {
+        // The type added on the edit page (a nested types.add) persists to the designer's sovereign store
+        // with a real positive id (the nested object round-tripped through its OWN arrayAdd, not the create
+        // draft's). Confirm a MetaType named `typeName` exists, reachable from the named design's types set.
+        await EventuallyAsync(() =>
+        {
+            var design = _designer.Store.ReadExtent("Design").Values.FirstOrDefault(o =>
+                o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue lt && lt.Text == designLabel);
+            if (design is null || !design.Fields.TryGetValue("types", out var tv) || tv is not DeEnv.Storage.SetValue set)
+                return false;
+            var metaTypes = _designer.Store.ReadExtent("MetaType");
+            return set.Members.Keys.Any(id => metaTypes.TryGetValue(id, out var mt)
+                && mt.Fields.TryGetValue("name", out var nv) && nv is DeEnv.Storage.TextValue nt && nt.Text == typeName);
+        });
+    }
 
     [Then("the design editor shows the design's UI text in a textarea")]
     public async Task ThenEditorShowsUiText() =>

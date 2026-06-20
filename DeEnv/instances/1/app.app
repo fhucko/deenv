@@ -23,7 +23,6 @@
 ui
     var newAppPort = 9100
     var newInfraPort = 9101
-    var newLabel = ""
     var newDesignId = 0
     var newInstanceName = ""
     var renameId = 0
@@ -31,6 +30,7 @@ ui
     var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime"]
     var typeKinds = ["object", "enum"]
     var cardinalities = ["single", "set", "dictionary"]
+    var confirmDeleteId = 0
 
     fn addType(design)
         design.types.add({ name: "", baseType: "object", values: "", order: 0, props: [] })
@@ -48,10 +48,6 @@ ui
             return "prop-row is-dict"
         return "prop-row"
 
-    fn addDesign()
-        db.designs.add({ label: newLabel, types: [], initialData: "" })
-        newLabel = ""
-
     fn startRename(i)
         renameId = i.id
         renameName = i.app
@@ -60,11 +56,16 @@ ui
         sys.rename(i.id, renameName)
         renameId = 0
 
-    fn navBar()
+    fn navClass(active, name)
+        if active == name
+            return "nav-link is-active"
+        return "nav-link"
+
+    fn navBar(active)
         return <nav class="ide-nav">
-            <a class="nav-instances" href="/instances">
+            <a class={navClass(active, "instances")} href="/instances">
                 "Instances"
-            <a class="nav-designs" href="/designs">
+            <a class={navClass(active, "designs")} href="/designs">
                 "Designs"
 
     fn designsListPage()
@@ -72,21 +73,26 @@ ui
             return <td class="design-actions">
                 <a class="edit-design" href={sys.nest("/designs", sys.id(d))}>
                     "Edit"
-                <button class="delete-design" onClick={() => db.designs.remove(d)}>
-                    "Delete"
+                if confirmDeleteId == sys.id(d)
+                    <span class="delete-confirm">
+                        "Delete?"
+                    <button class="delete-yes" onClick={() => db.designs.remove(d)}>
+                        "Yes"
+                    <button class="delete-cancel" onClick={() => confirmDeleteId = 0}>
+                        "Cancel"
+                else
+                    <button class="delete-design" onClick={() => confirmDeleteId = sys.id(d)}>
+                        "Delete"
+        fn createDesignForm(draft)
+            return <Field obj={draft} desc={sys.schema("Design", "label")}>
         return <main class="ide-designs">
             <h1>
                 "Designs"
-            <div class="new-design">
-                <input class="new-design-label" value={newLabel}>
-                <button class="add-design" onClick={() => addDesign()}>
-                    "Add"
-            <SetTable set={db.designs} desc={sys.schema("Design")} setPath="/designs" columns={["label"]} rowActions={designActions}>
+            <SetTable set={db.designs} desc={sys.schema("Design")} setPath="/designs" columns={["label"]} rowActions={designActions} createForm={createDesignForm}>
 
     fn designEditor(design)
         return <section class="design-editor">
-            <h2 class="design-label">
-                design.label
+            <input class="design-label" value={design.label}>
             <button class="add-type" onClick={() => addType(design)}>
                 "+ Type"
             foreach type in design.types
@@ -152,9 +158,13 @@ ui
                 "Edit design"
             <a class="back" href="/designs">
                 "Back"
-            foreach d in db.designs
-                if sys.id(d) == routeId
-                    designEditor(d)
+            if db.designs.any(d => sys.id(d) == routeId)
+                foreach d in db.designs
+                    if sys.id(d) == routeId
+                        designEditor(d)
+            else
+                <p class="not-found">
+                    "Design not found."
 
     fn instancesListPage()
         return <main class="ide-list">
@@ -232,21 +242,27 @@ ui
                 "Instance"
             <a class="back" href="/instances">
                 "Back"
-            foreach i in sys.instances
-                if i.id == routeId
-                    <span class="instance-app">
-                        i.app
-                    designSelector(i.id, i.designId)()
-                    <button class="clone-instance" onClick={() => sys.cloneInstance(i.id, newAppPort, newInfraPort)}>
-                        "Clone"
-                    <button class="delete-instance" onClick={() => sys.delete(i.id)}>
-                        "Delete"
+            if sys.instances.any(i => i.id == routeId)
+                foreach i in sys.instances
+                    if i.id == routeId
+                        <span class="instance-app">
+                            i.app
+                        designSelector(i.id, i.designId)()
+                        <button class="clone-instance" onClick={() => sys.cloneInstance(i.id, newAppPort, newInfraPort)}>
+                            "Clone"
+                        <button class="delete-instance" onClick={() => sys.delete(i.id)}>
+                            "Delete"
+            else
+                <p class="not-found">
+                    "Instance not found."
 
     fn render()
         var page
+        var active = "instances"
         var section = sys.segment(path, 1)
         var sub = sys.segment(path, 2)
         if section == "designs"
+            active = "designs"
             if sub == ""
                 page = designsListPage
             else
@@ -257,5 +273,5 @@ ui
             else
                 page = instanceSelectorPage
         return <div class="ide">
-            navBar()
+            navBar(active)
             page()

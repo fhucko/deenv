@@ -336,10 +336,10 @@ public sealed class SsrRenderer
           background: var(--surface); color: var(--text); cursor: pointer; transition: background .12s, border-color .12s; }
         button:hover { background: #f3f4f6; }
         button:active { background: #e9ebee; }
-        .set-add, .dict-add, .ref-create, .add-design, .add-type, .add-prop, .create-instance, .rename-save, .apply-design,
+        .set-add, .dict-add, .ref-create, .add-type, .add-prop, .create-instance, .rename-save, .apply-design,
         .add-user, .add-list-btn, .add-item-btn {
           background: var(--green); border-color: var(--green); color: #fff; }
-        .set-add:hover, .dict-add:hover, .ref-create:hover, .add-design:hover, .add-type:hover, .add-prop:hover,
+        .set-add:hover, .dict-add:hover, .ref-create:hover, .add-type:hover, .add-prop:hover,
         .create-instance:hover, .rename-save:hover, .apply-design:hover,
         .add-user:hover, .add-list-btn:hover, .add-item-btn:hover { background: #1a7f37; border-color: #1a7f37; }
         .set-remove, .dict-remove, .ref-clear, .remove-type, .remove-prop, .delete-design, .delete-instance {
@@ -367,11 +367,18 @@ public sealed class SsrRenderer
            (a.row-link) covers it via ::after — the entire row is one click target (keyboard + mouse +
            new-tab, since it is a real <a>), while the identity text in the first cell still reads as
            plain text. A per-row Remove is z-raised above the overlay and revealed on hover/focus, so
-           clicking it (which stops propagation) removes WITHOUT navigating. */
+           clicking it (which stops propagation) removes WITHOUT navigating.
+           The overlay is scoped to NON-managed tables: an action-managed SetTable (one given rowActions)
+           carries its own action buttons in each row, so a click-stealing whole-row overlay would sit
+           over them. The .set-table.managed class (set when rowActions is provided) opts the row out of
+           the stretch — the label stays an in-cell nav link, the action buttons stay directly clickable.
+           This replaces the per-consumer z-index band-aid the designs list used to need. */
         .set-row, .dict-row { position: relative; cursor: pointer; }
+        .set-table.managed .set-row { cursor: default; }
         .set-row td.row-id a.row-link, .dict-row td.row-id a.row-link { color: inherit; font-weight: 600; }
         .set-row td.row-id a.row-link:hover, .dict-row td.row-id a.row-link:hover { text-decoration: none; }
-        a.row-link::after { content: ""; position: absolute; inset: 0; }
+        .set-table:not(.managed) a.row-link::after, .dict-table a.row-link::after {
+          content: ""; position: absolute; inset: 0; }
         .set-row td.row-action, .dict-row td.row-action { text-align: right; width: 1%; white-space: nowrap; }
         .set-remove, .dict-remove { position: relative; z-index: 1; opacity: 0; transition: opacity .12s;
           padding: 0.15rem 0.55rem; border-color: transparent; background: transparent; color: var(--muted); }
@@ -403,7 +410,10 @@ public sealed class SsrRenderer
         .ide { display: block; }
         nav.ide-nav { display: flex; gap: 1rem; padding-bottom: 0.8rem; margin-bottom: 1.2rem;
           border-bottom: 1px solid var(--border); }
-        nav.ide-nav a { font-weight: 600; }
+        nav.ide-nav a { font-weight: 600; color: var(--muted); }
+        /* The current section is marked with .is-active (the render derives it from the path) so the
+           operator can see where they are. */
+        nav.ide-nav a.is-active { color: var(--accent); }
         .designs-table, .instances-table { border-collapse: collapse; width: 100%; margin: 0.3rem 0 1rem;
           background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
         .designs-table th, .instances-table th, .designs-table td, .instances-table td {
@@ -453,15 +463,19 @@ public sealed class SsrRenderer
         details.code-areas { margin-top: 1.4rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
         details.code-areas summary.code-summary { font-weight: 600; color: var(--muted); cursor: pointer; padding: 0.3rem 0; }
         details.code-areas[open] summary.code-summary { margin-bottom: 0.6rem; }
+        /* .design-label is a SPAN in the instances list (the resolved design name) and an editable INPUT
+           in the editor (the design's renamable label) — bold in both; the editor input also reads as a
+           heading-sized field. */
         .design-label, .instance-app, .instance-port { font-weight: 600; }
-        /* The designs list renders via the generic <SetTable> (whole-row a.row-link overlay to the
-           editor). Its per-row action cell (the designer's `rowActions` slot) carries the Edit link +
-           Delete button; raise the cell above the row-link ::after overlay so both stay clickable and
-           always visible (unlike the set table's hover-revealed Remove). */
-        .set-row td.design-actions { position: relative; z-index: 1; width: 1%; white-space: nowrap;
-          text-align: right; }
+        .design-editor > input.design-label { display: block; width: 100%; max-width: 440px; font-size: 1.15rem;
+          margin: 0 0 0.4rem; }
+        /* The designs list is an action-managed <SetTable> (rowActions set → .set-table.managed, no
+           whole-row overlay), so its per-row action cell (Edit link + Delete button + the inline delete
+           confirm) needs no z-index band-aid — the buttons are directly clickable. Just lay the cell out
+           (right-aligned, no wrap, with small gaps between controls). */
+        .set-row td.design-actions { width: 1%; white-space: nowrap; text-align: right; }
         .set-row td.design-actions a, .set-row td.design-actions button { margin-left: 0.4rem; }
-        .new-instance, .new-design { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
+        .new-instance { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
           margin: 0.6rem 0 1.2rem; padding: 0.9rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
         .new-instance input, .new-instance select { max-width: 180px; }
         .design-editor { margin-top: 1rem; }

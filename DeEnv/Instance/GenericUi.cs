@@ -35,16 +35,29 @@ namespace DeEnv.Instance;
 //   • RefEditor(parent, prop, target) — a reference editor: current label, a pick button
 //     per extent() candidate, a clear button, and a create-new form. A COMPONENT: its body
 //     runs once as init (a local `state` holding a draft), and it returns a render fn.
-//   • SetTable(set, desc, setPath) — a set table: an aligned header + member rows + a `+ New`
-//     button. A whole data row is navigable — its first cell wraps the member's identity (labelProp
-//     value) in a stretched `<a class="row-link" href=nest(setPath, m)>` (CSS `::after { inset:0 }`
-//     covers the row); a per-row Remove sits z-raised above the overlay. A bool column renders a
-//     read-only ✓/✗ glyph, never "true"/"false". Shared structure with DictTable (row-link + Remove
-//     + bool cell + the `+ New`/create-form swap), differing only in the identity source. A COMPONENT:
-//     a local `state.creating` flag SWAPS the render between the table (default) and a labeled CREATE
-//     FORM (the same `Field` label+Input the edit page uses, per scalar prop) with Save / Cancel — so
-//     the create form is hidden until asked, not an always-visible inline add row. Save commits the
-//     draft (`set.add`) and returns to the table; Cancel discards it; both reset `state.draft`.
+//   • SetTable(set, desc, setPath, columns, rowActions, createForm) — a set table: an aligned header +
+//     member rows + a `+ New` button. A whole data row is navigable — its first cell wraps the member's
+//     identity (labelProp value) in a stretched `<a class="row-link" href=nest(setPath, m)>` (CSS
+//     `::after { inset:0 }` covers the row); a per-row Remove sits z-raised above the overlay. A bool
+//     column renders a read-only ✓/✗ glyph, never "true"/"false". Shared structure with DictTable
+//     (row-link + Remove + bool cell + the `+ New`/create-form swap), differing only in the identity
+//     source. A COMPONENT: a local `state.creating` flag SWAPS the render between the table (default)
+//     and a labeled CREATE FORM with Save / Cancel — so the create form is hidden until asked, not an
+//     always-visible inline add row. Save commits the draft (`set.add`) and returns to the table; Cancel
+//     discards it; both reset `state.draft`. The last three params shape the table (all optional, default
+//     to the plain data-table behavior):
+//       · columns — the column names to show (omitted/null → labelProp + every scalar prop).
+//       · rowActions(m) — a per-row action cell; when given, it REPLACES the default Remove cell AND
+//         marks the table `managed`, which suppresses the whole-row click overlay (the stretched
+//         a.row-link::after) so the consumer's action buttons are not under a click-stealing layer — the
+//         label stays an in-cell nav link. Omitted/null → the default Remove cell + whole-row overlay
+//         (the data-table path, byte-for-byte unchanged).
+//       · createForm(draft) — the body of the create form: a function returning the fields to edit on the
+//         create draft, rendered INSIDE the create-form card in place of the default per-scalar `Field`
+//         form (the Save/Cancel + set.add flow stays around it). Omitted/null → the default all-scalars
+//         form (one `Field` per scalar prop), byte-for-byte unchanged. A consumer passes it to show a
+//         FOCUSED create (the designer's designs list shows just a label field, not Design's raw
+//         ui/common/initialData scalars) while still using the generic New + set.add.
 //
 // Builtins do the reflective work, all under the framework `sys` namespace: sys.field (dynamic
 // access), sys.humanize (labels), sys.extent (a type's objects), sys.schema (a type's descriptor),
@@ -183,7 +196,7 @@ public static class GenericUi
                                 "Create new"
                 return render
 
-            fn SetTable(set, desc, setPath, columns, rowActions)
+            fn SetTable(set, desc, setPath, columns, rowActions, createForm)
                 var state = { draft: sys.new(desc), creating: false }
                 fn save()
                     set.add(state.draft)
@@ -195,20 +208,26 @@ public static class GenericUi
                     state.draft = sys.new(desc)
                     state.creating = false
                 fn render()
+                    var tableClass = "set-table"
+                    if rowActions != null
+                        tableClass = "set-table managed"
                     if state.creating
                         return <div class="create-form">
                             <h3>
                                 "New "
                                 sys.humanize(desc.name)
-                            foreach p in desc.props
-                                if p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary"
-                                    <Field obj={state.draft} desc={p}>
+                            if createForm != null
+                                createForm(state.draft)
+                            else
+                                foreach p in desc.props
+                                    if p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary"
+                                        <Field obj={state.draft} desc={p}>
                             <div class="create-actions">
                                 <button class="set-add" onClick={save}>
                                     "Save"
                                 <button class="cancel" onClick={cancel}>
                                     "Cancel"
-                    return <div class="set-table">
+                    return <div class={tableClass}>
                         <table>
                             <tr class="set-head">
                                 if columns != null
