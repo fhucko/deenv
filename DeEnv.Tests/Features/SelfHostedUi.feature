@@ -320,6 +320,17 @@ Feature: Self-hosted generic UI (object forms)
     And the set row titled "Authored note" shows "Ada" in its reference cell
     And the set row titled "First note" shows "" in its reference cell
 
+  # An enum column in a set table renders the HUMANIZED value (sys.humanize), matching the edit
+  # form's enum <select> option text — not the raw stored name. Order 2's status is "shipped", so
+  # its status cell shows "Shipped". The status column is the row's only non-label, non-action data
+  # cell (Order has label + status), so it is addressed the same way as the reference cell.
+  @milestone-11 @single-user
+  Scenario: A set table renders an enum value humanized in its column
+    Given the enum fixture app is running
+    When I open "/orders"
+    Then the page shows ".set-table"
+    And the set row titled "First" shows "Shipped" in its data cell
+
   # ── flag-gated create view (milestone 11) ──────────────────────────────────
   # The always-visible inline add row is replaced by a `+ New` button that reveals a
   # labeled create form (the same Field label+Input the edit page uses), swapping out

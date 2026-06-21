@@ -257,6 +257,16 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
             $"const c = r?.querySelector('td:not(.row-id):not(.row-action)'); " +
             $"return c != null && c.textContent.trim() === {JsString(expected)}; }}");
 
+    // The row's single non-label, non-action data cell (same addressing as the reference cell).
+    // Used for an enum column: the cell text is the rendered value, which must be the HUMANIZED
+    // form (sys.humanize) — e.g. "Shipped", not the raw "shipped".
+    [Then("the set row titled {string} shows {string} in its data cell")]
+    public async Task ThenDataCellShows(string rowTitle, string expected) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const r = [...document.querySelectorAll('.set-row')].find(e => e.textContent.includes({JsString(rowTitle)})); " +
+            $"const c = r?.querySelector('td:not(.row-id):not(.row-action)'); " +
+            $"return c != null && c.textContent.trim() === {JsString(expected)}; }}");
+
     // The exact pathname after a navigation lands (the row link pushed history) — stricter than the
     // substring "the URL is", so a wrong navigation to /notes/2 can't satisfy a "/notes" assertion.
     [Then("the URL path becomes {string}")]

@@ -260,6 +260,8 @@ public static class GenericUi
                                                         else if p.baseType == "object"
                                                             if sys.field(m, p.name) != null
                                                                 sys.field(sys.field(m, p.name), sys.schema(p.target).labelProp)
+                                                        else if p.baseType == "enum"
+                                                            sys.humanize(sys.field(m, p.name))
                                                         else
                                                             sys.field(m, p.name)
                                     else
@@ -275,6 +277,8 @@ public static class GenericUi
                                                     else if p.baseType == "object"
                                                         if sys.field(m, p.name) != null
                                                             sys.field(sys.field(m, p.name), sys.schema(p.target).labelProp)
+                                                    else if p.baseType == "enum"
+                                                        sys.humanize(sys.field(m, p.name))
                                                     else
                                                         sys.field(m, p.name)
                                     if rowActions != null
@@ -357,6 +361,8 @@ public static class GenericUi
                                             if p.baseType == "bool"
                                                 <span class="bool-cell">
                                                     boolGlyph(sys.field(m, p.name))
+                                            else if p.baseType == "enum"
+                                                sys.humanize(sys.field(m, p.name))
                                             else
                                                 sys.field(m, p.name)
                                     if desc.isScalar
