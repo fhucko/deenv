@@ -1,6 +1,6 @@
 # systemd unit for the DeEnv kernel host. Install at /etc/systemd/system/deenv.service.
-# Runs the published app as an unprivileged `deenv` user, auto-starts on boot, restarts on crash.
-# See deploy/DEPLOY.md for the full runbook.
+# Runs the published self-contained bundle as an unprivileged `deenv` user; auto-starts on
+# boot, restarts on crash. See deploy/DEPLOY.md for the full runbook.
 
 [Unit]
 Description=DeEnv kernel host
@@ -12,25 +12,34 @@ Type=simple
 User=deenv
 Group=deenv
 
-# The published binaries live here; the persistent data home is separate (DEENV_HOME), so an
+# Binaries live in /opt/deenv; the persistent data home is separate (DEENV_HOME), so an
 # update can replace the binaries without touching kernel.json or any instance's data.
 WorkingDirectory=/opt/deenv
 Environment=DEENV_HOME=/var/lib/deenv
+Environment=HOME=/var/lib/deenv
 
-# Framework-dependent run via the installed .NET 9 runtime. If `which dotnet` differs, fix the path
-# (e.g. /usr/bin/dotnet, or a self-contained build's own apphost: ExecStart=/opt/deenv/DeEnv).
-ExecStart=/usr/bin/dotnet /opt/deenv/DeEnv.dll
+# Reverse-proxy deployment (nginx terminates TLS in front): bind the app + asset hosts to
+# loopback so the raw ports never leave the box, and advertise an EMPTY asset authority so the
+# page uses the app origin (nginx routes /ws + /js to the asset host, and one auth gate covers
+# the WebSocket). Drop both lines for a direct, non-proxied deployment.
+Environment=DEENV_BIND=loopback
+Environment=DEENV_PUBLIC_ASSET_PORT=0
 
-# Always come back (crash or reboot); give the kernel time to stop its hosts cleanly on SIGTERM
-# (Program.cs handles ProcessExit -> graceful shutdown).
+# Self-contained build's own apphost (no .NET runtime needed on the box). For a
+# framework-dependent build instead: ExecStart=/usr/bin/dotnet /opt/deenv/DeEnv.dll
+ExecStart=/opt/deenv/DeEnv
+
+# Always come back (crash or reboot); give the kernel time to stop its hosts cleanly on
+# SIGTERM (Program.cs handles ProcessExit -> graceful shutdown).
 Restart=always
 RestartSec=5
 TimeoutStopSec=15
 
-# Light hardening (the app only needs to read /opt/deenv and write /var/lib/deenv).
+# Light hardening: read /opt/deenv, write /var/lib/deenv (ProtectSystem=full leaves /var
+# writable), private /tmp, no new privileges.
 NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/var/lib/deenv
+PrivateTmp=true
+ProtectSystem=full
 ProtectHome=true
 
 [Install]
