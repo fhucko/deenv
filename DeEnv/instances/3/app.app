@@ -1,4 +1,4 @@
-﻿types
+types
     Db
         companyName text
         settings dict of text by text
