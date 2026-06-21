@@ -59,3 +59,19 @@ Feature: Todo app
     And the store eventually has a "User" whose "name" is "User 2"
     When I select the user "User 2"
     Then the page shows the selected user "User 2"
+
+  # The blank-object factories mint drafts via sys.new(sys.schema(T)), which OMITS a type's
+  # collection props (the store materializes them on add). This guards that path end-to-end on
+  # the CLIENT: a freshly-created user gets a list nested into its (store-materialized) todoLists,
+  # and that list gets an item nested into its items — and both persist.
+  @milestone-11
+  Scenario: Nesting into a freshly-created user and list
+    Given the todo app is running
+    When I add a new user "User 2"
+    And I select the user "User 2"
+    And I add a new list "Groceries"
+    And I add a new item "Buy milk" to the list "Groceries"
+    Then the page shows the list "Groceries"
+    And the page shows an item "Buy milk"
+    And the store eventually has a "TodoList" whose "name" is "Groceries"
+    And the store eventually has a "TodoItem" whose "text" is "Buy milk"

@@ -26,13 +26,13 @@ ui
     var newList = getNewList()
 
     fn getNewUser()
-        return { name: "", todoLists: [] }
+        return sys.new(sys.schema("User"))
 
     fn getNewList()
-        return { name: "", items: [] }
+        return sys.new(sys.schema("TodoList"))
 
     fn getNewItem()
-        return { text: "", checked: false }
+        return sys.new(sys.schema("TodoItem"))
 
     fn addNewUser()
         db.users.add(newUser)
