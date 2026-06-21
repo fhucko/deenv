@@ -168,6 +168,94 @@ public sealed class CodeClientTests
         });
     }
 
+    // A just-added set member is rendered with a transient NEGATIVE id; when its arrayAdd round-trip
+    // returns, remapAddedId re-keys it to its real POSITIVE id and re-renders. A foreach row's DOM node is
+    // keyed by its member id, so this re-key flips the row's data-key — and the reconciler must reuse the
+    // SAME element across that flip (the negative→positive id is the same logical row). If it rebuilds the
+    // row instead, a focused input in it is destroyed and any in-progress, not-yet-committed edit is lost —
+    // exactly the intermittent flake where a name typed into a just-added row vanished when the remap landed
+    // mid-edit. This drives the real client renderUi over the real model, so it reproduces the reconciler
+    // path deterministically (no server timing): add a transient row, focus its input, type an UNCOMMITTED
+    // character, then perform the remap re-render and assert the input survived with focus + text intact.
+    [Test]
+    public async Task A_focused_edit_survives_the_negative_to_real_id_remap_rerender()
+    {
+        await WithPageAsync(InstanceContext.InteractiveUiDb(), s => { SeedItem(s, "a"); SeedItem(s, "b"); }, async page =>
+        {
+            // Build a transient new member straight into the model (a negative id, as `db.items.add` mints)
+            // and render — a new row appears keyed by that negative id. Driving the model+renderUi directly
+            // (not the Add button) keeps the remap under the test's control: no real WS arrayAdd reply can
+            // fire its own remap and race this one, so the reproduction is deterministic.
+            var negKey = await page.EvaluateAsync<int>(
+                """
+                () => {
+                    const db = uiStatic.state.scope.items["db"].value;
+                    const items = db.props["items"];
+                    const neg = --uiStatic.lastId.value;
+                    items.items.push({ key: neg, value: { type: "object", props: { name: { type: "text", value: "" } }, id: neg } });
+                    invalidateMember(items.id);
+                    renderUi();
+                    return neg;
+                }
+                """);
+
+            // The transient row's name input exists, keyed by the negative id (it sorts first: empty name).
+            await page.Locator(".name").First.WaitForAsync();
+
+            // Focus it and type ONE character WITHOUT committing it to the model — i.e. set the live input's
+            // value + leave it focused, but do NOT fire `input` (so the model still holds ""). This is the
+            // in-progress edit a real user has half-typed when the remap lands. Tag the element so we can
+            // prove the very same node survives the re-render.
+            await page.EvaluateAsync(
+                $$"""
+                () => {
+                    const rows = [...document.querySelectorAll('.name')];
+                    const el = rows.find(e => e.closest('[data-key]')?.getAttribute('data-key') === String({{negKey}}));
+                    el.__probe = "kept";
+                    el.focus();
+                    el.value = "X"; // uncommitted: no `input` event, so the model name is still ""
+                }
+                """);
+
+            // The remap: re-key the member from its negative id to a real positive id and re-render, exactly
+            // as remapAddedId does on the arrayAdd reply.
+            await page.EvaluateAsync(
+                $$"""
+                () => {
+                    const realId = 9001;
+                    const db = uiStatic.state.scope.items["db"].value;
+                    const items = db.props["items"];
+                    const item = items.items.find(i => i.key === {{negKey}});
+                    item.key = realId;
+                    item.value.id = realId;
+                    uiStatic.state.objects[realId] = item.value;
+                    uiStatic.state.localToServerIds[{{negKey}}] = realId;
+                    uiStatic.state.serverToLocalIds[realId] = {{negKey}};
+                    invalidateMember(items.id);
+                    renderUi();
+                }
+                """);
+
+            // The row is now keyed by the real (positive) id…
+            await page.WaitForFunctionAsync("() => !!document.querySelector('[data-key=\"9001\"]')");
+
+            // …and the SAME input element survived the re-render (our probe marker is still on it) and is
+            // still focused. Had the reconciler rebuilt the row on the key flip, the marker and the focus
+            // would both be gone (a fresh input replaces it). (The half-typed value, never committed to the
+            // model, is legitimately reset by reconciliation — node identity + focus are what the remap must
+            // preserve; a real user's per-keystroke edits ARE committed and survive, proven by the suite.)
+            var diag = await page.EvaluateAsync<string>(
+                """
+                () => {
+                    const el = document.querySelector('[data-key="9001"] .name');
+                    if (el == null) return "no-node";
+                    return `probe=${el.__probe} focused=${el === document.activeElement} value=${JSON.stringify(el.value)}`;
+                }
+                """);
+            await Assert.That(diag).IsEqualTo("probe=kept focused=true value=\"\"");
+        });
+    }
+
     private static string? Name(ObjectValue o) =>
         o.Fields.TryGetValue("name", out var n) && n is TextValue t ? t.Text : null;
 

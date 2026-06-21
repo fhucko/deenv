@@ -78,12 +78,24 @@ function syncScopeText(name: string, apply: (v: string) => void): void {
 function updateChildren(parent: Node, execChildren: ExecTagChild[]): void {
     const desired = flatten(execChildren).filter(isRenderable);
 
-    // Index existing children: keyed elements by their data-key, the rest by tag name.
+    // Index existing children: keyed elements by their data-key, the rest by tag name. A foreach row is
+    // keyed by its member object's id; when a just-added member's transient negative id is remapped to its
+    // real (positive) id, the desired child for that row now carries the POSITIVE key while the live node
+    // still carries the negative one. Without bridging them the reconciler would treat the remapped row as a
+    // new node and rebuild its subtree — destroying focus and any in-progress (uncommitted) input edit. So a
+    // node keyed by a remapped negative id is ALSO indexed under its real id, keeping the SAME element across
+    // the remap (the very identity-stability the data-key reconciliation exists to provide).
     const keyed: { [key: string]: ChildNode[] } = {};
     const unkeyed: { [name: string]: ChildNode[] } = {};
     for (const node of Array.from(parent.childNodes)) {
         const k = node.nodeType === 1 ? (node as Element).getAttribute("data-key") : null;
-        if (k != null) (keyed[k] ??= []).push(node);
+        if (k != null) {
+            // A node keyed by a just-remapped transient (negative) id is indexed under its REAL id, the key
+            // the desired child now carries — so the same element is reused across the remap (post-remap the
+            // desired children always carry positive ids, so the negative key is never looked up).
+            const remapped = uiStatic.state.localToServerIds[Number(k)];
+            (keyed[remapped != null ? String(remapped) : k] ??= []).push(node);
+        }
         else (unkeyed[node.nodeName] ??= []).push(node);
     }
 
