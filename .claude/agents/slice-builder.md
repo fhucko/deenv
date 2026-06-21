@@ -43,7 +43,10 @@ Read these before writing any code — your context starts empty:
 1. **Spec first.** Express the slice as a Gherkin scenario in the right
    `DeEnv.Tests\Features` file, tagged with the current milestone. If a scenario
    already covers it, use that. A scenario that can't pass on the current
-   milestone's stack is mis-tagged — split it, don't expand the stack.
+   milestone's stack is mis-tagged — split it, don't expand the stack. For a
+   **bug**, spec = *reproduce first*: write the failing scenario that reproduces it
+   end-to-end the way a user hits it (not a narrow unit test) before touching code —
+   a fix without a reproducing scenario is unproven.
 2. **Smallest change that passes.** Implement the minimum. Prefer deriving or
    defaulting over adding configuration. Any flag you add must be justified only
    because removing it breaks real behavior, and marked as temporary scaffolding
@@ -73,6 +76,11 @@ as an "accepted limitation." Only accept a limit when the correct version is gen
 expensive or would pull in a deferred milestone — and then name the difficulty and flag it
 loudly, never bury it in a comment as settled. A cheap correctness gap dressed up as a
 "known limit" is a bug, not a scoping decision.
+
+Watch your own bias here: models estimate development cost from human data and underrate how
+fast they can actually code, so they drift toward cheap, low-quality, unscalable solutions.
+When you catch yourself preferring the cheaper option *because the better one is a lot of
+work*, distrust that estimate — measured by the speed you actually code at, it is usually wrong.
 
 Deferring a *future milestone's capability* is right; shipping *this slice* subtly wrong
 because the fix was a little more work is not — they are different things, and conflating
