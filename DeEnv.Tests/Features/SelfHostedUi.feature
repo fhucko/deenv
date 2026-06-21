@@ -423,6 +423,56 @@ Feature: Self-hosted generic UI (object forms)
     Then no set row eventually shows "First"
     And the URL path is still "/notes"
 
+  # ── client-side (SPA) navigation (milestone 11) ─────────────────────────────
+  # An in-app link click navigates CLIENT-SIDE: the click is intercepted, the URL is
+  # updated via the History API, and the target view re-renders over the warm session —
+  # NO full page reload, NO re-hydration. A window marker set after first load survives
+  # the navigation (a reload would wipe it), the URL updates to the target, the target
+  # view's content actually renders (data loaded over the warm session, not a fresh GET),
+  # and the page is STILL the same hydrated session. Browser Back then restores the
+  # previous view AND its URL, also without a reload. Deep-linking is unaffected (every
+  # URL still SSRs on a direct GET — proven by the many "I open <path>" scenarios above,
+  # each of which is a fresh navigation that server-renders the target).
+
+  @milestone-11 @single-user
+  Scenario: An in-app link navigates client-side without a full page reload
+    Given the self-hosted form app is running
+    When I open "/"
+    And I mark the live page
+    And I follow the set row link
+    Then the URL path becomes "/notes/2"
+    And the page shows ".object-form"
+    And the "title" field shows "First"
+    And the live page mark survives
+    And the page is still the same hydrated session
+    When I navigate back
+    Then the URL path becomes "/"
+    And the page shows ".set-table"
+    And the live page mark survives
+
+  # An OBJECT route (/notes/2) ships only the routed member of the set, so a SIBLING member
+  # (Note 9) is absent from the client graph. Navigating client-side to that sibling resolves
+  # to target:null (a valid route whose object was not shipped — byte-identical to a missing
+  # node), which WITHOUT the flash guard paints the router's NotFound branch, then the refetch
+  # re-renders the real page: a "Not found" FLASH on a good navigation. With the guard, the
+  # current view is HELD until the refetch returns, then the target paints once — NotFound never
+  # appears. A MutationObserver armed before the nav records any `.not-found` that ever rendered
+  # in #app, so the assertion proves the flash never happened (not merely that it is gone now).
+  # A refetch frame is also asserted, proving the target was genuinely un-shipped (the scenario
+  # actually exercises the guard, not a case where the object happened to be present).
+  @milestone-11 @single-user
+  Scenario: Navigating to an un-shipped target never flashes the Not found view
+    Given the flash-nav app is running
+    When I watch the websocket
+    And I open "/notes/2"
+    And I arm the not-found detector
+    And I navigate via an in-app link to "/notes/9"
+    Then the URL path becomes "/notes/9"
+    And the page shows ".object-form"
+    And the target title field eventually shows "Ninth"
+    And the not-found view never appeared during the navigation
+    And a refetch was sent
+
   @milestone-11 @single-user
   Scenario: A set table's header aligns with its body rows
     Given the self-hosted form app is running

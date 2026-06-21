@@ -57,15 +57,40 @@ function init(): void {
     // path. (Identity when root-mounted.)
     scope.items["path"] = { value: { type: "text", value: stripBase(location.pathname) }, isReadOnly: false };
 
-    // Browser back/forward: write the (base-stripped) location back into the path var and re-render.
+    // Browser back/forward: write the (base-stripped) location back into the path var and re-render
+    // over the warm session — the same machinery a forward click uses, just driven by the browser's
+    // history pop instead of a pushState. resetViewState() drops the component slot-cache (the visited
+    // view's components must run fresh — the slot keys collide across different-kind views) and forces a
+    // refetch (the visited path's data may not be in the client graph; sys.resolve returns target:null —
+    // not a "Value not available" throw — for a missing node).
+    //
+    // Mirror the forward-click guards so Back/Forward is never less safe than a click:
+    //   • If the session is not fully ready (wsReady false — socket still connecting/dropped, or the
+    //     hello not yet acked), a refetch could not be serviced, so the optimistic render would strand
+    //     the user on the popped URL with stale/NotFound content. Force a real browser reload of the
+    //     popped location instead — the server SSRs it (the deep-link path), which is always correct.
+    //   • Otherwise paint optimistically ONLY when the target resolves to a renderable view locally;
+    //     when it does not (a valid route whose object was not shipped) HOLD the current view and let
+    //     the refetch's reply paint it — the same flash guard navigateClientSide uses, so a Back to an
+    //     un-shipped view never flashes NotFound either.
     window.addEventListener("popstate", () => {
         const item = uiStatic.state.scope.items["path"];
-        if (item != null) {
-            item.value = { type: "text", value: stripBase(location.pathname) };
-            invalidateVar("path");
-            renderUi();
-        }
+        if (item == null) return;
+        if (!wsReady()) { location.reload(); return; }
+        const pathVar = stripBase(location.pathname);
+        item.value = { type: "text", value: pathVar };
+        invalidateVar("path");
+        resetViewState();
+        if (targetRenderableLocally(pathVar)) renderUi();
+        else maybeRefetch();
     });
+
+    // In-app links navigate CLIENT-SIDE (no full reload): one delegated listener intercepts qualifying
+    // anchor clicks (same-origin, in-mount, plain left-click) and re-renders the target over the warm
+    // session via the History API. Delegated on document so it also covers links OUTSIDE the #app
+    // reconciler root (e.g. the breadcrumb trail). Non-qualifying clicks (external/new-tab/download/
+    // hash/modified) and a not-ready session fall through to the browser. See ui.ts interceptNavigation.
+    document.addEventListener("click", interceptNavigation);
 
     renderUi();
 

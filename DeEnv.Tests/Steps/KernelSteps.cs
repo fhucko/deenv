@@ -497,6 +497,33 @@ public sealed class KernelSteps(InstanceContext ctx)
         await ctx.Page!.Locator(".object-form button.save").First.ClickAsync();
     }
 
+    // Open a named instance at its KERNEL MOUNT (/apps/<name>) in a browser — the production addressing,
+    // so a subsequent SPA click exercises the mount-aware branch (ui.ts stripBase/in-mount guard). The
+    // page BaseURL is the kernel's shared app port; GotoReadyAsync waits for hydration so the delegated
+    // click listener is wired before the test clicks.
+    [When("I open the {string} instance in a browser at its path")]
+    public async Task WhenOpenNamedInBrowserAsync(string name)
+    {
+        ctx.Page = await SharedBrowser.NewPageAsync($"http://localhost:{_appPort}");
+        await ctx.Page.GotoReadyAsync(MountPath(name));
+    }
+
+    // Click the generic-UI set row's stretched anchor (a.row-link). Under a mount its href is the
+    // member's MOUNTED URL (/apps/site/notes/2), so the click drives the mount-aware client-side nav.
+    [When("I click the set row link")]
+    public async Task WhenClickSetRowLinkAsync() =>
+        await ctx.Page!.Locator(".set-row a.row-link").First.ClickAsync();
+
+    // The browser's URL pathname becomes the (MOUNTED) target — polled, since a client-side nav updates
+    // location via pushState without a Load event. Distinct from the generic-UI "the URL path becomes"
+    // step, which asserts the app's root-relative path; here we assert the full mounted browser path.
+    [Then("the browser URL path becomes {string}")]
+    public async Task ThenBrowserUrlPathBecomesAsync(string expected) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => new URL(location.href).pathname === {JsString(expected)}");
+
+    private static string JsString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
+
     [Then("the original instance's store eventually has the bool set")]
     public async Task ThenStoreHasBoolSetAsync() =>
         await Polling.EventuallyAsync(

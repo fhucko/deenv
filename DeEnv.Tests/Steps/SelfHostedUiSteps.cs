@@ -283,6 +283,136 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await Assert.That(pathname).IsEqualTo(expected);
     }
 
+    // ── client-side (SPA) navigation (milestone 11) ─────────────────────────────────
+    // The unique per-load token stamped on the window by "I mark the live page" — captured here so a
+    // later step can prove the EXACT same token is still present (no reload AND no re-hydration).
+    private string _pageToken = "";
+
+    // Mark the LIVE document with a window flag and a unique token. A full page reload re-creates the
+    // window (wiping both); a re-hydration re-runs init() (which a reload is the only trigger for here).
+    // So if the EXACT token survives a navigation, that navigation neither reloaded nor re-hydrated the
+    // page. Wait for readiness first so the marker is set on the fully-settled page (and the same
+    // connection a client-side nav reuses).
+    [When("I mark the live page")]
+    public async Task WhenMarkLivePage()
+    {
+        await ctx.Page!.WaitReadyAsync();
+        _pageToken = "tok-" + Guid.NewGuid().ToString("N");
+        await ctx.Page!.EvaluateAsync(
+            "(t) => { window.__spa = true; window.__pageToken = t; }", _pageToken);
+    }
+
+    // The window flag set by "I mark the live page" is STILL present — proof the navigation did not
+    // trigger a full document reload (which would have wiped window.__spa).
+    [Then("the live page mark survives")]
+    public async Task ThenLivePageMarkSurvives() =>
+        await Assert.That(await ctx.Page!.EvaluateAsync<bool>("() => window.__spa === true")).IsTrue();
+
+    // Same hydrated session: the page is still hydrated (data-hydrated present) AND it carries the
+    // EXACT token stamped before the nav. The window survives only if there was no reload; init() runs
+    // only on the initial document load, so the token being byte-for-byte the same proves the client
+    // never re-hydrated — the warm session (and its WebSocket) carried straight through the navigation.
+    [Then("the page is still the same hydrated session")]
+    public async Task ThenSameHydratedSession()
+    {
+        await ctx.Page!.WaitHydratedAsync();
+        var sameToken = await ctx.Page!.EvaluateAsync<bool>(
+            "(t) => window.__pageToken === t", _pageToken);
+        await Assert.That(sameToken).IsTrue();
+    }
+
+    // Browser Back: pops the history entry the client-side nav pushed. The popstate handler (init.ts)
+    // writes the base-stripped location back into the `path` var and re-renders over the warm session —
+    // no reload, so NO Load event fires. WaitUntil=Commit resolves as soon as the history change is
+    // committed (waiting for Load would hang on a same-document pop); the following URL/content steps
+    // poll the live DOM/URL for the settled outcome.
+    [When("I navigate back")]
+    public async Task WhenNavigateBack() =>
+        await ctx.Page!.GoBackAsync(new() { WaitUntil = Microsoft.Playwright.WaitUntilState.Commit });
+
+    // ── SPA-nav flash guard (milestone 11) ──────────────────────────────────────────
+    // Following a link to an UN-SHIPPED object (sys.resolve → target:null) must NOT optimistically paint
+    // the router's NotFound branch and then re-render the real page (a "Not found" flash). These steps
+    // arm a flash DETECTOR, drive a real in-app link click, and assert NotFound never rendered.
+
+    [Given("the flash-nav app is running")]
+    public async Task GivenFlashNavAppRunning()
+    {
+        ctx.Description = InstanceContext.FlashNavDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    // Arm a MutationObserver that flips window.__sawNotFound the instant a `.not-found` element ever
+    // appears anywhere under #app — so a NotFound that renders and is then replaced is still caught (a
+    // post-hoc "is .not-found present now" check would miss a transient flash). Records the CURRENT state
+    // too (in case a synchronous paint beat the observer). Wait for readiness first so the detector is
+    // armed on the fully-settled page, before the link click that triggers the client-side navigation.
+    [When("I arm the not-found detector")]
+    public async Task WhenArmNotFoundDetector()
+    {
+        await ctx.Page!.WaitReadyAsync();
+        await ctx.Page!.EvaluateAsync(
+            """
+            () => {
+                window.__sawNotFound = document.querySelector('#app .not-found') != null;
+                const obs = new MutationObserver(() => {
+                    if (document.querySelector('#app .not-found') != null) window.__sawNotFound = true;
+                });
+                obs.observe(document.getElementById('app'), { childList: true, subtree: true });
+            }
+            """);
+    }
+
+    // Inject a real same-origin in-app anchor and click it: a plain left-click on an <a href> bubbles to
+    // init.ts's delegated `interceptNavigation`, which (the page being the generic UI) takes it over as a
+    // client-side navigation — exactly the path a framework-emitted link click follows. The anchor's
+    // origin is the test page's own, so it is in-mount and same-origin. Clicking a link the test injected
+    // is no less a real interception than clicking a rendered one (the handler is delegated on document
+    // and does not care who created the anchor).
+    [When("I navigate via an in-app link to {string}")]
+    public async Task WhenNavigateViaInAppLink(string path)
+    {
+        await ctx.Page!.EvaluateAsync(
+            """
+            (p) => {
+                const a = document.createElement('a');
+                a.setAttribute('href', p);
+                a.id = '__spa_link';
+                a.textContent = 'go';
+                document.body.appendChild(a);
+            }
+            """, path);
+        await ctx.Page!.Locator("#__spa_link").ClickAsync();
+    }
+
+    // The target object form has SETTLED on the expected title — polled (the target paints only after the
+    // refetch returns, so a one-shot read could race the re-render). Reaching this guarantees the
+    // navigation completed onto the real target view, so the not-found detector below reads a final state.
+    [Then("the target title field eventually shows {string}")]
+    public async Task ThenTargetTitleEventuallyShows(string expected) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('.object-form input.title')?.value === {JsString(expected)}");
+
+    // NotFound NEVER rendered during the navigation: the detector flag stayed false. The preceding
+    // content assertions (.object-form + the settled target title) already waited for the target view to
+    // appear, so by now any transient NotFound flash would have been observed. This is the decisive flash
+    // assertion — without the guard, the optimistic paint renders NotFound here and the flag is true.
+    [Then("the not-found view never appeared during the navigation")]
+    public async Task ThenNotFoundNeverAppeared() =>
+        await Assert.That(await ctx.Page!.EvaluateAsync<bool>("() => window.__sawNotFound === true")).IsFalse();
+
+    // A `refetch` frame was sent — proving the navigation's target was genuinely un-shipped (the flash
+    // guard held the view and asked the server), so this scenario actually exercises the guard. Reads the
+    // settled sent-frame buffer ("I watch the websocket"); the target-rendered assertions above already
+    // waited for the refetch reply, so every frame the nav emits is captured by now.
+    [Then("a refetch was sent")]
+    public async Task ThenRefetchWasSent()
+    {
+        bool any;
+        lock (_sentWsFrames) any = _sentWsFrames.Any(f => f.Contains("\"op\":\"refetch\""));
+        await Assert.That(any).IsTrue();
+    }
+
     // ── flag-gated create view (milestone 11) ───────────────────────────────────────
     // The always-visible inline add row (.set-new/.dict-new) is replaced by a `+ New` button that
     // reveals a labeled create form (.create-form), swapping out the table; Save commits + returns to

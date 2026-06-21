@@ -26,9 +26,45 @@ function renderUi(): void {
     // including a full-takeover render); fall back to body if it is somehow absent.
     updateChildren(document.getElementById("app") ?? document.body, [result]);
     syncPath();
+    syncBreadcrumbs();
     syncScopeText("title", v => { document.title = v; });
     refreshErrorBanner();
     maybeRefetch(); // anything stale or missing → re-ask the server
+}
+
+// Keep the generic-UI breadcrumb chrome in step with the current `path` after a CLIENT-SIDE render.
+// Breadcrumbs are SSR'd by C# (SsrRenderer.Breadcrumbs) OUTSIDE the #app reconciler root, so a
+// client-side navigation (which only re-renders #app) would otherwise leave them stale. This rebuilds
+// the trail from the `path` var, segment for segment, exactly as the server does — the same
+// location-mirrors-URL invariant. No-op when the nav is absent (a full-custom render has no
+// breadcrumbs) or when path is unavailable, so it only touches the chrome that exists. Hrefs are
+// mount-prefixed (mountUrl), like the server's and like app-emitted links, so a breadcrumb click is
+// itself a valid in-app navigation.
+function syncBreadcrumbs(): void {
+    const nav = document.querySelector("nav.breadcrumbs");
+    if (nav == null) return;
+    const item = uiStatic.state.scope.items["path"];
+    if (item == null || item.value.type !== "text") return;
+
+    // Build the desired trail: "Db" → "/", then one link per path segment at its cumulative path.
+    const segs = item.value.value.split("/").filter(s => s !== "");
+    const desired: { href: string; text: string }[] = [{ href: "/", text: "Db" }];
+    let url = "";
+    for (const seg of segs) { url += "/" + seg; desired.push({ href: url, text: seg }); }
+
+    // Idempotent: skip the rebuild when the rendered trail already matches (renderUi runs on every
+    // keystroke, so only touch the DOM when the path actually changed).
+    const current = Array.from(nav.querySelectorAll("a")).map(a => a.textContent || "").join(" ");
+    if (current === desired.map(d => d.text).join(" ")) return;
+
+    nav.textContent = "";
+    desired.forEach((d, i) => {
+        if (i > 0) nav.appendChild(document.createTextNode(" / "));
+        const a = document.createElement("a");
+        a.setAttribute("href", mountUrl(d.href));
+        a.textContent = d.text;
+        nav.appendChild(a);
+    });
 }
 
 // Routing writes real history entries: a code-driven `path` change pushes, so the
@@ -42,6 +78,154 @@ function syncPath(): void {
     if (item == null || item.value.type !== "text") return;
     const mounted = mountUrl(item.value.value);
     if (mounted !== location.pathname) history.pushState(null, "", mounted);
+}
+
+// ── client-side (SPA) navigation ──────────────────────────────────────────────────
+//
+// An in-app link click navigates CLIENT-SIDE instead of a full page reload: intercept the click,
+// update the URL via the History API, and re-render the target view over the warm session. The server
+// still SSRs every URL on a direct GET (deep-link/refresh unaffected); this only short-circuits the
+// in-app click. Wired from init.ts as a single delegated listener (alongside popstate).
+
+// Whether this page is the self-hosted GENERIC UI (set by the SSR bootstrap, beside initData/initUi/
+// initBase). The first-class signal that the generic router is in play — the same _isGeneric C# uses
+// to emit breadcrumbs. SPA interception is gated on it directly, not on sniffing the breadcrumb chrome.
+declare const initGeneric: boolean;
+
+// Handle a click that may be an in-app link. Only SAME-ORIGIN, in-mount, plain left-clicks on an
+// anchor with no new-tab/download/external intent are taken over; everything else is left to the
+// browser (the classic SPA footguns — modified clicks open tabs, off-origin/external/hash links must
+// behave natively). If the link qualifies but the session cannot service it (the socket is not open,
+// so a refetch for unshipped data could not run), it ALSO falls back to a full browser navigation
+// rather than stranding the user on a changed URL with stale content.
+function interceptNavigation(e: MouseEvent): void {
+    // SCOPE: client-side nav is for the self-hosted GENERIC UI, which is refetch-complete by
+    // construction (the synthesized router ships every schema descriptor and resolves any URL over the
+    // shipped graph). A fully-CUSTOM `fn render()` (e.g. the operator designer) may read a deeply-nested
+    // graph the refetch does not fully reconstruct cross-page, so it stays on full-page navigation (the
+    // designer deliberately relies on a fresh SSR per route). initGeneric is the first-class signal
+    // (injected by the SSR bootstrap, the same _isGeneric C# gates the breadcrumb chrome on); non-generic
+    // → let the browser navigate (the safe default).
+    if (!initGeneric) return;
+    // A modified click (new tab / new window / download-gesture) or a non-primary button must keep
+    // its native behavior. defaultPrevented: another handler already consumed it.
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+
+    // The nearest enclosing anchor with an href (a click can land on a child of the link).
+    const anchor = (e.target as Element | null)?.closest?.("a");
+    if (!(anchor instanceof HTMLAnchorElement)) return;
+    const href = anchor.getAttribute("href");
+    if (href == null || href === "") return;
+
+    // Explicit "let the browser handle it" signals: a new browsing context, a download, or an
+    // externally-marked link.
+    if (anchor.target && anchor.target !== "_self") return;
+    if (anchor.hasAttribute("download")) return;
+    if (/(^|\s)external(\s|$)/i.test(anchor.getAttribute("rel") ?? "")) return;
+
+    // Resolve against the current document so a relative href is handled too; bail on a different
+    // origin (the browser must do a real cross-origin navigation).
+    const url = new URL(anchor.href, location.href);
+    if (url.origin !== location.origin) return;
+
+    // A pure in-page hash (same path + search, only the fragment differs) is native anchor behavior —
+    // never a view navigation.
+    if (url.pathname === location.pathname && url.search === location.search && url.hash !== "") return;
+
+    // A same-origin link OUTSIDE this instance's mount (e.g. /apps/other from /apps/todo) is a real
+    // navigation to a different app — let the browser load it. stripBase returns the path unchanged
+    // when it does not carry our base, which would route it to this app's NotFound; guard on that.
+    const base = basePrefix();
+    if (base !== "" && url.pathname !== base && !url.pathname.startsWith(base + "/")) return;
+
+    // The link is in-app. Take it over — unless the session can't service it, in which case fall back
+    // to a full browser navigation (no preventDefault) so the user never lands on a stale view.
+    if (!wsReady()) return;
+    e.preventDefault();
+    // The browser URL keeps the FULL target (mounted pathname + query + fragment) so it stays
+    // shareable; the app's `path` var gets just the base-stripped pathname — exactly the value init.ts
+    // and the popstate handler derive from location.pathname (search/hash are not part of a node path).
+    navigateClientSide(url.pathname + url.search + url.hash, stripBase(url.pathname));
+}
+
+// Navigate to a target client-side: push a history entry for `pushUrl` (so the URL bar reflects the
+// view and stays shareable), write the root-relative `pathVar` into the `path` var, invalidate `path`
+// so its dependents recompute, and render. This is the SAME var-write + invalidate + render the
+// popstate handler runs for Back/Forward, plus the pushState (popstate is the browser writing history
+// for us; here we write it ourselves).
+//
+// FLASH GUARD: the target's object is often NOT in the client graph yet — the first paint ships only
+// the starting view's data, and following a REFERENCE ships only the target's label, never the object.
+// sys.resolve returns target:null for such an un-shipped (but valid) node — byte-identical to a
+// genuinely-missing one — so an optimistic paint would render the router's NotFound branch, then the
+// refetch reply would re-render the real view: a "Not found" FLASH on a perfectly good navigation.
+// So: optimistic-paint immediately ONLY when the target already resolves to a renderable view locally
+// (the instant feel for shipped data, e.g. a set-table row); otherwise HOLD the current view, fire the
+// refetch, and let its reply paint the target once. NotFound is reserved for a genuinely-gone node —
+// if the refetch returns and the target is STILL unresolvable, the render then paints NotFound (one
+// clean paint). No router/interpreter change: this only consults the existing client sys.resolve.
+function navigateClientSide(pushUrl: string, pathVar: string): void {
+    const item = uiStatic.state.scope.items["path"];
+    if (item == null) return;
+    // pushState BEFORE the render: refetch sends location.pathname, so the URL must already be the
+    // target when renderUi (→ maybeRefetch) runs.
+    history.pushState(null, "", pushUrl);
+    item.value = { type: "text", value: pathVar };
+    invalidateVar("path");
+    resetViewState();
+    // Optimistic paint only when the target view is renderable from the data already on the client;
+    // when it is not (a valid route whose object was not shipped) skip the paint — holding the current
+    // view — and just fire the refetch (resetViewState set needsServerData), whose reply re-renders the
+    // now-shipped target. Reserving NotFound for the post-refetch render kills the navigation flash.
+    if (targetRenderableLocally(pathVar)) renderUi();
+    else maybeRefetch();
+}
+
+// Is the target path already renderable from the client's shipped data — i.e. would the generic router
+// paint a real view (not NotFound) for it right now? Resolves the path with the SAME client sys.resolve
+// the router uses (a throwaway context, so it never disturbs uiStatic.lastId; depStack is empty here so
+// it records no dependencies), then checks the kind-appropriate binding the router branches require:
+// object/leaf need the target object present; set/ref/dict are owner-bound (need the PARENT present);
+// notFound (a route invalid per the shipped descriptors) is NOT locally renderable — wait for the
+// server's authoritative answer before painting NotFound. Any unexpected failure → treat as not
+// locally renderable (fall back to the refetch-then-render path, which is always correct).
+function targetRenderableLocally(pathVar: string): boolean {
+    try {
+        const probeCtx: ExecContext = { lastId: { value: uiStatic.lastId.value } };
+        const call: CodeCall = { type: "call", fn: { type: "symbol", name: "resolve" },
+            params: [{ type: "text", value: pathVar }] };
+        const r = execResolve(call, uiStatic.renderFn.scope, probeCtx);
+        if (r.type !== "object") return false;
+        const kind = r.props["kind"]?.type === "text" ? r.props["kind"].value : "";
+        const present = (v: ExecValue | undefined) => v != null && v.type === "object";
+        switch (kind) {
+            case "object": case "leaf": return present(r.props["target"]);
+            case "set": case "ref": case "dict": return present(r.props["parent"]);
+            default: return false; // notFound (or unknown) — let the refetch confirm before painting
+        }
+    } catch {
+        return false;
+    }
+}
+
+// Reset the client view state for a NAVIGATION (the same effect a full reload had, minus the reload):
+//   1. Drop the component slot-cache. A component memoizes by its render-tree SLOT (position), NOT its
+//      function identity — so two different components at the SAME slot (e.g. the root <SetTable> on
+//      /notes vs the root <ObjectForm> on /notes/2) share a slot key, and the cache would hand the
+//      target view the PREVIOUS view's component. A navigation rebuilds the render tree wholesale, so
+//      the old slot assignments are meaningless; clearing them lets each component re-run (and resets
+//      per-view component state, like a fresh load). Operates on uiStatic.cache directly (the same Map
+//      memoize uses) — no interpreter change.
+//   2. Force a refetch. The first paint shipped only the STARTING view's data, so the target's object
+//      may be absent from the client `db` graph — and sys.resolve returns target:null for a missing
+//      node (no "Value not available" throw), which would render NotFound instead of refetching.
+//      needsServerData makes renderUi's trailing maybeRefetch re-ask the server (it renders over a
+//      fresh store load), as the full-reload navigation this replaces did. The optimistic render paints
+//      immediately from whatever IS shipped; the refetch reply re-renders with the complete data.
+function resetViewState(): void {
+    for (const key of Array.from(uiStatic.cache.keys()))
+        if (key.startsWith("comp:")) uiStatic.cache.delete(key);
+    needsServerData = true;
 }
 
 // Prefix a ROOT-RELATIVE url with the mount base (the client twin of SsrRenderer.MountUrl). Identity

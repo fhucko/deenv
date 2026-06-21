@@ -368,6 +368,26 @@ function remapAddedId(arrayId: number, tempId: number, realId: number,
     renderUi();
 }
 
+// Is the session ready to service a client-side navigation's refetch over the warm session? Not merely
+// socket-open: the connection must also be CLAIMED — the session-claim `hello` ACKNOWLEDGED (helloAcked,
+// the same readiness signal `data-ready` is built from). Gating SPA nav only on socket-open would let a
+// navigation fire a refetch into the UNCLAIMED connecting-window (open but before `hello` is acked),
+// where the warm session is not yet bound to this client and the target view could be left
+// unserviceable. When not claimed, client-side nav (forward click AND Back/Forward) falls back to a full
+// browser navigation so the user is never stranded on a changed URL with stale/NotFound content.
+//
+// NB this does NOT also require `!refetchInFlight`: a refetch already in flight does not make the
+// session unable to service a navigation. `maybeRefetch` self-serializes (a second refetch no-ops while
+// one is pending, and the latest `path` wins on the next render), so a nav fired during a refetch is
+// fine. Folding `refetchInFlight` in here WOULD break the common flow — a forward client-nav kicks off a
+// refetch (the always-refetch floor), so an immediate Back (or a rapid second click) would see the
+// session "not ready" and force a full reload mid-settle. claimed-and-open is the right serviceability
+// line; the connect-time settle that `data-ready` additionally waits for is a MUTATION concern, not a
+// nav one. A normal mutation still rides the outbox (wsSend) as before — this is only the SPA-nav gate.
+function wsReady(): boolean {
+    return codeWs != null && codeWs.readyState === WebSocket.OPEN && helloAcked;
+}
+
 // Send now if the socket is open; otherwise queue and flush on open.
 function wsSend(msg: object): void {
     const text = JSON.stringify(msg);

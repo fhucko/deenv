@@ -111,6 +111,33 @@ public class InstanceContext
             dueDate: "2026-01-01"
     """;
 
+    // Milestone 11 (SPA-nav flash guard): the self-hosted generic UI over a notes set with TWO members.
+    // An OBJECT route (/notes/2) ships only the routed member of the set (FindTarget records just that
+    // item) — so the SIBLING (Note 9) is ABSENT from the client graph after a deep-link to /notes/2.
+    // Navigating client-side to /notes/9 therefore resolves to target:null (a VALID route whose object
+    // was not shipped — byte-identical to a genuinely-missing node), which is exactly the case the flash
+    // guard must handle: don't paint NotFound optimistically, hold the current view, refetch, then paint
+    // the real Note 9 page. Drives the "navigating to an un-shipped target never flashes Not found"
+    // scenario. (No custom `fn render()` → the default self-hosted generic UI, so SPA nav is in play.)
+    public static InstanceDescription FlashNavDb() =>
+        InstanceDescriptionLoader.Load(FlashNavApp);
+
+    private const string FlashNavApp = """
+    types
+        Db
+            notes set of Note
+        Note
+            title text
+
+    initialData
+        Db 1
+            notes: [2, 9]
+        Note 2
+            title: "First"
+        Note 9
+            title: "Ninth"
+    """;
+
     // Milestone 11 (public component library): a HAND-WRITTEN `fn render()` that composes the
     // public `<ObjectForm>` library component — the second consumer proving the generic-UI library
     // is reachable + usable from userspace (the first consumer is the @milestone-9 generic object

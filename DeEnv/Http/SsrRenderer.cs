@@ -120,7 +120,7 @@ public sealed class SsrRenderer
             var breadcrumbs = _isGeneric ? Breadcrumbs(ParsePath(urlPath), @base) : "";
 
             return (UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi),
-                    clientId, @base, assetAuthority),
+                    clientId, @base, assetAuthority, _isGeneric),
                 status);
         }
         catch (CodeRuntimeException ex)
@@ -274,20 +274,23 @@ public sealed class SsrRenderer
     // Page shell for a code page: optional generic chrome (a generic-UI page keeps the
     // breadcrumbs) around the `#app` mount the client reconciles into; an inline bootstrap
     // injects the bundle from the infra port (/js), which hydrates from window.initUi /
-    // window.initData. The default stylesheet ships on EVERY page: the generic UI's component
+    // window.initData. `window.initGeneric` carries the first-class "is this the self-hosted
+    // generic UI" signal (the same _isGeneric that drives the breadcrumb chrome), so the client
+    // gates SPA navigation on it directly instead of sniffing incidental chrome. The default
+    // stylesheet ships on EVERY page: the generic UI's component
     // styles (.object-form/.set-table/.ref-editor/…) apply to its markup, and the base element
     // styles (typography, inputs, buttons, tables) give a custom `fn render()` app a clean look
     // too — a custom app overrides via the cascade. (Zero-config good defaults; minimal by default.)
     private static string UiLayout(
         string title, string breadcrumbs, string body, string initData, string initUi, string clientId,
-        string @base, string assetAuthority) => $$"""
+        string @base, string assetAuthority, bool isGeneric) => $$"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
           <meta charset="utf-8">
           <title>{{Escape(title)}}</title>
           <style>{{ViewChromeCss}}</style>
-          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initBase="{{JsStringSafe(@base)}}";window.initAssetAuthority="{{JsStringSafe(assetAuthority)}}";</script>
+          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initBase="{{JsStringSafe(@base)}}";window.initAssetAuthority="{{JsStringSafe(assetAuthority)}}";window.initGeneric={{(isGeneric ? "true" : "false")}};</script>
           <script>(function(){var a=window.initAssetAuthority,b=window.initBase==="/"?"":window.initBase;var s=document.createElement("script");s.src=a?location.protocol+"//"+a+b+"/js":b+"/js";document.head.appendChild(s);})();</script>
         </head>
         <body>{{breadcrumbs}}<div id="app">{{body}}</div></body>

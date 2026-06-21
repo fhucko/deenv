@@ -207,6 +207,22 @@ Feature: Kernel host (multi-instance, path-addressed)
     Then the original instance's store eventually has the bool set
     And the page is fully ready
 
+  # SPA navigation under a KERNEL MOUNT (the production addressing): the kernel serves the instance at
+  # /apps/<name>, so an in-app link click exercises the mount-aware branch (ui.ts stripBase/in-mount
+  # guard) that the root-mounted SPA scenarios never reach. Clicking the generic-UI set row link
+  # navigates CLIENT-SIDE (a window marker set after load survives — a full reload would wipe it) to the
+  # member's MOUNTED URL (/apps/site/notes/2), with no page reload. This closes the deployment-path gap.
+  @milestone-10 @single-user
+  Scenario: An in-app link under a kernel mount navigates client-side
+    Given a registry of one generic-UI instance named "site"
+    And the kernel has started
+    When I open the "site" instance in a browser at its path
+    And I mark the live page
+    And I click the set row link
+    Then the browser URL path becomes "/apps/site/notes/2"
+    And the page shows ".object-form"
+    And the live page mark survives
+
   # ── domain capability (no Host routing — nginx's job) ─────────────────────────
   # A request carrying X-Forwarded-Prefix: "" is served at the domain ROOT: the page's links are
   # root-relative (no /apps/<name> prefix) and the injected base is "/". This is the primitive that
