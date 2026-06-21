@@ -75,7 +75,11 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
     [When(@"I create a new {string} named {string} through the reference")]
     public async Task WhenCreateNewThroughReferenceAsync(string typeName, string name)
     {
-        await ctx.Page!.WaitHydratedAsync(); // the reference page was reached by a read-only nav
+        // WaitReadyAsync, not just WaitHydratedAsync: Create mints + links the object over the WS
+        // (setReferenceField), so the socket must be fully settled (open + claimed) — a
+        // hydrated-but-not-ready page would ride the connecting-window outbox and could delay/lose
+        // the mutation under load. The reference page was reached by a read-only nav.
+        await ctx.Page!.WaitReadyAsync();
         await ctx.Page!.Locator(".ref-new input.name").FillAsync(name);
         await ctx.Page.Locator("button.ref-create").ClickAsync();
         // Wait for the created object to be minted + referenced — the editor shows it as current.
@@ -88,7 +92,10 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
     [When(@"I pick the existing {string} named {string}")]
     public async Task WhenPickExistingAsync(string typeName, string name)
     {
-        await ctx.Page!.WaitHydratedAsync(); // the reference page was reached by a read-only nav
+        // WaitReadyAsync, not just WaitHydratedAsync: Set links the reference over the WS
+        // (setReferenceField) — wait for the settled (open + claimed) socket so the mutation acts on
+        // an established connection. The reference page was reached by a read-only nav.
+        await ctx.Page!.WaitReadyAsync();
         await ctx.Page!.Locator("select.ref-pick").First.SelectOptionAsync(
             new Microsoft.Playwright.SelectOptionValue { Label = name });
         await ctx.Page.Locator("button.ref-set").First.ClickAsync();
@@ -102,6 +109,11 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
     {
         await ctx.EnsureServerAndBrowserAsync();
         await ctx.Page!.GotoReadyAsync(ctx.BaseUrl + "/" + setName);
+        // WaitReadyAsync before the remove: the unlink (arrayRemove) goes over the WS and triggers
+        // server-side GC — wait for the settled (open + claimed) socket so the mutation acts on an
+        // established connection (a hydrated-but-not-ready page could ride the connecting-window
+        // outbox and delay/lose it under load).
+        await ctx.Page!.WaitReadyAsync();
         // The self-hosted setTable's per-row Remove button (.set-remove) unlinks the member.
         await ctx.Page!.Locator(".set-row", new() { HasTextString = name })
                       .Locator("button.set-remove").First.ClickAsync();
@@ -154,7 +166,17 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
     [Then(@"the extent {string} has {int} object(s)")]
     public async Task ThenExtentCountAsync(string typeName, int count)
     {
-        await Assert.That(ExtentCount(typeName)).IsEqualTo(count);
+        // Poll the REAL store count, do not read once: the preceding mutation (a create-through-
+        // reference, a pick, a set-remove) lands in the store via an ASYNC WS round-trip — the
+        // server mints/links the object and runs mark-sweep GC on its own thread — while the
+        // mutating step only waited for the OPTIMISTIC DOM update (the .ref-current text, the row
+        // detaching). A single read can therefore observe the extent before that server write +
+        // GC has committed (Expected 1 found 0 after a create; Expected 0 found 1 after a remove).
+        // Polling gates the assertion on the authoritative outcome actually settling — the store is
+        // the single source of truth — and returns the instant it does. (No timer, no budget raise.)
+        await Polling.EventuallyAsync(
+            () => ExtentCount(typeName) == count,
+            $"the extent '{typeName}' to settle at {count} object(s)");
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────
