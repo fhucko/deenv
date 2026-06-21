@@ -171,12 +171,12 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
 
 ---
 
-## Beyond Milestone 8
+## Milestones 9 and later
 
 Status is marked inline. The done milestones (M9–M11) are grouped first; the **future**
 items are **NOT scoped — do not build yet** (CLAUDE.md ground rules 1–2).
 
-### Done since Milestone 8 (M9–M11)
+### Done (M9–M11)
 
 - **M9 — Self-hosted generic UI.  ← DONE (2026-06-14).** The auto-form experience is
   re-expressed in Code as a reflective library (`objectForm`/`refEditor`/`setTable`/
