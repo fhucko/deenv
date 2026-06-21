@@ -124,16 +124,14 @@ distributed scale (that is the hardest, latest pillar — pillar 7, STAGES.md
 Stage 5). "Superior to expensive cloud, for the apps cloud over-serves" is a
 large and honest claim; "superior to cloud, full stop" would be an overpromise.
 
-**Free, open, and steward-led.** deenv is **free and open source** — that is
-settled; the **specific license is still being chosen, currently leaning permissive
-(MIT).** The axis is permissive (MIT/Apache) vs. copyleft (GPL/**AGPL**):
-permissive maximises reach and embedding (the current lean), while copyleft
-(especially AGPL) would instead keep the core from being taken closed and
-out-proprietarised, at some adoption friction. (Restrictive source-available
-licenses like BSL are off the table — they are not open source.) One consideration for
-whichever is chosen: the kernel/image boundary is a natural license boundary, so
-apps built on the kernel can stay the author's own regardless (as the Linux
-kernel's GPL does not reach userspace). The creator's role is **steward, not founder** —
+**Free, open, and steward-led.** deenv is **free and open source** under the **MIT
+license** — chosen for maximum reach and embedding. The considered alternative was
+copyleft (GPL/**AGPL**), which would instead keep the core from being taken closed and
+out-proprietarised at some adoption friction; permissive won on reach. (Restrictive
+source-available licenses like BSL were never on the table — they are not open source.)
+The kernel/image boundary is in any case a natural license boundary, so apps built on
+the kernel stay the author's own regardless (as the Linux kernel's GPL does not reach
+userspace). The creator's role is **steward, not founder** —
 the Linus Torvalds / Evan You model: build and maintain the core, funded by
 **donations and sponsorship**, with a day job as the runway until (if ever) it
 earns the right to go full-time. **AI is the force multiplier** that makes this
