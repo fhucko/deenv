@@ -9,6 +9,10 @@ scope until the current one is finished. Sequencing is not the opposite of
 ambition — for a mission this size, it is the only way the ambition ever
 becomes real.
 
+The milestones below run in order down to a single **Future work** divider: everything above
+it is done or in progress, everything below is future and out of scope. When a milestone is
+completed, move its entry above the divider.
+
 **Current focus (2026-06-21).** Milestones 1–11 are done. The active phase is the
 **usable-MVP gates**: (1) non-destructive apply — data survives a schema change — ✅ done;
 (2) a minimal real deploy (a self-contained build as a systemd service behind nginx) ✅
@@ -276,9 +280,6 @@ in DECISIONS ("UI middle-ground"). See `docs/plans/m11-reactivity-foundation.md`
 ---
 
 ## Future work — NOT scoped, do not build yet
-
-_Rolling marker: when a milestone is completed, move its entry above this line. Everything
-below is future and out of scope (CLAUDE.md ground rules 1–2)._
 
 - **Code, next layers.** A full type-checker (today: structural validation);
   derived-collection mutation semantics; dictionaries surfaced to the Code
