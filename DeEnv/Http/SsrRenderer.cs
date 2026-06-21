@@ -495,6 +495,39 @@ public sealed class SsrRenderer
           margin: 0.6rem 0 1.2rem; padding: 0.9rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
         .new-instance input, .new-instance select { max-width: 180px; }
         .design-editor { margin-top: 1rem; }
+        /* Per-row overflow ("kebab") menu: ALL of a row's actions (Open/Rename/Clone/Delete) live in
+           one trailing actions cell behind a "⋯" toggle, instead of being scattered across columns.
+           The menu container (and its click-outside backdrop) are always in the DOM and toggled by the
+           .open class (the component flips it) — never conditionally inserted, so the foreach row's
+           children stay structurally stable. The OPEN menu is position:absolute so it overlays rather
+           than growing the row and reflowing the table; the .row-actions cell (and .kebab) are the
+           positioning context. A full-viewport .kebab-backdrop sits just under the menu to catch an
+           outside click and close it. */
+        .instances-table td.row-actions { position: relative; width: 1%; white-space: nowrap; text-align: right; }
+        .kebab { position: relative; display: inline-block; }
+        /* The toggle reads as a button at rest (subtle border + surface), not a transparent glyph. */
+        .kebab-toggle { position: relative; z-index: 50; padding: 0.15rem 0.55rem; line-height: 1;
+          font-weight: 700; letter-spacing: .08em; color: var(--muted);
+          background: var(--surface); border: 1px solid var(--border); }
+        .kebab-toggle:hover { background: #f3f4f6; color: var(--text); }
+        /* Click-outside-to-close: hidden until the menu opens, then a fixed full-viewport catcher
+           beneath the menu (z below the menu, above the page). */
+        .kebab-backdrop { display: none; }
+        .kebab-backdrop.open { display: block; position: fixed; inset: 0; z-index: 40; }
+        .kebab-menu { display: none; }
+        .kebab-menu.open { display: flex; flex-direction: column; align-items: stretch; gap: 0.15rem;
+          position: absolute; top: 100%; right: 0; z-index: 50; min-width: 9rem;
+          margin-top: 0.25rem; padding: 0.3rem; background: var(--surface); border: 1px solid var(--border);
+          border-radius: 8px; box-shadow: 0 2px 8px rgba(31,35,40,.12); text-align: left; }
+        .kebab-menu a, .kebab-menu button { display: block; width: 100%; text-align: left;
+          border-color: transparent; background: transparent; }
+        .kebab-menu a:hover, .kebab-menu button:hover { background: #f3f4f6; }
+        .kebab-menu a.open-instance { padding: 0.4rem 0.85rem; color: var(--text); }
+        /* The two-step delete confirm inside the menu (mirrors the designs list): inline "Delete?" + Yes/Cancel. */
+        .kebab-menu .delete-confirm { display: block; padding: 0.4rem 0.85rem 0.1rem; font-size: 0.85rem; color: var(--danger); }
+        .kebab-menu button.delete-yes { color: var(--danger); }
+        /* The detail page's head: name (or inline rename) + the kebab on one line, above the selector. */
+        .instance-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.6rem; }
 
         /* Todo showcase (the committed default app — a custom fn render composing the library).
            These rules are the todo's own LAYOUT only (cards, grid, row arrangement, widths); the

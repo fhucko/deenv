@@ -29,6 +29,7 @@ ui
     var typeKinds = ["object", "enum"]
     var cardinalities = ["single", "set", "dictionary"]
     var confirmDeleteId = 0
+    var confirmDeleteInstanceId = 0
 
     fn addType(design)
         design.types.add({ name: "", baseType: "object", values: "", order: 0, props: [] })
@@ -45,6 +46,16 @@ ui
         if prop.cardinality == "dictionary"
             return "prop-row is-dict"
         return "prop-row"
+
+    fn kebabClass(open)
+        if open
+            return "kebab-menu open"
+        return "kebab-menu"
+
+    fn backdropClass(open)
+        if open
+            return "kebab-backdrop open"
+        return "kebab-backdrop"
 
     fn startRename(i)
         renameId = i.id
@@ -164,6 +175,42 @@ ui
                 <p class="not-found">
                     "Design not found."
 
+    fn instanceActions(inst, showOpen)
+        var state = { open: false }
+        fn closeMenu()
+            state.open = false
+            confirmDeleteInstanceId = 0
+        fn pickRename()
+            startRename(inst)
+            closeMenu()
+        fn pickClone()
+            sys.cloneInstance(inst.id)
+            closeMenu()
+        fn render()
+            return <div class="kebab">
+                <button class="kebab-toggle" onClick={() => state.open = state.open == false}>
+                    "⋯"
+                <div class={backdropClass(state.open)} onClick={() => closeMenu()}>
+                <div class={kebabClass(state.open)}>
+                    if showOpen
+                        <a class="open-instance" href={sys.nest("/instances", inst.id)}>
+                            "Open"
+                    <button class="rename-instance" onClick={() => pickRename()}>
+                        "Rename"
+                    <button class="clone-instance" onClick={() => pickClone()}>
+                        "Clone"
+                    if confirmDeleteInstanceId == inst.id
+                        <span class="delete-confirm">
+                            "Delete?"
+                        <button class="delete-yes" onClick={() => sys.delete(inst.id)}>
+                            "Yes"
+                        <button class="delete-cancel" onClick={() => confirmDeleteInstanceId = 0}>
+                            "Cancel"
+                    else
+                        <button class="delete-instance" onClick={() => confirmDeleteInstanceId = inst.id}>
+                            "Delete"
+        return render
+
     fn instancesListPage()
         return <main class="ide-list">
             <h1>
@@ -200,8 +247,6 @@ ui
                             else
                                 <span class="instance-app">
                                     i.app
-                                <button class="rename-instance" onClick={() => startRename(i)}>
-                                    "Rename"
                         <td class="instance-port">
                             i.path
                         <td>
@@ -209,13 +254,8 @@ ui
                                 if sys.id(d) == i.designId
                                     <span class="design-label">
                                         d.label
-                        <td>
-                            <a class="open-instance" href={sys.nest("/instances", i.id)}>
-                                "Open"
-                            <button class="clone-instance" onClick={() => sys.cloneInstance(i.id)}>
-                                "Clone"
-                            <button class="delete-instance" onClick={() => sys.delete(i.id)}>
-                                "Delete"
+                        <td class="row-actions">
+                            <instanceActions inst={i} showOpen={true}>
 
     fn designSelector(instanceId, currentDesignId)
         var state = { pick: currentDesignId }
@@ -241,13 +281,18 @@ ui
             if sys.instances.any(i => i.id == routeId)
                 foreach i in sys.instances
                     if i.id == routeId
-                        <span class="instance-app">
-                            i.app
+                        <div class="instance-head">
+                            if renameId == i.id
+                                <input class="rename-input" value={renameName}>
+                                <button class="rename-save" onClick={() => doRename(i)}>
+                                    "Save"
+                                <button class="rename-cancel" onClick={() => renameId = 0}>
+                                    "Cancel"
+                            else
+                                <span class="instance-app">
+                                    i.app
+                            instanceActions(i, false)()
                         designSelector(i.id, i.designId)()
-                        <button class="clone-instance" onClick={() => sys.cloneInstance(i.id)}>
-                            "Clone"
-                        <button class="delete-instance" onClick={() => sys.delete(i.id)}>
-                            "Delete"
             else
                 <p class="not-found">
                     "Instance not found."

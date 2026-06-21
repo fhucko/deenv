@@ -84,12 +84,14 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [When("I open the instance {string}")]
     public async Task WhenOpenInstance(string label)
     {
-        // The Open link is a fresh-SSR <a href="/instances/<id>"> on the matching instance row. Reaching
-        // the instance page can start from the instances list OR directly (after editing a design) — go
-        // to the list first so the row's Open link is present, then click it.
+        // The Open link is a fresh-SSR <a href="/instances/<id>"> now living in the row's kebab (overflow)
+        // menu — all row actions were consolidated there. Reaching the instance page can start from the
+        // instances list OR directly (after editing a design) — go to the list first so the row is present,
+        // open its kebab so the Open link is visible, then click it.
         if (await ctx.Page!.Locator($".instance-row").CountAsync() == 0)
             await WhenOpenList();
-        await RowFor(label).Locator("a.open-instance").ClickAsync();
+        await RowFor(label).Locator("td.row-actions button.kebab-toggle").ClickAsync();
+        await RowFor(label).Locator(".kebab-menu.open a.open-instance").ClickAsync();
         await ctx.Page!.WaitForSelectorAsync("main.ide-instance select.design-pick");
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
     }
@@ -314,6 +316,104 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [When("I apply the design")]
     public async Task WhenApply() =>
         await ctx.Page!.Locator("button.apply-design").ClickAsync();
+
+    // ── The per-row kebab (overflow) actions menu on the instances list ──────────
+
+    [Then("the instance {string} row actions are hidden behind a kebab")]
+    public async Task ThenRowActionsBehindKebab(string label)
+    {
+        // The row carries a single "⋯" toggle in its trailing actions cell, and the menu items
+        // (Open/Rename/Clone/Delete) start HIDDEN — they live in the DOM (the menu container is always
+        // rendered, only toggled by a class), so this asserts hidden, not absent. Proves the actions are
+        // consolidated behind the kebab rather than spread across the row's columns.
+        var row = RowFor(label);
+        await Assert.That(await row.Locator("td.row-actions button.kebab-toggle").CountAsync()).IsEqualTo(1);
+        await row.Locator(".kebab-menu button.rename-instance").WaitForAsync(Hidden);
+        await row.Locator(".kebab-menu button.clone-instance").WaitForAsync(Hidden);
+        await row.Locator(".kebab-menu button.delete-instance").WaitForAsync(Hidden);
+    }
+
+    [When("I open the actions menu for instance {string}")]
+    public async Task WhenOpenActionsMenu(string label) =>
+        // Click the row's "⋯" toggle — the component flips its own open state and re-renders, so the
+        // menu (class .kebab-menu.open) becomes visible. State is keyed to this row's slot, so only this
+        // row's menu opens.
+        await RowFor(label).Locator("td.row-actions button.kebab-toggle").ClickAsync();
+
+    [Then("the instance {string} actions menu shows Open, Rename, Clone, and Delete")]
+    public async Task ThenActionsMenuShowsAll(string label)
+    {
+        // Opened, the menu reveals all four actions (the same controls as before, now gathered in one
+        // place). WaitForAsync (default: Visible) proves each is now displayed, not just present.
+        var menu = RowFor(label).Locator(".kebab-menu.open");
+        await menu.Locator("a.open-instance").WaitForAsync();
+        await menu.Locator("button.rename-instance").WaitForAsync();
+        await menu.Locator("button.clone-instance").WaitForAsync();
+        await menu.Locator("button.delete-instance").WaitForAsync();
+    }
+
+    [Then("the instance {string} actions menu stays closed")]
+    public async Task ThenActionsMenuClosed(string label)
+    {
+        // Opening one row's kebab must NOT open another's — each row's menu has independent state keyed
+        // to its instance identity. So this row has no .open menu and its items stay hidden.
+        var row = RowFor(label);
+        await Assert.That(await row.Locator(".kebab-menu.open").CountAsync()).IsEqualTo(0);
+        await row.Locator(".kebab-menu button.delete-instance").WaitForAsync(Hidden);
+    }
+
+    [When("I choose Rename from the instance {string} kebab")]
+    public async Task WhenChooseRename(string label) =>
+        // The Rename item inside the (open) menu runs the SAME start-rename handler as the old parked
+        // button — only its location changed. Clicking it sets the page's renameId to this instance.
+        await RowFor(label).Locator(".kebab-menu.open button.rename-instance").ClickAsync();
+
+    [Then("the instance {string} row shows the inline rename editor")]
+    public async Task ThenRowShowsRenameEditor(string label)
+    {
+        // start-rename flips the Name column to its inline rename conditional (the established per-row
+        // pattern): a rename input + Save + Cancel. While renaming, the row's .instance-app name span is
+        // gone (the else branch), so locate the renaming row by the input it now shows.
+        _ = label;
+        var renaming = ctx.Page!.Locator(".instance-row:has(input.rename-input)");
+        await renaming.Locator("input.rename-input").WaitForAsync();
+        await Assert.That(await renaming.Locator("button.rename-save").CountAsync()).IsEqualTo(1);
+        await Assert.That(await renaming.Locator("button.rename-cancel").CountAsync()).IsEqualTo(1);
+    }
+
+    // ── The same kebab on the instance DETAIL page (/instances/<id>) — no Open item ──
+
+    [When("I open the actions menu on the instance page")]
+    public async Task WhenOpenActionsMenuOnDetail() =>
+        // The detail page carries the SAME instanceActions component in its head; click its "⋯" toggle.
+        await ctx.Page!.Locator("main.ide-instance .kebab button.kebab-toggle").ClickAsync();
+
+    [Then("the instance page actions menu has no Open item")]
+    public async Task ThenDetailMenuHasNoOpen()
+    {
+        // The component is called with showOpen=false here, so the Open item is not in the tree at all
+        // (the only place "Open" would point is this very page). The menu IS open and still offers the
+        // other actions — assert one is visible to prove the menu opened, and that Open is absent.
+        var menu = ctx.Page!.Locator("main.ide-instance .kebab-menu.open");
+        await menu.Locator("button.rename-instance").WaitForAsync();
+        await Assert.That(await menu.Locator("a.open-instance").CountAsync()).IsEqualTo(0);
+    }
+
+    [When("I choose Rename from the instance page kebab")]
+    public async Task WhenChooseRenameOnDetail() =>
+        // Rename in the detail kebab runs the same start-rename handler, setting renameId to this instance.
+        await ctx.Page!.Locator("main.ide-instance .kebab-menu.open button.rename-instance").ClickAsync();
+
+    [Then("the instance page shows the inline rename editor")]
+    public async Task ThenDetailShowsRenameEditor()
+    {
+        // start-rename flips the page head to its inline rename conditional (input + Save + Cancel), the
+        // same pattern as the list row. While renaming, the head's .instance-app name span is gone.
+        var head = ctx.Page!.Locator("main.ide-instance .instance-head");
+        await head.Locator("input.rename-input").WaitForAsync();
+        await Assert.That(await head.Locator("button.rename-save").CountAsync()).IsEqualTo(1);
+        await Assert.That(await head.Locator("button.rename-cancel").CountAsync()).IsEqualTo(1);
+    }
 
     // ── When: deleting a design (the two-step inline confirm) ────────────────────
 

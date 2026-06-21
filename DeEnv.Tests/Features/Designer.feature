@@ -305,3 +305,45 @@ Feature: The operator IDE (designs library + instance design selector)
     And I add a type to the design
     And I name the just-added type "Thing"
     Then the design "withtype" has a stored type named "Thing"
+
+  # Each instances-list row gathers ALL its actions (Open/Rename/Clone/Delete) into ONE trailing
+  # actions cell behind a "⋯" overflow (kebab) menu — instead of scattering Rename in the Name column
+  # and Open/Clone/Delete in a separate column. The menu is a per-row REACTIVE component: it is hidden
+  # until the row's kebab is clicked, and its open/closed state is keyed to that row's instance identity,
+  # so opening one row's menu does NOT open another's (independent state that survives re-render). The
+  # menu container is always in the DOM (toggled by a class), not conditionally inserted, so the row's
+  # children reconcile cleanly. The actions behind it invoke the SAME handlers as before.
+  @milestone-10 @single-user
+  Scenario: Row actions are consolidated into a per-row kebab menu with independent state
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the instances list
+    Then the instance "todo" row actions are hidden behind a kebab
+    When I open the actions menu for instance "todo"
+    Then the instance "todo" actions menu shows Open, Rename, Clone, and Delete
+    And the instance "crm" actions menu stays closed
+
+  # The kebab is only the CONTAINER — the actions still work. Choosing Rename from the "todo" row's
+  # kebab triggers the same start-rename handler as before, so the Name column swaps to the inline
+  # rename input (the established per-row conditional). This proves the consolidation changed only WHERE
+  # the control lives, not the operation it performs.
+  @milestone-10 @single-user
+  Scenario: Rename chosen from the kebab opens the inline rename editor for that row
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the instances list
+    And I open the actions menu for instance "todo"
+    And I choose Rename from the instance "todo" kebab
+    Then the instance "todo" row shows the inline rename editor
+
+  # The instance DETAIL page (/instances/<id>) carries the same kebab, but it must NOT offer "Open" -
+  # that would point at the page you are already on (self-referential). So the detail kebab drops Open
+  # and keeps Rename/Clone/Delete; choosing Rename opens the SAME inline rename editor in the page head
+  # (the established conditional), proving the menu drives the real operation here too.
+  @milestone-10 @single-user
+  Scenario: The instance detail page kebab omits Open and its Rename opens the inline editor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the instances list
+    And I open the instance "todo"
+    And I open the actions menu on the instance page
+    Then the instance page actions menu has no Open item
+    When I choose Rename from the instance page kebab
+    Then the instance page shows the inline rename editor
