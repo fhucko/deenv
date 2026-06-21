@@ -294,6 +294,8 @@ public class InstanceContext
     // `Db.lead: Person` is a reference ROUTE (/lead → the self-hosted reference editor);
     // `Note` (title scalar + `author: Person` reference) so /notes/{id} renders an objectForm
     // with an embedded author picker. Two people seed the Person extent for "pick existing".
+    // The `notes` SET seeds two members so its set table at /notes shows the reference column
+    // both ways: Note 4 has no author (→ "(none)") and Note 5 references Ada (id 2, → "2").
     public static InstanceDescription SelfHostedRefDb() =>
         InstanceDescriptionLoader.Load(SelfHostedRefApp);
 
@@ -312,13 +314,16 @@ public class InstanceContext
     initialData
         Db 1
             people: [2, 3]
-            notes: [4]
+            notes: [4, 5]
         Person 2
             name: "Ada"
         Person 3
             name: "Grace"
         Note 4
             title: "First note"
+        Note 5
+            title: "Authored note"
+            author: 2
     """;
 
     // The code-bearing fixture documents, for the printer round-trip tests. The shop app is a

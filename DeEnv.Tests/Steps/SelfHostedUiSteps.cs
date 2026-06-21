@@ -247,6 +247,16 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
             $"() => {{ const r = [...document.querySelectorAll('.set-row')].find(e => e.textContent.includes({JsString(rowTitle)})); " +
             "return r != null && r.querySelector('.bool-cell')?.textContent.trim() === '\\u2717'; }");
 
+    // A reference column renders the referent's label (or blank when unset). The data cell is the
+    // row's <td> that is neither the title link (.row-id) nor the trailing Remove cell (.row-action);
+    // Note has exactly one such cell (author), so its trimmed text is the rendered reference value.
+    [Then("the set row titled {string} shows {string} in its reference cell")]
+    public async Task ThenRefCellShows(string rowTitle, string expected) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const r = [...document.querySelectorAll('.set-row')].find(e => e.textContent.includes({JsString(rowTitle)})); " +
+            $"const c = r?.querySelector('td:not(.row-id):not(.row-action)'); " +
+            $"return c != null && c.textContent.trim() === {JsString(expected)}; }}");
+
     // The exact pathname after a navigation lands (the row link pushed history) — stricter than the
     // substring "the URL is", so a wrong navigation to /notes/2 can't satisfy a "/notes" assertion.
     [Then("the URL path becomes {string}")]

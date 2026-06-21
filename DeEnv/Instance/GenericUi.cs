@@ -239,7 +239,7 @@ public static class GenericUi
                                     <th>
                                         sys.humanize(desc.labelProp)
                                     foreach p in desc.props
-                                        if p.baseType != "object" && p.baseType != "set" && p.name != desc.labelProp
+                                        if p.baseType != "set" && p.baseType != "dictionary" && p.name != desc.labelProp
                                             <th>
                                                 sys.humanize(p.name)
                                 <th>
@@ -257,6 +257,9 @@ public static class GenericUi
                                                         if p.baseType == "bool"
                                                             <span class="bool-cell">
                                                                 boolGlyph(sys.field(m, p.name))
+                                                        else if p.baseType == "object"
+                                                            if sys.field(m, p.name) != null
+                                                                sys.field(sys.field(m, p.name), sys.schema(p.target).labelProp)
                                                         else
                                                             sys.field(m, p.name)
                                     else
@@ -264,11 +267,14 @@ public static class GenericUi
                                             <a class="row-link" href={sys.nest(setPath, m)}>
                                                 sys.field(m, desc.labelProp)
                                         foreach p in desc.props
-                                            if p.baseType != "object" && p.baseType != "set" && p.name != desc.labelProp
+                                            if p.baseType != "set" && p.baseType != "dictionary" && p.name != desc.labelProp
                                                 <td>
                                                     if p.baseType == "bool"
                                                         <span class="bool-cell">
                                                             boolGlyph(sys.field(m, p.name))
+                                                    else if p.baseType == "object"
+                                                        if sys.field(m, p.name) != null
+                                                            sys.field(sys.field(m, p.name), sys.schema(p.target).labelProp)
                                                     else
                                                         sys.field(m, p.name)
                                     if rowActions != null

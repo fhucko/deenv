@@ -308,6 +308,18 @@ Feature: Self-hosted generic UI (object forms)
     Then a set row eventually shows "Second note"
     And the store eventually has a "Note" whose "title" is "Second note"
 
+  # The generic set table shows every non-collection prop as a column, including a single
+  # reference: a ref column renders the referent's LABEL (sys.field(ref, target.labelProp)),
+  # or blank when unset. Note 5 references Ada → its author cell shows "Ada"; Note 4 has no
+  # author → blank. Tables stay read-only (no cell inputs); editing happens on the member page.
+  @milestone-11 @single-user
+  Scenario: A set table renders a single reference as a label column
+    Given the self-hosted reference app is running
+    When I open "/notes"
+    Then the page shows ".set-table"
+    And the set row titled "Authored note" shows "Ada" in its reference cell
+    And the set row titled "First note" shows "" in its reference cell
+
   # ── flag-gated create view (milestone 11) ──────────────────────────────────
   # The always-visible inline add row is replaced by a `+ New` button that reveals a
   # labeled create form (the same Field label+Input the edit page uses), swapping out
