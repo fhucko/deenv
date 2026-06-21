@@ -169,116 +169,116 @@ custom mode *composing the generic UI as a library* (M9 makes the generic UI tha
 library). The synthesized-view dispatch is kept as the generic UI's internal
 routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED").
 
+## Milestone 9 — Self-hosted generic UI  ← DONE (2026-06-14)
+
+The auto-form experience is
+re-expressed in Code as a reflective library (`objectForm`/`refEditor`/`setTable`/
+`dictTable`/`leafForm` over schema-as-data; builtins `field`/`humanize`/`extent`/
+`setRef`/`nest`/`clone`) and is now the **default** renderer — an app with no
+`fn render()` self-hosts. Object forms, references, set tables, objects-that-hold-sets
+(inline tables, nested path-walk links), dictionaries (route + entries), and a
+self-hosted NotFound all render in Code; the **C# auto-form, `instance.ts`, and the
+`/js` C# client are deleted** — the self-hosted UI is the sole renderer. Infra
+(`/ws`, the `/js` bundle) is on a separate port (clean app URL space); framework
+context lives in a `system` scope with the generic-UI internals in a sibling
+`internal` scope. Specced by `SelfHostedUi.feature` + the migrated milestone-1/2/4/5
+features. See DECISIONS.md.
+
+## Milestone 10 — Multi-instance management (single-process, single-operator)  ← DONE
+
+One kernel process **hosts every instance in `kernel.json` at once**, each addressed by
+**path** (`/apps/<name>`) under the kernel's two shared ports (an app port + an asset
+port) with its own sovereign data, driven by an **instance registry** (which instances
+exist) as **kernel-owned data**. (The earlier per-instance port-pair model was replaced
+by path routing, commit 27c6d98.) The
+substrate under schema versioning's *apply*, the Stage-2 test-instance loop, and
+the self-hosted-image north star — the unit that gets versioned/applied/tested is
+an instance, so instance management is the layer underneath.
+
+**First slice** (hosting/wiring only — no Code/interpreter change): factor the
+"build + start the app+infra hosts for one instance" out of `Program.cs`'s single,
+blocking `RunAsync` tail into a thin C# **kernel supervisor** that starts every
+instance in a registry and blocks on a shutdown signal. The registry is a plain
+`kernel.json` the kernel reads **without the interpreter** (the sanctioned
+bootstrap subset). Proven by two scenarios: the kernel hosts two instances on
+distinct ports, both serving their root; a change in one leaves the other
+unchanged (**data sovereignty**). **Landed**, and run modes were **removed
+entirely** (user direction): the kernel host is the sole entry point and
+`kernel.json` is the single source of what runs — a single instance is just a
+one-entry registry, so there is no `--mode`/`--app` and no regression in hosting
+one app. The designer becomes a registry entry; the M4 export/publish bridge is
+now exposed to Code as host actions, not a CLI mode. Built in `DeEnv/Kernel/`
+(`RegistryReader`/`KernelHost`/`HostedInstance`), specced by `Kernel.feature`
+(`@milestone-10`); suite green 238/238. Several more slices landed: **`list`** (the registry is
+readable from image Code as a read-only `instances` global — an app renders the list itself, the
+first kernel-as-data read path), **`create`** (add an instance to a RUNNING kernel: minted id,
+id-keyed sovereign store, operator-set ports, persisted; the `instances` view is live — no stale
+data), and **`switch`/`delete`** (re-bind a running instance's ports / remove one + collect its
+store) — the full create/list/switch/delete *mechanism* in C#. Then the **`sys` namespace** (the
+framework builtins + `instances` under `sys`) and the **host-action channel** (Code triggers a
+server-side host op): `sys.publish(schema, targetId)` runs the M4 schema export onto an existing
+instance and `sys.create(schema, name)` spawns a new one — both project a passed
+schema object (carried by its id; the designer's `Db { types }` meta-schema is unchanged).
+Then the **operator designer + ops**: `designer.app` (now `instances/1/app.app`) gained a HAND-ROLLED
+custom `fn render()` (a type/prop editor + the `sys.instances` list + per-instance
+create/clone/delete/publish controls), replacing its auto generic UI — explicit image Code, NOT a
+hidden callable designer (the compose path is rejected). The ops: `sys.delete(id)`,
+`sys.cloneInstance(sourceId)` (copies app doc + data), per-instance `sys.publish(db, id)`.
+Underpinned by a **uniform id-based instance identity model**: every instance has a stable unique int
+id; storage is fully id-based (`instances/<id>/`); the registry `app` field is a display NAME label
+(used for nothing functional, no `.app`); the boot-vs-created distinction is removed (ops work on any
+instance by id). **Named create + rename then completed the operator flow** (the create form takes a
+display name → `sys.create(schema, name)`; a per-instance Rename → `sys.rename(id,
+name)` edits the registry label). Remaining: richer editing. See DECISIONS.md ("Operator instance ops +
+the id-based instance identity model").
+
+**Kernel discipline:** the kernel gains the *mechanism* (host N instances, bind
+ports, hold the registry) — **not** the management *experience*. Create/list/
+switch/delete as the IDE are **image Code** (later slices); a C# admin panel would
+be the M4 mistake (a one-off the self-hosted IDE later tears out).
+
+**Deferred (kept out to stay single-process / single-operator):** cross-machine /
+kernel-to-kernel connectivity + distributed ACID (the *Multi-device* pillar below,
+Stage 5); fault/resource isolation between instances (Stage 5); real-time/multi-
+user; dynamic create/destroy-while-running and the management commands (follow-up
+slices); promoting the registry to a real *restricted* kernel-instance (north
+star). See STAGES.md + DECISIONS.md ("Multi-instance management — the kernel host").
+
+## Milestone 11 — Reactive components + the public component library (the UI middle-ground)  ← DONE 2026-06-19
+
+The generic-UI-as-first-consumer COLLAPSE landed (suite 348) — `sys.resolve(path)` + ONE
+synthesized Code `fn render()` composing the library replaced the C# per-URL dispatch; a
+generic app is now literally the custom-render path. *(Scheduled as M11 by user decision
+2026-06-16, pulled ahead of schema versioning, which moves to M13.)* **Slices 1–3 + 4a/4b +
+(b) + the dict follow-on + the public library's first slice landed (suite 315):** components
+get a **render-tree-positional ("slot path") identity** decoupled from the argument-keyed
+memo, so a component runs once per slot and its state survives a re-render with rebuilt
+arguments; slice 2 extends the slot path through `foreach` (per-row, by member identity — the
+same key the DOM reconciler uses), so a component in a list keeps independent state that
+follows the object across reorder/remove; slice 3 adds an opt-in `key={...}` directive that
+folds into the slot identity (caller-controlled reset); 4a + 4b moved the generic UI's
+components onto tag-invocation (object-form nested ones + the ref/set/dict ROOT views via
+value-position recognition); and slice (b) + the dict follow-on replaced BOTH descriptor
+registries (`__descs` type + `__dictDescs` dict) with a `sys.schema(typeName)` /
+`sys.schema(type, prop)` builtin (server-resolved + shipped like `sys.extent`) and deleted both.
+**Recognition = pure name-resolution** (a tag whose name is an in-scope function — any
+function, top-level or local — is a component; `<div>` stays an element), keyed by slot via the
+**existing** memo (untouched, additive). Run-once-across-re-renders is a client behavior (C#'s
+`Memoize` is write-only → server renders once), proven by the `@milestone-11` Gherkin scenarios;
+a new unified `setup + renders[]` conformance protocol proves the deterministic core (recognition,
+by-name binding, splice, local-component capture, sibling + foreach-row slot uniqueness) on both
+twins. The **public component library** landed too — a `lib` scope (`system ← lib ← app`) makes
+the PascalCase components (`ObjectForm`/`RefEditor`/`Input`/`Field`/…) composable from a
+hand-written `fn render()`, with the generic UI as the library's **first consumer** (its own
+completeness proof). Delivers VISION pillar 8's "auto with overrides" via the mechanism settled
+in DECISIONS ("UI middle-ground"). See `docs/plans/m11-reactivity-foundation.md`.
+
 ---
 
-## Milestones 9 and later
+## Future work — NOT scoped, do not build yet
 
-Status is marked inline. The done milestones (M9–M11) are grouped first; the **future**
-items are **NOT scoped — do not build yet** (CLAUDE.md ground rules 1–2).
-
-### Done (M9–M11)
-
-- **M9 — Self-hosted generic UI.  ← DONE (2026-06-14).** The auto-form experience is
-  re-expressed in Code as a reflective library (`objectForm`/`refEditor`/`setTable`/
-  `dictTable`/`leafForm` over schema-as-data; builtins `field`/`humanize`/`extent`/
-  `setRef`/`nest`/`clone`) and is now the **default** renderer — an app with no
-  `fn render()` self-hosts. Object forms, references, set tables, objects-that-hold-sets
-  (inline tables, nested path-walk links), dictionaries (route + entries), and a
-  self-hosted NotFound all render in Code; the **C# auto-form, `instance.ts`, and the
-  `/js` C# client are deleted** — the self-hosted UI is the sole renderer. Infra
-  (`/ws`, the `/js` bundle) is on a separate port (clean app URL space); framework
-  context lives in a `system` scope with the generic-UI internals in a sibling
-  `internal` scope. Specced by `SelfHostedUi.feature` + the migrated milestone-1/2/4/5
-  features. See DECISIONS.md.
-
-- **M10 — Multi-instance management (single-process, single-operator).  ← DONE.** One
-  kernel process **hosts every instance in `kernel.json` at once**, each addressed by
-  **path** (`/apps/<name>`) under the kernel's two shared ports (an app port + an asset
-  port) with its own sovereign data, driven by an **instance registry** (which instances
-  exist) as **kernel-owned data**. (The earlier per-instance port-pair model was replaced
-  by path routing, commit 27c6d98.) The
-  substrate under schema versioning's *apply*, the Stage-2 test-instance loop, and
-  the self-hosted-image north star — the unit that gets versioned/applied/tested is
-  an instance, so instance management is the layer underneath.
-
-  **First slice** (hosting/wiring only — no Code/interpreter change): factor the
-  "build + start the app+infra hosts for one instance" out of `Program.cs`'s single,
-  blocking `RunAsync` tail into a thin C# **kernel supervisor** that starts every
-  instance in a registry and blocks on a shutdown signal. The registry is a plain
-  `kernel.json` the kernel reads **without the interpreter** (the sanctioned
-  bootstrap subset). Proven by two scenarios: the kernel hosts two instances on
-  distinct ports, both serving their root; a change in one leaves the other
-  unchanged (**data sovereignty**). **Landed**, and run modes were **removed
-  entirely** (user direction): the kernel host is the sole entry point and
-  `kernel.json` is the single source of what runs — a single instance is just a
-  one-entry registry, so there is no `--mode`/`--app` and no regression in hosting
-  one app. The designer becomes a registry entry; the M4 export/publish bridge is
-  now exposed to Code as host actions, not a CLI mode. Built in `DeEnv/Kernel/`
-  (`RegistryReader`/`KernelHost`/`HostedInstance`), specced by `Kernel.feature`
-  (`@milestone-10`); suite green 238/238. Several more slices landed: **`list`** (the registry is
-  readable from image Code as a read-only `instances` global — an app renders the list itself, the
-  first kernel-as-data read path), **`create`** (add an instance to a RUNNING kernel: minted id,
-  id-keyed sovereign store, operator-set ports, persisted; the `instances` view is live — no stale
-  data), and **`switch`/`delete`** (re-bind a running instance's ports / remove one + collect its
-  store) — the full create/list/switch/delete *mechanism* in C#. Then the **`sys` namespace** (the
-  framework builtins + `instances` under `sys`) and the **host-action channel** (Code triggers a
-  server-side host op): `sys.publish(schema, targetId)` runs the M4 schema export onto an existing
-  instance and `sys.create(schema, name)` spawns a new one — both project a passed
-  schema object (carried by its id; the designer's `Db { types }` meta-schema is unchanged).
-  Then the **operator designer + ops**: `designer.app` (now `instances/1/app.app`) gained a HAND-ROLLED
-  custom `fn render()` (a type/prop editor + the `sys.instances` list + per-instance
-  create/clone/delete/publish controls), replacing its auto generic UI — explicit image Code, NOT a
-  hidden callable designer (the compose path is rejected). The ops: `sys.delete(id)`,
-  `sys.cloneInstance(sourceId)` (copies app doc + data), per-instance `sys.publish(db, id)`.
-  Underpinned by a **uniform id-based instance identity model**: every instance has a stable unique int
-  id; storage is fully id-based (`instances/<id>/`); the registry `app` field is a display NAME label
-  (used for nothing functional, no `.app`); the boot-vs-created distinction is removed (ops work on any
-  instance by id). **Named create + rename then completed the operator flow** (the create form takes a
-  display name → `sys.create(schema, name)`; a per-instance Rename → `sys.rename(id,
-  name)` edits the registry label). Remaining: richer editing. See DECISIONS.md ("Operator instance ops +
-  the id-based instance identity model").
-
-  **Kernel discipline:** the kernel gains the *mechanism* (host N instances, bind
-  ports, hold the registry) — **not** the management *experience*. Create/list/
-  switch/delete as the IDE are **image Code** (later slices); a C# admin panel would
-  be the M4 mistake (a one-off the self-hosted IDE later tears out).
-
-  **Deferred (kept out to stay single-process / single-operator):** cross-machine /
-  kernel-to-kernel connectivity + distributed ACID (the *Multi-device* pillar below,
-  Stage 5); fault/resource isolation between instances (Stage 5); real-time/multi-
-  user; dynamic create/destroy-while-running and the management commands (follow-up
-  slices); promoting the registry to a real *restricted* kernel-instance (north
-  star). See STAGES.md + DECISIONS.md ("Multi-instance management — the kernel host").
-
-- **M11 — SolidJS-style reactive components + the public component library (the UI
-  middle-ground).  ← DONE 2026-06-19 (suite 348): the generic-UI-as-first-consumer COLLAPSE landed —
-  `sys.resolve(path)` + ONE synthesized Code `fn render()` composing the library replaced the C#
-  per-URL dispatch; a generic app is now literally the custom-render path.** *(Scheduled as M11 by user
-  decision 2026-06-16, pulled ahead of schema versioning, which moves to M13.)* **Slices 1–3 + 4a/4b + (b) + the dict follow-on + the public library's first
-  slice landed (suite 315):** components get a **render-tree-positional ("slot
-  path") identity** decoupled from the argument-keyed memo, so a component runs once per slot and its
-  state survives a re-render with rebuilt arguments; slice 2 extends the slot path through
-  `foreach` (per-row, by member identity — the same key the DOM reconciler uses), so a component
-  in a list keeps independent state that follows the object across reorder/remove; slice 3 adds an
-  opt-in `key={...}` directive that folds into the slot identity (caller-controlled reset); 4a + 4b
-  moved the generic UI's components onto tag-invocation (object-form nested ones + the ref/set/dict
-  ROOT views via value-position recognition); and slice (b) + the dict follow-on replaced BOTH
-  descriptor registries (`__descs` type + `__dictDescs` dict) with a `sys.schema(typeName)` /
-  `sys.schema(type, prop)` builtin (server-resolved + shipped like `sys.extent`) and deleted both.
-  **Recognition =
-  pure name-resolution** (a tag whose name is an in-scope function — any function, top-level or
-  local — is a component; `<div>` stays an element), keyed by slot via the **existing** memo
-  (untouched, additive). Run-once-across-re-renders is a client behavior (C#'s `Memoize` is
-  write-only → server renders once), proven by the `@milestone-11` Gherkin scenarios; a new unified
-  `setup + renders[]` conformance protocol proves the deterministic core (recognition, by-name
-  binding, splice, local-component capture, sibling + foreach-row slot uniqueness) on both twins.
-  The **public component library** landed too — a `lib` scope (`system ← lib ← app`) makes the
-  PascalCase components (`ObjectForm`/`RefEditor`/`Input`/`Field`/…) composable from a
-  hand-written `fn render()`, with the generic UI as the library's **first consumer** (its own
-  completeness proof). Delivers VISION pillar 8's "auto with overrides" via the mechanism settled
-  in DECISIONS ("UI middle-ground"). See `docs/plans/m11-reactivity-foundation.md`.
-
-### Future (NOT scoped — do not build yet)
+_Rolling marker: when a milestone is completed, move its entry above this line. Everything
+below is future and out of scope (CLAUDE.md ground rules 1–2)._
 
 - **Code, next layers.** A full type-checker (today: structural validation);
   derived-collection mutation semantics; dictionaries surfaced to the Code
