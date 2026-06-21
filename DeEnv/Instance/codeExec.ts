@@ -731,7 +731,7 @@ function execExtent(codeCall: CodeCall, scope: ExecScope, context: ExecContext):
     return memoize("extent:" + v.value, context, () => { throw new Error("Value not available"); });
 }
 
-// schema(typeName): a type's descriptor — { name, labelProp, props, blank } — the reflective shape
+// schema(typeName): a type's descriptor — { name, labelProp, props } — the reflective shape
 // the self-hosted generic UI walks. The twin of execExtent: the descriptor is SERVER-RESOLVED
 // (computed from the schema, which never crosses the wire), shipped as a cached value, and the
 // client reuses it. No store/schema on the client, so a cache miss throws "Value not available",

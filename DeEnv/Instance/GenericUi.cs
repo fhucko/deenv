@@ -66,7 +66,7 @@ namespace DeEnv.Instance;
 // draft), sys.setFields (bulk-copy one object's props onto another — fill or commit a draft).
 // `obj.prop = x` resets a component's draft after Create.
 //
-// A type's descriptor — { name, labelProp, props } (plus a now-unused `blank`) — is fetched by
+// A type's descriptor — { name, labelProp, props } — is fetched by
 // `sys.schema(typeName)`,
 // resolved server-side from the schema (the descriptor literal GenericUi threads into the executor)
 // and shipped to the client like extent. Components are tag-invoked and slot-keyed, so a descriptor
@@ -462,10 +462,7 @@ public static class GenericUi
 
     // The descriptor literals threaded into the executor for `sys.schema(...)` to evaluate (the
     // replacement for the old `__descs`/`__dictDescs` globals). Two key shapes, both pure data:
-    //   "TypeName"      → { name, labelProp, props } — a type's descriptor (sys.schema("T")). (Also
-    //                     carries a `blank` template, now UNUSED — sys.new(desc) mints drafts
-    //                     reflectively from `props` — but kept so the public descriptor shape is
-    //                     unchanged; harmless pure data.)
+    //   "TypeName"      → { name, labelProp, props } — a type's descriptor (sys.schema("T")).
     //   "Owner/prop"    → that prop's descriptor — sys.schema("O","P"). One entry per prop of every
     //                     object type, so a caller can fetch a single prop's shape by name. The
     //                     generic UI uses this for a dict route; a hand-written `fn render()` uses it
@@ -489,10 +486,7 @@ public static class GenericUi
         return Obj(
             ("name", Text(t.Name)),
             ("labelProp", Text(labelProp)),
-            ("props", Arr((t.Props ?? []).Select(p => (ICodeValue)PropDesc(p, desc)))),
-            // `blank`: a default-valued draft template. UNUSED since sys.new(desc) builds drafts
-            // reflectively from `props`; kept so the public sys.schema descriptor shape is unchanged.
-            ("blank", Obj(scalars.Select(p => (p.Name, DefaultFor(p.Type))).ToArray())));
+            ("props", Arr((t.Props ?? []).Select(p => (ICodeValue)PropDesc(p, desc)))));
     }
 
     // A prop descriptor: scalar { name, baseType }; reference { name, baseType:"object",
@@ -502,7 +496,7 @@ public static class GenericUi
     // (dictTable reads it directly): valueProps are the element's scalar columns (empty for a
     // scalar dict, where isScalar=true and a single "Value" column is shown). sys.new(desc) reads
     // these to mint the New-entry draft — a `value` for a scalar dict (defaulted by `element`), else
-    // one field per valueProp. (A `blank` template is also emitted but UNUSED, kept for shape-stability.)
+    // one field per valueProp.
     private static CodeObject PropDesc(PropDefinition p, InstanceDescription desc)
     {
         if (p.Cardinality == Cardinality.Dictionary)
@@ -515,10 +509,7 @@ public static class GenericUi
                 ("keyType", Text(p.KeyType ?? "text")),
                 ("element", Text(p.Type)),
                 ("isScalar", new CodeBool { Value = isScalar }),
-                ("valueProps", Arr(valueProps.Select(vp => (ICodeValue)PropDesc(vp, desc)))),
-                ("blank", isScalar
-                    ? Obj(("value", DefaultFor(p.Type)))
-                    : Obj(valueProps.Select(vp => (vp.Name, DefaultFor(vp.Type))).ToArray())));
+                ("valueProps", Arr(valueProps.Select(vp => (ICodeValue)PropDesc(vp, desc)))));
         }
         if (p.Cardinality == Cardinality.Set)
             return Obj(("name", Text(p.Name)), ("baseType", Text("set")), ("element", Text(p.Type)));
@@ -539,7 +530,7 @@ public static class GenericUi
         _ => Text(""),
     };
 
-    // Scalar (leaf-valued) props for the blank-draft template and the table columns: base
+    // Scalar (leaf-valued) props for the label prop and the table columns: base
     // leaves and enums (an enum value is text-shaped). References/sets/dicts are excluded.
     private static List<PropDefinition> Scalars(TypeDefinition t, InstanceDescription desc) => (t.Props ?? [])
         .Where(p => p.Cardinality == Cardinality.Single && (BaseTypes.IsName(p.Type) || desc.IsEnumType(p.Type)))

@@ -16,7 +16,6 @@ interface ClientCommon { functions?: CodeFunction[]; }
 
 const uiStatic: {
     renderFn: ExecFunction;
-    renderArgs: ExecValue[]; // always empty: the render takes no args (routing is internal — sys.resolve / reading path)
     lastId: LastId;
     state: AppState;
     cache: Map<string, ClientCacheEntry>;
@@ -24,7 +23,6 @@ const uiStatic: {
     lastError: string | null; // the latest server-rejected mutation's reason (Stage 5)
 } = {
     renderFn: null as unknown as ExecFunction,
-    renderArgs: [],
     lastId: { value: 0 },
     // The client mirrors the server's framework values (db, path) + app vars in one flat
     // top scope; resolution is by name, so the server's system/app split is observationally

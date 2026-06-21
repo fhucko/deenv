@@ -11,7 +11,7 @@ function renderUi(): void {
     resetSlotPath(); // a fresh render tree starts at the root slot (defensive; push/pop is balanced)
     let result: ExecValue;
     try {
-        result = callFunction(uiStatic.renderFn, context, uiStatic.renderArgs);
+        result = callFunction(uiStatic.renderFn, context, []);
     } catch (e) {
         // Unshipped data read outside any computation boundary: keep the current DOM
         // and ask the server; the refetch reply re-renders with the data present.
