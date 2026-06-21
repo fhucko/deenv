@@ -16,3 +16,9 @@ DeEnv/Instance/*.js
 
 ## NuGet
 *.nupkg
+
+## Deploy / publish artifacts + transient run logs (build output — never tracked)
+artifacts/
+*.log
+*.tar.gz
+kernel-smoke.*

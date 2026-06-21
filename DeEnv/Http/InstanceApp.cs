@@ -53,9 +53,10 @@ public sealed class LiveRegistry
 // Both trees share one session store (the SSR path mints sessions, the WS path recomputes over them
 // — see ClientSession). `mountBase` is where the instance is mounted ("/" root-mounted, "/apps/<name>"
 // path-mounted) — applied at the SSR edge so emitted links/assets are mount-correct while the app
-// stays base-unaware (a request can override it via X-Forwarded-Prefix). `assetPort` is the
-// kernel-level asset port the page builds its /js + WebSocket URL against (the host comes from the
-// request, so the same authority serves all instances).
+// stays base-unaware (a request can override it via X-Forwarded-Prefix). `assetPort` is the ADVERTISED
+// asset port the page builds its /js + WebSocket URL against (the kernel's bind port locally, or a
+// proxy's public TLS asset port — the host comes from the request, so the same authority serves all
+// instances).
 public static class InstanceApp
 {
     public static (IHandlerBuilder App, IHandlerBuilder Asset) Build(

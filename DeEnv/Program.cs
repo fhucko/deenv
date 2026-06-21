@@ -37,8 +37,30 @@ catch (KernelConfigException ex)
     return;
 }
 
+// Two deployment knobs for running behind a reverse proxy (nginx terminating TLS), read from env so the
+// committed kernel.json stays environment-agnostic (same as DEENV_HOME). Both default to today's
+// behavior, so local/dev is untouched:
+//   DEENV_BIND=loopback         → bind the app + asset hosts to 127.0.0.1 only (the proxy owns the
+//                                 public interface; the raw ports never leave the box), else all
+//                                 interfaces.
+//   DEENV_PUBLIC_ASSET_PORT=<n> → the asset port the page tells the browser to use for /js + the
+//                                 WebSocket, while the asset host still BINDS registry.AssetPort on the
+//                                 box. `0` → SAME-ORIGIN: advertise an EMPTY authority so the browser
+//                                 uses the app origin and the proxy routes /ws + /js to the asset host
+//                                 (one origin → one auth gate covers the WebSocket too). `>0` → that
+//                                 explicit public TLS asset port. Unset → advertise the bind port
+//                                 (local/dev — same origin port as before).
+var bindLoopback = string.Equals(
+    Environment.GetEnvironmentVariable("DEENV_BIND"), "loopback", StringComparison.OrdinalIgnoreCase);
+int? advertisedAssetPort =
+    int.TryParse(Environment.GetEnvironmentVariable("DEENV_PUBLIC_ASSET_PORT"), out var pub) && pub >= 0
+        ? pub
+        : null;
+
 // The two shared kernel ports come from the registry header (addressing is by path, not per-instance).
-var kernel = new KernelHost(baseDir, Path.Combine(baseDir, "kernel.json"), registry.AppPort, registry.AssetPort);
+var kernel = new KernelHost(
+    baseDir, Path.Combine(baseDir, "kernel.json"), registry.AppPort, registry.AssetPort,
+    bindLoopback, advertisedAssetPort);
 try
 {
     await kernel.StartAsync(specs);
@@ -53,7 +75,14 @@ catch (StoredDataException ex)
     return;
 }
 
-Console.WriteLine($"Kernel listening — app:{kernel.AppPort} asset:{kernel.AssetPort}.");
+var iface = bindLoopback ? "127.0.0.1" : "all interfaces";
+var advert = advertisedAssetPort switch
+{
+    null => "",
+    0 => ", assets same-origin",
+    int a => $", asset advertised as :{a}",
+};
+Console.WriteLine($"Kernel listening on {iface} — app:{kernel.AppPort} asset:{kernel.AssetPort}{advert}.");
 foreach (var instance in kernel.Instances)
     Console.WriteLine($"  Hosting {instance.Spec.App} at /apps/{instance.Spec.App}.");
 

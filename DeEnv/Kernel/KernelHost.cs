@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using DeEnv.Designer;
 using DeEnv.Http;
 using DeEnv.Instance;
@@ -32,7 +33,9 @@ namespace DeEnv.Kernel;
 // boot context (the base directory it resolves instances under, the registry file it persists to, and
 // the two shared ports) so a Code-triggered create (sys.create) can self-service CreateAsync with the
 // same layout + registry as a boot instance.
-public sealed class KernelHost(string baseDir, string registryPath, int appPort, int assetPort) : IAsyncDisposable
+public sealed class KernelHost(
+    string baseDir, string registryPath, int appPort, int assetPort,
+    bool bindLoopback = false, int? advertisedAssetPort = null) : IAsyncDisposable
 {
     // Keyed by instance id (its unique address + id-dir name). A dictionary, not a list, so every
     // operation addresses an instance by its STABLE id; ConcurrentDictionary is thread-safe per
@@ -42,6 +45,11 @@ public sealed class KernelHost(string baseDir, string registryPath, int appPort,
 
     public int AppPort => appPort;
     public int AssetPort => assetPort;
+
+    // The asset port the page ADVERTISES to the browser (for /js + the WebSocket). Defaults to the bind
+    // port; a reverse-proxied deployment overrides it (DEENV_PUBLIC_ASSET_PORT) so the client dials the
+    // proxy's public TLS asset port while this host still binds `assetPort` on the box.
+    private int AdvertisedAssetPort => advertisedAssetPort ?? assetPort;
 
     // The two shared GenHTTP hosts (the app host on appPort, the asset host on assetPort), bound once
     // at StartAsync with a PathRouter front handler each. Null until started.
@@ -203,16 +211,14 @@ public sealed class KernelHost(string baseDir, string registryPath, int appPort,
         var appRouter = new PathRouter(n => ByName(n)?.AppHandler, Names);
         var assetRouter = new PathRouter(n => ByName(n)?.AssetHandler, Names);
 
-        _assetHost = Host.Create()
+        _assetHost = WithBinding(Host.Create()
             .Handler(assetRouter)
-            .Defaults(secureUpgrade: false, strictTransport: false)
-            .Port((ushort)assetPort);
+            .Defaults(secureUpgrade: false, strictTransport: false), assetPort);
 
-        _appHost = Host.Create()
+        _appHost = WithBinding(Host.Create()
             .Handler(appRouter)
             // Plain HTTP: no HTTPS endpoint, so don't upgrade/redirect.
-            .Defaults(secureUpgrade: false, strictTransport: false)
-            .Port((ushort)appPort);
+            .Defaults(secureUpgrade: false, strictTransport: false), appPort);
 
         try
         {
@@ -223,7 +229,7 @@ public sealed class KernelHost(string baseDir, string registryPath, int appPort,
             // independent; a failure stops the hosts. Each instance shares the LIVE registry provider
             // and gets its own host-action seam (a lazy closure over the hosted set).
             foreach (var spec in specs)
-                Register(HostedInstance.Start(spec, assetPort, _registry, HostActionsFor(spec)));
+                Register(HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec)));
         }
         catch
         {
@@ -231,6 +237,14 @@ public sealed class KernelHost(string baseDir, string registryPath, int appPort,
             throw;
         }
     }
+
+    // Bind a built host to its port: loopback-only when DEENV_BIND=loopback (a reverse proxy then owns
+    // the public interface and the raw app/asset ports never leave the box), else all interfaces — the
+    // local/dev default. Backward compatible: unset → bind every interface as before.
+    private IServerHost WithBinding(IServerHost host, int port) =>
+        bindLoopback
+            ? host.Bind(IPAddress.Loopback, (ushort)port, dualStack: false)
+            : host.Port((ushort)port);
 
     // ── boot sync of the design library (the design-host's `db.designs`) ──────────────
 
@@ -306,7 +320,7 @@ public sealed class KernelHost(string baseDir, string registryPath, int appPort,
 
         // Load it (build its handlers) and register — the front routers resolve it by name immediately,
         // and it shows up on EVERY instance's next render (the shared LIVE registry). No host bind.
-        var created = HostedInstance.Start(spec, assetPort, _registry, HostActionsFor(spec));
+        var created = HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec));
         Register(created);
 
         // Persist: append the created entry and rewrite kernel.json, so the instance reappears on the
@@ -346,7 +360,7 @@ public sealed class KernelHost(string baseDir, string registryPath, int appPort,
             new HashSet<string>(_instances.Values.Select(i => i.Spec.DataPath), StringComparer.OrdinalIgnoreCase),
             new HashSet<string>(_instances.Values.Select(i => i.Spec.App), StringComparer.Ordinal));
 
-        var created = HostedInstance.Start(spec, assetPort, _registry, HostActionsFor(spec));
+        var created = HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec));
         Register(created);
 
         RegistryWriter.Write(registryPath, new Registry(
@@ -405,7 +419,7 @@ public sealed class KernelHost(string baseDir, string registryPath, int appPort,
                 "/apps/<name>, so names must be unique.");
 
         // Rebuild with the new mount base so emitted links/assets use `/apps/<name>`. Same id-dir + store.
-        var renamed = HostedInstance.Start(instance.Spec with { App = name }, assetPort, _registry, HostActionsFor(instance.Spec with { App = name }));
+        var renamed = HostedInstance.Start(instance.Spec with { App = name }, AdvertisedAssetPort, _registry, HostActionsFor(instance.Spec with { App = name }));
         if (!_instances.TryUpdate(id, renamed, instance))
             throw new InvalidOperationException($"Instance {id} changed during the rename.");
         RefreshRegistry();
@@ -427,7 +441,7 @@ public sealed class KernelHost(string baseDir, string registryPath, int appPort,
         try
         {
             if (!_instances.TryGetValue(id, out var existing)) return Task.CompletedTask;
-            var restarted = HostedInstance.Start(existing.Spec, assetPort, _registry, HostActionsFor(existing.Spec));
+            var restarted = HostedInstance.Start(existing.Spec, AdvertisedAssetPort, _registry, HostActionsFor(existing.Spec));
             if (_instances.TryUpdate(id, restarted, existing))
                 RefreshRegistry();
             // If it was deleted / re-swapped during the rebuild, just drop the rebuilt handlers (GC).

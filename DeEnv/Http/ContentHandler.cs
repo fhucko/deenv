@@ -54,8 +54,9 @@ public sealed class ContentHandler : IHandler
             ? (prefix.Length == 0 ? "/" : prefix)
             : _mountBase;
 
-    // Where the client loads /js + opens its WebSocket: the request host with the kernel-level asset
-    // PORT (a shared port, decoupled from the per-instance app addressing). Empty when no asset port
+    // Where the client loads /js + opens its WebSocket: the request host with the ADVERTISED asset port
+    // (the kernel's bind port locally, or a reverse proxy's public TLS asset port via
+    // DEENV_PUBLIC_ASSET_PORT — decoupled from the per-instance app addressing). Empty when no asset port
     // (a render with no client bundle) — the client then falls back to a same-origin, base-relative
     // asset URL. The host is taken from the request (stripping any :port it carries) so the browser
     // reaches the asset host on the same name it used for the app.
