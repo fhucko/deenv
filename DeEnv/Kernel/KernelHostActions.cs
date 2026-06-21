@@ -11,11 +11,11 @@ namespace DeEnv.Kernel;
 // set) into an app document, or address an instance by its id:
 //   • publish(design, targetId) — project the design onto an EXISTING instance (resolved by id over
 //     the live hosted set), replacing its document while PRESERVING its data (non-destructive apply).
-//   • create(design, appPort, infraPort) — project the design into a NEW instance on the given
-//     ports, via the kernel create delegate (the C# create mechanism: write the doc, hot-start,
-//     append the registry, refresh the live set).
-//   • cloneInstance(sourceId, appPort, infraPort) — copy an existing instance's app doc AND data
-//     into a NEW instance on the given ports, via the kernel clone delegate.
+//   • create(design, name) — project the design into a NEW instance with the given display NAME, via
+//     the kernel create delegate (the C# create mechanism: write the doc, load, append the registry,
+//     refresh the live set). NO ports — addressing is by path (`/apps/<name>` derives from the name).
+//   • cloneInstance(sourceId) — copy an existing instance's app doc AND data into a NEW instance, via
+//     the kernel clone delegate. NO ports — the clone gets a unique mount name derived from the source.
 //   • delete(targetId) — remove an existing instance, via the kernel delete delegate.
 //   • setDesign(design, targetId) — record (on the target's registry entry) that it now runs the
 //     passed design, AND deploy it onto the target — the IDE's "Apply" (remember-then-publish). It is
@@ -32,9 +32,9 @@ namespace DeEnv.Kernel;
 public sealed class KernelHostActions(
     string metaAppPath, string dataPath,
     Func<int, InstanceSpec?> resolveTarget,
-    Func<string, string, int, int, int?, Task> createInstance,
+    Func<string, string, int?, Task> createInstance,
     Func<int, Task> deleteInstance,
-    Func<int, int, int, Task> cloneInstance,
+    Func<int, Task> cloneInstance,
     Func<int, int, Task> recordDesign,
     Func<int, Task> restartInstance,
     Func<int, string, Task> renameInstance) : IHostActions
@@ -99,37 +99,33 @@ public sealed class KernelHostActions(
         _ = restartInstance(targetId);
     }
 
-    // create(design, name, appPort, infraPort): project the PASSED design into a NEW instance with the
-    // given display label on the given ports — the sibling of publish (spawn rather than replace). arg 0
-    // is the design object id, arg 1 the display label, args 2/3 the ports. ProjectDesignDocument
-    // validates the design first (throws, spawning nothing, on an invalid one); then the kernel create
-    // delegate writes + hot-starts it, recording the design's id on the new instance's registry entry
-    // (so its dropdown pre-selects that design, like a seeded one). The delegate is async (it binds
-    // ports); we block on it because the WS dispatch is synchronous and there is no synchronization
-    // context to deadlock on (a single-operator devops action).
+    // create(design, name): project the PASSED design into a NEW instance with the given display NAME —
+    // the sibling of publish (spawn rather than replace). arg 0 is the design object id, arg 1 the
+    // display name (which ALSO becomes the mount path `/apps/<name>` — addressing is by path now, so
+    // there are NO port args). ProjectDesignDocument validates the design first (throws, spawning
+    // nothing, on an invalid one); then the kernel create delegate writes + loads it, recording the
+    // design's id on the new instance's registry entry (so its dropdown pre-selects that design). The
+    // delegate is async; we block on it (the WS dispatch is synchronous, no synchronization context to
+    // deadlock on — a single-operator devops action).
     private void Create(JsonElement args)
     {
         var designId = ArgInt(args, 0);
         var design = ResolveDesign(designId);
         var name = ArgText(args, 1);
-        var appPort = ArgInt(args, 2);
-        var infraPort = ArgInt(args, 3);
 
         var appDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
-        createInstance(appDoc, name, appPort, infraPort, designId).GetAwaiter().GetResult();
+        createInstance(appDoc, name, designId).GetAwaiter().GetResult();
     }
 
-    // cloneInstance(sourceId, appPort, infraPort): copy an existing instance (app doc + data) into a
-    // NEW one on the given ports — the data-carrying sibling of create. arg 0 is the SOURCE instance
-    // id (a bare int, not a schema object), args 1/2 the new ports. The kernel clone delegate resolves
-    // the id and copies the files; an unknown id throws (surfaced as the reject). Blocked on for the
-    // same reason as create (the WS dispatch is synchronous, no synchronization context to deadlock on).
+    // cloneInstance(sourceId): copy an existing instance (app doc + data) into a NEW one — the
+    // data-carrying sibling of create. arg 0 is the SOURCE instance id (a bare int, not a schema
+    // object); there are NO port args (the clone gets a unique mount name derived from the source —
+    // addressing is by path). The kernel clone delegate resolves the id and copies the files; an
+    // unknown id throws (surfaced as the reject). Blocked on for the same reason as create.
     private void Clone(JsonElement args)
     {
         var sourceId = ArgInt(args, 0);
-        var appPort = ArgInt(args, 1);
-        var infraPort = ArgInt(args, 2);
-        cloneInstance(sourceId, appPort, infraPort).GetAwaiter().GetResult();
+        cloneInstance(sourceId).GetAwaiter().GetResult();
     }
 
     // delete(targetId): remove an existing instance. arg 0 is the instance id (a bare int). The kernel

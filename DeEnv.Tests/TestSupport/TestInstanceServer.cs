@@ -25,17 +25,19 @@ public sealed class TestInstanceServer : IAsyncDisposable
     {
         Store = new JsonFileInstanceStore(dataFilePath, description);
 
-        // Two ports, exactly like production: the app port (SSR, clean URL space) and the
-        // infra port (/ws + /js). The page is served from the app port; its bundle + WS
-        // target the infra port (injected as window.initInfraPort).
+        // Two ports, like production: the app port (SSR, clean URL space) and the asset port (/ws +
+        // /js). A single in-process instance is ROOT-MOUNTED (mount base "/"), so the base seam is in
+        // its identity form (links + path are root-relative, the asset URL has no prefix) — exactly
+        // the behavior-preserving case. The page targets the asset port (injected as the asset
+        // authority host:port). The kernel-hosted path-mounted case is exercised by Kernel.feature.
         var appPort = GetFreePort();
-        var infraPort = GetFreePort();
-        var (appApp, infraApp) = InstanceApp.Build(Store, description, infraPort);
+        var assetPort = GetFreePort();
+        var (appApp, assetApp) = InstanceApp.Build(Store, description, mountBase: "/", assetPort: assetPort);
 
         _infraHost = Host.Create()
-                    .Handler(infraApp)
+                    .Handler(assetApp)
                     .Defaults(secureUpgrade: false, strictTransport: false)
-                    .Port((ushort)infraPort);
+                    .Port((ushort)assetPort);
 
         _appHost = Host.Create()
                     .Handler(appApp)

@@ -4,10 +4,10 @@ using DeEnv.Storage;
 // ── Entry point: the kernel host ─────────────────────────────────────────────────
 //
 // The program IS the kernel host. It reads the instance registry (kernel.json) and hosts every
-// instance in it at once — each on its own port pair with its own sovereign data — then blocks
-// until shutdown. There are NO run modes and no --app switch: kernel.json is the single source of
-// truth for what runs (one entry = a single app; many entries = multi-instance). A single instance
-// is just a one-entry registry.
+// instance in it at once — all behind ONE shared app port + ONE shared asset port, each instance
+// addressed by PATH (`/apps/<name>`) with its own sovereign data — then blocks until shutdown. There
+// are NO run modes and no --app switch: kernel.json is the single source of truth for what runs (the
+// two kernel-level ports + the per-instance entries). A single instance is just a one-entry registry.
 //
 // The M4 schema tools (designing a schema, publishing it via SchemaBridge) are no longer CLI
 // modes. SchemaBridge stays — still unit-tested by Bridge.feature — to be exposed to Code as a
@@ -23,9 +23,10 @@ var baseDir = Environment.GetEnvironmentVariable("DEENV_HOME") is { Length: > 0 
     : AppContext.BaseDirectory;
 
 IReadOnlyList<InstanceSpec> specs;
+Registry registry;
 try
 {
-    var registry = RegistryReader.Read(Path.Combine(baseDir, "kernel.json"));
+    registry = RegistryReader.Read(Path.Combine(baseDir, "kernel.json"));
     specs = KernelHost.SpecsFor(registry, baseDir);
 }
 catch (KernelConfigException ex)
@@ -36,7 +37,8 @@ catch (KernelConfigException ex)
     return;
 }
 
-var kernel = new KernelHost(baseDir, Path.Combine(baseDir, "kernel.json"));
+// The two shared kernel ports come from the registry header (addressing is by path, not per-instance).
+var kernel = new KernelHost(baseDir, Path.Combine(baseDir, "kernel.json"), registry.AppPort, registry.AssetPort);
 try
 {
     await kernel.StartAsync(specs);
@@ -51,8 +53,9 @@ catch (StoredDataException ex)
     return;
 }
 
+Console.WriteLine($"Kernel listening — app:{kernel.AppPort} asset:{kernel.AssetPort}.");
 foreach (var instance in kernel.Instances)
-    Console.WriteLine($"Hosting {instance.Spec.App} on app:{instance.AppPort} infra:{instance.InfraPort}.");
+    Console.WriteLine($"  Hosting {instance.Spec.App} at /apps/{instance.Spec.App}.");
 
 // Block until Ctrl+C / process exit, then stop every host cleanly.
 using var shutdown = new CancellationTokenSource();

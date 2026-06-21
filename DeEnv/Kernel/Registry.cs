@@ -2,34 +2,40 @@ using System.Text.Json;
 
 namespace DeEnv.Kernel;
 
-// The instance registry — kernel-owned data naming which instances the kernel hosts and on
-// which ports. It is a plain bootstrap file (kernel.json) the kernel reads WITHOUT the
-// interpreter (the sanctioned bootstrap subset): the registry must exist before any instance
-// runs — it is how the system is assembled — so it cannot itself be modeled inside an instance.
+// The instance registry — kernel-owned data naming which instances the kernel hosts. It is a plain
+// bootstrap file (kernel.json) the kernel reads WITHOUT the interpreter (the sanctioned bootstrap
+// subset): the registry must exist before any instance runs — it is how the system is assembled — so
+// it cannot itself be modeled inside an instance.
 //
-// Minimality (see DECISIONS "The self-hosted image → kernel-owned data — keep it minimal"): an
-// entry carries the instance's identity (a stable unique `Id`) + a display name (`App`) + its port
-// binding, and essentially nothing else. Storage is keyed by the ID: the schema + data files live
-// under instances/<id>/ (AppPaths.SchemaPathForId/DataPathForId, via KernelHost.SpecsFor), NOT
-// derived from a name — so `App` is a pure display LABEL, used for nothing functional, and every
-// instance gets its own store by virtue of its distinct id (two instances with the same name still
-// have separate stores).
+// ADDRESSING IS BY PATH: every instance is served under the kernel's single app port + single asset
+// port, addressed by `/apps/<name>`. So the two kernel-level ports live on the registry's `Kernel`
+// header (NOT per-instance), and a per-instance entry carries NO ports at all.
+//
+// Minimality (see DECISIONS "The self-hosted image → kernel-owned data — keep it minimal"): an entry
+// carries the instance's identity (a stable unique `Id`) + a display name (`App`) and essentially
+// nothing else. Storage is keyed by the ID: the schema + data files live under instances/<id>/
+// (AppPaths.SchemaPathForId/DataPathForId, via KernelHost.SpecsFor), NOT derived from a name — so
+// `App` is the display LABEL that ALSO determines the mount path (`/apps/<App>`); every instance gets
+// its own store by virtue of its distinct id. (Two instances may NOT share a name now — they would
+// collide on the mount path — but they still have separate stores by id.)
 //
 // `Id` is that stable unique address: every hosted instance has one, and clone/delete/publish address
-// an instance BY it (the old model — created = id-dir number, boot = 0 — couldn't tell two boot
-// instances apart). An entry written without an id (Id == 0, the unassigned sentinel) gets one
+// an instance BY it. An entry written without an id (Id == 0, the unassigned sentinel) gets one
 // assigned deterministically on read, so an id-less hand-edited registry still ends up uniquely
 // addressed — provided its app files already live under instances/<id>/ (resolution is purely by id).
 //
 // `DesignId` is the EXPLICIT reference to which design (a member of the operator IDE's `db.designs`
-// set) this instance currently runs — chosen over label-matching (the IDE used to match a row to a
-// design by name) so the link is exact and rename-safe. It is the id of a `Design` object in the
-// designer's data, recorded by the IDE's Apply action (sys.setDesign) and read back to pre-select the
-// design dropdown on /instances/<id>. null means "no design chosen", and is omitted from kernel.json
-// (see RegistryJson.Options — WhenWritingNull).
-public sealed record RegistryEntry(int Id, string App, int AppPort, int InfraPort, int? DesignId = null);
+// set) this instance currently runs — recorded by the IDE's Apply action (sys.setDesign) and read
+// back to pre-select the design dropdown. null means "no design chosen", and is omitted from
+// kernel.json (see RegistryJson.Options — WhenWritingNull).
+public sealed record RegistryEntry(int Id, string App, int? DesignId = null);
 
-public sealed record Registry(IReadOnlyList<RegistryEntry> Instances);
+// The whole registry: the kernel-level shared ports (the app port + the asset port — addressing is by
+// path, so these are kernel-wide, not per-instance) plus the instances. `AppPort`/`AssetPort` default
+// to the committed local-dev pair (8080/8081) so a registry that omits them still boots; a deployment
+// sets them explicitly. The reader fills the default when the header is absent (an id-less / port-less
+// hand-edited registry still works).
+public sealed record Registry(IReadOnlyList<RegistryEntry> Instances, int AppPort = 8080, int AssetPort = 8081);
 
 // The shared bootstrap JSON shape for kernel.json: camelCase + case-insensitive property names,
 // with comments and trailing commas allowed when reading a hand-edited file. camelCase matches the
@@ -78,8 +84,13 @@ public static class RegistryReader
         // in practice this is a no-op. (Resolution is purely by id, so such an entry's app files must
         // already live under instances/<id>/ — this fills the id, it doesn't relocate any files.)
         var maxId = registry.Instances.Where(e => e.Id > 0).Select(e => e.Id).DefaultIfEmpty(0).Max();
-        return new Registry(
-            registry.Instances.Select(e => e.Id > 0 ? e : e with { Id = ++maxId }).ToList());
+        // Rebuild the instances (filling missing ids) but PRESERVE the kernel-level ports via `with`
+        // (a bare `new Registry(instances)` would reset them to the 8080/8081 defaults — addressing is
+        // by path, so the two shared ports are the only ports there are; dropping them was the bug).
+        return registry with
+        {
+            Instances = registry.Instances.Select(e => e.Id > 0 ? e : e with { Id = ++maxId }).ToList(),
+        };
     }
 }
 

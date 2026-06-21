@@ -71,8 +71,8 @@ public static class CodeValidator
         ["extent"] = 1,
         ["setRef"] = 3,
         ["publish"] = 2, // (schema, targetId)
-        ["create"] = 4,  // (schema, name, appPort, infraPort)
-        ["cloneInstance"] = 3, // (sourceId, appPort, infraPort)
+        ["create"] = 2,  // (schema, name) — addressing is by path, so no port args
+        ["cloneInstance"] = 1, // (sourceId) — the clone's mount name derives from the source
         ["delete"] = 1,  // (targetId)
         ["rename"] = 2,  // (id, name)
         ["setDesign"] = 2, // (schema, targetId)

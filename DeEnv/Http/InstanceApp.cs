@@ -9,26 +9,25 @@ using GenHTTP.Modules.Websockets.Protocol;
 namespace DeEnv.Http;
 
 // One row of the kernel's instance registry as surfaced to image Code (the read-only `instances`
-// global): the instance id, its display NAME, and its two ports. A pure projection — no file paths,
-// no store — so the kernel hands the renderer DATA, not a kernel reference (the locality-free seam).
-// `Id` is the kernel-minted instance id (the sole key to its files, and the address a host action
-// like `sys.publish(id)` targets); `App` is a display name label only (used for nothing functional);
-// `Port` is the app/serving port; `AssetsPort` is the infra port (/ws + /js).
+// global): the instance id, its display NAME, and its mount PATH (`/apps/<name>`). A pure projection —
+// no file paths, no store — so the kernel hands the renderer DATA, not a kernel reference (the
+// locality-free seam). `Id` is the kernel-minted instance id (the sole key to its files, and the
+// address a host action like `sys.publish(id)` targets); `App` is the display name (which also
+// determines the mount); `Path` is `/apps/<name>` — what the operator sees + links to, now that
+// addressing is by path, not per-instance ports.
 //
 // There is no `Created`/boot distinction: storage is fully id-based, and clone/delete/publish all
 // work on ANY instance by its id, so the surface renders those actions on every row uniformly.
 //
 // `DesignId` is the explicit reference to which IDE design this instance currently runs (null = none),
 // carried from the registry so the operator IDE can pre-select that design in the /instances/<id>
-// dropdown and show its label in the instances list. It is the id of a `Design` in the designer's own
-// data — a non-sensitive handle like `Id`, not a file path.
+// dropdown and show its label in the instances list.
 //
 // PRIVACY: keep this projection free of anything sensitive. Registry rows render as transient
-// objects, and ClientState ships a transient's props in FULL to every client that renders the
-// list — there is no per-prop gating here. So the "expose the contended external binding (ports),
-// hide internal identity (storage)" line (DECISIONS "`create` direction") must be drawn AT this
-// projection, never relied on at the render. The id is a non-sensitive handle (not a file path).
-public sealed record InstanceInfo(int Id, string App, int Port, int AssetsPort, int? DesignId = null);
+// objects, and ClientState ships a transient's props in FULL to every client that renders the list —
+// there is no per-prop gating here. The id, the name, and the mount path are all non-sensitive
+// handles (not file paths).
+public sealed record InstanceInfo(int Id, string App, string Path, int? DesignId = null);
 
 // A live cell holding the kernel's current instance registry. The WRITER is the kernel (it swaps
 // `.Current` whenever the hosted set changes); the READERS are every hosted instance's renderer (they
@@ -43,25 +42,29 @@ public sealed class LiveRegistry
     public IReadOnlyList<InstanceInfo> Current { get => _current; set => _current = value; }
 }
 
-// Builds the GenHTTP handler trees for an instance, split across two ports so the app
-// port owns a clean, reserved-path-free data URL space. Shared by the real host
-// (Program.cs) and the in-process test host so routing is identical.
+// Builds the GenHTTP handler trees for an instance, split into an app tree and an asset tree so the
+// app URL space stays clean and reserved-path-free. Shared by the kernel host (which mounts these
+// under apps/<name> on the kernel's two shared ports) and the in-process test host so routing is
+// identical.
 //
-//   App host   → SSR HTML for every node path, nothing reserved (ContentHandler).
-//   Infra host → /ws (WebSocket: all data ops) + /js (the client bundle).
+//   App tree   → SSR HTML for every node path, nothing reserved (ContentHandler).
+//   Asset tree → /ws (WebSocket: all data ops) + /js (the client bundle).
 //
-// Both trees share one session store (the SSR path mints sessions, the WS path recomputes
-// over them — see ClientSession). The app host is told the infra port so the page can load
-// /js and open its WebSocket against it.
+// Both trees share one session store (the SSR path mints sessions, the WS path recomputes over them
+// — see ClientSession). `mountBase` is where the instance is mounted ("/" root-mounted, "/apps/<name>"
+// path-mounted) — applied at the SSR edge so emitted links/assets are mount-correct while the app
+// stays base-unaware (a request can override it via X-Forwarded-Prefix). `assetPort` is the
+// kernel-level asset port the page builds its /js + WebSocket URL against (the host comes from the
+// request, so the same authority serves all instances).
 public static class InstanceApp
 {
-    public static (IHandlerBuilder App, IHandlerBuilder Infra) Build(
-        IInstanceStore store, InstanceDescription description, int infraPort,
+    public static (IHandlerBuilder App, IHandlerBuilder Asset) Build(
+        IInstanceStore store, InstanceDescription description, string mountBase, int assetPort,
         LiveRegistry? registry = null, IHostActions? hostActions = null)
     {
         var sessions = new ClientSessionStore();
         var ws = new WsHandler(store, description, sessions, registry ?? new LiveRegistry(),
-            hostActions ?? new NoHostActions());
+            hostActions ?? new NoHostActions(), mountBase);
 
         // Native GenHTTP websocket (no Fleck). We read/write raw UTF-8 frames so the
         // JSON payload goes on the wire verbatim — no extra serialization wrapping.
@@ -75,12 +78,12 @@ public static class InstanceApp
             });
 
         var app = Layout.Create()
-            .Add(new ContentHandlerBuilder(store, description, sessions, infraPort, registry ?? new LiveRegistry()));
+            .Add(new ContentHandlerBuilder(store, description, sessions, mountBase, assetPort, registry ?? new LiveRegistry()));
 
-        var infra = Layout.Create()
+        var asset = Layout.Create()
             .Add("ws", websocket)
             .Add("js", new BundleHandlerBuilder());
 
-        return (app, infra);
+        return (app, asset);
     }
 }

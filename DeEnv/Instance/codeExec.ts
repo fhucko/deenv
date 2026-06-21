@@ -786,16 +786,15 @@ function execPublish(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     return { type: "nothing" };
 }
 
-// sys.create(schema, name, appPort, infraPort): a SERVER-ONLY host action — project the passed SCHEMA
-// object into a NEW kernel instance with the given display label on the given ports (the sibling of
-// publish: publish replaces an existing instance, create spawns a new one). Like execPublish it stages
+// sys.create(schema, name): a SERVER-ONLY host action — project the passed SCHEMA object into a NEW
+// kernel instance with the given display NAME (the sibling of publish: publish replaces an existing
+// instance, create spawns a new one). NO ports: addressing is by PATH now, so the new instance is
+// served at `/apps/<name>` (the kernel derives the mount from the name). Like execPublish it stages
 // NOTHING and only fires the hostAction send-hook. Returns nothing; SSR/refetch no-ops it.
 function execCreate(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const schema = executeValue(codeCall.params[0], scope, context).value;
     const name = executeValue(codeCall.params[1], scope, context).value;
-    const appPort = executeValue(codeCall.params[2], scope, context).value;
-    const infraPort = executeValue(codeCall.params[3], scope, context).value;
-    sendHostAction("create", [schemaIdArg(schema), name, appPort, infraPort]);
+    sendHostAction("create", [schemaIdArg(schema), name]);
     return { type: "nothing" };
 }
 
@@ -809,16 +808,15 @@ function execRename(codeCall: CodeCall, scope: ExecScope, context: ExecContext):
     return { type: "nothing" };
 }
 
-// sys.cloneInstance(sourceId, appPort, infraPort): a SERVER-ONLY host action — copy an existing
-// instance's app document AND data into a NEW instance on the given ports (the data-carrying sibling
-// of create: create projects a fresh design, clone copies a live one). The source is named by its
-// instance id (a bare int, NOT a schema object — no schemaIdArg). Stages NOTHING; only fires the
-// hostAction send-hook (the source id + the two ports). Returns nothing; SSR/refetch no-ops it.
+// sys.cloneInstance(sourceId): a SERVER-ONLY host action — copy an existing instance's app document
+// AND data into a NEW instance (the data-carrying sibling of create: create projects a fresh design,
+// clone copies a live one). The source is named by its instance id (a bare int, NOT a schema object —
+// no schemaIdArg). NO ports: the clone is served at a unique `/apps/<name>` the kernel derives from
+// the source's name. Stages NOTHING; only fires the hostAction send-hook. Returns nothing; SSR/refetch
+// no-ops it.
 function execCloneInstance(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const sourceId = executeValue(codeCall.params[0], scope, context).value;
-    const appPort = executeValue(codeCall.params[1], scope, context).value;
-    const infraPort = executeValue(codeCall.params[2], scope, context).value;
-    sendHostAction("cloneInstance", [sourceId, appPort, infraPort]);
+    sendHostAction("cloneInstance", [sourceId]);
     return { type: "nothing" };
 }
 

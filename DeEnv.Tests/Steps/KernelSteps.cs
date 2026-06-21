@@ -1,5 +1,3 @@
-﻿using System.Net;
-using System.Net.Sockets;
 using DeEnv.Kernel;
 using DeEnv.Storage;
 using DeEnv.Tests.TestSupport;
@@ -13,9 +11,8 @@ namespace DeEnv.Tests.Steps;
 public sealed class KernelSteps(InstanceContext ctx)
 {
     // The simplest instance: an object Db with one bool, rendered as a single checkbox by the
-    // self-hosted generic UI. Two copies under different file names are two DIFFERENT app
-    // documents → two different derived data files (alpha-data.json / beta-data.json), so the
-    // stores cannot alias — the data-sovereignty point of the slice.
+    // self-hosted generic UI. Distinct ids → distinct id-dirs → distinct stores; distinct NAMES →
+    // distinct /apps/<name> mounts. Addressing is by PATH now (no per-instance ports).
     private const string BoolApp = """
     types
         Db
@@ -23,9 +20,11 @@ public sealed class KernelSteps(InstanceContext ctx)
     """;
 
     // A fully-custom app that renders the kernel's `sys.instances` global — the read-only list of
-    // hosted instances (app + ports) provided under the framework `sys` namespace. A custom fn
-    // render() runs in the app scope (parent = system), so `sys` resolves by walking up and
-    // `sys.instances` reads its prop. Proves the read path end-to-end through the real scope chain.
+    // hosted instances (name + mount path) under the framework `sys` namespace. Proves the read path
+    // end-to-end through the real scope chain. The instances are addressed by PATH now, so each row
+    // shows i.app (the name) + i.path (/apps/<name>) as TEXT — i.path is a cross-instance ABSOLUTE
+    // path (it points at ANOTHER instance's mount), so it is informational data, not the current app's
+    // own intra-mount navigation (which is what the base seam prefixes).
     private const string ConsoleApp = """
     types
         Db
@@ -38,111 +37,87 @@ public sealed class KernelSteps(InstanceContext ctx)
                     <div class="instance-row">
                         <span class="app">
                             i.app
-                        <span class="port">
-                            i.port
-                        <span class="assets">
-                            i.assetsPort
+                        <span class="path">
+                            i.path
+    """;
+
+    // A generic-UI app (no custom render): its Db root self-hosts with breadcrumbs + a nested set
+    // link, so a path-mounted render exercises the base seam's link/breadcrumb prefixing. Seeded with
+    // one note so the set table + nested member link render.
+    private const string MountApp = """
+    types
+        Db
+            notes set of Note
+        Note
+            title text
+
+    initialData
+        Db 1
+            notes: [2]
+        Note 2
+            title: "First"
     """;
 
     private HostedInstance Alpha => ctx.Kernel!.Instances[0];
     private HostedInstance Beta => ctx.Kernel!.Instances[1];
 
-    // Captures the error raised while resolving a deliberately-invalid registry.
+    // The kernel's two shared ports (chosen per scenario; addressing is by path, not per-instance).
+    private int _appPort;
+    private int _assetPort;
+
     private Exception? _configError;
 
-    // The `list` scenario: the served console page, and the tokens it must contain — every app
-    // name plus the ports that ONLY the registry global could have rendered (each instance's app
-    // port, and the OTHER instances' assets ports; the console's own assets port is skipped because
-    // it also appears in the page's window.initInfraPort bootstrap, so it wouldn't prove anything).
+    // The console list scenario: the served console page + the tokens it must contain.
     private string _consoleHtml = "";
-    private string[] _expectedApps = [];
-    private int[] _expectedPorts = [];
+    private string[] _expectedNames = [];
+    private string[] _expectedPaths = [];
 
-    // The `create` scenarios: the instance produced by CreateAsync and the port pair it was assigned
-    // (kept so a post-restart instance can be re-found by its persisted port).
+    // The create scenarios.
     private HostedInstance? _created;
-    private int _createdAppPort;
-    private int _createdInfraPort;
-
-    // The `delete` scenarios: the created instance's id-dir, captured before deletion so we can
-    // assert the whole store directory is gone afterwards.
+    private string _createdName = "";
     private string _createdIdDir = "";
 
-    // The `clone` scenarios: the instance produced by CloneAsync and the port pair it was assigned
-    // (kept so a post-restart clone can be re-found by its persisted port).
+    // The clone scenario.
     private HostedInstance? _cloned;
-    private int _clonedAppPort;
-    private int _clonedInfraPort;
+    private string _clonedName = "";
 
-    // The `switch` scenarios: the new port pair the instance was switched to, and the old app port
-    // it was switched away from (kept so we can assert the new binding serves and the old does not),
-    // plus the error a rejected switch raises.
-    private int _switchedAppPort;
-    private int _switchedInfraPort;
-    private int _oldAppPort;
-    private Exception? _switchError;
+    // The rename scenario.
+    private string _oldName = "";
+    private Exception? _renameError;
 
     // ── Given ─────────────────────────────────────────────────────────────────
 
-    [Given("a registry of two instances on distinct port pairs")]
+    [Given("a registry of two named instances")]
     public void GivenRegistry()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "deenv-kernel-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        ctx.KernelDir = dir;
-
-        // Storage is id-based: each instance lives under instances/<id>/app.app, resolved purely by
-        // its id. The `app` field is a display name label only. Two distinct ids → two distinct
-        // id-dirs → two distinct stores (the data-sovereignty point of the slice).
+        var dir = NewDir();
         WriteApp(dir, 1, BoolApp);
         WriteApp(dir, 2, BoolApp);
-
-        int aApp = FreePort(), aInfra = FreePort(), bApp = FreePort(), bInfra = FreePort();
-        File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
-        {
-          "instances": [
-            { "id": 1, "app": "alpha", "appPort": {{aApp}}, "infraPort": {{aInfra}} },
-            { "id": 2, "app": "beta",  "appPort": {{bApp}}, "infraPort": {{bInfra}} }
-          ]
-        }
-        """);
+        WriteRegistry(dir, ("alpha", 1), ("beta", 2));
     }
 
     [Given("a registry of one instance")]
     public void GivenRegistryOfOne()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "deenv-kernel-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        ctx.KernelDir = dir;
-
+        var dir = NewDir();
         WriteApp(dir, 1, BoolApp);
-
-        int aApp = FreePort(), aInfra = FreePort();
-        File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
-        {
-          "instances": [
-            { "id": 1, "app": "alpha", "appPort": {{aApp}}, "infraPort": {{aInfra}} }
-          ]
-        }
-        """);
+        WriteRegistry(dir, ("alpha", 1));
     }
 
     [Given("a registry whose only instance is a console app that lists the instances")]
     public void GivenConsoleRegistryOfOne()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "deenv-kernel-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        ctx.KernelDir = dir;
-
+        var dir = NewDir();
         WriteApp(dir, 1, ConsoleApp);
-        int cApp = FreePort(), cInfra = FreePort();
-        File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
-        {
-          "instances": [
-            { "id": 1, "app": "console", "appPort": {{cApp}}, "infraPort": {{cInfra}} }
-          ]
-        }
-        """);
+        WriteRegistry(dir, ("console", 1));
+    }
+
+    [Given("a registry of one generic-UI instance named {string}")]
+    public void GivenGenericUiInstance(string name)
+    {
+        var dir = NewDir();
+        WriteApp(dir, 1, MountApp);
+        WriteRegistry(dir, (name, 1));
     }
 
     // ── When / Given (start) ────────────────────────────────────────────────────
@@ -152,36 +127,27 @@ public sealed class KernelSteps(InstanceContext ctx)
     public async Task WhenKernelStartsAsync()
     {
         var registry = RegistryReader.Read(Path.Combine(ctx.KernelDir!, "kernel.json"));
-        ctx.Kernel = new KernelHost(ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+        ctx.Kernel = new KernelHost(ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"), _appPort, _assetPort);
         await ctx.Kernel.StartAsync(KernelHost.SpecsFor(registry, ctx.KernelDir!));
     }
 
-    // ── create: add an instance to a running kernel ──────────────────────────────
+    // ── create ──────────────────────────────────────────────────────────────────
 
-    [When("the operator creates an instance from a bool app on a free port pair")]
-    [Given("the operator creates an instance from a bool app on a free port pair")]
-    public async Task WhenOperatorCreatesInstanceAsync()
+    [When("the operator creates an instance named {string} from a bool app")]
+    [Given("the operator creates an instance named {string} from a bool app")]
+    public async Task WhenOperatorCreatesInstanceAsync(string name)
     {
-        _createdAppPort = FreePort();
-        _createdInfraPort = FreePort();
+        _createdName = name;
         _created = await ctx.Kernel!.CreateAsync(
-            BoolApp, "app", _createdAppPort, _createdInfraPort,
-            ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
-        // Its id-dir (<KernelDir>/instances/<id>) is the directory holding the written app document,
-        // captured now so a later delete assertion can prove the whole store directory is removed.
+            BoolApp, name, ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
         _createdIdDir = Path.GetDirectoryName(_created.Spec.SchemaPath)!;
     }
-
-    // ── ghost id-dir: a new instance must never reuse an orphaned directory ───────
 
     private int _orphanId;
 
     [Given("an orphaned instance directory {string} exists")]
     public void GivenOrphanedInstanceDir(string id)
     {
-        // Simulate a "ghost": an instances/<n>/ dir left on disk by a create whose registry write
-        // failed, so it is NOT in kernel.json (and not in the live set). The next create must mint an
-        // id PAST it — never reuse the dir — or it would adopt the orphan's stale data.
         _orphanId = int.Parse(id);
         Directory.CreateDirectory(Path.Combine(ctx.KernelDir!, "instances", id));
     }
@@ -190,18 +156,13 @@ public sealed class KernelSteps(InstanceContext ctx)
     public async Task ThenCreatedIdPastOrphanAsync() =>
         await Assert.That(_created!.Spec.Id).IsGreaterThan(_orphanId);
 
-    // ── delete: remove a created instance from a running kernel ───────────────────
+    // ── delete ──────────────────────────────────────────────────────────────────
 
     [When("the operator deletes the created instance")]
     [Given("the operator deletes the created instance")]
-    public async Task WhenOperatorDeletesInstanceAsync()
-    {
+    public async Task WhenOperatorDeletesInstanceAsync() =>
         await ctx.Kernel!.DeleteAsync(_created!, Path.Combine(ctx.KernelDir!, "kernel.json"));
-    }
 
-    // Delete a REGISTRY ("boot") instance — the second of two — by addressing it by its unique id,
-    // proving delete is uniform now (no boot refusal). Capture its id-dir first so a later assertion
-    // can prove the whole store directory is removed.
     [When("the operator deletes the second instance by its id")]
     public async Task WhenOperatorDeletesSecondAsync()
     {
@@ -211,66 +172,51 @@ public sealed class KernelSteps(InstanceContext ctx)
     }
 
     [Then("the kernel hosts only the first instance")]
-    public async Task ThenHostsOnlyFirstAsync()
-    {
+    public async Task ThenHostsOnlyFirstAsync() =>
         await Assert.That(ctx.Kernel!.Instances.Count).IsEqualTo(1);
-    }
 
     [Then("the second instance's store directory is gone")]
-    public async Task ThenSecondStoreDirGoneAsync()
-    {
+    public async Task ThenSecondStoreDirGoneAsync() =>
         await Assert.That(Directory.Exists(_createdIdDir)).IsFalse();
-    }
 
     [Then("the deleted instance no longer serves its root")]
-    public async Task ThenDeletedNoLongerServesAsync()
-    {
-        // Its app host is stopped, so the port no longer accepts connections — the GET fails.
-        await Assert.That(await ServesRootAsync(_createdAppPort)).IsFalse();
-    }
+    public async Task ThenDeletedNoLongerServesAsync() =>
+        await Assert.That(await ServesAsync(MountPath(_createdName))).IsFalse();
 
     [Then("the kernel hosts only the original instance")]
-    public async Task ThenHostsOnlyOriginalAsync()
-    {
+    public async Task ThenHostsOnlyOriginalAsync() =>
         await Assert.That(ctx.Kernel!.Instances.Count).IsEqualTo(1);
-    }
 
     [Then("the created instance's store directory is gone")]
-    public async Task ThenStoreDirGoneAsync()
-    {
+    public async Task ThenStoreDirGoneAsync() =>
         await Assert.That(Directory.Exists(_createdIdDir)).IsFalse();
-    }
 
     [Then("the console instance's page no longer lists the created instance")]
     public async Task ThenConsoleDoesNotListCreatedAsync()
     {
-        // The created instance's app port could only ever appear on the console page via the LIVE
-        // `instances` global; after delete the kernel hosts only the console, so it is gone.
         using var http = new HttpClient();
-        var html = await http.GetStringAsync($"http://localhost:{ctx.Kernel!.Instances[0].AppPort}/");
-        await Assert.That(html).DoesNotContain(_createdAppPort.ToString());
+        var html = await http.GetStringAsync(Url(MountPath("console")));
+        await Assert.That(html).DoesNotContain(MountPath(_createdName));
     }
 
-    // ── clone: copy a created instance (app doc + data) onto a new port pair ───────
+    // ── clone ─────────────────────────────────────────────────────────────────
 
-    [When("the operator clones the created instance onto a free port pair")]
-    [Given("the operator clones the created instance onto a free port pair")]
+    [When("the operator clones the created instance")]
+    [Given("the operator clones the created instance")]
     public async Task WhenOperatorClonesInstanceAsync()
     {
-        _clonedAppPort = FreePort();
-        _clonedInfraPort = FreePort();
         _cloned = await ctx.Kernel!.CloneAsync(
-            _created!, _clonedAppPort, _clonedInfraPort,
-            ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+            _created!, ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+        _clonedName = _cloned.Spec.App;
     }
 
-    [Then("the clone serves its root on its assigned port")]
+    [Then("the clone serves its root at its own path")]
     public async Task ThenCloneServesRootAsync()
     {
-        // After a restart _cloned is disposed; re-find the live instance by its persisted port.
-        var instance = ctx.Kernel!.Instances.Single(i => i.AppPort == _clonedAppPort);
+        // After a restart _cloned is disposed; re-find the live instance by its persisted name.
+        var instance = ctx.Kernel!.Instances.Single(i => i.Spec.App == _clonedName);
         using var http = new HttpClient();
-        var resp = await http.GetAsync($"http://localhost:{instance.AppPort}/");
+        var resp = await http.GetAsync(Url(MountPath(instance.Spec.App)));
         await Assert.That((int)resp.StatusCode).IsEqualTo(200);
         await Assert.That(await resp.Content.ReadAsStringAsync()).Contains("input type=\"checkbox\"");
     }
@@ -278,152 +224,115 @@ public sealed class KernelSteps(InstanceContext ctx)
     [Then("the clone's data matches the source")]
     public async Task ThenCloneDataMatchesSourceAsync()
     {
-        // The source's bool was toggled to true before the clone; CloneAsync copied the DATA file, so
-        // the clone's sovereign store carries the same value (true) — a true copy, not an empty store.
-        var instance = ctx.Kernel!.Instances.Single(i => i.AppPort == _clonedAppPort);
+        var instance = ctx.Kernel!.Instances.Single(i => i.Spec.App == _clonedName);
         await Assert.That(instance.Store.ReadNode(NodePath.Root.Field("ready"))).IsEqualTo(new BoolValue(true));
         using var http = new HttpClient();
-        await Assert.That(await http.GetStringAsync($"http://localhost:{instance.AppPort}/")).Contains(" checked");
+        await Assert.That(await http.GetStringAsync(Url(MountPath(instance.Spec.App)))).Contains(" checked");
     }
 
     [Then("the kernel now hosts three instances")]
-    public async Task ThenHostsThreeAsync()
-    {
+    public async Task ThenHostsThreeAsync() =>
         await Assert.That(ctx.Kernel!.Instances.Count).IsEqualTo(3);
-    }
-
-    // ── clone a BOOT instance by its unique id (the wrong-clone fix) ───────────────
 
     [Given("the second instance's data changes")]
-    public void WhenSecondDataChanges()
-    {
-        // Toggle the SECOND boot instance's bool to true through its own store. Only the second one
-        // changes — the first stays false — so a later assertion on the clone's data proves the RIGHT
-        // boot was cloned (the old all-boots-share-id-0 model would have cloned the first).
+    public void WhenSecondDataChanges() =>
         Beta.Store.WriteObject(
             NodePath.Root,
             new ObjectValue(new Dictionary<string, NodeValue> { ["ready"] = new BoolValue(true) }));
-    }
 
-    [When("the operator clones the second instance by its id onto a free port pair")]
+    [When("the operator clones the second instance by its id")]
     public async Task WhenCloneSecondByIdAsync()
     {
-        _clonedAppPort = FreePort();
-        _clonedInfraPort = FreePort();
-        // Address the boot instance BY ITS UNIQUE ID (resolved from the live set) — the same lookup
-        // the host-action clone path uses — proving a boot instance is individually addressable now.
         var bootId = Beta.Spec.Id;
         var source = ctx.Kernel!.Instances.Single(i => i.Spec.Id == bootId);
-        _cloned = await ctx.Kernel.CloneAsync(
-            source, _clonedAppPort, _clonedInfraPort,
-            ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+        _cloned = await ctx.Kernel.CloneAsync(source, ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+        _clonedName = _cloned.Spec.App;
     }
 
     [Then("the clone's data matches the second instance")]
     public async Task ThenCloneDataMatchesSecondAsync()
     {
-        // The clone carries the SECOND boot's data (ready = true), not the first's (false) — so the
-        // right boot was addressed and copied. (The first boot stays false, asserted implicitly: a
-        // wrong clone would have copied false here.)
-        var instance = ctx.Kernel!.Instances.Single(i => i.AppPort == _clonedAppPort);
+        var instance = ctx.Kernel!.Instances.Single(i => i.Spec.App == _clonedName);
         await Assert.That(instance.Store.ReadNode(NodePath.Root.Field("ready"))).IsEqualTo(new BoolValue(true));
         using var http = new HttpClient();
-        await Assert.That(await http.GetStringAsync($"http://localhost:{instance.AppPort}/")).Contains(" checked");
+        await Assert.That(await http.GetStringAsync(Url(MountPath(instance.Spec.App)))).Contains(" checked");
     }
 
-    // ── switch: re-bind an instance to a new port pair ────────────────────────────
+    // ── rename (now a re-mount) ───────────────────────────────────────────────────
 
-    [When("the operator switches the original instance to a free port pair")]
-    [Given("the operator switches the original instance to a free port pair")]
-    public async Task WhenOperatorSwitchesInstanceAsync()
+    [When("the operator renames the original instance to {string}")]
+    [Given("the operator renames the original instance to {string}")]
+    public async Task WhenOperatorRenamesAsync(string name)
     {
-        _oldAppPort = Alpha.AppPort;
-        _switchedAppPort = FreePort();
-        _switchedInfraPort = FreePort();
-        await ctx.Kernel!.SwitchAsync(
-            Alpha, _switchedAppPort, _switchedInfraPort, Path.Combine(ctx.KernelDir!, "kernel.json"));
+        _oldName = Alpha.Spec.App;
+        await ctx.Kernel!.RenameAsync(Alpha.Spec.Id, name, Path.Combine(ctx.KernelDir!, "kernel.json"));
     }
 
-    [When("the operator switches the first instance onto the second instance's port")]
-    public async Task WhenOperatorSwitchesOntoUsedPortAsync()
+    [When("the operator renames the first instance onto the second instance's name")]
+    public async Task WhenOperatorRenamesOntoUsedAsync()
     {
-        _oldAppPort = Alpha.AppPort;
+        _oldName = Alpha.Spec.App;
         try
         {
-            // Target Beta's live app port — already bound, so the guard must reject before any stop.
-            await ctx.Kernel!.SwitchAsync(
-                Alpha, Beta.AppPort, FreePort(), Path.Combine(ctx.KernelDir!, "kernel.json"));
+            await ctx.Kernel!.RenameAsync(Alpha.Spec.Id, Beta.Spec.App, Path.Combine(ctx.KernelDir!, "kernel.json"));
         }
-        catch (Exception ex)
-        {
-            _switchError = ex;
-        }
+        catch (Exception ex) { _renameError = ex; }
     }
 
-    [Then("the original instance serves its root on the new port")]
-    public async Task ThenServesOnNewPortAsync()
+    [Then("the original instance no longer serves its root at its old path")]
+    public async Task ThenNoLongerServesOldNameAsync() =>
+        await Assert.That(await ServesAsync(MountPath(_oldName))).IsFalse();
+
+    [Then("the rename is rejected with a clear kernel-config error")]
+    public async Task ThenRenameRejectedAsync()
     {
-        // After a restart Alpha is a fresh handle; re-find the live instance by its persisted new port.
-        var instance = ctx.Kernel!.Instances.Single(i => i.AppPort == _switchedAppPort);
-        using var http = new HttpClient();
-        var resp = await http.GetAsync($"http://localhost:{instance.AppPort}/");
-        await Assert.That((int)resp.StatusCode).IsEqualTo(200);
-        await Assert.That(await resp.Content.ReadAsStringAsync()).Contains("input type=\"checkbox\"");
+        await Assert.That(_renameError).IsNotNull();
+        await Assert.That(_renameError is KernelConfigException).IsTrue();
     }
 
-    [Then("the original instance no longer serves its root on the old port")]
-    public async Task ThenNoLongerServesOnOldPortAsync()
-    {
-        await Assert.That(await ServesRootAsync(_oldAppPort)).IsFalse();
-    }
-
-    [Then("the switch is rejected with a clear kernel-config error")]
-    public async Task ThenSwitchRejectedAsync()
-    {
-        await Assert.That(_switchError).IsNotNull();
-        await Assert.That(_switchError is KernelConfigException).IsTrue();
-        await Assert.That(_switchError!.Message).Contains("Port");
-    }
-
-    [Then("both instances still serve their roots on their original ports")]
+    [Then("both instances still serve their roots at their own paths")]
     public async Task ThenBothStillServeAsync()
     {
         await Assert.That(ctx.Kernel!.Instances.Count).IsEqualTo(2);
         using var http = new HttpClient();
         foreach (var instance in ctx.Kernel.Instances)
         {
-            var resp = await http.GetAsync($"http://localhost:{instance.AppPort}/");
+            var resp = await http.GetAsync(Url(MountPath(instance.Spec.App)));
             await Assert.That((int)resp.StatusCode).IsEqualTo(200);
             await Assert.That(await resp.Content.ReadAsStringAsync()).Contains("input type=\"checkbox\"");
         }
     }
 
-    [Then("the created instance serves its root on its assigned port")]
-    public async Task ThenCreatedServesRootAsync()
+    // ── serving at /apps/<name> ───────────────────────────────────────────────────
+
+    [Then("the created instance serves its root at {string}")]
+    public async Task ThenCreatedServesAtAsync(string path)
     {
-        // After a restart _created is disposed; re-find the live instance by its persisted port.
-        var instance = ctx.Kernel!.Instances.Single(i => i.AppPort == _createdAppPort);
         using var http = new HttpClient();
-        var resp = await http.GetAsync($"http://localhost:{instance.AppPort}/");
+        var resp = await http.GetAsync(Url(path));
+        await Assert.That((int)resp.StatusCode).IsEqualTo(200);
+        await Assert.That(await resp.Content.ReadAsStringAsync()).Contains("input type=\"checkbox\"");
+    }
+
+    [Then("the original instance serves its root at {string}")]
+    public async Task ThenOriginalServesAtAsync(string path)
+    {
+        using var http = new HttpClient();
+        var resp = await http.GetAsync(Url(path));
         await Assert.That((int)resp.StatusCode).IsEqualTo(200);
         await Assert.That(await resp.Content.ReadAsStringAsync()).Contains("input type=\"checkbox\"");
     }
 
     [Then("the kernel now hosts both instances")]
-    public async Task ThenHostsBothAsync()
-    {
+    public async Task ThenHostsBothAsync() =>
         await Assert.That(ctx.Kernel!.Instances.Count).IsEqualTo(2);
-    }
 
     [Then("the console instance's page lists the created instance")]
     public async Task ThenConsoleListsCreatedAsync()
     {
-        // The original console instance ([0]) was already running when the create happened. Its page
-        // must now show the created instance's app port — which can ONLY appear via the LIVE
-        // `instances` global (a frozen boot snapshot would have listed only the console itself).
         using var http = new HttpClient();
-        var html = await http.GetStringAsync($"http://localhost:{ctx.Kernel!.Instances[0].AppPort}/");
-        await Assert.That(html).Contains(_createdAppPort.ToString());
+        var html = await http.GetStringAsync(Url(MountPath("console")));
+        await Assert.That(html).Contains(MountPath(_createdName));
     }
 
     [When("the kernel restarts from its persisted registry")]
@@ -431,62 +340,95 @@ public sealed class KernelSteps(InstanceContext ctx)
     {
         await ctx.Kernel!.DisposeAsync();
         var registry = RegistryReader.Read(Path.Combine(ctx.KernelDir!, "kernel.json"));
-        ctx.Kernel = new KernelHost(ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+        ctx.Kernel = new KernelHost(ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"), _appPort, _assetPort);
         await ctx.Kernel.StartAsync(KernelHost.SpecsFor(registry, ctx.KernelDir!));
     }
 
     [When("the created instance's data changes")]
     [Given("the created instance's data changes")]
-    public void WhenCreatedDataChanges()
-    {
+    public void WhenCreatedDataChanges() =>
         _created!.Store.WriteObject(
             NodePath.Root,
             new ObjectValue(new Dictionary<string, NodeValue> { ["ready"] = new BoolValue(true) }));
-    }
 
     [Then("the original instance is unchanged")]
-    public async Task ThenOriginalUnchangedAsync()
-    {
+    public async Task ThenOriginalUnchangedAsync() =>
         await Assert.That(Alpha.Store.ReadNode(NodePath.Root.Field("ready"))).IsEqualTo(new BoolValue(false));
-    }
 
-    // ── Then ──────────────────────────────────────────────────────────────────
+    // ── Then: /apps/<name> serving ────────────────────────────────────────────────
 
-    [Then("each instance serves its root on its own port")]
-    public async Task ThenEachServesRootAsync()
+    [Then("each instance serves its root at its mount path on the app port")]
+    public async Task ThenEachServesAtPathAsync()
     {
         await Assert.That(ctx.Kernel!.Instances.Count).IsEqualTo(2);
-        await Assert.That(Alpha.AppPort).IsNotEqualTo(Beta.AppPort);
-
         using var http = new HttpClient();
         foreach (var instance in ctx.Kernel.Instances)
         {
-            var resp = await http.GetAsync($"http://localhost:{instance.AppPort}/");
+            var resp = await http.GetAsync(Url(MountPath(instance.Spec.App)));
             await Assert.That((int)resp.StatusCode).IsEqualTo(200);
             await Assert.That(await resp.Content.ReadAsStringAsync()).Contains("input type=\"checkbox\"");
         }
     }
 
-    // ── data sovereignty ────────────────────────────────────────────────────────
+    // ── mount-aware links + base ──────────────────────────────────────────────────
+
+    [When("I request the console instance at its path")]
+    public Task WhenRequestConsoleAtPathAsync() => RequestNamedAsync("console", prefix: null);
+
+    [When("I request the {string} instance at its path")]
+    public Task WhenRequestNamedAtPathAsync(string name) => RequestNamedAsync(name, prefix: null);
+
+    [When("I request the {string} instance at its path with X-Forwarded-Prefix {string}")]
+    public Task WhenRequestNamedWithPrefixAsync(string name, string prefix) => RequestNamedAsync(name, prefix);
+
+    private async Task RequestNamedAsync(string name, string? prefix)
+    {
+        using var http = new HttpClient();
+        var req = new HttpRequestMessage(HttpMethod.Get, Url(MountPath(name)));
+        if (prefix != null) req.Headers.Add("X-Forwarded-Prefix", prefix);
+        var resp = await http.SendAsync(req);
+        _consoleHtml = await resp.Content.ReadAsStringAsync();
+    }
+
+    [Then("the page's links carry the {string} prefix")]
+    public async Task ThenLinksCarryPrefixAsync(string prefix)
+    {
+        // A generic-UI page's breadcrumb + nested set links are root-relative in app Code and
+        // mount-prefixed at the SSR edge, so every emitted href starts with the mount prefix (e.g. the
+        // breadcrumb "Db" → href="/apps/site", the nested notes link → href="/apps/site/notes").
+        await Assert.That(_consoleHtml).Contains($"href=\"{prefix}");
+        // And no UNPREFIXED root-relative app href slipped through (a bare href="/..." that the edge
+        // failed to prefix). The bundle bootstrap uses base-relative JS, not an href, so this is scoped
+        // to anchor/src hrefs the renderer emits.
+        await Assert.That(_consoleHtml).DoesNotContain("href=\"/notes");
+    }
+
+    [Then("the page's injected base is {string}")]
+    public async Task ThenInjectedBaseAsync(string expected) =>
+        await Assert.That(_consoleHtml).Contains($"window.initBase=\"{expected}\"");
+
+    [Then("the page's links are root-relative")]
+    public async Task ThenLinksRootRelativeAsync()
+    {
+        // X-Forwarded-Prefix "" → no /apps/<name> prefix anywhere on the page (links + asset URL):
+        // the instance is served at the domain root, the primitive nginx uses for a per-domain app.
+        await Assert.That(_consoleHtml).DoesNotContain("/apps/");
+    }
+
+    // ── data sovereignty ──────────────────────────────────────────────────────────
 
     [When("one instance's data changes")]
-    public void WhenOneChanges()
-    {
-        // Toggle the first instance's bool through its OWN store (each instance is sovereign).
+    public void WhenOneChanges() =>
         Alpha.Store.WriteObject(
             NodePath.Root,
             new ObjectValue(new Dictionary<string, NodeValue> { ["ready"] = new BoolValue(true) }));
-    }
 
     [Then("that instance reflects the change")]
     public async Task ThenChangedReflectsAsync()
     {
         await Assert.That(Alpha.Store.ReadNode(NodePath.Root.Field("ready"))).IsEqualTo(new BoolValue(true));
-        // A rendered true bool attribute is " checked" (leading space; SsrRenderer omits a false
-        // one). The embedded UI AST carries the attribute NAME as "checked" (quote-prefixed), so
-        // the leading space is what distinguishes a checked checkbox from the always-present AST.
         using var http = new HttpClient();
-        await Assert.That(await http.GetStringAsync($"http://localhost:{Alpha.AppPort}/")).Contains(" checked");
+        await Assert.That(await http.GetStringAsync(Url(MountPath(Alpha.Spec.App)))).Contains(" checked");
     }
 
     [Then("the other instance is unchanged")]
@@ -494,104 +436,151 @@ public sealed class KernelSteps(InstanceContext ctx)
     {
         await Assert.That(Beta.Store.ReadNode(NodePath.Root.Field("ready"))).IsEqualTo(new BoolValue(false));
         using var http = new HttpClient();
-        await Assert.That(await http.GetStringAsync($"http://localhost:{Beta.AppPort}/")).DoesNotContain(" checked");
+        await Assert.That(await http.GetStringAsync(Url(MountPath(Beta.Spec.App)))).DoesNotContain(" checked");
     }
 
-    // ── list: the registry as a read-only Code global ───────────────────────────
+    // ── list: the registry as a read-only Code global ─────────────────────────────
 
     [Given("a registry whose first instance is a console app that lists the instances")]
     public void GivenConsoleRegistry()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "deenv-kernel-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        ctx.KernelDir = dir;
-
+        var dir = NewDir();
         WriteApp(dir, 1, ConsoleApp);
         WriteApp(dir, 2, BoolApp);
         WriteApp(dir, 3, BoolApp);
-
-        int cApp = FreePort(), cAssets = FreePort(),
-            aApp = FreePort(), aAssets = FreePort(),
-            bApp = FreePort(), bAssets = FreePort();
-
-        // The rendered app names are the registry `app` labels (a display name only — storage is by id).
-        _expectedApps = ["console", "alpha", "beta"];
-        // Every app port, plus the non-console assets ports — all of which can ONLY appear on the
-        // page via the `instances` global (cAssets is excluded: it's also in window.initInfraPort).
-        _expectedPorts = [cApp, aApp, bApp, aAssets, bAssets];
-
-        File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
-        {
-          "instances": [
-            { "id": 1, "app": "console", "appPort": {{cApp}}, "infraPort": {{cAssets}} },
-            { "id": 2, "app": "alpha",   "appPort": {{aApp}}, "infraPort": {{aAssets}} },
-            { "id": 3, "app": "beta",    "appPort": {{bApp}}, "infraPort": {{bAssets}} }
-          ]
-        }
-        """);
+        WriteRegistry(dir, ("console", 1), ("alpha", 2), ("beta", 3));
+        _expectedNames = ["console", "alpha", "beta"];
+        _expectedPaths = ["/apps/console", "/apps/alpha", "/apps/beta"];
     }
 
-    [When("I request the console instance's root")]
-    public async Task WhenRequestConsoleRootAsync()
-    {
-        using var http = new HttpClient();
-        _consoleHtml = await http.GetStringAsync($"http://localhost:{ctx.Kernel!.Instances[0].AppPort}/");
-    }
-
-    [Then("the page lists every hosted instance's app and ports")]
+    [Then("the page lists every hosted instance's name and path")]
     public async Task ThenPageListsInstancesAsync()
     {
-        foreach (var app in _expectedApps)
-            await Assert.That(_consoleHtml).Contains(app);
-        foreach (var port in _expectedPorts)
-            await Assert.That(_consoleHtml).Contains(port.ToString());
+        foreach (var name in _expectedNames)
+            await Assert.That(_consoleHtml).Contains(name);
+        foreach (var path in _expectedPaths)
+            await Assert.That(_consoleHtml).Contains(path);
+    }
+
+    // ── the shared asset port ─────────────────────────────────────────────────────
+
+    [When("I request {string} under the original instance's mount on the asset port")]
+    public async Task WhenRequestAssetUnderMountAsync(string assetPath)
+    {
+        using var http = new HttpClient();
+        var url = $"http://localhost:{_assetPort}{MountPath(Alpha.Spec.App)}{assetPath}";
+        _consoleHtml = await http.GetStringAsync(url);
+    }
+
+    [Then("the asset response is the client bundle")]
+    public async Task ThenAssetIsBundleAsync() =>
+        // The bundle defines the client runtime (init() + the reconciler); a distinctive token proves it.
+        await Assert.That(_consoleHtml).Contains("function init(");
+
+    // ── a path-mounted instance's WebSocket (browser) ─────────────────────────────
+
+    [When("I open the original instance in a browser at its path")]
+    public async Task WhenOpenOriginalInBrowserAsync()
+    {
+        ctx.Page = await SharedBrowser.NewPageAsync($"http://localhost:{_appPort}");
+        await ctx.Page.GotoReadyAsync(MountPath(Alpha.Spec.App));
+    }
+
+    [When("I toggle its checkbox")]
+    public async Task WhenToggleCheckboxAsync()
+    {
+        await ctx.Page!.WaitReadyAsync(); // the save commits over the WS — wait for the settled socket
+        // The generic ObjectForm stages scalar edits in a draft (autosave off by default), so toggling
+        // the checkbox stages it; clicking Save commits it over the WS (objectPropChange) — the full
+        // round-trip over the path-mounted asset endpoint, which is what this scenario exercises.
+        await ctx.Page!.Locator("input[type=checkbox]").First.CheckAsync();
+        await ctx.Page!.Locator(".object-form button.save").First.ClickAsync();
+    }
+
+    [Then("the original instance's store eventually has the bool set")]
+    public async Task ThenStoreHasBoolSetAsync() =>
+        await Polling.EventuallyAsync(
+            () => Alpha.Store.ReadNode(NodePath.Root.Field("ready")) is BoolValue { Value: true },
+            "the toggled bool to persist over the path-mounted WS");
+
+    [Then("the page is fully ready")]
+    public async Task ThenPageReadyAsync() =>
+        await ctx.Page!.WaitReadyAsync();
+
+    // ── registry validation ───────────────────────────────────────────────────────
+
+    [Given("a registry of two instances that resolve to the same data file")]
+    public void GivenAliasedRegistry()
+    {
+        var dir = NewDir();
+        // Two entries with the SAME id → the same id-dir → the same data file.
+        WriteApp(dir, 1, BoolApp);
+        WriteRegistry(dir, ("alpha", 1), ("beta", 1));
+    }
+
+    [Given("a registry of two instances that share a mount name")]
+    public void GivenSharedNameRegistry()
+    {
+        var dir = NewDir();
+        // Distinct ids (distinct stores) but the SAME name → a /apps/<name> mount collision.
+        WriteApp(dir, 1, BoolApp);
+        WriteApp(dir, 2, BoolApp);
+        WriteRegistry(dir, ("dup", 1), ("dup", 2));
+    }
+
+    [When("the kernel registry is resolved")]
+    public void WhenRegistryResolved()
+    {
+        try
+        {
+            var registry = RegistryReader.Read(Path.Combine(ctx.KernelDir!, "kernel.json"));
+            KernelHost.SpecsFor(registry, ctx.KernelDir!);
+        }
+        catch (Exception ex) { _configError = ex; }
+    }
+
+    [Then("it is rejected with a clear kernel-config error")]
+    public async Task ThenRejectedAsync()
+    {
+        await Assert.That(_configError).IsNotNull();
+        await Assert.That(_configError is KernelConfigException).IsTrue();
+        await Assert.That(_configError!.Message).Contains("same data file");
+    }
+
+    [Then("it is rejected with a clear kernel-config error mentioning the name")]
+    public async Task ThenRejectedNameAsync()
+    {
+        await Assert.That(_configError).IsNotNull();
+        await Assert.That(_configError is KernelConfigException).IsTrue();
+        await Assert.That(_configError!.Message).Contains("mount name");
     }
 
     // ── design-host first-boot seed (the designer's `db.designs`) ────────────────
 
-    // Boot a kernel from the REAL committed apps the way production does: the designer (instances/1,
-    // holding `db.designs`) as id 1, the real todo + crm apps as ids 2 + 3, and an extra no-design bool
-    // app as id 4. The designIds match the committed kernel.json (designer 60, todo 13, crm 27); the
-    // no-design app carries no designId. The kernel's first-boot seed reverse-projects each design-bearing
-    // app's OWN app.app into a Design at id == its designId — the design-host store is then asserted.
     [Given("a kernel booted from the committed designer, todo and crm apps plus a no-design app")]
     public async Task GivenKernelFromCommittedAppsAsync()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "deenv-seed-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        ctx.KernelDir = dir;
-
-        // The real committed app documents in their id-dirs, exactly as the kernel hosts them.
+        var dir = NewDir();
         WriteApp(dir, 1, File.ReadAllText(InstanceContext.AppFixture(1))); // designer (db.designs)
         WriteApp(dir, 2, File.ReadAllText(InstanceContext.AppFixture(2))); // todo
         WriteApp(dir, 3, File.ReadAllText(InstanceContext.AppFixture(3))); // crm
         WriteApp(dir, 4, BoolApp);                                          // a no-design instance
 
-        int dApp = FreePort(), dInfra = FreePort(),
-            tApp = FreePort(), tInfra = FreePort(),
-            cApp = FreePort(), cInfra = FreePort(),
-            nApp = FreePort(), nInfra = FreePort();
-
-        // designIds pin each design's id to its instance's reference (designer 60, todo 13, crm 27 — the
-        // committed values). The fourth instance has NO designId, so it must contribute no design.
-        File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
+        // designIds pin each design's id to its instance's reference (designer 60, todo 13, crm 27).
+        var entries = new[]
         {
-          "instances": [
-            { "id": 1, "app": "designer", "appPort": {{dApp}}, "infraPort": {{dInfra}}, "designId": 60 },
-            { "id": 2, "app": "todo",     "appPort": {{tApp}}, "infraPort": {{tInfra}}, "designId": 13 },
-            { "id": 3, "app": "crm",      "appPort": {{cApp}}, "infraPort": {{cInfra}}, "designId": 27 },
-            { "id": 4, "app": "nodesign", "appPort": {{nApp}}, "infraPort": {{nInfra}} }
-          ]
-        }
-        """);
+            ("designer", 1, (int?)60),
+            ("todo", 2, (int?)13),
+            ("crm", 3, (int?)27),
+            ("nodesign", 4, (int?)null),
+        };
+        File.WriteAllText(Path.Combine(dir, "kernel.json"), RegistryJsonText(entries));
 
         var registry = RegistryReader.Read(Path.Combine(dir, "kernel.json"));
-        ctx.Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"));
+        ctx.Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"), _appPort, _assetPort);
         await ctx.Kernel.StartAsync(KernelHost.SpecsFor(registry, dir));
     }
 
-    // The design-host: the instance holding `db.designs` (the designer, id 1). Its store's `Design`
-    // extent is the seeded design library, keyed by id.
     private IReadOnlyDictionary<int, ObjectValue> SeededDesigns() =>
         ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store.ReadExtent("Design");
 
@@ -607,9 +596,6 @@ public sealed class KernelSteps(InstanceContext ctx)
     [Then("the design-host's design {int} has a type named {string}")]
     public async Task ThenSeededDesignHasTypeAsync(int id, string typeName)
     {
-        // The design's `types` set holds the reverse-projected MetaTypes; one carries the named type — so
-        // the seed reverse-projected the app's REAL types, not a placeholder. Resolve the design's types
-        // set members (the design-host store loads them inline as objects) and look for the name.
         var design = SeededDesigns()[id];
         var types = (SetValue)design.Fields["types"];
         var names = types.Members.Values
@@ -619,26 +605,17 @@ public sealed class KernelSteps(InstanceContext ctx)
         await Assert.That(names).Contains(typeName);
     }
 
-    // ── boot sync: app-file edits reflect into the design library on restart ──────
-
-    // Edit a HOSTED app's committed document on disk (the file is the source of truth). The boot sync
-    // reverse-projects each instance's app.app on every boot, so this new type must appear in todo's
-    // design (id 13) after a restart. Append a new object type to instances/2's app.app.
     [Given("the todo app's document gains a new type {string}")]
     public void GivenTodoAppGainsType(string typeName)
     {
         var schemaPath = AppPaths.SchemaPathForId(ctx.KernelDir!, 2); // todo is instance id 2
         var doc = File.ReadAllText(schemaPath);
-        // Splice a new object type into the `types` section, right after the `types` keyword line, so it is
-        // a top-level type regardless of what the rest of the document holds (initialData/ui below stay put).
         var lines = doc.Replace("\r\n", "\n").Split('\n').ToList();
         var typesLine = lines.FindIndex(l => l == "types");
         lines.Insert(typesLine + 1, $"    {typeName}\n        label text");
         File.WriteAllText(schemaPath, string.Join("\n", lines));
     }
 
-    // Drop a design from the design-host's live store (then GC sweeps it), simulating a store that does
-    // not yet hold a design its instance still references — so the boot sync's ADD half re-creates it.
     [Given("the design-host's design {int} is removed from its store")]
     public void GivenDesignRemovedFromStore(int id)
     {
@@ -657,8 +634,6 @@ public sealed class KernelSteps(InstanceContext ctx)
     [Then("the no-design app contributes no design")]
     public async Task ThenNoDesignAppContributesNothingAsync()
     {
-        // The fourth instance ("nodesign") carries no designId, so the seed produced exactly the three
-        // design-bearing apps' designs (designer/todo/crm) — no fourth design.
         var designs = SeededDesigns();
         await Assert.That(designs.Count).IsEqualTo(3);
         await Assert.That(designs.Values.Select(LabelOf)).DoesNotContain("nodesign");
@@ -667,9 +642,6 @@ public sealed class KernelSteps(InstanceContext ctx)
     [Given("the operator adds a design labelled {string} to the design-host")]
     public void GivenOperatorAddsDesign(string label)
     {
-        // An operator edit straight through the design-host's own store (the IDE does this over the WS):
-        // mint a new Design with a label and add it to `db.designs`. It must survive a restart — the seed
-        // is first-run-only, so a restart loads the existing store (with this edit), never reseeds.
         var store = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store;
         var id = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
         {
@@ -688,57 +660,19 @@ public sealed class KernelSteps(InstanceContext ctx)
     private static string LabelOf(ObjectValue design) =>
         design.Fields.TryGetValue("label", out var v) && v is TextValue t ? t.Text : "";
 
-    // ── registry validation (fail loudly on aliased stores) ─────────────────────
+    // ── helpers ───────────────────────────────────────────────────────────────
 
-    [Given("a registry of two instances that resolve to the same data file")]
-    public void GivenAliasedRegistry()
+    // A fresh temp dir for a scenario's fixtures + registry, and the two shared kernel ports.
+    private string NewDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), "deenv-kernel-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         ctx.KernelDir = dir;
-
-        // Two entries with the SAME id → the same id-dir (instances/1/) → the same data file, which
-        // would silently break sovereignty if the kernel didn't reject it. (Storage is id-based, so
-        // a duplicate id — not a duplicate name — is what aliases a store now.)
-        WriteApp(dir, 1, BoolApp);
-        int p1 = FreePort(), p2 = FreePort(), p3 = FreePort(), p4 = FreePort();
-        File.WriteAllText(Path.Combine(dir, "kernel.json"), $$"""
-        {
-          "instances": [
-            { "id": 1, "app": "alpha", "appPort": {{p1}}, "infraPort": {{p2}} },
-            { "id": 1, "app": "beta",  "appPort": {{p3}}, "infraPort": {{p4}} }
-          ]
-        }
-        """);
+        _appPort = FreePort();
+        _assetPort = FreePort();
+        return dir;
     }
 
-    [When("the kernel registry is resolved")]
-    public void WhenRegistryResolved()
-    {
-        try
-        {
-            var registry = RegistryReader.Read(Path.Combine(ctx.KernelDir!, "kernel.json"));
-            KernelHost.SpecsFor(registry, ctx.KernelDir!);
-        }
-        catch (Exception ex)
-        {
-            _configError = ex;
-        }
-    }
-
-    [Then("it is rejected with a clear kernel-config error")]
-    public async Task ThenRejectedAsync()
-    {
-        await Assert.That(_configError).IsNotNull();
-        await Assert.That(_configError is KernelConfigException).IsTrue();
-        await Assert.That(_configError!.Message).Contains("same data file");
-    }
-
-    // ── helpers ───────────────────────────────────────────────────────────────
-
-    // Write a fixture app document to its id-dir (<dir>/instances/<id>/app.app), the layout the
-    // kernel resolves PURELY by id (AppPaths.SchemaPathForId). The id, not a file name, is what
-    // distinguishes one instance's store from another.
     private static void WriteApp(string dir, int id, string appDoc)
     {
         var idDir = AppPaths.IdDirFor(dir, id);
@@ -746,25 +680,40 @@ public sealed class KernelSteps(InstanceContext ctx)
         File.WriteAllText(Path.Combine(idDir, "app.app"), appDoc);
     }
 
-    // True if an instance is serving its root on this app port, false if the port refuses the
-    // connection (the host has been stopped). A refused connection returns immediately; the timeout only
-    // bounds a LIVE-but-slow response, so 15s gives a live instance headroom under concurrent suite load
-    // (5s produced false negatives) without making the refused case any slower.
-    private static async Task<bool> ServesRootAsync(int appPort)
+    // Write kernel.json with the two kernel-level ports + the given (name, id) instances (no
+    // per-instance ports — addressing is by path).
+    private void WriteRegistry(string dir, params (string Name, int Id)[] instances) =>
+        File.WriteAllText(Path.Combine(dir, "kernel.json"),
+            RegistryJsonText(instances.Select(i => (i.Name, i.Id, (int?)null)).ToArray()));
+
+    private string RegistryJsonText((string Name, int Id, int? DesignId)[] instances)
+    {
+        var rows = instances.Select(i =>
+        {
+            var did = i.DesignId.HasValue ? $", \"designId\": {i.DesignId.Value}" : "";
+            return $"    {{ \"id\": {i.Id}, \"app\": \"{i.Name}\"{did} }}";
+        });
+        return "{\n" +
+               $"  \"appPort\": {_appPort},\n" +
+               $"  \"assetPort\": {_assetPort},\n" +
+               "  \"instances\": [\n" + string.Join(",\n", rows) + "\n  ]\n}";
+    }
+
+    private string MountPath(string name) => "/apps/" + name;
+    private string Url(string path) => $"http://localhost:{_appPort}{path}";
+
+    // True if the app port serves a 2xx at this path, false if it 404s (the instance is not routed) or
+    // the connection is refused. A refused/404 returns promptly; the timeout bounds a LIVE-but-slow page.
+    private async Task<bool> ServesAsync(string path)
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         try
         {
-            var resp = await http.GetAsync($"http://localhost:{appPort}/");
+            var resp = await http.GetAsync(Url(path));
             return resp.IsSuccessStatusCode;
         }
-        catch (HttpRequestException)
-        {
-            return false;
-        }
+        catch (HttpRequestException) { return false; }
     }
 
-    // A genuinely free TCP port, never handed out twice this run (see PortAllocator) — so parallel kernel
-    // scenarios can't be dealt the same port and collide.
     private static int FreePort() => PortAllocator.Next();
 }

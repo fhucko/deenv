@@ -7,7 +7,8 @@ namespace DeEnv.Tests.Steps;
 
 // Shared UI-testing steps used across features (navigation + page-kind assertions).
 // A self-hosted code page mounts into #app and bootstraps the client bundle (/js) from
-// the infra port — the page carries window.initInfraPort.
+// the asset host under its mount — the page carries window.initBase (the mount prefix) and
+// window.initAssetAuthority (host:port).
 [Binding]
 public sealed class CommonUiSteps(InstanceContext ctx)
 {
@@ -30,7 +31,7 @@ public sealed class CommonUiSteps(InstanceContext ctx)
         await ctx.Page!.WaitForSelectorAsync("#app [data-key]",
             new Microsoft.Playwright.PageWaitForSelectorOptions { State = Microsoft.Playwright.WaitForSelectorState.Attached });
         var html = await ctx.Page.ContentAsync();
-        await Assert.That(html).Contains("initInfraPort");
+        await Assert.That(html).Contains("initBase");
     }
 
     [Then("the page shows {string}")]

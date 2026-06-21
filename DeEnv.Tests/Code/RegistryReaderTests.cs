@@ -17,10 +17,12 @@ public sealed class RegistryReaderTests
     {
         var registry = ReadInline("""
         {
+          "appPort": 8080,
+          "assetPort": 8081,
           "instances": [
-            { "app": "alpha", "appPort": 8080, "infraPort": 8081 },
-            { "app": "beta",  "appPort": 8082, "infraPort": 8083 },
-            { "app": "gamma", "appPort": 8084, "infraPort": 8085 }
+            { "app": "alpha" },
+            { "app": "beta" },
+            { "app": "gamma" }
           ]
         }
         """);
@@ -41,10 +43,12 @@ public sealed class RegistryReaderTests
     {
         var registry = ReadInline("""
         {
+          "appPort": 8080,
+          "assetPort": 8081,
           "instances": [
-            { "id": 5, "app": "alpha", "appPort": 8080, "infraPort": 8081 },
-            { "app": "beta",  "appPort": 8082, "infraPort": 8083 },
-            { "id": 2, "app": "gamma", "appPort": 8084, "infraPort": 8085 }
+            { "id": 5, "app": "alpha" },
+            { "app": "beta" },
+            { "id": 2, "app": "gamma" }
           ]
         }
         """);
@@ -56,6 +60,27 @@ public sealed class RegistryReaderTests
         await Assert.That(ids[1]).IsEqualTo(6);
         await Assert.That(ids[2]).IsEqualTo(2);
         await Assert.That(ids.Distinct().Count()).IsEqualTo(ids.Count);
+    }
+
+    // The reader PRESERVES the kernel-level ports (the app port + asset port). Addressing is by path,
+    // so these two shared ports are the only ports there are; the reader's id-forgiveness rebuild must
+    // carry them through (a bare rebuild reset them to the 8080/8081 defaults — the production bug where
+    // the kernel ignored kernel.json's ports and always bound 8080/8081).
+    [Test]
+    public async Task The_reader_preserves_the_kernel_ports()
+    {
+        var registry = ReadInline("""
+        {
+          "appPort": 18080,
+          "assetPort": 18081,
+          "instances": [
+            { "id": 1, "app": "alpha" }
+          ]
+        }
+        """);
+
+        await Assert.That(registry.AppPort).IsEqualTo(18080);
+        await Assert.That(registry.AssetPort).IsEqualTo(18081);
     }
 
     private static Registry ReadInline(string json)

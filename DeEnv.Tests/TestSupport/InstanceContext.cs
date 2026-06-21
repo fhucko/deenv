@@ -790,6 +790,16 @@ public class InstanceContext
     public KernelHost? Kernel { get; set; }
     public string? KernelDir { get; set; }
 
+    // The designer's mount base (`/apps/designer`) when a kernel-backed browser is pointed at it —
+    // addressing is by PATH now, so a step navigating to a designer route prefixes this (the `<a href>`
+    // links the designer emits already carry it via the SSR/client edge). Empty until set.
+    public string DesignerBase { get; private set; } = "";
+
+    // A designer route URL: the designer's mount base + the root-relative route (e.g. "/instances" →
+    // "/apps/designer/instances"). Used by DesignerSteps' explicit navigations (clicked links carry the
+    // prefix already).
+    public string DesignerUrl(string route) => DesignerBase + route;
+
     // ── browser ───────────────────────────────────────────────────────────────
 
     public IPage? Page { get; set; }
@@ -829,35 +839,36 @@ public class InstanceContext
         WriteIdApp(dir, 1, File.ReadAllText(AppFixture(1)));
 
         // Each target hosts the REAL committed app whose label it carries (todo → instances/2's app, crm
-        // → instances/3's, …), exactly as production hosts them — so the kernel's first-boot seed
-        // reverse-projects each into its REAL Design (real types + real ui). (Previously the targets were
-        // throwaway bool apps and the designer's designs came from an EMBEDDED seed; now each app's own
-        // app.app is the single source of truth, so the target must BE the real app.) Each references its
-        // design by an EXPLICIT designId — the committed kernel.json's designId for that label — so the
-        // dropdowns start correct and the instances list shows the design. The designer itself (id 1) is
-        // uniform: it carries a designId too (its OWN "designer" self-design), so its instances-list row
-        // resolves to a design like every other row, with no special-casing. (Mirrors kernel.json.)
+        // → instances/3's, …), so the kernel's first-boot seed reverse-projects each into its REAL Design.
+        // Each references its design by an EXPLICIT designId — the committed kernel.json's designId for
+        // that label — so the dropdowns start correct. The designer itself (id 1) carries a designId too
+        // (its OWN "designer" self-design). Addressing is by PATH now, so there are NO per-instance ports —
+        // the two kernel-level ports go on the registry header, and each instance is served at /apps/<name>.
+        var appPort = FreePort();
+        var assetPort = FreePort();
         var designIds = DesignIdsByLabel();
-        var entries = new List<string>
-        {
-            RegistryEntryJson(1, "designer", FreePort(), FreePort(), designIds["designer"]),
-        };
+        var entries = new List<string> { RegistryEntryJson(1, "designer", designIds["designer"]) };
         foreach (var (id, label) in targets)
         {
             WriteIdApp(dir, id, File.ReadAllText(CommittedAppForLabel(label)));
-            entries.Add(RegistryEntryJson(id, label, FreePort(), FreePort(), designIds[label]));
+            entries.Add(RegistryEntryJson(id, label, designIds[label]));
         }
 
         File.WriteAllText(Path.Combine(dir, "kernel.json"),
-            "{\n  \"instances\": [\n    " + string.Join(",\n    ", entries) + "\n  ]\n}");
+            "{\n" +
+            $"  \"appPort\": {appPort},\n  \"assetPort\": {assetPort},\n" +
+            "  \"instances\": [\n    " + string.Join(",\n    ", entries) + "\n  ]\n}");
 
         var registry = RegistryReader.Read(Path.Combine(dir, "kernel.json"));
-        Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"));
+        Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"), appPort, assetPort);
         await Kernel.StartAsync(KernelHost.SpecsFor(registry, dir));
 
         var designer = Kernel.Instances.Single(i => i.Spec.Id == 1);
 
-        Page = await SharedBrowser.NewPageAsync($"http://localhost:{designer.AppPort}");
+        // The designer is mounted at /apps/designer; the browser BaseURL is the app port, and steps
+        // navigate to DesignerUrl(route) (the designer's emitted links already carry the mount prefix).
+        DesignerBase = HostedInstance.MountBaseFor(designer.Spec.App);
+        Page = await SharedBrowser.NewPageAsync($"http://localhost:{appPort}");
         return designer;
     }
 
@@ -881,10 +892,10 @@ public class InstanceContext
         File.WriteAllText(Path.Combine(idDir, "app.app"), appDoc);
     }
 
-    private static string RegistryEntryJson(int id, string label, int appPort, int infraPort, int? designId = null)
+    private static string RegistryEntryJson(int id, string label, int? designId = null)
     {
         var did = designId.HasValue ? $", \"designId\": {designId.Value}" : "";
-        return $"{{ \"id\": {id}, \"app\": \"{label}\", \"appPort\": {appPort}, \"infraPort\": {infraPort}{did} }}";
+        return $"{{ \"id\": {id}, \"app\": \"{label}\"{did} }}";
     }
 
     // The seeded design id for a label (e.g. "crm") — so a step can assert an instance now records that

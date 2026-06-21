@@ -9,8 +9,18 @@
 // authoritative: ok → the entry commits (drops); error → reverse-replay the journal
 // back past the failed entry, drop it, and re-apply the rest.
 
-// The infra port (set by the SSR page as window.initInfraPort) where /ws and /js live.
-declare const initInfraPort: number;
+// Where /ws and /js live (set by the SSR page): the asset AUTHORITY (host:port — a kernel-level
+// shared port, decoupled from the per-instance app addressing) and the instance's mount BASE
+// (`/apps/<name>`, or "/" root-mounted). The WS URL is `<proto>//<assetAuthority><base>/ws`. Empty
+// authority → a same-origin, base-relative URL (a reverse-proxied / domain-root deployment).
+declare const initAssetAuthority: string;
+declare const initBase: string;
+
+// The mount base as a URL PREFIX: "" when root-mounted ("/"), else the base verbatim ("/apps/todo").
+// Prepended to the asset paths (/ws, /js) and — in ui.ts/init.ts — to the app's root-relative links.
+function basePrefix(): string {
+    return initBase === "/" ? "" : initBase;
+}
 
 let codeWs: WebSocket | null = null;
 const codeWsOutbox: string[] = [];
@@ -94,9 +104,14 @@ function markReadyIfSettled(): void {
 
 function connectWs(): void {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    // Infra endpoints (/ws, /js) live on a separate port from the app's URL space, so the
-    // app port stays a clean, reserved-path-free data space. window.initInfraPort carries it.
-    codeWs = new WebSocket(`${proto}//${location.hostname}:${initInfraPort}/ws`);
+    // Asset endpoints (/ws, /js) live on a separate shared port from the app's URL space, addressed by
+    // path under the instance's mount — so the app URL space stays clean AND the same authority serves
+    // every instance. <assetAuthority><base>/ws; an empty authority means a same-origin, base-relative
+    // URL (a reverse-proxied deployment, where nginx maps it back to the kernel's asset port).
+    const wsUrl = initAssetAuthority
+        ? `${proto}//${initAssetAuthority}${basePrefix()}/ws`
+        : `${proto}//${location.host}${basePrefix()}/ws`;
+    codeWs = new WebSocket(wsUrl);
     codeWs.onopen = () => {
         wsRetryDelay = 1000;
         // Claim the warm session minted at SSR before anything else; if this arrives

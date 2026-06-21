@@ -21,8 +21,6 @@
         order int
 
 ui
-    var newAppPort = 9100
-    var newInfraPort = 9101
     var newDesignId = 0
     var newInstanceName = ""
     var renameId = 0
@@ -176,18 +174,16 @@ ui
                         <option value={sys.id(d)}>
                             d.label
                 <input class="new-instance-name" value={newInstanceName}>
-                <input class="new-instance-app-port" value={newAppPort}>
-                <input class="new-instance-infra-port" value={newInfraPort}>
                 foreach d in db.designs
                     if sys.id(d) == newDesignId
-                        <button class="create-instance" onClick={() => sys.create(d, newInstanceName, newAppPort, newInfraPort)}>
+                        <button class="create-instance" onClick={() => sys.create(d, newInstanceName)}>
                             "Create"
             <table class="instances-table">
                 <tr class="instances-head">
                     <th>
                         "Instance"
                     <th>
-                        "Port"
+                        "URL"
                     <th>
                         "Design"
                     <th>
@@ -207,7 +203,7 @@ ui
                                 <button class="rename-instance" onClick={() => startRename(i)}>
                                     "Rename"
                         <td class="instance-port">
-                            i.port
+                            i.path
                         <td>
                             foreach d in db.designs
                                 if sys.id(d) == i.designId
@@ -216,7 +212,7 @@ ui
                         <td>
                             <a class="open-instance" href={sys.nest("/instances", i.id)}>
                                 "Open"
-                            <button class="clone-instance" onClick={() => sys.cloneInstance(i.id, newAppPort, newInfraPort)}>
+                            <button class="clone-instance" onClick={() => sys.cloneInstance(i.id)}>
                                 "Clone"
                             <button class="delete-instance" onClick={() => sys.delete(i.id)}>
                                 "Delete"
@@ -248,7 +244,7 @@ ui
                         <span class="instance-app">
                             i.app
                         designSelector(i.id, i.designId)()
-                        <button class="clone-instance" onClick={() => sys.cloneInstance(i.id, newAppPort, newInfraPort)}>
+                        <button class="clone-instance" onClick={() => sys.cloneInstance(i.id)}>
                             "Clone"
                         <button class="delete-instance" onClick={() => sys.delete(i.id)}>
                             "Delete"

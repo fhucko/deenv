@@ -113,15 +113,15 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the design editor shows the design's label "blank"
 
   # Create an instance: the inline "New instance" form on /instances picks an existing design (a
-  # <select>) + a display name + a free app/infra port pair, and Create spawns a new instance running
-  # that design under that name. The kernel refreshes its live set, so the new instance shows in the list
-  # (race-free) under the typed name — and its NEW registry entry carries the picked design's id, so
-  # opening it pre-selects that design in the selector.
+  # <select>) + a display name, and Create spawns a new instance running that design under that name,
+  # served at /apps/<name> (addressing is by path now — no port inputs). The kernel refreshes its live
+  # set, so the new instance shows in the list (race-free) under the typed name — and its NEW registry
+  # entry carries the picked design's id, so opening it pre-selects that design in the selector.
   @milestone-10 @single-user
   Scenario: Creating an instance from the list form spawns it running the picked design
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the instances list
-    And I create an instance named "myapp" from the design "crm" on a free port pair
+    And I create an instance named "myapp" from the design "crm"
     Then a new instance "myapp" running design "crm" appears in the instances list
     When I open that new instance
     Then the design dropdown has the design "crm" selected

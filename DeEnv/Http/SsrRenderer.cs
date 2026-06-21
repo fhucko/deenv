@@ -21,10 +21,11 @@ public sealed class SsrRenderer
     // _desc stays pristine for printing; _ui carries the render-time synthesis.
     private readonly InstanceUi? _ui;
 
-    // The infra port (where /ws and /js are served) — injected into the page so the client
-    // loads its bundle and opens its WebSocket against it, keeping the app port a clean,
-    // reserved-path-free data URL space.
-    private readonly int _infraPort;
+    // The asset authority (host:port where /ws and /js are served) — injected into the page so the
+    // client loads its bundle and opens its WebSocket against it, keeping the app port a clean,
+    // reserved-path-free data URL space. A full authority (not a bare port) so the asset port is a
+    // kernel-level shared port, decoupled from the per-instance app addressing. Defaults to empty
+    // (no asset host — a render with no client bundle, e.g. a unit-level render).
 
     // Names of the synthesized framework members (the generic library + the generic render) — placed
     // in the lib scope, between the system scope and the app scope, so user code can compose them but
@@ -50,20 +51,26 @@ public sealed class SsrRenderer
     private readonly LiveRegistry _registry;
 
     public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
-        int infraPort = 0, LiveRegistry? registry = null)
+        LiveRegistry? registry = null)
     {
         _store = store;
         _desc = desc;
         _resolver = new TypeResolver(desc);
         _sessions = sessions;
-        _infraPort = infraPort;
         _registry = registry ?? new LiveRegistry();
         (_ui, _systemNames, _isGeneric, _descriptors) = GenericUi.Effective(desc);
     }
 
     // The rendered HTML plus the first-paint HTTP status (200 unless code set it, e.g. the
     // self-hosted NotFound view sets 404).
-    public (string Html, int Status) Render(string urlPath) => RenderPage(urlPath);
+    //
+    // `urlPath` is ROOT-RELATIVE — the instance is mount-UNAWARE, so its routing (`path` var, link
+    // targets) is the same whether it lives at a path or a domain root. `base` is the mount prefix
+    // the EDGES apply (the kernel router stripped it before this, and re-applies it on emitted links
+    // so the app keeps writing `/notes/2`): "/" = root-mounted (behavior-preserving — every edge is
+    // an identity), "/apps/todo" = path-mounted. `assetAuthority` (host:port) is where /ws + /js live.
+    public (string Html, int Status) Render(string urlPath, string @base = "/", string assetAuthority = "") =>
+        RenderPage(urlPath, @base, assetAuthority);
 
     // ── code-owned UI (every page is `fn render()`) ─────────────────────────────
     //
@@ -73,14 +80,14 @@ public sealed class SsrRenderer
     // routing now lives in Code (sys.resolve), proven by the SelfHostedUi generic-UI + resolve-probe
     // scenarios. A runtime error on first paint becomes an SSR error page.
 
-    private (string Html, int Status) RenderPage(string urlPath)
+    private (string Html, int Status) RenderPage(string urlPath, string @base, string assetAuthority)
     {
         var context = new ExecContext();
         try
         {
             var (result, title, scope, status) = ExecuteRender(urlPath, context);
             var body = new StringBuilder();
-            SerializeChild(result, body);
+            SerializeChild(result, body, @base);
 
             // Mint a session and ship its clientId, so the WS can claim it (hello) and a
             // later milestone can hang per-client push on it. The id is all the client
@@ -110,9 +117,10 @@ public sealed class SsrRenderer
             // routed/collection/missing page can still navigate back up; a full-custom render owns the
             // whole page. The trail is derived from the REQUEST url path — segment for segment, per
             // INSTANCE_MODEL.md (the same location-mirrors-URL invariant the client preserves).
-            var breadcrumbs = _isGeneric ? Breadcrumbs(ParsePath(urlPath)) : "";
+            var breadcrumbs = _isGeneric ? Breadcrumbs(ParsePath(urlPath), @base) : "";
 
-            return (UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi), clientId, _infraPort),
+            return (UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi),
+                    clientId, @base, assetAuthority),
                 status);
         }
         catch (CodeRuntimeException ex)
@@ -271,19 +279,27 @@ public sealed class SsrRenderer
     // styles (typography, inputs, buttons, tables) give a custom `fn render()` app a clean look
     // too — a custom app overrides via the cascade. (Zero-config good defaults; minimal by default.)
     private static string UiLayout(
-        string title, string breadcrumbs, string body, string initData, string initUi, string clientId, int infraPort) => $$"""
+        string title, string breadcrumbs, string body, string initData, string initUi, string clientId,
+        string @base, string assetAuthority) => $$"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
           <meta charset="utf-8">
           <title>{{Escape(title)}}</title>
           <style>{{ViewChromeCss}}</style>
-          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initInfraPort={{infraPort}};</script>
-          <script>(function(){var s=document.createElement("script");s.src=location.protocol+"//"+location.hostname+":"+window.initInfraPort+"/js";document.head.appendChild(s);})();</script>
+          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initBase="{{JsStringSafe(@base)}}";window.initAssetAuthority="{{JsStringSafe(assetAuthority)}}";</script>
+          <script>(function(){var a=window.initAssetAuthority,b=window.initBase==="/"?"":window.initBase;var s=document.createElement("script");s.src=a?location.protocol+"//"+a+b+"/js":b+"/js";document.head.appendChild(s);})();</script>
         </head>
         <body>{{breadcrumbs}}<div id="app">{{body}}</div></body>
         </html>
         """;
+
+    // Escape a string for embedding inside a double-quoted JS string literal in the injected
+    // bootstrap (the base + asset authority). Backslash/quote and "<" (so "</script>" can't break
+    // out), matching ScriptSafe's intent. Both values are server-controlled (a path + host:port), so
+    // this is defensive, not a security boundary.
+    private static string JsStringSafe(string s) =>
+        s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("<", "\\u003c");
 
     // The default stylesheet (served on every page — see UiLayout). Three layers: base element
     // styling (typography, form controls, buttons, tables) that lifts ANY page off raw HTML;
@@ -528,17 +544,17 @@ public sealed class SsrRenderer
     // `selectValue` is the bound value of an enclosing <select> (null otherwise), threaded so an
     // <option> can mark itself `selected` when its own `value` matches the selection — the SSR half
     // of <select> two-way binding (see SerializeTag's select branch).
-    private void SerializeChild(IExecTagChild child, StringBuilder sb, IExecValue? selectValue = null)
+    private void SerializeChild(IExecTagChild child, StringBuilder sb, string @base, IExecValue? selectValue = null)
     {
         switch (child)
         {
             case ExecTag tag:
-                SerializeTag(tag, sb, selectValue);
+                SerializeTag(tag, sb, @base, selectValue);
                 break;
             case ExecArray coll:
                 // foreach / where / orderBy flatten into the child stream (e.g. a select's options
                 // built by foreach), so the select's value carries through the flattening.
-                foreach (var item in coll.Items) SerializeChild(item.Value, sb, selectValue);
+                foreach (var item in coll.Items) SerializeChild(item.Value, sb, @base, selectValue);
                 break;
             case ExecText text:
                 sb.Append(Escape(text.Value));
@@ -553,7 +569,7 @@ public sealed class SsrRenderer
         }
     }
 
-    private void SerializeTag(ExecTag tag, StringBuilder sb, IExecValue? selectValue = null)
+    private void SerializeTag(ExecTag tag, StringBuilder sb, string @base, IExecValue? selectValue = null)
     {
         // A <textarea>'s value is its TEXT CONTENT, not a `value` attribute (browsers ignore
         // `value` on <textarea>), so its bound `value` is emitted as escaped content below and
@@ -580,7 +596,7 @@ public sealed class SsrRenderer
         foreach (var (name, value) in tag.Attributes)
         {
             if ((isTextarea || isSelect) && name == "value") continue;
-            AppendCodeAttribute(sb, name, value);
+            AppendCodeAttribute(sb, name, value, @base);
         }
         if (isSelectedOption) sb.Append(" selected");
         sb.Append('>');
@@ -592,7 +608,7 @@ public sealed class SsrRenderer
         if (isTextarea && tag.Attributes.TryGetValue("value", out var v))
             AppendTextareaValue(sb, v);
 
-        foreach (var child in tag.Children) SerializeChild(child, sb, childSelectValue);
+        foreach (var child in tag.Children) SerializeChild(child, sb, @base, childSelectValue);
         sb.Append("</").Append(tag.Name).Append('>');
     }
 
@@ -630,12 +646,18 @@ public sealed class SsrRenderer
     // Only scalar attribute values become HTML attributes. Function values (event
     // handlers like onClick) and objects/arrays/null are wired on the client, not
     // serialized. A bool attribute follows HTML semantics: present iff true.
-    private static void AppendCodeAttribute(StringBuilder sb, string name, IExecValue value)
+    //
+    // A navigational URL attribute (href/src) whose value is ROOT-RELATIVE is prefixed with the
+    // mount `base` HERE, at the edge — so app Code keeps writing `/notes/2` (mount-unaware) and the
+    // emitted link is mount-correct (`/apps/todo/notes/2`). The client reconciler (ui.ts) applies
+    // the same prefix, so SSR and hydrate agree. With base "/" this is an identity (behavior-preserving).
+    private static void AppendCodeAttribute(StringBuilder sb, string name, IExecValue value, string @base)
     {
         switch (value)
         {
             case ExecText t:
-                sb.Append(' ').Append(name).Append("=\"").Append(Escape(t.Value)).Append('"');
+                var text = IsUrlAttribute(name) ? MountUrl(@base, t.Value) : t.Value;
+                sb.Append(' ').Append(name).Append("=\"").Append(Escape(text)).Append('"');
                 break;
             case ExecInt i:
                 sb.Append(' ').Append(name).Append("=\"").Append(i.Value.ToString(CultureInfo.InvariantCulture)).Append('"');
@@ -647,13 +669,14 @@ public sealed class SsrRenderer
     }
 
     // Build the read-only `instances` Code collection from the registry snapshot: one row per
-    // hosted instance, { id, app, port, assetsPort, designId } scalars. A transient List (negative ids),
-    // like a where/orderBy result — an app reads the rows in output position, so they ship as leaves and
-    // the list survives hydration. Empty when there is no kernel. `id` is the host-action address (e.g.
-    // sys.publish(db, i.id)), unique per instance and the sole key to its files; `app` is a display
-    // name only; `designId` is the explicit reference to the IDE design this instance runs (0 = none),
-    // read by the IDE to pre-select the design dropdown. clone/delete/publish work on ANY instance, so
-    // there is no created/boot flag.
+    // hosted instance, { id, app, path, designId } scalars. A transient List (negative ids), like a
+    // where/orderBy result — an app reads the rows in output position, so they ship as leaves and the
+    // list survives hydration. Empty when there is no kernel. `id` is the host-action address (e.g.
+    // sys.publish(db, i.id)), unique per instance and the sole key to its files; `app` is the display
+    // name (which also determines the mount); `path` is `/apps/<name>` — the instance's address, now
+    // that hosting is by path (no per-instance ports); `designId` is the explicit reference to the IDE
+    // design this instance runs (0 = none). clone/delete/publish work on ANY instance, so there is no
+    // created/boot flag.
     private ExecArray BuildRegistry(ExecContext context)
     {
         var items = new List<ExecItem>();
@@ -668,8 +691,7 @@ public sealed class SsrRenderer
                     {
                         ["id"] = new ExecInt { Value = info.Id },
                         ["app"] = new ExecText { Value = info.App },
-                        ["port"] = new ExecInt { Value = info.Port },
-                        ["assetsPort"] = new ExecInt { Value = info.AssetsPort },
+                        ["path"] = new ExecText { Value = info.Path },
                         ["designId"] = new ExecInt { Value = info.DesignId ?? 0 },
                     },
                 },
@@ -700,14 +722,17 @@ public sealed class SsrRenderer
         nav.breadcrumbs { margin-bottom: 1rem; color: #666; }
         """;
 
-    private static string Breadcrumbs(NodePath path)
+    // The generic breadcrumb chrome. Its targets are ROOT-RELATIVE node paths (`/`, `/notes`, …),
+    // prefixed with the mount `base` at the edge so they navigate within the mounted instance — the
+    // same MountUrl the attribute emitter applies to app-authored hrefs.
+    private static string Breadcrumbs(NodePath path, string @base)
     {
-        var sb = new StringBuilder("<nav class=\"breadcrumbs\"><a href=\"/\">Db</a>");
+        var sb = new StringBuilder($"<nav class=\"breadcrumbs\"><a href=\"{Escape(MountUrl(@base, "/"))}\">Db</a>");
         var url = "";
         foreach (var seg in path.Segments)
         {
             url += "/" + seg;
-            sb.Append($" / <a href=\"{Escape(url)}\">{Escape(seg)}</a>");
+            sb.Append($" / <a href=\"{Escape(MountUrl(@base, url))}\">{Escape(seg)}</a>");
         }
         sb.Append("</nav>");
         return sb.ToString();
@@ -720,6 +745,45 @@ public sealed class SsrRenderer
     {
         var segs = urlPath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
         return NodePath.FromSegments(segs);
+    }
+
+    // ── mount base (the front-edge addressing seam) ─────────────────────────────
+    //
+    // The instance is mount-UNAWARE: its `path` var and the URLs its Code emits are root-relative, so
+    // the SAME instance serves at a path (`/apps/todo`) or a domain root unchanged. The `base` is
+    // applied ONLY here, at the edges (SSR link/breadcrumb/script emission), and mirrored on the
+    // client (ui.ts/init.ts). These two helpers are the whole seam in C#.
+
+    // Navigational URL attribute names — the ones whose root-relative value the mount base prefixes.
+    private static bool IsUrlAttribute(string name) => name is "href" or "src";
+
+    // Prefix a ROOT-RELATIVE url with the mount base. Identity when base is "/" (root-mounted) or the
+    // url is not root-relative (an absolute "http(s)://…", a protocol-relative "//host", a fragment
+    // "#", or a relative "foo" — none are mount-rebased). `base` "/apps/todo" + url "/notes/2" →
+    // "/apps/todo/notes/2"; + "/" → "/apps/todo".
+    public static string MountUrl(string @base, string url)
+    {
+        if (@base == "/" || @base.Length == 0) return url;
+        if (!url.StartsWith('/') || url.StartsWith("//")) return url; // not root-relative → leave it
+        var trimmed = @base.TrimEnd('/');
+        return url == "/" ? trimmed : trimmed + url;
+    }
+
+    // Strip the mount base off a FULL request path to recover the instance's root-relative path (the
+    // inverse of MountUrl; the client init.ts mirrors it for the `path` var). "/apps/todo/notes/2"
+    // with base "/apps/todo" → "/notes/2"; "/apps/todo" → "/". Identity when base is "/". A path that
+    // does not start with the base is returned unchanged (defensive — the router only routes matches).
+    public static string StripBase(string @base, string fullPath)
+    {
+        if (@base == "/" || @base.Length == 0) return fullPath;
+        var trimmed = @base.TrimEnd('/');
+        if (fullPath == trimmed) return "/";
+        if (fullPath.StartsWith(trimmed + "/", StringComparison.Ordinal))
+        {
+            var rest = fullPath[trimmed.Length..];
+            return rest.Length == 0 ? "/" : rest;
+        }
+        return fullPath;
     }
 
     private static string Escape(string s) =>

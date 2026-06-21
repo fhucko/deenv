@@ -53,15 +53,17 @@ function init(): void {
     // path itself. Built as a direct closure over the rebuilt top scope, never registered by name.
     uiStatic.renderFn = { type: "fn", fn: initUi.ui.render, scope };
 
-    // Routing: `path` is framework-provided (the live URL), overriding the server's
-    // first-paint value.
-    scope.items["path"] = { value: { type: "text", value: location.pathname }, isReadOnly: false };
+    // Routing: `path` is framework-provided (the live URL), overriding the server's first-paint value.
+    // The browser URL carries the mount (`/apps/<name>/…`); the app's `path` var is ROOT-RELATIVE
+    // (mount-unaware), so strip the base — exactly the SSR first paint, which gave Code the stripped
+    // path. (Identity when root-mounted.)
+    scope.items["path"] = { value: { type: "text", value: stripBase(location.pathname) }, isReadOnly: false };
 
-    // Browser back/forward: write the location back into the path var and re-render.
+    // Browser back/forward: write the (base-stripped) location back into the path var and re-render.
     window.addEventListener("popstate", () => {
         const item = uiStatic.state.scope.items["path"];
         if (item != null) {
-            item.value = { type: "text", value: location.pathname };
+            item.value = { type: "text", value: stripBase(location.pathname) };
             invalidateVar("path");
             renderUi();
         }

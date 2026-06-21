@@ -33,10 +33,36 @@ function renderUi(): void {
 
 // Routing writes real history entries: a code-driven `path` change pushes, so the
 // browser's back/forward buttons work; popstate (init.ts) writes the var back.
+//
+// The app's `path` var is ROOT-RELATIVE (mount-unaware); the BROWSER URL carries the mount, so the
+// pushState target is `base + path` (mountUrl). Compared against the live location.pathname (also
+// mounted), so an unchanged path does not re-push. Identity when root-mounted.
 function syncPath(): void {
     const item = uiStatic.state.scope.items["path"];
     if (item == null || item.value.type !== "text") return;
-    if (item.value.value !== location.pathname) history.pushState(null, "", item.value.value);
+    const mounted = mountUrl(item.value.value);
+    if (mounted !== location.pathname) history.pushState(null, "", mounted);
+}
+
+// Prefix a ROOT-RELATIVE url with the mount base (the client twin of SsrRenderer.MountUrl). Identity
+// when root-mounted ("/") or the url is not root-relative (absolute/protocol-relative/fragment). Used
+// for pushState targets and for app-emitted href/src in the reconciler (refreshAttributes).
+function mountUrl(url: string): string {
+    const b = basePrefix();
+    if (b === "" || !url.startsWith("/") || url.startsWith("//")) return url;
+    return url === "/" ? b : b + url;
+}
+
+// Strip the mount base off a FULL browser path to recover the app's root-relative `path` var (the
+// inverse of mountUrl; the client twin of SsrRenderer.StripBase). "/apps/todo/notes/2" with base
+// "/apps/todo" → "/notes/2"; "/apps/todo" → "/". Identity when root-mounted, or when the path does
+// not carry the base (a domain-root deployment whose location is already root-relative).
+function stripBase(fullPath: string): string {
+    const b = basePrefix();
+    if (b === "") return fullPath;
+    if (fullPath === b) return "/";
+    if (fullPath.startsWith(b + "/")) { const rest = fullPath.slice(b.length); return rest === "" ? "/" : rest; }
+    return fullPath;
 }
 
 // The latest server-rejected mutation, surfaced as a dismissable banner. Lives on
@@ -167,7 +193,11 @@ function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
         // the .value property in syncSelectValue, AFTER the options exist — so skip it here.
         if (tag.name === "select" && name === "value") continue;
         if (raw == null || raw === false) { el.removeAttribute(name); continue; }
-        el.setAttribute(name, raw === true ? "" : String(raw));
+        // A navigational URL attribute (href/src) whose value is root-relative is mount-prefixed — the
+        // client twin of SsrRenderer's edge prefixing, so the hydrated link matches the SSR one (the app
+        // wrote `/notes/2`, both edges emit `/apps/todo/notes/2`). Identity when root-mounted.
+        const out = raw === true ? "" : (name === "href" || name === "src") ? mountUrl(String(raw)) : String(raw);
+        el.setAttribute(name, out);
         want.add(name);
     }
     for (const attr of Array.from(el.attributes))

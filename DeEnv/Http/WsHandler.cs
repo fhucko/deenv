@@ -150,6 +150,11 @@ public sealed class WsHandler
     private readonly ClientSessionStore? _sessions;
     private readonly LiveRegistry _registry;
     private readonly IHostActions _hostActions;
+    // The instance's mount prefix ("/" root-mounted, "/apps/<name>" path-mounted). The client sends
+    // FULL paths (location.pathname, which carries the mount) for write/refetch ops; the handler
+    // strips the mount before resolving against the schema, so the instance stays mount-unaware (its
+    // node paths are root-relative). Identity-stripping when "/" (behavior-preserving).
+    private readonly string _mountBase;
     private readonly JsonSerializerOptions _jsonOpts = new()
     {
         WriteIndented = false,
@@ -158,7 +163,7 @@ public sealed class WsHandler
     };
 
     public WsHandler(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
-        LiveRegistry? registry = null, IHostActions? hostActions = null)
+        LiveRegistry? registry = null, IHostActions? hostActions = null, string mountBase = "/")
     {
         _store = store;
         _desc = desc;
@@ -166,6 +171,7 @@ public sealed class WsHandler
         _sessions = sessions;
         _registry = registry ?? new LiveRegistry();
         _hostActions = hostActions ?? new NoHostActions();
+        _mountBase = mountBase;
     }
 
     // The warm per-client session a code-UI message addresses (clientId minted at SSR).
@@ -435,6 +441,12 @@ public sealed class WsHandler
     // reflects every committed change, not a per-client mirror that could have diverged.
     private string HandleRefetch(string pathStr, WsRequest req)
     {
+        // The client sends location.pathname (the FULL URL, carrying the mount prefix); strip the
+        // mount so the re-render's `path` var is root-relative, exactly like the SSR first paint. A
+        // path that does not carry the mount (the X-Forwarded-Prefix="" domain-root case) is left
+        // unchanged. Identity when root-mounted.
+        pathStr = SsrRenderer.StripBase(_mountBase, pathStr);
+
         Session(req); // slide liveness; the session holds no data
 
         // Load the graph once from the store; object-valued vars (the client's selection)
