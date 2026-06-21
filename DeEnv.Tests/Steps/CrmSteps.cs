@@ -87,7 +87,10 @@ public sealed class CrmSteps(InstanceContext ctx)
     {
         // Self-hosted forms class inputs by prop name (input.name) and autosave each edit;
         // the retiring C# auto-form keyed them with data-field and committed on Save.
-        await ctx.Page!.WaitHydratedAsync(); // the bound input's handler must be attached before we type
+        // WaitReadyAsync (not just hydrated): an autosave edit persists over the WS, so the socket must be
+        // fully settled — a hydrated-but-not-ready page rides the connecting-window outbox and can lose the
+        // edit under load (the staged path only writes the draft here, but waiting for ready is uniform).
+        await ctx.Page!.WaitReadyAsync();
         var selfHosted = ctx.Page!.Locator($"input.{field}");
         var input = await selfHosted.CountAsync() > 0 ? selfHosted.First
             : ctx.Page!.Locator($"input[data-field='{field}']").First;
@@ -102,7 +105,7 @@ public sealed class CrmSteps(InstanceContext ctx)
         // (.object-form button.save → sys.setField writes the draft's scalars back). Click it when
         // present. (The leaf/scalar-dict-entry editor still autosaves, so a form Save is just absent
         // there — nothing to click, and the edit has already flushed.)
-        await ctx.Page!.WaitHydratedAsync();
+        await ctx.Page!.WaitReadyAsync(); // the Save commits over the WS — wait for the socket to be fully settled
         var saveButton = ctx.Page!.Locator(".object-form button.save");
         if (await saveButton.CountAsync() > 0) await saveButton.First.ClickAsync();
         // Poll the persisted store until every edit has flushed to it — replaces a fixed 500ms guess

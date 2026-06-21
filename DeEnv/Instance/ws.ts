@@ -60,6 +60,38 @@ const pendingAdds = new Map<number, number>();
 
 let wsRetryDelay = 1000;
 
+// ── full-readiness signal (`data-ready`) — INTERIM ───────────────────────────────────
+//
+// `data-hydrated` (init.ts) marks the FIRST CLIENT RENDER done, but that fires BEFORE the
+// WebSocket has opened — so a mutation made between hydration and the socket settling rides
+// the connecting-window outbox (flushed only on open) instead of an established, claimed
+// connection. Under a slow/contended connect that edit can be delayed past a caller's window
+// (or lost to an early disconnect+resync), i.e. an edit made "before the page is fully loaded"
+// goes missing. `data-ready` is the stricter signal: it is set ONLY once the page has FULLY
+// settled — hydration done AND the socket open AND the session-claim `hello` acknowledged AND
+// any connect-time refetch applied — so an interaction gated on it always acts on an
+// established, server-acknowledged connection.
+//
+// INTERIM: this WAITS for readiness rather than making a not-ready mutation survive. The proper
+// fix is offline-resilient mutations (a durable outbox that delivers across a not-ready/dropped
+// connection regardless of timing — see the offline-support direction); until then, gating on
+// readiness is the minimal correct guard. Remove this marker (and the test waits on it) when
+// mutations become connection-state-independent.
+let helloAcked = false;
+
+function setReady(ready: boolean): void {
+    if (ready) document.documentElement.setAttribute("data-ready", "1");
+    else document.documentElement.removeAttribute("data-ready");
+}
+
+// Ready = the connection is established (hello acknowledged) AND no connect-time settle is still
+// outstanding (a refetch kicked off on open has returned). Called after the hello reply and after
+// each refetch reply, so whichever completes last flips the marker on. (Hydration is implied: a WS
+// reply can only arrive after init() ran connectWs + the first render.)
+function markReadyIfSettled(): void {
+    setReady(helloAcked && !refetchInFlight);
+}
+
 function connectWs(): void {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     // Infra endpoints (/ws, /js) live on a separate port from the app's URL space, so the
@@ -81,6 +113,10 @@ function connectWs(): void {
         pendingAdds.clear();
         refetchInFlight = false;
         needsServerData = true;
+        // No longer ready: a dropped connection cannot carry a mutation. The marker re-arms
+        // when the reconnect's hello is re-acknowledged (INTERIM — see the data-ready note).
+        helloAcked = false;
+        setReady(false);
         setTimeout(connectWs, wsRetryDelay);
         wsRetryDelay = Math.min(wsRetryDelay * 2, 10000);
     };
@@ -218,11 +254,17 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
     // in-flight guard so a later mutation can retry, instead of wedging forever.
     if (msg.error != null && typeof msg.id !== "number") {
         refetchInFlight = false;
+        markReadyIfSettled(); // a failed connect-time refetch still settles readiness
         console.error("Server error:", msg.error);
         return;
     }
 
-    if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
+    if (msg.op === "hello") {
+        // The session-claim is acknowledged: the connection is established. Readiness flips on
+        // once any connect-time refetch has also returned. (INTERIM — see the data-ready note.)
+        helloAcked = true;
+        markReadyIfSettled();
+    } else if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
         const arrayId = pendingAdds.get(msg.tempId);
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }
     } else if (msg.op === "refetch" && msg.state != null) {
@@ -232,6 +274,7 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // refresh): delete them, so the next lookup recomputes over the merged data
         // instead of reusing an outdated tree — and nothing stays stale to re-trigger.
         for (const [key, e] of uiStatic.cache) if (e.stale) uiStatic.cache.delete(key);
+        markReadyIfSettled(); // the connect-time settle (if any) is now applied
         renderUi();
     }
 }

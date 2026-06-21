@@ -62,6 +62,21 @@ public static class PageNav
         page.WaitForSelectorAsync("html[data-hydrated]", new() { State = WaitForSelectorState.Attached });
 
     /// <summary>
+    /// Wait until the page is FULLY ready (the <c>data-ready</c> marker): hydration done AND the WebSocket
+    /// open AND the session-claim acknowledged AND any connect-time refetch applied. Call this before a step
+    /// that MUTATES (a fill that autosaves, a Save commit, a pick/clear) — <c>data-hydrated</c> alone fires
+    /// before the socket has settled, so an edit staged in that gap rides the connecting-window outbox and
+    /// can be delayed past this wait (or lost to an early disconnect) under load. Gating the mutation on
+    /// <c>data-ready</c> guarantees it acts on an established, server-acknowledged connection.
+    ///
+    /// INTERIM: this WAITS for readiness; the proper fix is offline-resilient mutations that survive a
+    /// not-ready/dropped connection regardless of timing (see ws.ts's data-ready note). Remove these waits
+    /// when mutations become connection-state-independent.
+    /// </summary>
+    public static Task WaitReadyAsync(this IPage page) =>
+        page.WaitForSelectorAsync("html[data-ready]", new() { State = WaitForSelectorState.Attached });
+
+    /// <summary>
     /// Reveal a set/dict table's flag-gated create form (milestone 11): the inline add row was replaced
     /// with a <c>+ New</c> button that swaps the table for a labeled create form. Idempotent — clicks
     /// <c>.new-btn</c> only when the create form is not already shown — so an add-flow step that reveals

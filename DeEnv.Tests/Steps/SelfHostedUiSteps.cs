@@ -44,7 +44,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     [When("I save the form")]
     public async Task WhenSaveTheForm()
     {
-        await ctx.Page!.WaitHydratedAsync();
+        await ctx.Page!.WaitReadyAsync(); // the Save commits over the WS — wait for the socket to be fully settled
         await ctx.Page!.Locator(".object-form button.save").First.ClickAsync();
         await ctx.AwaitPendingEditsAsync();
     }
@@ -129,7 +129,11 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     [When("I fill the {string} field with {string}")]
     public async Task WhenFillField(string field, string value)
     {
-        await ctx.Page!.WaitHydratedAsync(); // the bound input's handler must be attached before we type
+        // WaitReadyAsync, not just WaitHydratedAsync: an autosave form persists this edit over the WS as we
+        // type, so the socket must be fully settled (open + claimed) — a hydrated-but-not-ready page would
+        // ride the connecting-window outbox and could lose the edit under load. (A staged form only writes
+        // the draft here, but waiting for ready is uniform and harmless.)
+        await ctx.Page!.WaitReadyAsync();
         await ctx.Page!.Locator($"input.{field}").FillAsync(value);
         ctx.PendingEditValues.Add(value);
     }
@@ -141,7 +145,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     [When("I clear the {string} field")]
     public async Task WhenClearField(string field)
     {
-        await ctx.Page!.WaitHydratedAsync();
+        await ctx.Page!.WaitReadyAsync(); // an autosave form persists the clear over the WS — wait for the settled socket
         var input = ctx.Page!.Locator($"input.{field}");
         await input.FillAsync("");
         await input.DispatchEventAsync("input");
