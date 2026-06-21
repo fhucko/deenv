@@ -719,7 +719,6 @@ public sealed class SsrRenderer
 
     private const string Css = """
         body { font-family: system-ui, Arial, sans-serif; margin: 2rem; color: #222; }
-        nav.breadcrumbs { margin-bottom: 1rem; color: #666; }
         """;
 
     // The generic breadcrumb chrome. Its targets are ROOT-RELATIVE node paths (`/`, `/notes`, …),

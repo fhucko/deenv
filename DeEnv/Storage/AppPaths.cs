@@ -8,12 +8,6 @@ namespace DeEnv.Storage;
 // instance survives a kernel restart because its id-dir is its stable, id-addressed home.
 public static class AppPaths
 {
-    // The display data-file name derived from an app file's stem (instance.app → instance-data.json).
-    // Retained for the per-app-name derivation the storage layer/tests use; NOT part of id-based
-    // hosting resolution (that goes through DataPathForId), which never consults a name.
-    public static string DataFileNameFor(string appFile) =>
-        Path.GetFileNameWithoutExtension(appFile) + "-data.json";
-
     // The directory holding every hosted instance (<baseDir>/instances/) and one instance's id-dir
     // (<baseDir>/instances/<id>/), which holds its app document AND its co-located sovereign store.
     // Deleting an instance removes its whole id-dir — the kernel's id→location bookkeeping, an OS

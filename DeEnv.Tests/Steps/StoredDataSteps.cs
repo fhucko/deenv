@@ -10,8 +10,6 @@ namespace DeEnv.Tests.Steps;
 [Binding]
 public sealed class StoredDataSteps(InstanceContext ctx)
 {
-    private string? _derivedDataFileName;
-
     // ── Given ─────────────────────────────────────────────────────────────────
 
     [Given("a stored data file containing:")]
@@ -41,19 +39,7 @@ public sealed class StoredDataSteps(InstanceContext ctx)
         }
     }
 
-    [When("the data file name is derived for app {string}")]
-    public void WhenDataFileNameDerived(string app)
-    {
-        _derivedDataFileName = AppPaths.DataFileNameFor(app);
-    }
-
     // ── Then ──────────────────────────────────────────────────────────────────
-
-    [Then("the data file name is {string}")]
-    public async Task ThenDataFileNameAsync(string expected)
-    {
-        await Assert.That(_derivedDataFileName).IsEqualTo(expected);
-    }
 
     [Then("opening is rejected with a data error mentioning {string}")]
     public async Task ThenRejectedMentioningAsync(string phrase)

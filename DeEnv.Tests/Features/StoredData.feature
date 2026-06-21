@@ -1,23 +1,10 @@
 ﻿Feature: Stored data matches the running app
-  Each app document owns its own data file, derived from the app file's name, so
+  Each instance owns its own data file (instances/<id>/app-data.json), so
   switching apps never mixes data. On startup the store validates an existing
   data file against the running app's types and REFUSES to start on a mismatch —
   loudly, with the file and the offending detail named — instead of silently
   running over stale data. It never reseeds over an existing file: deleting or
   moving the file is a deliberate user act.
-
-  # ── data file per app ──────────────────────────────────────────────────────
-
-  @milestone-8 @single-user @persistence
-  Scenario Outline: Each app document gets its own data file
-    When the data file name is derived for app "<app>"
-    Then the data file name is "<dataFile>"
-
-    Examples:
-      | app                    | dataFile           |
-      | instance.app           | instance-data.json |
-      | crm.app                | crm-data.json      |
-      | C:\elsewhere\shop.app  | shop-data.json     |
 
   # ── the startup guard ──────────────────────────────────────────────────────
 
