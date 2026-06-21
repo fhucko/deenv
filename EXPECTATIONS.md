@@ -25,8 +25,9 @@ be derived, everything optional should be optional with a sensible default.
   flag or opt-in is justified *only* while removing it would break or limit real
   behavior — and then it is **temporary scaffolding to delete**, not a permanent
   part of the surface. State that intent where the flag lives, and remove it when
-  the blocker is gone (e.g. the self-hosted generic UI is opt-in *only* until its
-  slices reach parity and it can become the default; see DECISIONS.md).
+  the blocker is gone (e.g. the self-hosted generic UI *was* opt-in only until its
+  slices reached parity, then the flag was deleted and it became the default — M9; see
+  DECISIONS.md).
 - **Boilerplate is a smell.** If two apps must repeat the same lines to get the
   same ordinary outcome, that outcome should be the default instead.
 

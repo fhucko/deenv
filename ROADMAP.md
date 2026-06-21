@@ -9,6 +9,13 @@ scope until the current one is finished. Sequencing is not the opposite of
 ambition — for a mission this size, it is the only way the ambition ever
 becomes real.
 
+**Current focus (2026-06-21).** Milestones 1–11 are done. The active phase is the
+**usable-MVP gates**: (1) non-destructive apply — data survives a schema change — ✅ done;
+(2) a minimal real deploy (a self-contained build as a systemd service behind nginx) ✅
+done; (3) dogfood one real app — in progress (`instances/5`, `devlog`). M12 (visual
+designer) is deferred until after the MVP; M13 (schema versioning) sits on instance
+management. See CLAUDE.md "Current focus" for detail.
+
 ---
 
 ## Milestone 1 — The instance, single-boolean Db  ← START HERE
@@ -164,14 +171,18 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
 
 ---
 
-## Future milestones (NOT scoped — do not build yet)
+## Beyond Milestone 8 — completed (M9–M11) and future work
+
+*Status is marked inline on each entry. The **future** items (Code-next-layers, M12, M13
+versioning, and everything below them) are **NOT scoped — do not build yet** (CLAUDE.md
+ground rules 1–2).*
 
 - **Code, next layers.** A full type-checker (today: structural validation);
   derived-collection mutation semantics; dictionaries surfaced to the Code
   runtime; editor tooling. Enables schema versioning to be built inside the
   environment.
 
-- **Self-hosted generic UI.  ← DONE (2026-06-14).** The auto-form experience is
+- **M9 — Self-hosted generic UI.  ← DONE (2026-06-14).** The auto-form experience is
   re-expressed in Code as a reflective library (`objectForm`/`refEditor`/`setTable`/
   `dictTable`/`leafForm` over schema-as-data; builtins `field`/`humanize`/`extent`/
   `setRef`/`nest`/`clone`) and is now the **default** renderer — an app with no
@@ -206,25 +217,11 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   write-only → server renders once), proven by the `@milestone-11` Gherkin scenarios; a new unified
   `setup + renders[]` conformance protocol proves the deterministic core (recognition, by-name
   binding, splice, local-component capture, sibling + foreach-row slot uniqueness) on both twins.
-  The **public component library** (follow-up 5, the feature half) is underway — **first slice
-  DONE:** a `lib` scope (`system ← lib ← app`) makes the PascalCase library components composable
-  from a hand-written `fn render()` (proven by a fixture; the generic UI is the other consumer).
-  Remaining: publish each component as a blessed API, the operator designer as a second consumer,
-  then the generic-UI-as-first-consumer collapse. See
-  `docs/plans/m11-reactivity-foundation.md`. Delivers pillar 8's "auto with
-  overrides" (modify/extend
-  *parts* of the generic UI) via the mechanism settled in DECISIONS ("UI middle-ground"):
-  **one public component library** (`ObjectForm`/`Field`/`SetTable`/…) that BOTH a custom `fn
-  render()` and the generic UI compose — the generic UI rewritten as the library's **first
-  consumer** (its own completeness proof) — with **SolidJS-style reactivity** (run-once
-  components, no reset on prop change, parent-controlled structural reset; the `__descs`
-  reference-stability dissolved into the interpreter). Supersedes the earlier "call the
-  `internal` `objectForm`/`field` directly" sketch (an internals-leak, rejected). **Foundation
-  first:** the reactivity refactor (a twin-interpreter change; stands alone; kills the
-  `__descs` fragility) before the public library on top. *What's left:* the M9 generic UI is
-  already a Code library, but lives in `internal` with the fragile descriptor model — so the
-  work is the reactivity refactor + promoting it to a clean public API. Decompose via
-  milestone-planner; a vision-keeper pass is worth it (this reorders versioning).
+  The **public component library** landed too — a `lib` scope (`system ← lib ← app`) makes the
+  PascalCase components (`ObjectForm`/`RefEditor`/`Input`/`Field`/…) composable from a
+  hand-written `fn render()`, with the generic UI as the library's **first consumer** (its own
+  completeness proof). Delivers VISION pillar 8's "auto with overrides" via the mechanism settled
+  in DECISIONS ("UI middle-ground"). See `docs/plans/m11-reactivity-foundation.md`.
 - **M12 — Visual component designer.** A WinForms/XAML-style visual designer over the M11
   public component library: drag/arrange/configure components on a canvas, **show-all** (the
   canvas a synced view of the full `fn render()`; the M7 round-trip printer is the visual↔text
@@ -234,10 +231,12 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   Extends pillar 1 (design visually) from data to UI. Needs M11 + the Stage-2 live-preview
   infra. See DECISIONS ("UI middle-ground → Visual component designer").
 
-- **Multi-instance management (single-process, single-operator).  ← M10, first five
-  slices DONE 2026-06-14.** One kernel process **hosts multiple instances at once**,
-  each on its own port pair with its own sovereign data, driven by an **instance
-  registry** (which instances exist + their ports) as **kernel-owned data**. The
+- **M10 — Multi-instance management (single-process, single-operator).  ← DONE.** One
+  kernel process **hosts every instance in `kernel.json` at once**, each addressed by
+  **path** (`/apps/<name>`) under the kernel's two shared ports (an app port + an asset
+  port) with its own sovereign data, driven by an **instance registry** (which instances
+  exist) as **kernel-owned data**. (The earlier per-instance port-pair model was replaced
+  by path routing, commit 27c6d98.) The
   substrate under schema versioning's *apply*, the Stage-2 test-instance loop, and
   the self-hosted-image north star — the unit that gets versioned/applied/tested is
   an instance, so instance management is the layer underneath.
@@ -264,18 +263,18 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
   store) — the full create/list/switch/delete *mechanism* in C#. Then the **`sys` namespace** (the
   framework builtins + `instances` under `sys`) and the **host-action channel** (Code triggers a
   server-side host op): `sys.publish(schema, targetId)` runs the M4 schema export onto an existing
-  instance and `sys.create(schema, name, appPort, infraPort)` spawns a new one — both project a passed
+  instance and `sys.create(schema, name)` spawns a new one — both project a passed
   schema object (carried by its id; the designer's `Db { types }` meta-schema is unchanged).
   Then the **operator designer + ops**: `designer.app` (now `instances/1/app.app`) gained a HAND-ROLLED
   custom `fn render()` (a type/prop editor + the `sys.instances` list + per-instance
   create/clone/delete/publish controls), replacing its auto generic UI — explicit image Code, NOT a
   hidden callable designer (the compose path is rejected). The ops: `sys.delete(id)`,
-  `sys.cloneInstance(sourceId, ports)` (copies app doc + data), per-instance `sys.publish(db, id)`.
+  `sys.cloneInstance(sourceId)` (copies app doc + data), per-instance `sys.publish(db, id)`.
   Underpinned by a **uniform id-based instance identity model**: every instance has a stable unique int
   id; storage is fully id-based (`instances/<id>/`); the registry `app` field is a display NAME label
   (used for nothing functional, no `.app`); the boot-vs-created distinction is removed (ops work on any
   instance by id). **Named create + rename then completed the operator flow** (the create form takes a
-  display name → `sys.create(schema, name, appPort, infraPort)`; a per-instance Rename → `sys.rename(id,
+  display name → `sys.create(schema, name)`; a per-instance Rename → `sys.rename(id,
   name)` edits the registry label). Remaining: richer editing. See DECISIONS.md ("Operator instance ops +
   the id-based instance identity model").
 

@@ -1620,6 +1620,13 @@ reference that replaced label-matching:
 The deferred follow-ups from "Operator instance ops" (named create, rename) plus the deploy-visibility
 gap (publish wrote the doc but the running instance kept serving the old one).
 
+_**Superseded in part 2026-06-21 (path routing, commit 27c6d98):** instances are now addressed by
+**path** (`/apps/<name>`) under two **kernel-level** shared ports (an app port + an asset port), so
+per-instance ports are gone. `sys.create` is now `(schema, name)` and `sys.cloneInstance` is
+`(sourceId)` — no port args; a registry entry is `{ id, app, designId }`. The port-pair / free-port
+details in the bullets below are historical. See the [App routing: paths + domains] memory +
+`deploy/DEPLOY.md`._
+
 - **Named create.** The `/instances/new` stub is replaced by an inline "New instance" form on
   `/instances` (design `<select>` + a name `<input>` + a free port pair + Create). `sys.create` gains a
   name argument BEFORE the ports — `sys.create(schema, name, appPort, infraPort)` — matching the logical

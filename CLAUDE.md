@@ -214,22 +214,22 @@ vars) — lives in a `system` scope; the generic-UI internals (`__descs`/`__dict
 the library) live in a **sibling `internal` scope outside userspace**. Driven by
 `SelfHostedUi.feature` (`DeEnv/Instance/GenericUi.cs`) plus the migrated
 milestone-1/2/4/5 features. See DECISIONS.md ("Self-hosted generic UI" + "Post-M9
-refinements") and the project memory. **The current milestone is Milestone 10 — multi-instance
-management (the kernel host)** (refocused 2026-06-14; first five slices LANDED 2026-06-14 — the
+refinements") and the project memory. **Milestone 10 — multi-instance
+management (the kernel host) — is DONE** (refocused 2026-06-14; landed across several slices — the
 kernel host, `list` (registry read from Code), `create`, and `switch`/`delete` — the full create/list/
 switch/delete *mechanism* in C#): one kernel
-process hosts multiple instances at once, each on its own port pair with its own sovereign data,
+process hosts multiple instances at once, each addressed by path (`/apps/<name>`) with its own sovereign data,
 driven by an instance registry as kernel-owned data — the substrate under schema versioning's
 *apply*, the Stage-2 test-instance loop, and the self-hosted-image north star. First slice
 (hosting/wiring, no Code/interpreter change), DONE: the single-instance host is factored out of
 `Program.cs` into a thin C# supervisor (`DeEnv/Kernel/`: `RegistryReader` reads `kernel.json` as
 plain bootstrap data; `KernelHost`/`HostedInstance` start every instance + block on shutdown).
-Two instances on two port pairs are both reachable and data-sovereign (`Kernel.feature`,
+Two instances at distinct `/apps/<name>` paths are both reachable and data-sovereign (`Kernel.feature`,
 `@milestone-10`; suite green 238/238). **Run modes were removed (user direction):** the kernel
 host is the sole entry point and `kernel.json` is the single source of what runs — a single
 instance is just a one-entry registry, so there is no `--mode`/`--app`. The designer is a registry
 entry; the M4 export/publish bridge is now exposed to Code as host actions — `sys.publish(schema,
-targetId)` (replace an existing instance) and `sys.create(schema, name, appPort, infraPort)` (spawn a
+targetId)` (replace an existing instance) and `sys.create(schema, name)` (spawn a
 new one), both projecting a passed schema object — not a CLI mode. Kernel discipline: the kernel gains
 the hosting *mechanism* (create/list/switch/delete in C# + the host-action channel); the operator
 create/publish/switch/delete COMMANDS-as-the-IDE are image Code. **The operator designer + ops landed
@@ -237,14 +237,14 @@ create/publish/switch/delete COMMANDS-as-the-IDE are image Code. **The operator 
 type/prop editor + the `sys.instances` list + per-instance create/clone/delete/publish controls),
 replacing its auto generic UI. Decided: explicit hand-written Code, NOT a "hidden callable designer"
 (the generic-UI-as-library compose mechanism is rejected). The ops: `sys.delete(id)`,
-`sys.cloneInstance(sourceId, ports)` (copies app doc + data — a true clone), per-instance
+`sys.cloneInstance(sourceId)` (copies app doc + data — a true clone), per-instance
 `sys.publish(db, id)`. **A uniform id-based instance identity model** underpins them: every instance
 has a stable unique int `id`; storage is fully id-based (`instances/<id>/`); the registry `app` field
 is a display NAME label (used for nothing functional, no `.app` extension); the boot-vs-created
 distinction is REMOVED (delete/clone/publish work on any instance by id; deleting drops its data, git
 holds the committed sources). See DECISIONS "Operator instance ops + the id-based instance identity
 model". **Named create + rename then completed the operator flow (2026-06-16):** the create form takes a
-display name — `sys.create(schema, name, appPort, infraPort)` — and a per-instance Rename — `sys.rename(id,
+display name — `sys.create(schema, name)` — and a per-instance Rename — `sys.rename(id,
 name)` — edits the registry label (no restart; label-only). Follow-up: richer editing.
 Deferred: cross-machine/multi-kernel + distributed ACID, fault/resource isolation, real-time
 (Stage 5/later), and the management commands. Schema versioning steps back to M13 (it sits on

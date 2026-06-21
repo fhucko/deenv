@@ -157,6 +157,7 @@ A malformed document is rejected at load with a clear, specific error
 
 ## Worked example
 
-The committed default app, `DeEnv/instance.app`, is the todo application —
-types, seed, and the full UI in one document. The designer's meta-schema
-(`DeEnv/designer.app`) is a types-only document.
+The committed default app is `DeEnv/instances/2/app.app`, the todo application —
+types, seed, and the full UI in one document. The operator designer
+(`DeEnv/instances/1/app.app`) is the IDE — a hand-rolled custom `fn render()` over
+`db.types` plus the instances list.

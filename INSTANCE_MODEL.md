@@ -147,7 +147,7 @@ There is no create URL, so a URL only ever addresses an entry that exists
 - **Predictive prefetching + client-side caching** — loading data for nodes
   the current view implies you'll visit next, so navigation feels instant.
   This is explicitly where the render-coupled storage engine (VISION pillar
-  4) belongs: "prefetch what the view implies" *is* that pillar. Not built
+  5) belongs: "prefetch what the view implies" *is* that pillar. Not built
   now; do not pull into Milestone 1.
 
 ## Breadcrumbs
