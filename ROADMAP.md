@@ -171,16 +171,12 @@ routing only. See DECISIONS.md ("UI customization — views (M8) — SUPERSEDED"
 
 ---
 
-## Beyond Milestone 8 — completed (M9–M11) and future work
+## Beyond Milestone 8
 
-*Status is marked inline on each entry. The **future** items (Code-next-layers, M12, M13
-versioning, and everything below them) are **NOT scoped — do not build yet** (CLAUDE.md
-ground rules 1–2).*
+Status is marked inline. The done milestones (M9–M11) are grouped first; the **future**
+items are **NOT scoped — do not build yet** (CLAUDE.md ground rules 1–2).
 
-- **Code, next layers.** A full type-checker (today: structural validation);
-  derived-collection mutation semantics; dictionaries surfaced to the Code
-  runtime; editor tooling. Enables schema versioning to be built inside the
-  environment.
+### Done since Milestone 8 (M9–M11)
 
 - **M9 — Self-hosted generic UI.  ← DONE (2026-06-14).** The auto-form experience is
   re-expressed in Code as a reflective library (`objectForm`/`refEditor`/`setTable`/
@@ -194,42 +190,6 @@ ground rules 1–2).*
   context lives in a `system` scope with the generic-UI internals in a sibling
   `internal` scope. Specced by `SelfHostedUi.feature` + the migrated milestone-1/2/4/5
   features. See DECISIONS.md.
-
-- **M11 — SolidJS-style reactive components + the public component library (the UI
-  middle-ground).  ← DONE 2026-06-19 (suite 348): the generic-UI-as-first-consumer COLLAPSE landed —
-  `sys.resolve(path)` + ONE synthesized Code `fn render()` composing the library replaced the C#
-  per-URL dispatch; a generic app is now literally the custom-render path.** *(Scheduled as M11 by user
-  decision 2026-06-16, pulled ahead of schema versioning, which moves to M13.)* **Slices 1–3 + 4a/4b + (b) + the dict follow-on + the public library's first
-  slice landed (suite 315):** components get a **render-tree-positional ("slot
-  path") identity** decoupled from the argument-keyed memo, so a component runs once per slot and its
-  state survives a re-render with rebuilt arguments; slice 2 extends the slot path through
-  `foreach` (per-row, by member identity — the same key the DOM reconciler uses), so a component
-  in a list keeps independent state that follows the object across reorder/remove; slice 3 adds an
-  opt-in `key={...}` directive that folds into the slot identity (caller-controlled reset); 4a + 4b
-  moved the generic UI's components onto tag-invocation (object-form nested ones + the ref/set/dict
-  ROOT views via value-position recognition); and slice (b) + the dict follow-on replaced BOTH
-  descriptor registries (`__descs` type + `__dictDescs` dict) with a `sys.schema(typeName)` /
-  `sys.schema(type, prop)` builtin (server-resolved + shipped like `sys.extent`) and deleted both.
-  **Recognition =
-  pure name-resolution** (a tag whose name is an in-scope function — any function, top-level or
-  local — is a component; `<div>` stays an element), keyed by slot via the **existing** memo
-  (untouched, additive). Run-once-across-re-renders is a client behavior (C#'s `Memoize` is
-  write-only → server renders once), proven by the `@milestone-11` Gherkin scenarios; a new unified
-  `setup + renders[]` conformance protocol proves the deterministic core (recognition, by-name
-  binding, splice, local-component capture, sibling + foreach-row slot uniqueness) on both twins.
-  The **public component library** landed too — a `lib` scope (`system ← lib ← app`) makes the
-  PascalCase components (`ObjectForm`/`RefEditor`/`Input`/`Field`/…) composable from a
-  hand-written `fn render()`, with the generic UI as the library's **first consumer** (its own
-  completeness proof). Delivers VISION pillar 8's "auto with overrides" via the mechanism settled
-  in DECISIONS ("UI middle-ground"). See `docs/plans/m11-reactivity-foundation.md`.
-- **M12 — Visual component designer.** A WinForms/XAML-style visual designer over the M11
-  public component library: drag/arrange/configure components on a canvas, **show-all** (the
-  canvas a synced view of the full `fn render()`; the M7 round-trip printer is the visual↔text
-  sync engine), **live preview = the Stage-2 inner-loop mini-instance** (the real interpreted
-  renderer — no design/runtime divergence), and the native paren-free **`for … in`** keyword
-  desugaring to declarative keyed iteration (the XAML `ItemsControl`/`DataTemplate` role).
-  Extends pillar 1 (design visually) from data to UI. Needs M11 + the Stage-2 live-preview
-  infra. See DECISIONS ("UI middle-ground → Visual component designer").
 
 - **M10 — Multi-instance management (single-process, single-operator).  ← DONE.** One
   kernel process **hosts every instance in `kernel.json` at once**, each addressed by
@@ -289,6 +249,50 @@ ground rules 1–2).*
   user; dynamic create/destroy-while-running and the management commands (follow-up
   slices); promoting the registry to a real *restricted* kernel-instance (north
   star). See STAGES.md + DECISIONS.md ("Multi-instance management — the kernel host").
+
+- **M11 — SolidJS-style reactive components + the public component library (the UI
+  middle-ground).  ← DONE 2026-06-19 (suite 348): the generic-UI-as-first-consumer COLLAPSE landed —
+  `sys.resolve(path)` + ONE synthesized Code `fn render()` composing the library replaced the C#
+  per-URL dispatch; a generic app is now literally the custom-render path.** *(Scheduled as M11 by user
+  decision 2026-06-16, pulled ahead of schema versioning, which moves to M13.)* **Slices 1–3 + 4a/4b + (b) + the dict follow-on + the public library's first
+  slice landed (suite 315):** components get a **render-tree-positional ("slot
+  path") identity** decoupled from the argument-keyed memo, so a component runs once per slot and its
+  state survives a re-render with rebuilt arguments; slice 2 extends the slot path through
+  `foreach` (per-row, by member identity — the same key the DOM reconciler uses), so a component
+  in a list keeps independent state that follows the object across reorder/remove; slice 3 adds an
+  opt-in `key={...}` directive that folds into the slot identity (caller-controlled reset); 4a + 4b
+  moved the generic UI's components onto tag-invocation (object-form nested ones + the ref/set/dict
+  ROOT views via value-position recognition); and slice (b) + the dict follow-on replaced BOTH
+  descriptor registries (`__descs` type + `__dictDescs` dict) with a `sys.schema(typeName)` /
+  `sys.schema(type, prop)` builtin (server-resolved + shipped like `sys.extent`) and deleted both.
+  **Recognition =
+  pure name-resolution** (a tag whose name is an in-scope function — any function, top-level or
+  local — is a component; `<div>` stays an element), keyed by slot via the **existing** memo
+  (untouched, additive). Run-once-across-re-renders is a client behavior (C#'s `Memoize` is
+  write-only → server renders once), proven by the `@milestone-11` Gherkin scenarios; a new unified
+  `setup + renders[]` conformance protocol proves the deterministic core (recognition, by-name
+  binding, splice, local-component capture, sibling + foreach-row slot uniqueness) on both twins.
+  The **public component library** landed too — a `lib` scope (`system ← lib ← app`) makes the
+  PascalCase components (`ObjectForm`/`RefEditor`/`Input`/`Field`/…) composable from a
+  hand-written `fn render()`, with the generic UI as the library's **first consumer** (its own
+  completeness proof). Delivers VISION pillar 8's "auto with overrides" via the mechanism settled
+  in DECISIONS ("UI middle-ground"). See `docs/plans/m11-reactivity-foundation.md`.
+
+### Future (NOT scoped — do not build yet)
+
+- **Code, next layers.** A full type-checker (today: structural validation);
+  derived-collection mutation semantics; dictionaries surfaced to the Code
+  runtime; editor tooling. Enables schema versioning to be built inside the
+  environment.
+
+- **M12 — Visual component designer.** A WinForms/XAML-style visual designer over the M11
+  public component library: drag/arrange/configure components on a canvas, **show-all** (the
+  canvas a synced view of the full `fn render()`; the M7 round-trip printer is the visual↔text
+  sync engine), **live preview = the Stage-2 inner-loop mini-instance** (the real interpreted
+  renderer — no design/runtime divergence), and the native paren-free **`for … in`** keyword
+  desugaring to declarative keyed iteration (the XAML `ItemsControl`/`DataTemplate` role).
+  Extends pillar 1 (design visually) from data to UI. Needs M11 + the Stage-2 live-preview
+  infra. See DECISIONS ("UI middle-ground → Visual component designer").
 
 - **Schema versioning  (sits on multi-instance management — now M13, after the UI milestones M11–M12).**
   Git-style versioning of the schema, built inside the environment itself using
