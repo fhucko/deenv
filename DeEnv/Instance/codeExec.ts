@@ -304,6 +304,17 @@ function memoize(key: string, context: ExecContext, compute: () => ExecValue): E
         if (e instanceof Error && e.message === "Value not available") {
             // A dependency the server never shipped: ask the server either way, and
             // show the stale result (if any) until the refetch lands.
+            //
+            // LOAD-BEARING INVARIANT (ws.ts refetch cleanup): a swallowed VNA with NO prior cached
+            // result is deliberately NOT cached here — we return the empty `nothing` WITHOUT
+            // memoCache.set, so this poisoned key never persists. A `fn:` PAGE function (e.g. the
+            // designer's designEditorPage) whose body merely READS a swallowed-empty inner result does
+            // NOT itself throw, so IT does get cached — with a tag/fn RESULT. ws.ts's refetch cleanup
+            // relies on that: it drops every persisted `fn:` entry whose result is a tag/fn so the
+            // post-refetch render recomputes the page over the now-complete data. The contract is that a
+            // persisted poisoned `fn:` entry always surfaces as such a tag/fn result (never a bare cached
+            // empty), which holds precisely because the direct-VNA path below skips the cache. (See ws.ts
+            // onWsMessage's refetch branch.)
             needsServerData = true;
             return existing != null ? existing.result : { type: "nothing" };
         }

@@ -285,10 +285,31 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
     } else if (msg.op === "refetch" && msg.state != null) {
         refetchInFlight = false;
         mergeState(msg.state); // shipped entries arrive fresh (stale: false)
-        // Entries STILL stale were not shipped (client-local tag trees the server cannot
-        // refresh): delete them, so the next lookup recomputes over the merged data
-        // instead of reusing an outdated tree — and nothing stays stale to re-trigger.
-        for (const [key, e] of uiStatic.cache) if (e.stale) uiStatic.cache.delete(key);
+        // After a fresh data merge, drop the client-local RECOMPUTE entries so the next render
+        // recomputes them over the merged data instead of reusing an outdated tree:
+        //   • any STILL-stale entry — a mutation invalidated its deps but the server could not
+        //     refresh it, so it must recompute; and
+        //   • a `fn:`-keyed entry whose RESULT is a tag/fn — a per-route PAGE FUNCTION's rendered tree
+        //     (e.g. the designer's `designEditorPage`/`designEditor`). The server NEVER ships tag/fn
+        //     results (ClientState skips ExecTag/ExecFunction — it delegates their recompute to the
+        //     client), so such an entry is always a client-local recompute. Critically, an OPTIMISTIC
+        //     render that ran before this refetch may have computed one against not-yet-shipped data: a
+        //     deep read threw "Value not available", which memoize SWALLOWS to an empty result whose deps
+        //     never recorded the missing field — so the merge's prop-invalidation can't mark it stale, and
+        //     it would survive as a stale EMPTY tree. (This works BECAUSE the direct-VNA path in codeExec.ts
+        //     memoize deliberately does NOT cache the bare swallowed empty — only an enclosing `fn:` page,
+        //     which doesn't itself throw, persists, and always as a tag/fn RESULT; see the LOAD-BEARING
+        //     INVARIANT note there. So matching tag/fn results here catches exactly the poisoned pages.)
+        //     Dropping it (a plain fn carries no component state,
+        //     unlike `comp:`, so re-running is a pure recompute) forces a correct re-render over the
+        //     complete data. Scoped to tag/fn RESULTS so a `fn:` returning a SCALAR computed from PRIVATE
+        //     data — which the server DOES ship precisely so the client need not recompute it — is kept,
+        //     not dropped (dropping it would re-read the unshipped input and loop). This is what makes a
+        //     fully-CUSTOM render (the designer) navigate client-side correctly; the generic UI's views
+        //     are `comp:` (their state is preserved) and were already fresh.
+        for (const [key, e] of uiStatic.cache)
+            if (e.stale || (key.startsWith("fn:") && (e.result.type === "tag" || e.result.type === "fn")))
+                uiStatic.cache.delete(key);
         markReadyIfSettled(); // the connect-time settle (if any) is now applied
         renderUi();
     }

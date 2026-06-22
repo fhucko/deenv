@@ -54,6 +54,62 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the design editor shows a type named "TodoItem"
     And the design editor shows the design's UI text in a textarea
 
+  # ── client-side (SPA) navigation in the CUSTOM-render designer (uniform with the generic UI) ──
+  # The designer is a fully-custom `fn render()`, yet an in-app Edit-link click navigates CLIENT-SIDE
+  # exactly as the generic UI does: the click is intercepted, the URL is updated via the History API,
+  # and the deep `/designs/<id>` type/prop editor re-renders over the warm session — NO full page reload,
+  # NO re-hydration. A window marker set after the list loads survives the navigation (a reload would wipe
+  # it), the browser URL becomes the mounted editor URL, and the editor's deeply-nested content (the
+  # design's real types and its UI source text — read cross-page over a fresh store load) actually renders.
+  # The PRIVACY pin proves the structural-privacy claim stays honest: the designs LIST ships design labels,
+  # not every design's full source — the todo design's UI source token ("user-chip") never appears in the
+  # first paint's window.initData. Browser Back then restores the list (the slot-reset path re-runs the
+  # list's components cleanly), also without a reload.
+  @milestone-10 @single-user
+  Scenario: An Edit-link click in the custom designer navigates client-side to the deep editor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    Then the designs list first paint does not ship the design's UI source token "user-chip"
+    When I mark the live page
+    And I edit the design "todo"
+    Then the browser URL is the mounted design editor
+    And the design editor shows a type named "TodoItem"
+    And the design editor shows the design's UI text in a textarea
+    And the live page mark survives
+    And the page is still the same hydrated session
+    When I navigate back
+    Then the designs list shows a design "todo"
+    And the live page mark survives
+
+  # ── no partial-content FLASH on the deep editor (round-2) ───────────────────────────────────────
+  # The designs LIST ships only each design's label (structural privacy — types/ui/common/initialData are
+  # NOT shipped). The design OBJECT is present (a list leaf), so the prior flash guard ("is the target
+  # object present?") let the Edit-nav optimistic-paint immediately — but designEditor then reads the
+  # UNSHIPPED design.types / sys.field(design,"ui"), throws "Value not available", which memoize swallows
+  # to empty: the operator saw the editor heading + an EMPTY type list + blank code areas for one frame
+  # before the refetch filled it (a blink on localhost; a visible "blank then snapped in" on a real
+  # network). The round-2 speculative-commit guard renders the target into a throwaway tree and commits it
+  # ONLY if it built completely from local data; the thin editor needs server data, so the LIST view is
+  # HELD until the refetch paints the COMPLETE editor once. A MutationObserver armed before the nav records
+  # any `.design-editor` that ever rendered WITHOUT a `.type-card` (the empty/partial state — the todo
+  # design always has the TodoItem type, so a complete editor always has ≥1 type card), so the assertion
+  # proves the partial editor never appeared, not merely that it is absent now. The populated assertions
+  # (the TodoItem type + the UI text) confirm the nav still completed onto the real editor.
+  @milestone-10 @single-user
+  Scenario: Navigating into the deep design editor never flashes a blank editor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I arm the blank-editor detector
+    And I scroll the page down
+    And I edit the design "todo"
+    Then the browser URL is the mounted design editor
+    And the design editor shows a type named "TodoItem"
+    And the design editor shows the design's UI text in a textarea
+    And the blank design editor never appeared during the navigation
+    # SCROLL RESET (round-2): a full reload reset scroll; SPA forward-nav must too. The list was
+    # scrolled down above, so the editor would otherwise open mid-page — assert it landed at the top.
+    And the page is scrolled to the top
+
   # The instances list shows each instance alongside the design it currently runs, resolved by the
   # explicit designId reference (todo → its seeded "todo" design).
   @milestone-10 @single-user

@@ -7,21 +7,39 @@
 // half is SsrRenderer.
 
 function renderUi(): void {
+    const result = buildRenderTree();
+    // null = the render fn read unshipped data OUTSIDE any computation boundary (the top-level VNA
+    // throw): keep the current DOM and let the refetch (kicked off by buildRenderTree) re-render with
+    // the data present.
+    if (result == null) return;
+    commitRender(result);
+    maybeRefetch(); // anything stale or missing → re-ask the server
+}
+
+// Run the render fn to its ExecValue tree (DOM-free — the tree is committed separately by
+// commitRender). Returns null when a read OUTSIDE any computation boundary hit "Value not available":
+// that's unrecoverable locally, so it sets needsServerData + fires the refetch and the caller keeps the
+// current DOM. (A VNA INSIDE a memoize is swallowed there to an empty result and ALSO sets
+// needsServerData — see codeExec.ts; the tree still builds, just incomplete. renderUiSpeculative reads
+// needsServerData to tell a complete tree from such an incomplete one.)
+function buildRenderTree(): ExecValue | null {
     const context: ExecContext = { lastId: uiStatic.lastId };
     resetSlotPath(); // a fresh render tree starts at the root slot (defensive; push/pop is balanced)
-    let result: ExecValue;
     try {
-        result = callFunction(uiStatic.renderFn, context, []);
+        return callFunction(uiStatic.renderFn, context, []);
     } catch (e) {
-        // Unshipped data read outside any computation boundary: keep the current DOM
-        // and ask the server; the refetch reply re-renders with the data present.
         if (e instanceof Error && e.message === "Value not available") {
             needsServerData = true;
             maybeRefetch();
-            return;
+            return null;
         }
         throw e;
     }
+}
+
+// Commit a rendered tree to the DOM and resync the out-of-#app chrome. Shared by the committing
+// renderUi and the speculative commit (renderUiSpeculative) so both paint identically.
+function commitRender(result: ExecValue): void {
     // Mount on the #app container the SSR shell emits (present on every code page,
     // including a full-takeover render); fall back to body if it is somehow absent.
     updateChildren(document.getElementById("app") ?? document.body, [result]);
@@ -29,7 +47,33 @@ function renderUi(): void {
     syncBreadcrumbs();
     syncScopeText("title", v => { document.title = v; });
     refreshErrorBanner();
-    maybeRefetch(); // anything stale or missing → re-ask the server
+    consumeScrollReset(); // a forward nav whose target just painted scrolls to the top
+}
+
+// Speculatively render the target and commit it ONLY if it rendered COMPLETELY from already-local data.
+// This is the SECOND flash gate (targetRenderableLocally is the first): targetRenderableLocally only asks
+// "is the route's target object present", which is true for the designer's thin design-row leaf — yet the
+// deep `/designs/<id>` editor then reads the design's UNSHIPPED types/code, throws VNA, and memoize
+// swallows it to an EMPTY tree, so the operator saw a blank editor for one frame before the refetch filled
+// it. This renders the target into a throwaway tree first and checks whether building it needed server
+// data (a swallowed VNA sets needsServerData): if it did, the tree is incomplete, so DISCARD it, hold the
+// current #app, and let the trailing refetch paint the complete tree once. If it did not, the tree is
+// complete (every generic case with its props shipped, e.g. a set-row nav) → commit it for the instant
+// paint. Returns whether it committed (so the caller knows the view changed). Render-mode-agnostic: the
+// test is "is the data complete", never "which UI mode".
+function renderUiSpeculative(): boolean {
+    // Isolate THIS render's data-completeness: needsServerData may already be true (resetViewState set it
+    // as the always-refetch floor), so save it, clear it, and read back whether building the tree set it.
+    const before = needsServerData;
+    needsServerData = false;
+    const result = buildRenderTree();
+    const incomplete = result == null || needsServerData;
+    // Restore the floor (a committed instant paint still refetches for authoritative state, exactly as the
+    // pre-speculative instant path did); an incomplete build already needs the server anyway.
+    needsServerData = before || incomplete;
+    if (incomplete) return false; // hold the current view — the refetch reply paints the target
+    commitRender(result!);
+    return true;
 }
 
 // Keep the generic-UI breadcrumb chrome in step with the current `path` after a CLIENT-SIDE render.
@@ -86,11 +130,15 @@ function syncPath(): void {
 // update the URL via the History API, and re-render the target view over the warm session. The server
 // still SSRs every URL on a direct GET (deep-link/refresh unaffected); this only short-circuits the
 // in-app click. Wired from init.ts as a single delegated listener (alongside popstate).
-
-// Whether this page is the self-hosted GENERIC UI (set by the SSR bootstrap, beside initData/initUi/
-// initBase). The first-class signal that the generic router is in play — the same _isGeneric C# uses
-// to emit breadcrumbs. SPA interception is gated on it directly, not on sniffing the breadcrumb chrome.
-declare const initGeneric: boolean;
+//
+// UNIFORM across UI modes — generic AND fully-custom (the operator designer). Both re-render over the
+// warm session the same way: the refetch fires on the user's OWN navigation over a FRESH store load,
+// so a custom render reading a deeply-nested cross-page graph (the designer's `/designs` → `/designs/<id>`
+// type/prop editor) is reconstructed server-side and shipped via the same memo cache the first paint
+// uses. The flash guard (renderUiSpeculative — paint instantly only when the target builds COMPLETELY
+// from local data, else hold for the refetch) and the `wsReady()` not-ready fallback below are
+// render-agnostic — they consult the live URL, the warm session, and the actual render over the shipped
+// data — so the same safety applies to every page. There is no per-mode gate.
 
 // Handle a click that may be an in-app link. Only SAME-ORIGIN, in-mount, plain left-clicks on an
 // anchor with no new-tab/download/external intent are taken over; everything else is left to the
@@ -99,14 +147,6 @@ declare const initGeneric: boolean;
 // so a refetch for unshipped data could not run), it ALSO falls back to a full browser navigation
 // rather than stranding the user on a changed URL with stale content.
 function interceptNavigation(e: MouseEvent): void {
-    // SCOPE: client-side nav is for the self-hosted GENERIC UI, which is refetch-complete by
-    // construction (the synthesized router ships every schema descriptor and resolves any URL over the
-    // shipped graph). A fully-CUSTOM `fn render()` (e.g. the operator designer) may read a deeply-nested
-    // graph the refetch does not fully reconstruct cross-page, so it stays on full-page navigation (the
-    // designer deliberately relies on a fresh SSR per route). initGeneric is the first-class signal
-    // (injected by the SSR bootstrap, the same _isGeneric C# gates the breadcrumb chrome on); non-generic
-    // → let the browser navigate (the safe default).
-    if (!initGeneric) return;
     // A modified click (new tab / new window / download-gesture) or a non-primary button must keep
     // its native behavior. defaultPrevented: another handler already consumed it.
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -154,16 +194,22 @@ function interceptNavigation(e: MouseEvent): void {
 // popstate handler runs for Back/Forward, plus the pushState (popstate is the browser writing history
 // for us; here we write it ourselves).
 //
-// FLASH GUARD: the target's object is often NOT in the client graph yet — the first paint ships only
-// the starting view's data, and following a REFERENCE ships only the target's label, never the object.
-// sys.resolve returns target:null for such an un-shipped (but valid) node — byte-identical to a
-// genuinely-missing one — so an optimistic paint would render the router's NotFound branch, then the
-// refetch reply would re-render the real view: a "Not found" FLASH on a perfectly good navigation.
-// So: optimistic-paint immediately ONLY when the target already resolves to a renderable view locally
-// (the instant feel for shipped data, e.g. a set-table row); otherwise HOLD the current view, fire the
-// refetch, and let its reply paint the target once. NotFound is reserved for a genuinely-gone node —
-// if the refetch returns and the target is STILL unresolvable, the render then paints NotFound (one
-// clean paint). No router/interpreter change: this only consults the existing client sys.resolve.
+// FLASH GUARD: the target view often can't render fully from the data on the client yet — the first
+// paint ships only the starting view's data, following a REFERENCE ships only the target's label (not
+// the object), and the designs LIST ships each design's label but NOT its types/code. An optimistic
+// paint over such an incomplete graph either renders NotFound (an un-shipped node resolves to
+// target:null) or paints a present-but-thin object as an EMPTY/partial view (the designer's deep editor
+// reads design.types, throws VNA, memoize swallows it) — then the refetch re-renders the real view: a
+// FLASH on a perfectly good navigation. So renderUiSpeculative renders the target into a throwaway tree
+// and commits it ONLY if it built COMPLETELY from local data; otherwise it holds the current view and
+// lets the trailing refetch paint the target once. This is data-completeness-driven, not mode- or
+// kind-driven — so a generic set-row nav (props shipped) stays INSTANT while the designer's thin-target
+// nav HOLDS. No router/interpreter change: it only runs the existing render fn.
+//
+// SCROLL: a forward nav resets window scroll to the top once the target paints (full reloads did this;
+// SPA nav must do it explicitly). Armed here, consumed by commitRender whenever the target actually
+// paints — the speculative commit (complete) or the trailing refetch's renderUi (incomplete/held). NOT
+// armed on popstate (the browser restores scroll for Back/Forward) nor on keystroke re-renders.
 function navigateClientSide(pushUrl: string, pathVar: string): void {
     const item = uiStatic.state.scope.items["path"];
     if (item == null) return;
@@ -173,22 +219,27 @@ function navigateClientSide(pushUrl: string, pathVar: string): void {
     item.value = { type: "text", value: pathVar };
     invalidateVar("path");
     resetViewState();
-    // Optimistic paint only when the target view is renderable from the data already on the client;
-    // when it is not (a valid route whose object was not shipped) skip the paint — holding the current
-    // view — and just fire the refetch (resetViewState set needsServerData), whose reply re-renders the
-    // now-shipped target. Reserving NotFound for the post-refetch render kills the navigation flash.
-    if (targetRenderableLocally(pathVar)) renderUi();
-    else maybeRefetch();
+    armScrollReset(); // forward nav → scroll to top when the target view paints
+    // Optimistic-paint only when the route resolves to a renderable view locally — an un-shipped (but
+    // valid) node resolves to target:null, byte-identical to a genuinely-missing one, and would otherwise
+    // paint the router's NotFound branch (which builds "completely", so the completeness check alone
+    // wouldn't catch it). When it resolves renderable, renderUiSpeculative additionally HOLDS if the
+    // target's render is incomplete (a present-but-thin object — the designer's deep editor). Either
+    // hold → the refetch reply paints the target once. NotFound stays reserved for a genuinely-gone node.
+    if (targetRenderableLocally(pathVar)) renderUiSpeculative();
+    maybeRefetch();        // floor refetch for authoritative state (held targets paint from its reply)
 }
 
-// Is the target path already renderable from the client's shipped data — i.e. would the generic router
-// paint a real view (not NotFound) for it right now? Resolves the path with the SAME client sys.resolve
-// the router uses (a throwaway context, so it never disturbs uiStatic.lastId; depStack is empty here so
-// it records no dependencies), then checks the kind-appropriate binding the router branches require:
-// object/leaf need the target object present; set/ref/dict are owner-bound (need the PARENT present);
-// notFound (a route invalid per the shipped descriptors) is NOT locally renderable — wait for the
-// server's authoritative answer before painting NotFound. Any unexpected failure → treat as not
-// locally renderable (fall back to the refetch-then-render path, which is always correct).
+// Is the target path renderable from the client's shipped data WITHOUT painting an unconfirmed NotFound —
+// i.e. would the generic router bind a real view (not NotFound) for it right now? Resolves the path with
+// the SAME client sys.resolve the router uses (a throwaway context, so it never disturbs uiStatic.lastId;
+// depStack is empty here so it records no dependencies), then checks the kind-appropriate binding the
+// router branches require: object/leaf need the target object present; set/ref/dict are owner-bound (need
+// the PARENT present); notFound (a route invalid per the SHIPPED descriptors — which may just mean the
+// node was not shipped) is NOT locally renderable — wait for the server's authoritative answer before
+// painting NotFound. This is the FIRST gate (don't paint an unconfirmed NotFound); renderUiSpeculative is
+// the SECOND (don't paint an incomplete view). Any unexpected failure → treat as not locally renderable
+// (fall back to the refetch-then-render path, which is always correct).
 function targetRenderableLocally(pathVar: string): boolean {
     try {
         const probeCtx: ExecContext = { lastId: { value: uiStatic.lastId.value } };
@@ -208,6 +259,22 @@ function targetRenderableLocally(pathVar: string): boolean {
     }
 }
 
+// ── scroll reset on forward navigation ──────────────────────────────────────────────
+//
+// A full page reload reset the window scroll; an SPA navigation does not, so a deep nav from a scrolled
+// list would otherwise land mid-page. This arms a one-shot reset on a FORWARD navigation (a link click
+// — navigateClientSide), consumed when the target view paints (commitRender): the speculative commit
+// when the target is fully local, else the refetch reply's renderUi when it was held. Deliberately NOT
+// armed for popstate (Back/Forward — the browser restores the prior scroll position there) nor for the
+// keystroke re-renders renderUi runs on every edit (scrolling then would yank the page mid-typing).
+let pendingScrollReset = false;
+function armScrollReset(): void { pendingScrollReset = true; }
+function consumeScrollReset(): void {
+    if (!pendingScrollReset) return;
+    pendingScrollReset = false;
+    window.scrollTo(0, 0);
+}
+
 // Reset the client view state for a NAVIGATION (the same effect a full reload had, minus the reload):
 //   1. Drop the component slot-cache. A component memoizes by its render-tree SLOT (position), NOT its
 //      function identity — so two different components at the SAME slot (e.g. the root <SetTable> on
@@ -215,13 +282,16 @@ function targetRenderableLocally(pathVar: string): boolean {
 //      target view the PREVIOUS view's component. A navigation rebuilds the render tree wholesale, so
 //      the old slot assignments are meaningless; clearing them lets each component re-run (and resets
 //      per-view component state, like a fresh load). Operates on uiStatic.cache directly (the same Map
-//      memoize uses) — no interpreter change.
+//      memoize uses) — no interpreter change. (Plain-function `fn:` results — a custom render's per-route
+//      page functions — are dropped on the REFETCH reply instead, after the fresh data lands; see ws.ts.)
+//      A discarded SPECULATIVE render (the target was incomplete) leaves the target view's just-built
+//      `comp:` entries in the cache — harmless: the held current view never re-renders, and the refetch
+//      reply's renderUi re-resolves them by slot for the target.
 //   2. Force a refetch. The first paint shipped only the STARTING view's data, so the target's object
-//      may be absent from the client `db` graph — and sys.resolve returns target:null for a missing
-//      node (no "Value not available" throw), which would render NotFound instead of refetching.
-//      needsServerData makes renderUi's trailing maybeRefetch re-ask the server (it renders over a
-//      fresh store load), as the full-reload navigation this replaces did. The optimistic render paints
-//      immediately from whatever IS shipped; the refetch reply re-renders with the complete data.
+//      (or the designer's design types/code) may be absent from the client `db` graph. needsServerData
+//      makes the trailing maybeRefetch re-ask the server (it renders over a fresh store load), as the
+//      full-reload navigation this replaces did — so the floor refetch fires after BOTH a complete
+//      instant paint (for authoritative state) and a held incomplete target (whose reply paints it).
 function resetViewState(): void {
     for (const key of Array.from(uiStatic.cache.keys()))
         if (key.startsWith("comp:")) uiStatic.cache.delete(key);

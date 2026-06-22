@@ -18,9 +18,10 @@ namespace DeEnv.Tests.Steps;
 // + `/instances/<id>` (a design SELECTOR — a <select> dropdown + Apply). An instance references its
 // design by an EXPLICIT `designId` (seeded by the fixture so the dropdowns start correct).
 //
-// Cross-route navigation is a fresh-SSR <a href> per route (the no-load model — each route's page needs
-// different store data, so a server render from the store is exactly right), not a client-side path
-// reassignment; the steps click the links and let the browser navigate.
+// Cross-route navigation is an <a href> per route. A DIRECT GET (or a reload) server-renders the route
+// from the store, but since round-1 an in-app link CLICK is intercepted and handled CLIENT-SIDE (the
+// target re-renders over the warm session via a refetch — same as the generic UI); the steps click the
+// links, and for a forward click that lands the editor a pushState updates the URL (no Load event).
 [Binding]
 public sealed class DesignerSteps(InstanceContext ctx)
 {
@@ -72,8 +73,9 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [When("I edit the design {string}")]
     public async Task WhenEditDesign(string label)
     {
-        // The Edit link is a fresh-SSR <a href="/designs/<designId>"> on the matching design row; clicking
-        // it navigates the browser, so the editor page is a full server render with the design's data.
+        // The Edit link is an <a href="/designs/<designId>"> on the matching design row. Since round-1 the
+        // in-app click is INTERCEPTED and handled CLIENT-SIDE (no full reload — the deep editor re-renders
+        // over the warm session; a full SSR still happens on a DIRECT GET of the URL, e.g. a refresh).
         // Wait for the editor SECTION (always present once the design resolves) rather than a type row —
         // a freshly-added design has no types yet, so .type-name would never appear for it.
         await DesignRowFor(label).Locator("a.edit-design").ClickAsync();
@@ -830,6 +832,104 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await Assert.That(await select.Locator("optgroup[label=\"Built-in\"]").CountAsync()).IsGreaterThanOrEqualTo(1);
         await Assert.That(await select.Locator("optgroup[label=\"This design\"]").CountAsync()).IsGreaterThanOrEqualTo(1);
     }
+
+    // ── Then: client-side (SPA) navigation in the custom designer ────────────────
+
+    // The browser URL after the client-side Edit-link nav: the designer is kernel-mounted at
+    // /apps/designer, so its emitted href + the pushState target carry that mount — the URL becomes
+    // /apps/designer/designs/<designId>. Polled (a client-side nav updates location via pushState with
+    // no Load event); the dynamic design id is matched with a regex.
+    [Then("the browser URL is the mounted design editor")]
+    public async Task ThenBrowserUrlIsEditor() =>
+        await ctx.Page!.WaitForUrlContentAsync(
+            new System.Text.RegularExpressions.Regex(@"/apps/designer/designs/[0-9]+$"));
+
+    // Structural-privacy pin for the custom designer's first paint: the designs LIST ships only what it
+    // displays (design labels), NOT every design's full source. The todo design's `ui` section is the real
+    // todo app's custom render; it contains the class token "user-chip", which the list never displays — so
+    // that token must NOT appear anywhere in the first paint's shipped client state (window.initData). Reads
+    // the WHOLE document (the head data island included), so it catches a value leaking through initData even
+    // though it is never in the visible body. (Mirrors CodeSteps' window.initData privacy assertions.)
+    [Then("the designs list first paint does not ship the design's UI source token {string}")]
+    public async Task ThenListDoesNotShipToken(string token)
+    {
+        var html = await ctx.Page!.ContentAsync();
+        const string marker = "window.initData=";
+        var start = html.IndexOf(marker, StringComparison.Ordinal);
+        await Assert.That(start).IsGreaterThanOrEqualTo(0);
+        start += marker.Length;
+        var end = html.IndexOf(";window.initUi=", start, StringComparison.Ordinal);
+        var initData = html[start..end];
+        await Assert.That(initData.Contains(token, StringComparison.Ordinal)).IsFalse();
+    }
+
+    // ── Then: no partial-content FLASH on the deep editor (round-2) ──────────────
+
+    // Arm a MutationObserver that flips window.__sawBlankEditor the instant the editor PAGE
+    // (`main.ide-design-edit` — its heading + Back link) appears under #app WITHOUT any `.type-card` in it:
+    // the empty/partial editor state. (The optimistic round-1 paint rendered the page chrome but the
+    // deep `designEditor(d)` call read the design's UNSHIPPED types and was swallowed to nothing, so the
+    // `.design-editor` body — and its type cards — were absent for a frame.) The todo design always has
+    // the TodoItem type, so a COMPLETE editor always carries ≥1 `.type-card`; only a partial paint shows
+    // the page with none. This is state-agnostic to HOW the body is missing (no `.design-editor` at all,
+    // OR a `.design-editor` with an empty type list). A post-hoc check would miss a transient flash the
+    // refetch then fills, so the observer watches every intermediate mutation; the current state is
+    // recorded too (a synchronous paint could beat the observer). The held view shows the LIST
+    // (`main.ide-designs`), not `main.ide-design-edit`, so the detector stays false while holding and only
+    // fires on a partial EDITOR paint. Wait for readiness first so it is armed on the fully-settled list,
+    // before the Edit click that triggers the client-side navigation into the editor.
+    [When("I arm the blank-editor detector")]
+    public async Task WhenArmBlankEditorDetector()
+    {
+        await ctx.Page!.WaitReadyAsync();
+        await ctx.Page!.EvaluateAsync(
+            """
+            () => {
+                const partial = () => document.querySelector('#app main.ide-design-edit') != null
+                    && document.querySelector('#app .type-card') == null;
+                window.__sawBlankEditor = partial();
+                const obs = new MutationObserver(() => { if (partial()) window.__sawBlankEditor = true; });
+                obs.observe(document.getElementById('app'), { childList: true, subtree: true });
+            }
+            """);
+    }
+
+    // The blank/partial editor NEVER rendered during the navigation: the detector flag stayed false. The
+    // preceding populated assertions (the TodoItem type card + the settled UI text) already waited for the
+    // COMPLETE editor to appear, so by now any transient blank-editor flash would have been observed. This
+    // is the decisive flash assertion — without the speculative guard, the optimistic paint renders the
+    // editor section with an empty type list here and the flag is true.
+    [Then("the blank design editor never appeared during the navigation")]
+    public async Task ThenBlankEditorNeverAppeared() =>
+        await Assert.That(await ctx.Page!.EvaluateAsync<bool>("() => window.__sawBlankEditor === true")).IsFalse();
+
+    // Scroll the page down so a following forward-nav can prove it resets scroll. Appends a tall spacer to
+    // document.body (OUTSIDE #app, so the editor's #app rebuild leaves it in place — the page stays
+    // scrollable across the nav), scrolls to a positive offset, and asserts the scroll actually moved
+    // (non-zero scrollY) — otherwise the later "scrolled to the top" assertion would be vacuously true on a
+    // page too short to scroll. (scrollTo is sync; the assert reads the settled scroll position.)
+    [When("I scroll the page down")]
+    public async Task WhenScrollDown()
+    {
+        await ctx.Page!.EvaluateAsync(
+            """
+            () => {
+                const sp = document.createElement('div');
+                sp.id = '__scroll_spacer';
+                sp.style.height = '3000px';
+                document.body.appendChild(sp);
+                window.scrollTo(0, 1200);
+            }
+            """);
+        await Assert.That(await ctx.Page!.EvaluateAsync<double>("() => window.scrollY")).IsGreaterThan(0d);
+    }
+
+    // The window is scrolled back to the top after a forward client-side nav (the SPA twin of the full
+    // reload's scroll reset). Polled — the reset fires when the TARGET view paints, which (for a held
+    // incomplete target like the deep editor) is the refetch reply's render, slightly after the URL change.
+    [Then("the page is scrolled to the top")]
+    public async Task ThenScrolledTop() =>
+        await ctx.Page!.WaitForFunctionAsync("() => window.scrollY === 0");
 
     // ── helpers ─────────────────────────────────────────────────────────────────
 

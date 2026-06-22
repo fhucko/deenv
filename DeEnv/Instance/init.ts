@@ -61,18 +61,20 @@ function init(): void {
     // over the warm session — the same machinery a forward click uses, just driven by the browser's
     // history pop instead of a pushState. resetViewState() drops the component slot-cache (the visited
     // view's components must run fresh — the slot keys collide across different-kind views) and forces a
-    // refetch (the visited path's data may not be in the client graph; sys.resolve returns target:null —
-    // not a "Value not available" throw — for a missing node).
+    // refetch (the visited path's data may not be in the client graph; a deep read of an un-shipped node
+    // throws "Value not available", caught + held by the speculative render below).
     //
     // Mirror the forward-click guards so Back/Forward is never less safe than a click:
     //   • If the session is not fully ready (wsReady false — socket still connecting/dropped, or the
-    //     hello not yet acked), a refetch could not be serviced, so the optimistic render would strand
-    //     the user on the popped URL with stale/NotFound content. Force a real browser reload of the
+    //     hello not yet acked), a refetch could not be serviced, so an optimistic render would strand
+    //     the user on the popped URL with stale/incomplete content. Force a real browser reload of the
     //     popped location instead — the server SSRs it (the deep-link path), which is always correct.
-    //   • Otherwise paint optimistically ONLY when the target resolves to a renderable view locally;
-    //     when it does not (a valid route whose object was not shipped) HOLD the current view and let
-    //     the refetch's reply paint it — the same flash guard navigateClientSide uses, so a Back to an
-    //     un-shipped view never flashes NotFound either.
+    //   • Otherwise paint optimistically ONLY when the target resolves to a renderable view locally AND
+    //     renderUiSpeculative finds it builds COMPLETELY from local data; when the route resolves to a
+    //     not-yet-confirmed NotFound (un-shipped node) OR the build is incomplete (a present-but-thin
+    //     object), HOLD the current view and let the refetch reply paint it — the same TWO flash gates
+    //     navigateClientSide uses, so a Back to an un-shipped view never flashes a NotFound/partial frame
+    //     either. NOTE: no scroll reset here — the browser restores the prior scroll position on a pop.
     window.addEventListener("popstate", () => {
         const item = uiStatic.state.scope.items["path"];
         if (item == null) return;
@@ -81,8 +83,8 @@ function init(): void {
         item.value = { type: "text", value: pathVar };
         invalidateVar("path");
         resetViewState();
-        if (targetRenderableLocally(pathVar)) renderUi();
-        else maybeRefetch();
+        if (targetRenderableLocally(pathVar)) renderUiSpeculative(); // instant iff renderable AND complete
+        maybeRefetch();
     });
 
     // In-app links navigate CLIENT-SIDE (no full reload): one delegated listener intercepts qualifying
