@@ -644,6 +644,74 @@ Feature: Self-hosted generic UI (object forms)
     And the page shows ".ref-editor"
     And no page error occurred
 
+  # ── set-table create-form: saving a new member with UNSET reference/set props (regression) ──
+  # The demo app (instances/6): the Db's `tasks` set holds a Task with scalars (title/done/priority/
+  # estimate) PLUS an `assignee` REFERENCE and a nested `subtasks` SET. Adding a Task through the set
+  # table's create form was reported broken: after Save the new row did not appear, re-opening New
+  # showed the previous draft, and the create-form inputs were frozen — all symptoms of the post-Save
+  # re-render THROWING (the committing renderUi rethrows, the DOM stays stuck on the create-form).
+  #
+  # Root cause: Save does set.add(draft) where draft = sys.new(Task) — which mints SCALAR props only,
+  # SKIPPING `assignee` (reference) and `subtasks` (set). The immediate post-add re-render iterates the
+  # table's `assignee` column over that draft and does `if sys.field(m, "assignee") != null`; sys.field
+  # over the absent prop throws (client: a VNA; server, after refetch: "Unknown field"). Over the
+  # newly-added member the throw is NOT a recoverable VNA-at-top-level — it surfaces and freezes.
+  #
+  # Fix: sys.new now mints a COMPLETE object (twin DbBridge shape) — `assignee` present and null,
+  # `subtasks` present as an empty set — so `field(m,"assignee") != null` reads null (no throw) and the
+  # post-Save re-render PAINTS the new row instead of freezing. The decisive anti-freeze signals: the new
+  # row appears, the create form closed (the re-render committed past the create-form), and NO uncaught
+  # page error fired (the throw that froze the DOM is gone). Before the fix all three failed at once.
+  # (NOTE: re-opening the create form afterwards shows the PRIOR draft, not a blank one — a SEPARATE,
+  # pre-existing, client-only M11 component-arg-staleness bug, reproduced even on a reference-free set,
+  # unrelated to this sys.new fix and needing its own M11-reactivity slice. See the report's Flags.)
+
+  @milestone-11 @single-user
+  Scenario: Saving a new set member whose type has an unset reference renders the row, not a frozen form
+    Given the demo collections app is running
+    When I watch for page errors
+    And I open "/tasks"
+    Then the page shows ".set-table"
+    When I click the new button
+    And I fill the new "title" with "Ship the demo"
+    And I fill the new "estimate" with "3"
+    And I add to the set
+    Then a set row eventually shows "Ship the demo"
+    And the store eventually has a "Task" whose "title" is "Ship the demo"
+    And the page does not show ".create-form"
+    And no page error occurred
+
+  # The deeper path the reviewer flagged: NAVIGATE INTO the just-created member. Its /tasks/<id> ObjectForm
+  # runs `foreach sub in m.subtasks` (a SET) over a member the client MINTED via sys.new (no refetch
+  # papering over it). Before the fix the missing `subtasks` set threw "foreach target is not a collection."
+  # — exactly the reviewer's flagged case — so the page never painted; with sys.new COMPLETE the form paints
+  # (the nested subtasks SetTable iterates the empty set) with NO page error.
+  #
+  # (The assignee RefEditor is NOT asserted here: a deep-linked member's RefEditor reads `sys.extent(Person)`
+  # which the START `/tasks` page never shipped, so the optimistic render swallows that VNA to an empty view
+  # and the follow-up refetch does NOT un-poison it for a JUST-CREATED member — the client already holds the
+  # member's exact data, so the merge invalidates nothing. That is a SEPARATE, pre-existing client-only
+  # refetch-cleanup bug (a poisoned `comp:`-view that spliced an un-shipped-dependency child survives the
+  # refetch), unrelated to the sys.new root cause and needing its own slice — a broad "drop comp views on
+  # refetch" fix regresses the operator designer's delete flow. See the report's Flags.)
+  @milestone-11 @single-user
+  Scenario: Navigating into a just-created set member renders its object form over a complete object
+    Given the demo collections app is running
+    When I watch for page errors
+    And I open "/tasks"
+    Then the page shows ".set-table"
+    When I click the new button
+    And I fill the new "title" with "Wire the deploy"
+    And I add to the set
+    Then a set row eventually shows "Wire the deploy"
+    And the store eventually has a "Task" whose "title" is "Wire the deploy"
+    When I open the just-created member titled "Wire the deploy"
+    Then the URL path matches a "/tasks" member
+    And the page shows ".object-form"
+    And the target title field eventually shows "Wire the deploy"
+    And the page shows ".set-table"
+    And no page error occurred
+
   # ── references: the self-hosted pick-or-clear editor (slice 2) ──────────────
 
   @milestone-9 @single-user

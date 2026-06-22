@@ -138,6 +138,58 @@
       "expect": { "kind": "int", "value": 0 }
     },
     {
+      "name": "sys.new mints a COMPLETE object — a single-object (reference) prop is present and null (twin: DbBridge loads an unset reference as null)",
+      "text": "sys.field(sys.new({ props: [ { name: \"ref\", baseType: \"object\", target: \"T\" } ] }), \"ref\") == null",
+      "expr": {
+        "type": "infixOp", "op": "equals",
+        "left": {
+          "type": "call",
+          "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "field" } },
+          "params": [
+            { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "new" } },
+              "params": [ { "type": "object", "props": [ { "name": "props", "value": { "type": "array", "items": [
+                { "type": "object", "props": [ { "name": "name", "value": { "type": "text", "value": "ref" } }, { "name": "baseType", "value": { "type": "text", "value": "object" } }, { "name": "target", "value": { "type": "text", "value": "T" } } ] }
+              ] } } ] } ] },
+            { "type": "text", "value": "ref" }
+          ]
+        },
+        "right": { "type": "null" }
+      },
+      "expect": { "kind": "bool", "value": true }
+    },
+    {
+      "name": "sys.new mints a COMPLETE object — a SET prop is present and an empty (iterable) collection (twin: DbBridge loads an absent set as an empty set)",
+      "text": "sys.field(sys.new({ props: [ { name: \"items\", baseType: \"set\", element: \"T\" } ] }), \"items\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "field" } },
+        "params": [
+          { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "new" } },
+            "params": [ { "type": "object", "props": [ { "name": "props", "value": { "type": "array", "items": [
+              { "type": "object", "props": [ { "name": "name", "value": { "type": "text", "value": "items" } }, { "name": "baseType", "value": { "type": "text", "value": "set" } }, { "name": "element", "value": { "type": "text", "value": "T" } } ] }
+            ] } } ] } ] },
+          { "type": "text", "value": "items" }
+        ]
+      },
+      "expect": { "kind": "intList", "value": [] }
+    },
+    {
+      "name": "sys.new mints a COMPLETE object — a DICTIONARY prop is present and an empty collection (twin: DbBridge loads an absent dict as an empty dict)",
+      "text": "sys.field(sys.new({ props: [ { name: \"entries\", baseType: \"dictionary\", element: \"T\" } ] }), \"entries\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "field" } },
+        "params": [
+          { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "new" } },
+            "params": [ { "type": "object", "props": [ { "name": "props", "value": { "type": "array", "items": [
+              { "type": "object", "props": [ { "name": "name", "value": { "type": "text", "value": "entries" } }, { "name": "baseType", "value": { "type": "text", "value": "dictionary" } }, { "name": "element", "value": { "type": "text", "value": "T" } } ] }
+            ] } } ] } ] },
+          { "type": "text", "value": "entries" }
+        ]
+      },
+      "expect": { "kind": "intList", "value": [] }
+    },
+    {
       "name": "sys.new on a scalar-DICTIONARY prop descriptor mints a single `value` defaulted by `element` (text → \"\")",
       "text": "sys.new({ baseType: \"dictionary\", isScalar: true, element: \"text\" }).value",
       "expr": {

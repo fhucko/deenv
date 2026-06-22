@@ -422,11 +422,13 @@ function fieldResult(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
 // the self-hosted ObjectForm uses for BOTH directions of its staged edit: the edit-draft's initial fill
 // (sys.setFields(state.draft, obj) — copy the live object's scalars into a fresh sys.new draft so the
 // inputs show them) and the Save commit (sys.setFields(obj, draft) — write the draft's scalars back).
-// SCALARS ONLY: a prop whose value is an object (a reference) or an array (a set/dict) is SKIPPED — the
-// draft is scalar-only (collection props bind to the LIVE object via RefEditor/SetTable/DictTable, never
-// the draft), so persisting one on Save would be a bug (objectPropChange per prop, which the server
-// rejects for a non-scalar field; a reference persists via setReferenceField, not objectPropChange).
-// Matches sys.new, which mints only scalar leaves. A bulk primitive (not per-field) because Code has no
+// SCALARS ONLY: a prop whose value is an object (a reference) or an array (a set/dict) — OR null (an
+// UNSET reference) — is SKIPPED. The draft is scalar-only (collection props bind to the LIVE object via
+// RefEditor/SetTable/DictTable, never the draft), so persisting one on Save would be a bug
+// (objectPropChange per prop, which the server rejects for a non-scalar field; a reference, set or unset,
+// persists via setReferenceField, not objectPropChange). sys.new now mints a COMPLETE object (references
+// as null, sets/dicts as empty arrays), so the null-skip keeps the draft scalar-only. A bulk primitive
+// (not per-field) because Code has no
 // statement-position iteration (`foreach` is render-only), so a handler cannot loop over schema-iterated
 // prop names — the framework loops here. recordProp registers the source read (twin of the server, which
 // also ships it as a displayed leaf so the client's setup re-run can re-fill the draft). Each prop is set
@@ -440,8 +442,12 @@ function execSetFields(codeCall: CodeCall, scope: ExecScope, context: ExecContex
     if (target.type !== "object") throw new Error("setFields() expects a target object.");
     if (source.type !== "object") throw new Error("setFields() expects a source object.");
     for (const [name, value] of Object.entries(source.props)) {
-        // Skip collections/references — only scalar leaves are staged (see the invariant above).
-        if (value.type === "object" || value.type === "array") continue;
+        // Skip collections/references AND nulls — only scalar leaves are staged (see the invariant
+        // above). An object/array is a reference/set/dict; a NULL is an UNSET reference (sys.new now
+        // mints references as null, and a stored unset reference loads as null too). A scalar leaf is
+        // never null (an input always yields a typed value), so skipping null stages exactly the scalar
+        // leaves and keeps a Save from objectPropChange-ing a non-scalar prop (which the server rejects).
+        if (value.type === "object" || value.type === "array" || value.type === "null") continue;
         recordProp(source.id, name);
         const before = target.props[name];
         target.props[name] = value;
@@ -524,14 +530,20 @@ function execId(codeCall: CodeCall, scope: ExecScope, context: ExecContext): Exe
     return { type: "int", value: obj.id };
 }
 
-// new(desc): a FRESH object of a type, built REFLECTIVELY from its descriptor — each scalar prop set
-// to its baseType default (twin of CodeExecutor.DefaultExec / GenericUi.DefaultFor). The constructor
-// for the self-hosted UI's drafts: a create-new form's blank state, and the seed of ObjectForm's edit
-// draft (then filled from the live object via sys.setFields). A fresh object every call (no aliasing).
-// Privacy-trivial: reads NO source object — only the already-shipped descriptor — and emits constant
-// defaults, so the client's setup re-run mints the same defaults. Two descriptor shapes (the two the
-// UI passes): a TYPE descriptor → one field per SCALAR `props` entry; a dictionary PROP descriptor →
-// a `value` for a scalar dict (defaulted by `element`) or one field per `valueProps` entry.
+// new(desc): a FRESH object of a type, built REFLECTIVELY from its descriptor — built to the SAME
+// COMPLETE shape DbBridge.LoadObject gives a stored object, so a freshly-minted member is never missing
+// a key (twin of CodeExecutor.DefaultExec / DefaultProp / GenericUi.DefaultFor). EVERY declared prop is
+// initialized: a scalar → its baseType default; a single object (reference) → null; a set → an empty
+// Set array; a dictionary → an empty Dict array (the element type carried so a later add persists the
+// right member type). The constructor for the self-hosted UI's drafts: a create-new form's blank state
+// (the SetTable does `set.add(sys.new(desc))`, so the draft becomes a real member and MUST be complete —
+// else the generic table's reference/set columns read an absent prop and throw, freezing the form), and
+// the seed of ObjectForm's edit draft (then filled from the live object via sys.setFields). A fresh
+// object every call (no aliasing). Privacy-trivial: reads NO source object — only the already-shipped
+// descriptor — and emits constant defaults/empties, so the client's setup re-run mints the same shape.
+// Two descriptor shapes (the two the UI passes): a TYPE descriptor → one field per `props` entry (every
+// cardinality); a dictionary PROP descriptor → a `value` for a scalar dict (defaulted by `element`) or
+// one field per `valueProps` entry (an entry is a scalar-only object, so valueProps are all scalar).
 function defaultValue(baseType: string): ExecValue {
     if (baseType === "bool") return { type: "bool", value: false };
     if (baseType === "int") return { type: "int", value: 0 };
@@ -545,6 +557,18 @@ function descProps(desc: ExecObject, field: string): ExecObject[] {
 }
 function propName(p: ExecObject): string { const n = p.props["name"]; return n != null && n.type === "text" ? n.value : ""; }
 function propBaseType(p: ExecObject): string { const b = p.props["baseType"]; return b != null && b.type === "text" ? b.value : ""; }
+function propElement(p: ExecObject): string { const e = p.props["element"]; return e != null && e.type === "text" ? e.value : ""; }
+// A prop's COMPLETE default value — mirrors DbBridge.LoadObject's per-cardinality shape so sys.new and a
+// stored load agree: scalar → default leaf; object → null (an unset reference); set/dict → an empty
+// array of the right kind, carrying its element type (id 0 = a draft-local empty collection, exactly as
+// the store yields for an absent set/dict — add/remove only sends to the server once id > 0).
+function defaultProp(p: ExecObject): ExecValue {
+    const bt = propBaseType(p);
+    if (bt === "object") return { type: "null" };
+    if (bt === "set") return { type: "array", kind: "set", items: [], id: 0, elementTypeName: propElement(p) };
+    if (bt === "dictionary") return { type: "array", kind: "dict", items: [], id: 0, elementTypeName: propElement(p) };
+    return defaultValue(bt);
+}
 function execNew(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     if (codeCall.params.length !== 1) throw new Error("new(desc) takes one argument.");
     const desc = executeValue(codeCall.params[0], scope, context).value;
@@ -559,9 +583,7 @@ function execNew(codeCall: CodeCall, scope: ExecScope, context: ExecContext): Ex
         else
             for (const vp of descProps(desc, "valueProps")) props[propName(vp)] = defaultValue(propBaseType(vp));
     } else {
-        for (const p of descProps(desc, "props"))
-            if (propBaseType(p) !== "object" && propBaseType(p) !== "set" && propBaseType(p) !== "dictionary")
-                props[propName(p)] = defaultValue(propBaseType(p));
+        for (const p of descProps(desc, "props")) props[propName(p)] = defaultProp(p);
     }
     return { type: "object", props, id: --context.lastId.value };
 }

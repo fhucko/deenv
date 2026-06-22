@@ -194,6 +194,18 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.Page!.Locator(".set-row", new() { HasTextString = title })
             .Locator("a.row-link").First.ClickAsync();
 
+    // Click a just-CREATED member's row-link and follow it into its member page. The member was minted
+    // client-side (sys.new) then arrayAdd-remapped to its real id; the preceding "store eventually has"
+    // step gates on that remap, so the row-link now carries the positive id. Waits for the member URL to
+    // land (a trailing numeric segment) so the next assertion sees the member page, not the set view.
+    [When("I open the just-created member titled {string}")]
+    public async Task WhenOpenCreatedMember(string title)
+    {
+        await ctx.Page!.Locator(".set-row", new() { HasTextString = title })
+            .Locator("a.row-link").First.ClickAsync();
+        await ctx.Page!.WaitForUrlContentAsync(new System.Text.RegularExpressions.Regex(@"/[0-9]+$"));
+    }
+
     // Per-row Remove (.set-remove), z-raised above the row-link overlay. With the stopPropagation
     // wiring, clicking it removes the member WITHOUT bubbling to the row link (no navigation).
     [When("I remove the set row titled {string}")]
@@ -273,6 +285,13 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task ThenUrlPathBecomes(string expected) =>
         await ctx.Page!.WaitForFunctionAsync(
             $"() => new URL(location.href).pathname === {JsString(expected)}");
+
+    // The URL is a member page under `base` — `base` then a single numeric segment (a created member's
+    // id is server-assigned, so the exact value is unknown; this asserts the shape, e.g. /tasks/8).
+    [Then("the URL path matches a {string} member")]
+    public async Task ThenUrlPathMatchesMember(string @base) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => new RegExp('^' + {JsString(@base)} + '/[0-9]+$').test(new URL(location.href).pathname)");
 
     // The pathname is STILL exactly this (a handled Remove must not have navigated). The preceding
     // step already settled the removal, so this reads the now-stable URL.

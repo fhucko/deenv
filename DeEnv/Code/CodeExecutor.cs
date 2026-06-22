@@ -281,13 +281,14 @@ public sealed class CodeExecutor
     // over schema-iterated prop names; the framework loops here instead.
     //
     // SCALARS ONLY (the staged-edit invariant): only a SCALAR leaf prop is copied; a prop whose value
-    // is an object (a reference) or an array (a set/dict) is SKIPPED. The ObjectForm's draft is meant
-    // to be scalar-only — it binds collection props (reference/set/dict) to the LIVE object via its own
-    // RefEditor/SetTable/DictTable, never the draft — so a copied collection has no business in the
-    // draft, and persisting one on Save is a bug: a Save does objectPropChange per prop, which the
-    // server rejects for a non-scalar field (a set/dict is not a scalar; a reference persists via
-    // setReferenceField, not objectPropChange). This matches `sys.new`, which already mints only
-    // scalar leaves, so the draft stays scalar-only in both directions of the staged edit.
+    // is an object (a reference) or an array (a set/dict) — OR null (an UNSET reference) — is SKIPPED.
+    // The ObjectForm's draft is meant to be scalar-only — it binds collection props (reference/set/dict)
+    // to the LIVE object via its own RefEditor/SetTable/DictTable, never the draft — so a copied
+    // collection has no business in the draft, and persisting one on Save is a bug: a Save does
+    // objectPropChange per prop, which the server rejects for a non-scalar field (a set/dict is not a
+    // scalar; a reference, set or unset, persists via setReferenceField, not objectPropChange). `sys.new`
+    // now mints a COMPLETE object (references as null, sets/dicts as empty arrays — the store's shape), so
+    // the null-skip is what keeps the draft scalar-only in both directions of the staged edit.
     //
     // SHIPPING (the privacy-relevant part): a copied scalar is recorded as a displayed leaf (ungated,
     // like the old clone) — because it IS a value about to be shown/edited in a bound input, and this
@@ -311,8 +312,13 @@ public sealed class CodeExecutor
             throw new CodeRuntimeException("setFields() expects a source object.");
         foreach (var (name, value) in source.Props)
         {
-            // Skip collections/references — only scalar leaves are staged (see the invariant above).
-            if (value is ExecObject or ExecArray) continue;
+            // Skip collections/references AND nulls — only scalar leaves are staged (see the invariant
+            // above). An object/array is a reference/set/dict; a NULL is an UNSET reference (sys.new now
+            // mints references as null, and a stored unset reference loads as null too). A scalar leaf is
+            // never null — an input always yields a typed value ("" / 0 / bool) — so skipping null stages
+            // exactly the scalar leaves and keeps a Save from objectPropChange-ing a non-scalar prop (the
+            // server rejects that), which is the staged-edit contract.
+            if (value is ExecObject or ExecArray or ExecNull) continue;
             target.Props[name] = value;
             // Ship the source's prop: it is a displayed/edited value (it lands in the bound draft).
             // Ungated because a setup's closure result is not tags, so leaf-promotion would drop it.
@@ -459,8 +465,7 @@ public sealed class CodeExecutor
         }
         else
             foreach (var p in DescriptorProps(desc, "props"))
-                if (!IsCollectionBaseType(PropBaseType(p)))
-                    props[PropName(p)] = DefaultExec(PropBaseType(p));
+                props[PropName(p)] = DefaultProp(p);
         return new ExecObject { Props = props, Id = --context.LastId.Value };
     }
 
@@ -474,8 +479,20 @@ public sealed class CodeExecutor
         _ => new ExecText { Value = "" },
     };
 
-    private static bool IsCollectionBaseType(string baseType) =>
-        baseType is "object" or "set" or "dictionary";
+    // A prop's COMPLETE default value — mirrors DbBridge.LoadObject's per-cardinality shape (and the TS
+    // twin defaultProp) so sys.new and a stored load yield the SAME shape: a scalar → its leaf default; a
+    // single object (reference) → null (unset); a set/dict → an EMPTY array of the matching kind carrying
+    // its element type. Id 0 marks a draft-local empty collection — exactly what the store yields for an
+    // absent set/dict, and add/remove only persists to the server once Id > 0. A complete draft is why
+    // the generic table's reference/set columns (`if field(m, prop) != null`) no longer throw on a member
+    // freshly minted by the SetTable create-form's `set.add(sys.new(desc))`.
+    private static IExecValue DefaultProp(ExecObject prop) => PropBaseType(prop) switch
+    {
+        "object" => new ExecNull(),
+        "set" => new ExecArray { Items = [], Id = 0, Kind = ArrayKind.Set, ElementTypeName = PropElement(prop) },
+        "dictionary" => new ExecArray { Items = [], Id = 0, Kind = ArrayKind.Dict, ElementTypeName = PropElement(prop) },
+        var b => DefaultExec(b),
+    };
 
     // A descriptor's prop list (`props` / `valueProps`) — a Code array of prop-descriptor objects.
     private static IEnumerable<ExecObject> DescriptorProps(ExecObject desc, string field) =>
@@ -485,6 +502,7 @@ public sealed class CodeExecutor
 
     private static string PropName(ExecObject prop) => (prop.Props.GetValueOrDefault("name") as ExecText)?.Value ?? "";
     private static string PropBaseType(ExecObject prop) => (prop.Props.GetValueOrDefault("baseType") as ExecText)?.Value ?? "";
+    private static string PropElement(ExecObject prop) => (prop.Props.GetValueOrDefault("element") as ExecText)?.Value ?? "";
 
     // nest(base, seg): a URL path-join ("/notes" + a member → "/notes/3") — Code has no
     // string concatenation, so building nested member links needs a builtin. `seg` is a
