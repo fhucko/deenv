@@ -157,7 +157,11 @@ middle-ground) — is DONE (the generic-UI-as-first-consumer COLLAPSE landed 202
 The non-destructive-apply MVP substrate then landed 2026-06-20 (suite 355 — see DECISIONS "Data must
 survive schema changes"). CURRENT FOCUS is the usable-MVP gates: gate #1 (non-destructive apply) ✅,
 next gate #2 = minimal real deploy, then gate #3 = dogfood a real app; M12 (visual designer) is
-deferred until after the MVP. The M11 detail below is retained as history.** Slice 1 gives components a **render-tree-positional ("slot path") identity**
+deferred until after the MVP. (M11 reactivity polish has kept landing: `sys.new` mints COMPLETE
+objects [ec8f974], and the two trailing arg-staleness bugs — a create-form's reopened draft, and a
+just-created member's empty `RefEditor` — are FIXED client-side [51b78fa, 2026-06-22, suite 422]:
+reactive arg re-bind on slot-stable components + dropping memo entries built over MISSING data on
+refetch. See the project memory.) The M11 detail below is retained as history.** Slice 1 gives components a **render-tree-positional ("slot path") identity**
 decoupled from the argument-keyed memo, so a component runs its body **once per slot** and its
 local state survives a re-render even when its argument is rebuilt fresh. Components are recognized
 by **pure name-resolution** — a tag whose name resolves to a function in scope is a component (any
