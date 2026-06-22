@@ -736,10 +736,20 @@ function ownerBound(context: ExecContext, db: ExecObject, segments: string[], ki
 // like where/orderBy; the server shipped the displayed list and the client reuses it. No
 // store on the client, so a cache miss/stale throws "Value not available", which the
 // memoize wrapper turns into a refetch (the same hidden-dependency path).
+//
+// A true MISS (the extent was never shipped — e.g. navigating to a ref/object page whose start view
+// shipped no candidate list) makes memoize SWALLOW its VNA and return an empty `nothing` (not a throw)
+// — and `nothing` is NOT an empty array, so a consumer that iterates it (`foreach c in sys.extent(...)`)
+// or reads a member would otherwise throw a misleading NON-VNA error. Re-throw the VNA so the miss
+// surfaces as exactly that — a "Value not available" the nearest memoize boundary swallows cleanly and
+// that triggers the refetch — instead of a `nothing` leaking into a value position. A legitimately EMPTY
+// extent ships as an empty ARRAY (kind set, zero items), never `nothing`, so this only fires on a miss.
 function execExtent(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const v = executeValue(codeCall.params[0], scope, context).value;
     if (v.type !== "text") throw new Error("extent() expects a text type name.");
-    return memoize("extent:" + v.value, context, () => { throw new Error("Value not available"); });
+    const r = memoize("extent:" + v.value, context, () => { throw new Error("Value not available"); });
+    if (r.type === "nothing") throw new Error("Value not available"); // a miss (never shipped) — not an empty extent
+    return r;
 }
 
 // schema(typeName): a type's descriptor — { name, labelProp, props } — the reflective shape
@@ -757,7 +767,13 @@ function execSchema(codeCall: CodeCall, scope: ExecScope, context: ExecContext):
         if (p.type !== "text") throw new Error("schema() expects a text prop name.");
         lookup += "/" + p.value;
     }
-    return memoize("schema:" + lookup, context, () => { throw new Error("Value not available"); });
+    // As in execExtent: a MISS makes memoize return an empty `nothing`. A descriptor is always read as an
+    // object (`.props`/`.labelProp`/`.values`), so a leaked `nothing` would throw a misleading non-VNA
+    // "Cannot read on a non-object." Re-throw the VNA so a not-yet-shipped descriptor surfaces cleanly
+    // (swallowed at the nearest memoize boundary → refetch), never as a `nothing` in a value position.
+    const r = memoize("schema:" + lookup, context, () => { throw new Error("Value not available"); });
+    if (r.type === "nothing") throw new Error("Value not available"); // a miss (never shipped)
+    return r;
 }
 
 // setRef(obj, prop, value): set/clear an object REFERENCE prop and persist it. value is an

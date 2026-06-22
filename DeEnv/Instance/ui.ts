@@ -22,13 +22,25 @@ function renderUi(): void {
 // current DOM. (A VNA INSIDE a memoize is swallowed there to an empty result and ALSO sets
 // needsServerData — see codeExec.ts; the tree still builds, just incomplete. renderUiSpeculative reads
 // needsServerData to tell a complete tree from such an incomplete one.)
-function buildRenderTree(): ExecValue | null {
+//
+// SPECULATIVE = best-effort: an OPTIMISTIC pre-refetch render (renderUiSpeculative) runs over data the
+// client may not hold yet, where a read of un-shipped data does NOT always surface as a clean VNA. The
+// memoize swallow turns an un-shipped sys.extent/sys.schema MISS into an empty `nothing` (not a throw),
+// and using that `nothing` in a position that wants a real value — e.g. `foreach c in sys.extent(...)`
+// (the generic RefEditor's candidate loop) — then throws a NON-VNA error ("foreach target is not a
+// collection."). So in speculative mode ANY throw is treated exactly like a top-level VNA: the data is
+// incomplete, hold the current view and let the trailing refetch paint the target over complete data
+// (which a reload proves works). This is the floor that guarantees a client-side navigation NEVER strands
+// the user on a changed URL with a frozen view, whatever the optimistic render hit. The COMMITTING caller
+// (renderUi, default speculative=false) still rethrows a non-VNA error — over its complete data that is a
+// genuine bug and must surface, not be silently hidden.
+function buildRenderTree(speculative: boolean = false): ExecValue | null {
     const context: ExecContext = { lastId: uiStatic.lastId };
     resetSlotPath(); // a fresh render tree starts at the root slot (defensive; push/pop is balanced)
     try {
         return callFunction(uiStatic.renderFn, context, []);
     } catch (e) {
-        if (e instanceof Error && e.message === "Value not available") {
+        if (speculative || (e instanceof Error && e.message === "Value not available")) {
             needsServerData = true;
             maybeRefetch();
             return null;
@@ -55,18 +67,21 @@ function commitRender(result: ExecValue): void {
 // "is the route's target object present", which is true for the designer's thin design-row leaf — yet the
 // deep `/designs/<id>` editor then reads the design's UNSHIPPED types/code, throws VNA, and memoize
 // swallows it to an EMPTY tree, so the operator saw a blank editor for one frame before the refetch filled
-// it. This renders the target into a throwaway tree first and checks whether building it needed server
-// data (a swallowed VNA sets needsServerData): if it did, the tree is incomplete, so DISCARD it, hold the
-// current #app, and let the trailing refetch paint the complete tree once. If it did not, the tree is
-// complete (every generic case with its props shipped, e.g. a set-row nav) → commit it for the instant
-// paint. Returns whether it committed (so the caller knows the view changed). Render-mode-agnostic: the
-// test is "is the data complete", never "which UI mode".
+// it. This renders the target into a throwaway tree first (in SPECULATIVE mode — see buildRenderTree) and
+// checks whether building it needed server data: if the build returned null (it threw — a top-level VNA OR,
+// over incomplete data, a non-VNA error like iterating a swallowed-empty sys.extent) OR set needsServerData
+// (a swallowed VNA), the tree is incomplete, so DISCARD it, hold the current #app, and let the trailing
+// refetch paint the complete tree once. If it did not, the tree is complete (every generic case with its
+// props shipped, e.g. a set-row nav) → commit it for the instant paint. Returns whether it committed (so
+// the caller knows the view changed). Render-mode-agnostic: the test is "is the data complete", never
+// "which UI mode". Crucially, building speculatively NEVER throws out of here, so navigateClientSide always
+// reaches its floor maybeRefetch — the user is never stranded on a changed URL with a frozen view.
 function renderUiSpeculative(): boolean {
     // Isolate THIS render's data-completeness: needsServerData may already be true (resetViewState set it
     // as the always-refetch floor), so save it, clear it, and read back whether building the tree set it.
     const before = needsServerData;
     needsServerData = false;
-    const result = buildRenderTree();
+    const result = buildRenderTree(true); // best-effort: a throw over incomplete data → null (incomplete)
     const incomplete = result == null || needsServerData;
     // Restore the floor (a committed instant paint still refetches for authoritative state, exactly as the
     // pre-speculative instant path did); an incomplete build already needs the server anyway.

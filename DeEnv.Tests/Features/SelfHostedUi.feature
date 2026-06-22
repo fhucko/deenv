@@ -593,6 +593,57 @@ Feature: Self-hosted generic UI (object forms)
     When I open "/notes"
     Then the breadcrumbs read "Db / notes"
 
+  # ── SPA nav into an object form holding a reference, over un-shipped data (regression) ──
+  # The demo app (instances/6 shape): the Db holds OBJECT collections — a `tasks` set whose member holds a
+  # reference (assignee) + nests its own set (subtasks). The generic object form, when its object holds a
+  # reference, renders the reference editor (RefEditor), which builds its candidate picker with `foreach c
+  # in sys.extent(<RefType>)` and reads `sys.schema(<RefType>)`. A START view that rendered the route's
+  # descriptors (so the nav's first gate, targetRenderableLocally, passes) but did NOT render that
+  # reference — e.g. the Db ROOT (`/`) or the `tasks` SET VIEW (`/tasks`), neither of which ships the
+  # `Person` EXTENT — leaves `extent:Person` un-shipped on the client. On the CLIENT a memoize MISS for an
+  # un-shipped extent returns an empty `nothing` (a swallowed VNA, NOT a throw), and `foreach c in nothing`
+  # then throws a NON-VNA error ("foreach target is not a collection."). These pages were always
+  # full-reload/SSR before SPA nav, so that client render path never ran until now.
+  #
+  # THE BUG: buildRenderTree rethrows any non-VNA error, so the speculative (optimistic) render's throw
+  # escaped navigateClientSide BEFORE the floor maybeRefetch ran — and since history.pushState had already
+  # changed the URL, the result was: URL changed, console error, view FROZEN on the previous page, only a
+  # reload (a fresh SSR over complete data) fixing it.
+  #
+  # Two failing-first scenarios reach the SAME member form from the two realistic entry points (its set
+  # view, and the root), driving a real in-app link click (the SPA path) and asserting the TARGET view
+  # actually paints + NO page error fired. They FAIL on the buggy code (frozen view + pageerror) and pass
+  # once (1) the speculative render is best-effort — any throw holds the view and the floor refetch paints
+  # the target over complete data (which a reload proves works) — and (2) a sys.extent/sys.schema MISS
+  # surfaces as a clean "Value not available" rather than a `nothing` that leaks into a value position. (An
+  # object form holding a reference is also the render path of the report's "dict entry with an OBJECT
+  # value"; a dictionary entry is not seedable in initialData, so a `tasks` member is its deterministic
+  # deep-link analogue.)
+
+  @milestone-11 @single-user
+  Scenario: SPA nav from a set view into a member form holding a reference renders, not a frozen page
+    Given the demo collections app is running
+    When I watch for page errors
+    And I open "/tasks"
+    And I navigate via an in-app link to "/tasks/4"
+    Then the URL path becomes "/tasks/4"
+    And the page shows ".object-form"
+    And the target title field eventually shows "Ship it"
+    And the page shows ".ref-editor"
+    And no page error occurred
+
+  @milestone-11 @single-user
+  Scenario: SPA nav from the root into a member form holding a reference renders, not a frozen page
+    Given the demo collections app is running
+    When I watch for page errors
+    And I open "/"
+    And I navigate via an in-app link to "/tasks/4"
+    Then the URL path becomes "/tasks/4"
+    And the page shows ".object-form"
+    And the target title field eventually shows "Ship it"
+    And the page shows ".ref-editor"
+    And no page error occurred
+
   # ── references: the self-hosted pick-or-clear editor (slice 2) ──────────────
 
   @milestone-9 @single-user

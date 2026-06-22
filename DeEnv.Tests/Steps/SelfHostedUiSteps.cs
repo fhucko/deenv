@@ -342,6 +342,47 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    // ── SPA nav to a collection view over un-shipped data (regression) ───────────────
+    // The demo app's shape: object collections (a tasks set whose member nests a set + ref, configs/
+    // settings dicts). A deep-link to a scalar member ships only that member, so navigating to a
+    // collection view speculatively renders over un-shipped data — the path that threw a non-VNA error
+    // before this fix.
+
+    [Given("the demo collections app is running")]
+    public async Task GivenDemoCollectionsAppRunning()
+    {
+        ctx.Description = InstanceContext.DemoCollectionsDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    // Capture every uncaught page error (window 'error' / unhandled rejection) Playwright surfaces as
+    // `PageError`, so a later assertion can prove the SPA navigation raised NONE. This is the decisive
+    // bug signal: the buggy speculative render's non-VNA throw escapes navigateClientSide and surfaces
+    // here as a pageerror (console.log capture is unreliable — see project memory — so this hooks the
+    // structured PageError event, which carries the exact message). Wired BEFORE the navigation so it
+    // observes the page from the start.
+    private readonly List<string> _pageErrors = new();
+
+    [When("I watch for page errors")]
+    public Task WhenWatchForPageErrors()
+    {
+        ctx.Page!.PageError += (_, error) => { lock (_pageErrors) _pageErrors.Add(error); };
+        return Task.CompletedTask;
+    }
+
+    // No uncaught page error fired during the navigation. The preceding content assertions (the target
+    // table/form actually rendering) already waited for the navigation to settle onto the target view,
+    // so by now any synchronous throw from the speculative render would have been captured. On the buggy
+    // code the speculative SetTable/ObjectForm render throws a non-VNA error that escapes to here AND the
+    // view freezes — so this (with the content steps above) is what makes the scenario fail before the fix.
+    [Then("no page error occurred")]
+    public async Task ThenNoPageError()
+    {
+        string[] errors;
+        lock (_pageErrors) errors = _pageErrors.ToArray();
+        await Assert.That(errors).IsEmpty();
+    }
+
     // Arm a MutationObserver that flips window.__sawNotFound the instant a `.not-found` element ever
     // appears anywhere under #app — so a NotFound that renders and is then replaced is still caught (a
     // post-hoc "is .not-found present now" check would miss a transient flash). Records the CURRENT state

@@ -138,6 +138,69 @@ public class InstanceContext
             title: "Ninth"
     """;
 
+    // SPA-nav object-form-with-reference regression (the demo app's shape, instances/6): the self-hosted
+    // generic UI over a Db that holds OBJECT collections — a `tasks` set whose element holds a reference
+    // (assignee) + nests its OWN set (subtasks) — plus a `lead` reference, scalar `settings`/object `configs`
+    // dicts (the demo's full shape). No `ui` section → the default generic UI, so SPA nav is in play.
+    //
+    // The bug: the generic object form, when its object holds a reference, renders the RefEditor, whose
+    // candidate picker is `foreach c in sys.extent("Person")`. A START view that shipped the route's
+    // descriptors (so the nav's first gate passes) but NOT the Person EXTENT — the Db ROOT (`/`) and the
+    // `tasks` SET VIEW (`/tasks`) both qualify (neither renders a Person picker) — leaves `extent:Person`
+    // un-shipped on the client. A CLIENT memoize MISS for it returns an empty `nothing` (a swallowed VNA,
+    // not a throw); `foreach c in nothing` then throws a NON-VNA error that escaped navigateClientSide
+    // before the floor refetch ran (the URL already changed) → URL changed, console error, view FROZEN
+    // until a reload. Navigating from `/tasks` OR from `/` to the TASK MEMBER (/tasks/4 — an ObjectForm
+    // whose `assignee` RefEditor reads the un-shipped Person extent) reproduces it. Drives the two
+    // object-form-with-reference SPA-nav scenarios.
+    //
+    // (An object form holding a reference is also the render path of the report's "dict entry with an
+    // OBJECT value"; a dictionary entry is not seedable in initialData — AppParse.SeedValue accepts only
+    // scalars / ref-id arrays / bare ids, so dicts start empty and entries are added at runtime — so a
+    // `tasks` member is its deterministic deep-link analogue. `lead`/`settings`/`configs` round out the
+    // demo's shape and keep the fixture faithful even though the two scenarios deep-link via `tasks`.)
+    public static InstanceDescription DemoCollectionsDb() =>
+        InstanceDescriptionLoader.Load(DemoCollectionsApp);
+
+    private const string DemoCollectionsApp = """
+    types
+        Db
+            people set of Person
+            tasks set of Task
+            lead Person
+            settings dict of text by text
+            configs dict of Config by text
+        Person
+            name text
+        Task
+            title text
+            assignee Person
+            subtasks set of Subtask
+        Subtask
+            label text
+        Config
+            theme text
+            owner Person
+
+    initialData
+        Db 1
+            people: [2, 3]
+            tasks: [4]
+            lead: 2
+        Person 2
+            name: "Ada"
+        Person 3
+            name: "Grace"
+        Task 4
+            title: "Ship it"
+            assignee: 2
+            subtasks: [5, 6]
+        Subtask 5
+            label: "Design"
+        Subtask 6
+            label: "Build"
+    """;
+
     // Milestone 11 (public component library): a HAND-WRITTEN `fn render()` that composes the
     // public `<ObjectForm>` library component — the second consumer proving the generic-UI library
     // is reachable + usable from userspace (the first consumer is the @milestone-9 generic object
