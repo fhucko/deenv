@@ -62,14 +62,6 @@ storage.
 Schema versioning, real-time / multi-user, the custom storage engine, and the
 distributed runtime are still ahead.
 
-**The pace, straight from the commit log:**
-
-- **June 5, 2026** — first commit: a `Db` that is literally one boolean.
-- **June 21, 2026** — five apps (designer, todo, CRM, shop, dev-log) hosted by
-  one kernel, the UI self-hosted in DeEnv's own code, and schema edits that
-  preserve your data.
-- **16 days. Milestones 1 → 11, plus a real deploy.** ~210 commits.
-
 ### What works today
 
 - **Visual data design** — a self-hosted schema *designer* (itself one of the

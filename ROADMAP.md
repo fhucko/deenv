@@ -16,8 +16,8 @@ completed, move its entry above the divider.
 **Current focus (2026-06-21).** Milestones 1–11 are done. The active phase is the
 **usable-MVP gates**: (1) non-destructive apply — data survives a schema change — ✅ done;
 (2) a minimal real deploy (a self-contained build as a systemd service behind nginx) ✅
-done; (3) dogfood one real app — in progress (`instances/5`, `devlog`). M12 (visual
-designer) is deferred until after the MVP; M13 (schema versioning) sits on instance
+done; (3) dogfood one real app — in progress (`instances/5`, `devlog`). The visual
+designer is deferred until after the MVP; M13 (schema versioning) sits on instance
 management. See CLAUDE.md "Current focus" for detail.
 
 ---
@@ -286,7 +286,7 @@ in DECISIONS ("UI middle-ground"). See `docs/plans/m11-reactivity-foundation.md`
   runtime; editor tooling. Enables schema versioning to be built inside the
   environment.
 
-- **M12 — Visual component designer.** A WinForms/XAML-style visual designer over the M11
+- **Visual component designer.** A WinForms/XAML-style visual designer over the M11
   public component library: drag/arrange/configure components on a canvas, **show-all** (the
   canvas a synced view of the full `fn render()`; the M7 round-trip printer is the visual↔text
   sync engine), **live preview = the Stage-2 inner-loop mini-instance** (the real interpreted
@@ -295,14 +295,14 @@ in DECISIONS ("UI middle-ground"). See `docs/plans/m11-reactivity-foundation.md`
   Extends pillar 1 (design visually) from data to UI. Needs M11 + the Stage-2 live-preview
   infra. See DECISIONS ("UI middle-ground → Visual component designer").
 
-- **Schema versioning  (sits on multi-instance management — now M13, after the UI milestones M11–M12).**
+- **Schema versioning  (sits on multi-instance management — now M13, after the UI milestones).**
   Git-style versioning of the schema, built inside the environment itself using
   the code milestone (versioning is behaviour-shaped). The structural
   identity-based diff is already designed — renames are exact because
   non-constants carry identity (Milestone 5).
 
   **MVP-critical substrate pulled forward — LANDED 2026-06-19/20.** A thin **non-destructive
-  apply** — *data survives a schema change* — was built ahead of / interleaved with M11–M12
+  apply** — *data survives a schema change* — was built ahead of / interleaved with M11
   (an app you cannot evolve without losing data is useless). What landed (server-side C#,
   `SchemaBridge.WriteDocument` + `JsonFileInstanceStore.MigrateTowardSchema`): an apply PRESERVES
   data that still fits the new schema and carries it forward — additive (new field → default),
