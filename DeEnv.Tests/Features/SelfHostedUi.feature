@@ -628,7 +628,7 @@ Feature: Self-hosted generic UI (object forms)
     And I navigate via an in-app link to "/tasks/4"
     Then the URL path becomes "/tasks/4"
     And the page shows ".object-form"
-    And the target title field eventually shows "Ship it"
+    And the target title field eventually shows "Design the schema"
     And the page shows ".ref-editor"
     And no page error occurred
 
@@ -640,7 +640,7 @@ Feature: Self-hosted generic UI (object forms)
     And I navigate via an in-app link to "/tasks/4"
     Then the URL path becomes "/tasks/4"
     And the page shows ".object-form"
-    And the target title field eventually shows "Ship it"
+    And the target title field eventually shows "Design the schema"
     And the page shows ".ref-editor"
     And no page error occurred
 
