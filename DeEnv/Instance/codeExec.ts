@@ -208,7 +208,12 @@ const collectionMethods = ["add", "remove", "setEntry", "where", "orderBy", "any
 // (conformance) → no caching, just compute.
 
 interface CacheDeps { props: { obj: number; prop: string }[]; members: number[]; vars: string[]; }
-interface ClientCacheEntry { result: ExecValue; deps: CacheDeps; stale: boolean; }
+// argsKey: the identity of the args a component slot was last invoked with — a re-invocation at the SAME
+// slot with a CHANGED arg (e.g. a create-form draft replaced by a fresh sys.new) re-binds/recomputes it
+// (reactive props). incomplete: this entry's compute swallowed a "Value not available" below it (a
+// speculative render over un-shipped data) — it is dropped on the next refetch so it recomputes over the
+// now-complete data. Both are client-only (absent on server-shipped entries, where they default falsy).
+interface ClientCacheEntry { result: ExecValue; deps: CacheDeps; stale: boolean; argsKey?: string; incomplete?: boolean; }
 
 let memoCache: Map<string, ClientCacheEntry> | null = null;
 const depStack: CacheDeps[] = [];
@@ -219,6 +224,14 @@ const depStack: CacheDeps[] = [];
 // to empty between renders, and the render entry (renderUi) resets it defensively.
 const slotPath: string[] = [];
 function resetSlotPath(): void { slotPath.length = 0; }
+
+// Objects minted by sys.new (create-form drafts) — the bindable identities a component's view pins to.
+// objectArgKey tracks a swap of one of these (or a stable positive-id db object), but NOT a re-minted
+// descriptor (sys.schema ships a fresh negative-id object each refetch though its meaning is constant) —
+// tracking those would re-bind every descriptor-taking component on every refetch (churn). A WeakSet keeps
+// this off the object's serialized shape, so the twin/conformance (which compares sys.new's output) is
+// untouched. Membership survives a refetch (the draft object is preserved by mergeState).
+const draftObjects = new WeakSet<ExecObject>();
 
 // True while an event handler runs: handlers may be side-effecting (assignments,
 // factory calls), so their calls must never hit or fill the cache.
@@ -231,6 +244,13 @@ function runWithMemoBypass(f: () => void): void {
 // A computation read data the server never shipped (and has no cached result):
 // the next maybeRefetch round-trips for authoritative state.
 let needsServerData = false;
+
+// Monotonic count of swallowed VNAs ("Value not available" reads over un-shipped data). memoize samples it
+// before/after each compute: a delta means the result (or a child it spliced) was built over INCOMPLETE
+// data, so the entry is flagged and dropped on the next refetch (see ClientCacheEntry.incomplete + ws.ts).
+// NEVER reset this (unlike slotPath, which IS reset per render): only DELTAS are read, so zeroing it
+// mid-render would corrupt any in-flight before/after sample straddling the reset and mis-flag entries.
+let vnaSwallows = 0;
 
 function setMemoCache(cache: Map<string, ClientCacheEntry> | null): void { memoCache = cache; }
 
@@ -287,10 +307,15 @@ function memoize(key: string, context: ExecContext, compute: () => ExecValue): E
     const existing = memoCache.get(key);
     if (existing && !existing.stale) {
         if (depStack.length > 0) mergeDeps(depStack[depStack.length - 1], existing.deps);
+        // Splicing an INCOMPLETE child taints the enclosing computation: count the swallow against the
+        // current compute so its entry is flagged incomplete too — propagating through HITS (not just the
+        // same render) so a parent that re-reads a cached-empty child is dropped on refetch, not left stale.
+        if (existing.incomplete) vnaSwallows++;
         return existing.result;
     }
     const deps: CacheDeps = { props: [], members: [], vars: [] };
     const lastIdBefore = context.lastId.value;
+    const vnaBefore = vnaSwallows;
     depStack.push(deps);
     try {
         const result = compute();
@@ -298,7 +323,9 @@ function memoize(key: string, context: ExecContext, compute: () => ExecValue): E
         // inside it (a `getNewX()` factory) — is not pure: caching it would hand every
         // caller the same mutable instance. (A derived array stays cacheable.)
         if (!(result.type === "object" && result.id < 0 && result.id < lastIdBefore))
-            memoCache.set(key, { result, deps, stale: false });
+            // incomplete: a VNA was swallowed under this compute (directly, or via a spliced incomplete
+            // child) — the result is built over partial data, so the refetch cleanup must drop it.
+            memoCache.set(key, { result, deps, stale: false, incomplete: vnaSwallows > vnaBefore });
         return result;
     } catch (e) {
         if (e instanceof Error && e.message === "Value not available") {
@@ -314,7 +341,17 @@ function memoize(key: string, context: ExecContext, compute: () => ExecValue): E
             // post-refetch render recomputes the page over the now-complete data. The contract is that a
             // persisted poisoned `fn:` entry always surfaces as such a tag/fn result (never a bare cached
             // empty), which holds precisely because the direct-VNA path below skips the cache. (See ws.ts
-            // onWsMessage's refetch branch.)
+            // onWsMessage's refetch branch.) The fn:-result heuristic only catches PAGE functions; counting
+            // the swallow here additionally flags every enclosing memoize (incl. a poisoned `comp:`-view) as
+            // incomplete, so the refetch cleanup drops those too — precisely, without dropping healthy state.
+            //
+            // Count the swallow as incompleteness ONLY when there is NO prior result: that is the genuinely
+            // MISSING case (the compute spliced an empty `nothing`), which the refetch must recompute. A
+            // STALE-but-present result (existing != null — e.g. a RefEditor reading an extent that setRef
+            // coarsely staled, whose membership is unchanged) is returned as-is and handled by the NORMAL
+            // stale-invalidation path; flagging it incomplete would needlessly drop+re-render a view that has
+            // usable data, re-reading possibly-stale merged data and racing the optimistic display.
+            if (existing == null) vnaSwallows++;
             needsServerData = true;
             return existing != null ? existing.result : { type: "nothing" };
         }
@@ -585,7 +622,9 @@ function execNew(codeCall: CodeCall, scope: ExecScope, context: ExecContext): Ex
     } else {
         for (const p of descProps(desc, "props")) props[propName(p)] = defaultProp(p);
     }
-    return { type: "object", props, id: --context.lastId.value };
+    const obj: ExecObject = { type: "object", props, id: --context.lastId.value };
+    draftObjects.add(obj); // a sys.new draft is a bindable identity a component pins to — track its swaps (objectArgKey)
+    return obj;
 }
 
 // resolve(pathText): the URL→view-kind dispatch (the client twin of C# CodeExecutor.ExecuteResolve;
@@ -1179,12 +1218,78 @@ function executeComponentValue(tag: CodeTag, component: ExecFunction, scope: Exe
     // changing it gives the component a NEW identity (caller-controlled "reset when X changes").
     if ("key" in attrs) slotKey += "#" + argKey(attrs["key"]);
     const args = component.fn.params.map(p => (p.name !== "key" && p.name in attrs) ? attrs[p.name] : { type: "null" } as ExecValue);
+    // Reactive props: a slot-stable component re-invoked with a CHANGED OBJECT argument must reflect it. The
+    // setup still runs ONCE (its `var state` persists across the re-render) — but its cached output was bound
+    // to the OLD args. When an object arg's identity differs from the last invocation at this slot, refresh:
+    //   • a STATEFUL component (its setup returned a render CLOSURE) keeps its state — re-bind the params in
+    //     the captured scope and recompute only its view; and
+    //   • a STATELESS one (returned the tag directly — no closure ⇒ no persistent state) is recomputed over
+    //     the new args.
+    // ONLY object args are tracked (objectArgKey): an object is the bindable identity a view pins to (its
+    // sys.field reads), so a swap to a different object (e.g. a create-form draft replaced by a fresh
+    // sys.new) must re-bind. A rebuilt-literal ARRAY (e.g. columns={["label"]}), scalar, or function arg gets
+    // a fresh id every render but is semantically stable — its CONTENT changes already propagate through
+    // deps; tracking it would recompute the component EVERY render (churn that breaks reconciliation). A
+    // server-shipped entry has no argsKey yet: skip it on the hydration render (re-running could re-read
+    // private data the server shipped the RESULT for) — that render uses the server's args, so it just
+    // records the matching key; real swaps come from later interactions and are detected then.
+    const argsKey = objectArgKey(args);
+    const prior = memoCache?.get(slotKey);
+    if (prior != null && !prior.stale && prior.argsKey != null && prior.argsKey !== argsKey) {
+        if (prior.result.type === "fn") {
+            if (rebindComponentArgs(component, prior.result, args)) {
+                const viewEntry = memoCache!.get(slotKey + ":view");
+                if (viewEntry != null) viewEntry.stale = true;
+            }
+        } else {
+            prior.stale = true; // stateless: recompute the tag over the new args
+        }
+    }
     let view = memoize(slotKey, context, () => invokeFn(component, args, context));
+    const entry = memoCache?.get(slotKey);
+    if (entry != null) entry.argsKey = argsKey;
     if (view.type === "fn") {
         const renderClosure = view;
         view = memoize(slotKey + ":view", context, () => invokeFn(renderClosure, [], context));
     }
     return view;
+}
+
+// The identity signature of a component's BINDABLE object arguments (param-index : object id), the key the
+// slot's reactive-prop check diffs across renders. Tracked iff the arg is a stable positive-id db object OR
+// a sys.new draft (draftObjects) — the genuine bindable identities a view pins to. A re-minted DESCRIPTOR
+// (sys.schema yields a fresh negative-id object each refetch, same meaning), a rebuilt-literal array/object,
+// a scalar, or a function is EXCLUDED: its identity churns or is irrelevant, and its content changes already
+// propagate through deps — tracking it would re-bind the component every render. Empty when a component
+// takes no bindable object args (then it never re-binds on an arg change, by design).
+function objectArgKey(args: ExecValue[]): string {
+    let key = "";
+    for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a.type === "object" && (a.id > 0 || draftObjects.has(a))) key += i + ":" + a.id + ";";
+    }
+    return key;
+}
+
+// Refresh a slot-stable component's params to the CURRENT args, in the call scope its render closure
+// captured (the transient frame between the closure's body scope and the persistent top scope — walk up
+// while !isTop, like closureKey). Returns whether any param value actually changed, so the caller only
+// stales the view when it must. Read-only param bindings are updated in place: the read-only guard is for
+// user `=` statements; a re-bind is the framework refreshing the prop, not user code.
+function rebindComponentArgs(component: ExecFunction, closure: ExecFunction, args: ExecValue[]): boolean {
+    let changed = false;
+    const params = component.fn.params;
+    for (let i = 0; i < params.length && i < args.length; i++) {
+        if (params[i].name === "key") continue;
+        for (let s: ExecScope | null = closure.scope; s != null && !s.isTop; s = s.parent) {
+            const item = s.items[params[i].name];
+            if (item != null) {
+                if (argKey(item.value) !== argKey(args[i])) { item.value = args[i]; changed = true; }
+                break;
+            }
+        }
+    }
+    return changed;
 }
 
 // Invoke a function value with already-evaluated args (twin of C# InvokeFunction) — a child

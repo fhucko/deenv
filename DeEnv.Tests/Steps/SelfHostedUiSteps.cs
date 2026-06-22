@@ -499,6 +499,16 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task WhenCancelCreateForm() =>
         await ctx.Page!.Locator(".create-form button.cancel").First.ClickAsync();
 
+    // The reopened create form's input for the named prop is BLANK — proving "New" after a Save shows a
+    // FRESH draft (state.draft = sys.new), not the just-saved values. Before the M11 fix the create-form's
+    // <Field obj={state.draft}> was a slot-stable component whose cached output stayed bound to the OLD
+    // (now-added) draft object, so reopening showed the prior values. WaitForFunction so a still-reconciling
+    // DOM settles to the fresh draft.
+    [Then("the new {string} field is empty")]
+    public async Task ThenNewFieldEmpty(string field) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const e = document.querySelector('.create-form input.{field}'); return e != null && e.value === ''; }}");
+
     // A create-form field is LABELED: a <label> with the prop's class sits in the form (the same
     // label+Input composite the edit/object page uses), proving the form is the labeled edit form, not
     // a row of bare inputs.

@@ -681,19 +681,39 @@ Feature: Self-hosted generic UI (object forms)
     And the page does not show ".create-form"
     And no page error occurred
 
+  # ── create-form reopen shows a FRESH draft, not the prior one (M11 reactivity, bug 1) ──
+  # After Save mints a new draft (state.draft = sys.new), reopening "New" must show a BLANK form. Before the
+  # fix the create-form's <Field obj={state.draft}> was a slot-stable component whose cached output stayed
+  # bound to the OLD (now-added) draft object — so reopening showed the just-saved values and its inputs
+  # wrote back to the added object. The fix re-binds a component's args when it is re-invoked at the same
+  # slot with a CHANGED argument object (reactive props), so the reopened form binds the fresh draft. The
+  # bug reproduces independently of references — Task's scalar `title` suffices to show it.
+  @milestone-11 @single-user
+  Scenario: Reopening the create form after Save shows a fresh blank draft, not the prior one
+    Given the demo collections app is running
+    When I open "/tasks"
+    Then the page shows ".set-table"
+    When I click the new button
+    And I fill the new "title" with "First task"
+    And I add to the set
+    Then a set row eventually shows "First task"
+    When I click the new button
+    Then the new "title" field is empty
+
   # The deeper path the reviewer flagged: NAVIGATE INTO the just-created member. Its /tasks/<id> ObjectForm
   # runs `foreach sub in m.subtasks` (a SET) over a member the client MINTED via sys.new (no refetch
   # papering over it). Before the fix the missing `subtasks` set threw "foreach target is not a collection."
   # — exactly the reviewer's flagged case — so the page never painted; with sys.new COMPLETE the form paints
   # (the nested subtasks SetTable iterates the empty set) with NO page error.
   #
-  # (The assignee RefEditor is NOT asserted here: a deep-linked member's RefEditor reads `sys.extent(Person)`
-  # which the START `/tasks` page never shipped, so the optimistic render swallows that VNA to an empty view
-  # and the follow-up refetch does NOT un-poison it for a JUST-CREATED member — the client already holds the
-  # member's exact data, so the merge invalidates nothing. That is a SEPARATE, pre-existing client-only
-  # refetch-cleanup bug (a poisoned `comp:`-view that spliced an un-shipped-dependency child survives the
-  # refetch), unrelated to the sys.new root cause and needing its own slice — a broad "drop comp views on
-  # refetch" fix regresses the operator designer's delete flow. See the report's Flags.)
+  # The assignee RefEditor is now asserted too (M11 reactivity, bug 2): a deep-linked member's RefEditor reads
+  # `sys.extent(Person)`, which the START `/tasks` page never shipped, so the optimistic render swallows that
+  # VNA to an empty view and caches the enclosing `comp:`-view as an empty splice; for a JUST-CREATED member
+  # the follow-up refetch invalidates nothing (the client already holds the member's exact data), so the
+  # poison used to survive. The fix marks any memo whose compute swallowed a VNA as INCOMPLETE and drops those
+  # (and only those) on the next refetch, so the poisoned view recomputes over the now-shipped extent and its
+  # Person candidates (Ada/Grace) appear. The precise incomplete-drop leaves healthy `comp:` state untouched,
+  # so the operator designer's delete flow — which a broad "drop all comp views" fix regressed — is unaffected.
   @milestone-11 @single-user
   Scenario: Navigating into a just-created set member renders its object form over a complete object
     Given the demo collections app is running
@@ -710,6 +730,8 @@ Feature: Self-hosted generic UI (object forms)
     And the page shows ".object-form"
     And the target title field eventually shows "Wire the deploy"
     And the page shows ".set-table"
+    And a reference candidate "Ada" is offered
+    And a reference candidate "Grace" is offered
     And no page error occurred
 
   # ── references: the self-hosted pick-or-clear editor (slice 2) ──────────────

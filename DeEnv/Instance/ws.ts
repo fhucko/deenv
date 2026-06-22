@@ -307,8 +307,14 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         //     not dropped (dropping it would re-read the unshipped input and loop). This is what makes a
         //     fully-CUSTOM render (the designer) navigate client-side correctly; the generic UI's views
         //     are `comp:` (their state is preserved) and were already fresh.
+        //   • an `incomplete` entry — its compute SWALLOWED a "Value not available" below it (a speculative
+        //     render over un-shipped data), so it (e.g. a `comp:`-view that spliced a just-created member's
+        //     RefEditor reading an un-shipped sys.extent) holds an empty child but recorded NO dep on the
+        //     missing data — the merge can't stale it. Unlike the broad `fn:` rule this is PRECISE: it drops
+        //     ONLY views built over partial data, so healthy `comp:` state (the operator designer's delete
+        //     flow) is untouched. The dropped view recomputes over the now-complete merged data next render.
         for (const [key, e] of uiStatic.cache)
-            if (e.stale || (key.startsWith("fn:") && (e.result.type === "tag" || e.result.type === "fn")))
+            if (e.stale || e.incomplete || (key.startsWith("fn:") && (e.result.type === "tag" || e.result.type === "fn")))
                 uiStatic.cache.delete(key);
         markReadyIfSettled(); // the connect-time settle (if any) is now applied
         renderUi();
