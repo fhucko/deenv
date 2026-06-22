@@ -6,6 +6,7 @@
     { "id": 2, "app": "todo", "designId": 13 },
     { "id": 3, "app": "crm", "designId": 27 },
     { "id": 4, "app": "shop", "designId": 39 },
-    { "id": 5, "app": "devlog" }
+    { "id": 5, "app": "devlog" },
+    { "id": 6, "app": "demo" }
   ]
 }
