@@ -197,4 +197,12 @@ public sealed class ExecContext
     // — even when an argument object is rebuilt fresh every render. Push/pop is balanced, so
     // it returns to empty between renders.
     public List<string> SlotPath { get; } = [];
+
+    // Ambient (dynamic-scope) bindings for the current dynamic extent: `ambient name = value`
+    // pushes a frame, a block save/restores this (popping provides on exit), and a symbol read
+    // falls back to it after a lexical miss.
+    public AmbientFrame? Ambient { get; set; }
 }
+
+// One immutable frame in the ambient chain — dynamic scoping over the call/render extent.
+public sealed record AmbientFrame(string Name, IExecValue Value, AmbientFrame? Parent);

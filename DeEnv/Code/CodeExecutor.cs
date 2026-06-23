@@ -53,6 +53,7 @@ public sealed class CodeExecutor
             case CodeReturn ret:            return ExecuteValue(ret.Value, scope, context);
             case CodeCall call:             ExecuteCall(call, scope, context); return null;
             case CodeIf codeIf:             return ExecuteIf(codeIf, scope, context);
+            case CodeAmbient ambient:       ExecuteAmbient(ambient, scope, context); return null;
             default: throw new NotImplementedException($"Statement {statement.GetType().Name}");
         }
     }
@@ -80,6 +81,10 @@ public sealed class CodeExecutor
         var value = varDec.Value == null ? new ExecNull() : ExecuteValue(varDec.Value, scope, context);
         scope.Items[varDec.Name] = new ExecScopeItem { Value = value, IsReadOnly = false };
     }
+
+    // `ambient name = value` — push a dynamic-scope binding; the enclosing block pops it on exit.
+    private void ExecuteAmbient(CodeAmbient ambient, ExecScope scope, ExecContext context) =>
+        context.Ambient = new AmbientFrame(ambient.Name, ExecuteValue(ambient.Value, scope, context), context.Ambient);
 
     private void ExecuteAssignment(CodeAssignment assignment, ExecScope scope, ExecContext context) =>
         AssignAndReturn(assignment, scope, context);
@@ -117,12 +122,17 @@ public sealed class CodeExecutor
     private IExecValue? ExecuteBlock(CodeBlock block, ExecScope scope, ExecContext context)
     {
         var innerScope = new ExecScope { Parent = scope };
-        foreach (var statement in block.Statements)
+        var savedAmbient = context.Ambient;   // ambient provides in this block pop on exit
+        try
         {
-            var value = ExecuteStatement(statement, innerScope, context);
-            if (value != null) return value;
+            foreach (var statement in block.Statements)
+            {
+                var value = ExecuteStatement(statement, innerScope, context);
+                if (value != null) return value;
+            }
+            return null;
         }
-        return null;
+        finally { context.Ambient = savedAmbient; }
     }
 
     // ── values ────────────────────────────────────────────────────────────────────
@@ -169,7 +179,8 @@ public sealed class CodeExecutor
 
     private static IExecValue ExecuteSymbol(CodeSymbol codeSymbol, ExecScope scope, ExecContext context)
     {
-        var itemScope = FindScope(codeSymbol.Name, scope);
+        var itemScope = TryFindScope(codeSymbol.Name, scope);
+        if (itemScope == null) return ResolveAmbient(codeSymbol.Name, context);  // dynamic-scope fallback
         var item = itemScope.Items[codeSymbol.Name];
         if (itemScope.IsTop)
         {
@@ -181,6 +192,22 @@ public sealed class CodeExecutor
             OnValueAccessed(context, item.Value);
         }
         return item.Value;
+    }
+
+    private static ExecScope? TryFindScope(string name, ExecScope scope)
+    {
+        for (ExecScope? s = scope; s != null; s = s.Parent)
+            if (s.Items.ContainsKey(name)) return s;
+        return null;
+    }
+
+    // Dynamic-scope resolution up the ambient frame chain — the fallback when a symbol is not
+    // in any lexical scope. Throws the same not-found error a lexical miss used to.
+    private static IExecValue ResolveAmbient(string name, ExecContext context)
+    {
+        for (var f = context.Ambient; f != null; f = f.Parent)
+            if (f.Name == name) return f.Value;
+        throw new CodeRuntimeException($"Variable '{name}' not found.");
     }
 
     private static void OnValueAccessed(ExecContext context, IExecValue value)

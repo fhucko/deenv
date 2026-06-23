@@ -22,6 +22,7 @@ public interface ICodeElement;
 [JsonDerivedType(typeof(CodeAssignment), "assign")]
 [JsonDerivedType(typeof(CodeCall), "call")]
 [JsonDerivedType(typeof(CodeIf), "if")]
+[JsonDerivedType(typeof(CodeAmbient), "ambient")]
 public interface ICodeStatement : ICodeElement;
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
@@ -89,6 +90,15 @@ public sealed class CodeVarDec : ICodeStatement
 {
     public required string Name { get; set; }
     public ICodeValue? Value { get; set; }
+}
+
+// `ambient name = value` — provide/override an ambient (dynamic-scope) var for the rest of
+// the enclosing block and its callees. Resolved on a symbol read after a lexical miss, and
+// popped when the block exits. Consume is implicit (just read the name).
+public sealed class CodeAmbient : ICodeStatement
+{
+    public required string Name { get; set; }
+    public required ICodeValue Value { get; set; }
 }
 
 public sealed class CodeAssignment : ICodeStatement, ICodeValue

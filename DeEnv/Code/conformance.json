@@ -8,6 +8,38 @@
       "expect": { "kind": "int", "value": 5 }
     },
     {
+      "name": "ambient provide resolves in a callee (flows down)",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "ambient", "name": "amb", "value": { "type": "int", "value": 7 } },
+        { "type": "return", "value": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+          { "type": "return", "value": { "type": "symbol", "name": "amb" } }
+        ] } } } }
+      ] } } },
+      "expect": { "kind": "int", "value": 7 }
+    },
+    {
+      "name": "ambient shadow — nearest provider wins",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "ambient", "name": "amb", "value": { "type": "int", "value": 1 } },
+        { "type": "return", "value": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+          { "type": "ambient", "name": "amb", "value": { "type": "int", "value": 2 } },
+          { "type": "return", "value": { "type": "symbol", "name": "amb" } }
+        ] } } } }
+      ] } } },
+      "expect": { "kind": "int", "value": 2 }
+    },
+    {
+      "name": "ambient pops on block exit — caller unaffected by a callee's provide",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "ambient", "name": "amb", "value": { "type": "int", "value": 1 } },
+        { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+          { "type": "ambient", "name": "amb", "value": { "type": "int", "value": 9 } }
+        ] } } },
+        { "type": "return", "value": { "type": "symbol", "name": "amb" } }
+      ] } } },
+      "expect": { "kind": "int", "value": 1 }
+    },
+    {
       "name": "text literal",
       "text": "\"hi\"",
       "expr": { "type": "text", "value": "hi" },

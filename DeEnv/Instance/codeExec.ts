@@ -9,7 +9,7 @@
 
 // ── AST (mirrors DeEnv/Code/CodeAst.cs, "type"-discriminated, camelCase) ──────────
 
-type CodeStatement = CodeAssignment | CodeBlock | CodeVarDec | CodeFunction | CodeReturn | CodeCall | CodeIf;
+type CodeStatement = CodeAssignment | CodeBlock | CodeVarDec | CodeFunction | CodeReturn | CodeCall | CodeIf | CodeAmbient;
 
 type CodeValue = CodeInt | CodeText | CodeBool | CodeNull | CodeSymbol | CodeObject | CodeArray |
     CodeFunction | CodeTag | CodeInfixOp | CodeCall | CodeAssignment;
@@ -28,6 +28,7 @@ interface CodeInfixOp { type: "infixOp"; op: string; left: CodeValue; right: Cod
 interface CodeAssignment { type: "assign"; target: CodeValue; value: CodeValue; }
 interface CodeBlock { type: "block"; statements: CodeStatement[]; }
 interface CodeVarDec { type: "varDec"; name: string; value: CodeValue | null; }
+interface CodeAmbient { type: "ambient"; name: string; value: CodeValue; }
 interface CodeFunction { type: "fn"; name: string | null; params: CodeFunctionParam[]; body: CodeBlock; id?: number; }
 interface CodeFunctionParam { name: string; }
 interface CodeReturn { type: "return"; value: CodeValue; }
@@ -65,7 +66,8 @@ interface ExecTag { type: "tag"; name: string; attributes: { [name: string]: Exe
 // invalidate the memo cache. Transient local scopes (fn calls, blocks, foreach) leave it unset.
 interface ExecScope { items: { [name: string]: ExecScopeItem }; parent: ExecScope | null; isTop?: boolean; }
 interface ExecScopeItem { value: ExecValue; isReadOnly: boolean; }
-interface ExecContext { lastId: LastId; }
+interface ExecContext { lastId: LastId; ambient?: AmbientFrame | null; }
+interface AmbientFrame { name: string; value: ExecValue; parent: AmbientFrame | null; }
 interface LastId { value: number; }
 
 // ── statements ────────────────────────────────────────────────────────────────────
@@ -82,6 +84,7 @@ function executeStatement(statement: CodeStatement, scope: ExecScope, context: E
         case "return": return executeValue(statement.value, scope, context).value;
         case "call": executeCall(statement, scope, context); return null;
         case "if": return executeIf(statement, scope, context);
+        case "ambient": context.ambient = { name: statement.name, value: executeValue(statement.value, scope, context).value, parent: context.ambient ?? null }; return null;
         default: throw new Error("NotImplementedException");
     }
 }
@@ -107,11 +110,14 @@ function executeVarDec(varDec: CodeVarDec, scope: ExecScope, context: ExecContex
 
 function executeBlock(block: CodeBlock, scope: ExecScope, context: ExecContext): ExecValue | null {
     const innerScope: ExecScope = { parent: scope, items: {} };
-    for (const statement of block.statements) {
-        const value = executeStatement(statement, innerScope, context);
-        if (value != null) return value;
-    }
-    return null;
+    const savedAmbient = context.ambient;   // ambient provides in this block pop on exit
+    try {
+        for (const statement of block.statements) {
+            const value = executeStatement(statement, innerScope, context);
+            if (value != null) return value;
+        }
+        return null;
+    } finally { context.ambient = savedAmbient; }
 }
 
 function executeAssignment(assignment: CodeAssignment, scope: ExecScope, context: ExecContext): ExecValue {
@@ -163,7 +169,7 @@ function executeValue(value: CodeValue, scope: ExecScope, context: ExecContext):
         case "call":
             if (sysBuiltinName(value.fn) === "field") return fieldResult(value, scope, context);
             return { value: executeCall(value, scope, context) };
-        case "symbol": return executeSymbol(value, scope);
+        case "symbol": return executeSymbol(value, scope, context);
         case "object": return { value: executeObject(value, scope, context) };
         case "array": return { value: executeArray(value, scope, context) };
         case "assign": return { value: executeAssignment(value, scope, context) };
@@ -182,8 +188,13 @@ function executeObject(codeObject: CodeObject, scope: ExecScope, context: ExecCo
     return { type: "object", props, id: --context.lastId.value };
 }
 
-function executeSymbol(codeSymbol: CodeSymbol, scope: ExecScope): ExecResult {
-    const itemScope = findScope(codeSymbol, scope);
+function executeSymbol(codeSymbol: CodeSymbol, scope: ExecScope, context: ExecContext): ExecResult {
+    const itemScope = tryFindScope(codeSymbol, scope);
+    if (itemScope == null) {
+        for (let f = context.ambient ?? null; f != null; f = f.parent)
+            if (f.name === codeSymbol.name) return { value: f.value };   // dynamic-scope fallback
+        throw new Error(`Variable ${codeSymbol.name} not found`);
+    }
     const item = itemScope.items[codeSymbol.name];
     // A writable top-scope var read inside a computation is a dependency: assigning
     // the var must invalidate the cached result. (Read-only items — db, functions —
@@ -1345,6 +1356,12 @@ function findScope(symbol: CodeSymbol, scope: ExecScope): ExecScope {
     if (scope.items[symbol.name]) return scope;
     if (scope.parent !== null) return findScope(symbol, scope.parent);
     throw new Error(`Variable ${symbol.name} not found`);
+}
+
+function tryFindScope(symbol: CodeSymbol, scope: ExecScope): ExecScope | null {
+    for (let s: ExecScope | null = scope; s != null; s = s.parent)
+        if (s.items[symbol.name]) return s;
+    return null;
 }
 
 // WebSocket mutation sends — wired by ws.ts via setWsHooks (Stage 4b). Until then they
