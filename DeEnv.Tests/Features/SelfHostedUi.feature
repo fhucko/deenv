@@ -133,23 +133,24 @@ Feature: Self-hosted generic UI (object forms)
     When I save the form
     Then the store eventually has a "Note" whose "title" is "Renamed"
 
-  # Navigating away (SPA) unmounts the form, dropping its staging ctx — so a staged-but-unsaved edit
-  # must NOT reach the store: leaving is a discard, not a save. We assert that data-safety half here
-  # (a store read after the URL flips back — reliable). The stronger UI proof (the RETURNING form shows
-  # the stored value via the full Back→forward round-trip) is held back one more step: the primary
-  # back-nav race IS fixed (a Back landing during the forward nav's in-flight refetch self-serialized
-  # and stranded the previous view HELD — fixed by re-firing the refetch after a reply, ws.ts), but a
-  # residual data-completeness race remains — the set table can render ROWLESS after Back under peak
-  # load (an empty foreach over a transiently-unmerged collection caches with no dep to invalidate when
-  # the members land). The field-revert itself is already proven by "Discarding a staged edit reverts".
+  # Navigating away (SPA) unmounts the form, dropping its staging ctx — so a staged-but-unsaved edit is
+  # DISCARDED: Back to the set table, forward into the form again, and the returning form shows the
+  # STORED value (not the staged one), with the store unchanged (leaving is a discard, not a save). The
+  # full Back→forward round-trip exercises the nav race that previously made this flaky: a refetch sent
+  # for the OLD path could land AFTER the user navigated on and CLOBBER the client-owned `path` var (a
+  # stale `/` reply reverting a fresh `/notes/2`), re-rendering the old view over the new URL — fixed by
+  # never overwriting `path` on a state merge (dt.ts).
   @milestone-11 @single-user
-  Scenario: Navigating away from a form does not commit a staged edit
+  Scenario: Navigating away from a form discards a staged edit
     Given the self-hosted form app is running
     When I open "/"
     And I follow the set row link
     And I fill the "title" field with "Throwaway"
     And I navigate back
     Then the URL path becomes "/"
+    And the page shows ".set-table"
+    When I follow the set row link
+    Then the "title" field shows "First"
     And the store still has a "Note" whose "title" is "First"
 
   # The committed shop (instances/4, fully-auto generic UI) on a real customer page. The full

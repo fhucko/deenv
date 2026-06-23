@@ -71,6 +71,12 @@ function mergeState(dtState: ServerDtState): void {
     uiStatic.lastId.value = minId;
 
     for (const [key, value] of Object.entries(dtState.scope)) {
+        // `path` is CLIENT-OWNED navigation state — set by navClient/popstate/init from the LIVE URL. A
+        // refetch ships the path it rendered FOR, but a (possibly stale) reply can land AFTER the user has
+        // navigated on; overwriting would REVERT path to the refetch's value and re-render the OLD view
+        // over the new URL — the back/forward nav race (a stale `/` reply clobbering a fresh `/notes/2`).
+        // The client's live path is authoritative; the render reads it, so it always paints the real URL.
+        if (key === "path") continue;
         // A var currently holding a client-minted draft (a transient object being
         // edited in a form) is client-held state: a server re-render recomputes its
         // initializer to a fresh empty draft, which must not clobber the user's input.
