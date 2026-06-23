@@ -113,6 +113,9 @@ public sealed class CodeExecutor
                 // In a staging context the write stages — the live object is untouched until commit.
                 // Gated to persisted (positive-id) objects: a transient draft (sys.new, id<0) writes
                 // live, so a create-form's draft is not entangled in the surrounding edit transaction.
+                // (id>0 is today's proxy for "real identity in the live store". A just-added object
+                // still awaiting its negative→real remap is also id<0 but has no route, so nothing
+                // renders it in a staging form — revisit this gate if that ever changes.)
                 if (obj.Id > 0 && NearestStagingCtx(context) is { } staging)
                 {
                     if (!staging.Staged.TryGetValue(obj, out var fields)) staging.Staged[obj] = fields = [];
@@ -375,11 +378,10 @@ public sealed class CodeExecutor
         return value;
     }
 
-    // setFields(target, source): copy EVERY prop of `source` onto `target` — the bulk, dynamic
-    // write the self-hosted ObjectForm uses for BOTH directions of its staged edit: the edit-draft's
-    // initial fill (`sys.setFields(state.draft, obj)`, copying the live object's current values into a
-    // fresh `sys.new` draft so the inputs show them) and the Save commit (`sys.setFields(obj, draft)`,
-    // writing the draft's values back onto the live object). A bulk primitive (not per-field) because
+    // setFields(target, source): copy EVERY prop of `source` onto `target` — a standalone bulk,
+    // dynamic write. (Historically ObjectForm's draft fill + Save commit; the form now stages through a
+    // data-context `ctx`, so setFields has no Code consumer today — kept as a public primitive pending
+    // a surface decision.) A bulk primitive (not per-field) because
     // Code has no statement-position iteration — `foreach` is render-only — so a handler cannot loop
     // over schema-iterated prop names; the framework loops here instead.
     //

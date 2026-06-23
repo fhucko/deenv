@@ -143,7 +143,9 @@ Feature: Self-hosted generic UI (object forms)
     And I follow the set row link
     And I fill the "title" field with "Throwaway"
     And I navigate back
-    And I follow the set row link
+    Then the URL path becomes "/"
+    And the page shows ".set-table"
+    When I follow the set row link
     Then the "title" field shows "First"
     And the store still has a "Note" whose "title" is "First"
 

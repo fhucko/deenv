@@ -32,15 +32,15 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     }
 
     // ── staged edits + Save/Discard (milestone 11) ──────────────────────────────────
-    // The generic ObjectForm now stages scalar edits in a local draft and commits them on Save
-    // (autosave OFF by default). These drive that form-level flow.
+    // The generic ObjectForm stages scalar edits in a data-context (`ctx`) overlay and commits them on
+    // Save (autosave OFF by default). These drive that form-level flow.
 
-    // Commit the staged scalar edits: the ObjectForm's Save button (.object-form button.save) writes
-    // the draft's scalars back onto the live object via sys.setFields (id-addressed objectPropChange).
-    // The commit is an async WS round-trip, so gate on it landing in the persisted store before the
-    // scenario reads it (or navigates and re-renders from it) — the pending edits recorded by the fill
-    // steps. (A non-emptying assertion that follows — "the store eventually has …" — would also poll,
-    // but a save→navigate flow has no such gate, so awaiting here makes every Save path safe.)
+    // Commit the staged scalar edits: the ObjectForm's Save button (.object-form button.save) flushes
+    // the ctx overlay back onto the live object via ctx.commit() (one id-addressed objectPropChange per
+    // staged field). The commit is an async WS round-trip, so gate on it landing in the persisted store
+    // before the scenario reads it (or navigates and re-renders from it) — the pending edits recorded by
+    // the fill steps. (A non-emptying assertion that follows — "the store eventually has …" — would also
+    // poll, but a save→navigate flow has no such gate, so awaiting here makes every Save path safe.)
     [When("I save the form")]
     public async Task WhenSaveTheForm()
     {
@@ -49,11 +49,10 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.AwaitPendingEditsAsync();
     }
 
-    // Discard the staged edits: the Discard button copies the live object's scalars back ONTO the
-    // draft in place (sys.setFields(state.draft, obj)), so the bound inputs re-render to the stored
-    // values (the draft keeps its identity, so the slot-keyed Fields re-read it). Drop the pending
-    // edits too — a discard abandons them, so a later Save in the same scenario must not wait for a
-    // value that will never persist.
+    // Discard the staged edits: the Discard button drops the ctx overlay (ctx.discard()) and
+    // invalidates the staged props, so the bound inputs re-render to the stored values. Drop the
+    // pending edits too — a discard abandons them, so a later Save in the same scenario must not wait
+    // for a value that will never persist.
     [When("I discard the form")]
     public async Task WhenDiscardTheForm()
     {

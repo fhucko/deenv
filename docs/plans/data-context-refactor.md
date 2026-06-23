@@ -54,9 +54,11 @@ isolating its draft) or go live. The old slice-3/slice-4 split collapses.
   `save`=`ctx.commit()`, `discard`=`ctx.discard()`.
 - **Field two-way binding:** `sys.field`'s `setValue` must stage through the nearest ctx (slice 2
   only intercepted the assignment path, not `setValue`).
-- **Create-forms isolate:** `RefEditor`/`SetTable` create-drafts each open their **own**
-  `ambient ctx = ctx.new()` so their `<Input>` edits stage in their ctx; Save commits it
-  (`set.add`/`setRef` of the now-complete draft), Cancel discards.
+- **Create-forms isolate:** a nested `RefEditor`/`SetTable`/`DictTable` create-draft (`sys.new`,
+  negative id) writes **live** — the `id>0` staging gate excludes it — so its `<Input>` edits never
+  stage in the enclosing form's ctx; Save adds the now-complete draft (`set.add`/`setRef`), Cancel
+  drops it. (The "each opens its own `ctx.new()`" idea was superseded by the simpler gate — see
+  "How 3c converged".)
 - **Gherkin (done, all green):** edit stages (stored value unchanged until Save), Save persists,
   Discard reverts, **nav discards** (the form's ctx drops on unmount — proven via an SPA round-trip),
   create-form isolation. Stale `setFields`/`state.draft` scenario comments rewritten to behavior-level.
@@ -85,3 +87,18 @@ Two bugs the first attempt hit, both fixed:
 
 The `id>0` gate covers all three write sites (`obj.prop` assign, `setValue`/`field`, C# assign);
 discard also invalidates the reverted props so the client re-renders them.
+
+## Loose ends (post-review, 2026-06-23)
+
+Two reviewers (architecture + ui) cleared the slice; their notes:
+- **`sys.setFields` now has zero Code consumers** — ObjectForm was its only one. Kept as a public
+  builtin (removing one is a structural surface change → ask first); its docs no longer claim
+  ObjectForm uses it. A clean deletion candidate if the user wants the surface trimmed.
+- **`ctx.dirty` is built + conformance-tested but unconsumed** — the form shows Save/Discard
+  unconditionally. Intentional foundation for the deferred unsaved-indicator / dirty-gated Save; flag
+  it if it stays naked much longer.
+- **The `id>0` gate** is a proxy for "real identity in the live store"; a just-added object pending
+  its neg→real remap is also id<0 but has no route, so it can't reach a staging form today. The gate
+  comment names the assumption to revisit if that changes.
+- Per-field commit is **not atomic** (N independent WS ops; a mid-batch reject rolls back only that
+  op — the same semantics autosave always had). Atomic batch commit stays deferred.

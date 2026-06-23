@@ -144,7 +144,9 @@ function executeAssignment(assignment: CodeAssignment, scope: ExecScope, context
         const prop = target.right.name;
         // In a staging context the write stages — the live object is untouched until commit.
         // Gated to persisted (positive-id) objects: a transient draft (sys.new, id<0) writes live,
-        // so a create-form's draft is not entangled in the surrounding edit transaction.
+        // so a create-form's draft is not entangled in the surrounding edit transaction. (id>0 is
+        // today's proxy for "real identity in the live store" — a just-added object still awaiting its
+        // negative→real remap is also id<0, but nothing routes one into a staging form. Revisit if so.)
         const staging = obj.id > 0 ? nearestStagingCtx(context) : null;
         if (staging != null) {
             let fields = staging.staged.get(obj);
@@ -495,10 +497,10 @@ function fieldResult(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     };
 }
 
-// setFields(target, source): copy the SCALAR props of `source` onto `target` — the bulk, dynamic write
-// the self-hosted ObjectForm uses for BOTH directions of its staged edit: the edit-draft's initial fill
-// (sys.setFields(state.draft, obj) — copy the live object's scalars into a fresh sys.new draft so the
-// inputs show them) and the Save commit (sys.setFields(obj, draft) — write the draft's scalars back).
+// setFields(target, source): copy the SCALAR props of `source` onto `target` — a standalone bulk,
+// dynamic write. (Historically ObjectForm's draft fill + Save commit; the form now stages through a
+// data-context `ctx`, so setFields has no Code consumer today — kept as a public primitive pending a
+// surface decision.)
 // SCALARS ONLY: a prop whose value is an object (a reference) or an array (a set/dict) — OR null (an
 // UNSET reference) — is SKIPPED. The draft is scalar-only (collection props bind to the LIVE object via
 // RefEditor/SetTable/DictTable, never the draft), so persisting one on Save would be a bug

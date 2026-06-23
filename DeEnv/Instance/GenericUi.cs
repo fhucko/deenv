@@ -22,16 +22,16 @@ namespace DeEnv.Instance;
 //   • ObjectForm(obj, meta, base, autosave) — an object page: a field per prop (a Field for a
 //     scalar, a nested RefEditor for a single object reference, an inline SetTable for an object set,
 //     or an inline DictTable for a dictionary). A collection's label is a navigable list-title link to
-//     its own route. `base` is the page's URL path, so inline links nest. A COMPONENT: it holds a
-//     local draft — a fresh `sys.new(meta)` object filled from the live object's scalars by
-//     `sys.setFields(state.draft, obj)` — and returns a render fn. `autosave` (bool) controls when
-//     scalar edits commit: omitted/false (the DEFAULT, what the synthesized object view passes)
-//     STAGES scalar edits into the draft and commits them on a Save button (`sys.setFields(obj,
-//     draft)`); Discard copies the object's scalars back ONTO the draft (`sys.setFields(draft, obj)`
-//     — in place, so the draft keeps its identity and the slot-keyed Fields re-read it). true keeps
-//     live per-keystroke autosave with no buttons. Either way COLLECTION props (reference/set/
-//     dictionary) bind to the LIVE object — never staged (each manages its own members, which
-//     persist on their own).
+//     its own route. `base` is the page's URL path, so inline links nest. A COMPONENT: it opens a
+//     staging data-context — `ambient ctx = ctx.new(autosave)` — and binds Fields to the LIVE `obj`
+//     directly; the ctx decides whether a write stages or persists. `autosave` (bool) controls that:
+//     omitted/false (the DEFAULT, what the synthesized object view passes) makes `ctx.new` a STAGING
+//     child, so scalar edits stage in the overlay (the stored object is untouched) and commit on a
+//     Save button (`ctx.commit()`); Discard drops the overlay (`ctx.discard()`) and the inputs re-read
+//     the stored value. true makes `ctx.new(true)` the live parent → per-keystroke autosave, no
+//     buttons. Either way COLLECTION props (reference/set/dictionary) bind to the LIVE object, and a
+//     nested create-form's draft (transient, negative id) writes live — never staged in this form's
+//     ctx (each manages its own members, which persist on their own).
 //   • RefEditor(parent, prop, target) — a reference editor: current label, a pick button
 //     per extent() candidate, a clear button, and a create-new form. A COMPONENT: its body
 //     runs once as init (a local `state` holding a draft), and it returns a render fn.
@@ -62,9 +62,9 @@ namespace DeEnv.Instance;
 // Builtins do the reflective work, all under the framework `sys` namespace: sys.field (dynamic
 // access), sys.humanize (labels), sys.extent (a type's objects), sys.schema (a type's descriptor),
 // sys.setRef (set/clear a reference), sys.nest (a URL path-join for nested member links), sys.new (a
-// fresh default-valued object built from a descriptor — a create-new draft, or the seed of an edit
-// draft), sys.setFields (bulk-copy one object's props onto another — fill or commit a draft).
-// `obj.prop = x` resets a component's draft after Create.
+// fresh default-valued object built from a descriptor — a create-new draft), sys.setFields (bulk-copy
+// one object's scalar props onto another — a standalone primitive with no current Code consumer since
+// ObjectForm moved to ctx staging). `obj.prop = x` resets a component's draft after Create.
 //
 // A type's descriptor — { name, labelProp, props } — is fetched by
 // `sys.schema(typeName)`,
