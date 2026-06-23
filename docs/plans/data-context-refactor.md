@@ -71,7 +71,7 @@ isolating its draft) or go live. The old slice-3/slice-4 split collapses.
 ## Deferred (separate, later)
 Conflict-resolver (commit-time CAS) · atomic batch commit · graph-save (recursive create + subtree
 id-remap) · privacy re-layer · per-page vs per-form ctx (settled per-form for now) · declared
-ambient consumption (static checker).
+ambient consumption (static checker) · the indented-block `ambient` sub-scope form — **colonless** (`ambient x = v` then a deeper-indented block, like `fn`/`if`/`foreach`; provides `x` only within the block). The block MODE is kept; only the colon punctuation was dropped.
 
 ## How 3c converged (2026-06-23)
 
