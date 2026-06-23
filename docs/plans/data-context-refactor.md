@@ -6,8 +6,9 @@ bugs structurally and gives staged / commit / discard + a dirty bit a real home.
 
 ## Status
 
-**Foundation complete — 6 commits, 430/430, both twins. All DORMANT** (no root `ctx` is provided
-in the real app yet, so behaviour is unchanged and the browser suite stays green):
+**COMPLETE — the generic ObjectForm now runs on `ctx`; 430/430, both twins.** The staging overlay
+is live in the real app: the framework provides a live root `ctx`, the form opens a staging child,
+edits stage (stored value untouched), Save commits / Discard reverts. Create-form drafts isolate.
 
 | | commit | what |
 |---|---|---|
@@ -16,6 +17,8 @@ in the real app yet, so behaviour is unchanged and the browser suite stays green
 | slice 2 | `ed5c747` | `ExecCtx` overlay — `ctx.new`/`commit`/`discard`/`dirty` + obj-prop read/write interception |
 | slice 3a | `1f59e95` | closures capture their ambient → deferred onClick handlers resolve `ctx` from birthplace |
 | parser | `e56f7e7` | parse + print `ambient name = value` (GenericUi.cs is parsed Code text) |
+| 3b | `cebdb3c`+ | framework wiring — live root `ctx` provided at the render + onClick entries (SSR + client) |
+| 3c | this commit | ObjectForm on `ctx`: drop drafts/`setFields`, `ambient ctx = ctx.new(autosave)`, `save`=commit / `discard`=discard; `setValue` + `obj.prop` writes stage; **create-form drafts isolate (id<0→live)** |
 
 ## Settled surface
 - `ambient ctx = ctx.new()` — provide a staging sub-context (run-once, in a component body).
@@ -33,7 +36,7 @@ drafts get entangled in the edit transaction. ⇒ **the ObjectForm rewrite is NO
 create-forms** — they're one chunk. Each create-form must open its **own** `ctx` (nested,
 isolating its draft) or go live. The old slice-3/slice-4 split collapses.
 
-## Remaining work
+## What landed (3b + 3c)
 
 ### 3b — framework wiring (safe prep, both no-ops until 3c uses them; land green first)
 - **Root provision:** `SsrRenderer.ExecuteRender` (server) and the client render entry set
@@ -66,3 +69,18 @@ isolating its draft) or go live. The old slice-3/slice-4 split collapses.
 Conflict-resolver (commit-time CAS) · atomic batch commit · graph-save (recursive create + subtree
 id-remap) · privacy re-layer · per-page vs per-form ctx (settled per-form for now) · declared
 ambient consumption (static checker) · the `ambient` indented-block sub-scope form.
+
+## How 3c converged (2026-06-23)
+
+Two bugs the first attempt hit, both fixed:
+1. **A `formContext` helper shared its ctx across slots** — `CallFunction` memoizes every call by
+   `(fn-id, args)`, so a helper returning a fresh staging ctx got cached and reused across renders /
+   slots. Fixed by making autosave an **argument to `ctx.new(autosave)`** (a built-in ctx-method, not
+   a memoized fn call): the form opens its ctx inline in its own body, no helper.
+2. **Create-form drafts entangled in the parent form's transaction** (the coupling above). Fixed with
+   the **id<0→live** gate: a transient `sys.new` draft (negative id) writes live, so its `<Input>`
+   edits never stage in the enclosing ObjectForm's ctx. Conformance overlay cases then stage onto an
+   injected **positive-id** object (the gate excludes id<0 literals).
+
+The `id>0` gate covers all three write sites (`obj.prop` assign, `setValue`/`field`, C# assign);
+discard also invalidates the reverted props so the client re-renders them.

@@ -111,7 +111,9 @@ public sealed class CodeExecutor
                 if (ExecuteValue(left, scope, context) is not ExecObject obj)
                     throw new CodeRuntimeException("Cannot assign a field on a non-object.");
                 // In a staging context the write stages — the live object is untouched until commit.
-                if (NearestStagingCtx(context) is { } staging)
+                // Gated to persisted (positive-id) objects: a transient draft (sys.new, id<0) writes
+                // live, so a create-form's draft is not entangled in the surrounding edit transaction.
+                if (obj.Id > 0 && NearestStagingCtx(context) is { } staging)
                 {
                     if (!staging.Staged.TryGetValue(obj, out var fields)) staging.Staged[obj] = fields = [];
                     fields[member.Name] = value;
@@ -243,11 +245,12 @@ public sealed class CodeExecutor
 
     // `ctx.new()` (a staging child), `ctx.discard()` (drop staged), `ctx.commit()` (flush staged to
     // the parent context, or to the live object when the parent is the live root).
-    private static IExecValue CallCtxMethod(ExecCtxMethod m)
+    private static IExecValue CallCtxMethod(ExecCtxMethod m, IExecValue[] args)
     {
         switch (m.Method)
         {
-            case "new": return new ExecCtx { Parent = m.Ctx, Live = false };
+            // ctx.new(autosave): autosave=true → the live parent (writes persist); else a staging child.
+            case "new": return args.Length > 0 && args[0] is ExecBool { Value: true } ? m.Ctx : new ExecCtx { Parent = m.Ctx, Live = false };
             case "discard": m.Ctx.Staged.Clear(); return new ExecNothing();
             case "commit":
                 foreach (var (obj, fields) in m.Ctx.Staged)
@@ -832,7 +835,7 @@ public sealed class CodeExecutor
         {
             ExecFunction fn       => CallFunction(fn, codeCall.Params, scope, context),
             ExecSysFunction sysFn => CallSysFunction(sysFn, codeCall.Params, scope, context),
-            ExecCtxMethod ctxFn   => CallCtxMethod(ctxFn),
+            ExecCtxMethod ctxFn   => CallCtxMethod(ctxFn, [.. codeCall.Params.Select(p => ExecuteValue(p, scope, context))]),
             _ => throw new CodeRuntimeException("Target of a call is not a function."),
         };
     }

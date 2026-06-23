@@ -57,6 +57,13 @@ public sealed class ConformanceTests
         // The live root data context as ambient `ctx` (the framework provides this in the real app),
         // so cases can open staging sub-contexts via `ctx.new()`.
         context.Ambient = new AmbientFrame("ctx", new ExecCtx { Live = true }, null);
+        // A persisted (positive-id) object the overlay cases stage onto — staging is gated to
+        // persisted objects (a transient draft writes live), so the test object needs a real id.
+        scope.Items["o"] = new ExecScopeItem
+        {
+            Value = new ExecObject { Id = 100, Props = new() { ["f"] = new ExecInt { Value = 1 } } },
+            IsReadOnly = false,
+        };
         if (c.Renders is not { } renders)
             return executor.ExecuteValue(c.Expr!.Value.Deserialize<ICodeValue>(JsonOpts)!, scope, context);
 

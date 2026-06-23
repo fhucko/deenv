@@ -143,7 +143,9 @@ function executeAssignment(assignment: CodeAssignment, scope: ExecScope, context
         if (obj.type !== "object") throw new Error("Cannot assign a field on a non-object.");
         const prop = target.right.name;
         // In a staging context the write stages — the live object is untouched until commit.
-        const staging = nearestStagingCtx(context);
+        // Gated to persisted (positive-id) objects: a transient draft (sys.new, id<0) writes live,
+        // so a create-form's draft is not entangled in the surrounding edit transaction.
+        const staging = obj.id > 0 ? nearestStagingCtx(context) : null;
         if (staging != null) {
             let fields = staging.staged.get(obj);
             if (fields == null) staging.staged.set(obj, fields = new Map());
@@ -468,7 +470,8 @@ function fieldResult(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     if (nameV.type !== "text") throw new Error("field() expects a text field name.");
     const name = nameV.value;
     // Capture the staging context at render (ctx is active here); the deferred setValue stages into it.
-    const staging = nearestStagingCtx(context);
+    // Gated to persisted objects (id>0): a transient draft writes live, isolating create-form drafts.
+    const staging = obj.id > 0 ? nearestStagingCtx(context) : null;
     const value = nearestStagedValue(obj, name, context) ?? obj.props[name];
     if (value == null) throw new Error("Value not available");
     recordProp(obj.id, name);
@@ -1181,7 +1184,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     }
     const fn = executeValue(codeCall.fn, scope, context).value;
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));
-    if (fn.type === "ctxMethod") return callCtxMethod(fn);
+    if (fn.type === "ctxMethod") return callCtxMethod(fn, codeCall.params.map(p => executeValue(p, scope, context).value));
     if (fn.type !== "fn") throw new Error("Target of a call is not a function.");
 
     // Args evaluate in the caller's context (their deps are the caller's); the body is
@@ -1424,10 +1427,15 @@ function nearestStagedValue(obj: ExecObject, prop: string, context: ExecContext)
     }
     return undefined;
 }
-function callCtxMethod(m: ExecCtxMethod): ExecValue {
+function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
     switch (m.method) {
-        case "new": return { type: "ctx", staged: new Map(), parent: m.ctx, live: false };
-        case "discard": m.ctx.staged.clear(); return { type: "nothing" };
+        // ctx.new(autosave): autosave=true → the live parent (writes persist); else a staging child.
+        case "new": return args.length > 0 && args[0].type === "bool" && args[0].value ? m.ctx : { type: "ctx", staged: new Map(), parent: m.ctx, live: false };
+        case "discard":
+            for (const [obj, fields] of m.ctx.staged)
+                for (const prop of fields.keys()) invalidateProp(obj.id, prop);   // re-render the reverted fields
+            m.ctx.staged.clear();
+            return { type: "nothing" };
         case "commit":
             for (const [obj, fields] of m.ctx.staged)
                 for (const [prop, val] of fields) {
@@ -1510,6 +1518,8 @@ function runConformance(caseJson: string): string {
     setMemoCache(new Map());
     resetSlotPath();
     const scope: ExecScope = { items: {}, parent: null };
+    // A persisted (positive-id) object the overlay cases stage onto (staging is gated to id>0).
+    scope.items["o"] = { value: { type: "object", id: 100, props: { f: { type: "int", value: 1 } } }, isReadOnly: false };
     const context: ExecContext = { lastId: { value: 0 }, ambient: rootAmbient() };
     let result: ExecValue = { type: "nothing" };
     if (c.renders) {

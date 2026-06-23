@@ -120,12 +120,11 @@ public static class GenericUi
                     <Input obj={obj} desc={desc}>
 
             fn ObjectForm(obj, meta, base, autosave)
-                var state = { draft: sys.new(meta) }
-                sys.setFields(state.draft, obj)
+                ambient ctx = ctx.new(autosave)
                 fn save()
-                    sys.setFields(obj, state.draft)
+                    ctx.commit()
                 fn discard()
-                    sys.setFields(state.draft, obj)
+                    ctx.discard()
                 fn render()
                     return <div class="object-form">
                         <h2>
@@ -146,10 +145,8 @@ public static class GenericUi
                                     <a class="list-title" href={sys.nest(base, p.name)}>
                                         sys.humanize(p.name)
                                     <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
-                            else if autosave == true
-                                <Field obj={obj} desc={p}>
                             else
-                                <Field obj={state.draft} desc={p}>
+                                <Field obj={obj} desc={p}>
                         if autosave != true
                             <div class="form-actions">
                                 <button class="save" onClick={save}>
