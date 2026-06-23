@@ -39,8 +39,9 @@ public static class SharedBrowser
     /// <see cref="PageNav"/> (it waits for DOMContentLoaded, not the /js bundle), so what this bounds is
     /// deterministic element/hydration waits. The old 5s was tuned for the serialized world; once the
     /// heavy operator-IDE scenarios overlap the pool (bounded, not serialized), hydration can briefly
-    /// exceed 5s under load, so 10s gives honest headroom while still surfacing a stuck wait well under
-    /// Playwright's 30s default.
+    /// exceed it under load — and even 10s proved too tight under PEAK full-suite load (an SPA
+    /// round-trip's clicks/waits occasionally exceeded it). This uses Playwright's native 30s default:
+    /// honest headroom for load spikes, the browser-action parallel of the wide fill→save persist gate.
     /// </remarks>
     public static async Task<IPage> NewPageAsync(string? baseUrl = null)
     {
@@ -48,8 +49,8 @@ public static class SharedBrowser
         var context = await browser.NewContextAsync(
             baseUrl is null ? new BrowserNewContextOptions() : new BrowserNewContextOptions { BaseURL = baseUrl });
         var page = await context.NewPageAsync();
-        page.SetDefaultTimeout(10000);
-        page.SetDefaultNavigationTimeout(10000);
+        page.SetDefaultTimeout(30000);
+        page.SetDefaultNavigationTimeout(30000);
         return page;
     }
 

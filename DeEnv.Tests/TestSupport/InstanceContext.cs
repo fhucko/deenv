@@ -819,6 +819,8 @@ public class InstanceContext
     // instant all values are present it returns. A no-op when nothing was filled (a Save with no prior
     // fill — e.g. a checkbox toggle — gates on its own assertion instead). Empty/cleared fields are
     // not gated here (an empty string is always "contained"); their assertions poll the field itself.
+    // The persist can be slow to LAND under peak full-suite load (not lost — fill and save both gate on
+    // WaitReadyAsync upstream); the wide Polling default absorbs that spike.
     public async Task AwaitPendingEditsAsync()
     {
         foreach (var value in PendingEditValues)

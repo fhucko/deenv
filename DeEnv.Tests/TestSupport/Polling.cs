@@ -9,7 +9,11 @@ namespace DeEnv.Tests.TestSupport;
 /// </summary>
 public static class Polling
 {
-    public static async Task EventuallyAsync(Func<bool> condition, string what, int timeoutMs = 10000)
+    // The 30s default is sized for PEAK full-suite load, not the typical case: under CPU contention from
+    // the bounded parallel browser fleet, a WS commit / GC / file rewrite can briefly exceed 10s. The poll
+    // returns the instant the outcome holds, so green runs pay nothing — only a genuinely stuck wait pays
+    // the ceiling. Callers needing a wider window (a whole-app deploy) still pass an explicit timeout.
+    public static async Task EventuallyAsync(Func<bool> condition, string what, int timeoutMs = 30000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (DateTime.UtcNow < deadline)
