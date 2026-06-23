@@ -133,6 +133,20 @@ Feature: Self-hosted generic UI (object forms)
     When I save the form
     Then the store eventually has a "Note" whose "title" is "Renamed"
 
+  # nav-discards: a staged edit lives in the form's ctx (a slot-keyed sub-context); navigating away
+  # unmounts the form, dropping the ctx and its overlay. Returning re-renders a fresh form from the
+  # store, so the staged-but-unsaved edit is gone — nav discards, the same as an explicit Discard.
+  @milestone-11 @single-user
+  Scenario: Navigating away from a form discards a staged edit
+    Given the self-hosted form app is running
+    When I open "/"
+    And I follow the set row link
+    And I fill the "title" field with "Throwaway"
+    And I navigate back
+    And I follow the set row link
+    Then the "title" field shows "First"
+    And the store still has a "Note" whose "title" is "First"
+
   # The committed shop (instances/4, fully-auto generic UI) on a real customer page. The full
   # staged flow on three distinct outcomes: a staged edit leaves the store unchanged; Save commits
   # it; a Discard after an edit reverts the input to the stored value and leaves the store unchanged.
@@ -154,15 +168,11 @@ Feature: Self-hosted generic UI (object forms)
     Then the "name" field shows "Ada Lovelace"
     And the store still has a "Customer" whose "name" is "Ada Lovelace"
 
-  # Regression: Saving a staged ObjectForm for an object that HAS a SET prop (a customer with
-  # orders) must NOT try to persist the set. The staged draft is scalar-only by design (the form
-  # binds collection props to the LIVE object, never the draft), so Save (sys.setFields(obj, draft))
-  # must copy/persist only scalars. Before the fix, the edit-init sys.setFields(state.draft, obj)
-  # copied EVERY prop of the live customer into the draft — including `orders` — so Save fired an
-  # objectPropChange for the set, which the server rejected ("Field 'orders' on 'Customer' is not a
-  # scalar field") and the journal rolled back, logging a console error on every Save (the scalar
-  # still persisted, masking the failure). The edited scalar persists, the orders set keeps its
-  # members, and the set's objectPropChange is never even sent.
+  # Regression: Saving a scalar edit on an object that also HAS a set prop (a customer with orders)
+  # must persist ONLY the staged scalar — not the set. The form stages scalar Field edits in its ctx
+  # and binds collection props (orders) to the LIVE object (never staged), so commit flushes only the
+  # edited scalar: no objectPropChange is sent for the set, and the orders keep their members. (A set
+  # objectPropChange would be rejected — "Field 'orders' on 'Customer' is not a scalar field".)
   @milestone-11 @single-user
   Scenario: Saving an object with a set prop persists the scalar and leaves the set untouched
     Given the shop app is running

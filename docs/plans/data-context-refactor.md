@@ -57,8 +57,9 @@ isolating its draft) or go live. The old slice-3/slice-4 split collapses.
 - **Create-forms isolate:** `RefEditor`/`SetTable` create-drafts each open their **own**
   `ambient ctx = ctx.new()` so their `<Input>` edits stage in their ctx; Save commits it
   (`set.add`/`setRef` of the now-complete draft), Cancel discards.
-- **Gherkin:** edit stages (stored value unchanged until Save), Save persists, Discard reverts,
-  nav discards, create-form isolation.
+- **Gherkin (done, all green):** edit stages (stored value unchanged until Save), Save persists,
+  Discard reverts, **nav discards** (the form's ctx drops on unmount — proven via an SPA round-trip),
+  create-form isolation. Stale `setFields`/`state.draft` scenario comments rewritten to behavior-level.
 
 ## Guardrails
 - Tests-first per slice; both twins in lockstep via `conformance.json`; storage seam untouched
