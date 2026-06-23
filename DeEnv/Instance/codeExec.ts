@@ -467,15 +467,23 @@ function fieldResult(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     if (obj.type !== "object") throw new Error("field() expects an object.");
     if (nameV.type !== "text") throw new Error("field() expects a text field name.");
     const name = nameV.value;
-    const value = obj.props[name];
+    // Capture the staging context at render (ctx is active here); the deferred setValue stages into it.
+    const staging = nearestStagingCtx(context);
+    const value = nearestStagedValue(obj, name, context) ?? obj.props[name];
     if (value == null) throw new Error("Value not available");
     recordProp(obj.id, name);
     return {
         value,
-        // Autosave: a bound edit persists immediately (like static `obj.member`), so the
-        // generic form needs no Save button — consistent with the reference picker and
-        // the reactive code pages.
+        // In a staging context the edit stages (the live object is untouched until commit); otherwise
+        // it persists immediately (autosave / the live root).
         setValue: p => {
+            if (staging != null) {
+                let fields = staging.staged.get(obj);
+                if (fields == null) staging.staged.set(obj, fields = new Map());
+                fields.set(name, p);
+                invalidateProp(obj.id, name);
+                return;
+            }
             const before = obj.props[name];
             obj.props[name] = p;
             invalidateProp(obj.id, name);

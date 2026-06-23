@@ -361,6 +361,11 @@ public sealed class CodeExecutor
             throw new CodeRuntimeException("field() expects an object.");
         if (nameVal is not ExecText name)
             throw new CodeRuntimeException("field() expects a text field name.");
+        if (NearestStagedValue(obj, name.Value, context) is { } staged)
+        {
+            RecordPropAccess(obj, name.Value, staged, context);
+            return staged;
+        }
         if (!obj.Props.TryGetValue(name.Value, out var value))
             throw new CodeRuntimeException($"Unknown field '{name.Value}'.");
         RecordPropAccess(obj, name.Value, value, context);
