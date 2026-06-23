@@ -41,8 +41,9 @@ function init(): void {
     connectWs();
     mergeState(initData);
     const scope = uiStatic.state.scope;
-    for (const fn of initUi.common?.functions ?? []) executeFunction(fn, scope);
-    for (const fn of initUi.ui.functions ?? []) executeFunction(fn, scope);
+    const initCtx: ExecContext = { lastId: { value: 0 } };   // top-level fns capture no ambient
+    for (const fn of initUi.common?.functions ?? []) executeFunction(fn, scope, initCtx);
+    for (const fn of initUi.ui.functions ?? []) executeFunction(fn, scope, initCtx);
 
     // Every page renders through a single `fn render()` (the app's own, or the framework's
     // synthesized generic router), taking no arguments — routing is internal: the generic render

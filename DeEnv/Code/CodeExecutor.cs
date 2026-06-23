@@ -49,7 +49,7 @@ public sealed class CodeExecutor
             case CodeAssignment assignment: ExecuteAssignment(assignment, scope, context); return null;
             case CodeBlock block:           return ExecuteBlock(block, scope, context);
             case CodeVarDec varDec:         ExecuteVarDec(varDec, scope, context); return null;
-            case CodeFunction function:     ExecuteFunction(function, scope); return null;
+            case CodeFunction function:     ExecuteFunction(function, scope, context); return null;
             case CodeReturn ret:            return ExecuteValue(ret.Value, scope, context);
             case CodeCall call:             ExecuteCall(call, scope, context); return null;
             case CodeIf codeIf:             return ExecuteIf(codeIf, scope, context);
@@ -66,9 +66,9 @@ public sealed class CodeExecutor
         return code == null ? null : ExecuteStatement(code, scope, context);
     }
 
-    private static ExecFunction ExecuteFunction(CodeFunction function, ExecScope scope)
+    private static ExecFunction ExecuteFunction(CodeFunction function, ExecScope scope, ExecContext context)
     {
-        var fn = new ExecFunction { Function = function, Scope = scope };
+        var fn = new ExecFunction { Function = function, Scope = scope, CapturedAmbient = context.Ambient };
         if (function.Name != null)
             scope.Items[function.Name] = new ExecScopeItem { Value = fn, IsReadOnly = true };
         return fn;
@@ -147,7 +147,7 @@ public sealed class CodeExecutor
     public IExecValue ExecuteValue(ICodeValue value, ExecScope scope, ExecContext context) => value switch
     {
         CodeInt codeInt        => new ExecInt { Value = codeInt.Value },
-        CodeFunction codeFn    => ExecuteFunction(codeFn, scope),
+        CodeFunction codeFn    => ExecuteFunction(codeFn, scope, context),
         CodeCall codeCall      => ExecuteCall(codeCall, scope, context),
         // A tag in VALUE position whose name resolves to a function is a component (a root/returned
         // component) — run it slot-keyed and yield its view value; otherwise it's an HTML element.
@@ -906,8 +906,19 @@ public sealed class CodeExecutor
             // catches static arity mismatches on named functions.
             for (var i = 0; i < argVals.Length && i < fn.Function.Params.Length; i++)
                 callScope.Items[fn.Function.Params[i].Name] = new ExecScopeItem { Value = argVals[i], IsReadOnly = true };
-            return ExecuteBlock(fn.Function.Body, callScope, context) ?? new ExecNothing();
+            return RunBody(fn, callScope, context);
         });
+    }
+
+    // Run a function/closure body, restoring its captured ambient bindings first (null = a top-level
+    // fn → flows down to the live ambient). Mirrors the block save/restore so the call site's ambient
+    // returns afterward.
+    private IExecValue RunBody(ExecFunction fn, ExecScope callScope, ExecContext context)
+    {
+        var savedAmbient = context.Ambient;
+        if (fn.CapturedAmbient != null) context.Ambient = fn.CapturedAmbient;
+        try { return ExecuteBlock(fn.Function.Body, callScope, context) ?? new ExecNothing(); }
+        finally { context.Ambient = savedAmbient; }
     }
 
     // Run `compute` as a memoized computation: capture its dependencies in a fresh
@@ -1000,7 +1011,7 @@ public sealed class CodeExecutor
         var callScope = new ExecScope { Parent = fn.Scope };
         if (fn.Function.Params.Length > 0)
             callScope.Items[fn.Function.Params[0].Name] = new ExecScopeItem { Value = arg, IsReadOnly = true };
-        return ExecuteBlock(fn.Function.Body, callScope, context) ?? new ExecNothing();
+        return RunBody(fn, callScope, context);
     }
 
     private IExecValue CallSysFunction(ExecSysFunction sysFn, ICodeValue[] args, ExecScope scope, ExecContext context)

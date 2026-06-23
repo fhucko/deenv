@@ -57,7 +57,7 @@ interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id:
 // literal or where/orderBy result). ElementTypeName is the member type (set/dict only).
 interface ExecArray { type: "array"; kind: "set" | "dict" | "list"; items: ExecArrayItem[]; id: number; elementTypeName?: string; sourcePath?: string; }
 interface ExecArrayItem { key: number; value: ExecValue; }
-interface ExecFunction { type: "fn"; fn: CodeFunction; scope: ExecScope; }
+interface ExecFunction { type: "fn"; fn: CodeFunction; scope: ExecScope; capturedAmbient?: AmbientFrame | null; }
 interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
 // A data context: staged field writes over a parent, read-through. live = the root (writes go
 // live); a sub-context (ctx.new) stages until commit. Staged keyed by object reference.
@@ -84,7 +84,7 @@ function executeStatement(statement: CodeStatement, scope: ExecScope, context: E
         case "assign": executeAssignment(statement, scope, context); return null;
         case "block": return executeBlock(statement, scope, context);
         case "varDec": executeVarDec(statement, scope, context); return null;
-        case "fn": executeFunction(statement, scope); return null;
+        case "fn": executeFunction(statement, scope, context); return null;
         case "return": return executeValue(statement.value, scope, context).value;
         case "call": executeCall(statement, scope, context); return null;
         case "if": return executeIf(statement, scope, context);
@@ -100,8 +100,8 @@ function executeIf(codeIf: CodeIf, scope: ExecScope, context: ExecContext): Exec
     return code == null ? null : executeStatement(code, scope, context);
 }
 
-function executeFunction(fun: CodeFunction, scope: ExecScope): ExecFunction {
-    const fn: ExecFunction = { type: "fn", fn: fun, scope };
+function executeFunction(fun: CodeFunction, scope: ExecScope, context: ExecContext): ExecFunction {
+    const fn: ExecFunction = { type: "fn", fn: fun, scope, capturedAmbient: context.ambient ?? null };
     if (fun.name != null) scope.items[fun.name] = { value: fn, isReadOnly: true };
     return fn;
 }
@@ -168,7 +168,7 @@ function executeValue(value: CodeValue, scope: ExecScope, context: ExecContext):
         case "text": return { value: { type: "text", value: value.value } };
         case "bool": return { value: { type: "bool", value: value.value } };
         case "null": return { value: { type: "null" } };
-        case "fn": return { value: executeFunction(value, scope) };
+        case "fn": return { value: executeFunction(value, scope, context) };
         // A tag in VALUE position whose name resolves to a function is a component (a root/returned
         // component) — run it slot-keyed and yield its view value; otherwise it's an HTML element.
         case "tag": {
@@ -991,7 +991,16 @@ function asLambda(value: ExecValue): ExecFunction {
 function invokeLambda(fn: ExecFunction, arg: ExecValue, context: ExecContext): ExecValue {
     const callScope: ExecScope = { parent: fn.scope, items: {} };
     if (fn.fn.params.length > 0) callScope.items[fn.fn.params[0].name] = { value: arg, isReadOnly: true };
-    return executeBlock(fn.fn.body, callScope, context) ?? { type: "nothing" };
+    return runBody(fn, callScope, context);
+}
+
+// Run a closure body, restoring its captured ambient first (null = a top-level fn → flows down to
+// the live ambient), then restoring the call site's ambient afterward.
+function runBody(fn: ExecFunction, callScope: ExecScope, context: ExecContext): ExecValue {
+    const saved = context.ambient;
+    if (fn.capturedAmbient != null) context.ambient = fn.capturedAmbient;
+    try { return executeBlock(fn.fn.body, callScope, context) ?? { type: "nothing" }; }
+    finally { context.ambient = saved; }
 }
 
 function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext): void {
@@ -1169,7 +1178,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         const callScope: ExecScope = { parent: closure.scope, items: {} };
         for (let i = 0; i < argVals.length && i < closure.fn.params.length; i++)
             callScope.items[closure.fn.params[i].name] = { value: argVals[i], isReadOnly: true };
-        return executeBlock(closure.fn.body, callScope, context) ?? { type: "nothing" };
+        return runBody(closure, callScope, context);
     });
 }
 

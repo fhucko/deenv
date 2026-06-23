@@ -116,6 +116,10 @@ public sealed class ExecFunction : IExecValue
 {
     public required CodeFunction Function { get; set; }
     public required ExecScope Scope { get; set; }
+    // The ambient bindings at the closure's creation — restored when it's invoked, so a deferred
+    // callback (e.g. an onClick) resolves ambient vars from its birthplace, not the call site. Null
+    // for a top-level fn (created outside any ambient), which then flows down to the live ambient.
+    public AmbientFrame? CapturedAmbient { get; set; }
     object IExecValue.Value => this;
 }
 

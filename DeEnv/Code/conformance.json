@@ -82,6 +82,19 @@
       "expect": { "kind": "int", "value": 2 }
     },
     {
+      "name": "ambient: a closure captures its provider's binding, resolved after the provider returns",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "id": 901, "params": [], "body": { "type": "block", "statements": [
+        { "type": "varDec", "name": "f", "value": { "type": "call", "params": [], "fn": { "type": "fn", "id": 902, "params": [], "body": { "type": "block", "statements": [
+          { "type": "ambient", "name": "amb", "value": { "type": "int", "value": 5 } },
+          { "type": "return", "value": { "type": "fn", "id": 903, "params": [], "body": { "type": "block", "statements": [
+            { "type": "return", "value": { "type": "symbol", "name": "amb" } }
+          ] } } }
+        ] } } } },
+        { "type": "return", "value": { "type": "call", "params": [], "fn": { "type": "symbol", "name": "f" } } }
+      ] } } },
+      "expect": { "kind": "int", "value": 5 }
+    },
+    {
       "name": "text literal",
       "text": "\"hi\"",
       "expr": { "type": "text", "value": "hi" },
