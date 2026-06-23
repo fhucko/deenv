@@ -68,6 +68,14 @@
       "expect": { "kind": "bool", "value": true }
     },
     {
+      "name": "context: dirty is false with no staged writes",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "ambient", "name": "ctx", "value": { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "new" } } } },
+        { "type": "return", "value": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "dirty" } } }
+      ] } } },
+      "expect": { "kind": "bool", "value": false }
+    },
+    {
       "name": "context: commit flushes staged writes to the base",
       "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
         { "type": "ambient", "name": "ctx", "value": { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "new" } } } },

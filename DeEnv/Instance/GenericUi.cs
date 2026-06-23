@@ -530,13 +530,6 @@ public static class GenericUi
         return Obj(("name", Text(p.Name)), ("baseType", Text(p.Type)));
     }
 
-    private static ICodeValue DefaultFor(string baseType) => baseType switch
-    {
-        "bool" => new CodeBool { Value = false },
-        "int" => new CodeInt { Value = 0 },
-        _ => Text(""),
-    };
-
     // Scalar (leaf-valued) props for the label prop and the table columns: base
     // leaves and enums (an enum value is text-shaped). References/sets/dicts are excluded.
     private static List<PropDefinition> Scalars(TypeDefinition t, InstanceDescription desc) => (t.Props ?? [])

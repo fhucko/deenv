@@ -18,10 +18,6 @@ public interface IInstanceStore
     // prop write persists this way. Throws if no object carries the id.
     void WriteField(int objectId, string prop, NodeValue value);
 
-    // Build a default-valued entry for the dictionary's (or set's) element type
-    // WITHOUT persisting it. Used to render the "new entry" form.
-    NodeValue NewEntryTemplate(NodePath path);
-
     // Create a dictionary entry under a caller-supplied (manual) key.
     // Throws if an entry with that key already exists.
     void CreateEntry(NodePath dictPath, NodeValue key, NodeValue value);

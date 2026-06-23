@@ -26,10 +26,6 @@ public sealed class HostedInstance
     public InstanceSpec Spec { get; private set; }
     public IInstanceStore Store { get; }
 
-    // The instance's mount NAME (the `/apps/<Name>` path segment) — its display label. Changing it is a
-    // re-mount, so Rename rebuilds the handlers with the new base (KernelHost.RenameAsync).
-    public string Name => Spec.App;
-
     // The built handler trees the kernel's front routers delegate to: the app tree (SSR) and the asset
     // tree (/ws + /js). Built with the instance's mount base so emitted links/assets are mount-correct.
     public IHandler AppHandler { get; }

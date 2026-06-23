@@ -572,7 +572,7 @@ function execId(codeCall: CodeCall, scope: ExecScope, context: ExecContext): Exe
 
 // new(desc): a FRESH object of a type, built REFLECTIVELY from its descriptor — built to the SAME
 // COMPLETE shape DbBridge.LoadObject gives a stored object, so a freshly-minted member is never missing
-// a key (twin of CodeExecutor.DefaultExec / DefaultProp / GenericUi.DefaultFor). EVERY declared prop is
+// a key (twin of CodeExecutor.DefaultExec / DefaultProp). EVERY declared prop is
 // initialized: a scalar → its baseType default; a single object (reference) → null; a set → an empty
 // Set array; a dictionary → an empty Dict array (the element type carried so a later add persists the
 // right member type). The constructor for the self-hosted UI's drafts: a create-new form's blank state

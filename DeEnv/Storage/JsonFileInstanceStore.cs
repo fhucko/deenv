@@ -686,15 +686,6 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     // ── dictionary entries (manual keys; values are scalars or object references) ──
 
-    public NodeValue NewEntryTemplate(NodePath path)
-    {
-        var typeInfo = _resolver.ResolveType(path)
-            ?? throw new InvalidOperationException($"Path {path} does not resolve.");
-        if (typeInfo.Cardinality is not (Cardinality.Dictionary or Cardinality.Set))
-            throw new InvalidOperationException($"{path} is not a dictionary or set.");
-        return BuildDefault(typeInfo.Type);
-    }
-
     public void CreateEntry(NodePath dictPath, NodeValue key, NodeValue value)
     {
         lock (_sync)
@@ -903,26 +894,6 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     }
 
     // ── helpers: values ─────────────────────────────────────────────────────────
-
-    private NodeValue BuildDefault(TypeDefinition type)
-    {
-        if (type.BaseType != BaseType.Object)
-            return DefaultBase(type.BaseType);
-
-        var fields = new Dictionary<string, NodeValue>();
-        foreach (var prop in type.Props ?? [])
-        {
-            if (prop.Cardinality == Cardinality.Set)
-                fields[prop.Name] = new SetValue(0, new Dictionary<int, NodeValue>()); // template; not stored
-            else if (prop.Cardinality == Cardinality.Dictionary)
-                fields[prop.Name] = new DictionaryValue(0, new Dictionary<NodeValue, NodeValue>()); // template; not stored
-            else if (_desc.IsObjectType(prop.Type))
-                fields[prop.Name] = new ReferenceValue(null, prop.Type);
-            else
-                fields[prop.Name] = DefaultBase(ResolveTypeDef(prop.Type).BaseType);
-        }
-        return new ObjectValue(fields);
-    }
 
     private static NodeValue DefaultBase(BaseType bt) => bt switch
     {

@@ -482,7 +482,7 @@ public sealed class CodeExecutor
     }
 
     // new(desc): a FRESH object of a type, built REFLECTIVELY from its descriptor — each scalar prop
-    // set to its baseType default (the runtime twin of GenericUi.DefaultFor: bool→false, int→0, every
+    // set to its baseType default (bool→false, int→0, every
     // other leaf/enum → ""). The constructor for the self-hosted UI's drafts: a create-new form's
     // blank state, and the seed of ObjectForm's edit draft. A fresh object every call (no shared template → no aliasing).
     //
@@ -518,7 +518,7 @@ public sealed class CodeExecutor
         return new ExecObject { Props = props, Id = --context.LastId.Value };
     }
 
-    // The scalar baseType default — the runtime twin of GenericUi.DefaultFor (kept in lockstep with
+    // The scalar baseType default (kept in lockstep with
     // codeExec.ts's defaultValue). A leaf-only switch: enum values are text-shaped, so they default ""
     // by falling through, exactly as the old `blank` literal did.
     private static IExecValue DefaultExec(string baseType) => baseType switch
