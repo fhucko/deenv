@@ -378,61 +378,6 @@ public sealed class CodeExecutor
         return value;
     }
 
-    // setFields(target, source): copy EVERY prop of `source` onto `target` — a standalone bulk,
-    // dynamic write. (Historically ObjectForm's draft fill + Save commit; the form now stages through a
-    // data-context `ctx`, so setFields has no Code consumer today — kept as a public primitive pending
-    // a surface decision.) A bulk primitive (not per-field) because
-    // Code has no statement-position iteration — `foreach` is render-only — so a handler cannot loop
-    // over schema-iterated prop names; the framework loops here instead.
-    //
-    // SCALARS ONLY (the staged-edit invariant): only a SCALAR leaf prop is copied; a prop whose value
-    // is an object (a reference) or an array (a set/dict) — OR null (an UNSET reference) — is SKIPPED.
-    // The ObjectForm's draft is meant to be scalar-only — it binds collection props (reference/set/dict)
-    // to the LIVE object via its own RefEditor/SetTable/DictTable, never the draft — so a copied
-    // collection has no business in the draft, and persisting one on Save is a bug: a Save does
-    // objectPropChange per prop, which the server rejects for a non-scalar field (a set/dict is not a
-    // scalar; a reference, set or unset, persists via setReferenceField, not objectPropChange). `sys.new`
-    // now mints a COMPLETE object (references as null, sets/dicts as empty arrays — the store's shape), so
-    // the null-skip is what keeps the draft scalar-only in both directions of the staged edit.
-    //
-    // SHIPPING (the privacy-relevant part): a copied scalar is recorded as a displayed leaf (ungated,
-    // like the old clone) — because it IS a value about to be shown/edited in a bound input, and this
-    // copy runs in a component SETUP whose result is a render CLOSURE, not tags, so the normal
-    // leaf-promotion would drop the reads (the routed object would ship empty and the client's setup
-    // re-run would re-fill the draft from a blank object — the inputs would vanish). It is an EXPLICIT
-    // copy of displayed scalar values, not a generic "ship whatever I touched" hack.
-    //
-    // Each prop is set in place, the SAME write path two-way binding and `obj.member = value` use.
-    // Server-side it only sets (the server never persists from the executor — the WS handlers do); the
-    // client twin (codeExec.ts) also invalidates readers and persists each field when the target is
-    // server-backed (id > 0), so a Save onto a stored object commits and the draft's initial fill (a
-    // transient target) does not. Returns the target.
-    private IExecValue ExecuteSetFields(CodeCall call, ExecScope scope, ExecContext context)
-    {
-        if (call.Params.Length != 2)
-            throw new CodeRuntimeException("setFields(target, source) takes two arguments.");
-        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject target)
-            throw new CodeRuntimeException("setFields() expects a target object.");
-        if (ExecuteValue(call.Params[1], scope, context) is not ExecObject source)
-            throw new CodeRuntimeException("setFields() expects a source object.");
-        foreach (var (name, value) in source.Props)
-        {
-            // Skip collections/references AND nulls — only scalar leaves are staged (see the invariant
-            // above). An object/array is a reference/set/dict; a NULL is an UNSET reference (sys.new now
-            // mints references as null, and a stored unset reference loads as null too). A scalar leaf is
-            // never null — an input always yields a typed value ("" / 0 / bool) — so skipping null stages
-            // exactly the scalar leaves and keeps a Save from objectPropChange-ing a non-scalar prop (the
-            // server rejects that), which is the staged-edit contract.
-            if (value is ExecObject or ExecArray or ExecNull) continue;
-            target.Props[name] = value;
-            // Ship the source's prop: it is a displayed/edited value (it lands in the bound draft).
-            // Ungated because a setup's closure result is not tags, so leaf-promotion would drop it.
-            if (context.DepStack.Count > 0) context.DepStack.Peek().Props.Add(new PropDep(source.Id, name));
-            context.AccessedObjectProps.Add((source, name));
-        }
-        return target;
-    }
-
     // humanize(text): a prop name → a human label ("companyName" → "Company name").
     // Pure; runs identically on server and client (TextUtil / codeExec.ts twin).
     private IExecValue ExecuteHumanize(CodeCall call, ExecScope scope, ExecContext context)
@@ -539,8 +484,7 @@ public sealed class CodeExecutor
     // new(desc): a FRESH object of a type, built REFLECTIVELY from its descriptor — each scalar prop
     // set to its baseType default (the runtime twin of GenericUi.DefaultFor: bool→false, int→0, every
     // other leaf/enum → ""). The constructor for the self-hosted UI's drafts: a create-new form's
-    // blank state, and the seed of ObjectForm's edit draft (then filled from the live object via
-    // sys.setFields). A fresh object every call (no shared template → no aliasing).
+    // blank state, and the seed of ObjectForm's edit draft. A fresh object every call (no shared template → no aliasing).
     //
     // Privacy-trivial by construction: it reads NO source object — only the (already-shipped)
     // descriptor — and emits constant defaults, so there is nothing private to leak and nothing to
@@ -861,7 +805,6 @@ public sealed class CodeExecutor
     private IExecValue? ExecuteBuiltin(string name, CodeCall call, ExecScope scope, ExecContext context) => name switch
     {
         "field" => ExecuteField(call, scope, context),
-        "setFields" => ExecuteSetFields(call, scope, context),
         "humanize" => ExecuteHumanize(call, scope, context),
         "extent" => ExecuteExtent(call, scope, context),
         "schema" => ExecuteSchema(call, scope, context),

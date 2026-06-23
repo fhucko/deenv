@@ -199,7 +199,7 @@ public class InstanceContext
     // Milestone 11 (same object, two independent editing contexts): a HAND-WRITTEN `fn render()` that
     // composes TWO STAGED `<ObjectForm>`s over the SAME object (`db.note`). Pure composition of the
     // existing per-form overlay — no new builtin or mechanism. Each form is a COMPONENT, so its
-    // run-once setup mints its OWN draft (`sys.new` + `sys.setFields(draft, obj)`); M11 keys a
+    // run-once setup mints its OWN draft (staged through its own ctx); M11 keys a
     // component by its render-tree SLOT, not its arguments, so the two forms — distinct render-tree
     // positions — get distinct slots and therefore INDEPENDENT drafts. Editing one form's field stages
     // into that form's draft only; the other is untouched, and the store is untouched until a Save.

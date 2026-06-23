@@ -288,40 +288,6 @@
       "expect": { "kind": "text", "value": "" }
     },
     {
-      "name": "sys.setFields copies the source's props onto the target and returns the target",
-      "text": "sys.setFields({ n: 0 }, { n: 7 }).n",
-      "expr": {
-        "type": "infixOp", "op": "objectProp",
-        "left": {
-          "type": "call",
-          "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "setFields" } },
-          "params": [
-            { "type": "object", "props": [ { "name": "n", "value": { "type": "int", "value": 0 } } ] },
-            { "type": "object", "props": [ { "name": "n", "value": { "type": "int", "value": 7 } } ] }
-          ]
-        },
-        "right": { "type": "symbol", "name": "n" }
-      },
-      "expect": { "kind": "int", "value": 7 }
-    },
-    {
-      "name": "sys.setFields mutates the target in place (read it back through the var)",
-      "expr": {
-        "type": "call", "params": [],
-        "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
-          { "type": "varDec", "name": "o", "value": { "type": "object", "props": [ { "name": "n", "value": { "type": "int", "value": 0 } } ] } },
-          { "type": "call",
-            "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "setFields" } },
-            "params": [ { "type": "symbol", "name": "o" }, { "type": "object", "props": [ { "name": "n", "value": { "type": "int", "value": 7 } } ] } ] },
-          { "type": "return", "value": {
-            "type": "call",
-            "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "field" } },
-            "params": [ { "type": "symbol", "name": "o" }, { "type": "text", "value": "n" } ] } }
-        ] } }
-      },
-      "expect": { "kind": "int", "value": 7 }
-    },
-    {
       "name": "sys.nest joins a base path and a segment, trimming a trailing slash",
       "text": "sys.nest(\"/\", \"notes\")",
       "expr": {

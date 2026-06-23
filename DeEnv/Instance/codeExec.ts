@@ -497,45 +497,6 @@ function fieldResult(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     };
 }
 
-// setFields(target, source): copy the SCALAR props of `source` onto `target` — a standalone bulk,
-// dynamic write. (Historically ObjectForm's draft fill + Save commit; the form now stages through a
-// data-context `ctx`, so setFields has no Code consumer today — kept as a public primitive pending a
-// surface decision.)
-// SCALARS ONLY: a prop whose value is an object (a reference) or an array (a set/dict) — OR null (an
-// UNSET reference) — is SKIPPED. The draft is scalar-only (collection props bind to the LIVE object via
-// RefEditor/SetTable/DictTable, never the draft), so persisting one on Save would be a bug
-// (objectPropChange per prop, which the server rejects for a non-scalar field; a reference, set or unset,
-// persists via setReferenceField, not objectPropChange). sys.new now mints a COMPLETE object (references
-// as null, sets/dicts as empty arrays), so the null-skip keeps the draft scalar-only. A bulk primitive
-// (not per-field) because Code has no
-// statement-position iteration (`foreach` is render-only), so a handler cannot loop over schema-iterated
-// prop names — the framework loops here. recordProp registers the source read (twin of the server, which
-// also ships it as a displayed leaf so the client's setup re-run can re-fill the draft). Each prop is set
-// in place, the SAME write path two-way binding and `obj.member = value` use — invalidate readers, and
-// persist when the target is server-backed (persistFieldEdit: id > 0 commits via objectPropChange; a
-// transient draft does not). Returns the target.
-function execSetFields(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
-    if (codeCall.params.length !== 2) throw new Error("setFields(target, source) takes two arguments.");
-    const target = executeValue(codeCall.params[0], scope, context).value;
-    const source = executeValue(codeCall.params[1], scope, context).value;
-    if (target.type !== "object") throw new Error("setFields() expects a target object.");
-    if (source.type !== "object") throw new Error("setFields() expects a source object.");
-    for (const [name, value] of Object.entries(source.props)) {
-        // Skip collections/references AND nulls — only scalar leaves are staged (see the invariant
-        // above). An object/array is a reference/set/dict; a NULL is an UNSET reference (sys.new now
-        // mints references as null, and a stored unset reference loads as null too). A scalar leaf is
-        // never null (an input always yields a typed value), so skipping null stages exactly the scalar
-        // leaves and keeps a Save from objectPropChange-ing a non-scalar prop (which the server rejects).
-        if (value.type === "object" || value.type === "array" || value.type === "null") continue;
-        recordProp(source.id, name);
-        const before = target.props[name];
-        target.props[name] = value;
-        invalidateProp(target.id, name);
-        persistFieldEdit(target, name, value, before);
-    }
-    return target;
-}
-
 // humanize(text): a prop name → a human label ("companyName" → "Company name").
 // Twin of DeEnv.Code.TextUtil.Humanize; pinned by the conformance suite.
 function humanizeText(name: string): string {
@@ -617,7 +578,7 @@ function execId(codeCall: CodeCall, scope: ExecScope, context: ExecContext): Exe
 // right member type). The constructor for the self-hosted UI's drafts: a create-new form's blank state
 // (the SetTable does `set.add(sys.new(desc))`, so the draft becomes a real member and MUST be complete —
 // else the generic table's reference/set columns read an absent prop and throw, freezing the form), and
-// the seed of ObjectForm's edit draft (then filled from the live object via sys.setFields). A fresh
+// the seed of ObjectForm's edit draft. A fresh
 // object every call (no aliasing). Privacy-trivial: reads NO source object — only the already-shipped
 // descriptor — and emits constant defaults/empties, so the client's setup re-run mints the same shape.
 // Two descriptor shapes (the two the UI passes): a TYPE descriptor → one field per `props` entry (every
@@ -1166,7 +1127,6 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     // for its setValue; in statement position the value form is enough.
     switch (sysBuiltinName(codeCall.fn)) {
         case "field": return fieldResult(codeCall, scope, context).value;
-        case "setFields": return execSetFields(codeCall, scope, context);
         case "humanize": return execHumanize(codeCall, scope, context);
         case "extent": return execExtent(codeCall, scope, context);
         case "schema": return execSchema(codeCall, scope, context);

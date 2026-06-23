@@ -62,9 +62,7 @@ namespace DeEnv.Instance;
 // Builtins do the reflective work, all under the framework `sys` namespace: sys.field (dynamic
 // access), sys.humanize (labels), sys.extent (a type's objects), sys.schema (a type's descriptor),
 // sys.setRef (set/clear a reference), sys.nest (a URL path-join for nested member links), sys.new (a
-// fresh default-valued object built from a descriptor — a create-new draft), sys.setFields (bulk-copy
-// one object's scalar props onto another — a standalone primitive with no current Code consumer since
-// ObjectForm moved to ctx staging). `obj.prop = x` resets a component's draft after Create.
+// fresh default-valued object built from a descriptor — a create-new draft). `obj.prop = x` resets a component's draft after Create.
 //
 // A type's descriptor — { name, labelProp, props } — is fetched by
 // `sys.schema(typeName)`,

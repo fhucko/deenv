@@ -66,7 +66,6 @@ public static class CodeValidator
     private static readonly Dictionary<string, int> BuiltinArities = new()
     {
         ["field"] = 2,
-        ["setFields"] = 2,
         ["humanize"] = 1,
         ["extent"] = 1,
         ["setRef"] = 3,
