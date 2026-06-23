@@ -108,7 +108,9 @@ ui
 ```
 
 - **Statements**: `var x` / `var x = expr`, assignment, `return`, calls,
-  `if` / `else if` / `else`, named `fn`s.
+  `if` / `else if` / `else`, named `fn`s, and `ambient name = value` — provide a
+  dynamically-scoped value to callees for the rest of the enclosing scope (its
+  first consumer is the data context, below).
 - **Expressions**: literals (`0`, `-7`, `"text"` with `\" \\ \n \t` escapes,
   `true`, `null`), arrays `[a, b]`, objects `{ name: value }`, member/call
   chains (`db.tasks.where(p).orderBy(k)`), the operators
@@ -117,24 +119,48 @@ ui
 - **Tags** are JSX-like with no closing tag — children are the indented
   block. Attributes: `attr="text"` or `attr={expr}`. Tag-level `if`/`else`
   and `foreach x in collection`.
+- **Components**: a tag whose name resolves to an in-scope `fn` (top-level or
+  local) is a *component* — it runs once per render-tree slot and keeps local
+  state across re-renders (an element tag like `<div>` does not). Attributes bind
+  to the function's parameters by name. An opt-in `key={expr}` folds into the
+  component's slot identity, so changing it resets the component.
 - A two-way `value`/`checked` binding on an `<input>` must target an
   assignable lvalue (a writable var or a prop chain).
+
+### Data context (`ctx`)
+
+Edits flow through an ambient **data context** — a staging overlay over the live
+store. The framework provides a live root `ctx`; a component opens a staging child
+with `ambient ctx = ctx.new()` (or `ctx.new(true)` for a live, autosave context).
+While a staging `ctx` is in scope, writing a **persisted** object's field
+(`obj.prop = …`, or a two-way `value=` binding) stages in the overlay — the stored
+object is untouched until commit:
+
+- `ctx.commit()` — flush the staged writes to the live store (one persisted edit
+  per field).
+- `ctx.discard()` — drop the overlay; bound inputs re-read the stored value.
+- `ctx.dirty` — true while the overlay holds an uncommitted write.
+
+A transient draft (a fresh `sys.new`, not yet persisted) always writes live, so a
+create-form's in-progress edits are never swept into the surrounding transaction.
 
 ### Two modes: fully custom or fully auto
 
 An app is one of two modes — there is no partial-customization middle layer (the
-M8 `view` system was dropped; "auto with overrides" will come later via the custom
-mode composing the generic UI as a library):
+M8 `view` system was dropped). "Auto with overrides" lives within the custom mode:
+a `fn render()` composes the public generic-UI component library (below) instead of
+a separate view system.
 
 - **Fully custom** — a `ui` section with `fn render()` owns the whole URL space. A
   full code page (two-way binding, WS mutations, the memo cache, refetch); it ships
   to the client and re-renders there.
 - **Fully auto (the default)** — any app *without* a `fn render()` (including an app
-  with no `ui` section at all) is rendered by the **self-hosted generic UI** (M9):
-  the generic object/reference/set/dictionary pages are rendered by a Code library
-  (`objectForm`/`refEditor`/`setTable`/`dictTable` over the type's schema). There is
-  no opt-in flag — auto is simply what you get without a custom render. (Navigating
-  INTO a dictionary entry still falls to the retiring C# auto-form for now.)
+  with no `ui` section at all) is rendered by the **self-hosted generic UI**: a single
+  synthesized `fn render()` routes every URL via `sys.resolve(path)` and composes the
+  public Code component library (`ObjectForm` / `RefEditor` / `SetTable` / `DictTable`
+  / `LeafForm`, over the type's schema). There is no opt-in flag — auto is simply what
+  you get without a custom render, and a custom render can compose the same PascalCase
+  components.
 
 ## Validation a loader must enforce
 

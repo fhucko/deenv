@@ -71,7 +71,7 @@ isolating its draft) or go live. The old slice-3/slice-4 split collapses.
 ## Deferred (separate, later)
 Conflict-resolver (commit-time CAS) · atomic batch commit · graph-save (recursive create + subtree
 id-remap) · privacy re-layer · per-page vs per-form ctx (settled per-form for now) · declared
-ambient consumption (static checker) · the `ambient` indented-block sub-scope form.
+ambient consumption (static checker).
 
 ## How 3c converged (2026-06-23)
 
