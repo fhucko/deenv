@@ -103,7 +103,13 @@ public static class CodeParse
             (left, rest) => rest.Aggregate(left, (l, r) =>
                 (ICodeValue)new CodeInfixOp { Op = r.Item2, Left = l, Right = r.Item4 }));
 
-    public static Parser<ICodeValue> MultiplyDivide => InfixLevel(Postfix, OneOf(
+    // Unary prefix `!` (logical NOT). Binds tighter than the binary operators but looser than
+    // postfix member/call, so `!a.b` is `!(a.b)` and `!a && b` is `(!a) && b`. Recursive: `!!x`.
+    public static Parser<ICodeValue> Unary => OneOf(
+        Seq(Text("!"), Ws0, Lazy(() => Unary), (_, _, operand) => (ICodeValue)new CodeNot { Operand = operand }),
+        Postfix);
+
+    public static Parser<ICodeValue> MultiplyDivide => InfixLevel(Unary, OneOf(
         Text("*").ConvertTo(_ => CodeInfixOpType.Multiply),
         Text("/").ConvertTo(_ => CodeInfixOpType.Divide),
         Text("%").ConvertTo(_ => CodeInfixOpType.Modulo)));

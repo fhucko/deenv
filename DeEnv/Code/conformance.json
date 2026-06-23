@@ -723,6 +723,30 @@
         "left": { "type": "fn", "name": null, "params": [], "body": { "type": "block", "statements": [ { "type": "return", "value": { "type": "int", "value": 5 } } ] } },
         "right": { "type": "null" } },
       "expect": { "kind": "bool", "value": false }
+    },
+    {
+      "name": "unary ! negates true to false",
+      "text": "!true",
+      "expr": { "type": "not", "operand": { "type": "bool", "value": true } },
+      "expect": { "kind": "bool", "value": false }
+    },
+    {
+      "name": "unary ! negates false to true",
+      "text": "!false",
+      "expr": { "type": "not", "operand": { "type": "bool", "value": false } },
+      "expect": { "kind": "bool", "value": true }
+    },
+    {
+      "name": "unary ! binds tighter than == : !true == false is (!true) == false",
+      "text": "!true == false",
+      "expr": { "type": "infixOp", "op": "equals", "left": { "type": "not", "operand": { "type": "bool", "value": true } }, "right": { "type": "bool", "value": false } },
+      "expect": { "kind": "bool", "value": true }
+    },
+    {
+      "name": "double unary ! : !!false is false",
+      "text": "!!false",
+      "expr": { "type": "not", "operand": { "type": "not", "operand": { "type": "bool", "value": false } } },
+      "expect": { "kind": "bool", "value": false }
     }
   ]
 }

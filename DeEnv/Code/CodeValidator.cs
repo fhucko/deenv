@@ -193,6 +193,9 @@ public static class CodeValidator
                 // The right side of object-prop access is a member name, not a symbol.
                 if (infix.Op != CodeInfixOpType.ObjectProp) ValidateValue(infix.Right, scope);
                 break;
+            case CodeNot not:
+                ValidateValue(not.Operand, scope);
+                break;
             case CodeCall call:
                 ValidateValue(call.Fn, scope);
                 foreach (var arg in call.Params) ValidateValue(arg, scope);

@@ -162,6 +162,7 @@ public sealed class CodeExecutor
         CodeText codeText      => new ExecText { Value = codeText.Value },
         CodeBool codeBool      => new ExecBool { Value = codeBool.Value },
         CodeInfixOp codeInfix  => ExecuteInfixOp(codeInfix, scope, context),
+        CodeNot codeNot        => ExecuteNot(codeNot, scope, context),
         CodeSymbol codeSymbol  => ExecuteSymbol(codeSymbol, scope, context),
         CodeObject codeObject  => ExecuteObject(codeObject, scope, context),
         CodeArray codeArray    => ExecuteArray(codeArray, scope, context),
@@ -762,6 +763,10 @@ public sealed class CodeExecutor
         : throw new CodeRuntimeException("Expected an int.");
     private static bool AsBool(IExecValue v) => v is ExecBool b ? b.Value
         : throw new CodeRuntimeException("Expected a bool.");
+
+    // Unary `!`: negate a bool operand. The operand's reads are tracked by ExecuteValue.
+    private IExecValue ExecuteNot(CodeNot codeNot, ExecScope scope, ExecContext context) =>
+        new ExecBool { Value = !AsBool(ExecuteValue(codeNot.Operand, scope, context)) };
 
     // ── calls (functions + collection system-functions) ─────────────────────────
 

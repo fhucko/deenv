@@ -12,7 +12,7 @@
 type CodeStatement = CodeAssignment | CodeBlock | CodeVarDec | CodeFunction | CodeReturn | CodeCall | CodeIf | CodeAmbient;
 
 type CodeValue = CodeInt | CodeText | CodeBool | CodeNull | CodeSymbol | CodeObject | CodeArray |
-    CodeFunction | CodeTag | CodeInfixOp | CodeCall | CodeAssignment;
+    CodeFunction | CodeTag | CodeInfixOp | CodeCall | CodeAssignment | CodeNot;
 
 type CodeTagChild = CodeValue | CodeTagIf | CodeTagForEach;
 
@@ -25,6 +25,7 @@ interface CodeArray { type: "array"; items: CodeValue[]; }
 interface CodeObject { type: "object"; props: CodeObjectProp[]; }
 interface CodeObjectProp { name: string; value: CodeValue; }
 interface CodeInfixOp { type: "infixOp"; op: string; left: CodeValue; right: CodeValue; }
+interface CodeNot { type: "not"; operand: CodeValue; }
 interface CodeAssignment { type: "assign"; target: CodeValue; value: CodeValue; }
 interface CodeBlock { type: "block"; statements: CodeStatement[]; }
 interface CodeVarDec { type: "varDec"; name: string; value: CodeValue | null; }
@@ -180,6 +181,7 @@ function executeValue(value: CodeValue, scope: ExecScope, context: ExecContext):
             return { value: component ? executeComponentValue(value, component, scope, context) : executeTag(value, scope, context) };
         }
         case "infixOp": return executeInfixOp(value, scope, context);
+        case "not": return executeNot(value, scope, context);
         // sys.field(obj, name) is a bindable lvalue (two-way binding needs its setValue), so it
         // is resolved here rather than through executeCall (which drops setValue). Its callee is
         // a `sys.field` member access, so recognize the sys-rooted callee (not a bare symbol).
@@ -1085,6 +1087,12 @@ function getCompareValue(value: ExecValue): any {
         case "null": return null;
         default: throw new Error("NotImplementedException");
     }
+}
+
+function executeNot(codeNot: CodeNot, scope: ExecScope, context: ExecContext): ExecResult {
+    const operand = executeValue(codeNot.operand, scope, context).value;
+    if (operand.type !== "bool") throw new Error("Expected a bool.");
+    return { value: { type: "bool", value: !operand.value } };
 }
 
 function executeInfixOpBasic(codeInfixOp: CodeInfixOp, scope: ExecScope, context: ExecContext): ExecValue {

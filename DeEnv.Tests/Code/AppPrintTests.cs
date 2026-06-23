@@ -72,6 +72,13 @@ public sealed class AppPrintTests
         await AssertPrints("db.tasks.where((x) => x.done == false)",
                            "db.tasks.where(x => x.done == false)");
         await AssertPrints("((n) => n + 1)(41)", "(n => n + 1)(41)");
+        // Unary `!`: tighter than the binary ops (no parens on a member/comparison operand),
+        // but it parenthesizes a lower-precedence operand; `!!x` nests bare.
+        await AssertPrints("!a", "!a");
+        await AssertPrints("!a.b", "!a.b");
+        await AssertPrints("!a == b", "!a == b");
+        await AssertPrints("!(a == b)", "!(a == b)");
+        await AssertPrints("!!a", "!!a");
     }
 
     private static async Task AssertPrints(string source, string expected)

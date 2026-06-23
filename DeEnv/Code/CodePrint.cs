@@ -16,6 +16,7 @@ public static class CodePrint
     {
         CodeInfixOp { Op: CodeInfixOpType.ObjectProp } => 90,
         CodeCall => 90,
+        CodeNot => 85,
         CodeInfixOp { Op: CodeInfixOpType.Multiply or CodeInfixOpType.Divide or CodeInfixOpType.Modulo } => 80,
         CodeInfixOp { Op: CodeInfixOpType.Add or CodeInfixOpType.Subtract } => 70,
         CodeInfixOp { Op: CodeInfixOpType.And } => 50,
@@ -59,6 +60,7 @@ public static class CodePrint
             Operand(prop.Left, 90) + "." + ((CodeSymbol)prop.Right).Name,
         CodeInfixOp op =>
             Operand(op.Left, Precedence(op)) + " " + OpToken(op.Op) + " " + Operand(op.Right, Precedence(op) + 1),
+        CodeNot n => "!" + Operand(n.Operand, 85),
         CodeCall call => Operand(call.Fn, 90) + "(" + string.Join(", ", call.Params.Select(Value)) + ")",
         CodeAssignment assign => Value(assign.Target) + " = " + Value(assign.Value),
         CodeFunction fn => InlineLambda(fn),

@@ -38,6 +38,7 @@ public interface ICodeStatement : ICodeElement;
 [JsonDerivedType(typeof(CodeArray), "array")]
 [JsonDerivedType(typeof(CodeNull), "null")]
 [JsonDerivedType(typeof(CodeAssignment), "assign")]
+[JsonDerivedType(typeof(CodeNot), "not")]
 public interface ICodeValue : ICodeTagChild;
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
@@ -53,6 +54,7 @@ public interface ICodeValue : ICodeTagChild;
 [JsonDerivedType(typeof(CodeArray), "array")]
 [JsonDerivedType(typeof(CodeNull), "null")]
 [JsonDerivedType(typeof(CodeTagForEach), "foreach")]
+[JsonDerivedType(typeof(CodeNot), "not")]
 [JsonDerivedType(typeof(CodeTagIf), "if")]
 public interface ICodeTagChild : ICodeElement;
 
@@ -168,6 +170,13 @@ public sealed class CodeInfixOp : ICodeValue
     public required CodeInfixOpType Op { get; set; }
     public required ICodeValue Left { get; set; }
     public required ICodeValue Right { get; set; }
+}
+
+// Unary logical NOT: `!operand`. Binds tighter than the binary operators but looser than
+// postfix member/call (so `!a.b` is `!(a.b)`); recurses for `!!x`.
+public sealed class CodeNot : ICodeValue
+{
+    public required ICodeValue Operand { get; set; }
 }
 
 public enum CodeInfixOpType
