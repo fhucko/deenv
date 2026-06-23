@@ -201,13 +201,15 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the "todo" instance's app document declares "checked set of TodoList"
     And the "todo" instance's app document declares "text dict of text by text"
 
-  # An enum type's value list is authorable in the designer, not just in the .app text. Adding a type,
-  # setting its base type to "enum", and filling its (always-rendered, comma-separated) values input,
-  # then applying, deploys the enum through the same projection — so the designer can author an enum's
-  # values end-to-end. The deployed document declares the enum in the canonical `Name enum` + indented
-  # values form.
+  # An enum type's value list is authorable in the designer, not just in the .app text: adding a type,
+  # setting its base type to "enum", and filling its (always-rendered, comma-separated) values input
+  # captures the enum in the designer's own store. This stays LIGHT — it asserts the designer captured
+  # the authoring, not a full deploy. The two halves the old end-to-end conflated are each tested
+  # cheaply on their own: design→app-document projection of an enum in Bridge.feature ("projects an
+  # enum type's value list"), and applying/deploying a design in "Applying a different design ...
+  # deploys it" + HostAction. So there is no apply / kernel deploy / 45s file-poll here.
   @milestone-10 @single-user
-  Scenario: An enum type authored in the designer deploys
+  Scenario: The designer authors an enum type's base and values
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
     And I edit the design "todo"
@@ -215,9 +217,7 @@ Feature: The operator IDE (designs library + instance design selector)
     And I name the just-added type "Status"
     And I set the just-added type's base type to "enum"
     And I set the just-added type's values to "open, doing, done"
-    When I open the instance "todo"
-    And I apply the design
-    Then the "todo" instance's app document declares the enum "Status" with values "open, doing, done"
+    Then the design's type "Status" is an enum with values "open, doing, done"
 
   # Removing a type from a design must actually delete it. The remove drives arrayRemove on the design's
   # (nested) types set, which runs the store's garbage collector -- and the GC walks the whole meta-schema

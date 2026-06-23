@@ -745,20 +745,21 @@ public sealed class DesignerSteps(InstanceContext ctx)
             && File.ReadAllText(target.Spec.SchemaPath).Contains(declaration), timeoutMs: 45000);
     }
 
-    [Then("the {string} instance's app document declares the enum {string} with values {string}")]
-    public async Task ThenTargetDeclaresEnum(string label, string typeName, string values)
+    [Then("the design's type {string} is an enum with values {string}")]
+    public async Task ThenDesignerTypeIsEnum(string typeName, string values)
     {
-        // Apply deployed the projected app document; assert it declares the enum in the canonical AppPrint
-        // form -- `    Name enum\n` then each value indented 8 spaces -- proving the type name, base type
-        // "enum", and the comma-separated value list all flowed through projection. The whole block is
-        // matched (not a bare value substring that could collide elsewhere). Wide window: the deploy
-        // projects the WHOLE app + resets data, run under peak full-suite load.
-        var expected = "    " + typeName + " enum\n"
-            + string.Concat(values.Split(',').Select(v => v.Trim()).Where(v => v.Length > 0)
-                .Select(v => "        " + v + "\n"));
-        var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
-        await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
-            && File.ReadAllText(target.Spec.SchemaPath).Replace("\r\n", "\n").Contains(expected), timeoutMs: 45000);
+        // Split-target (no apply/deploy): assert the designer captured the enum in its OWN sovereign
+        // store — base type "enum" + the values input. The design->app-document projection of an enum is
+        // proven cheaply in Bridge.feature ("projects an enum type's value list"), and applying a design
+        // is proven by "Applying a different design ... deploys it" + HostAction — so there is no kernel
+        // deploy, no second instance's schema file, no 45s poll here, just the UI-authoring seam. The
+        // values input persists over an async WS round-trip, so poll the (fast, local) MetaType extent.
+        var expected = values.Split(',').Select(v => v.Trim()).Where(v => v.Length > 0).ToList();
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values.Any(o =>
+            o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == typeName
+            && o.Fields.TryGetValue("baseType", out var b) && b is DeEnv.Storage.TextValue bt && bt.Text == "enum"
+            && o.Fields.TryGetValue("values", out var vv) && vv is DeEnv.Storage.TextValue vt
+            && vt.Text.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).SequenceEqual(expected)));
     }
 
     [Then("the design {string} has no unnamed type")]
