@@ -247,6 +247,9 @@ public sealed class SsrRenderer
             ?? throw new CodeRuntimeException("No render function for this instance.");
         var renderScope = _isGeneric ? lib : app;
 
+        // The framework provides the live root data context as ambient `ctx` (writes persist); a form
+        // opens a staging child via ctx.new(). Inert until a form does.
+        context.Ambient = new AmbientFrame("ctx", new ExecCtx { Live = true }, null);
         var result = exec.InvokeFunction(renderFn, [], renderScope, context);
 
         if (result is not IExecTagChild child)

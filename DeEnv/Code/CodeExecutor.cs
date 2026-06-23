@@ -891,6 +891,17 @@ public sealed class CodeExecutor
         return ExecuteBlock(fn.Body, callScope, context) ?? new ExecNothing();
     }
 
+    // Like InvokeFunction but on an ExecFunction closure — restores its captured ambient (RunBody),
+    // so a component's setup body and its returned render view resolve the ambient context that was
+    // provided inside the component's body.
+    private IExecValue InvokeClosure(ExecFunction fn, IReadOnlyList<IExecValue> args, ExecContext context)
+    {
+        var callScope = new ExecScope { Parent = fn.Scope };
+        for (var i = 0; i < args.Count && i < fn.Function.Params.Length; i++)
+            callScope.Items[fn.Function.Params[i].Name] = new ExecScopeItem { Value = args[i], IsReadOnly = true };
+        return RunBody(fn, callScope, context);
+    }
+
     private IExecValue CallFunction(ExecFunction fn, ICodeValue[] args, ExecScope scope, ExecContext context)
     {
         // Args evaluate in the caller's context (their deps are the caller's); the body
@@ -1202,10 +1213,10 @@ public sealed class CodeExecutor
         // Absent → identity is the slot path alone (the zero-config default).
         if (attrs.TryGetValue("key", out var keyVal)) slotKey += "#" + ArgKey(keyVal);
         var args = BindParams(component, attrs);
-        var view = Memoize(slotKey, context, () => InvokeFunction(component.Function, args, component.Scope, context));
+        var view = Memoize(slotKey, context, () => InvokeClosure(component, args, context));
         if (view is ExecFunction renderClosure)
             view = Memoize(slotKey + ":view", context,
-                () => InvokeFunction(renderClosure.Function, [], renderClosure.Scope, context));
+                () => InvokeClosure(renderClosure, [], context));
         return view;
     }
 

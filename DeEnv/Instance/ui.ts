@@ -35,7 +35,7 @@ function renderUi(): void {
 // (renderUi, default speculative=false) still rethrows a non-VNA error — over its complete data that is a
 // genuine bug and must surface, not be silently hidden.
 function buildRenderTree(speculative: boolean = false): ExecValue | null {
-    const context: ExecContext = { lastId: uiStatic.lastId };
+    const context: ExecContext = { lastId: uiStatic.lastId, ambient: rootAmbient() };
     resetSlotPath(); // a fresh render tree starts at the root slot (defensive; push/pop is balanced)
     try {
         return callFunction(uiStatic.renderFn, context, []);
@@ -359,7 +359,7 @@ function callFunction(fn: ExecFunction, context: ExecContext, args: ExecValue[] 
     const callScope: ExecScope = { parent: fn.scope, items: {} };
     for (let i = 0; i < args.length && i < fn.fn.params.length; i++)
         callScope.items[fn.fn.params[i].name] = { value: args[i], isReadOnly: true };
-    return executeBlock(fn.fn.body, callScope, context) ?? { type: "nothing" };
+    return runBody(fn, callScope, context);
 }
 
 function syncScopeText(name: string, apply: (v: string) => void): void {
@@ -539,7 +539,7 @@ function wireEvents(el: HTMLElement, tag: ExecTag): void {
         // onClick handler still navigate as usual (this only guards code-wired handlers).
         el.onclick = (e: MouseEvent) => {
             e.stopPropagation();
-            runWithMemoBypass(() => callFunction(fn, { lastId: uiStatic.lastId }));
+            runWithMemoBypass(() => callFunction(fn, { lastId: uiStatic.lastId, ambient: rootAmbient() }));
             renderUi();
         };
     } else {

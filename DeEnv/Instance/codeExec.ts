@@ -1003,6 +1003,12 @@ function runBody(fn: ExecFunction, callScope: ExecScope, context: ExecContext): 
     finally { context.ambient = saved; }
 }
 
+// The live root data context provided by the framework as ambient `ctx` (writes persist; a form
+// opens a staging child via ctx.new()). Fresh per render — the root is a stateless live sentinel.
+function rootAmbient(): AmbientFrame {
+    return { name: "ctx", value: { type: "ctx", staged: new Map(), parent: null, live: true }, parent: null };
+}
+
 function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext): void {
     // A set member is keyed by its object identity; other kinds get a transient key.
     const key = arr.kind === "set" && value.type === "object" ? value.id : --context.lastId.value;
@@ -1338,7 +1344,7 @@ function invokeFn(fn: ExecFunction, args: ExecValue[], context: ExecContext): Ex
     const callScope: ExecScope = { parent: fn.scope, items: {} };
     for (let i = 0; i < args.length && i < fn.fn.params.length; i++)
         callScope.items[fn.fn.params[i].name] = { value: args[i], isReadOnly: true };
-    return executeBlock(fn.fn.body, callScope, context) ?? { type: "nothing" };
+    return runBody(fn, callScope, context);
 }
 
 // A component's view splices into the parent's children: an array (a fragment) splices flat, a
@@ -1496,8 +1502,7 @@ function runConformance(caseJson: string): string {
     setMemoCache(new Map());
     resetSlotPath();
     const scope: ExecScope = { items: {}, parent: null };
-    const context: ExecContext = { lastId: { value: 0 },
-        ambient: { name: "ctx", value: { type: "ctx", staged: new Map(), parent: null, live: true }, parent: null } };
+    const context: ExecContext = { lastId: { value: 0 }, ambient: rootAmbient() };
     let result: ExecValue = { type: "nothing" };
     if (c.renders) {
         for (const stmt of c.setup ?? []) executeStatement(stmt, scope, context);
