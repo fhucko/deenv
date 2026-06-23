@@ -127,6 +127,25 @@ public sealed class ExecSysFunction : IExecValue
     object IExecValue.Value => this;
 }
 
+// A data context: an overlay of staged field writes over a parent context, read-through. Live
+// marks the root (writes go straight to the live object); a sub-context (`ctx.new`) stages
+// instead, until `commit` flushes to its parent. Staged is keyed by object reference.
+public sealed class ExecCtx : IExecValue
+{
+    public Dictionary<ExecObject, Dictionary<string, IExecValue>> Staged { get; } = [];
+    public ExecCtx? Parent { get; set; }
+    public bool Live { get; set; }
+    object IExecValue.Value => this;
+}
+
+// `ctx.new` / `ctx.commit` / `ctx.discard` bound to their context — invoked via a call.
+public sealed class ExecCtxMethod : IExecValue
+{
+    public required ExecCtx Ctx { get; set; }
+    public required string Method { get; set; }
+    object IExecValue.Value => this;
+}
+
 public sealed class ExecTag : IExecValue
 {
     public required string Name { get; set; }

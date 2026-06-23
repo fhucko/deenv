@@ -42,7 +42,7 @@ interface CodeTagForEach { type: "foreach"; item: CodeSymbol; collection: CodeVa
 // ── runtime values (mirrors DeEnv/Code/ExecValues.cs) ─────────────────────────────
 
 type ExecValue = ExecFunction | ExecSysFunction | ExecTag | ExecArray | ExecObject |
-    ExecInt | ExecBool | ExecText | ExecNull | ExecNothing;
+    ExecInt | ExecBool | ExecText | ExecNull | ExecNothing | ExecCtx | ExecCtxMethod;
 type ExecTagChild = ExecValue;
 type ExecResult = { value: ExecValue; setValue?: (value: ExecValue) => void; };
 
@@ -59,6 +59,10 @@ interface ExecArray { type: "array"; kind: "set" | "dict" | "list"; items: ExecA
 interface ExecArrayItem { key: number; value: ExecValue; }
 interface ExecFunction { type: "fn"; fn: CodeFunction; scope: ExecScope; }
 interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
+// A data context: staged field writes over a parent, read-through. live = the root (writes go
+// live); a sub-context (ctx.new) stages until commit. Staged keyed by object reference.
+interface ExecCtx { type: "ctx"; staged: Map<ExecObject, Map<string, ExecValue>>; parent: ExecCtx | null; live: boolean; }
+interface ExecCtxMethod { type: "ctxMethod"; ctx: ExecCtx; method: string; }
 interface ExecTag { type: "tag"; name: string; attributes: { [name: string]: ExecResult }; children: ExecTagChild[]; key?: number; }
 
 // isTop marks a persistent top-level scope (the framework system scope, or the app scope)
@@ -138,6 +142,15 @@ function executeAssignment(assignment: CodeAssignment, scope: ExecScope, context
         const obj = executeValue(target.left, scope, context).value;
         if (obj.type !== "object") throw new Error("Cannot assign a field on a non-object.");
         const prop = target.right.name;
+        // In a staging context the write stages — the live object is untouched until commit.
+        const staging = nearestStagingCtx(context);
+        if (staging != null) {
+            let fields = staging.staged.get(obj);
+            if (fields == null) staging.staged.set(obj, fields = new Map());
+            fields.set(prop, value);
+            invalidateProp(obj.id, prop);
+            return value;
+        }
         const before = obj.props[prop];
         obj.props[prop] = value;
         invalidateProp(obj.id, prop);
@@ -406,8 +419,13 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
     if (left.type === "array" && collectionMethods.includes(right.name))
         return { value: collectionSysFunction(left, right.name, context) };
 
+    if (left.type === "ctx")
+        return { value: right.name === "dirty"
+            ? { type: "bool", value: left.staged.size > 0 }
+            : { type: "ctxMethod", ctx: left, method: right.name } };
+
     if (left.type !== "object") throw new Error(`Cannot read '${right.name}' on a non-object.`);
-    const value = left.props[right.name];
+    const value = nearestStagedValue(left, right.name, context) ?? left.props[right.name];
     if (value == null) throw new Error("Value not available");
     recordProp(left.id, right.name);
     return {
@@ -1140,6 +1158,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     }
     const fn = executeValue(codeCall.fn, scope, context).value;
     if (fn.type === "sysFn") return fn.fn(codeCall.params.map(p => executeValue(p, scope, context).value));
+    if (fn.type === "ctxMethod") return callCtxMethod(fn);
     if (fn.type !== "fn") throw new Error("Target of a call is not a function.");
 
     // Args evaluate in the caller's context (their deps are the caller's); the body is
@@ -1364,6 +1383,49 @@ function tryFindScope(symbol: CodeSymbol, scope: ExecScope): ExecScope | null {
     return null;
 }
 
+// ── data context (the ambient `ctx` overlay) ─────────────────────────────────
+// ponytail: resolves ambient `ctx` per prop access (linear walk); cache if it matters.
+function nearestCtx(context: ExecContext): ExecCtx | null {
+    for (let f = context.ambient ?? null; f != null; f = f.parent)
+        if (f.name === "ctx") return f.value.type === "ctx" ? f.value : null;
+    return null;
+}
+function nearestStagingCtx(context: ExecContext): ExecCtx | null {
+    const c = nearestCtx(context);
+    return c != null && !c.live ? c : null;
+}
+function nearestStagedValue(obj: ExecObject, prop: string, context: ExecContext): ExecValue | undefined {
+    for (let c = nearestCtx(context); c != null; c = c.parent) {
+        const v = c.staged.get(obj)?.get(prop);
+        if (v != null) return v;
+    }
+    return undefined;
+}
+function callCtxMethod(m: ExecCtxMethod): ExecValue {
+    switch (m.method) {
+        case "new": return { type: "ctx", staged: new Map(), parent: m.ctx, live: false };
+        case "discard": m.ctx.staged.clear(); return { type: "nothing" };
+        case "commit":
+            for (const [obj, fields] of m.ctx.staged)
+                for (const [prop, val] of fields) {
+                    const p = m.ctx.parent;
+                    if (p != null && !p.live) {
+                        let pf = p.staged.get(obj);
+                        if (pf == null) p.staged.set(obj, pf = new Map());
+                        pf.set(prop, val);
+                    } else {
+                        const before = obj.props[prop];
+                        obj.props[prop] = val;
+                        invalidateProp(obj.id, prop);
+                        if (obj.id > 0) propValueChange(obj, prop, val, before);
+                    }
+                }
+            m.ctx.staged.clear();
+            return { type: "nothing" };
+        default: throw new Error(`Unknown context method '${m.method}'.`);
+    }
+}
+
 // WebSocket mutation sends — wired by ws.ts via setWsHooks (Stage 4b). Until then they
 // no-op, so local two-way binding and transient construction work without a server.
 // Each hook carries what a rollback needs (Stage 5): the live target reference, the
@@ -1425,7 +1487,8 @@ function runConformance(caseJson: string): string {
     setMemoCache(new Map());
     resetSlotPath();
     const scope: ExecScope = { items: {}, parent: null };
-    const context: ExecContext = { lastId: { value: 0 } };
+    const context: ExecContext = { lastId: { value: 0 },
+        ambient: { name: "ctx", value: { type: "ctx", staged: new Map(), parent: null, live: true }, parent: null } };
     let result: ExecValue = { type: "nothing" };
     if (c.renders) {
         for (const stmt of c.setup ?? []) executeStatement(stmt, scope, context);

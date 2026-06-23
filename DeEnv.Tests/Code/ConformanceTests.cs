@@ -54,6 +54,9 @@ public sealed class ConformanceTests
         var executor = new CodeExecutor();
         var scope = new ExecScope();
         var context = new ExecContext();
+        // The live root data context as ambient `ctx` (the framework provides this in the real app),
+        // so cases can open staging sub-contexts via `ctx.new()`.
+        context.Ambient = new AmbientFrame("ctx", new ExecCtx { Live = true }, null);
         if (c.Renders is not { } renders)
             return executor.ExecuteValue(c.Expr!.Value.Deserialize<ICodeValue>(JsonOpts)!, scope, context);
 

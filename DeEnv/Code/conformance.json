@@ -40,6 +40,48 @@
       "expect": { "kind": "int", "value": 1 }
     },
     {
+      "name": "context: a staged write reads back from the overlay (base untouched)",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "ambient", "name": "ctx", "value": { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "new" } } } },
+        { "type": "varDec", "name": "o", "value": { "type": "object", "props": [ { "name": "f", "value": { "type": "int", "value": 1 } } ] } },
+        { "type": "assign", "target": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "o" }, "right": { "type": "symbol", "name": "f" } }, "value": { "type": "int", "value": 2 } },
+        { "type": "return", "value": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "o" }, "right": { "type": "symbol", "name": "f" } } }
+      ] } } },
+      "expect": { "kind": "int", "value": 2 }
+    },
+    {
+      "name": "context: discard drops staged writes — base unchanged",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "ambient", "name": "ctx", "value": { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "new" } } } },
+        { "type": "varDec", "name": "o", "value": { "type": "object", "props": [ { "name": "f", "value": { "type": "int", "value": 1 } } ] } },
+        { "type": "assign", "target": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "o" }, "right": { "type": "symbol", "name": "f" } }, "value": { "type": "int", "value": 2 } },
+        { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "discard" } } },
+        { "type": "return", "value": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "o" }, "right": { "type": "symbol", "name": "f" } } }
+      ] } } },
+      "expect": { "kind": "int", "value": 1 }
+    },
+    {
+      "name": "context: dirty reflects staged writes",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "ambient", "name": "ctx", "value": { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "new" } } } },
+        { "type": "varDec", "name": "o", "value": { "type": "object", "props": [ { "name": "f", "value": { "type": "int", "value": 1 } } ] } },
+        { "type": "assign", "target": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "o" }, "right": { "type": "symbol", "name": "f" } }, "value": { "type": "int", "value": 2 } },
+        { "type": "return", "value": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "dirty" } } }
+      ] } } },
+      "expect": { "kind": "bool", "value": true }
+    },
+    {
+      "name": "context: commit flushes staged writes to the base",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "ambient", "name": "ctx", "value": { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "new" } } } },
+        { "type": "varDec", "name": "o", "value": { "type": "object", "props": [ { "name": "f", "value": { "type": "int", "value": 1 } } ] } },
+        { "type": "assign", "target": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "o" }, "right": { "type": "symbol", "name": "f" } }, "value": { "type": "int", "value": 2 } },
+        { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "commit" } } },
+        { "type": "return", "value": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "o" }, "right": { "type": "symbol", "name": "f" } } }
+      ] } } },
+      "expect": { "kind": "int", "value": 2 }
+    },
+    {
       "name": "text literal",
       "text": "\"hi\"",
       "expr": { "type": "text", "value": "hi" },

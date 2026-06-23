@@ -110,7 +110,14 @@ public sealed class CodeExecutor
             {
                 if (ExecuteValue(left, scope, context) is not ExecObject obj)
                     throw new CodeRuntimeException("Cannot assign a field on a non-object.");
-                obj.Props[member.Name] = value;
+                // In a staging context the write stages — the live object is untouched until commit.
+                if (NearestStagingCtx(context) is { } staging)
+                {
+                    if (!staging.Staged.TryGetValue(obj, out var fields)) staging.Staged[obj] = fields = [];
+                    fields[member.Name] = value;
+                }
+                else
+                    obj.Props[member.Name] = value;
                 break;
             }
             default:
@@ -210,6 +217,54 @@ public sealed class CodeExecutor
         throw new CodeRuntimeException($"Variable '{name}' not found.");
     }
 
+    // ── data context (the ambient `ctx` overlay) ─────────────────────────────────
+    // ponytail: resolves ambient `ctx` per prop access (linear walk); cache on the context if it matters.
+
+    // The nearest ambient data context (well-known name `ctx`), or null when none is provided.
+    private static ExecCtx? NearestCtx(ExecContext context)
+    {
+        for (var f = context.Ambient; f != null; f = f.Parent)
+            if (f.Name == "ctx") return f.Value as ExecCtx;
+        return null;
+    }
+
+    // The nearest STAGING context — a sub-context; the live root (and "no context") stages nothing.
+    private static ExecCtx? NearestStagingCtx(ExecContext context) =>
+        NearestCtx(context) is { Live: false } c ? c : null;
+
+    // The staged value for (object, field) anywhere up the active context chain, or null.
+    private static IExecValue? NearestStagedValue(ExecObject obj, string prop, ExecContext context)
+    {
+        for (var c = NearestCtx(context); c != null; c = c.Parent)
+            if (c.Staged.TryGetValue(obj, out var fields) && fields.TryGetValue(prop, out var v))
+                return v;
+        return null;
+    }
+
+    // `ctx.new()` (a staging child), `ctx.discard()` (drop staged), `ctx.commit()` (flush staged to
+    // the parent context, or to the live object when the parent is the live root).
+    private static IExecValue CallCtxMethod(ExecCtxMethod m)
+    {
+        switch (m.Method)
+        {
+            case "new": return new ExecCtx { Parent = m.Ctx, Live = false };
+            case "discard": m.Ctx.Staged.Clear(); return new ExecNothing();
+            case "commit":
+                foreach (var (obj, fields) in m.Ctx.Staged)
+                    foreach (var (prop, val) in fields)
+                        if (m.Ctx.Parent is { Live: false } p)
+                        {
+                            if (!p.Staged.TryGetValue(obj, out var pf)) p.Staged[obj] = pf = [];
+                            pf[prop] = val;
+                        }
+                        else
+                            obj.Props[prop] = val;   // committed to the live object (the client also persists)
+                m.Ctx.Staged.Clear();
+                return new ExecNothing();
+            default: throw new CodeRuntimeException($"Unknown context method '{m.Method}'.");
+        }
+    }
+
     private static void OnValueAccessed(ExecContext context, IExecValue value)
     {
         if (context.DepStack.Count > 0)
@@ -235,8 +290,21 @@ public sealed class CodeExecutor
             if (target is ExecArray coll && CollectionMethods.Contains(member.Name))
                 return new ExecSysFunction { Target = coll, Method = member.Name };
 
+            // A data context: `ctx.dirty` (a bool) or a bound method (`ctx.new`/`commit`/`discard`).
+            if (target is ExecCtx ctx)
+                return member.Name == "dirty"
+                    ? new ExecBool { Value = ctx.Staged.Count > 0 }
+                    : new ExecCtxMethod { Ctx = ctx, Method = member.Name };
+
             if (target is not ExecObject obj)
                 throw new CodeRuntimeException($"Cannot read '{member.Name}' on a non-object.");
+
+            // Overlay read: in a staging context the staged value for this (object, field) wins.
+            if (NearestStagedValue(obj, member.Name, context) is { } stagedValue)
+            {
+                RecordPropAccess(obj, member.Name, stagedValue, context);
+                return stagedValue;
+            }
             if (!obj.Props.TryGetValue(member.Name, out var value))
                 throw new CodeRuntimeException($"Unknown field '{member.Name}'.");
 
@@ -759,6 +827,7 @@ public sealed class CodeExecutor
         {
             ExecFunction fn       => CallFunction(fn, codeCall.Params, scope, context),
             ExecSysFunction sysFn => CallSysFunction(sysFn, codeCall.Params, scope, context),
+            ExecCtxMethod ctxFn   => CallCtxMethod(ctxFn),
             _ => throw new CodeRuntimeException("Target of a call is not a function."),
         };
     }
