@@ -318,6 +318,13 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
                 uiStatic.cache.delete(key);
         markReadyIfSettled(); // the connect-time settle (if any) is now applied
         renderUi();
+        // A navigation that fired DURING this refetch found refetchInFlight set and self-serialized
+        // (maybeRefetch no-op'd), leaving needsServerData set for the NEW path. The reply we just merged
+        // was for the OLD path, so the current path may still be incomplete and HELD — re-fire now that
+        // the in-flight slot is free, so the latest path actually gets its own fetch instead of being
+        // stranded on a held/partial view. No-op in the common case (needsServerData already cleared);
+        // it self-terminates once the current path renders complete (each fetch ships more, never loops).
+        maybeRefetch();
     }
 }
 

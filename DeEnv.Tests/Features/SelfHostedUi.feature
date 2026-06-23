@@ -135,11 +135,13 @@ Feature: Self-hosted generic UI (object forms)
 
   # Navigating away (SPA) unmounts the form, dropping its staging ctx — so a staged-but-unsaved edit
   # must NOT reach the store: leaving is a discard, not a save. We assert that data-safety half here
-  # (a store read after the URL flips back — reliable, no dependency on the previous view re-rendering).
-  # NOTE: the stronger UI proof — the RETURNING form showing the stored value — is intentionally NOT
-  # asserted: the back-nav (history.back) re-render of the previous view races under peak load WHEN an
-  # edit was staged (a real SPA-nav × data-context interaction, tracked separately for a proper fix).
-  # The field-revert-on-discard itself is already proven by "Discarding a staged edit reverts the field".
+  # (a store read after the URL flips back — reliable). The stronger UI proof (the RETURNING form shows
+  # the stored value via the full Back→forward round-trip) is held back one more step: the primary
+  # back-nav race IS fixed (a Back landing during the forward nav's in-flight refetch self-serialized
+  # and stranded the previous view HELD — fixed by re-firing the refetch after a reply, ws.ts), but a
+  # residual data-completeness race remains — the set table can render ROWLESS after Back under peak
+  # load (an empty foreach over a transiently-unmerged collection caches with no dep to invalidate when
+  # the members land). The field-revert itself is already proven by "Discarding a staged edit reverts".
   @milestone-11 @single-user
   Scenario: Navigating away from a form does not commit a staged edit
     Given the self-hosted form app is running
