@@ -17,7 +17,7 @@ namespace DeEnv.Code;
 public static class CodeParse
 {
     public static readonly string[] Keywords =
-        ["fn", "var", "if", "else", "foreach", "in", "return", "true", "false", "null", "common", "ui", "server"];
+        ["fn", "var", "if", "else", "foreach", "in", "return", "true", "false", "null", "common", "ui", "server", "ambient"];
 
     // ── literals & atoms ─────────────────────────────────────────────────────────
 
@@ -186,6 +186,12 @@ public static class CodeParse
             Optional(Seq(Ws0, Text("="), Ws0, Value, (_, _, _, v) => v)), NlOrEnd,
             (_, _, name, value, _) => new CodeVarDec { Name = name.Name, Value = value });
 
+    // `ambient name = value` — provide/override an ambient (dynamic-scope) var for the rest of the
+    // enclosing block. Value is required; consuming it is implicit (just read the name).
+    public static IndentedParser<CodeAmbient> Ambient => _ =>
+        Seq(Text("ambient"), Ws1, Symbol, Ws0, Text("="), Ws0, Value, NlOrEnd,
+            (_, _, name, _, _, _, value, _) => new CodeAmbient { Name = name.Name, Value = value });
+
     // A named function: `fn name(params)` + an indented body. `server fn` marks it
     // server-only (never shipped to the client).
     public static IndentedParser<CodeFunction> NamedFunction => indent =>
@@ -221,7 +227,8 @@ public static class CodeParse
             Return(indent),
             NamedFunction(indent),
             CallStatement(indent),
-            VarDec(indent)),
+            VarDec(indent),
+            Ambient(indent)),
             (_, statement) => statement);
 
     public static IndentedParser<CodeBlock> Block => indent =>

@@ -118,6 +118,9 @@ public static class CodePrint
                 if (v.Value != null) sb.Append(" = ").Append(Value(v.Value));
                 sb.Append('\n');
                 break;
+            case CodeAmbient amb:
+                sb.Append(indent).Append("ambient ").Append(amb.Name).Append(" = ").Append(Value(amb.Value)).Append('\n');
+                break;
             case CodeAssignment a:
                 sb.Append(indent).Append(Value(a)).Append('\n');
                 break;
