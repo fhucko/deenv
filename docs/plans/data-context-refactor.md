@@ -1,81 +1,68 @@
-# Data-context refactor — build plan
+# Data-context refactor — build plan (revised 2026-06-23)
 
 **Goal:** extract data-state into a first-class client **ambient context** (overlay +
-transaction), replacing drafts-living-in-component-memo-state. Fixes the two known
-reactivity bugs structurally and gives staged / commit / discard + a dirty bit a real home.
+transaction), replacing drafts-living-in-component-memo-state. Fixes the two known reactivity
+bugs structurally and gives staged / commit / discard + a dirty bit a real home.
 
-## Why (the mess)
-Drafts (`state.draft` in `GenericUi` ObjectForm/SetTable/RefEditor) are locals inside the
-component's slot-keyed memo — editing state and component-lifecycle share one entry. That's
-the root of bug-1 (the disabled `bug1-off` re-bind) and bug-2 (refetch drops the comp entry),
-and why nav (`resetViewState`) silently nukes drafts. The server data path is comparatively
-clean — this is a **client** refactor. (Full map: project memory.)
+## Status
 
-## Settled model
-- **Context = full-access overlay over the store** — a sparse staged map over a parent,
-  read-through; provided ambiently; not bound to one object. Root context is
-  framework-provided (the live store, parentless). Sub-contexts via `ctx.new()` (child of the
-  receiver). Stack `store ← root ← page/form ← …`; commit flushes to parent, discard drops.
-- **Ambient = dynamic scoping.** `ambient name = value` provides/overrides for the rest of the
-  providing function's extent (its callees + rest-of-scope), via bindings on **owner-tree
-  nodes** + nearest-up resolution. Provide is a language construct (can't be delegated to a
-  function — it pops on return). Consume is implicit (read the name / call ctx methods).
-  Closures capture their owner-tree position. **No global slot** (the render tree isn't linear).
-- **Surface:** `ambient ctx = ctx.new()` (provide a sub-context); `ctx.commit()` /
-  `ctx.discard()` / `ctx.dirty` (built-in methods, same mechanism as `set.add`); `sys.new(type)`
-  unchanged (objects). Writes route through the nearest ctx (root = live = persist; staging ctx
-  = stage). Dirty is **local** (own overlay only; commit moves data up).
-- **No dispose** (GC + reference-drop). **Run-once** provide (context not re-minted per render).
+**Foundation complete — 6 commits, 430/430, both twins. All DORMANT** (no root `ctx` is provided
+in the real app yet, so behaviour is unchanged and the browser suite stays green):
+
+| | commit | what |
+|---|---|---|
+| plan | `aa5d11c` | this doc |
+| slice 1 | `979a32e` | `ambient name = value` dynamic-scope vars (tree-positional resolve, save/restore per block) |
+| slice 2 | `ed5c747` | `ExecCtx` overlay — `ctx.new`/`commit`/`discard`/`dirty` + obj-prop read/write interception |
+| slice 3a | `1f59e95` | closures capture their ambient → deferred onClick handlers resolve `ctx` from birthplace |
+| parser | `e56f7e7` | parse + print `ambient name = value` (GenericUi.cs is parsed Code text) |
+
+## Settled surface
+- `ambient ctx = ctx.new()` — provide a staging sub-context (run-once, in a component body).
+- `ctx.commit()` / `ctx.discard()` / `ctx.dirty` — built-in methods (the `set.add` mechanism).
+- `sys.new(type)` — unchanged, makes objects. The root context is framework-provided + **live**
+  (writes persist); a `ctx.new()` child stages. Interception is a **no-op when no `ctx`** is
+  provided (the real app today) → zero regression.
+
+## The coupling that reshaped the rest (found 2026-06-23)
+
+A staging `ctx` is **ambient**, so everything rendered inside the form inherits it — including the
+nested `RefEditor`/`SetTable`, whose own `sys.new` create-drafts are edited via `<Input
+obj={state.draft}>` (an `obj.prop` write → stages in the **parent** form's ctx). So the create-form
+drafts get entangled in the edit transaction. ⇒ **the ObjectForm rewrite is NOT separable from the
+create-forms** — they're one chunk. Each create-form must open its **own** `ctx` (nested,
+isolating its draft) or go live. The old slice-3/slice-4 split collapses.
+
+## Remaining work
+
+### 3b — framework wiring (safe prep, both no-ops until 3c uses them; land green first)
+- **Root provision:** `SsrRenderer.ExecuteRender` (server) and the client render entry set
+  `context.Ambient = live root ctx`. No-op (root is live; existing draft-based forms still write
+  to props).
+- **Capture-restore reaches the reactive paths:** verify/wire that the **component-render**
+  invocation (`executeComponentValue`) and **onClick** handler invocation (`ui.ts`) route through
+  the `RunBody`/`runBody` capture-restore (so a component's `render`/`save`/`discard` resolve their
+  captured `ctx`). No-op until something captures a non-null ambient.
+- Verify: build + suite 430-green after each (pure prep, no behaviour change).
+
+### 3c — the form rewrite (the behaviour change; the browser suite is the test)
+- **ObjectForm:** drop `var state = {draft: sys.new}` + `setFields`. `ambient ctx =` a staging
+  child (default) or the live root (`autosave==true`); Fields bind `obj` directly;
+  `save`=`ctx.commit()`, `discard`=`ctx.discard()`.
+- **Field two-way binding:** `sys.field`'s `setValue` must stage through the nearest ctx (slice 2
+  only intercepted the assignment path, not `setValue`).
+- **Create-forms isolate:** `RefEditor`/`SetTable` create-drafts each open their **own**
+  `ambient ctx = ctx.new()` so their `<Input>` edits stage in their ctx; Save commits it
+  (`set.add`/`setRef` of the now-complete draft), Cancel discards.
+- **Gherkin:** edit stages (stored value unchanged until Save), Save persists, Discard reverts,
+  nav discards, create-form isolation.
 
 ## Guardrails
-- Gherkin/conformance **before** code, each slice. Both twins (`CodeExecutor.cs` +
-  `codeExec.ts`) stay in lockstep via `conformance.json`.
-- **Storage seam untouched:** commit replays the staged map through the existing per-field WS
-  ops. No bulk/atomic path yet.
-- Privacy stays deferred; keep the transfer seam clean so it re-layers later.
-
-## Slices
-
-### 1. Ambient facility (substrate)
-- **Syntax:** `ambient name = value` (rest-of-scope + indented block, no colon) + bare-name
-  consume. `CodeParse.cs`, `CodePrint.cs`, `CodeAst.cs`.
-- **Runtime (both twins):** owner-tree nodes carry a `name → value` binding map; a consumer
-  resolves by walking up from its node; provide adds a binding at the current node; closures
-  capture their node. Extend the existing slot-path/owner structure (`ExecValues.cs`
-  `ExecContext`, `codeExec.ts` `slotPath`).
-- **Tests:** conformance — provide→consume-below, shadow, walk-up, closure-captures-position.
-  Gherkin — survives re-render + closure resolves at click (client-only).
-- Proven on a **plain ambient var**. No data context yet.
-
-### 2. Context + overlay + interception (first consumer)
-- **Value:** an overlay (parent ref + sparse `(objId, prop) → value` staged map, read-through).
-  `ExecValues.cs`.
-- **Root:** framework-provides the root context (live store as base) in scope setup
-  (`SsrRenderer.cs`).
-- **Methods:** `ctx.new()`, `ctx.commit()`, `ctx.discard()`, `ctx.dirty` — add a
-  context-methods dispatch alongside `CollectionMethods` in both twins.
-- **Interception:** prop read resolves through the nearest ctx overlay; prop write/assignment
-  stages in the nearest ctx (root = live → existing persist path). `CodeExecutor.cs`
-  (`RecordPropAccess` + assignment), `codeExec.ts` (prop read + `executeAssignment` /
-  `persistFieldEdit`).
-- **Commit:** walk the staged map → emit existing per-field WS ops (or merge into parent
-  overlay if nested). `sys.new` untouched.
-- **Tests:** conformance — overlay read / write-stages-not-persists / commit-to-parent / discard.
-
-### 3. Rewire ObjectForm (behavior + bug fixes land)
-- `GenericUi.cs` — ObjectForm = `ambient ctx = ctx.new()` + fields (bind `obj`, stage via
-  interception) + `if ctx.dirty: Save(ctx.commit) / Discard(ctx.discard)`. Drop
-  `var state = {draft: sys.new}` + `setFields`.
-- **Delete dead code:** `codeExec.ts` `bug1-off` guard, `argsKey` write, `rebindComponentArgs`,
-  `objectArgKey`.
-- **Tests (Gherkin):** stage-not-persisted, Save-commits, Discard-reverts, nav-discards,
-  reopen-empty.
-
-### 4. Follow-ups
-CreateForm/SetTable/RefEditor onto ctx (`sys.new` + `ctx.commit`) · nested commit-to-parent ·
-Gherkin cleanup pass (prune obsolete, rewrite internals-coupled scenarios to behavior level).
+- Tests-first per slice; both twins in lockstep via `conformance.json`; storage seam untouched
+  (commit replays through today's per-field WS ops).
+- Privacy stays deferred; keep the transfer/fetch seam clean so it re-layers later.
 
 ## Deferred (separate, later)
-Conflict-resolver (commit-time CAS; temp first-wins) · atomic batch commit · graph-save
-(recursive create + subtree id-remap) · privacy re-layer · per-page vs per-form context scope ·
-declared ambient consumption (static checker) · detached/parentless user contexts.
+Conflict-resolver (commit-time CAS) · atomic batch commit · graph-save (recursive create + subtree
+id-remap) · privacy re-layer · per-page vs per-form ctx (settled per-form for now) · declared
+ambient consumption (static checker) · the `ambient` indented-block sub-scope form.
