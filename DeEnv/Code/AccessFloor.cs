@@ -7,8 +7,18 @@ namespace DeEnv.Code;
 // It decides, per principal, what may be READ (which objects load into the `db` graph that ships to the
 // client — consulted by DbBridge) and what may be WRITTEN (which create/edit/delete mutations are
 // accepted — consulted by WsHandler). A denied read object never enters the graph (a set member is
-// omitted, a single reference becomes null); a denied write is rejected before it touches the store. No
-// app path — a custom render, a where-query, a mutation — can route around it.
+// omitted, a single reference becomes null); a denied write is rejected before it touches the store.
+//
+// What the floor gates (after the floor-hardening pass): a where-query reads the graph the read floor
+// already gated; the extent listing (sys.extent — the reference picker's candidates AND a custom
+// render's own listing) is now gated too (CodeExecutor.ExecuteExtent threads this floor into
+// DbBridge.LoadExtent, omitting read-denied rows). The object-graph mutation seams (set-member
+// create/delete, object-field + reference edit, AND the path-addressed `write` onto a set member's
+// scalar field) are all gated.
+// ponytail: the ONE remaining ungated app path is DICTIONARY ENTRIES — a dict entry's READ (DbBridge
+// does not gate dict members) and its WRITE (WsHandler addEntry/removeEntry on a dict, and the
+// path-addressed `write` onto a dict-entry value). They stay deferred TOGETHER (read + write in
+// lockstep), to be gated when dict reads are; until then a ruled dict entry is reachable.
 //
 // This is NOT callable from app Code: it is a kernel-floor helper the DbBridge / WsHandler consult.
 //
@@ -88,9 +98,18 @@ public sealed class AccessFloor
         {
             return _executor.ExecuteValue(when, scope, new ExecContext()) is ExecBool { Value: true };
         }
-        catch (CodeRuntimeException)
+        catch (Exception)
         {
-            return false; // a malformed/uncomputable condition denies — fail closed
+            // ANY evaluation fault denies — fail closed. Not just CodeRuntimeException: an arithmetic
+            // fault (integer `/` or `%` by a zero divisor throws DivideByZeroException, see
+            // CodeExecutor.ExecuteInfixOp) is a .NET exception, not a CodeRuntimeException, and must NOT
+            // escape to crash the SSR render (a render-time DoS). An access decision errs to DENY — the
+            // safe default — so the broad catch is correct here (the floor never grants on a faulting
+            // condition), distinct from the render's own error handling.
+            // ponytail: the C#/TS interpreter twins DIVERGE on `/0` (C# throws DivideByZeroException; the
+            // TS twin yields Infinity/NaN). That is a conformance gap to settle as its own twin/conformance
+            // change; it is OUT OF SCOPE here. This catch only stops the C# fault from crashing the render.
+            return false;
         }
     }
 

@@ -183,7 +183,17 @@ public sealed class SsrRenderer
         ExecObject? warmDb = null, int? principalUserId = null)
     {
         var ui = _ui!;
-        var exec = new CodeExecutor(_store, _descriptors, _resolver);
+
+        // The bound principal + the access read floor (M-auth), built FIRST so the SAME floor gates BOTH
+        // the graph load (DbBridge.LoadRoot below) AND the executor's `sys.extent(...)` listing (threaded
+        // into the CodeExecutor): a read-denied row stays out of the graph AND out of any pick-candidate /
+        // custom-render listing. `currentUser` (its scalar fields — e.g. `role`) is the principal the
+        // request acts as, or ExecNull when anonymous / unresolved; the floor is dormant (allow-all) when
+        // the app declares no rules. Property access on a null principal fails closed (a role rule denies).
+        var currentUser = LoadPrincipal(principalUserId);
+        var floor = new AccessFloor(_desc.Rules ?? [], currentUser);
+
+        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor);
         // Ship EVERY schema descriptor on first paint (not lazily on first use), so a component
         // composing sys.schema(...) over a row that appears only after a client-side add still finds
         // its descriptor in the cache instead of missing. Descriptors are static, user-data-free.
@@ -203,14 +213,10 @@ public sealed class SsrRenderer
         var lib = new ExecScope { Parent = system, IsTop = true };
         var app = new ExecScope { Parent = lib, IsTop = true };
 
-        // The bound principal (M-auth): the `User` object the request acts as, loaded from the store by
-        // its id (its scalar fields — e.g. `role` — are enough for a condition like `currentUser.role ==
-        // "Admin"`), or ExecNull when anonymous / unresolved. The access read floor evaluates each rule's
-        // condition over { currentUser, object }; an anonymous request reads `null.role` → null (fail
-        // closed), so a role rule denies. `currentUser` is exposed to Code as a READ-ONLY system var,
-        // beside db/path/status. The floor is dormant (allow-all) when the app declares no rules.
-        var currentUser = LoadPrincipal(principalUserId);
-        var floor = new AccessFloor(_desc.Rules ?? [], currentUser);
+        // `currentUser` (built above, with the floor) is exposed to Code as a READ-ONLY system var,
+        // beside db/path/status. The access read floor evaluates each rule's condition over
+        // { currentUser, object }; an anonymous request reads `null.role` → null (fail closed), so a role
+        // rule denies.
         system.Items["currentUser"] = new ExecScopeItem { Value = currentUser, IsReadOnly = true };
 
         // db root (the object graph), read-only. A recompute reuses the warm graph the

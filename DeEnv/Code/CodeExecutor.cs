@@ -32,12 +32,21 @@ public sealed class CodeExecutor
     // by the SelfHostedUi SSR+hydrate "resolve probe" scenarios.
     private readonly TypeResolver? _resolver;
 
+    // The access READ floor (M-auth), threaded in by the renderer so the extent listing is gated. The
+    // renderer builds ONE floor over the bound principal + the ruleset and passes it BOTH to
+    // DbBridge.LoadRoot (which gates the graph) AND here, so `sys.extent(type)` reads the SAME floor: a
+    // read-denied row never enters the candidate list a reference picker (or a custom render's own
+    // listing) sees. Null for a bare executor (a condition evaluator, conformance, the client twin has
+    // no floor) ⇒ no extent gating, exactly as a dormant app. See ExecuteExtent.
+    private readonly AccessFloor? _floor;
+
     public CodeExecutor(IInstanceStore? store = null, IReadOnlyDictionary<string, CodeObject>? descriptors = null,
-        TypeResolver? resolver = null)
+        TypeResolver? resolver = null, AccessFloor? floor = null)
     {
         _store = store;
         _descriptors = descriptors ?? new Dictionary<string, CodeObject>();
         _resolver = resolver;
+        _floor = floor;
     }
 
     // ── statements ──────────────────────────────────────────────────────────────
@@ -402,6 +411,12 @@ public sealed class CodeExecutor
     // extent(typeName): all objects of a type (the reference picker's candidates), as a
     // memoized computation keyed by type — its displayed result ships and the client
     // reuses it; a mint/setRef stales `extent:*` so the next render refetches a fresh list.
+    //
+    // The read floor (M-auth) gates the listing the SAME way it gates the graph: a row the principal
+    // may not READ is omitted, so it never becomes a pick candidate (nor leaks via a custom render's
+    // own `sys.extent(...)`). The floor is passed into LoadExtent; null (a bare executor / dormant app)
+    // keeps every row. Gating happens inside the Memoize computation, so the SHIPPED `extent:*` entry
+    // already excludes denied rows (the client receives only what it may see).
     private IExecValue ExecuteExtent(CodeCall call, ExecScope scope, ExecContext context)
     {
         if (call.Params.Length != 1)
@@ -410,7 +425,8 @@ public sealed class CodeExecutor
             throw new CodeRuntimeException("extent() expects a text type name.");
         if (_store == null)
             throw new CodeRuntimeException("extent() requires a store.");
-        return Memoize($"extent:{typeName.Value}", context, () => DbBridge.LoadExtent(_store, typeName.Value, context));
+        return Memoize($"extent:{typeName.Value}", context,
+            () => DbBridge.LoadExtent(_store, typeName.Value, context, _floor));
     }
 
     // schema(typeName): a type's descriptor — { name, labelProp, props } — the reflective

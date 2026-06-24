@@ -182,3 +182,59 @@ Feature: The access floor (read enforcement by principal)
     Then the setPassword is rejected
     And the member can log in with password "original"
     And the member cannot log in with password "hacked"
+
+  # ── floor-hardening (three review-found bypasses) ───────────────────────────
+  # The read floor gated the db GRAPH but not the extent LISTING; the write floor gated the
+  # identity-addressed edits but not the path `write` onto a set member's scalar field; a
+  # throwing condition crashed the render. Each scenario below FAILS on the unhardened floor
+  # (the denied row leaks / the ungated write persists / the render errors) and PASSES after.
+
+  # Fix 1 — sys.extent must obey the READ floor. A custom render (or the generic ref picker)
+  # lists a type's rows via sys.extent(...), which bypassed CanRead. The denied member must see
+  # NO candidate of the ruled type; the admin sees them.
+  Scenario: An admin sees the ruled type's rows in an extent listing
+    Given an app that lists the Milestone extent via sys.extent in a custom render
+    And the current user is the admin
+    When the page state is rendered for "/"
+    Then the extent listing includes a row titled "Gate #3"
+
+  Scenario: A non-admin sees none of the ruled type's rows in an extent listing
+    Given an app that lists the Milestone extent via sys.extent in a custom render
+    And the current user is the member
+    When the page state is rendered for "/"
+    Then the extent listing includes no row titled "Gate #3"
+
+  Scenario: An anonymous reader sees none of the ruled type's rows in an extent listing
+    Given an app that lists the Milestone extent via sys.extent in a custom render
+    And there is no current user
+    When the page state is rendered for "/"
+    Then the render does not error
+    And the extent listing includes no row titled "Gate #3"
+
+  # Fix 2 — the path `write` op onto a set member's scalar field must obey the WRITE floor. It
+  # is the SAME mutation objectPropChange performs (and gates), but routed through the leaf-path
+  # seam, which was ungated. A non-admin's write is rejected and the store is byte-unchanged; an
+  # admin's write persists.
+  Scenario: A non-admin's path write to a ruled object's field is rejected and the store is unchanged
+    Given the access rule "Milestone edit where currentUser.role == \"Admin\""
+    And the current user is the member
+    When the member writes "title" of "Milestone" 2 to "Hacked" via the path write op
+    Then the mutation is rejected
+    And the stored "Milestone" 2 has "title" equal to "Gate #3"
+
+  Scenario: An admin's path write to a ruled object's field is accepted and persists
+    Given the access rule "Milestone edit where currentUser.role == \"Admin\""
+    And the current user is the admin
+    When the admin writes "title" of "Milestone" 2 to "Gate #3 - done" via the path write op
+    Then the mutation is accepted
+    And the stored "Milestone" 2 has "title" equal to "Gate #3 - done"
+
+  # Fix 3 — a throwing condition must DENY (fail closed), not crash the render. A condition that
+  # divides by zero throws DivideByZeroException (not a CodeRuntimeException), which escaped the
+  # floor's narrow catch and crashed the SSR render. It must now deny and the render must succeed.
+  Scenario: A condition that divides by zero denies access without crashing the render
+    Given the only access rule's condition divides by zero
+    And the current user is the admin
+    When the page state is rendered for "/"
+    Then the render does not error
+    And the shipped data includes no "Milestone"

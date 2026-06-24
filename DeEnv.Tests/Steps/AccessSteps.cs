@@ -81,6 +81,49 @@ public sealed class AccessSteps(InstanceContext ctx)
         await Assert.That(ctx.Description!.Rules is null || ctx.Description!.Rules!.Count == 0).IsTrue();
     }
 
+    // ── floor-hardening (the three review-found bypasses) ───────────────────────
+
+    // Fix 1 — sys.extent gating. Swap in the fixture whose custom `fn render()` lists the Milestone extent
+    // via `sys.extent("Milestone")` (the ref-picker seam), carrying the `Milestone read` rule. The store is
+    // rebuilt over the same seed so the seeded milestone/users remain. The render then surfaces each
+    // candidate in a `.extent-row`, so the listing assertions read whether the denied row leaked.
+    [Given("an app that lists the Milestone extent via sys.extent in a custom render")]
+    public async Task GivenExtentListingApp()
+    {
+        ctx.Description = InstanceContext.AccessExtentFixtureDb();
+        ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+        await Assert.That(ctx.Description!.Rules!.Any(r => r.Type == "Milestone" && r.Verbs.Contains("read")))
+            .IsTrue();
+    }
+
+    // The extent listing is the custom render's ONLY content (just the .extent-row list), so a row's title
+    // appears in the rendered document iff it survived the read floor into the candidate list. Present →
+    // the admin saw the candidate; absent → the denied member/anonymous reader did not.
+    [Then("the extent listing includes a row titled {string}")]
+    public async Task ThenExtentIncludes(string title)
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        await Assert.That(ctx.RenderedHtml!.Contains(title)).IsTrue();
+    }
+
+    [Then("the extent listing includes no row titled {string}")]
+    public async Task ThenExtentExcludes(string title)
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        await Assert.That(ctx.RenderedHtml!.Contains(title)).IsFalse();
+    }
+
+    // Fix 3 — a throwing condition must DENY, not crash the render. Swap in the fixture whose ONLY rule's
+    // condition divides by zero, rebuilt over the same seed. The render step then proves the floor catches
+    // the DivideByZeroException (fail closed) rather than letting it crash the SSR render.
+    [Given("the only access rule's condition divides by zero")]
+    public async Task GivenDivZeroRule()
+    {
+        ctx.Description = InstanceContext.AccessDivZeroFixtureDb();
+        ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+        await Assert.That(ctx.Description!.Rules!.Single(r => r.Type == "Milestone").When).IsNotNull();
+    }
+
     // ── the principal (floor-first harness bind) ────────────────────────────────
 
     [Given("the current user is the admin")]
@@ -171,6 +214,19 @@ public sealed class AccessSteps(InstanceContext ctx)
         var setId = MilestonesSetId();
         _writeReply = ws.ProcessMessage(
             $$"""{ "op": "arrayAdd", "clientId": "{{clientId}}", "setId": {{setId}}, "typeName": "Milestone", "value": { "props": { "title": { "type": "text", "value": "{{title}}" } } } }""");
+    }
+
+    // Fix 2 — the path `write` op onto a set member's scalar field (`/milestones/<id>/title`). This is the
+    // SAME mutation objectPropChange performs but routed through the leaf-path seam (WriteLeaf walks into the
+    // set), which was ungated. The `{word}` (admin/member) is the actor label; the bound principal decides.
+    [When("the {word} writes {string} of {string} {int} to {string} via the path write op")]
+    public void WhenPathWritesField(string _actor, string prop, string _type, int memberId, string value)
+    {
+        // The `write` op carries a BARE scalar value (ws.ts sends `bareScalar(value)`), not the
+        // { type, value } envelope objectPropChange uses — title is text, so a bare JSON string.
+        var (ws, clientId) = BoundWs();
+        _writeReply = ws.ProcessMessage(
+            $$"""{ "op": "write", "clientId": "{{clientId}}", "path": "/milestones/{{memberId}}/{{prop}}", "value": "{{value}}" }""");
     }
 
     // delete: an arrayRemove dropping the seeded Milestone from the Db.milestones set.

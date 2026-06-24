@@ -930,6 +930,46 @@ public class InstanceContext
 
     private const string AccessFixtureAppNoRule = AccessFixtureTypes + AccessFixtureSeed;
 
+    // M-auth floor-hardening (Fix 1 — sys.extent gating): the SAME shape + the `Milestone read` rule, but
+    // with a CUSTOM `fn render()` that LISTS the Milestone extent via `sys.extent("Milestone")` (the seam
+    // the reference picker uses: `foreach c in sys.extent(target)`). This is the exposure the graph floor
+    // does NOT cover — a custom render (or a ref picker) lists a read-denied type's rows directly. Each row
+    // ships its title in a `.extent-row`, so a scenario asserts an admin sees "Gate #3" as a candidate and
+    // a member sees none. (A plain `<main>`/`<div>` render — no tag name resolves to a component, avoiding
+    // the name-resolution footgun.)
+    public static InstanceDescription AccessExtentFixtureDb() =>
+        InstanceDescriptionLoader.Load(AccessExtentFixtureApp);
+
+    private const string AccessExtentFixtureApp = AccessFixtureTypes + AccessFixtureSeed + """
+
+    access
+        Milestone
+            read where currentUser.role == "Admin"
+
+    ui
+
+        fn render()
+            return <main>
+                foreach m in sys.extent("Milestone")
+                    <div class="extent-row">
+                        m.title
+    """;
+
+    // M-auth floor-hardening (Fix 3 — a throwing condition must DENY, not crash the render): the SAME
+    // shape + seed, but the ONLY access rule's condition divides by zero (`1 / 0 == 1`). Integer `/` by a
+    // zero divisor throws DivideByZeroException (CodeExecutor.ExecuteInfixOp) — a .NET exception, NOT a
+    // CodeRuntimeException. The read floor evaluates the condition while loading the Milestone set member;
+    // before the fix the throw ESCAPED AccessFloor.EvaluateCondition's narrow catch and crashed the SSR
+    // render (a render-time DoS). After the fix the broad catch denies (fail closed) — the milestone is
+    // omitted and the page renders normally. Rebuilt over the same seed so the milestone/users persist.
+    public static InstanceDescription AccessDivZeroFixtureDb() =>
+        InstanceDescriptionLoader.Load(AccessFixtureTypes + AccessFixtureSeed + """
+
+    access
+        Milestone
+            read where 1 / 0 == 1
+    """);
+
     // M-auth login 1d (bootstrap): the SAME shape (Role enum + a `users set of User` + the access
     // rules) but with NO seeded users — the chicken-and-egg the seed-admin operation solves (an app
     // with rules and no Admin can never be logged into). Only the Db root is seeded so the `users` set

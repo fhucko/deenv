@@ -230,11 +230,15 @@ public sealed class WsHandler
     // declares no rules — so a solo app pays nothing. The principal is the session's bound `currentUser`
     // (ClientSession.PrincipalUserId — harness-set this slice; the password-login slice binds it on the WS).
     //
-    // ponytail: this slice gates the OBJECT-graph write seams (set-member create/delete, object-field +
-    // reference edit) — exactly the surface the read floor (DbBridge) gates. The DICTIONARY/leaf-path write
-    // seams (addEntry/removeEntry on a dict, the path-addressed `write`) are NOT gated yet, matching the
-    // read floor's own dict gap; they layer on additively when dict reads are gated. Per-field rules and
-    // richer condition inputs (now/client/cross-row) are later slices too.
+    // The OBJECT-graph write seams are ALL gated: set-member create/delete (arrayAdd/arrayRemove +
+    // removeEntry on a set), object-field + reference edit (objectPropChange/setReferenceField), AND the
+    // path-addressed `write` onto a set member's scalar field (HandleWrite — the SAME mutation
+    // objectPropChange performs, so it is gated identically). That is exactly the surface the read floor
+    // (DbBridge graph + sys.extent listing) gates.
+    // ponytail: the ONE ungated write surface is DICTIONARY entries — addEntry/removeEntry on a dict, and
+    // the path-addressed `write` onto a dict-entry value. They stay deferred IN LOCKSTEP with the dict READ
+    // gap (DbBridge does not gate dict members either), so the read+write dict gates land together. Per-field
+    // rules and richer condition inputs (now/client/cross-row) are later slices too.
     private Code.AccessFloor Floor(WsRequest req) =>
         new(_desc.Rules ?? [], Code.AccessFloor.LoadPrincipal(_store, Session(req)?.PrincipalUserId));
 
@@ -320,15 +324,28 @@ public sealed class WsHandler
 
         var value = DeserializeLeaf(valEl, typeInfo.Type);
 
+        // The WRITE floor (M-auth): a path `write` onto a SET MEMBER's scalar field (`/<set>/<id>/<field>`)
+        // is the SAME mutation HandleObjectPropChange performs — an `edit` of the owning extent object — so
+        // it MUST be gated the same way, or it routes around the floor. The owner is the set member at the
+        // parent path; its intrinsic id IS the parent's last segment (a set's members are keyed by id), so
+        // the candidate is built by-id over its CURRENT scalar fields, exactly as the objectPropChange edit
+        // floor builds it. Rejected → the `{ error }` reply (client rollback); the store is never touched.
+        // ponytail: a DICTIONARY-entry write (a scalar entry caught below, or an object-entry field
+        // `/customers/42/name`) is NOT gated yet — it stays deferred with the dict READ gap (gated when
+        // dict reads are), so the read+write dict gates land together.
+        var parentPath = path.IsRoot ? null : NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1));
+        if (parentPath != null && SetMemberOwnerId(parentPath) is { } ownerId
+            && _store.ReadById(ownerId) is { } owner)
+            RequireWrite(Floor(req), "edit", owner.TypeName,
+                Code.AccessFloor.ScalarObject(owner.TypeName, ownerId, owner.Fields));
+
         // A SCALAR dictionary entry's value lives at its path but is addressed by (dict, key)
         // — WriteLeaf can't walk into a dict, so upsert the entry. (An OBJECT entry's field
         // path, e.g. /customers/42/name, has an object parent and writes through WriteLeaf.)
-        if (!path.IsRoot
-            && _resolver.ResolveType(NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1)))
-               is { Cardinality: Cardinality.Dictionary } parentInfo)
+        if (parentPath != null
+            && _resolver.ResolveType(parentPath) is { Cardinality: Cardinality.Dictionary } parentInfo)
         {
-            var dictPath = NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1));
-            _store.WriteDictionaryEntry(dictPath, ParseKey(path.Segments[^1], parentInfo.KeyTypeName ?? "text"), value);
+            _store.WriteDictionaryEntry(parentPath, ParseKey(path.Segments[^1], parentInfo.KeyTypeName ?? "text"), value);
         }
         else
         {
@@ -336,6 +353,24 @@ public sealed class WsHandler
         }
 
         return Serialize(new WriteResponse { Path = pathStr });
+    }
+
+    // The intrinsic id of the EXTENT OBJECT a path addresses, but ONLY when the path is a SET MEMBER
+    // (`/<set>/<id>`) — a member's own segment IS its id (a set keys members by id), and the grandparent
+    // resolves to a Set. Used by the write floor to gate a path `write` onto a set member's scalar field as
+    // an `edit` of that member, matching HandleObjectPropChange. Returns null for anything else (the root, a
+    // top-level field, a single reference, or a DICTIONARY entry — the deferred dict gap), so only the
+    // set-member case is gated. The grandparent check is what distinguishes a set member (gate) from a dict
+    // entry (defer): both have a Single-object parent, but only a set member's parent sits under a Set.
+    private int? SetMemberOwnerId(NodePath memberPath)
+    {
+        if (memberPath.Segments.Count < 2) return null; // need a /<set>/<id> shape at least
+        if (_resolver.ResolveType(memberPath) is not { Cardinality: Cardinality.Single } info
+            || info.Type.BaseType != BaseType.Object)
+            return null; // not an object (so not a member with scalar fields)
+        var grandparent = NodePath.FromSegments(memberPath.Segments.Take(memberPath.Segments.Count - 1));
+        if (_resolver.ResolveType(grandparent) is not { Cardinality: Cardinality.Set }) return null;
+        return int.TryParse(memberPath.Segments[^1], out var id) ? id : null;
     }
 
     // ── addEntry (create on the create-form Save) ──────────────────────────────

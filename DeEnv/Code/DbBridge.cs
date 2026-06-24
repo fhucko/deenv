@@ -180,7 +180,16 @@ public static class DbBridge
     // (id + scalar props). Enough for the reference picker's candidate list — option
     // label (a text prop) + id. Their object/set/dict props are omitted (the full object
     // loads via the graph after a reference is set). Memoized by the caller.
-    public static ExecArray LoadExtent(IInstanceStore store, string typeName, ExecContext context)
+    //
+    // `floor` is the M-auth access read floor (null ⇒ no enforcement, today's behavior). When set, a
+    // row the principal may not READ is OMITTED from the list — so a read-denied type's objects never
+    // become pick candidates (the reference picker's `foreach c in sys.extent(target)`) and never leak
+    // through a custom render's own `sys.extent(...)`. This mirrors the graph floor in LoadObject: the
+    // candidate is built SCALAR-only (passwordHash already excluded), exactly the shape CanRead's
+    // condition reads (`object.status`, the row's own fields), so the listing floor decides over the
+    // SAME inputs as the graph floor.
+    public static ExecArray LoadExtent(IInstanceStore store, string typeName, ExecContext context,
+        AccessFloor? floor = null)
     {
         var items = new List<ExecItem>();
         foreach (var (id, ov) in store.ReadExtent(typeName))
@@ -192,6 +201,9 @@ public static class DbBridge
                 if (v is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue
                     && !UserConvention.IsHiddenField(typeName, name))
                     obj.Props[name] = ScalarToExec(v);
+            // The read floor: a row the principal may not read is omitted — it never enters the candidate
+            // list. Built scalar-only above, so CanRead reads the same fields it would on the graph.
+            if (floor != null && !floor.CanRead(typeName, obj)) continue;
             items.Add(new ExecItem { Key = id, Value = obj });
         }
         return new ExecArray
