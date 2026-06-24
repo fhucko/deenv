@@ -930,6 +930,31 @@ public class InstanceContext
 
     private const string AccessFixtureAppNoRule = AccessFixtureTypes + AccessFixtureSeed;
 
+    // M-auth login 1d (bootstrap): the SAME shape (Role enum + a `users set of User` + the access
+    // rules) but with NO seeded users — the chicken-and-egg the seed-admin operation solves (an app
+    // with rules and no Admin can never be logged into). Only the Db root is seeded so the `users` set
+    // exists to link the new admin into; the seed mints the first User. Used to prove the kernel-side
+    // AdminSeed creates a loginable admin from scratch.
+    public static InstanceDescription AccessFixtureNoUsers() =>
+        InstanceDescriptionLoader.Load(AccessFixtureTypes + AccessFixtureNoUsersSeed + AccessFixtureRules);
+
+    private const string AccessFixtureNoUsersSeed = """
+
+    initialData
+        Db 1
+            milestones: [2]
+            users: []
+        Milestone 2
+            title: "Gate #3"
+    """;
+
+    private const string AccessFixtureRules = """
+
+    access
+        Milestone
+            read where currentUser.role == "Admin"
+    """;
+
     // The same fixture (types + seed) but carrying an EXPLICIT set of `Milestone` rule lines — so the
     // write-enforcement scenarios can install a single-verb rule (e.g. `edit where currentUser.role ==
     // "Admin"`) and have it take real effect (the rule is PARSED by AppParse exactly as the app's own
