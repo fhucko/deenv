@@ -60,6 +60,7 @@ function commitRender(result: ExecValue): void {
     syncScopeText("title", v => { document.title = v; });
     refreshErrorBanner();
     consumeScrollReset(); // a forward nav whose target just painted scrolls to the top
+    focusNewCreateForm(); // a just-opened create form scrolls into view and takes focus
 }
 
 // Speculatively render the target and commit it ONLY if it rendered COMPLETELY from already-local data.
@@ -345,6 +346,28 @@ function consumeScrollReset(): void {
     if (!pendingScrollReset) return;
     pendingScrollReset = false;
     window.scrollTo(0, 0);
+}
+
+// ── focus a newly-opened create form ────────────────────────────────────────────────
+//
+// The generic SetTable/DictTable keep the read-only table visible and reveal the create form BELOW it
+// (rather than swapping the table out), so on a long list — or a small screen — the form can open below
+// the fold and a "New" click looks like nothing happened. When a create form NEWLY appears (the count of
+// .create-form under #app rises), bring it into view and focus its first field so the operator can type
+// immediately. Gated on a count INCREASE, never the keystroke re-renders that follow (those keep the
+// count flat) — focusing on every render would yank focus mid-typing, the same hazard consumeScrollReset
+// avoids. ponytail: focuses the last create form in document order on an increase — exact for the common
+// single-form-open case (every generic collection page, incl. devlog); a page with two forms open at once
+// could focus the wrong one, harmless (the operator just clicks the field they want).
+let openCreateForms = 0;
+function focusNewCreateForm(): void {
+    const forms = document.querySelectorAll<HTMLElement>("#app .create-form");
+    if (forms.length > openCreateForms) {
+        const form = forms[forms.length - 1];
+        form.scrollIntoView({ block: "nearest" });
+        form.querySelector<HTMLInputElement>("input, textarea, select")?.focus({ preventScroll: true });
+    }
+    openCreateForms = forms.length;
 }
 
 // Reset the client view state for a NAVIGATION (the same effect a full reload had, minus the reload):

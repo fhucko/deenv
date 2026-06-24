@@ -451,8 +451,10 @@ Feature: Self-hosted generic UI (object forms)
 
   # ── flag-gated create view (milestone 11) ──────────────────────────────────
   # The always-visible inline add row is replaced by a `+ New` button that reveals a
-  # labeled create form (the same Field label+Input the edit page uses), swapping out
-  # the table; Save commits + returns to the table, Cancel discards. Hidden until asked.
+  # labeled create form (the same Field label+Input the edit page uses) BELOW the still-
+  # visible read-only table; Save appends a row + closes the form, Cancel discards. Hidden
+  # until asked. The list stays visible while adding (a tracker keeps the list in view while
+  # appending) — the create form is a separate card under the table, NOT inline-row editing.
 
   @milestone-11 @single-user
   Scenario: A set table shows a New button, not an inline add form, on load
@@ -463,13 +465,58 @@ Feature: Self-hosted generic UI (object forms)
     And the page does not show ".set-new"
 
   @milestone-11 @single-user
-  Scenario: Clicking New reveals a labeled create form in place of the set table
+  Scenario: Clicking New reveals a labeled create form below the still-visible set table
     Given the self-hosted form app is running
     When I open "/notes"
     And I click the new button
     Then the page shows ".create-form"
     And the create form has a labeled "title" field
-    And the page does not show ".set-table"
+    And the page shows ".set-table"
+
+  # Because the read-only table stays visible, the create form opens BELOW it — potentially below the
+  # fold on a long list or small screen, where a New click would otherwise look like it did nothing.
+  # So a just-opened create form takes focus on its first field (and scrolls into view): the click
+  # visibly does something and the operator can type immediately.
+  @milestone-11 @single-user
+  Scenario: Opening the create form focuses its first field
+    Given the self-hosted form app is running
+    When I open "/notes"
+    And I click the new button
+    Then the create form's first field is focused
+
+  # The defining proof of "the list stays visible while adding": on a collection with existing
+  # members, clicking New keeps every existing row present AND shows the create form (they
+  # coexist), Save appends a new row and closes the form, and Cancel closes the form leaving the
+  # list intact. The set route SSRs the seeded "First note" member, so the row is present from the
+  # start and must survive the create-form being open (the old swap hid it entirely).
+  @milestone-11 @single-user
+  Scenario: Opening the create form keeps the existing rows visible, and Save appends below them
+    Given the self-hosted reference app is running
+    When I open "/notes"
+    Then the page shows ".set-table"
+    And a set row shows "First note"
+    When I click the new button
+    Then the page shows ".create-form"
+    And the page shows ".set-table"
+    And a set row shows "First note"
+    When I fill the new "title" with "Appended note"
+    And I add to the set
+    Then a set row eventually shows "Appended note"
+    And a set row shows "First note"
+    And the page does not show ".create-form"
+
+  @milestone-11 @single-user
+  Scenario: Cancelling the create form keeps the existing rows visible the whole time
+    Given the self-hosted reference app is running
+    When I open "/notes"
+    And I click the new button
+    Then a set row shows "First note"
+    When I fill the new "title" with "Abandoned"
+    And I cancel the create form
+    Then the page shows ".set-table"
+    And the page does not show ".create-form"
+    And a set row shows "First note"
+    And no set row eventually shows "Abandoned"
 
   # The Note has a `dueDate date` prop, so the create form has a date field; fill it (an empty
   # date is rejected on add — a pre-existing model gap in empty-date handling, NOT specific to the
@@ -498,14 +545,14 @@ Feature: Self-hosted generic UI (object forms)
     And no set row eventually shows "Discarded"
 
   @milestone-11 @single-user
-  Scenario: A dictionary create form reveals labeled Key and value fields
+  Scenario: A dictionary create form reveals labeled Key and value fields below the still-visible table
     Given the self-hosted dict app is running
     When I open "/"
     And I click the new button
     Then the page shows ".create-form"
     And the create form has a labeled "dict-key" field
     And the create form has a labeled "value" field
-    And the page does not show ".dict-table"
+    And the page shows ".dict-table"
 
   @milestone-11 @single-user
   Scenario: A dictionary create form with a missing key shows a validation error and adds nothing

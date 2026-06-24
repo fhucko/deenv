@@ -40,11 +40,13 @@ namespace DeEnv.Instance;
 //     identity (labelProp value) in a stretched `<a class="row-link" href=nest(setPath, m)>` (CSS
 //     `::after { inset:0 }` covers the row); a per-row Remove sits z-raised above the overlay. A bool
 //     column renders a read-only ✓/✗ glyph, never "true"/"false". Shared structure with DictTable
-//     (row-link + Remove + bool cell + the `+ New`/create-form swap), differing only in the identity
-//     source. A COMPONENT: a local `state.creating` flag SWAPS the render between the table (default)
-//     and a labeled CREATE FORM with Save / Cancel — so the create form is hidden until asked, not an
-//     always-visible inline add row. Save commits the draft (`set.add`) and returns to the table; Cancel
-//     discards it; both reset `state.draft`. The last three params shape the table (all optional, default
+//     (row-link + Remove + bool cell + the `+ New`/create-form pattern), differing only in the identity
+//     source. A COMPONENT: the read-only table ALWAYS renders; a local `state.creating` flag toggles what
+//     sits BELOW it — the `+ New` button (default) or a labeled CREATE FORM with Save / Cancel. So the
+//     existing list stays visible while you add a member (a tracker keeps the list in view while
+//     appending); the create form is a separate card under the table, hidden until asked — NOT an inline
+//     add row (tables stay read-only; edits happen on the member page). Save commits the draft (`set.add`)
+//     and closes the form; Cancel discards it; both reset `state.draft`. The last three params shape the table (all optional, default
 //     to the plain data-table behavior):
 //       · columns — the column names to show (omitted/null → labelProp + every scalar prop).
 //       · rowActions(m) — a per-row action cell; when given, it REPLACES the default Remove cell AND
@@ -206,22 +208,6 @@ public static class GenericUi
                     var tableClass = "set-table"
                     if rowActions != null
                         tableClass = "set-table managed"
-                    if state.creating
-                        return <div class="create-form">
-                            <h3>
-                                "New "
-                                sys.humanize(desc.name)
-                            if createForm != null
-                                createForm(state.draft)
-                            else
-                                foreach p in desc.props
-                                    if p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary"
-                                        <Field obj={state.draft} desc={p}>
-                            <div class="create-actions">
-                                <button class="set-add" onClick={save}>
-                                    "Save"
-                                <button class="cancel" onClick={cancel}>
-                                    "Cancel"
                     return <div class={tableClass}>
                         <table>
                             <tr class="set-head">
@@ -282,9 +268,26 @@ public static class GenericUi
                                         <td class="row-action">
                                             <button class="set-remove" onClick={() => set.remove(m)}>
                                                 "Remove"
-                        <button class="new-btn" onClick={startCreate}>
-                            "New "
-                            sys.humanize(desc.name)
+                        if state.creating
+                            <div class="create-form">
+                                <h3>
+                                    "New "
+                                    sys.humanize(desc.name)
+                                if createForm != null
+                                    createForm(state.draft)
+                                else
+                                    foreach p in desc.props
+                                        if p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary"
+                                            <Field obj={state.draft} desc={p}>
+                                <div class="create-actions">
+                                    <button class="set-add" onClick={save}>
+                                        "Save"
+                                    <button class="cancel" onClick={cancel}>
+                                        "Cancel"
+                        else
+                            <button class="new-btn" onClick={startCreate}>
+                                "New "
+                                sys.humanize(desc.name)
                 return render
 
             fn DictTable(dict, desc, base)
@@ -311,29 +314,6 @@ public static class GenericUi
                     state.error = ""
                     state.creating = false
                 fn render()
-                    if state.creating
-                        return <div class="create-form">
-                            <h3>
-                                "New "
-                                sys.humanize(desc.name)
-                            <div class="field">
-                                <label class="dict-key">
-                                    "Key"
-                                <input class="dict-key" value={state.key}>
-                            foreach p in desc.valueProps
-                                <Field obj={state.draft} desc={p}>
-                            if desc.isScalar
-                                <div class="field">
-                                    <label class="value">
-                                        "Value"
-                                    <input type={InputType(desc.element)} class="value" value={sys.field(state.draft, "value")}>
-                            <div class="create-actions">
-                                <button class="dict-add" onClick={save}>
-                                    "Save"
-                                <button class="cancel" onClick={cancel}>
-                                    "Cancel"
-                            <div class="dict-error">
-                                state.error
                     return <div class="dict-table">
                         <table>
                             <tr class="dict-head">
@@ -366,9 +346,33 @@ public static class GenericUi
                                     <td class="row-action">
                                         <button class="dict-remove" onClick={() => dict.remove(m)}>
                                             "Remove"
-                        <button class="new-btn" onClick={startCreate}>
-                            "New "
-                            sys.humanize(desc.name)
+                        if state.creating
+                            <div class="create-form">
+                                <h3>
+                                    "New "
+                                    sys.humanize(desc.name)
+                                <div class="field">
+                                    <label class="dict-key">
+                                        "Key"
+                                    <input class="dict-key" value={state.key}>
+                                foreach p in desc.valueProps
+                                    <Field obj={state.draft} desc={p}>
+                                if desc.isScalar
+                                    <div class="field">
+                                        <label class="value">
+                                            "Value"
+                                        <input type={InputType(desc.element)} class="value" value={sys.field(state.draft, "value")}>
+                                <div class="create-actions">
+                                    <button class="dict-add" onClick={save}>
+                                        "Save"
+                                    <button class="cancel" onClick={cancel}>
+                                        "Cancel"
+                                <div class="dict-error">
+                                    state.error
+                        else
+                            <button class="new-btn" onClick={startCreate}>
+                                "New "
+                                sys.humanize(desc.name)
                 return render
 
             fn LeafForm(entry, base)

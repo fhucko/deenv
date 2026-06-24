@@ -509,16 +509,16 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
 
     // ── flag-gated create view (milestone 11) ───────────────────────────────────────
     // The always-visible inline add row (.set-new/.dict-new) is replaced by a `+ New` button that
-    // reveals a labeled create form (.create-form), swapping out the table; Save commits + returns to
-    // the table, Cancel discards. These steps drive that swap directly (the (a)-(e) coverage).
+    // reveals a labeled create form (.create-form) BELOW the still-visible read-only table; Save commits
+    // + returns to the New button, Cancel discards. These steps drive that flow directly.
 
-    // A selector is ABSENT (the inline add form is gone; the table is replaced while creating; the
-    // create form is gone after Save/Cancel). WaitForFunction so a still-reconciling DOM settles.
+    // A selector is ABSENT (the inline add form is gone; the create form is gone after Save/Cancel).
+    // WaitForFunction so a still-reconciling DOM settles.
     [Then("the page does not show {string}")]
     public async Task ThenPageDoesNotShow(string selector) =>
         await ctx.Page!.WaitForFunctionAsync($"() => document.querySelector({JsString(selector)}) === null");
 
-    // Click the `+ New` button to reveal the create form (the table → create-form swap). Hydration
+    // Click the `+ New` button to reveal the create form (below the still-visible table). Hydration
     // is awaited because the click runs a JS handler that flips the component's `creating` state.
     [When("I click the new button")]
     public async Task WhenClickNewButton()
@@ -551,6 +551,17 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             $"() => document.querySelector('.create-form label.{field}') !== null " +
             $"&& document.querySelector('.create-form input.{field}, .create-form select.{field}') !== null");
+
+    // The just-opened create form takes focus on its first field (the focusNewCreateForm one-shot in
+    // ui.ts), so on a long list / small screen the New click visibly does something and the operator can
+    // type immediately. WaitForFunction so the focus (set in the same commitRender that mounts the form)
+    // is observed once the DOM settles.
+    [Then("the create form's first field is focused")]
+    public async Task ThenCreateFormFirstFieldFocused() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const f = document.querySelector('.create-form'); const a = document.activeElement; " +
+            "return f !== null && a !== null && f.contains(a) " +
+            "&& (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT'); }");
 
     // Milestone 11: a hand-written `fn render()` that composes the PUBLIC <ObjectForm> library
     // component — proving the generic-UI library is reachable + usable from userspace.

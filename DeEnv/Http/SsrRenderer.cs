@@ -460,11 +460,12 @@ public sealed class SsrRenderer
         .ref-new input, .ref-new select { max-width: 200px; }
         .dict-error { color: var(--danger); font-size: 0.85rem; margin-top: 0.4rem; }
 
-        /* Flag-gated create view: the `+ New` button replaces the old always-visible inline add row,
-           and clicking it SWAPS the table for a labeled create form (.create-form, reusing the
-           .object-form card + .field labels) with Save (primary green, .set-add/.dict-add) and a plain
-           Cancel. Hidden until asked — the create-then-populate model; collections are added on the
-           entry's own page after it exists. */
+        /* Flag-gated create view: the `+ New` button replaces the old always-visible inline add row;
+           clicking it reveals a labeled create form (.create-form, reusing the .object-form card +
+           .field labels) BELOW the still-visible read-only table, with Save (primary green,
+           .set-add/.dict-add) and a plain Cancel — the list stays in view while appending. Hidden
+           until asked — the create-then-populate model; collections are added on the entry's own page
+           after it exists. (The table's own bottom margin separates it from the create-form card.) */
         .new-btn { margin-top: 0.3rem; border-color: var(--accent); color: var(--accent); }
         .new-btn:hover { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); border-color: var(--accent); }
         .create-form > .field > input:not([type=checkbox]), .create-form > .field > select { width: 100%; max-width: 440px; }
