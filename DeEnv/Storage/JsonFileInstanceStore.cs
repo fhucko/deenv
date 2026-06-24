@@ -754,7 +754,23 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         var tmp = path + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(doc, Opts));
-        File.Move(tmp, path, overwrite: true);
+        // Atomically replace the data file, retrying through a transient sharing violation. On Windows the
+        // overwriting move must replace `path`, which fails ("Access to the path is denied" /
+        // "used by another process") whenever ANOTHER handle is briefly open on it — a virus scanner,
+        // search indexer or backup in production, or a concurrent reader polling the file in the tests. That
+        // conflicting handle is held for microseconds, so a brief retry rides it out; WITHOUT it the OS-level
+        // conflict surfaces as a spurious write failure that gets reported back over the wire and rolls the
+        // user's edit back (the "persist/action" test flake under parallel load — and a real, if rare,
+        // production data-loss path). The whole point of write-temp-then-move is a durable, reader-safe
+        // commit; a transient replace conflict must not defeat that.
+        for (var attempt = 0; ; attempt++)
+        {
+            try { File.Move(tmp, path, overwrite: true); return; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < 50)
+            {
+                Thread.Sleep(10); // ~microsecond conflict window; up to ~500ms of retries dwarfs it
+            }
+        }
     }
 
     // The object a reference (or the root) points at, via its extent. Null if dangling.
