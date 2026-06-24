@@ -1,13 +1,16 @@
 using DeEnv.Instance;
+using DeEnv.Storage;
 
 namespace DeEnv.Code;
 
-// The access-control read floor (M-auth) — the non-bypassable check that sits BELOW Code, on the
-// store→runtime seam (DbBridge). It decides whether an object of a given type may load into the `db`
-// graph that ships to the client. A denied object never enters the graph (a set member is omitted, a
-// single reference becomes null), so no app path — a custom render, a where-query — can route around it.
+// The access-control floor (M-auth) — the non-bypassable check that sits BELOW Code, on the store seam.
+// It decides, per principal, what may be READ (which objects load into the `db` graph that ships to the
+// client — consulted by DbBridge) and what may be WRITTEN (which create/edit/delete mutations are
+// accepted — consulted by WsHandler). A denied read object never enters the graph (a set member is
+// omitted, a single reference becomes null); a denied write is rejected before it touches the store. No
+// app path — a custom render, a where-query, a mutation — can route around it.
 //
-// This is NOT callable from app Code: it is a kernel-floor helper the DbBridge consults while loading.
+// This is NOT callable from app Code: it is a kernel-floor helper the DbBridge / WsHandler consult.
 //
 // A rule's condition is an ordinary Code expression (Code-as-data AST) the EXISTING interpreter
 // evaluates over a scope { currentUser, object } — `currentUser` is the principal (an ExecObject, or
@@ -15,10 +18,10 @@ namespace DeEnv.Code;
 // fails CLOSED (null.prop → null, never a throw — see CodeExecutor.ExecuteInfixOp), so a role condition
 // with no principal evaluates to false (deny). That is the deny-by-default anonymous case.
 //
-// ponytail: READ-only enforcement, TYPE-level rules, the `{ currentUser, object }` condition scope, and
-// `==`/null as the only condition surface are THIS slice's ceiling. create/edit/delete verbs parse but
-// are not checked here (writes are the WsHandler floor, a later slice); per-field rules, `now`/`client`/
-// `db`/cross-row reads in conditions, and richer operators all layer on additively after.
+// ponytail: TYPE-level rules, the `{ currentUser, object }` condition scope, and `==`/null as the only
+// condition surface are THIS slice's ceiling. The READ floor (DbBridge) and the WRITE floor (WsHandler)
+// both consult this same evaluator; per-field rules, `now`/`client`/`db`/cross-row reads in conditions,
+// and richer operators all layer on additively after.
 public sealed class AccessFloor
 {
     private readonly IReadOnlyList<AccessRule> _rules;
@@ -39,18 +42,27 @@ public sealed class AccessFloor
     public bool Dormant => _rules.Count == 0;
 
     // May the principal READ an object of `typeName` (the candidate `obj` already loaded as an ExecObject)?
-    //
-    // Deny-by-default AMONG THE RULED subjects: if NO rule grants `read` (or `*`) to this type, the type is
-    // unruled → allow (it is not subject to the ruleset for reads). If one or more do, allow iff at least
-    // one such rule's condition holds — an absent condition (When == null) is an unconditional grant, a
-    // present one is evaluated over { currentUser, object }. So a `Milestone read where currentUser.role ==
-    // "Admin"` rule makes Milestone ruled-for-read: an admin passes, a member/anonymous is denied.
-    public bool CanRead(string typeName, ExecObject obj)
+    // The DbBridge floor consults this while loading the graph: a denied object never enters the graph.
+    public bool CanRead(string typeName, ExecObject obj) => Can("read", typeName, obj);
+
+    // May the principal perform a WRITE `verb` (create | edit | delete) on `obj` of `typeName`? The
+    // WsHandler mutation floor consults this: a denied create/edit/delete is rejected, the store untouched.
+    // For an EDIT/DELETE `obj` is the existing target (its current scalar fields); for a CREATE it is the
+    // about-to-be-created value (so a condition like `where object.status == "draft"` reads the new data).
+    public bool CanWrite(string verb, string typeName, ExecObject obj) => Can(verb, typeName, obj);
+
+    // Deny-by-default AMONG THE RULED subjects, for ONE verb: if NO rule grants `verb` (or `*`) to this
+    // type, the type is unruled for that verb → allow (not subject to the ruleset). If one or more do,
+    // allow iff at least one such rule's condition holds — an absent condition (When == null) is an
+    // unconditional grant, a present one is evaluated over { currentUser, object }. So a `Milestone edit
+    // where currentUser.role == "Admin"` rule makes Milestone ruled-for-edit: an admin passes, a
+    // member/anonymous is denied. A dormant floor (no rules) allows everything (today's behavior).
+    private bool Can(string verb, string typeName, ExecObject obj)
     {
         if (Dormant) return true;
 
-        var applicable = _rules.Where(r => r.Type == typeName && Grants(r, "read")).ToList();
-        if (applicable.Count == 0) return true; // unruled type → not gated for reads
+        var applicable = _rules.Where(r => r.Type == typeName && Grants(r, verb)).ToList();
+        if (applicable.Count == 0) return true; // unruled type for this verb → not gated
 
         foreach (var rule in applicable)
             if (rule.When == null || EvaluateCondition(rule.When, obj))
@@ -80,5 +92,37 @@ public sealed class AccessFloor
         {
             return false; // a malformed/uncomputable condition denies — fail closed
         }
+    }
+
+    // ── principal + candidate object construction (shared by both floors) ────────
+    //
+    // Both the read floor (SsrRenderer) and the write floor (WsHandler) build the principal and the
+    // candidate object the SAME way — scalar fields only, resolved through the store seam — so the two
+    // floors decide over identical inputs. Keeping this in ONE place is the consistency guarantee.
+
+    // The bound principal as an ExecObject of its SCALAR fields — enough for a condition like
+    // `currentUser.role == "Admin"`. Loaded by id through the storage seam (NOT the graph floor, so the
+    // principal is always resolvable to decide its own access). A null id (anonymous) or an id with no
+    // object (a stale/deleted principal) → ExecNull, which fails every role condition closed (deny).
+    // Object/collection fields are omitted: a condition reads scalar facts, and the floor evaluates over a
+    // throwaway context, so reading only scalars is also a privacy floor on what a condition could touch.
+    // ponytail: scalar-only + by-id is this slice's ceiling; a richer principal (the User's references/sets
+    // for graph-position conditions) layers on with the membership operator.
+    public static IExecValue LoadPrincipal(IInstanceStore store, int? principalUserId)
+    {
+        if (principalUserId is not { } id || store.ReadById(id) is not { } hit) return new ExecNull();
+        return ScalarObject(hit.TypeName, id, hit.Fields);
+    }
+
+    // A candidate object (the access decision's `object`) as an ExecObject of its SCALAR fields — what a
+    // condition like `where object.status == "draft"` reads. Built from a store ObjectValue (an existing
+    // edit/delete target) the same scalar-only way the principal is.
+    public static ExecObject ScalarObject(string typeName, int id, ObjectValue fields)
+    {
+        var props = new Dictionary<string, IExecValue>();
+        foreach (var (name, value) in fields.Fields)
+            if (value is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue)
+                props[name] = DbBridge.ScalarToExec(value);
+        return new ExecObject { Props = props, Id = id, TypeName = typeName };
     }
 }

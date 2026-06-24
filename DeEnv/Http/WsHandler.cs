@@ -183,6 +183,38 @@ public sealed class WsHandler
     // what lets the client address a just-added object before its arrayAdd round-trip has returned.
     private static int Resolve(ClientSession? session, int id) => session?.ResolveId(id) ?? id;
 
+    // ── the write floor (M-auth) ────────────────────────────────────────────────
+    //
+    // The non-bypassable WRITE check: a create/edit/delete is accepted only when a matching-verb rule's
+    // condition holds for the bound principal + the target object — else it is REJECTED (the reply carries
+    // an error, which the client surfaces and its existing rollback restores from; the store is never
+    // touched). Deny-by-default among the ruled types; DORMANT (allow-all, today's behavior) when the app
+    // declares no rules — so a solo app pays nothing. The principal is the session's bound `currentUser`
+    // (ClientSession.PrincipalUserId — harness-set this slice; the password-login slice binds it on the WS).
+    //
+    // ponytail: this slice gates the OBJECT-graph write seams (set-member create/delete, object-field +
+    // reference edit) — exactly the surface the read floor (DbBridge) gates. The DICTIONARY/leaf-path write
+    // seams (addEntry/removeEntry on a dict, the path-addressed `write`) are NOT gated yet, matching the
+    // read floor's own dict gap; they layer on additively when dict reads are gated. Per-field rules and
+    // richer condition inputs (now/client/cross-row) are later slices too.
+    private Code.AccessFloor Floor(WsRequest req) =>
+        new(_desc.Rules ?? [], Code.AccessFloor.LoadPrincipal(_store, Session(req)?.PrincipalUserId));
+
+    // Reject a denied write: throw whose message ProcessMessage's catch turns into the `{ error }` reply
+    // (→ client rollback). A single chokepoint so every gated handler reads the same.
+    private static void RequireWrite(Code.AccessFloor floor, string verb, string typeName, Code.ExecObject target)
+    {
+        if (!floor.CanWrite(verb, typeName, target))
+            throw new InvalidOperationException(
+                $"Access denied: not allowed to {verb} '{typeName}'.");
+    }
+
+    // The candidate object for a CREATE decision: the about-to-be-created value as a scalar-only ExecObject,
+    // so a condition like `where object.status == "draft"` reads the NEW data. Built from the same parsed
+    // ObjectValue the create would persist (id 0 — it has no identity until minted).
+    private Code.ExecObject CandidateFromValue(JsonElement value, TypeDefinition type) =>
+        Code.AccessFloor.ScalarObject(type.Name, 0, (ObjectValue)DeserializeValue(value, type));
+
     // ── message dispatch ──────────────────────────────────────────────────────
 
     public string ProcessMessage(string json)
@@ -305,10 +337,16 @@ public sealed class WsHandler
         {
             if (!int.TryParse(keyStr, out var memberId))
                 return Error("Set member key must be an integer identity.");
+            // The write floor: removing a set member is a `delete` of that member (same as arrayRemove).
+            if (_store.ReadById(memberId) is { } member)
+                RequireWrite(Floor(req), "delete", member.TypeName,
+                    Code.AccessFloor.ScalarObject(member.TypeName, memberId, member.Fields));
             _store.RemoveFromSet(path, memberId);
         }
         else if (typeInfo.Cardinality == Cardinality.Dictionary)
         {
+            // ponytail: dictionary-entry delete is NOT gated yet — the read floor doesn't gate dict reads
+            // either, so the write floor matches that staging (gated when dict reads are).
             _store.RemoveDictionaryEntry(path, ParseKey(keyStr, typeInfo.KeyTypeName ?? "text"));
         }
         else
@@ -323,17 +361,25 @@ public sealed class WsHandler
 
     private string HandleAddSetMember(NodePath path, string pathStr, ResolvedTypeInfo typeInfo, WsRequest req)
     {
+        // The write floor: adding a set member is a `create` of the element type — whether minting a new
+        // object (decided over the new value) or linking an existing one (decided over its current fields).
+        var floor = Floor(req);
+        var typeName = typeInfo.Type.Name;
+
         int id;
         if (req.RefId is { } refId)
         {
+            if (_store.ReadById(refId) is { } linked)
+                RequireWrite(floor, "create", typeName, Code.AccessFloor.ScalarObject(typeName, refId, linked.Fields));
             id = refId;
             _store.AddToSet(path, id); // link an existing object
         }
         else if (req.Value is { } valueEl)
         {
             var obj = (ObjectValue)DeserializeValue(valueEl, typeInfo.Type);
-            id = _store.CreateObject(typeInfo.Type.Name, obj); // mint a new object…
-            _store.AddToSet(path, id);                         // …then link it
+            RequireWrite(floor, "create", typeName, Code.AccessFloor.ScalarObject(typeName, 0, obj));
+            id = _store.CreateObject(typeName, obj);            // mint a new object…
+            _store.AddToSet(path, id);                          // …then link it
         }
         else
         {
@@ -374,6 +420,10 @@ public sealed class WsHandler
         // startup guard, StoredDataValidator).
         if (leaf is TextValue tv && !_desc.EnumAccepts(propDef.Type, tv.Text))
             return Error($"'{tv.Text}' is not a value of enum '{propDef.Type}'.");
+
+        // The write floor: editing a field is an `edit` of the (existing) object, decided over its
+        // CURRENT scalar fields. A denied edit throws → the `{ error }` reply rolls the client back.
+        RequireWrite(Floor(req), "edit", hit.TypeName, Code.AccessFloor.ScalarObject(hit.TypeName, objectId, hit.Fields));
         _store.WriteField(objectId, prop, leaf);
 
         return Serialize(new ObjectPropChangeResponse());
@@ -403,6 +453,12 @@ public sealed class WsHandler
             return Error($"Field '{prop}' on '{hit.TypeName}' is not a single reference.");
         var targetType = _desc.FindType(propDef.Type)!;
 
+        // The write floor: setting/clearing a reference is an `edit` of the (existing) OWNER object, so the
+        // edit verb is non-bypassable via this seam too (not just objectPropChange). A create-new pick ALSO
+        // mints a target object, gated as `create` on the target type below.
+        var floor = Floor(req);
+        RequireWrite(floor, "edit", hit.TypeName, Code.AccessFloor.ScalarObject(hit.TypeName, objectId, hit.Fields));
+
         int? newId = null;
         if (req.RefId is { } refIdRaw)
         {
@@ -410,6 +466,7 @@ public sealed class WsHandler
         }
         else if (req.Value is { } valueEl)
         {
+            RequireWrite(floor, "create", targetType.Name, CandidateFromValue(valueEl, targetType));
             newId = _store.CreateObject(targetType.Name, ExecObjectValue(valueEl, targetType));
             _store.WriteReference(objectId, prop, newId, targetType.Name);
         }
@@ -551,6 +608,12 @@ public sealed class WsHandler
         var value = req.Value is { } valEl
             ? ExecObjectValue(valEl, typeDef)
             : new ObjectValue(new Dictionary<string, NodeValue>());
+
+        // The write floor: adding a set member is a `create` of the element type, decided over the NEW
+        // object's scalar fields (so `where object.status == "draft"` reads the new data). Rejected BEFORE
+        // minting, so a denied create leaves no orphan object in the extent. id 0 = no identity yet.
+        RequireWrite(Floor(req), "create", typeName, Code.AccessFloor.ScalarObject(typeName, 0, value));
+
         var id = _store.CreateObject(typeName, value);
         _store.AddToSet(setId, id);
 
@@ -599,6 +662,12 @@ public sealed class WsHandler
 
         if (_store.SetElementType(setId) is null)
             return Error($"No set with id {setId}.");
+
+        // The write floor: removing a set member is a `delete` of that member, decided over its current
+        // scalar fields. Rejected BEFORE removal (and its GC), so a denied delete leaves the object intact.
+        if (_store.ReadById(objectId) is { } member)
+            RequireWrite(Floor(req), "delete", member.TypeName,
+                Code.AccessFloor.ScalarObject(member.TypeName, objectId, member.Fields));
         _store.RemoveFromSet(setId, objectId);
 
         return Serialize(new ArrayRemoveResponse());

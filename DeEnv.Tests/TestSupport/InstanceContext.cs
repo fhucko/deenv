@@ -910,15 +910,36 @@ public class InstanceContext
 
     private const string AccessFixtureAppNoRule = AccessFixtureTypes + AccessFixtureSeed;
 
+    // The same fixture (types + seed) but carrying an EXPLICIT set of `Milestone` rule lines — so the
+    // write-enforcement scenarios can install a single-verb rule (e.g. `edit where currentUser.role ==
+    // "Admin"`) and have it take real effect (the rule is PARSED by AppParse exactly as the app's own
+    // would be, not hand-built). Each `ruleLine` is a rule line under the `Milestone` type block — its
+    // verb list + optional `where` condition. The same deny-by-default ruleset gates reads AND the
+    // mutation seam, so a single-verb rule here activates the floor for that verb only.
+    public static InstanceDescription AccessFixtureWithRules(params string[] ruleLines) =>
+        InstanceDescriptionLoader.Load(
+            AccessFixtureTypes + AccessFixtureSeed + "\n\naccess\n    Milestone\n" +
+            string.Concat(ruleLines.Select(l => "        " + l + "\n")));
+
     // The seeded principal ids in AccessFixtureDb (the admin Ada, the member Bob), so a step can bind the
     // current user by role without re-deriving ids. These mirror the initialData seed above.
     public const int AccessAdminId = 3;
     public const int AccessMemberId = 4;
 
+    // The seeded "Gate #3" milestone's id (a set member of Db.milestones) — the write scenarios edit /
+    // delete it by id and assert the store directly. Mirrors the initialData seed above.
+    public const int AccessMilestoneId = 2;
+
     // The principal bound for the next render (M-auth) — the id of the `User` the request acts as, or null
     // (anonymous). A step sets it; the render step passes it into SsrRenderer.Render. This is the
     // floor-first harness hook the locked slice calls for (no WS login/bind handshake).
     public int? PrincipalUserId { get; set; }
+
+    // The `Milestone` access rule lines installed via the "Given the access rule" step (accumulated across
+    // the Background read rule + a write scenario's verb rule). Rebuilding from the full set keeps every
+    // declared rule active at once — an app realistically carries read AND write rules — and each is parsed
+    // by AppParse exactly as the app's own would be.
+    public readonly List<string> AccessRuleLines = new();
 
     // ── storage ───────────────────────────────────────────────────────────────
 

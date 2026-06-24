@@ -33,3 +33,51 @@ Feature: The access floor (read enforcement by principal)
     And the current user is the member
     When the page state is rendered for "/"
     Then the shipped data includes a "Milestone" titled "Gate #3"
+
+  # ── write enforcement (the mutation seam) ──────────────────────────────────
+  # The same ruleset gates mutations. With a verb rule active, a create/edit/delete is
+  # accepted only when a matching-verb rule's condition holds for the principal + target;
+  # otherwise it is rejected (the client's existing rollback restores state) and the store
+  # is left UNCHANGED. Driven at the WsHandler level (the mutation floor is server-side).
+
+  Scenario: An admin may edit a ruled object and the change persists
+    Given the access rule "Milestone edit where currentUser.role == \"Admin\""
+    And the current user is the admin
+    When the admin edits the "Milestone" titled "Gate #3" to set "title" to "Gate #3 - done"
+    Then the mutation is accepted
+    And the stored "Milestone" 2 has "title" equal to "Gate #3 - done"
+
+  Scenario: A non-admin's edit is rejected and the store is unchanged
+    Given the access rule "Milestone edit where currentUser.role == \"Admin\""
+    And the current user is the member
+    When the member edits the "Milestone" titled "Gate #3" to set "title" to "Hacked"
+    Then the mutation is rejected
+    And the stored "Milestone" 2 has "title" equal to "Gate #3"
+
+  Scenario: An admin may create a ruled object and it is added
+    Given the access rule "Milestone create where currentUser.role == \"Admin\""
+    And the current user is the admin
+    When the current user adds a "Milestone" titled "Gate #4" to the milestones set
+    Then the mutation is accepted
+    And the milestones set contains a "Milestone" titled "Gate #4"
+
+  Scenario: A non-admin's create is rejected and nothing is added
+    Given the access rule "Milestone create where currentUser.role == \"Admin\""
+    And the current user is the member
+    When the current user adds a "Milestone" titled "Sneaky" to the milestones set
+    Then the mutation is rejected
+    And the milestones set contains no "Milestone" titled "Sneaky"
+
+  Scenario: An admin may delete a ruled object and it is removed
+    Given the access rule "Milestone delete where currentUser.role == \"Admin\""
+    And the current user is the admin
+    When the current user removes "Milestone" 2 from the milestones set
+    Then the mutation is accepted
+    And the milestones set contains no "Milestone" 2
+
+  Scenario: A non-admin's delete is rejected and the object remains
+    Given the access rule "Milestone delete where currentUser.role == \"Admin\""
+    And the current user is the member
+    When the current user removes "Milestone" 2 from the milestones set
+    Then the mutation is rejected
+    And the milestones set still contains "Milestone" 2

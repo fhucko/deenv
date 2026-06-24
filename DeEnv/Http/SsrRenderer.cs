@@ -814,24 +814,10 @@ public sealed class SsrRenderer
         return new ExecArray { Items = items, Id = --context.LastId.Value, Kind = ArrayKind.List };
     }
 
-    // The bound principal as an ExecObject of its SCALAR fields (M-auth) — enough for an access
-    // condition (`currentUser.role == "Admin"` reads the `role` scalar). Loaded by id through the
-    // storage seam (ReadById), NOT the graph floor, so the principal is always resolvable to decide
-    // its own access. Null id (anonymous) or an id with no object (a stale/deleted principal) → ExecNull,
-    // which fails every role condition closed (deny). Object/collection fields are omitted: a condition
-    // reads scalar facts about the user; nothing here is shipped (the floor evaluates over a throwaway
-    // context), so reading only scalars is also a privacy floor on what a condition could touch.
-    // ponytail: scalar-only principal + by-id resolution is this slice's ceiling; a richer principal
-    // (the User's references/sets for graph-position conditions) layers on with the membership operator.
-    private IExecValue LoadPrincipal(int? principalUserId)
-    {
-        if (principalUserId is not { } id || _store.ReadById(id) is not { } hit) return new ExecNull();
-        var props = new Dictionary<string, IExecValue>();
-        foreach (var (name, value) in hit.Fields.Fields)
-            if (value is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue)
-                props[name] = DbBridge.ScalarToExec(value);
-        return new ExecObject { Props = props, Id = id, TypeName = hit.TypeName };
-    }
+    // The bound principal as a scalar-only ExecObject (M-auth) — see AccessFloor.LoadPrincipal, the single
+    // source of truth shared with the WsHandler write floor so both decide over an identical principal.
+    private IExecValue LoadPrincipal(int? principalUserId) =>
+        AccessFloor.LoadPrincipal(_store, principalUserId);
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
