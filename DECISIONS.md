@@ -1968,3 +1968,50 @@ Every scenario is tagged with its milestone (`@milestone-1`,
 A milestone-1 scenario must be passable with the milestone-1 stack — if it
 isn't, it is mis-tagged. Green milestone-1 scenarios are the "is v1 done?"
 signal; that signal only works if the tagging is honest.
+
+## M-auth — access control (graph-data rules + Code conditions, enforced below Code)
+
+**Now the active milestone (decided 2026-06-24). Full spec: `docs/plans/m-auth.md`.**
+
+deenv gets users + access control as a **deny-by-default ruleset over the object model**, per-**type**
+and per-**field**: a rule is `{type, field?, verbs (read/create/edit/delete), condition}`. Designed in
+a long interview; the key decisions and *why*:
+
+- **No "role" primitive — a role is an enum field on `User`.** "Who" is a condition
+  (`currentUser.role == "Admin"`). *Why:* reuse the enum type; this collapses roles-list (= enum
+  values), default role (= enum default), and role assignment (= a runtime field write, itself gated by
+  a rule). One fewer concept, nothing special to build.
+- **Conditions are pure Code expressions (Code-as-data AST), run by the existing interpreter** with an
+  injected scope `{db, currentUser, now, client, object}`. *Why:* no codegen and no new language — the
+  condition already *is* data deenv parses/prints/interprets, evaluated by the executor it already has.
+  Inputs are db + time + client; **externals are deferred, not forbidden** — an additive guard-railed
+  builtin for later (the architecture leaves it open for free).
+- **Access is over the data graph, not the URL.** *Why:* security attaches to the node, not the route
+  (one object has many URLs). Consequence: a condition can test an object's **set membership**
+  (`customer in customers`), so soft-delete/archive is "move to a `deletedCustomers` set, same type"
+  with access keyed off membership (`in` is the one new condition primitive). This is graph *position*
+  (data) — distinct from the rejected URL-routing and the rejected "reachable-from-user."
+- **Enforcement is a kernel floor, below Code, on the store/wire seam** — gates reads and writes,
+  non-bypassable. *Why:* app Code must not route around the check; orthogonal to the memo cache's
+  structural privacy (that protects computation inputs, not access-by-principal).
+- **Flexible base, simplified by UI.** The engine is fully expressive; the role×verb grid / condition
+  builder is one UI over it (auto-vs-custom, as everywhere). *Why:* don't pick a simplicity point — let
+  the base be maximal and let UIs tame it.
+- **Users/roles baked into every instance but dormant.** `User` (`name` + `passwordHash`) by
+  convention, injected/merged on publish; password crypto is **kernel builtins**, not app Code; the
+  apparatus is invisible until an app adds rules. *Why:* multi-user for free without burdening a solo
+  app (minimal-by-default).
+- **Auth UI is `lib` components; custom UI reserves nothing in URL space.** Login is a **state**
+  (`currentUser == null`) + a component + an action on the existing WS channel — not a reserved route.
+  Security lives *under* the components (builtins + floor), so placing login anywhere can't weaken it.
+- **Policy ships in the published app document, constant between publishes; conditions evaluate live.**
+  *Why:* rides the designer→publish pipeline (no new authoring infra); rules are fixed config, the
+  *answers* are computed live per request.
+
+Visited and **dropped** (do not resurrect as the model): owner fields; URL-based access; graph
+reachability/ReBAC; machine identity; SSO. (Time + client context are kept; only externals are
+deferred.) **Resolved 2026-06-24:** the **rules are the activation switch** (0 rules → dormant/allow-all as
+today; ≥1 rule → enforce, deny-by-default, login required); the first **publish-with-rules-and-no-
+Admin** requires initial admin credentials → the kernel seeds an Admin + the designer scaffolds the
+`* where role == "Admin"` override (no lockout); the **designer instance** is kernel-seeded at first
+boot. No public first-run race. See the spec.

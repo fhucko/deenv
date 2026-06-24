@@ -18,7 +18,9 @@ completed, move its entry above the divider.
 (2) a minimal real deploy (a self-contained build as a systemd service behind nginx) ✅
 done; (3) dogfood one real app — in progress (`instances/5`, `devlog`). The visual
 designer is deferred until after the MVP; M13 (schema versioning) sits on instance
-management. See CLAUDE.md "Current focus" for detail.
+management. See CLAUDE.md "Current focus" for detail. **M-auth (access control) is now the active
+build milestone (2026-06-24)** — pulled ahead of M12/M13; spec `docs/plans/m-auth.md`, decision in
+DECISIONS.md; its first sliver dovetails with the `devlog` dogfood.
 
 ---
 
@@ -276,6 +278,24 @@ the PascalCase components (`ObjectForm`/`RefEditor`/`Input`/`Field`/…) composa
 hand-written `fn render()`, with the generic UI as the library's **first consumer** (its own
 completeness proof). Delivers VISION pillar 8's "auto with overrides" via the mechanism settled
 in DECISIONS ("UI middle-ground"). See `docs/plans/m11-reactivity-foundation.md`.
+
+## Milestone — M-auth: access control  ← ACTIVE (2026-06-24, pulled ahead of M12/M13)
+
+Users + access control, designed in a long interview this session. A **deny-by-default ruleset over
+the object model**, per-**type** and per-**field**: `{type, field?, verbs, condition}`. **Roles are
+not a primitive** — a role is just a `User.role` **enum**; a rule's "who" is a condition
+(`currentUser.role == "Admin"`). **Conditions are pure Code expressions** (Code-as-data AST) run by the
+existing interpreter over `{db, currentUser, now, client, object}`; a condition can test **set
+membership** (`customer in customers`), so soft-delete = "move to a `deletedCustomers` set, same type"
+(no field flag). Enforcement is a **kernel floor, below Code, on the store/wire seam** (gates reads +
+writes, non-bypassable). **Flexible base, simplified by UI** — the role×verb grid is one UI over the
+engine. **Users/roles baked into every instance but dormant**; `User` (`name`+`passwordHash`) by
+convention, injected on publish; password crypto = kernel builtins; auth UI = `lib` components with
+**login-as-state** (custom UI reserves nothing in URL space). Policy ships in the **app document**,
+constant between publishes; conditions evaluate live. **First slice:** one type, read-only enforcement,
+equality conditions, at the floor, with password login + session→principal — dovetails with the
+`devlog` dogfood. **Open:** bootstrap (first admin) + the dormant→active trigger. Full spec
+`docs/plans/m-auth.md`; decision record in DECISIONS.md ("M-auth — access control").
 
 ---
 

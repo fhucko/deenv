@@ -152,6 +152,17 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
+**ACTIVE MILESTONE (2026-06-24): M-auth — access control.** Designed and approved this session;
+full spec in `docs/plans/m-auth.md`, decision record in DECISIONS.md ("M-auth — access control"). A
+**deny-by-default ruleset over the object model** (per-type + per-field); **conditions = pure Code**
+(Code-as-data AST) run by the existing interpreter over `{db, currentUser, now, client, object}`,
+**enforced at a kernel floor BELOW Code** on the store/wire seam; **roles are just a `User.role`
+enum** (no role primitive); a condition can test **set membership** (`customer in customers` — soft-
+delete = move to `deletedCustomers`, same type); **users/roles baked into every instance but dormant**;
+auth UI = `lib` components with **login-as-state** (custom UI reserves no URL). Pulled ahead of M12
+(visual designer) and M13 (versioning); first sliver dovetails with the `devlog` dogfood. **Open
+threads:** bootstrap (first admin) + the dormant→active trigger. The usable-MVP context below stands.
+
 **Milestone 11 — SolidJS-style reactive components + the public component library (the UI
 middle-ground) — is DONE (the generic-UI-as-first-consumer COLLAPSE landed 2026-06-19, suite 348).
 The non-destructive-apply MVP substrate then landed 2026-06-20 (suite 355 — see DECISIONS "Data must
