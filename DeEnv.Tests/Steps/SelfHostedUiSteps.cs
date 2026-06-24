@@ -22,6 +22,17 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    // The three-objects-deep generic-UI app (Db → milestones → Milestone → slices → Slice). Drives the
+    // deep-route HYDRATED breadcrumb/title scenario: a deep-link's SSR labels the intermediate "4" crumb,
+    // and (with the ancestor-label leaf shipped) the client's post-hydration re-resolve keeps it byte-
+    // identical instead of flipping to the raw id.
+    [Given("the deep-nav app is running")]
+    public async Task GivenDeepNavAppRunning()
+    {
+        ctx.Description = InstanceContext.DeepNavDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
     // The committed shop (instances/4) — the fully-auto generic UI over a customer set. Loaded
     // from its real id-dir document so the staged-edit scenarios drive the single source of truth.
     [Given("the shop app is running")]
@@ -337,6 +348,30 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         var sameToken = await ctx.Page!.EvaluateAsync<bool>(
             "(t) => window.__pageToken === t", _pageToken);
         await Assert.That(sameToken).IsTrue();
+    }
+
+    // The browser tab title (document.title), polled — on a client-side (SPA) navigation it is updated
+    // during the breadcrumb sync (commitRender → syncBreadcrumbs), which paints only after the target's
+    // render settles, so a one-shot read could race the re-render. Proves the generic title both UPDATES
+    // on SPA nav (the desync fix) and shows the LABELED trail (humanized props + object labels).
+    [Then("the browser tab title eventually is {string}")]
+    public async Task ThenBrowserTitleEventuallyIs(string expected) =>
+        await ctx.Page!.WaitForFunctionAsync($"() => document.title === {JsString(expected)}");
+
+    // The breadcrumb text after HYDRATION settles, polled — proves the CLIENT trail is byte-identical to
+    // the server's. On a fresh deep-link the SSR already shows the labeled trail; once the client hydrates,
+    // syncBreadcrumbs re-resolves every segment over the SHIPPED graph and rebuilds the nav only if its
+    // recomputed trail differs. So if an ancestor's label leaf did NOT ship, syncBreadcrumbs flips that
+    // INTERMEDIATE crumb from the label to the humanized raw id — and this polled equality catches it
+    // (a one-shot read could race that flip). Equal here ⇒ the server and the hydrated client agree.
+    [Then("the breadcrumbs eventually read {string}")]
+    public async Task ThenBreadcrumbsEventuallyRead(string expected)
+    {
+        await ctx.Page!.WaitHydratedAsync();
+        await ctx.Page!.WaitForFunctionAsync(
+            "(e) => document.querySelector('nav.breadcrumbs') != null && " +
+            "document.querySelector('nav.breadcrumbs').innerText.trim().replace(/\\s+/g, ' ') === e",
+            expected);
     }
 
     // Browser Back: pops the history entry the client-side nav pushed. The popstate handler (init.ts)

@@ -44,6 +44,38 @@ public sealed class CodeSteps(InstanceContext ctx)
         ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
     }
 
+    // The self-hosted generic-UI form instance (Db holds a `notes` set of Note), wired in-process so
+    // the SSR breadcrumb/title chrome can be asserted on the rendered HTML directly. The store seeds
+    // Note 2 ("First") from the fixture's initialData on first run, so /notes/2 routes to a real member.
+    [Given("the self-hosted form instance")]
+    public void GivenSelfHostedFormInstance()
+    {
+        ctx.Description = InstanceContext.SelfHostedFormDb();
+        ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+    }
+
+    // The three-objects-deep generic-UI instance (Db → milestones → Milestone → slices → Slice), wired
+    // in-process so the deep-route SSR breadcrumb/title can be asserted directly. Seeds Milestone 4 and
+    // its Slice 5, so /milestones/4/slices/5 routes through an INTERMEDIATE object segment ("4").
+    [Given("the deep-nav instance")]
+    public void GivenDeepNavInstance()
+    {
+        ctx.Description = InstanceContext.DeepNavDb();
+        ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+    }
+
+    // The scalar-dictionary instance (Db holds `settings dict of text by text`) wired in-process, with one
+    // entry seeded under a literal key carrying punctuation/caps ("ORD-001"). Lets the SSR breadcrumb prove
+    // the SERVER's SegmentLabel shows a scalar-dict key VERBATIM (not humanized "Ord 001") — dict entries
+    // are not seedable via initialData, so the store seeds the entry directly.
+    [Given("the scalar dict instance with key {string}")]
+    public void GivenScalarDictInstanceWithKey(string key)
+    {
+        ctx.Description = InstanceContext.SelfHostedScalarDictDb();
+        ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+        ctx.Store.CreateEntry(NodePath.Root.Field("settings"), new TextValue(key), new TextValue("open"));
+    }
+
     private static void SeedTask(IInstanceStore store, string title, bool done, int priority)
     {
         var id = store.CreateObject("Task", new ObjectValue(new Dictionary<string, NodeValue>
@@ -97,6 +129,15 @@ public sealed class CodeSteps(InstanceContext ctx)
         ctx.RenderedHtml = renderer.Render(path).Html;
     }
 
+    // Render with the instance's display NAME supplied (as the kernel does), so the breadcrumb/title
+    // root label is the humanized app name rather than the fallback "Db".
+    [When("the page at {string} is rendered as app {string}")]
+    public void WhenPageRenderedAsApp(string path, string appName)
+    {
+        var renderer = new SsrRenderer(ctx.Store!, ctx.Description!, appName: appName);
+        ctx.RenderedHtml = renderer.Render(path).Html;
+    }
+
     // ── Then ──────────────────────────────────────────────────────────────────
     //
     // Assertions are scoped to the rendered <body> — the visible first paint — not the
@@ -117,6 +158,17 @@ public sealed class CodeSteps(InstanceContext ctx)
     {
         await Assert.That(ctx.RenderedHtml).IsNotNull();
         await Assert.That(RenderedBody()).Contains(fragment);
+    }
+
+    // The document <title> (in <head>, so outside RenderedBody) — the browser-tab title.
+    [Then("the page title is {string}")]
+    public async Task ThenPageTitle(string expected)
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        var html = ctx.RenderedHtml!;
+        var start = html.IndexOf("<title>", StringComparison.Ordinal) + "<title>".Length;
+        var end = html.IndexOf("</title>", start, StringComparison.Ordinal);
+        await Assert.That(html[start..end]).IsEqualTo(expected);
     }
 
     [Then("the rendered HTML does not contain {string}")]

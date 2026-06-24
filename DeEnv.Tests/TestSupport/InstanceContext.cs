@@ -111,6 +111,37 @@ public class InstanceContext
             dueDate: "2026-01-01"
     """;
 
+    // Milestone 9 (labeled breadcrumbs, deep-route twin invariant): the self-hosted generic UI over a
+    // THREE-objects-deep graph (Db → milestones → Milestone → slices → Slice), modelled on the committed
+    // devlog app's shape. A route like /milestones/4/slices/5 has an INTERMEDIATE object segment ("4",
+    // the Milestone) whose label is NOT rendered by the leaf page (the Slice "5" form) — it is shown only
+    // in the breadcrumb. So the only thing that ships the intermediate's labelProp leaf is the breadcrumb
+    // trail's resolve recording it (the blocker fix); without that, the server labels "4" while the client
+    // humanizes the raw id → the crumb flips after hydration. The labelProp is the text `name`. Drives the
+    // deep-route SSR scenario AND the byte-identical hydrated browser scenario.
+    public static InstanceDescription DeepNavDb() =>
+        InstanceDescriptionLoader.Load(DeepNavApp);
+
+    private const string DeepNavApp = """
+    types
+        Db
+            milestones set of Milestone
+        Milestone
+            name text
+            slices set of Slice
+        Slice
+            name text
+
+    initialData
+        Db 1
+            milestones: [4]
+        Milestone 4
+            name: "Gate #3 - dogfood a real app"
+            slices: [5]
+        Slice 5
+            name: "Dev tracker v1 (this app)"
+    """;
+
     // Milestone 11 (SPA-nav flash guard): the self-hosted generic UI over a notes set with TWO members.
     // An OBJECT route (/notes/2) ships only the routed member of the set (FindTarget records just that
     // item) — so the SIBLING (Note 9) is ABSENT from the client graph after a deep-link to /notes/2.

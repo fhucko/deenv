@@ -91,12 +91,60 @@ function renderUiSpeculative(): boolean {
     return true;
 }
 
-// Keep the generic-UI breadcrumb chrome in step with the current `path` after a CLIENT-SIDE render.
-// Breadcrumbs are SSR'd by C# (SsrRenderer.Breadcrumbs) OUTSIDE the #app reconciler root, so a
-// client-side navigation (which only re-renders #app) would otherwise leave them stale. This rebuilds
-// the trail from the `path` var, segment for segment, exactly as the server does — the same
-// location-mirrors-URL invariant. No-op when the nav is absent (a full-custom render has no
-// breadcrumbs) or when path is unavailable, so it only touches the chrome that exists. Hrefs are
+// The generic-UI breadcrumb/title ROOT label: the instance display name (window.initAppName),
+// humanized (e.g. "devlog" → "Devlog"), so the root reads as the app's identity rather than the
+// internal root-type name. Falls back to "Db" when no name was injected — byte-identical to the
+// server's SsrRenderer.RootLabel.
+function rootLabel(): string {
+    const n = typeof initAppName === "string" ? initAppName : "";
+    return n.length > 0 ? humanizeText(n) : "Db";
+}
+
+// The breadcrumb/title LABEL for the final segment of a cumulative `urlPath` — the client twin of
+// CodeExecutor.SegmentLabel: a MEMBER route (a set member / object-dict entry — kind=object on a
+// non-root path) shows the bound object's labelProp value; a SCALAR-DICT entry (kind=leaf — the
+// user's own literal key) shows the RAW segment verbatim (never humanized — "ORD-001" stays as is);
+// anything else (a prop-name route segment) → null, so the caller humanizes the raw segment. Resolves
+// over the SAME client sys.resolve the router uses (a throwaway context, so it never disturbs
+// uiStatic.lastId and records no deps), reading the labelProp off the shipped `sys.schema` descriptor
+// — and (for an ancestor object on a deep route) off the labelProp leaf the server now records and
+// ships. Returns null (humanize the raw segment) on any miss/throw, so a thin/un-shipped node never
+// blanks the trail.
+function segmentLabel(urlPath: string): string | null {
+    try {
+        const probeCtx: ExecContext = { lastId: { value: uiStatic.lastId.value } };
+        const call: CodeCall = { type: "call", fn: { type: "symbol", name: "resolve" },
+            params: [{ type: "text", value: urlPath }] };
+        const r = execResolve(call, uiStatic.renderFn.scope, probeCtx);
+        if (r.type !== "object") return null;
+        const kind = r.props["kind"];
+        if (kind?.type !== "text") return null;
+        // A scalar-dict entry: the segment IS the user's literal key — show it verbatim, never humanized.
+        if (kind.value === "leaf") {
+            const segs = urlPath.split("/").filter(s => s !== "");
+            return segs.length > 0 ? segs[segs.length - 1] : null;
+        }
+        if (kind.value !== "object") return null;
+        const target = r.props["target"];
+        const typeName = r.props["typeName"];
+        if (target?.type !== "object" || typeName?.type !== "text") return null;
+        const desc = resolveDescriptor(typeName.value, probeCtx);
+        const labelProp = propText(desc, "labelProp");
+        if (labelProp === "") return null;
+        const v = target.props[labelProp];
+        return v != null && v.type === "text" && v.value.length > 0 ? v.value : null;
+    } catch {
+        return null;
+    }
+}
+
+// Keep the generic-UI breadcrumb chrome AND the tab title in step with the current `path` after a
+// CLIENT-SIDE render. Breadcrumbs are SSR'd by C# (SsrRenderer.Breadcrumbs) OUTSIDE the #app
+// reconciler root, and the generic title is set in the SSR <head>, so a client-side navigation (which
+// only re-renders #app) would otherwise leave both stale. This rebuilds the LABELED trail from the
+// `path` var — root label + one label per segment (a member's labelProp value, else the humanized
+// segment) — byte-identically to the server, the same location-mirrors-URL invariant. No-op when the
+// nav is absent (a full-custom render has no breadcrumbs) or when path is unavailable. Hrefs are
 // mount-prefixed (mountUrl), like the server's and like app-emitted links, so a breadcrumb click is
 // itself a valid in-app navigation.
 function syncBreadcrumbs(): void {
@@ -105,14 +153,23 @@ function syncBreadcrumbs(): void {
     const item = uiStatic.state.scope.items["path"];
     if (item == null || item.value.type !== "text") return;
 
-    // Build the desired trail: "Db" → "/", then one link per path segment at its cumulative path.
+    // Build the desired LABELED trail: the root label at "/", then one link per path segment at its
+    // cumulative path, its text resolved to the segment's label (object label or humanized prop).
     const segs = item.value.value.split("/").filter(s => s !== "");
-    const desired: { href: string; text: string }[] = [{ href: "/", text: "Db" }];
+    const desired: { href: string; text: string }[] = [{ href: "/", text: rootLabel() }];
     let url = "";
-    for (const seg of segs) { url += "/" + seg; desired.push({ href: url, text: seg }); }
+    for (const seg of segs) {
+        url += "/" + seg;
+        desired.push({ href: url, text: segmentLabel(url) ?? humanizeText(seg) });
+    }
+
+    // The generic tab title mirrors the labeled trail (the server set the same string in the SSR
+    // <head>; SPA nav re-renders only #app, so update it here for the generic case). A custom render
+    // (no breadcrumb nav) keeps its own `title` scope var via commitRender's syncScopeText.
+    document.title = desired.map(d => d.text).join(" / ");
 
     // Idempotent: skip the rebuild when the rendered trail already matches (renderUi runs on every
-    // keystroke, so only touch the DOM when the path actually changed).
+    // keystroke, so only touch the DOM when the path/labels actually changed).
     const current = Array.from(nav.querySelectorAll("a")).map(a => a.textContent || "").join(" ");
     if (current === desired.map(d => d.text).join(" ")) return;
 

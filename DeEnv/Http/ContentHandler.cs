@@ -23,9 +23,9 @@ public sealed class ContentHandler : IHandler
     private readonly int _assetPort;
 
     public ContentHandler(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions,
-        string mountBase, int assetPort, LiveRegistry registry)
+        string mountBase, int assetPort, LiveRegistry registry, string appName)
     {
-        _renderer = new SsrRenderer(store, description, sessions, registry);
+        _renderer = new SsrRenderer(store, description, sessions, registry, appName);
         _mountBase = mountBase;
         _assetPort = assetPort;
     }
@@ -80,9 +80,10 @@ public sealed class ContentHandlerBuilder : IHandlerBuilder
     private readonly string _mountBase;
     private readonly int _assetPort;
     private readonly LiveRegistry _registry;
+    private readonly string _appName;
 
     public ContentHandlerBuilder(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions,
-        string mountBase, int assetPort, LiveRegistry registry)
+        string mountBase, int assetPort, LiveRegistry registry, string appName)
     {
         _store = store;
         _description = description;
@@ -90,9 +91,10 @@ public sealed class ContentHandlerBuilder : IHandlerBuilder
         _mountBase = mountBase;
         _assetPort = assetPort;
         _registry = registry;
+        _appName = appName;
     }
 
-    public IHandler Build() => new ContentHandler(_store, _description, _sessions, _mountBase, _assetPort, _registry);
+    public IHandler Build() => new ContentHandler(_store, _description, _sessions, _mountBase, _assetPort, _registry, _appName);
 }
 
 // The ASSET host's bundle handler: serves the self-hosted UI client at /js. (The

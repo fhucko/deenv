@@ -710,6 +710,54 @@ public sealed class CodeExecutor
             },
         };
 
+    // The breadcrumb/title LABEL for the final segment of `urlPath`, reusing the resolve walk so the
+    // chrome shows human-readable labels instead of schema-internal identifiers:
+    //   • a MEMBER route (a set member / object-dict entry — kind=object on a non-root path) → the
+    //     bound object's labelProp value (e.g. "/notes/4" → the note's title), so an opaque id reads
+    //     as a label;
+    //   • a SCALAR-DICT entry (kind=leaf — the user's own literal key) → the RAW segment verbatim
+    //     (e.g. "/settings/ORD-001" → "ORD-001", NOT humanized "Ord 001"), so we never mangle the
+    //     key the user typed;
+    //   • anything else (a prop-name segment — a set/ref/dict ROUTE, or NotFound) → null, signalling
+    //     the caller to HUMANIZE the raw segment (e.g. "/notes" → "Notes").
+    // Falls back to null (humanize the raw segment) whenever the object or its label is missing, so a
+    // deleted/unshipped node never blanks the trail. Reuses ExecuteResolve (the one URL→target source
+    // of truth) over the SAME scope/context the render uses, and reads the label through the canonical
+    // leaf-recording prop accessor (RecordPropAccess — the same path `sys.field`/`.member` use), so an
+    // INTERMEDIATE path object's labelProp leaf actually SHIPS (FindTarget records a descended ancestor
+    // only as (obj, null), which ClientState drops) — the client's syncBreadcrumbs then re-resolves the
+    // identical label on a ≥3-deep route. The client twin is ui.ts's segmentLabel.
+    public string? SegmentLabel(string urlPath, ExecScope scope, ExecContext context)
+    {
+        var call = new CodeCall
+        {
+            Fn = new CodeSymbol { Name = "resolve" },
+            Params = [new CodeText { Value = urlPath }],
+        };
+        if (ExecuteResolve(call, scope, context) is not ExecObject r) return null;
+        if (r.Props.GetValueOrDefault("kind") is not ExecText kind) return null;
+
+        // A scalar-dict entry: the segment IS the user's literal key — show it verbatim, never humanized.
+        if (kind.Value == "leaf")
+            return urlPath.Split('/', StringSplitOptions.RemoveEmptyEntries) is { Length: > 0 } segs ? segs[^1] : null;
+
+        if (kind.Value != "object") return null;
+        if (r.Props.GetValueOrDefault("target") is not ExecObject target) return null;
+        if (r.Props.GetValueOrDefault("typeName") is not ExecText { Value: var typeName }) return null;
+
+        // The type's labelProp, read off the descriptor literal (the same source sys.schema(...) and the
+        // generic SetTable use). An empty labelProp (a type with no scalar) → no label.
+        var labelProp = _descriptors.GetValueOrDefault(typeName)?.Props
+            .FirstOrDefault(p => p.Name == "labelProp")?.Value is CodeText { Value: var lp } && lp.Length > 0 ? lp : null;
+        if (labelProp == null) return null;
+        if (!target.Props.TryGetValue(labelProp, out var labelValue)) return null;
+
+        // Record the read as an accessed LEAF (the canonical accessor) so the ancestor object's label
+        // prop ships to the client — exactly what makes the twin trails byte-identical on a deep route.
+        RecordPropAccess(target, labelProp, labelValue, context);
+        return labelValue is ExecText { Value: var label } && label.Length > 0 ? label : null;
+    }
+
     // Walk URL segments through the loaded `db` graph to BIND the routed object — the twin of
     // SsrRenderer.FindTarget. A set member segment is the member's identity id; a dict entry segment
     // is its __key; a field segment is a prop. Each step records its read as an accessed leaf

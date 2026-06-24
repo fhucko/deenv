@@ -50,14 +50,23 @@ public sealed class SsrRenderer
     // future live-update path can hang change-notification on it. Defaults to empty (no kernel ⇒ no list).
     private readonly LiveRegistry _registry;
 
+    // The instance's DISPLAY NAME (the kernel registry `app` label, e.g. "devlog"), used as the
+    // generic-UI breadcrumb/title ROOT label (humanized → "Devlog") instead of the hardcoded root-type
+    // name "Db". Threaded from the kernel through ContentHandler/InstanceApp, since the mount `base`
+    // is NOT a reliable source (it is "/" behind nginx via X-Forwarded-Prefix). Empty (→ "Db" root) for
+    // a bare/unit render that has no name to show. Also shipped to the client as window.initAppName so a
+    // client-side (SPA) breadcrumb/title rebuild shows the same root label.
+    private readonly string _appName;
+
     public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
-        LiveRegistry? registry = null)
+        LiveRegistry? registry = null, string appName = "")
     {
         _store = store;
         _desc = desc;
         _resolver = new TypeResolver(desc);
         _sessions = sessions;
         _registry = registry ?? new LiveRegistry();
+        _appName = appName;
         (_ui, _systemNames, _isGeneric, _descriptors) = GenericUi.Effective(desc);
     }
 
@@ -85,7 +94,7 @@ public sealed class SsrRenderer
         var context = new ExecContext();
         try
         {
-            var (result, title, scope, status) = ExecuteRender(urlPath, context);
+            var (result, title, scope, status, trail) = ExecuteRender(urlPath, context);
             var body = new StringBuilder();
             SerializeChild(result, body, @base);
 
@@ -115,12 +124,13 @@ public sealed class SsrRenderer
 
             // A generic-UI page keeps the breadcrumb chrome (plain links) around its content, so a
             // routed/collection/missing page can still navigate back up; a full-custom render owns the
-            // whole page. The trail is derived from the REQUEST url path — segment for segment, per
-            // INSTANCE_MODEL.md (the same location-mirrors-URL invariant the client preserves).
-            var breadcrumbs = _isGeneric ? Breadcrumbs(ParsePath(urlPath), @base) : "";
+            // whole page. The trail's HREFS are the cumulative URL prefixes (segment for segment, per
+            // INSTANCE_MODEL.md), but its visible TEXT is the LABELED trail (humanized props + object
+            // labels) — the same location-mirrors-URL invariant the client preserves.
+            var breadcrumbs = _isGeneric ? Breadcrumbs(ParsePath(urlPath), trail, @base) : "";
 
             return (UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi),
-                    clientId, @base, assetAuthority),
+                    clientId, @base, assetAuthority, _appName),
                 status);
         }
         catch (CodeRuntimeException ex)
@@ -153,11 +163,14 @@ public sealed class SsrRenderer
     {
         var context = new ExecContext();
         context.LastId.Value = Math.Min(0, lastIdFloor);
-        var (_, _, scope, _) = ExecuteRender(urlPath, context, sessionVars, warmDb);
+        var (_, _, scope, _, _) = ExecuteRender(urlPath, context, sessionVars, warmDb);
         return ClientState.Serialize(scope, context);
     }
 
-    private (IExecTagChild Result, string Title, ExecScope Scope, int Status) ExecuteRender(
+    // `Trail` is the labeled breadcrumb segments — one human-readable label per URL path segment
+    // (a humanized prop name, or a member's labelProp value), in order. Empty for a custom render
+    // (which owns its own chrome) or the root page. `Title` already joins them under the root label.
+    private (IExecTagChild Result, string Title, ExecScope Scope, int Status, IReadOnlyList<string> Trail) ExecuteRender(
         string urlPath, ExecContext context, IReadOnlyDictionary<string, IExecValue>? sessionVars = null,
         ExecObject? warmDb = null)
     {
@@ -259,19 +272,55 @@ public sealed class SsrRenderer
         // generic render's NotFound branch sets it to 404; read back here.
         var status = system.Items.TryGetValue("status", out var s) && s.Value is ExecInt si ? si.Value : 200;
 
-        // Title: the app's `title` var (in the app scope) when set; otherwise — a generic-UI page —
-        // the generic page title derived from the REQUEST url path (segment for segment, the same
-        // location-mirrors-URL invariant as the breadcrumb), or "Not found" when the generic render
-        // resolved to NotFound (status 404); else "DeEnv".
+        // The generic-UI breadcrumb/title trail: one LABEL per URL segment (humanized prop name, or a
+        // member's labelProp value), resolved over THIS render's scope/context so each resolved object's
+        // label leaf ships (the client re-resolves the same trail on a SPA nav). Empty for the root page
+        // or a custom render (which owns its chrome). Computed even for a NotFound page (status 404): the
+        // valid prefixes humanize and the bad segment falls back to raw — and the client's syncBreadcrumbs
+        // does the SAME on a 404 SPA nav, so the server/client trails stay byte-identical. Runs on the
+        // same `db` the render read, so it adds no new store load.
+        //
+        // NOTE — this is INTENTIONALLY computed on the refetch path too (RenderState discards the returned
+        // string trail but NOT its side effect): SegmentLabel records each path-ancestor's labelProp as an
+        // accessed leaf, so a refetch into a deep route ships those labels and the client's post-refetch
+        // breadcrumb stays byte-identical BY CONSTRUCTION — not by relying on the linking page having shipped
+        // them earlier. The resolves are pure (no store load), bounded by URL depth; do not "optimize" them
+        // away on the refetch path — that would reintroduce a latent server/client divergence on a refetch.
+        var trail = _isGeneric ? LabelTrail(urlPath, exec, renderScope, context) : [];
+
+        // Title: the app's `title` var (in the app scope) when set; otherwise — a generic-UI page — the
+        // labeled trail under the instance's display name (e.g. "Devlog / Milestones / Gate #3"; just the
+        // root label at "/"); else "DeEnv". A NotFound page (404) is not special-cased: its trail is the
+        // root + the (raw) unresolved segment, so the <title> matches the breadcrumb AND the client's
+        // syncBreadcrumbs sets the identical title on a 404 SPA nav (byte-identical, no divergence).
         var title = app.Items.TryGetValue("title", out var t) && t.Value is ExecText titleText
             ? titleText.Value
-            : _isGeneric ? (status == 404 ? "Not found" : PageTitle(ParsePath(urlPath)))
+            : _isGeneric ? TitleFromTrail(trail)
             : "DeEnv";
 
         // Ship the render scope (lib for the generic render; app for a custom render → its vars) plus
         // the parents (ClientState walks up). Type descriptors ride the memo cache as `schema:*`
         // entries, not the scope.
-        return (child, title, renderScope, status);
+        return (child, title, renderScope, status, trail);
+    }
+
+    // The labeled breadcrumb trail for a generic-UI page: one label per URL segment, in order. Each
+    // segment's label is its resolved object's labelProp value when the segment addresses a member (a
+    // set member / object-dict entry), else the humanized raw segment (a prop name / scalar-dict key).
+    // SegmentLabel reuses the resolve walk and returns null for the humanize case (or a missing object),
+    // so a deleted/unshipped node falls back to the raw segment rather than blanking. This is the C# half
+    // of the location-mirrors-URL invariant; ui.ts's syncBreadcrumbs is the byte-identical client twin.
+    private List<string> LabelTrail(string urlPath, CodeExecutor exec, ExecScope scope, ExecContext context)
+    {
+        var segments = urlPath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var labels = new List<string>(segments.Length);
+        var prefix = "";
+        foreach (var seg in segments)
+        {
+            prefix += "/" + seg;
+            labels.Add(exec.SegmentLabel(prefix, scope, context) ?? TextUtil.Humanize(seg));
+        }
+        return labels;
     }
 
     // Page shell for a code page: optional generic chrome (a generic-UI page keeps the
@@ -283,14 +332,14 @@ public sealed class SsrRenderer
     // too — a custom app overrides via the cascade. (Zero-config good defaults; minimal by default.)
     private static string UiLayout(
         string title, string breadcrumbs, string body, string initData, string initUi, string clientId,
-        string @base, string assetAuthority) => $$"""
+        string @base, string assetAuthority, string appName) => $$"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
           <meta charset="utf-8">
           <title>{{Escape(title)}}</title>
           <style>{{ViewChromeCss}}</style>
-          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initBase="{{JsStringSafe(@base)}}";window.initAssetAuthority="{{JsStringSafe(assetAuthority)}}";</script>
+          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initBase="{{JsStringSafe(@base)}}";window.initAssetAuthority="{{JsStringSafe(assetAuthority)}}";window.initAppName="{{JsStringSafe(appName)}}";</script>
           <script>(function(){var a=window.initAssetAuthority,b=window.initBase==="/"?"":window.initBase;var s=document.createElement("script");s.src=a?location.protocol+"//"+a+b+"/js":b+"/js";document.head.appendChild(s);})();</script>
         </head>
         <body>{{breadcrumbs}}<div id="app">{{body}}</div></body>
@@ -757,24 +806,35 @@ public sealed class SsrRenderer
         body { font-family: system-ui, Arial, sans-serif; margin: 2rem; color: #222; }
         """;
 
-    // The generic breadcrumb chrome. Its targets are ROOT-RELATIVE node paths (`/`, `/notes`, …),
-    // prefixed with the mount `base` at the edge so they navigate within the mounted instance — the
-    // same MountUrl the attribute emitter applies to app-authored hrefs.
-    private static string Breadcrumbs(NodePath path, string @base)
+    // The generic breadcrumb chrome. Its link TARGETS are the ROOT-RELATIVE cumulative node paths
+    // (`/`, `/notes`, …), prefixed with the mount `base` at the edge so they navigate within the
+    // mounted instance (the same MountUrl the attribute emitter applies). Its visible TEXT is the
+    // LABELED trail: the root is the instance display name humanized (the app's identity, not the
+    // internal root-type name "Db"); each segment is its `trail` label (a humanized prop name or a
+    // member's labelProp value). `trail` is one label per URL segment, in order.
+    private string Breadcrumbs(NodePath path, IReadOnlyList<string> trail, string @base)
     {
-        var sb = new StringBuilder($"<nav class=\"breadcrumbs\"><a href=\"{Escape(MountUrl(@base, "/"))}\">Db</a>");
+        var sb = new StringBuilder($"<nav class=\"breadcrumbs\"><a href=\"{Escape(MountUrl(@base, "/"))}\">{Escape(RootLabel())}</a>");
         var url = "";
-        foreach (var seg in path.Segments)
+        for (var i = 0; i < path.Segments.Count; i++)
         {
-            url += "/" + seg;
-            sb.Append($" / <a href=\"{Escape(MountUrl(@base, url))}\">{Escape(seg)}</a>");
+            url += "/" + path.Segments[i];
+            var text = i < trail.Count ? trail[i] : path.Segments[i];
+            sb.Append($" / <a href=\"{Escape(MountUrl(@base, url))}\">{Escape(text)}</a>");
         }
         sb.Append("</nav>");
         return sb.ToString();
     }
 
-    private static string PageTitle(NodePath path) =>
-        path.IsRoot ? "Db" : "Db / " + string.Join(" / ", path.Segments);
+    // The <title> for a generic page: the labeled trail under the root label, e.g. "Devlog" at the
+    // root, "Devlog / Milestones / Gate #3" deep. The same root label + labels the breadcrumb shows.
+    private string TitleFromTrail(IReadOnlyList<string> trail) =>
+        trail.Count == 0 ? RootLabel() : RootLabel() + " / " + string.Join(" / ", trail);
+
+    // The breadcrumb/title ROOT label: the instance display name, humanized (e.g. "devlog" → "Devlog").
+    // Falls back to "Db" (the historical root-type label) when no name was threaded in (a bare/unit
+    // render). The client mirrors this from window.initAppName (ui.ts rootLabel).
+    private string RootLabel() => _appName.Length > 0 ? TextUtil.Humanize(_appName) : "Db";
 
     private static NodePath ParsePath(string urlPath)
     {

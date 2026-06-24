@@ -152,9 +152,34 @@ There is no create URL, so a URL only ever addresses an entry that exists
 
 ## Breadcrumbs
 
-Breadcrumbs mirror the URL path **exactly, segment for segment.**
-`/customers/42` → `Db › customers › 42`. Invariant: breadcrumb trail equals
-the URL path. (Labeled breadcrumbs — a name instead of `42` — deferred.)
+Breadcrumbs mirror the URL path **exactly, segment for segment** — the link
+TARGETS are the cumulative URL prefixes (`/`, `/customers`, `/customers/42`),
+so a click is always an in-app navigation and the trail equals the URL path.
+
+The visible TEXT is the **labeled** trail (implemented; the generic UI):
+
+- the **root** is the instance's display name, humanized (`Devlog`) — not the
+  root-type name `Db` (which a bare/unit render with no name still falls back
+  to);
+- a **prop-name** segment is humanized (`customers` → `Customers`,
+  `dueDate` → `Due date`);
+- an **object** segment (a set member / object-dict entry) becomes that
+  object's **label** — its type's `labelProp` value (`/customers/42` →
+  `Acme`), so an opaque id reads as a name;
+- a **scalar-dictionary entry** segment is the user's literal key, shown
+  **verbatim** (`/settings/ORD-001` → `ORD-001`, never humanized);
+- a missing/empty label falls back to the humanized raw segment.
+
+The browser-tab `<title>` is the same labeled trail joined under the root
+label. Both are computed on the server (SSR) and **re-resolved identically by
+the client** on an SPA navigation — server and hydrated trails are
+byte-identical (the path-ancestor objects named in the URL ship just their one
+`labelProp` leaf for this; nothing else). C# `SsrRenderer.LabelTrail` /
+`CodeExecutor.SegmentLabel` and TS `syncBreadcrumbs` / `segmentLabel` are the
+twin halves.
+
+Still deferred: long-label truncation/wrapping, and threading the display name
+through a non-kernel (bare) render.
 
 ## Missing / deleted nodes
 
@@ -173,4 +198,5 @@ covers every unresolvable path.
   **position** (row 0 is key 42). Stored / user-defined order is a later
   refinement.
 - **Paging.** Tables render the whole dictionary for now. Known later need.
-- **Labeled breadcrumbs.**
+- **Labeled breadcrumbs** are now implemented (see Breadcrumbs above). What
+  remains deferred is only long-label truncation/wrapping.

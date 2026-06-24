@@ -15,6 +15,9 @@
 // authority → a same-origin, base-relative URL (a reverse-proxied / domain-root deployment).
 declare const initAssetAuthority: string;
 declare const initBase: string;
+// The instance display name (the kernel registry `app` label), injected by the SSR page. The generic-UI
+// breadcrumb/title uses it (humanized) as the ROOT label on a client-side render — see ui.ts rootLabel.
+declare const initAppName: string;
 
 // The mount base as a URL PREFIX: "" when root-mounted ("/"), else the base verbatim ("/apps/todo").
 // Prepended to the asset paths (/ws, /js) and — in ui.ts/init.ts — to the app's root-relative links.

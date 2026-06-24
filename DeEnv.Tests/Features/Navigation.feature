@@ -32,7 +32,9 @@ Feature: URL navigation and rendering
   @milestone-1 @single-user
   Scenario: Breadcrumbs mirror the path
     When I navigate to "/customers/42"
-    Then the breadcrumbs read "Db / customers / 42"
+    # The trail mirrors the path, but its TEXT is the labeled trail: the prop "customers" is humanized,
+    # and the entry key "42" becomes the Customer's label (its `name`, "Acme").
+    Then the breadcrumbs read "Db / Customers / Acme"
 
   @milestone-1 @single-user
   Scenario: A deleted key resolves to not-found

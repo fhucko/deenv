@@ -96,6 +96,33 @@ Feature: Self-hosted generic UI (object forms)
     Then a dict row eventually shows "currency"
     And the dict entry "currency" eventually has value "USD"
 
+  # A scalar-dict ENTRY segment is the user's own literal KEY — it must appear in the breadcrumb VERBATIM,
+  # never humanized: "ORD-001" must NOT become "Ord 001". (An entry resolves to kind=leaf, not an object,
+  # so there is no labelProp to show; the raw key is the label.) The breadcrumb is rebuilt by the client's
+  # segmentLabel after hydration, so this proves the rule holds byte-identically on BOTH twins. Object-dict
+  # entries (kind=object) still show their object's label — that path is unchanged and covered elsewhere.
+  @milestone-9 @single-user
+  Scenario: A scalar dictionary key shows verbatim in the breadcrumb, not humanized
+    Given the self-hosted scalar dict app is running
+    When I open "/"
+    And I fill the new key with "ORD-001"
+    And I fill the new "value" with "open"
+    And I add the dict entry
+    And the dict entry "ORD-001" eventually has value "open"
+    And I open "/settings/ORD-001"
+    Then the breadcrumbs eventually read "Db / Settings / ORD-001"
+
+  # The SERVER half of the scalar-dict-key rule, pinned in-process (a client-only fix would slip past the
+  # hydrated scenario above, since its polled assertion waits for the client's correct rebuild). The SSR
+  # breadcrumb anchor for the entry must show the literal key "ORD-001", never humanized "Ord 001".
+  @milestone-9 @single-user
+  Scenario: A scalar dictionary key is not humanized in the SSR breadcrumb
+    Given the scalar dict instance with key "ORD-001"
+    When the page at "/settings/ORD-001" is rendered as app "devlog"
+    Then the rendered HTML contains '<a href="/settings/ORD-001">ORD-001</a>'
+    And the rendered HTML contains '<a href="/settings">Settings</a>'
+    And the rendered HTML does not contain '<a href="/settings/ORD-001">Ord 001</a>'
+
   @milestone-9 @single-user
   Scenario: Input kind follows the prop's base type
     Given the self-hosted form app is running
@@ -110,6 +137,81 @@ Feature: Self-hosted generic UI (object forms)
     Given the self-hosted form app is running
     When I open "/notes/2"
     Then the "dueDate" label reads "Due date"
+
+  # The breadcrumb chrome and the browser-tab title show HUMAN labels, never schema-internal
+  # identifiers: the root is the instance display name humanized (not the root-type name "Db"), a
+  # prop-name segment is humanized ("notes" → "Notes"), and an object-id segment becomes that object's
+  # label ("2" → "First", its labelProp value). Driven in-process so the SSR breadcrumb (in <body>) and
+  # the <title> (in <head>) are asserted directly.
+  @milestone-9 @single-user
+  Scenario: Breadcrumbs and the page title show human labels, not internal identifiers
+    Given the self-hosted form instance
+    When the page at "/notes/2" is rendered as app "devlog"
+    Then the rendered HTML contains '<a href="/">Devlog</a>'
+    And the rendered HTML contains '<a href="/notes">Notes</a>'
+    And the rendered HTML contains '<a href="/notes/2">First</a>'
+    And the rendered HTML does not contain '<a href="/">Db</a>'
+    And the rendered HTML does not contain '<a href="/notes">notes</a>'
+    And the rendered HTML does not contain '<a href="/notes/2">2</a>'
+    And the page title is "Devlog / Notes / First"
+
+  # At the root the breadcrumb/title is just the humanized display name — never the root-type name "Db".
+  # The assertion targets the breadcrumb ROOT LINK specifically (the generic object form legitimately
+  # shows the type name "Db" as its own <h2> heading — a separate, pre-existing surface, not the chrome).
+  @milestone-9 @single-user
+  Scenario: The root breadcrumb and title are the humanized app name
+    Given the self-hosted form instance
+    When the page at "/" is rendered as app "devlog"
+    Then the rendered HTML contains '<a href="/">Devlog</a>'
+    And the rendered HTML does not contain '<a href="/">Db</a>'
+    And the page title is "Devlog"
+
+  # On a route THREE objects deep (Db → milestones → Milestone → slices → Slice), every object segment
+  # shows its label — including the INTERMEDIATE "4" (the Milestone), which the leaf page (the Slice "5"
+  # form) does NOT render. So the only thing that labels "4" is the breadcrumb trail itself: the server
+  # resolves it and (the blocker fix) records its labelProp as an accessed leaf so it SHIPS to the client.
+  # This pins the SERVER half of the deep trail; the hydrated scenario below pins the byte-identical client.
+  @milestone-9 @single-user
+  Scenario: A three-objects-deep route labels every segment, including the intermediate object
+    Given the deep-nav instance
+    When the page at "/milestones/4/slices/5" is rendered as app "devlog"
+    Then the rendered HTML contains '<a href="/milestones">Milestones</a>'
+    And the rendered HTML contains '<a href="/milestones/4">Gate #3 - dogfood a real app</a>'
+    And the rendered HTML contains '<a href="/milestones/4/slices">Slices</a>'
+    And the rendered HTML contains '<a href="/milestones/4/slices/5">Dev tracker v1 (this app)</a>'
+    And the rendered HTML does not contain '<a href="/milestones/4">4</a>'
+    And the page title is "Devlog / Milestones / Gate #3 - dogfood a real app / Slices / Dev tracker v1 (this app)"
+
+  # The deep-route trail must be BYTE-IDENTICAL on the hydrated client. A direct deep-link SSRs the labeled
+  # trail; once the client hydrates, syncBreadcrumbs re-resolves every segment over the SHIPPED graph and
+  # rebuilds the nav if its trail differs. Without the ancestor-label leaf shipping, the INTERMEDIATE
+  # crumb ("4", the Milestone) — which the leaf Slice form never renders — would flip from the label to the
+  # humanized raw id after hydration. The polled equality proves it does NOT flip: server and client agree.
+  # (The root is "Db" here — no display name is threaded through the test server; the labeled deep trail is
+  # what this proves.)
+  @milestone-9 @single-user
+  Scenario: A three-objects-deep route's breadcrumb and title survive hydration byte-identically
+    Given the deep-nav app is running
+    When I open "/milestones/4/slices/5"
+    Then the page shows ".object-form"
+    And the breadcrumbs eventually read "Db / Milestones / Gate #3 - dogfood a real app / Slices / Dev tracker v1 (this app)"
+    And the browser tab title eventually is "Db / Milestones / Gate #3 - dogfood a real app / Slices / Dev tracker v1 (this app)"
+
+  # The deep trail when the page is reached by a CLIENT-SIDE (SPA) navigation, not a deep-link. Starting at
+  # the root (which ships the Milestone members + their labels via the set table, but NOT their nested
+  # slices), navigating straight to the Slice forces a refetch for the un-shipped Slice "5"; the client then
+  # builds the whole labeled trail FROM SCRATCH over the navigated/refetched graph (no SSR'd trail to
+  # reconcile against — syncBreadcrumbs constructs it). A regression guard for the client building a 3-deep
+  # labeled trail through a refetch; the SPA-nav twin of the deep-link case above.
+  @milestone-11 @single-user
+  Scenario: A three-objects-deep route's breadcrumb is labeled when reached by SPA navigation
+    Given the deep-nav app is running
+    When I open "/"
+    And I navigate via an in-app link to "/milestones/4/slices/5"
+    Then the URL path becomes "/milestones/4/slices/5"
+    And the page shows ".object-form"
+    And the breadcrumbs eventually read "Db / Milestones / Gate #3 - dogfood a real app / Slices / Dev tracker v1 (this app)"
+    And the browser tab title eventually is "Db / Milestones / Gate #3 - dogfood a real app / Slices / Dev tracker v1 (this app)"
 
   # The generic object form is built entirely from the `sys` namespace builtins
   # (sys.humanize for the label, sys.field for the value) — a named proof that the
@@ -466,6 +568,25 @@ Feature: Self-hosted generic UI (object forms)
     And the page shows ".set-table"
     And the live page mark survives
 
+  # The browser-tab title tracks a CLIENT-SIDE navigation. The generic title is SSR'd into <head>, but
+  # a SPA nav re-renders only #app, so without the fix the title stays frozen at the first-paint value.
+  # The fix recomputes it during the breadcrumb sync, so after navigating from "/" into the member the
+  # title becomes the labeled trail — "Notes" humanized and "First" the object's label (a member id "2"
+  # would be a leak). The root title is "Db" here (no display name is threaded through the test server;
+  # the humanized-app-name root is proven by the in-process SSR scenarios). Back restores the root title.
+  @milestone-11 @single-user
+  Scenario: The browser tab title updates and shows labels on a client-side navigation
+    Given the self-hosted form app is running
+    When I open "/"
+    Then the browser tab title eventually is "Db"
+    When I follow the set row link
+    Then the URL path becomes "/notes/2"
+    And the page shows ".object-form"
+    And the browser tab title eventually is "Db / Notes / First"
+    When I navigate back
+    Then the URL path becomes "/"
+    And the browser tab title eventually is "Db"
+
   # An OBJECT route (/notes/2) ships only the routed member of the set, so a SIBLING member
   # (Note 9) is absent from the client graph. Navigating client-side to that sibling resolves
   # to target:null (a valid route whose object was not shipped — byte-identical to a missing
@@ -599,15 +720,17 @@ Feature: Self-hosted generic UI (object forms)
     Then the page shows ".not-found"
 
   # ── breadcrumbs on a collection/route page (milestone 11 bug fix) ───────────
-  # The breadcrumb trail is the REQUEST url path, segment for segment — not the
-  # view's argument-binding path (which, for an owner-bound set route, is the
-  # PARENT object and so showed only "Db").
+  # The breadcrumb trail follows the REQUEST url path, segment for segment — not the
+  # view's argument-binding path (which, for an owner-bound set route, is the PARENT
+  # object and so showed only "Db"). The visible TEXT is the LABELED trail: a prop-name
+  # segment is humanized ("notes" → "Notes"). The root is "Db" here (no display name is
+  # threaded through the test server; the humanized-app-name root is proven in-process).
 
   @milestone-11 @single-user
-  Scenario: The breadcrumb trail on a set route shows the full URL path
+  Scenario: The breadcrumb trail on a set route shows the labeled URL path
     Given the self-hosted form app is running
     When I open "/notes"
-    Then the breadcrumbs read "Db / notes"
+    Then the breadcrumbs read "Db / Notes"
 
   # ── SPA nav into an object form holding a reference, over un-shipped data (regression) ──
   # The demo app (instances/6 shape): the Db holds OBJECT collections — a `tasks` set whose member holds a

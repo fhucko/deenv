@@ -61,7 +61,7 @@ public static class InstanceApp
 {
     public static (IHandlerBuilder App, IHandlerBuilder Asset) Build(
         IInstanceStore store, InstanceDescription description, string mountBase, int assetPort,
-        LiveRegistry? registry = null, IHostActions? hostActions = null)
+        LiveRegistry? registry = null, IHostActions? hostActions = null, string appName = "")
     {
         var sessions = new ClientSessionStore();
         var ws = new WsHandler(store, description, sessions, registry ?? new LiveRegistry(),
@@ -79,7 +79,7 @@ public static class InstanceApp
             });
 
         var app = Layout.Create()
-            .Add(new ContentHandlerBuilder(store, description, sessions, mountBase, assetPort, registry ?? new LiveRegistry()));
+            .Add(new ContentHandlerBuilder(store, description, sessions, mountBase, assetPort, registry ?? new LiveRegistry(), appName));
 
         var asset = Layout.Create()
             .Add("ws", websocket)

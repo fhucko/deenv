@@ -54,7 +54,7 @@ public sealed class HostedInstance
         var description = InstanceDescriptionLoader.LoadFile(spec.SchemaPath);
         var store = new JsonFileInstanceStore(spec.DataPath, description);
         var mountBase = MountBaseFor(spec.App);
-        var (appApp, assetApp) = InstanceApp.Build(store, description, mountBase, assetPort, registry, hostActions);
+        var (appApp, assetApp) = InstanceApp.Build(store, description, mountBase, assetPort, registry, hostActions, spec.App);
         return new HostedInstance(spec, store, appApp.Build(), assetApp.Build());
     }
 
