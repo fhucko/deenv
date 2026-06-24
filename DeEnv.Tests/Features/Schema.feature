@@ -140,6 +140,36 @@
     And the type "OrderStatus" is an enum with values "pending, shipped, delivered"
     And the document round-trips through the printer
 
+  # ── multiline text presentation attribute ───────────────────────────────────
+
+  @milestone-multiline @single-user
+  Scenario: A multiline text prop parses, round-trips, and a plain text prop stays single-line
+    Given the app description:
+      """
+      types
+          Db
+              title text
+              body text multiline
+      """
+    When the document is loaded
+    Then the document loads successfully
+    And the "body" prop of "Db" is multiline
+    And the "title" prop of "Db" is not multiline
+    And the document round-trips through the printer
+
+  @milestone-multiline @single-user
+  Scenario: multiline on a non-text prop is rejected
+    Given the app description:
+      """
+      types
+          Db
+              boss Person multiline
+          Person
+              name text
+      """
+    When the document is loaded
+    Then loading is rejected with an error mentioning "multiline"
+
   @milestone-enum @single-user
   Scenario: An enum field stores an in-list value and rejects an off-list one
     Given the enum fixture instance is running

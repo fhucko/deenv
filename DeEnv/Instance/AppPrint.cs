@@ -84,7 +84,9 @@ public static class AppPrint
     {
         Cardinality.Set => $"set of {prop.Type}",
         Cardinality.Dictionary => prop.KeyType is { } key ? $"dict of {prop.Type} by {key}" : $"dict of {prop.Type}",
-        _ => prop.Type + (prop.Nullable ? "?" : ""),
+        // A single prop: `Type` (+ `?` if nullable), then the optional `multiline` presentation
+        // keyword (only ever set on a text prop) — so parse∘print round-trips.
+        _ => prop.Type + (prop.Nullable ? "?" : "") + (prop.Multiline ? " multiline" : ""),
     };
 
     // ── initialData ──────────────────────────────────────────────────────────────

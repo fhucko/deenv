@@ -56,6 +56,15 @@ public sealed class AppPrintTests
         await AssertRoundTrips(InstanceContext.EnumFixtureApp);
     }
 
+    // A `text multiline` prop (the presentation attribute) round-trips: the trailing `multiline`
+    // keyword is parsed onto the prop and printed back after the type, so parse∘print is the
+    // identity and the printed form is a fixpoint. A plain `text`/`int` prop prints with no keyword.
+    [Test]
+    public async Task The_multiline_fixture_round_trips()
+    {
+        await AssertRoundTrips(InstanceContext.MultilineFixtureApp);
+    }
+
     // ── expression printing: minimal parentheses ────────────────────────────────
 
     [Test]

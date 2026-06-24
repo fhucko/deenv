@@ -305,6 +305,33 @@ public class InstanceContext
             label: "Second"
     """;
 
+    // A `text multiline` presentation-attribute fixture (the generic-UI <textarea> slice).
+    // `Note.body` is marked `multiline`, `Note.title` is a plain text prop, and `count` is an int —
+    // so the member edit page (/notes/2) proves the THREE renderings side by side: body → <textarea>,
+    // title → single-line <input type=text>, count → <input type=number>. The value stays text either
+    // way (multiline is presentation only). A dedicated fixture (NOT a committed app, like the enum
+    // fixture) — it isolates the mechanism and avoids dragging the designer seed / SchemaBridge in.
+    public static InstanceDescription MultilineFixtureDb() =>
+        InstanceDescriptionLoader.Load(MultilineFixtureApp);
+
+    public const string MultilineFixtureApp = """
+    types
+        Db
+            notes set of Note
+        Note
+            title text
+            body text multiline
+            count int
+
+    initialData
+        Db 1
+            notes: [2]
+        Note 2
+            title: "First"
+            body: "line one"
+            count: 3
+    """;
+
     // An object with OPTIONAL leaf fields of every non-empty-parseable kind: `due` (date),
     // `amount` (decimal), `at` (datetime), plus a required `title`. Rendered by the default
     // self-hosted generic UI (no `ui` section). The Db holds a `reminders` set, so `/reminders`

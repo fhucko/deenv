@@ -11,12 +11,15 @@ namespace DeEnv.Instance;
 //
 //   • Input(obj, desc, variant) — the baseType-appropriate, two-way-bound control for one prop (the
 //     desc): <input type={InputType(...)}> for a scalar, a checkbox for bool, a <select> of values
-//     for an enum. The first composition PRIMITIVE — extracted from the three places that inlined the
+//     for an enum, and a <textarea> for a multiline text prop. The first composition PRIMITIVE —
+//     extracted from the three places that inlined the
 //     same baseType branch (the object-form field, the reference create-new draft, the set add-form).
 //     `variant` is an optional MUI-style presentation choice OWNED by the library (callers never
 //     restyle via their own CSS): omitted → "outlined" (bordered, the form default); "standard" → a
 //     borderless control that reads as plain text and reveals an underline on hover/focus (for inline
 //     contexts like a checklist row). The only thing a caller passes for looks; styling is internal.
+//     (A multiline text prop renders a <textarea>, which ignores `variant` — no styled variant exists
+//     for it yet; add one only if a caller needs an inline multiline control.)
 //   • Field(obj, desc) — a labeled field: a <div class="field"> wrapping the prop's humanized
 //     <label> and its Input. The labeled-field composite ObjectForm and a custom render compose.
 //   • ObjectForm(obj, meta, base, autosave) — an object page: a field per prop (a Field for a
@@ -108,6 +111,13 @@ public static class GenericUi
                         foreach v in desc.values
                             <option value={v}>
                                 sys.humanize(v)
+                else if desc.baseType == "text"
+                    if desc.multiline
+                        return <textarea class={desc.name} rows="4" value={sys.field(obj, desc.name)}>
+                    else if variant == "standard"
+                        return <input type="text" class={desc.name} value={sys.field(obj, desc.name)} variant="standard">
+                    else
+                        return <input type="text" class={desc.name} value={sys.field(obj, desc.name)}>
                 else if variant == "standard"
                     return <input type={InputType(desc.baseType)} class={desc.name} value={sys.field(obj, desc.name)} variant="standard">
                 else
@@ -220,7 +230,7 @@ public static class GenericUi
                                     <th>
                                         sys.humanize(desc.labelProp)
                                     foreach p in desc.props
-                                        if p.baseType != "set" && p.baseType != "dictionary" && p.name != desc.labelProp
+                                        if p.baseType != "set" && p.baseType != "dictionary" && p.name != desc.labelProp && p.multiline != true
                                             <th>
                                                 sys.humanize(p.name)
                                 <th>
@@ -250,7 +260,7 @@ public static class GenericUi
                                             <a class="row-link" href={sys.nest(setPath, m)}>
                                                 sys.field(m, desc.labelProp)
                                         foreach p in desc.props
-                                            if p.baseType != "set" && p.baseType != "dictionary" && p.name != desc.labelProp
+                                            if p.baseType != "set" && p.baseType != "dictionary" && p.name != desc.labelProp && p.multiline != true
                                                 <td>
                                                     if p.baseType == "bool"
                                                         <span class="bool-cell">
@@ -520,19 +530,30 @@ public static class GenericUi
                 ("keyType", Text(p.KeyType ?? "text")),
                 ("element", Text(p.Type)),
                 ("isScalar", new CodeBool { Value = isScalar }),
-                ("valueProps", Arr(valueProps.Select(vp => (ICodeValue)PropDesc(vp, desc)))));
+                ("valueProps", Arr(valueProps.Select(vp => (ICodeValue)PropDesc(vp, desc)))),
+                MultilineField(false));
         }
         if (p.Cardinality == Cardinality.Set)
-            return Obj(("name", Text(p.Name)), ("baseType", Text("set")), ("element", Text(p.Type)));
+            return Obj(("name", Text(p.Name)), ("baseType", Text("set")), ("element", Text(p.Type)), MultilineField(false));
         if (desc.IsObjectType(p.Type))
-            return Obj(("name", Text(p.Name)), ("baseType", Text("object")), ("target", Text(p.Type)));
+            return Obj(("name", Text(p.Name)), ("baseType", Text("object")), ("target", Text(p.Type)), MultilineField(false));
         // An enum scalar prop: { name, baseType: "enum", values: [...] } so objectForm renders a
         // <select> of its values (a bare `baseType: <typeName>` would fall through to a text input).
         if (desc.FindType(p.Type) is { BaseType: BaseType.Enum, Values: { } values })
             return Obj(("name", Text(p.Name)), ("baseType", Text("enum")),
-                ("values", Arr(values.Select(v => (ICodeValue)Text(v)))));
-        return Obj(("name", Text(p.Name)), ("baseType", Text(p.Type)));
+                ("values", Arr(values.Select(v => (ICodeValue)Text(v)))), MultilineField(false));
+        // A leaf scalar prop: { name, baseType }. A text prop carries `multiline` true so Input
+        // renders a <textarea> instead of an <input>, and SetTable drops it from the columns (long-form
+        // text belongs on the member page, not a scannable list). EVERY prop descriptor carries
+        // `multiline` (false for all non-multiline-text) so the SetTable column filter can read it
+        // uniformly — the interpreter evaluates both operands of `&&`, so it has no field to skip.
+        return Obj(("name", Text(p.Name)), ("baseType", Text(p.Type)), MultilineField(p.Multiline));
     }
+
+    // Every prop descriptor carries a `multiline` bool so consumers (Input, the SetTable column filter)
+    // read it without a missing-field error; only a multiline text leaf is ever true.
+    private static (string, ICodeValue) MultilineField(bool value) =>
+        ("multiline", new CodeBool { Value = value });
 
     // Scalar (leaf-valued) props for the label prop and the table columns: base
     // leaves and enums (an enum value is text-shaped). References/sets/dicts are excluded.

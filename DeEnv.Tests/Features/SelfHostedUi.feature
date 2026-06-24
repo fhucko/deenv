@@ -305,6 +305,37 @@ Feature: Self-hosted generic UI (object forms)
     And I save the form
     Then the store eventually has a "Order" whose "status" is "delivered"
 
+  # ── multiline text presentation attribute ──────────────────────────────────
+  # A `text multiline` prop renders a <textarea> in the generic UI; a plain `text` prop stays a
+  # single-line <input>, and a non-text scalar (int) is untouched. The value is and stays text —
+  # multiline only flips the editor — so two-way binding persists exactly like a single-line input
+  # (fill the textarea, Save, the store has the new text). Surfaced by dogfooding devlog (a notes
+  # field needs real multi-line text).
+
+  @milestone-multiline @single-user
+  Scenario: A multiline text field renders as a textarea while a plain text field stays an input
+    Given the multiline fixture app is running
+    When I open "/notes/2"
+    Then the page is a code page
+    And the "body" field is a textarea showing "line one"
+    And the "title" field is a "text" input
+    And the "count" field is a "number" input
+    When I fill the "body" textarea with two lines "first line" and "second line"
+    And I save the form
+    Then the store eventually has a "Note" whose "body" is the two lines "first line" and "second line"
+
+  # A `multiline` text prop is long-form content, so the generic SetTable DROPS it from the columns —
+  # a paragraph would wrap and squeeze the scannable Name/other columns; it's edited on the member
+  # page instead. Plain scalars (here `count`) stay columns. (`Db.notes` is a set of Note, and
+  # Note.body is the multiline prop; title is the label, count is a plain int.)
+  @milestone-multiline @single-user
+  Scenario: A multiline text prop is dropped from the set table columns
+    Given the multiline fixture app is running
+    When I open "/"
+    Then the page shows ".set-table"
+    And the set table has a "Count" column
+    And the set table has no "Body" column
+
   # ── component-local state (creation prototype) ─────────────────────────────
 
   @milestone-9 @single-user

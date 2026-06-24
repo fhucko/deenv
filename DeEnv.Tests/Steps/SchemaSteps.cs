@@ -89,6 +89,21 @@ public sealed class SchemaSteps(InstanceContext ctx)
         await Assert.That(type.Values).IsEquivalentTo(expected);
     }
 
+    // ── multiline text presentation attribute ───────────────────────────────────
+
+    // The `multiline` keyword parsed onto the prop sets its Multiline bool (the model field the
+    // generic UI's descriptor reads to render a <textarea>); a plain prop's stays false.
+    [Then("the {string} prop of {string} is multiline")]
+    public async Task ThenPropMultiline(string propName, string typeName) =>
+        await Assert.That(PropOf(typeName, propName).Multiline).IsTrue();
+
+    [Then("the {string} prop of {string} is not multiline")]
+    public async Task ThenPropNotMultiline(string propName, string typeName) =>
+        await Assert.That(PropOf(typeName, propName).Multiline).IsFalse();
+
+    private PropDefinition PropOf(string typeName, string propName) =>
+        ctx.LoadedDescription!.FindType(typeName)!.Props!.First(p => p.Name == propName);
+
     // parse(print(d)) ≡ d (structural) AND the printed form is a fixpoint — the same
     // round-trip the printer tests assert, here as the enum scenario's named proof.
     [Then("the document round-trips through the printer")]

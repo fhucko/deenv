@@ -4,12 +4,12 @@ types
     Milestone
         name text
         status Status
-        notes text
+        notes text multiline
         slices set of Slice
     Slice
         name text
         status Status
-        notes text
+        notes text multiline
     Status enum
         planned
         active

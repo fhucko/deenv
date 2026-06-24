@@ -14,12 +14,20 @@ public enum Cardinality { Single, Dictionary, Set }
 
 // Plain-data records. All JSON casing comes from SchemaJson.Options (camelCase
 // property policy + string-enum converter) — no per-property attributes, no logic.
+//
+// Multiline is a PRESENTATION attribute on a single `text` prop: the value is and stays
+// text (no storage/wire/interpreter value change), it only makes the generic UI render a
+// <textarea> editor instead of a single-line <input>. Default false (absent ⇒ off — the
+// common case is zero-config). Valid only on a single text prop; the loader rejects it
+// elsewhere. It is a single bool, NOT a general prop-attribute mechanism — generalize only
+// if a second presentation attribute ever appears.
 public record PropDefinition(
     string Name,
     string Type,
     Cardinality Cardinality = Cardinality.Single,
     string? KeyType = null,
-    bool Nullable = false);
+    bool Nullable = false,
+    bool Multiline = false);
 
 // A type's shape: an object type carries Props; an enum type (BaseType.Enum) carries its
 // ordered value names in Values; a leaf alias carries neither. Props and Values are mutually

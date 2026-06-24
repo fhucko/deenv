@@ -176,6 +176,15 @@ public static class InstanceDescriptionLoader
             throw new SchemaValidationException(
                 $"Prop '{prop.Name}' on type '{typeName}' references unknown type '{prop.Type}'.");
 
+        // `multiline` is a presentation attribute for a single text prop only. The grammar already
+        // confines it to a single prop (a set/dict never parses it), so this guards the remaining
+        // case: a single non-text prop (`boss User multiline`). Rejected with a clear message,
+        // matching how the other structural prop constraints are enforced here.
+        if (prop.Multiline && (prop.Cardinality != Cardinality.Single || prop.Type != "text"))
+            throw new SchemaValidationException(
+                $"Prop '{prop.Name}' on type '{typeName}' is marked 'multiline', " +
+                $"but 'multiline' is only valid on a single 'text' prop.");
+
         if (prop.Cardinality == Cardinality.Dictionary
             && prop.KeyType != null
             && !BaseTypes.IsName(prop.KeyType))

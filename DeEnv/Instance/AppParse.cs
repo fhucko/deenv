@@ -34,7 +34,11 @@ public static class AppParse
     // ── types ────────────────────────────────────────────────────────────────────
 
     // `name type` / `name set of Type` / `name dict of Type by key`, `?` = nullable (no colon —
-    // the name and its type are separated by whitespace; see Prop).
+    // the name and its type are separated by whitespace; see Prop). A single scalar prop may carry
+    // an optional trailing `multiline` keyword (`notes text multiline`) — a presentation attribute
+    // that makes the generic UI render a <textarea>; it is grammatically valid only after a single
+    // prop's type (never on a set/dict — there it simply fails to parse), and the loader further
+    // restricts it to `text` props.
     private static Parser<Func<string, PropDefinition>> PropType => OneOf(
         Seq(Text("set"), Ws1, Text("of"), Ws1, Name,
             (_, _, _, _, elem) => (Func<string, PropDefinition>)(name =>
@@ -43,9 +47,10 @@ public static class AppParse
             Optional(Seq(Ws1, Text("by"), Ws1, Name, (_, _, _, k) => k)),
             (_, _, _, _, elem, key) => (Func<string, PropDefinition>)(name =>
                 new PropDefinition(name, elem, Cardinality.Dictionary, key))),
-        Seq(Name, Optional(Text("?")),
-            (type, nullable) => (Func<string, PropDefinition>)(name =>
-                new PropDefinition(name, type, Cardinality.Single, Nullable: nullable != null))));
+        Seq(Name, Optional(Text("?")), Optional(Seq(Ws1, Text("multiline"), (_, kw) => kw)),
+            (type, nullable, multiline) => (Func<string, PropDefinition>)(name =>
+                new PropDefinition(name, type, Cardinality.Single,
+                    Nullable: nullable != null, Multiline: multiline != null))));
 
     // A prop is `name <type>` — the name and its type separated by whitespace, no colon.
     private static Parser<PropDefinition> Prop =>

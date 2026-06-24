@@ -242,6 +242,20 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
             "() => { const th = [...document.querySelectorAll('.set-head th')]; " +
             "return th.length > 0 && th[th.length - 1].textContent.trim() === ''; }");
 
+    // A SetTable column header (.set-head <th>) with the given humanized text IS present — a plain
+    // scalar prop is a column.
+    [Then("the set table has a {string} column")]
+    public async Task ThenSetTableHasColumn(string header) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.set-head th')].some(th => th.textContent.trim() === {JsString(header)})");
+
+    // No SetTable column header has the given text — proving a `multiline` text prop is DROPPED from the
+    // auto columns (long-form content lives on the member page, not a scannable list).
+    [Then("the set table has no {string} column")]
+    public async Task ThenSetTableHasNoColumn(string header) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.set-head th')].every(th => th.textContent.trim() !== {JsString(header)})");
+
     [Then("the set table header column count equals the body row column count")]
     public async Task ThenSetHeaderAligns() =>
         await ctx.Page!.WaitForFunctionAsync(
@@ -769,6 +783,45 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     [When("I choose {string} in the {string} select")]
     public async Task WhenChooseInSelect(string value, string field) =>
         await ctx.Page!.Locator($"select.{field}").SelectOptionAsync(value);
+
+    // ── multiline text presentation attribute ──────────────────────────────────────
+
+    [Given("the multiline fixture app is running")]
+    public async Task GivenMultilineFixtureAppRunning()
+    {
+        ctx.Description = InstanceContext.MultilineFixtureDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    // A `text multiline` prop renders as a <textarea class={p.name}> (not an <input>), and its bound
+    // value is its TEXT CONTENT (browsers ignore `value` on a textarea — both twins set .value). Read
+    // .value, the same property the client binds, so this works pre- and post-hydration.
+    [Then("the {string} field is a textarea showing {string}")]
+    public async Task ThenTextareaShows(string field, string expected)
+    {
+        var el = ctx.Page!.Locator($"textarea.{field}");
+        await Assert.That(await el.CountAsync()).IsEqualTo(1);
+        await Assert.That(await el.InputValueAsync()).IsEqualTo(expected);
+    }
+
+    // Fill the textarea with a genuinely multi-line value (the two lines joined by a real newline),
+    // proving the textarea holds real multi-line text. NOT registered as a pending edit: the newline
+    // is escaped on disk (\n), so the substring gate would miss it — the dedicated store assertion
+    // below polls the PARSED store value (a real newline) instead.
+    [When("I fill the {string} textarea with two lines {string} and {string}")]
+    public async Task WhenFillTextareaTwoLines(string field, string line1, string line2)
+    {
+        await ctx.Page!.WaitReadyAsync(); // a staged edit still rides the WS on Save — wait for the settled socket
+        await ctx.Page!.Locator($"textarea.{field}").FillAsync(line1 + "\n" + line2);
+    }
+
+    // The stored leaf is the two lines joined by a real newline — the value survived the round-trip
+    // unchanged (multiline is presentation only; the value is and stays plain text). Polls the parsed
+    // store (ReadExtent), so the comparison is over the real newline, not the on-disk \n escape.
+    [Then("the store eventually has a {string} whose {string} is the two lines {string} and {string}")]
+    public async Task ThenStoreHasTwoLines(string typeName, string field, string line1, string line2) =>
+        await EventuallyAsync(() => ctx.Store!.ReadExtent(typeName).Values
+            .Any(o => o.Fields.TryGetValue(field, out var v) && v is TextValue t && t.Text == line1 + "\n" + line2));
 
     [Given("the self-hosted scalar dict app is running")]
     public async Task GivenSelfHostedScalarDictAppRunning()
