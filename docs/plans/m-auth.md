@@ -1,9 +1,12 @@
 # Plan: M-auth — access control (the auth milestone)
 
 **Status:** designed 2026-06-24, **approved as the active milestone** (recorded in DECISIONS.md;
-pulled ahead of M12 visual designer and M13 versioning). **Not built yet.** Two open threads remain
-(both **resolved** 2026-06-24 — see [Open questions](#open-questions)). First sliver dovetails with
-the `devlog` dogfood.
+pulled ahead of M12 visual designer and M13 versioning). **BUILD WELL UNDERWAY (suite 513):** the
+engine (read floor + write enforcement + floor-hardening), self-hosted password login/logout
+(login-as-state, no reserved URL), the `devlog` **public-roadmap** dogfood (public read + admin-only
+write, via an `accessActive` system var + a `<SignInBar>`), and the **first-admin bootstrap** (env-var
+auto-seed on kernel boot) have all landed. Both original open threads are **resolved** (see
+[Open questions](#open-questions)). The first sliver dovetailed with the `devlog` dogfood as planned.
 
 ## Goal
 
@@ -203,13 +206,16 @@ not resurrect them as the model.
    the app behaves as today (reachable, no login, the operator just uses it; conditions never run).
    **≥ 1 rule → active**: deny-by-default among the rules, login required to be a principal. Writing
    the first rule flips it on — minimal-by-default, nothing to configure or delete.
-2. **Bootstrap — hangs off that same moment.** The first **publish that has rules but no `Admin` user**
-   requires **initial admin credentials**; the kernel seeds a `User` (role=Admin, hashed password) via
-   the builtin, and the designer scaffolds the `* where role == "Admin"` override so turning auth on
-   can't lock the operator out. The **designer instance itself** is kernel-seeded at **first boot**
-   (one-time). No public first-run claim (avoids the race-to-admin). *Caveat:* "no rules = allow all"
-   means a publicly-deployed app with zero rules is open — status quo and the operator's call; a
-   deploy-time "public instance, no access rules" lint is an easy later guard, not MVP.
+2. **Bootstrap — IMPLEMENTED as env-var auto-seed on kernel boot** (`AdminSeed.SeedFromEnv` /
+   `SeedIfRuled`, commit `c0065e5`). On boot the kernel seeds a `User` (role=Admin, hashed password) into
+   every **ruled** instance from the operator's `DEENV_ADMIN_PASSWORD` (+ optional `DEENV_ADMIN_USER` /
+   `DEENV_ADMIN_ROLE`), **once, idempotently** — so a fresh deploy of a ruled app is loginable. A dormant
+   app or an unset password is a no-op. This **supersedes** the originally-sketched publish-time prompt +
+   designer-scaffold override (env-var auto-seed is simpler for the deploy; the operator owning the boot
+   secret makes the can't-lock-yourself-out scaffold moot). *Caveat:* "no rules = allow all" means a
+   publicly-deployed app with zero rules is open — status quo and the operator's call; a deploy-time lint
+   is an easy later guard, not MVP. Password **rotation** via the env var is NOT supported (idempotent →
+   no re-seed); rotate via the in-app `setPassword` path later.
 
 Minor (build-time, not model forks): the exact verb set; field tighten-only vs also-loosen; the
 designer builder's preset vocabulary; whether `AppPrint` sugars role-conditions back into a column.
