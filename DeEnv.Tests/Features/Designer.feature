@@ -219,6 +219,24 @@ Feature: The operator IDE (designs library + instance design selector)
     And I set the just-added type's values to "open, doing, done"
     Then the design's type "Status" is an enum with values "open, doing, done"
 
+  # A single `text` prop's `multiline` presentation flag (the generic-UI <textarea> toggle, commit
+  # 678eb6d) is authorable in the designer, not just in the .app text. The prop-row has a checkbox bound
+  # to prop.multiline, shown ONLY for a single text prop (the one shape the loader allows it on) — so the
+  # designer can never produce an invalid design. Toggling it captures the flag in the designer's own
+  # store. LIGHT, like the enum authoring above: it asserts the designer captured the toggle + the
+  # progressive disclosure (shown on a text prop, hidden on a non-text one), not a full deploy — the
+  # design→app-document projection of multiline is proven cheaply in Bridge.feature.
+  @milestone-multiline @single-user
+  Scenario: The designer toggles multiline on a single text prop, and hides it on a non-text prop
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    Then the prop "text" shows a multiline toggle
+    And the prop "checked" shows no multiline toggle
+    When I toggle multiline on the prop "text"
+    Then the design's prop "text" is multiline
+    And the design's prop "checked" is not multiline
+
   # Removing a type from a design must actually delete it. The remove drives arrayRemove on the design's
   # (nested) types set, which runs the store's garbage collector -- and the GC walks the whole meta-schema
   # graph, including a MetaProp object whose `fields` carries a key literally named "type" (the prop's data

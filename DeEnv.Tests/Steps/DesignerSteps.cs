@@ -231,6 +231,18 @@ public sealed class DesignerSteps(InstanceContext ctx)
                 && o.Fields.TryGetValue("keyType", out var v) && v is DeEnv.Storage.TextValue t && t.Text == keyType));
     }
 
+    [When("I toggle multiline on the prop {string}")]
+    public async Task WhenToggleMultiline(string propName)
+    {
+        // The multiline checkbox in the prop's row (shown only for a single text prop). Check it — the
+        // two-way `checked` binding writes prop.multiline = true and autosaves. Wait for THIS prop's
+        // autosave (matched by name + multiline) so the designer's store has captured the flag.
+        await PropMultilineInput(propName).CheckAsync();
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
+            .Any(o => o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
+                && o.Fields.TryGetValue("multiline", out var v) && v is DeEnv.Storage.BoolValue b && b.Value));
+    }
+
     [When("I name the just-added type {string}")]
     public async Task WhenNameJustAddedType(string name)
     {
@@ -762,6 +774,23 @@ public sealed class DesignerSteps(InstanceContext ctx)
             && vt.Text.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).SequenceEqual(expected)));
     }
 
+    [Then("the design's prop {string} is multiline")]
+    public async Task ThenDesignerPropMultiline(string propName) =>
+        // The designer captured the multiline flag in its OWN sovereign store (the prop's bound checkbox
+        // wrote prop.multiline = true). Poll the (fast, local) MetaProp extent — the toggle persists over
+        // an async WS round-trip. The design→app-document projection is proven in Bridge.feature.
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values.Any(o =>
+            o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
+            && o.Fields.TryGetValue("multiline", out var v) && v is DeEnv.Storage.BoolValue b && b.Value));
+
+    [Then("the design's prop {string} is not multiline")]
+    public async Task ThenDesignerPropNotMultiline(string propName) =>
+        // A non-text prop never gets the flag (its toggle is hidden). Its stored multiline reads false —
+        // the store defaults a declared bool to false, so the field is present and false, never errors.
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values.Any(o =>
+            o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
+            && (!o.Fields.TryGetValue("multiline", out var v) || v is not DeEnv.Storage.BoolValue { Value: true })));
+
     [Then("the design {string} has no unnamed type")]
     public async Task ThenNoUnnamedType(string label)
     {
@@ -794,6 +823,18 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // Set to dictionary, the key-type field becomes visible via the row's class change — wait for it
         // (proving the disclosure reconciles when cardinality changes).
         await PropKeytypeInput(propName).First.WaitForAsync();
+
+    [Then("the prop {string} shows a multiline toggle")]
+    public async Task ThenPropMultilineToggle(string propName) =>
+        // A single text prop's row shows the multiline checkbox (visible via the row's is-text-single
+        // class). Wait for it visible (the field is always in the DOM; disclosure flips visibility).
+        await PropMultilineInput(propName).First.WaitForAsync();
+
+    [Then("the prop {string} shows no multiline toggle")]
+    public async Task ThenPropNoMultilineToggle(string propName) =>
+        // A non-text (or non-single) prop's multiline checkbox is hidden — multiline is valid only on a
+        // single text prop. The field stays in the DOM; assert it is HIDDEN, not absent.
+        await PropMultilineInput(propName).First.WaitForAsync(Hidden);
 
     [Then("the just-added type shows a props editor")]
     public async Task ThenJustAddedPropsEditor() =>
@@ -966,6 +1007,11 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     private Microsoft.Playwright.ILocator PropKeytypeInput(string propName) =>
         ctx.Page!.Locator($".design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) input.prop-keytype");
+
+    // The multiline checkbox of the `.prop-row` whose `.prop-name` holds `propName`. Shown only on a
+    // single text prop (progressive disclosure); always in the DOM, so "shows no toggle" means hidden.
+    private Microsoft.Playwright.ILocator PropMultilineInput(string propName) =>
+        ctx.Page!.Locator($".design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) input.prop-multiline");
 
     // Wait for a locator to become HIDDEN (display:none) — progressive-disclosure fields stay in the DOM
     // and only flip visibility, so "shows no X" means hidden, not detached.

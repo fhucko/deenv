@@ -96,3 +96,22 @@ Feature: Schema bridge (self-hosted designer)
     Then the exported document loads successfully
     And the exported type "Status" is an enum with values "open, doing, done"
     And the exported document declares the enum "Status" with values "open, doing, done"
+
+  # A single text prop's `multiline` presentation flag (the designer's checkbox, commit 678eb6d) flows
+  # through projection onto the PropDefinition (Multiline = true) and prints back in the canonical
+  # `name text multiline` form — so the designer authors a textarea-rendered prop end to end. A stale flag
+  # carried on a NON-text prop (a prop retyped after it was toggled) is DROPPED by projection — the
+  # designer never deploys an invalid design (the loader also rejects multiline off a text prop).
+  @milestone-multiline @single-user
+  Scenario: The bridge projects multiline onto a text prop and drops it from a non-text prop
+    Given a designer instance
+    And a designed type "Db" with base type "object"
+    And the type "Db" has a prop "body" of type "text" marked multiline
+    And the type "Db" has a prop "owner" of type "User" marked multiline
+    And a designed type "User" with base type "object"
+    And the type "User" has a prop "name" of type "text"
+    When the design is exported
+    Then the exported document loads successfully
+    And the exported type "Db" has a multiline prop "body"
+    And the exported type "Db" has a prop "owner" that is not multiline
+    And the exported document declares the multiline prop "body" of type "text"

@@ -97,11 +97,21 @@ public static class SchemaBridge
                         // ignore it here unless dictionary (a set that declared a keyType is rejected on load).
                         var keyType = cardinality == Cardinality.Dictionary
                             && TextField(prop, "keyType") is { Length: > 0 } key ? key : null;
+                        // `multiline` is a presentation flag valid ONLY on a single text prop (the loader
+                        // rejects it elsewhere). The designer's toggle is shown only for that shape, but a
+                        // hand-written document could carry a stale flag on a retyped prop — so project it
+                        // ONLY when the prop is still a single text prop, mirroring how keyType is ignored
+                        // off a dictionary. A missing field defaults false (the same defensive read).
+                        var propType = TextField(prop, "type");
+                        var multiline = cardinality == Cardinality.Single
+                            && propType == "text"
+                            && BoolField(prop, "multiline");
                         props.Add(new PropDefinition(
                             TextField(prop, "name"),
-                            TextField(prop, "type"),
+                            propType,
                             cardinality,
-                            keyType));
+                            keyType,
+                            Multiline: multiline));
                     }
 
                 if (baseName == "object")
@@ -229,4 +239,9 @@ public static class SchemaBridge
 
     private static int IntField(ObjectValue o, string name) =>
         o.Fields.TryGetValue(name, out var v) && v is IntValue i ? i.Value : 0;
+
+    // A bool meta-field, defaulting false when absent — the same defensive read as TextField/IntField,
+    // so a MetaProp that predates the `multiline` field (or any node missing it) reads false, not error.
+    private static bool BoolField(ObjectValue o, string name) =>
+        o.Fields.TryGetValue(name, out var v) && v is BoolValue b && b.Value;
 }

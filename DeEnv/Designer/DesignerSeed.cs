@@ -242,6 +242,10 @@ public static class DesignerSeed
                 ["type"] = Text(prop, "type"),
                 ["order"] = Int(prop, "order"),
                 ["cardinality"] = Text(prop, "cardinality"),
+                // Carry the `multiline` presentation flag forward verbatim. The live extent reads it as a
+                // BoolValue (defaulted false by BuildObject for a preserved MetaProp that predates the
+                // field), so this preserves a UI-created design's textarea toggle across the boot sync.
+                ["multiline"] = Bool(prop, "multiline"),
             };
             // keyType is meaningful (and stored) only for a dictionary prop — carry it when present.
             if (prop.Fields.GetValueOrDefault("keyType") is TextValue { Text.Length: > 0 } keyType)
@@ -257,6 +261,11 @@ public static class DesignerSeed
 
         private static int Int(ObjectValue obj, string name) =>
             obj.Fields.GetValueOrDefault(name) is IntValue i ? i.Value : 0;
+
+        // A bool leaf off an inline-loaded object, defaulting false when absent (a preserved MetaProp
+        // predating the `multiline` field, though BuildObject already defaults a declared bool to false).
+        private static bool Bool(ObjectValue obj, string name) =>
+            obj.Fields.GetValueOrDefault(name) is BoolValue b && b.Value;
 
         public void AddRootDb(IReadOnlyList<int> designIds) =>
             Pool("Db")[MintId().ToString()] = ToElement(new JsonObject { ["designs"] = IdArray(designIds) });
@@ -313,6 +322,12 @@ public static class DesignerSeed
                     Cardinality.Dictionary => "dictionary",
                     _ => "single",
                 },
+                // The `multiline` presentation flag (a single text prop's textarea toggle) round-trips
+                // into the designer's data, so a committed app's `notes text multiline` shows toggled-on
+                // in the editor and SchemaBridge.Project reads it back. Always emitted (false for every
+                // non-multiline prop) so the field is present on every seeded MetaProp — the bool the
+                // designer's checkbox binds and the type editor reads without a missing-field error.
+                ["multiline"] = prop.Multiline,
             };
             if (prop.Cardinality == Cardinality.Dictionary)
                 fields["keyType"] = prop.KeyType ?? "text";

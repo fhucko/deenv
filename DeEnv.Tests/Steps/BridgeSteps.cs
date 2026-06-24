@@ -38,6 +38,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
                 type text
                 cardinality text
                 keyType text
+                multiline bool
                 order int
         """;
 
@@ -136,6 +137,14 @@ public sealed class BridgeSteps(InstanceContext ctx)
     public void GivenSetProp(string typeName, string propName, string propType) =>
         AddProp(typeName, propName, propType, "set", "", order: 0);
 
+    // A designer-authored prop carrying the `multiline` presentation flag (the textarea toggle). Sets the
+    // MetaProp's `multiline` bool the designer's checkbox binds, so projection reads it back. Used for both
+    // the valid case (a single text prop → projects multiline) and the guard case (a non-text prop carrying
+    // a stale flag → must NOT project it).
+    [Given("the type {string} has a prop {string} of type {string} marked multiline")]
+    public void GivenMultilineProp(string typeName, string propName, string propType) =>
+        AddProp(typeName, propName, propType, "", "", order: 0, multiline: true);
+
     [Given("a designed enum type {string} with values {string}")]
     public void GivenDesignedEnumType(string name, string values)
     {
@@ -153,7 +162,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
     }
 
     private void AddProp(string typeName, string propName, string propType,
-        string cardinality, string keyType, int order)
+        string cardinality, string keyType, int order, bool multiline = false)
     {
         var propsPath = NodePath.Root.Field("types").Key(_typeKeys[typeName].ToString()).Field("props");
         var fields = new Dictionary<string, NodeValue>
@@ -166,6 +175,8 @@ public sealed class BridgeSteps(InstanceContext ctx)
             fields["cardinality"] = new TextValue(cardinality);
         if (keyType.Length > 0)
             fields["keyType"] = new TextValue(keyType);
+        if (multiline)
+            fields["multiline"] = new BoolValue(true);
         var id = _designer!.CreateObject("MetaProp", new ObjectValue(fields));
         _designer!.AddToSet(propsPath, id);
     }
@@ -278,6 +289,36 @@ public sealed class BridgeSteps(InstanceContext ctx)
             + string.Concat(values.Split(',').Select(v => v.Trim()).Where(v => v.Length > 0)
                 .Select(v => "        " + v + "\n"));
         await Assert.That(doc.Replace("\r\n", "\n")).Contains(expected);
+    }
+
+    // The projected prop carries Multiline = true (the model field the generic UI reads to render a
+    // <textarea>) — proving the designer's `multiline` toggle flows through projection onto a single text
+    // prop.
+    [Then("the exported type {string} has a multiline prop {string}")]
+    public async Task ThenExportedMultilinePropAsync(string typeName, string propName)
+    {
+        var prop = _exported!.FindType(typeName)?.Props?.FirstOrDefault(p => p.Name == propName);
+        await Assert.That(prop).IsNotNull();
+        await Assert.That(prop!.Multiline).IsTrue();
+    }
+
+    // The projected prop is NOT multiline — proving a stale `multiline` flag carried on a non-text prop is
+    // dropped by projection (the designer never deploys an invalid design; the loader also rejects it).
+    [Then("the exported type {string} has a prop {string} that is not multiline")]
+    public async Task ThenExportedNotMultilinePropAsync(string typeName, string propName)
+    {
+        var prop = _exported!.FindType(typeName)?.Props?.FirstOrDefault(p => p.Name == propName);
+        await Assert.That(prop).IsNotNull();
+        await Assert.That(prop!.Multiline).IsFalse();
+    }
+
+    // The canonical AppPrint form of a multiline prop: `        name text multiline` (the trailing keyword
+    // after the type). Asserts the whole prop line, proving the flag survived projection into the document.
+    [Then("the exported document declares the multiline prop {string} of type {string}")]
+    public async Task ThenExportedDocDeclaresMultilineAsync(string propName, string propType)
+    {
+        var doc = File.ReadAllText(_exportedSchemaPath).Replace("\r\n", "\n");
+        await Assert.That(doc).Contains("        " + propName + " " + propType + " multiline\n");
     }
 
     [Then("the exported type {string} lists prop {string} before {string}")]

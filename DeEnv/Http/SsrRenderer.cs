@@ -519,6 +519,12 @@ public sealed class SsrRenderer
         .prop-row input, .prop-row select { min-width: 0; width: 100%; }
         .prop-row input.prop-keytype { grid-column: 4; }
         .prop-row button.remove-prop { grid-column: 5; padding: 0.2rem 0.5rem; }
+        /* The multiline toggle is a full-width sub-row under a text prop's inputs (a labeled checkbox).
+           Spanning all columns keeps it off the name/type/cardinality grid; the checkbox sizes to its
+           content (overriding the .prop-row input width:100% / min-width:0 above). */
+        .prop-row label.multiline-toggle { grid-column: 1 / -1; display: flex; align-items: center;
+          gap: 0.4rem; font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }
+        .prop-row label.multiline-toggle input.prop-multiline { width: auto; min-width: 0; margin: 0; }
         .props-editor > button.add-prop { margin-top: 0.55rem; }
         /* Progressive disclosure — driven by a class on the container, not by conditional DOM (a field
            appearing/disappearing inside a foreach row does not reliably reconcile; an attribute/class
@@ -526,6 +532,9 @@ public sealed class SsrRenderer
            keyType matters only for a dictionary; a type shows EITHER its props editor (object) OR its
            enum-values field (enum), never both. SchemaBridge already ignores the hidden field's value. */
         .prop-row:not(.is-dict) input.prop-keytype { display: none; }
+        /* `multiline` is a presentation flag valid ONLY on a single text prop (the loader rejects it
+           elsewhere); so the toggle shows only on an is-text-single row and collapses otherwise. */
+        .prop-row:not(.is-text-single) label.multiline-toggle { display: none; }
         .type-card:not(.is-enum) .enum-values { display: none; }
         .type-card.is-enum .props-editor { display: none; }
         /* Raw code areas tucked behind a disclosure so the type editor reads as just types by default. */

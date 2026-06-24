@@ -18,6 +18,7 @@ types
         type text
         cardinality text
         keyType text
+        multiline bool
         order int
 
 ui
@@ -35,7 +36,7 @@ ui
         design.types.add({ name: "", baseType: "object", values: "", order: 0, props: [] })
 
     fn addProp(type)
-        type.props.add({ name: "", type: "text", cardinality: "single", keyType: "", order: 0 })
+        type.props.add({ name: "", type: "text", cardinality: "single", keyType: "", multiline: false, order: 0 })
 
     fn typeCardClass(type)
         if type.baseType == "enum"
@@ -45,6 +46,8 @@ ui
     fn propRowClass(prop)
         if prop.cardinality == "dictionary"
             return "prop-row is-dict"
+        if prop.type == "text" && prop.cardinality == "single"
+            return "prop-row is-text-single"
         return "prop-row"
 
     fn kebabClass(open)
@@ -145,6 +148,9 @@ ui
                                 <input class="prop-keytype" value={prop.keyType}>
                                 <button class="remove-prop" onClick={() => type.props.remove(prop)}>
                                     "×"
+                                <label class="multiline-toggle">
+                                    <input type="checkbox" class="prop-multiline" checked={prop.multiline}>
+                                    "Multi-line text"
                         <button class="add-prop" onClick={() => addProp(type)}>
                             "+ Field"
             <details class="code-areas">
