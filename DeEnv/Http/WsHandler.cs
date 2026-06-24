@@ -36,6 +36,10 @@ public sealed record WsRequest
     public bool? Clear { get; init; }
     public JsonElement? Value { get; init; }
     public JsonElement? Vars { get; init; }
+    // login: the credentials a `login` op carries. `name` is the User's login identifier
+    // (UserConvention.NameField), `password` the plaintext verified against the stored hash.
+    public string? Name { get; init; }
+    public string? Password { get; init; }
 }
 
 // Response records — one per op. Each property's camelCase (the shared `_jsonOpts`
@@ -131,6 +135,24 @@ public sealed record HostActionResponse
 public sealed record AckRemapResponse
 {
     public string Op => "ackRemap";
+    public bool Ok => true;
+}
+
+// login: the result of a credential check (M-auth). `ok` is the ONE bit the client acts on — a SUCCESS
+// reply also carries the bound `userId`; a FAILURE (wrong password OR unknown user — the SAME reply, so
+// the wire reveals no user-enumeration signal) carries no id (omitted when null). A failed login is a
+// NORMAL negative result, not an error — it is NOT routed through the `{ error }` rollback path.
+public sealed record LoginResponse
+{
+    public string Op => "login";
+    public required bool Ok { get; init; }
+    public int? UserId { get; init; }
+}
+
+// logout: always succeeds (clearing an already-anonymous session is idempotent).
+public sealed record LogoutResponse
+{
+    public string Op => "logout";
     public bool Ok => true;
 }
 
@@ -244,6 +266,8 @@ public sealed class WsHandler
                 "refetch"           => HandleRefetch(pathStr, req),
                 "hostAction"        => HandleHostAction(req),
                 "ackRemap"          => HandleAckRemap(req),
+                "login"             => HandleLogin(req),
+                "logout"            => HandleLogout(req),
                 _                   => Error($"Unknown op '{op}'")
             };
             return WithId(result, id);
@@ -504,12 +528,19 @@ public sealed class WsHandler
         // unchanged. Identity when root-mounted.
         pathStr = SsrRenderer.StripBase(_mountBase, pathStr);
 
-        Session(req); // slide liveness; the session holds no data
+        var session = Session(req); // slide liveness + recover the bound principal (M-auth)
+
+        // The refetch re-renders AS the logged-in principal: the same access read floor gates the graph
+        // load so a denied object stays out of the refetched state, and the principal threads into
+        // RenderState so `currentUser`-dependent UI re-renders bound (without this, a post-login refetch
+        // would render anonymous). Null (anonymous) ⇒ a dormant/no-rules app is unaffected.
+        var principalUserId = session?.PrincipalUserId;
+        var floor = Floor(req);
 
         // Load the graph once from the store; object-valued vars (the client's selection)
         // resolve to the same instances the render uses, so selection-dependent data the
         // first paint never shipped gets computed.
-        var db = Code.DbBridge.LoadRoot(_store, _desc, new Code.ExecContext());
+        var db = Code.DbBridge.LoadRoot(_store, _desc, new Code.ExecContext(), floor);
         var byId = IndexObjects(db);
 
         var sessionVars = new Dictionary<string, Code.IExecValue>();
@@ -522,7 +553,8 @@ public sealed class WsHandler
         var lastId = req.LastId ?? 0;
         // The refetch renderer gets the SAME live registry provider as the SSR path, so a refetch
         // re-render reflects the kernel's current instances — no stale `instances` list.
-        var state = new SsrRenderer(_store, _desc, registry: _registry).RenderState(pathStr, sessionVars, db, lastId);
+        var state = new SsrRenderer(_store, _desc, registry: _registry)
+            .RenderState(pathStr, sessionVars, db, lastId, principalUserId);
         return Serialize(new RefetchResponse { State = state });
     }
 
@@ -648,6 +680,66 @@ public sealed class WsHandler
         if (req.TempId is { } tempId)
             Session(req)?.DropTransientId(tempId);
         return Serialize(new AckRemapResponse());
+    }
+
+    // ── login / logout (the session→principal bind, M-auth) ─────────────────────
+    //
+    // Authentication over the EXISTING WS connection — no reserved route (login is a STATE, not a URL;
+    // the app keeps a clean URL space). `login` resolves the `User` by `name` through the store seam,
+    // verifies the plaintext `password` against the stored `passwordHash` (PBKDF2, server-side), and on
+    // success SETS this session's PrincipalUserId — the durable home the renderer/floors read. On failure
+    // it leaves the principal unchanged. The principal binds THIS session only (no cross-session/real-time
+    // propagation this slice).
+
+    // login: verify credentials and bind the principal. Wrong password AND unknown user produce the SAME
+    // negative reply ({ ok:false }, no userId), so the wire reveals no user-enumeration signal. A failed
+    // login is a NORMAL result (not an exception), so it does NOT go through the `{ error }` rollback path.
+    //
+    // ponytail: the REPLY is enumeration-safe, but the LATENCY is not constant-time across the known-user
+    // (runs PBKDF2) vs unknown-user (skips it) paths — a timing side-channel. Closing it (verify against a
+    // dummy hash for an unknown user) is a hardening layer beyond this slice; the locked scope only
+    // required the identical negative reply, which holds.
+    private string HandleLogin(WsRequest req)
+    {
+        if (Session(req) is not { } session)
+            return Error("login requires a known 'clientId'.");
+        if (req.Name is not { } name || req.Password is not { } password)
+            return Error("login requires 'name' and 'password'.");
+
+        // Resolve the principal by name through the store seam (the model's terms — an extent read), then
+        // verify. A missing user, a user with no/blank hash, or a wrong password ALL fall to the same
+        // negative reply. (FindUserByName reads the raw stored fields — passwordHash is excluded only from
+        // the SHIPPED graph, never from this kernel-side lookup.)
+        if (FindUserByName(name) is (int userId, ObjectValue userFields)
+            && userFields.Fields.GetValueOrDefault(Code.UserConvention.PasswordHashField) is TextValue { Text: var hash }
+            && hash.Length > 0
+            && Code.AuthCrypto.Verify(password, hash))
+        {
+            session.PrincipalUserId = userId;
+            return Serialize(new LoginResponse { Ok = true, UserId = userId });
+        }
+
+        return Serialize(new LoginResponse { Ok = false });
+    }
+
+    // logout: clear the bound principal back to anonymous (idempotent — a no-session/already-anonymous
+    // logout still replies ok).
+    private string HandleLogout(WsRequest req)
+    {
+        if (Session(req) is { } session)
+            session.PrincipalUserId = null;
+        return Serialize(new LogoutResponse());
+    }
+
+    // Resolve a User by its `name` field through the store seam (an extent scan). Returns the matching
+    // object's intrinsic id + its raw stored fields, or null when no User carries that name. Kernel-side
+    // only (never app Code): it reads the stored passwordHash that the load boundary hides from the graph.
+    private (int Id, ObjectValue Fields)? FindUserByName(string name)
+    {
+        foreach (var (id, fields) in _store.ReadExtent(Code.UserConvention.TypeName))
+            if (fields.Fields.GetValueOrDefault(Code.UserConvention.NameField) is TextValue { Text: var n } && n == name)
+                return (id, fields);
+        return null;
     }
 
     private string HandleArrayRemove(WsRequest req)

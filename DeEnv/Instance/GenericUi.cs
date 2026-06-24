@@ -495,9 +495,21 @@ public static class GenericUi
         var map = objectTypes.ToDictionary(t => t.Name, t => TypeDescriptor(t, desc));
         foreach (var t in objectTypes)
             foreach (var p in t.Props ?? [])
-                map[t.Name + "/" + p.Name] = PropDesc(p, desc);
+                // The User password hash is hidden from the reflective UI surface (M-auth), the
+                // schema-shape companion of the data-graph exclusion: the generic UI iterates a type's
+                // descriptor props to build its fields/columns, so a descriptor that omits the hash never
+                // renders a control for it (and never reads sys.field(row, "passwordHash") — which would
+                // throw, since the value is excluded from the graph). A secret is not a visible field.
+                if (!UserConvention.IsHiddenField(t.Name, p.Name))
+                    map[t.Name + "/" + p.Name] = PropDesc(p, desc);
         return map;
     }
+
+    // The props of a type that the reflective UI surfaces — every declared prop EXCEPT a hidden
+    // convention field (the User password hash). The single place the descriptor's prop list is
+    // narrowed, so the type descriptor + its column/field consumers all agree.
+    private static IEnumerable<PropDefinition> VisibleProps(TypeDefinition t) =>
+        (t.Props ?? []).Where(p => !UserConvention.IsHiddenField(t.Name, p.Name));
 
     private static CodeObject TypeDescriptor(TypeDefinition t, InstanceDescription desc)
     {
@@ -507,7 +519,7 @@ public static class GenericUi
         return Obj(
             ("name", Text(t.Name)),
             ("labelProp", Text(labelProp)),
-            ("props", Arr((t.Props ?? []).Select(p => (ICodeValue)PropDesc(p, desc)))));
+            ("props", Arr(VisibleProps(t).Select(p => (ICodeValue)PropDesc(p, desc)))));
     }
 
     // A prop descriptor: scalar { name, baseType }; reference { name, baseType:"object",
@@ -556,9 +568,11 @@ public static class GenericUi
         ("multiline", new CodeBool { Value = value });
 
     // Scalar (leaf-valued) props for the label prop and the table columns: base
-    // leaves and enums (an enum value is text-shaped). References/sets/dicts are excluded.
+    // leaves and enums (an enum value is text-shaped). References/sets/dicts are excluded — and so is a
+    // hidden convention field (the User password hash), so it can never become a labelProp or a column.
     private static List<PropDefinition> Scalars(TypeDefinition t, InstanceDescription desc) => (t.Props ?? [])
-        .Where(p => p.Cardinality == Cardinality.Single && (BaseTypes.IsName(p.Type) || desc.IsEnumType(p.Type)))
+        .Where(p => p.Cardinality == Cardinality.Single && (BaseTypes.IsName(p.Type) || desc.IsEnumType(p.Type))
+            && !UserConvention.IsHiddenField(t.Name, p.Name))
         .ToList();
 
     // ── tiny AST builders (the descriptor literals only) ──────────────────────────────

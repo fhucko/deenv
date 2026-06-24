@@ -121,7 +121,11 @@ public sealed class AccessFloor
     {
         var props = new Dictionary<string, IExecValue>();
         foreach (var (name, value) in fields.Fields)
-            if (value is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue)
+            // RULE-INDEPENDENT: never carry the User password hash into a principal/candidate ExecObject.
+            // The principal becomes the `currentUser` system var, so excluding it here ALSO keeps the
+            // hash out of any condition's reach and out of the shipped currentUser scope.
+            if (value is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue
+                && !UserConvention.IsHiddenField(typeName, name))
                 props[name] = DbBridge.ScalarToExec(value);
         return new ExecObject { Props = props, Id = id, TypeName = typeName };
     }

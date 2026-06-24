@@ -161,6 +161,11 @@ public static class DbBridge
                     }
                     else
                     {
+                        // The User-type password hash NEVER enters the graph (M-auth) — a structural,
+                        // RULE-INDEPENDENT exclusion at the load boundary (even a dormant app with no
+                        // access rules must not ship it). Skipping it here means it is absent from every
+                        // ExecObject, so neither a generic page nor a custom render can read it in-graph.
+                        if (UserConvention.IsHiddenField(type.Name, prop.Name)) break;
                         obj.Props[prop.Name] = ScalarToExec(
                             ov.Fields.GetValueOrDefault(prop.Name));
                     }
@@ -182,7 +187,10 @@ public static class DbBridge
         {
             var obj = new ExecObject { Props = [], Id = id, TypeName = typeName };
             foreach (var (name, v) in ov.Fields)
-                if (v is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue)
+                // RULE-INDEPENDENT: the User password hash is excluded from the candidate list too (it
+                // is never a column/label), so the reference picker's option objects never carry it.
+                if (v is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue
+                    && !UserConvention.IsHiddenField(typeName, name))
                     obj.Props[name] = ScalarToExec(v);
             items.Add(new ExecItem { Key = id, Value = obj });
         }

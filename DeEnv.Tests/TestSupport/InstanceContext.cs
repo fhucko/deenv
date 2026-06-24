@@ -882,6 +882,7 @@ public class InstanceContext
         User
             name text
             role Role
+            passwordHash text
     """;
 
     private const string AccessFixtureSeed = """
@@ -925,6 +926,11 @@ public class InstanceContext
     // current user by role without re-deriving ids. These mirror the initialData seed above.
     public const int AccessAdminId = 3;
     public const int AccessMemberId = 4;
+
+    // The admin's plaintext password (M-auth login). The seed step hashes it (AuthCrypto.Hash) into Ada's
+    // `passwordHash` so a `login` action can verify against the real PBKDF2 hash. NOT in initialData —
+    // the seed is in friendly scalar form, so the hash is written into the store directly by the step.
+    public const string AccessAdminPassword = "hunter2";
 
     // The seeded "Gate #3" milestone's id (a set member of Db.milestones) — the write scenarios edit /
     // delete it by id and assert the store directly. Mirrors the initialData seed above.
