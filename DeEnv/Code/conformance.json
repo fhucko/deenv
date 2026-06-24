@@ -161,6 +161,24 @@
       "expect": { "kind": "bool", "value": true }
     },
     {
+      "name": "access floor: property access on null fails closed (null.role == X is false)",
+      "text": "null.role == \"Admin\"",
+      "expr": { "type": "infixOp", "op": "equals",
+        "left": { "type": "infixOp", "op": "objectProp", "left": { "type": "null" }, "right": { "type": "symbol", "name": "role" } },
+        "right": { "type": "text", "value": "Admin" } },
+      "expect": { "kind": "bool", "value": false }
+    },
+    {
+      "name": "access floor: null property access propagates (null.a.b == X is false, no throw)",
+      "text": "null.a.b == \"x\"",
+      "expr": { "type": "infixOp", "op": "equals",
+        "left": { "type": "infixOp", "op": "objectProp",
+          "left": { "type": "infixOp", "op": "objectProp", "left": { "type": "null" }, "right": { "type": "symbol", "name": "a" } },
+          "right": { "type": "symbol", "name": "b" } },
+        "right": { "type": "text", "value": "x" } },
+      "expect": { "kind": "bool", "value": false }
+    },
+    {
       "name": "logical and (false)",
       "text": "1 == 1 && 2 < 1",
       "expr": {

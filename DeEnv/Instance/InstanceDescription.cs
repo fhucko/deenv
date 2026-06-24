@@ -64,10 +64,27 @@ public record InstanceCommon(IReadOnlyList<CodeFunction>? Functions = null);
 public record InstanceInitialData(
     IReadOnlyDictionary<string, IReadOnlyDictionary<string, JsonElement>>? Extents = null);
 
+// One access-control rule (M-auth): a deny-by-default ruleset entry over the object model.
+// `Type` is the rule's subject (a declared type name, e.g. "Milestone"); `Verbs` the actions
+// it grants (read | create | edit | delete, or `*` = all); `When` an OPTIONAL Code condition
+// (an AST node) the existing interpreter evaluates over { currentUser, object } — null = the
+// rule always applies. The read floor (AccessFloor) enforces `read` only this slice; the other
+// verbs parse/print but are not yet checked. A per-field form (a `Field` subject) is a later
+// slice — a type-level rule only, for now.
+public record AccessRule(
+    string Type,
+    IReadOnlyList<string> Verbs,
+    ICodeValue? When = null);
+
 // Parsed from ONE app text document (AppParse) — the only authoring surface. This
 // record (and its JSON form) is internal: the in-memory model and the wire.
+//
+// `Rules` is the M-auth access ruleset (the `access` section). ADDITIVE: absent/empty ⇒ the
+// app is DORMANT — allow-all, exactly today's behavior (conditions never run, no login). The
+// rules ARE the activation switch; writing the first rule turns enforcement on.
 public record InstanceDescription(
     IReadOnlyList<TypeDefinition>? Types = null,
     InstanceUi? Ui = null,
     InstanceCommon? Common = null,
-    InstanceInitialData? InitialData = null);
+    InstanceInitialData? InitialData = null,
+    IReadOnlyList<AccessRule>? Rules = null);

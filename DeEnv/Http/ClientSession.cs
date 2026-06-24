@@ -20,6 +20,17 @@ public sealed class ClientSession
     public DateTime LastTouched { get; set; } = DateTime.UtcNow;
     public bool Claimed { get; set; }
 
+    // ── principal (M-auth) ───────────────────────────────────────────────────────
+    //
+    // The id of the `User` object this session is authenticated as, or null when anonymous. This is
+    // the durable home of the session→principal bind: the renderer reads it to resolve the `currentUser`
+    // system var and the access read floor. It is the seam the password-login slice will SET (on a WS
+    // login/bind over this same connection — the bind happens on the connection, no reserved route).
+    // ponytail: this slice is FLOOR-FIRST — the principal is bound by the test harness (passed straight
+    // into SsrRenderer.Render), so this field is the not-yet-written destination of that later bind; no
+    // password crypto, no login handshake here. It defaults to null (anonymous), the dormant common case.
+    public int? PrincipalUserId { get; set; }
+
     // ── transient-id remap (a just-added object's negative id → its real one) ────
     //
     // The Code UI mints a just-added object with a transient NEGATIVE id and keeps addressing it by

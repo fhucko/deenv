@@ -78,8 +78,14 @@ public sealed class SsrRenderer
     // the EDGES apply (the kernel router stripped it before this, and re-applies it on emitted links
     // so the app keeps writing `/notes/2`): "/" = root-mounted (behavior-preserving — every edge is
     // an identity), "/apps/todo" = path-mounted. `assetAuthority` (host:port) is where /ws + /js live.
-    public (string Html, int Status) Render(string urlPath, string @base = "/", string assetAuthority = "") =>
-        RenderPage(urlPath, @base, assetAuthority);
+    // `principalUserId` (M-auth) is the bound principal — the id of the `User` object the request acts
+    // as, or null when anonymous. It resolves to the read-only `currentUser` system var and feeds the
+    // access read floor (a denied object never enters the `db` graph). Floor-first: the test harness
+    // passes it directly; a later slice binds it on the WS session (ClientSession.PrincipalUserId), the
+    // durable home this threads from. With no access rules the app is dormant and the principal is inert.
+    public (string Html, int Status) Render(string urlPath, string @base = "/", string assetAuthority = "",
+        int? principalUserId = null) =>
+        RenderPage(urlPath, @base, assetAuthority, principalUserId);
 
     // ── code-owned UI (every page is `fn render()`) ─────────────────────────────
     //
@@ -89,12 +95,13 @@ public sealed class SsrRenderer
     // routing now lives in Code (sys.resolve), proven by the SelfHostedUi generic-UI + resolve-probe
     // scenarios. A runtime error on first paint becomes an SSR error page.
 
-    private (string Html, int Status) RenderPage(string urlPath, string @base, string assetAuthority)
+    private (string Html, int Status) RenderPage(string urlPath, string @base, string assetAuthority,
+        int? principalUserId = null)
     {
         var context = new ExecContext();
         try
         {
-            var (result, title, scope, status, trail) = ExecuteRender(urlPath, context);
+            var (result, title, scope, status, trail) = ExecuteRender(urlPath, context, principalUserId: principalUserId);
             var body = new StringBuilder();
             SerializeChild(result, body, @base);
 
@@ -159,11 +166,12 @@ public sealed class SsrRenderer
     // its transients below it, so shipped negative ids never collide with the drafts
     // the client already holds.
     public JsonObject RenderState(
-        string urlPath, IReadOnlyDictionary<string, IExecValue>? sessionVars, ExecObject? warmDb, int lastIdFloor = 0)
+        string urlPath, IReadOnlyDictionary<string, IExecValue>? sessionVars, ExecObject? warmDb,
+        int lastIdFloor = 0, int? principalUserId = null)
     {
         var context = new ExecContext();
         context.LastId.Value = Math.Min(0, lastIdFloor);
-        var (_, _, scope, _, _) = ExecuteRender(urlPath, context, sessionVars, warmDb);
+        var (_, _, scope, _, _) = ExecuteRender(urlPath, context, sessionVars, warmDb, principalUserId);
         return ClientState.Serialize(scope, context);
     }
 
@@ -172,7 +180,7 @@ public sealed class SsrRenderer
     // (which owns its own chrome) or the root page. `Title` already joins them under the root label.
     private (IExecTagChild Result, string Title, ExecScope Scope, int Status, IReadOnlyList<string> Trail) ExecuteRender(
         string urlPath, ExecContext context, IReadOnlyDictionary<string, IExecValue>? sessionVars = null,
-        ExecObject? warmDb = null)
+        ExecObject? warmDb = null, int? principalUserId = null)
     {
         var ui = _ui!;
         var exec = new CodeExecutor(_store, _descriptors, _resolver);
@@ -195,9 +203,21 @@ public sealed class SsrRenderer
         var lib = new ExecScope { Parent = system, IsTop = true };
         var app = new ExecScope { Parent = lib, IsTop = true };
 
+        // The bound principal (M-auth): the `User` object the request acts as, loaded from the store by
+        // its id (its scalar fields — e.g. `role` — are enough for a condition like `currentUser.role ==
+        // "Admin"`), or ExecNull when anonymous / unresolved. The access read floor evaluates each rule's
+        // condition over { currentUser, object }; an anonymous request reads `null.role` → null (fail
+        // closed), so a role rule denies. `currentUser` is exposed to Code as a READ-ONLY system var,
+        // beside db/path/status. The floor is dormant (allow-all) when the app declares no rules.
+        var currentUser = LoadPrincipal(principalUserId);
+        var floor = new AccessFloor(_desc.Rules ?? [], currentUser);
+        system.Items["currentUser"] = new ExecScopeItem { Value = currentUser, IsReadOnly = true };
+
         // db root (the object graph), read-only. A recompute reuses the warm graph the
-        // session holds (already reflecting the client's mutations) instead of reloading.
-        var db = warmDb ?? DbBridge.LoadRoot(_store, _desc, context);
+        // session holds (already reflecting the client's mutations) instead of reloading. The read floor
+        // gates what enters the graph: an object the principal may not read never ships (denied set
+        // member omitted, denied single reference → null).
+        var db = warmDb ?? DbBridge.LoadRoot(_store, _desc, context, floor);
         system.Items["db"] = new ExecScopeItem { Value = db, IsReadOnly = true };
 
         // `sys` is the framework namespace object, read-only: it holds the less-common framework
@@ -792,6 +812,25 @@ public sealed class SsrRenderer
                 },
             });
         return new ExecArray { Items = items, Id = --context.LastId.Value, Kind = ArrayKind.List };
+    }
+
+    // The bound principal as an ExecObject of its SCALAR fields (M-auth) — enough for an access
+    // condition (`currentUser.role == "Admin"` reads the `role` scalar). Loaded by id through the
+    // storage seam (ReadById), NOT the graph floor, so the principal is always resolvable to decide
+    // its own access. Null id (anonymous) or an id with no object (a stale/deleted principal) → ExecNull,
+    // which fails every role condition closed (deny). Object/collection fields are omitted: a condition
+    // reads scalar facts about the user; nothing here is shipped (the floor evaluates over a throwaway
+    // context), so reading only scalars is also a privacy floor on what a condition could touch.
+    // ponytail: scalar-only principal + by-id resolution is this slice's ceiling; a richer principal
+    // (the User's references/sets for graph-position conditions) layers on with the membership operator.
+    private IExecValue LoadPrincipal(int? principalUserId)
+    {
+        if (principalUserId is not { } id || _store.ReadById(id) is not { } hit) return new ExecNull();
+        var props = new Dictionary<string, IExecValue>();
+        foreach (var (name, value) in hit.Fields.Fields)
+            if (value is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue)
+                props[name] = DbBridge.ScalarToExec(value);
+        return new ExecObject { Props = props, Id = id, TypeName = hit.TypeName };
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

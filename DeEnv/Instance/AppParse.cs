@@ -134,29 +134,77 @@ public static class AppParse
             (_, _, entries) => entries)
         .SkipEmptyLinesBefore();
 
+    // ── access (M-auth) ────────────────────────────────────────────────────────────
+    // The deny-by-default ruleset section. Mirrors `types` in shape (a header + indented
+    // type-blocks, each block a type name then its indented rule lines):
+    //
+    //   access
+    //       Milestone
+    //           read            where currentUser.role == "Admin"
+    //           read create     where currentUser.role == "Member"
+    //           *
+    //
+    // A rule line is a verb list (read | create | edit | delete, or `*` = all) and an OPTIONAL
+    // `where <expr>` condition — REUSING the existing CodeParse expression parser, not a new
+    // condition grammar. Absent ⇒ the rule always applies. The condition AST is stored verbatim
+    // on the rule and evaluated by the existing interpreter at the floor (over { currentUser,
+    // object }). This section is OPTIONAL — absent ⇒ no rules ⇒ the app is dormant (allow-all).
+
+    private static readonly string[] VerbNames = ["read", "create", "edit", "delete"];
+
+    private static Parser<string> Verb => OneOf(VerbNames.Append("*").Select(Text).ToArray());
+
+    // A rule line: a space-separated verb list (`*` is a lone verb), an optional `where <expr>`,
+    // then end-of-line. Produces the (verbs, condition) pair; the enclosing type-block stamps the
+    // type name on each to build the AccessRule.
+    private static Parser<(string[] Verbs, ICodeValue? When)> Rule =>
+        Seq(Many1Separated(Verb, Ws1),
+            Optional(Seq(Ws1, Text("where"), Ws1, CodeParse.Value, (_, _, _, expr) => expr)),
+            NlOrEnd,
+            (verbs, when, _) => (verbs, when));
+
+    // One type's rule block: the type name on its own line, then its indented rule lines, each
+    // mapped to an AccessRule carrying that type. (Sits at the `access` section's item indent.)
+    private static IndentedParser<AccessRule[]> AccessTypeEntry => indent =>
+        Seq(Name, NlOrEnd,
+            IndentLookahead(indent, Ws1, ruleIndent =>
+                Many1(Seq(Text(ruleIndent), Rule, (_, r) => r).SkipEmptyLinesBefore())),
+            (type, _, rules) => rules.Select(r => new AccessRule(type, r.Verbs, r.When)).ToArray());
+
+    private static Parser<AccessRule[]> AccessSection =>
+        Seq(Text("access"), NlOrEnd,
+            IndentLookahead("", Ws1, indent =>
+                Many1(Seq(Text(indent), AccessTypeEntry(indent), (_, t) => t).SkipEmptyLinesBefore()))
+                .SkipEmptyLinesBefore(),
+            (_, _, blocks) => blocks.SelectMany(b => b).ToArray())
+        .SkipEmptyLinesBefore();
+
     // ── the document ─────────────────────────────────────────────────────────────
 
     private static Parser<(TypeDefinition[] Types,
                            (string, string, JsonObject)[]? Seeds,
+                           AccessRule[]? Rules,
                            ICodeStatement[]? Common,
                            ICodeStatement[]? Ui)> Document =>
         Seq(TypesSection,
             Optional(InitialDataSection),
+            Optional(AccessSection),
             Optional(CodeParse.Section("common")),
             Optional(CodeParse.Section("ui")),
-            (types, seeds, common, ui) => (types, seeds, common, ui))
+            (types, seeds, rules, common, ui) => (types, seeds, rules, common, ui))
         .SkipEmptyLinesAfter();
 
     // Parse a whole app document. Syntax errors throw CodeParseException (positioned);
     // semantic mapping errors throw SchemaValidationException.
     public static InstanceDescription Parse(string source)
     {
-        var (types, seeds, common, ui) = Run(Seq(Document, Ws0, (d, _) => d), source);
+        var (types, seeds, rules, common, ui) = Run(Seq(Document, Ws0, (d, _) => d), source);
         return new InstanceDescription(
             Types: ResolveLeaves(types),
             Ui: ui == null ? null : CodeParse.MapUi(ui),
             Common: CodeParse.MapCommon(common),
-            InitialData: MapInitialData(seeds));
+            InitialData: MapInitialData(seeds),
+            Rules: rules);
     }
 
     private static IReadOnlyList<TypeDefinition> ResolveLeaves(TypeDefinition[] types)

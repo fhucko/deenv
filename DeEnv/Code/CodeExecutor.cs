@@ -303,6 +303,15 @@ public sealed class CodeExecutor
                     ? new ExecBool { Value = ctx.Staged.Count > 0 }
                     : new ExecCtxMethod { Ctx = ctx, Method = member.Name };
 
+            // Property access on null/nothing FAILS CLOSED: it yields null, never a throw. This is the
+            // M-auth obligation that makes a currentUser-dependent access condition DENY (not error) for
+            // an anonymous request — `currentUser.role == "Admin"` with `currentUser == null` reads
+            // `null.role` → null, and `null == "Admin"` is false. Null PROPAGATES (a chain like `a.b.c`
+            // over a null `a` collapses to null), kept in lockstep with the TS twin (codeExec.ts). A
+            // missing field on a REAL object is still an error below (a genuine bug, not the null case).
+            if (target is ExecNull or ExecNothing)
+                return new ExecNull();
+
             if (target is not ExecObject obj)
                 throw new CodeRuntimeException($"Cannot read '{member.Name}' on a non-object.");
 

@@ -430,6 +430,13 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
             ? { type: "bool", value: left.staged.size > 0 }
             : { type: "ctxMethod", ctx: left, method: right.name } };
 
+    // Property access on null/nothing FAILS CLOSED: it yields null, never a throw — the twin of
+    // CodeExecutor.ExecuteInfixOp. The M-auth obligation: a currentUser-dependent access condition
+    // must DENY (not error) for an anonymous request, so `currentUser.role` with `currentUser == null`
+    // reads `null.role` → null and `null == "Admin"` is false. Null propagates through a chain. (A
+    // missing field on a REAL object stays a "Value not available" below — the refetch path, unchanged.)
+    if (left.type === "null" || left.type === "nothing") return { value: { type: "null" } };
+
     if (left.type !== "object") throw new Error(`Cannot read '${right.name}' on a non-object.`);
     const value = nearestStagedValue(left, right.name, context) ?? left.props[right.name];
     if (value == null) throw new Error("Value not available");

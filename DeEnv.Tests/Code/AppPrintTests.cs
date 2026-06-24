@@ -65,6 +65,39 @@ public sealed class AppPrintTests
         await AssertRoundTrips(InstanceContext.MultilineFixtureApp);
     }
 
+    // The M-auth `access` section round-trips: parse∘print is the identity and the printed form is a
+    // fixpoint, with the ruleset grouped by type. The fixture carries one type-level read rule.
+    [Test]
+    public async Task The_access_fixture_round_trips()
+    {
+        await AssertRoundTrips(InstanceContext.AccessFixtureApp);
+    }
+
+    // A richer `access` section — a `where`-conditioned rule, a multi-verb rule, and a `*` (all-verbs)
+    // rule, across two types — round-trips: the verb list prints space-joined, the optional condition
+    // prints back via CodePrint, and rules group by type in first-appearance order (the canonical form).
+    [Test]
+    public async Task A_multi_verb_access_section_round_trips()
+    {
+        await AssertRoundTrips("""
+        types
+            Db
+                tasks set of Task
+            Task
+                title text
+            User
+                name text
+
+        access
+            Task
+                read where title == "published"
+                read create edit where currentUser.role == "Member"
+                *
+            User
+                read
+        """);
+    }
+
     // ── expression printing: minimal parentheses ────────────────────────────────
 
     [Test]

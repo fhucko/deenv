@@ -26,6 +26,9 @@ public static class AppPrint
                     PrintSeed(sb, typeName, id, fields);
         }
 
+        if (desc.Rules is { Count: > 0 } rules)
+            PrintAccess(sb, rules);
+
         if (desc.Common?.Functions is { Count: > 0 } commonFns)
         {
             sb.Append("\ncommon\n");
@@ -107,4 +110,25 @@ public static class AppPrint
         JsonValueKind.Array => "[" + string.Join(", ", value.EnumerateArray().Select(e => e.GetRawText())) + "]",
         _ => throw new InvalidOperationException($"No seed text form for {value.ValueKind}."),
     };
+
+    // ── access (M-auth) ────────────────────────────────────────────────────────────
+
+    // Print the ruleset as the `access` section — the inverse of AppParse.AccessSection. Rules are
+    // GROUPED by their type into one block each, IN FIRST-APPEARANCE ORDER (the canonical form), so
+    // parse∘print is the identity on the Rules list and print∘parse is a fixpoint. Each rule line is
+    // its verbs space-joined, then an optional `where <expr>` (the condition printed by CodePrint).
+    private static void PrintAccess(StringBuilder sb, IReadOnlyList<AccessRule> rules)
+    {
+        sb.Append("\naccess\n");
+        foreach (var type in rules.Select(r => r.Type).Distinct())
+        {
+            sb.Append("    ").Append(type).Append('\n');
+            foreach (var rule in rules.Where(r => r.Type == type))
+            {
+                sb.Append("        ").Append(string.Join(' ', rule.Verbs));
+                if (rule.When is { } when) sb.Append(" where ").Append(CodePrint.Value(when));
+                sb.Append('\n');
+            }
+        }
+    }
 }

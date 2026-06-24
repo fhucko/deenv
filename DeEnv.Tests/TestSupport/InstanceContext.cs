@@ -859,6 +859,67 @@ public class InstanceContext
                         sys.field(r.target, "title")
     """;
 
+    // M-auth (the access read floor): a devlog-shaped app — a `Milestone` set + a `User` with a `role`
+    // enum (Admin, Member) — carrying ONE type-level read rule that gates `Milestone` to admins. No `ui`
+    // section, so the default self-hosted generic UI renders it (the Db root shows the milestones set).
+    // A dedicated fixture (NOT a committed app, like the enum fixture) — it isolates the floor and avoids
+    // dragging the designer seed / SchemaBridge into the change. `WithAccessRule = false` drops the
+    // `access` section so the same shape proves the DORMANT (allow-all) case. The principal is bound
+    // floor-first (the harness passes it into SsrRenderer.Render); no password login this slice.
+    public static InstanceDescription AccessFixtureDb(bool withAccessRule = true) =>
+        InstanceDescriptionLoader.Load(withAccessRule ? AccessFixtureApp : AccessFixtureAppNoRule);
+
+    private const string AccessFixtureTypes = """
+    types
+        Role enum
+            Admin
+            Member
+        Db
+            milestones set of Milestone
+            users set of User
+        Milestone
+            title text
+        User
+            name text
+            role Role
+    """;
+
+    private const string AccessFixtureSeed = """
+
+    initialData
+        Db 1
+            milestones: [2]
+            users: [3, 4]
+        Milestone 2
+            title: "Gate #3"
+        User 3
+            name: "Ada"
+            role: "Admin"
+        User 4
+            name: "Bob"
+            role: "Member"
+    """;
+
+    // Public so the AppPrint round-trip test can prove the `access` section parses∘prints to identity.
+    public const string AccessFixtureApp = AccessFixtureTypes + AccessFixtureSeed + """
+
+    access
+        Milestone
+            read where currentUser.role == "Admin"
+    """;
+
+    private const string AccessFixtureAppNoRule = AccessFixtureTypes + AccessFixtureSeed;
+
+    // The seeded principal ids in AccessFixtureDb (the admin Ada, the member Bob), so a step can bind the
+    // current user by role without re-deriving ids. These mirror the initialData seed above.
+    public const int AccessAdminId = 3;
+    public const int AccessMemberId = 4;
+
+    // The principal bound for the next render (M-auth) — the id of the `User` the request acts as, or null
+    // (anonymous). A step sets it; the render step passes it into SsrRenderer.Render. This is the
+    // floor-first harness hook the locked slice calls for (no WS login/bind handshake).
+    public int? PrincipalUserId { get; set; }
+
     // ── storage ───────────────────────────────────────────────────────────────
 
     public string DataFilePath { get; set; } = Path.GetTempFileName();

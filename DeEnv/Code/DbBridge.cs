@@ -25,19 +25,25 @@ public static class DbBridge
     public const string EntryKeyProp = "__key";
 
     // Load the Db root object graph as a runtime ExecObject (positive id ⇒ in db).
-    public static ExecObject LoadRoot(IInstanceStore store, InstanceDescription desc, ExecContext context)
+    //
+    // `floor` is the M-auth access read floor (null ⇒ no enforcement, today's behavior). When set, an
+    // object the principal may not READ never enters the graph: a denied SET member is omitted, a denied
+    // SINGLE reference resolves to null. The Db root itself always loads (there is no rule for it, and you
+    // cannot navigate to an app you were denied the root of) — enforcement applies to its members below.
+    public static ExecObject LoadRoot(IInstanceStore store, InstanceDescription desc, ExecContext context,
+        AccessFloor? floor = null)
     {
         var db = desc.Db() ?? throw new InvalidOperationException("No Db type in the schema.");
         if (store.ReadNode(NodePath.Root) is not ObjectValue root)
             throw new InvalidOperationException("Db root is not an object.");
         var loaded = new Dictionary<int, ExecObject>();
-        return LoadObject(root, db, RootId, NodePath.Root, store, desc, loaded, context);
+        return LoadObject(root, db, RootId, NodePath.Root, store, desc, loaded, context, floor);
     }
 
     private static ExecObject LoadObject(
         ObjectValue ov, TypeDefinition type, int id, NodePath path,
         IInstanceStore store, InstanceDescription desc,
-        Dictionary<int, ExecObject> loaded, ExecContext context)
+        Dictionary<int, ExecObject> loaded, ExecContext context, AccessFloor? floor = null)
     {
         if (loaded.TryGetValue(id, out var existing)) return existing;
 
@@ -60,12 +66,14 @@ public static class DbBridge
                         setId = set.Id; // the set's stored intrinsic id — stable across renders
                         foreach (var (memberId, memberVal) in set.Members)
                             if (memberVal is ObjectValue memberOv)
-                                items.Add(new ExecItem
-                                {
-                                    Key = memberId,
-                                    Value = LoadObject(memberOv, elemType!, memberId,
-                                        fieldPath.Key(memberId.ToString()), store, desc, loaded, context),
-                                });
+                            {
+                                var member = LoadObject(memberOv, elemType!, memberId,
+                                    fieldPath.Key(memberId.ToString()), store, desc, loaded, context, floor);
+                                // The read floor: a member the principal may not read is OMITTED from the
+                                // set — it never enters the graph the client receives.
+                                if (floor != null && !floor.CanRead(elemType!.Name, member)) continue;
+                                items.Add(new ExecItem { Key = memberId, Value = member });
+                            }
                     }
                     obj.Props[prop.Name] = new ExecArray
                     {
@@ -137,9 +145,14 @@ public static class DbBridge
                             && f is ReferenceValue { TargetId: int targetId }
                             && store.ReadById(targetId) is { } hit)
                         {
-                            obj.Props[prop.Name] = LoadObject(hit.Fields,
+                            var target = LoadObject(hit.Fields,
                                 ResolveType(hit.TypeName, desc)!, targetId, fieldPath,
-                                store, desc, loaded, context);
+                                store, desc, loaded, context, floor);
+                            // The read floor: a referent the principal may not read resolves to null,
+                            // exactly as an unset reference does — the denied object never ships.
+                            obj.Props[prop.Name] = floor != null && !floor.CanRead(hit.TypeName, target)
+                                ? new ExecNull()
+                                : target;
                         }
                         else
                         {
