@@ -913,6 +913,12 @@ public sealed class CodeExecutor
         // runs it, so here it no-ops like the host actions. A host effect returns NOTHING and is OUTSIDE
         // the conformance contract — no conformance case; the bind happens on the connection, not here.
         "login" => new ExecNothing(),
+        // logout() — the MIRROR of login (M-auth login UI 1e-2): a CLIENT-only host effect that clears the
+        // session's principal back to anonymous. The client fires the `logout` hook → a `logout` WS op
+        // whose reply drives a refetch (the page swaps the root view back to the anonymous gate at the same
+        // URL). Like login it no-ops in the SSR/refetch renderer — the unbind lives on the connection, not
+        // here — and is OUTSIDE the conformance contract (no conformance case).
+        "logout" => new ExecNothing(),
         _ => null,
     };
 

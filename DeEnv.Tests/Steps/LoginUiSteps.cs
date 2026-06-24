@@ -88,6 +88,16 @@ public sealed class LoginUiSteps(InstanceContext ctx)
             new PageWaitForFunctionOptions { Timeout = 10000 });
     }
 
+    // Log out THROUGH the UserMenu (sub-slice 1e-2): click the Log out button the generic render shows once
+    // logged in. The button fires sys.logout → a `logout` WS op whose reply refetches as anonymous, so the
+    // same URL re-renders with the ruled data denied and the gate back. (No extra readiness gate: the WS was
+    // already established for login and stays open; the button only exists after the post-login refetch ran.)
+    [When("the visitor logs out through the user menu")]
+    public async Task WhenLogsOut()
+    {
+        await ctx.Page!.Locator(".user-menu button.logout").ClickAsync();
+    }
+
     // Login is a STATE, not a route: the URL never changed (no /login redirect). The visitor stayed on the
     // requested path; only the rendered content flipped.
     [Then("the URL is still {string}")]

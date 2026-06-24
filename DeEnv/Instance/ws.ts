@@ -257,6 +257,14 @@ function connectWs(): void {
             wsSend({ op: "login", clientId: uiStatic.clientId,
                 name: bareScalar(name), password: bareScalar(password) });
         },
+        // The MIRROR of login (sys.logout, M-auth login UI 1e-2). Clears the session's principal back to
+        // anonymous over the WS — no credentials, just the clientId (the server's `logout` op is idempotent
+        // and always replies ok). Like login it stages NOTHING and pushes NO journal entry; the REPLY
+        // (handled in onWsMessage) refetches so the page swaps the root view back to the anonymous gate at
+        // the SAME URL. No correlation id — the reply is recognized by its `op` ("logout").
+        logout: () => {
+            wsSend({ op: "logout", clientId: uiStatic.clientId });
+        },
     });
 }
 
@@ -312,6 +320,21 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // the refetch, so the data view re-runs fresh at the root slot and the DOM swaps. (A navigation
         // doesn't hit this because it already calls resetViewState; login is the other same-slot-swap edge.)
         if (msg.ok) { resetViewState(); maybeRefetch(); }
+    } else if (msg.op === "logout") {
+        // The MIRROR of the login reply (M-auth login UI 1e-2). The WS session is now anonymous again, so
+        // refetch: the re-render runs with NO principal, the access floor denies the now-unreadable data,
+        // `currentUser` flips back to null (mergeState), and the synthesized render's gate re-shows the
+        // <LoginForm> — the page swaps from the bound view back to the gate at the SAME URL (logout is a
+        // state, not a route). The server's `logout` op is idempotent and ALWAYS replies ok, so there is no
+        // ok-gate (unlike login, where a wrong password is a normal negative reply).
+        //
+        // resetViewState() — the SAME root-slot-swap fix login uses — because logout is the inverse wholesale
+        // render-tree rebuild at the same URL: the resolved root view (<UserMenu> + <ObjectForm>/…) → the
+        // gate's root <LoginForm>, two different components returned in VALUE position from the synthesized
+        // `fn render()` that key on the same root slot path. Without dropping the `comp:` slot-cache the stale
+        // logged-in view would sit under the root slot and renderUi would hand it back for the LoginForm call —
+        // the page would never return to the gate. resetViewState drops `comp:` (ui.ts) + forces the refetch.
+        resetViewState(); maybeRefetch();
     } else if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
         const arrayId = pendingAdds.get(msg.tempId);
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }

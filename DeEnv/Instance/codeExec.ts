@@ -952,6 +952,15 @@ function execLogin(codeCall: CodeCall, scope: ExecScope, context: ExecContext): 
     return { type: "nothing" };
 }
 
+// sys.logout(): the MIRROR of execLogin (M-auth login UI 1e-2) — clear the session→principal bind. Takes
+// no args; stages NOTHING in the data model; fires the dedicated `logout` hook (NOT hostAction) so its
+// REPLY can drive a refetch (the page swaps the root view back to the anonymous gate at the SAME URL —
+// logout is a state change, not a route). Returns nothing; the SSR/refetch renderer no-ops it.
+function execLogout(_codeCall: CodeCall, _scope: ExecScope, _context: ExecContext): ExecValue {
+    sendLogout();
+    return { type: "nothing" };
+}
+
 function collectionSysFunction(arr: ExecArray, method: string, context: ExecContext): ExecSysFunction {
     switch (method) {
         case "add": return { type: "sysFn", fn: args => { addToCollection(arr, args[0], context); return { type: "nothing" }; } };
@@ -1165,6 +1174,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "rename": return execRename(codeCall, scope, context);
         case "setDesign": return execSetDesign(codeCall, scope, context);
         case "login": return execLogin(codeCall, scope, context);
+        case "logout": return execLogout(codeCall, scope, context);
         case "nest": return execNest(codeCall, scope, context);
         case "segment": return execSegment(codeCall, scope, context);
         case "toInt": return execToInt(codeCall, scope, context);
@@ -1468,6 +1478,10 @@ interface WsHooks {
     // (unlike a host action) drives a refetch so the page re-renders as the bound principal. Distinct
     // from hostAction because the reply must trigger the refetch, not just surface an error.
     login(name: ExecValue, password: ExecValue): void;
+    // The MIRROR of login (sys.logout, M-auth login UI 1e-2): clear the principal over the WS. Takes no
+    // credentials; like login its REPLY (not a host action) drives a refetch, so the page swaps the root
+    // view back to the anonymous gate at the same URL.
+    logout(): void;
 }
 let wsHooks: WsHooks | null = null;
 function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
@@ -1498,6 +1512,9 @@ function sendHostAction(action: string, args: ExecValue[]): void {
 }
 function sendLogin(name: ExecValue, password: ExecValue): void {
     wsHooks?.login(name, password);
+}
+function sendLogout(): void {
+    wsHooks?.logout();
 }
 
 // ── conformance entry point ───────────────────────────────────────────────────────

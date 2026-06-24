@@ -97,6 +97,14 @@ public static class GenericUi
             fn render()
                 if anonymousLockedOut && currentUser == null
                     return <LoginForm>
+                var view = route()
+                if currentUser != null
+                    return <div class="app-shell">
+                        <UserMenu>
+                        view
+                return view
+
+            fn route()
                 var r = sys.resolve(path)
                 if r.kind == "object" && r.target != null
                     return <ObjectForm obj={r.target} meta={sys.schema(r.typeName)} base={path}>
@@ -440,6 +448,17 @@ public static class GenericUi
                             <input type="password" class="password" value={state.password}>
                         <button class="login-submit" onClick={submit}>
                             "Sign in"
+                return render
+
+            fn UserMenu()
+                fn logout()
+                    sys.logout()
+                fn render()
+                    return <div class="user-menu">
+                        <span class="user-name">
+                            sys.field(currentUser, "name")
+                        <button class="logout" onClick={logout}>
+                            "Log out"
                 return render
 
             fn InputType(baseType)

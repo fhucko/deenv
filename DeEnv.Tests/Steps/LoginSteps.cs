@@ -272,16 +272,22 @@ public sealed class LoginSteps(InstanceContext ctx)
         await Assert.That(ctx.RenderedHtml!.Contains(marker)).IsFalse();
     }
 
-    // (b) the currentUser scope ships FIELDS-LESS: the principal's `role`, read by the access condition to
-    // admit the milestone, is read over a THROWAWAY context and so never enters the shipped graph. The
-    // principal SHIPS as a scope reference (window.initData scope.currentUser → an object id), but its
-    // serialized object carries NO props — proving its field VALUES (its role) did not leak.
+    // (b) the principal's SENSITIVE fields never leak: the `role`, read by the access condition to admit the
+    // milestone, is read over a THROWAWAY context and so never enters the shipped graph; the `passwordHash`
+    // is excluded by convention. The principal SHIPS as a scope reference (window.initData scope.currentUser
+    // → an object id); its serialized object carries ONLY the fields the render legitimately DISPLAYED — and
+    // role/passwordHash are not among them.
     //
-    // A whole-document "Admin" string check would be WRONG here: "Admin" legitimately appears as the
-    // `Role` enum's value name in the shipped schema descriptor (eager PrewarmDescriptors), which is
-    // user-data-free metadata, not a principal leak. So this drills into the principal's own object entry
-    // in initData and asserts it is fields-less — immune to that descriptor metadata. Rendered at
-    // /milestones/2 (no users table), so the principal id is not also a displayed db.users row.
+    // 1e-2 NOTE: this used to assert the principal object is FIELDS-LESS (zero props). That was a proxy that
+    // held only while NOTHING read currentUser's fields. The <UserMenu> (the logged-in chrome) now displays
+    // currentUser.name, so the principal legitimately ships its `name` leaf — the user is allowed to see
+    // their OWN name; it is not a privacy leak. So the assertion is narrowed to the REAL invariant the
+    // scenario name promises: the principal ships NO `role` and NO `passwordHash` prop (the sensitive
+    // fields), whatever else it carries. The role-VALUE string check below is unchanged and still the
+    // strongest guard (a whole-document "Admin" check would be WRONG — "Admin" legitimately appears as the
+    // `Role` enum value name in the shipped schema descriptor; this drills into the principal's own object
+    // entry, immune to that metadata). Rendered at /milestones/2 (no users table), so the principal id is
+    // not also a displayed db.users row.
     [Then("the rendered document does not expose the current user's role {string}")]
     public async Task ThenNoRole(string role)
     {
@@ -293,8 +299,11 @@ public sealed class LoginSteps(InstanceContext ctx)
             .GetProperty("leaves").GetProperty("objects")
             .GetProperty(InstanceContext.AccessAdminId.ToString())
             .GetProperty("props");
-        // Fields-less: the principal object ships with NO props at all (its role never recorded as a leaf).
-        await Assert.That(principal.EnumerateObject().Any()).IsFalse();
+        // The SENSITIVE fields never enter the principal's shipped object: its role (read only by the access
+        // condition, over a throwaway context) and its passwordHash (convention-excluded) are absent as keys.
+        var props = principal.EnumerateObject().Select(p => p.Name).ToList();
+        await Assert.That(props).DoesNotContain("role");
+        await Assert.That(props).DoesNotContain(UserConvention.PasswordHashField);
         // And the role value is nowhere inside the principal's serialized object (belt-and-suspenders).
         await Assert.That(principal.GetRawText().Contains(role)).IsFalse();
     }

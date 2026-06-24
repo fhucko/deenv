@@ -254,3 +254,17 @@ Feature: The access floor (read enforcement by principal)
     When the visitor logs in through the form as "Ada" with password "hunter2"
     Then "Gate #3" eventually appears
     And the URL is still "/"
+
+  # ── logout from the UI (sub-slice 1e-2) ──────────────────────────────────────
+  # The mirror of login. Once logged in, the synthesized generic render also shows a <UserMenu>
+  # (the user's name + a Log out button). Clicking Log out fires sys.logout over the WS; the reply
+  # refetches as anonymous, so the same URL re-renders with the ruled data DENIED again and the
+  # login gate back — logout is a STATE, not a route (the URL never changes).
+  Scenario: A logged-in visitor logs out through the user menu and returns to the gate
+    Given the access-fixture app is served with the admin password "hunter2"
+    And an anonymous visitor opens "/"
+    When the visitor logs in through the form as "Ada" with password "hunter2"
+    Then "Gate #3" eventually appears
+    When the visitor logs out through the user menu
+    Then the login form is shown and "Gate #3" is not
+    And the URL is still "/"
