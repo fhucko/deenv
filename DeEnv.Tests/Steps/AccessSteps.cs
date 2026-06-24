@@ -45,7 +45,10 @@ public sealed class AccessSteps(InstanceContext ctx)
         await Assert.That(rule.StartsWith(prefix)).IsTrue();
         ctx.AccessRuleLines.Add(rule[prefix.Length..]);
 
-        ctx.Description = InstanceContext.AccessFixtureWithRules(ctx.AccessRuleLines.ToArray());
+        // Rebuild from BOTH accumulators (Milestone here + any User rule a login-1b scenario added), so the
+        // two rule steps are order-independent and every declared rule stays active at once.
+        ctx.Description = InstanceContext.AccessFixtureWithRules(
+            ctx.AccessRuleLines.ToArray(), ctx.UserAccessRuleLines.ToArray());
         ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
 
         await Assert.That(ctx.Description!.Rules).IsNotNull();

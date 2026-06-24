@@ -40,6 +40,11 @@ public sealed record WsRequest
     // (UserConvention.NameField), `password` the plaintext verified against the stored hash.
     public string? Name { get; init; }
     public string? Password { get; init; }
+    // setPassword: the TARGET user (`userId`) whose `passwordHash` is (re)set to the hash of
+    // `newPassword`. Distinct from `login`'s by-name credentials — setPassword addresses an
+    // existing User by id and is gated as an `edit` of that User (the write floor).
+    public int? UserId { get; init; }
+    public string? NewPassword { get; init; }
 }
 
 // Response records — one per op. Each property's camelCase (the shared `_jsonOpts`
@@ -156,6 +161,17 @@ public sealed record LogoutResponse
     public bool Ok => true;
 }
 
+// setPassword: the result of a gated password (re)set (M-auth). `ok` is the one bit the client acts on:
+// true when the principal was allowed to edit the target User AND it exists (the hash was written);
+// false when denied OR the target user is unknown. Like a denied write and a failed login, a false here
+// is a NORMAL negative result, NOT routed through the `{ error }` rollback path (nothing was staged
+// optimistically — passwordHash is never on the client). Write-only: the hash is never read back.
+public sealed record SetPasswordResponse
+{
+    public string Op => "setPassword";
+    public required bool Ok { get; init; }
+}
+
 public sealed record ErrorResponse
 {
     public required string Error { get; init; }
@@ -268,6 +284,7 @@ public sealed class WsHandler
                 "ackRemap"          => HandleAckRemap(req),
                 "login"             => HandleLogin(req),
                 "logout"            => HandleLogout(req),
+                "setPassword"       => HandleSetPassword(req),
                 _                   => Error($"Unknown op '{op}'")
             };
             return WithId(result, id);
@@ -729,6 +746,45 @@ public sealed class WsHandler
         if (Session(req) is { } session)
             session.PrincipalUserId = null;
         return Serialize(new LogoutResponse());
+    }
+
+    // setPassword: (re)set a target User's password, GATED by the EXISTING write floor (M-auth 1b). The
+    // principal must be allowed to `edit` the target User — the SAME deny-by-default rule that gates an
+    // objectPropChange edit — so "who may set a password" is an ordinary access rule (e.g. `User edit where
+    // currentUser.role == "Admin"`), never a special case. On allow: hash `newPassword` (PBKDF2,
+    // server-side, the only place passwords are handled) and write it through the store seam. Write-only —
+    // passwordHash is never read back (it stays excluded from the shipped graph), so it is never set from
+    // the client via objectPropChange (the client never sees the field); THIS kernel action is the one path
+    // that sets it. A denied write OR an unknown user is the SAME negative reply ({ ok:false }) — and, like
+    // login, NOT routed through the `{ error }` rollback path (nothing was staged optimistically).
+    //
+    // ponytail: the principal is the session's bound currentUser (set by `login`); the floor decision reads
+    // only currentUser (the rule's condition) — the target's CURRENT scalar fields are the candidate, exactly
+    // as the objectPropChange edit floor builds it. Per-field rules, self-service "change my own password",
+    // and signup/user-creation are later slices (1b sets a password on an EXISTING user).
+    private string HandleSetPassword(WsRequest req)
+    {
+        if (req.UserId is not { } userIdRaw)
+            return Error("setPassword requires a numeric 'userId'.");
+        if (req.NewPassword is not { } newPassword)
+            return Error("setPassword requires 'newPassword'.");
+        var userId = Resolve(Session(req), userIdRaw);
+
+        // The target must be a known User. An unknown id, or an id pointing at a non-User object, is the
+        // negative reply — same as a denied write (no user-enumeration distinction, and nothing is written).
+        if (_store.ReadById(userId) is not { TypeName: Code.UserConvention.TypeName } target)
+            return Serialize(new SetPasswordResponse { Ok = false });
+
+        // The write floor: setting a password is an `edit` of the (existing) target User, decided over its
+        // CURRENT scalar fields. Denied ⇒ the negative reply, the store untouched (no hash written).
+        if (!Floor(req).CanWrite("edit", Code.UserConvention.TypeName,
+                Code.AccessFloor.ScalarObject(Code.UserConvention.TypeName, userId, target.Fields)))
+            return Serialize(new SetPasswordResponse { Ok = false });
+
+        // Allowed: hash the new plaintext and write it through the store seam (the same field the seed/login
+        // path use). The hash is self-describing (AuthCrypto) so a later login verifies against it directly.
+        _store.WriteField(userId, Code.UserConvention.PasswordHashField, new TextValue(Code.AuthCrypto.Hash(newPassword)));
+        return Serialize(new SetPasswordResponse { Ok = true });
     }
 
     // Resolve a User by its `name` field through the store seam (an extent scan). Returns the matching

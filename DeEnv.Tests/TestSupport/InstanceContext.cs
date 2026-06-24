@@ -918,9 +918,23 @@ public class InstanceContext
     // verb list + optional `where` condition. The same deny-by-default ruleset gates reads AND the
     // mutation seam, so a single-verb rule here activates the floor for that verb only.
     public static InstanceDescription AccessFixtureWithRules(params string[] ruleLines) =>
-        InstanceDescriptionLoader.Load(
-            AccessFixtureTypes + AccessFixtureSeed + "\n\naccess\n    Milestone\n" +
-            string.Concat(ruleLines.Select(l => "        " + l + "\n")));
+        AccessFixtureWithRules(ruleLines, []);
+
+    // The same fixture carrying Milestone rule lines AND User rule lines (M-auth login 1b: setPassword is
+    // gated as a `User edit`, so a scenario installs a `User edit where currentUser.role == "Admin"` rule
+    // alongside the Background's `Milestone read`). Each block is emitted only when it has lines, so the
+    // Milestone-only callers (the read/write scenarios) are unaffected. Both blocks parse through AppParse
+    // exactly as the app's own `access` section would.
+    public static InstanceDescription AccessFixtureWithRules(string[] milestoneRuleLines, string[] userRuleLines)
+    {
+        var access = "";
+        if (milestoneRuleLines.Length > 0)
+            access += "\n    Milestone\n" + string.Concat(milestoneRuleLines.Select(l => "        " + l + "\n"));
+        if (userRuleLines.Length > 0)
+            access += "\n    User\n" + string.Concat(userRuleLines.Select(l => "        " + l + "\n"));
+        return InstanceDescriptionLoader.Load(
+            AccessFixtureTypes + AccessFixtureSeed + (access.Length > 0 ? "\n\naccess" + access : ""));
+    }
 
     // The seeded principal ids in AccessFixtureDb (the admin Ada, the member Bob), so a step can bind the
     // current user by role without re-deriving ids. These mirror the initialData seed above.
@@ -946,6 +960,11 @@ public class InstanceContext
     // declared rule active at once — an app realistically carries read AND write rules — and each is parsed
     // by AppParse exactly as the app's own would be.
     public readonly List<string> AccessRuleLines = new();
+
+    // The `User` access rule lines installed via the "Given the User access rule" step (M-auth login 1b:
+    // the `User edit` rule that gates setPassword). Accumulated separately so a rebuild always carries BOTH
+    // the Milestone block (Background) and the User block — order-independent across the two steps.
+    public readonly List<string> UserAccessRuleLines = new();
 
     // ── storage ───────────────────────────────────────────────────────────────
 

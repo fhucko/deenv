@@ -157,3 +157,28 @@ Feature: The access floor (read enforcement by principal)
     When the page state is rendered for "/milestones/2"
     Then the shipped data includes a "Milestone" titled "Gate #3"
     And the rendered document does not expose the current user's role "Admin"
+
+  # ── setPassword (a gated write action, login sub-slice 1b) ───────────────────
+  # Setting a User's password is an `edit` of that User, gated by the SAME write floor: an
+  # ordinary `User edit where currentUser.role == "Admin"` rule decides who may do it — no
+  # special case. The action hashes the new plaintext (PBKDF2, server-side) and writes it to
+  # the target's passwordHash through the store seam. passwordHash is write-only (never shipped,
+  # never set from the client), so this kernel action is the one path that sets it; a denied
+  # write or an unknown user is the same negative reply ({ ok:false }), not an { error }.
+
+  Scenario: An admin sets a member's password and the member can then log in with it
+    Given the User access rule "User edit where currentUser.role == \"Admin\""
+    And the current user is the admin
+    When the admin sets user 4's password to "freshpass"
+    Then the setPassword succeeds
+    When the member logs in with password "freshpass"
+    Then the login succeeds as the member
+
+  Scenario: A non-admin's setPassword is rejected and the original password still works
+    Given the User access rule "User edit where currentUser.role == \"Admin\""
+    And the member user has the password "original"
+    And the current user is the member
+    When the member sets user 4's password to "hacked"
+    Then the setPassword is rejected
+    And the member can log in with password "original"
+    And the member cannot log in with password "hacked"

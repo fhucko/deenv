@@ -27,6 +27,7 @@ public sealed class LoginSteps(InstanceContext ctx)
     private ClientSession? _session;
     private string _reply = "";
     private string _seededHash = "";
+    private string _setPasswordReply = "";
 
     // ── seed ────────────────────────────────────────────────────────────────────
 
@@ -45,6 +46,121 @@ public sealed class LoginSteps(InstanceContext ctx)
             .Fields[UserConvention.PasswordHashField];
         await Assert.That(stored).IsEqualTo((NodeValue)new TextValue(_seededHash));
     }
+
+    // Seed the MEMBER's (Bob's, id 4) password the same way (login 1b) — so a denied setPassword can be
+    // proven to have left the ORIGINAL hash intact (the original still verifies, the attempted-new does
+    // not). Written into the live store after any fixture rebuild a scenario did.
+    [Given("the member user has the password {string}")]
+    public async Task GivenMemberPassword(string password)
+    {
+        var hash = AuthCrypto.Hash(password);
+        ctx.Store!.WriteField(InstanceContext.AccessMemberId, UserConvention.PasswordHashField, new TextValue(hash));
+        var stored = ctx.Store!.ReadById(InstanceContext.AccessMemberId)!.Value.Fields
+            .Fields[UserConvention.PasswordHashField];
+        await Assert.That(stored).IsEqualTo((NodeValue)new TextValue(hash));
+    }
+
+    // ── the User access rule (login 1b: setPassword is gated as a `User edit`) ───
+
+    // Install a `User` access rule (e.g. `User edit where currentUser.role == "Admin"`) so setPassword is
+    // gated. The rule line is the FULL "User <verbs> [where <cond>]"; the leading "User " is stripped and
+    // accumulated, then the fixture is rebuilt from BOTH the Milestone lines (Background) and the User
+    // lines — parsed by AppParse exactly as the app's own `access` section would be — and the rule asserted
+    // present. The store is rebuilt over the SAME seed (identical types ⇒ the seeded users still fit).
+    [Given("the User access rule {string}")]
+    public async Task GivenUserAccessRule(string rule)
+    {
+        rule = rule.Replace("\\\"", "\"");
+        const string prefix = "User ";
+        await Assert.That(rule.StartsWith(prefix)).IsTrue();
+        ctx.UserAccessRuleLines.Add(rule[prefix.Length..]);
+
+        ctx.Description = InstanceContext.AccessFixtureWithRules(
+            ctx.AccessRuleLines.ToArray(), ctx.UserAccessRuleLines.ToArray());
+        ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+
+        await Assert.That(ctx.Description!.Rules!.Any(r => r.Type == "User" && r.Verbs.Contains("edit")))
+            .IsTrue();
+    }
+
+    // ── setPassword (driven through the WS action, gated by the write floor) ─────
+
+    // Send a `setPassword` op over a WS session bound to the currently-chosen principal (ctx.PrincipalUserId,
+    // set by "the current user is …"), exactly the way AccessSteps binds the write-floor scenarios — so the
+    // floor reads the real principal. The `{word}` (admin/member) is the actor label; the principal is what
+    // decides, so the same step serves both. The target user is addressed by id; the reply is captured for
+    // the succeeds/rejected assertions.
+    [When("the {word} sets user {int}'s password to {string}")]
+    public void WhenSetsPassword(string _actor, int userId, string newPassword)
+    {
+        _sessions ??= new ClientSessionStore();
+        var session = _sessions.Create();
+        session.PrincipalUserId = ctx.PrincipalUserId;
+        var ws = new WsHandler(ctx.Store!, ctx.Description!, _sessions);
+        _setPasswordReply = ws.ProcessMessage(
+            $$"""{ "op": "setPassword", "clientId": "{{session.Id}}", "userId": {{userId}}, "newPassword": "{{newPassword}}" }""");
+    }
+
+    [Then("the setPassword succeeds")]
+    public async Task ThenSetPasswordSucceeds()
+    {
+        using var doc = JsonDocument.Parse(_setPasswordReply);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("op").GetString()).IsEqualTo("setPassword");
+        await Assert.That(root.GetProperty("ok").GetBoolean()).IsTrue();
+        await Assert.That(root.TryGetProperty("error", out _)).IsFalse();
+    }
+
+    // A denied setPassword is the NORMAL negative reply ({ ok:false }) — NOT an { error } (nothing was
+    // staged optimistically; passwordHash is never on the client, so there is nothing to roll back).
+    [Then("the setPassword is rejected")]
+    public async Task ThenSetPasswordRejected()
+    {
+        using var doc = JsonDocument.Parse(_setPasswordReply);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("op").GetString()).IsEqualTo("setPassword");
+        await Assert.That(root.GetProperty("ok").GetBoolean()).IsFalse();
+        await Assert.That(root.TryGetProperty("error", out _)).IsFalse();
+    }
+
+    // ── the member logs in (proves a written/unchanged hash is verifiable) ───────
+
+    // Log in as the member (Bob) by sending a `login` over a fresh anonymous session — the end-to-end proof
+    // that a hash setPassword wrote (or left intact) actually authenticates. Returns the reply's `ok` so the
+    // caller asserts success/failure. By name "Bob" (the seeded member), the SAME path a real login takes.
+    private bool MemberLoginOk(string password)
+    {
+        var sessions = new ClientSessionStore();
+        var session = sessions.Create();
+        var ws = new WsHandler(ctx.Store!, ctx.Description!, sessions);
+        _reply = ws.ProcessMessage(
+            $$"""{ "op": "login", "clientId": "{{session.Id}}", "name": "Bob", "password": "{{password}}" }""");
+        using var doc = JsonDocument.Parse(_reply);
+        return doc.RootElement.GetProperty("ok").GetBoolean();
+    }
+
+    [When("the member logs in with password {string}")]
+    public void WhenMemberLogsIn(string password) => MemberLoginOk(password);
+
+    // After a successful member login the reply names the member principal (id 4) — proves the hash
+    // setPassword wrote verifies AND binds the right user.
+    [Then("the login succeeds as the member")]
+    public async Task ThenLoginSucceedsAsMember()
+    {
+        using var doc = JsonDocument.Parse(_reply);
+        var root = doc.RootElement;
+        await Assert.That(root.GetProperty("op").GetString()).IsEqualTo("login");
+        await Assert.That(root.GetProperty("ok").GetBoolean()).IsTrue();
+        await Assert.That(root.GetProperty("userId").GetInt32()).IsEqualTo(InstanceContext.AccessMemberId);
+    }
+
+    [Then("the member can log in with password {string}")]
+    public async Task ThenMemberCanLogIn(string password) =>
+        await Assert.That(MemberLoginOk(password)).IsTrue();
+
+    [Then("the member cannot log in with password {string}")]
+    public async Task ThenMemberCannotLogIn(string password) =>
+        await Assert.That(MemberLoginOk(password)).IsFalse();
 
     // ── the WS session (anonymous; the principal is set by `login`) ──────────────
 
