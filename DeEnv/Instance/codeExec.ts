@@ -940,6 +940,18 @@ function execSetDesign(codeCall: CodeCall, scope: ExecScope, context: ExecContex
     return { type: "nothing" };
 }
 
+// sys.login(name, password): a CLIENT-only host effect (M-auth login UI) — the session→principal bind.
+// Like execPublish it stages NOTHING in the data model (no obj.props mutation, no invalidateProp), but it
+// fires the dedicated `login` hook (NOT hostAction): login needs its REPLY to drive a refetch so the page
+// re-renders as the bound principal (currentUser flips). Returns nothing; the SSR/refetch renderer no-ops
+// it (CodeExecutor's `login` host-effect case). Args are the plaintext name + password (wire scalars).
+function execLogin(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const name = executeValue(codeCall.params[0], scope, context).value;
+    const password = executeValue(codeCall.params[1], scope, context).value;
+    sendLogin(name, password);
+    return { type: "nothing" };
+}
+
 function collectionSysFunction(arr: ExecArray, method: string, context: ExecContext): ExecSysFunction {
     switch (method) {
         case "add": return { type: "sysFn", fn: args => { addToCollection(arr, args[0], context); return { type: "nothing" }; } };
@@ -1152,6 +1164,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "delete": return execDelete(codeCall, scope, context);
         case "rename": return execRename(codeCall, scope, context);
         case "setDesign": return execSetDesign(codeCall, scope, context);
+        case "login": return execLogin(codeCall, scope, context);
         case "nest": return execNest(codeCall, scope, context);
         case "segment": return execSegment(codeCall, scope, context);
         case "toInt": return execToInt(codeCall, scope, context);
@@ -1451,6 +1464,10 @@ interface WsHooks {
     // A SERVER-ONLY host action (sys.publish): the client fires the action, the server alone runs
     // the effect. Stages nothing in the data model (no optimistic mutation to roll back).
     hostAction(action: string, args: ExecValue[]): void;
+    // The session→principal bind (sys.login, M-auth login UI): send credentials over the WS; its REPLY
+    // (unlike a host action) drives a refetch so the page re-renders as the bound principal. Distinct
+    // from hostAction because the reply must trigger the refetch, not just surface an error.
+    login(name: ExecValue, password: ExecValue): void;
 }
 let wsHooks: WsHooks | null = null;
 function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
@@ -1478,6 +1495,9 @@ function sendEntryRemove(arr: ExecArray, item: ExecArrayItem, key: string, index
 }
 function sendHostAction(action: string, args: ExecValue[]): void {
     wsHooks?.hostAction(action, args);
+}
+function sendLogin(name: ExecValue, password: ExecValue): void {
+    wsHooks?.login(name, password);
 }
 
 // ── conformance entry point ───────────────────────────────────────────────────────

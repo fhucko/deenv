@@ -69,6 +69,15 @@ namespace DeEnv.Instance;
 // sys.setRef (set/clear a reference), sys.nest (a URL path-join for nested member links), sys.new (a
 // fresh default-valued object built from a descriptor — a create-new draft). `obj.prop = x` resets a component's draft after Create.
 //
+//   • LoginForm() (M-auth login UI) — the auto-mode login gate: a COMPONENT whose run-once setup mints a
+//     transient `state` (name + password — a negative-id object, so edits stay client-local and never
+//     persist), returning two bound inputs + a Submit that calls sys.login(state.name, state.password). The
+//     synthesized render returns it (`<LoginForm>`) when `anonymousLockedOut && currentUser == null`, so an
+//     app where anonymous can read nothing shows login instead of an empty page. `sys.login(name, password)`
+//     is a CLIENT-only host effect (a server no-op like sys.publish): on the client it sends a `login` WS op
+//     whose reply drives a refetch, so the page re-renders as the bound principal (currentUser flips). The
+//     boundary lives UNDER it (the WS bind + the floor); relocating/restyling login cannot weaken it.
+//
 // A type's descriptor — { name, labelProp, props } — is fetched by
 // `sys.schema(typeName)`,
 // resolved server-side from the schema (the descriptor literal GenericUi threads into the executor)
@@ -86,6 +95,8 @@ public static class GenericUi
     private const string StdlibSource = """
         ui
             fn render()
+                if anonymousLockedOut && currentUser == null
+                    return <LoginForm>
                 var r = sys.resolve(path)
                 if r.kind == "object" && r.target != null
                     return <ObjectForm obj={r.target} meta={sys.schema(r.typeName)} base={path}>
@@ -410,6 +421,26 @@ public static class GenericUi
                         path
                     <a class="home" href="/">
                         "Home"
+
+            fn LoginForm()
+                var state = { name: "", password: "" }
+                fn submit()
+                    sys.login(state.name, state.password)
+                fn render()
+                    return <main class="login-form">
+                        <h2>
+                            "Sign in"
+                        <div class="field">
+                            <label class="name">
+                                "Name"
+                            <input type="text" class="name" value={state.name}>
+                        <div class="field">
+                            <label class="password">
+                                "Password"
+                            <input type="password" class="password" value={state.password}>
+                        <button class="login-submit" onClick={submit}>
+                            "Sign in"
+                return render
 
             fn InputType(baseType)
                 if baseType == "int"

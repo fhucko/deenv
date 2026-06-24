@@ -51,6 +51,62 @@ public sealed class AccessFloor
     // A fast path so the common (solo-app) case pays nothing and the DbBridge can skip building a scope.
     public bool Dormant => _rules.Count == 0;
 
+    // ── anonymousLockedOut (the auto-mode login gate signal, M-auth login UI) ────
+    //
+    // True when the app has `read` rules AND none of them grants ANONYMOUS access — i.e. an un-logged-in
+    // visitor can read NOTHING. Computed purely from the RULES (never the data), so it is correct even
+    // when every list is empty: it is a static property of the ruleset, the same answer whether the store
+    // has zero rows or a thousand. Shipped to Code as a read-only system var beside `currentUser`; the
+    // synthesized generic render uses it to gate an anonymous request to a <LoginForm> (an app where
+    // anonymous can read SOMETHING — a `read where status == "published"` rule — is NOT gated, so "public"
+    // pages stay public).
+    //
+    // FLOOR-CONSISTENT: it mirrors the read floor's own deny-by-default-AMONG-THE-RULED semantics (see
+    // Can). The floor gates a type for read ONLY when a `read` rule names it; a type with no read rule is
+    // UNRULED and stays readable. So the gate must require at least one READ rule to exist — a dormant app
+    // (no rules) AND an app with only WRITE rules (no read rule → reads allowed) both leave anonymous able
+    // to read, hence both are NOT locked out. Only once a read rule exists, and no read rule grants
+    // anonymous, is an anonymous visitor shut out everywhere. (The task framed this as "rules-exist AND no
+    // read rule grants anonymous"; the write-only-rules edge it did not enumerate resolves to NOT-gated to
+    // stay consistent with the floor, which would let anonymous read freely there — gating it would show a
+    // login form over publicly-readable data.)
+    //
+    // "Grants anonymous" is a STATIC check over the condition AST: a read rule grants anonymous when its
+    // condition is absent (an unconditional `read`) OR does not REFERENCE `currentUser` (a data-only
+    // condition like `status == "published"`, which can hold with no principal). A condition that
+    // references `currentUser` (a role/identity gate) is treated as NOT granting anonymous, because with
+    // a null principal it fails closed (deny). This is data-free by construction — it inspects the rule,
+    // not a live evaluation, so it never needs an object or the store.
+    // ponytail: the static check is a sound APPROXIMATION. A condition like `currentUser == null`
+    // references currentUser yet genuinely grants anonymous — so this would mark such an app locked-out
+    // even though anonymous reads succeed. Acceptable for the UI gate (a deliberate `read where
+    // currentUser == null` is an unusual way to spell a public rule; a bare `read` is the normal one);
+    // a precise check (eval the condition with currentUser=null) is data-coupled for `object`-reading
+    // conditions, so it was rejected here. Tighten only if a real app hits the edge.
+    public static bool AnonymousLockedOut(IReadOnlyList<AccessRule> rules)
+    {
+        var readRules = rules.Where(r => Grants(r, "read")).ToList();
+        if (readRules.Count == 0) return false; // no read rule → reads unruled → anonymous reads freely
+        // Locked out iff NO read rule grants anonymous (every read rule is currentUser-gated).
+        return !readRules.Any(r => r.When == null || !ReferencesCurrentUser(r.When));
+    }
+
+    // Does a condition AST reference the `currentUser` symbol anywhere? A structural walk over the value
+    // tree (the same node families a condition is built from — infix ops, calls, not, object/array
+    // literals, tags). The principal is named by the bare symbol `currentUser`; a `currentUser.role`
+    // access is `objectProp(currentUser, role)`, so finding the symbol covers member access too.
+    private static bool ReferencesCurrentUser(ICodeValue value) => value switch
+    {
+        CodeSymbol s => s.Name == "currentUser",
+        CodeInfixOp op => ReferencesCurrentUser(op.Left) || ReferencesCurrentUser(op.Right),
+        CodeNot n => ReferencesCurrentUser(n.Operand),
+        CodeCall c => ReferencesCurrentUser(c.Fn) || c.Params.Any(ReferencesCurrentUser),
+        CodeArray a => a.Items.Any(ReferencesCurrentUser),
+        CodeObject o => o.Props.Any(p => ReferencesCurrentUser(p.Value)),
+        CodeAssignment asn => ReferencesCurrentUser(asn.Target) || ReferencesCurrentUser(asn.Value),
+        _ => false, // literals (int/bool/text/null), functions, tags — no bare currentUser reference
+    };
+
     // May the principal READ an object of `typeName` (the candidate `obj` already loaded as an ExecObject)?
     // The DbBridge floor consults this while loading the graph: a denied object never enters the graph.
     public bool CanRead(string typeName, ExecObject obj) => Can("read", typeName, obj);

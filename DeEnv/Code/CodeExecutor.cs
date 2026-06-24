@@ -908,6 +908,11 @@ public sealed class CodeExecutor
         "delete" => new ExecNothing(),
         "setDesign" => new ExecNothing(),
         "rename" => new ExecNothing(),
+        // login(name, password) is a CLIENT-only host effect (M-auth login UI): the client fires the
+        // event hook → a `login` WS op (whose reply drives a refetch); the SSR/refetch renderer never
+        // runs it, so here it no-ops like the host actions. A host effect returns NOTHING and is OUTSIDE
+        // the conformance contract — no conformance case; the bind happens on the connection, not here.
+        "login" => new ExecNothing(),
         _ => null,
     };
 

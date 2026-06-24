@@ -75,6 +75,7 @@ public static class CodeValidator
         ["delete"] = 1,  // (targetId)
         ["rename"] = 2,  // (id, name)
         ["setDesign"] = 2, // (schema, targetId)
+        ["login"] = 2,   // (name, password) — a client-only host effect (the session→principal bind)
         ["nest"] = 2,
         ["segment"] = 2,
         ["toInt"] = 1,

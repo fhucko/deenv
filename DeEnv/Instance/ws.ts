@@ -247,10 +247,20 @@ function connectWs(): void {
             wsSend({ op: "hostAction", id: msgId, clientId: uiStatic.clientId,
                 action, args: args.map(scalarOf) });
         },
+        // The session→principal bind (sys.login, M-auth login UI). Sends the plaintext credentials over
+        // the WS (the server reads `name`/`password` as bare strings — the login op's shape, not the
+        // tagged { type, value } the data ops use). It stages NOTHING and pushes NO journal entry (the
+        // bind lives on the connection, not the data model); the REPLY (handled in onWsMessage) refetches
+        // on success so the page re-renders as the bound principal. No correlation id is needed — the
+        // reply is recognized by its `op` ("login"), and a failed login is a normal negative reply.
+        login: (name, password) => {
+            wsSend({ op: "login", clientId: uiStatic.clientId,
+                name: bareScalar(name), password: bareScalar(password) });
+        },
     });
 }
 
-function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: number;
+function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: number; ok?: boolean;
                             collections?: { [prop: string]: { id: number; elementTypeName?: string } };
                             state?: ServerDtState; error?: string }): void {
     // Correlated accept/reject first: an error rolls the journal back, an ok commits.
@@ -282,6 +292,26 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // once any connect-time refetch has also returned. (INTERIM — see the data-ready note.)
         helloAcked = true;
         markReadyIfSettled();
+    } else if (msg.op === "login") {
+        // The session→principal bind reply (M-auth login UI). On success the WS session is now bound
+        // to a principal, so refetch: the re-render runs AS that principal, the access floor admits the
+        // newly-readable data, and `currentUser` is overwritten by mergeState — the page flips from the
+        // login gate to the bound view at the SAME URL (login is a state, not a route). A failed login
+        // (ok:false) is a normal negative reply — leave the gate up (a richer error surface is a
+        // follow-up; the locked scope is the success→refetch flip).
+        //
+        // resetViewState() — NOT a bare needsServerData — because a login flip is a WHOLESALE render-tree
+        // rebuild at the same URL (the gate's root <LoginForm> → the resolved root <ObjectForm>/<SetTable>/…),
+        // exactly the "two different components at the SAME slot" hazard a navigation has. A component
+        // memoizes by render-tree SLOT, and BOTH the gate's `return <LoginForm>` and the post-login
+        // `return <ObjectForm>` are returned in VALUE position from the synthesized `fn render()`, so both
+        // key on the same (empty/root) slot path "comp:". The refetch reply PRESERVES `comp:` entries
+        // (component state), so without dropping them the stale LoginForm view would sit under the root slot
+        // and renderUi would hand it back for the ObjectForm call — the page would never leave the gate.
+        // resetViewState drops the `comp:` slot-cache (the SAME helper a navigation uses, ui.ts) and forces
+        // the refetch, so the data view re-runs fresh at the root slot and the DOM swaps. (A navigation
+        // doesn't hit this because it already calls resetViewState; login is the other same-slot-swap edge.)
+        if (msg.ok) { resetViewState(); maybeRefetch(); }
     } else if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
         const arrayId = pendingAdds.get(msg.tempId);
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }

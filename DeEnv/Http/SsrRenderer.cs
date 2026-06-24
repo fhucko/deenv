@@ -219,6 +219,17 @@ public sealed class SsrRenderer
         // rule denies.
         system.Items["currentUser"] = new ExecScopeItem { Value = currentUser, IsReadOnly = true };
 
+        // `anonymousLockedOut` (M-auth login UI) — a read-only system var beside `currentUser`: true when
+        // the app has rules and no `read` rule grants anonymous, so an un-logged-in visitor can read
+        // nothing. Computed from the RULES alone (data-independent — see AccessFloor.AnonymousLockedOut),
+        // so it is correct even when every list is empty. The synthesized generic render reads it to gate
+        // an anonymous request to a <LoginForm>. Shipped in the scope exactly like currentUser.
+        system.Items["anonymousLockedOut"] = new ExecScopeItem
+        {
+            Value = new ExecBool { Value = AccessFloor.AnonymousLockedOut(_desc.Rules ?? []) },
+            IsReadOnly = true,
+        };
+
         // db root (the object graph), read-only. A recompute reuses the warm graph the
         // session holds (already reflecting the client's mutations) instead of reloading. The read floor
         // gates what enters the graph: an object the principal may not read never ships (denied set

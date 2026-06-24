@@ -238,3 +238,19 @@ Feature: The access floor (read enforcement by principal)
     When the page state is rendered for "/"
     Then the render does not error
     And the shipped data includes no "Milestone"
+
+  # ── login-as-state from the UI (the client half, sub-slice 1e-1) ─────────────
+  # An auto-mode app where anonymous can read NOTHING (every read rule needs a non-null
+  # currentUser) is `anonymousLockedOut`: the synthesized generic render gates an anonymous
+  # request to a <LoginForm> instead of an empty page. Logging in through that form binds the
+  # session's principal over the WS and refetches, so the same URL re-renders as the bound user
+  # and the ruled data appears — login is a STATE, not a route (the URL never changes). End-to-end
+  # in a real browser: the failing-before proof is that without the gate + form an anonymous user
+  # has no way to log in (the page is empty / the data is denied and stays denied).
+  Scenario: An anonymous visitor logs in through the auto-mode gate and the ruled data appears
+    Given the access-fixture app is served with the admin password "hunter2"
+    And an anonymous visitor opens "/"
+    Then the login form is shown and "Gate #3" is not
+    When the visitor logs in through the form as "Ada" with password "hunter2"
+    Then "Gate #3" eventually appears
+    And the URL is still "/"
