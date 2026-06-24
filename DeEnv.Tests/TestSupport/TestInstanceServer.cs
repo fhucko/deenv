@@ -34,16 +34,20 @@ public sealed class TestInstanceServer : IAsyncDisposable
         var assetPort = GetFreePort();
         var (appApp, assetApp) = InstanceApp.Build(Store, description, mountBase: "/", assetPort: assetPort);
 
+        // Bind loopback-only (127.0.0.1), not all interfaces: tests are driven by Playwright over
+        // localhost, and an all-interfaces listener trips the Windows Defender Firewall prompt — which
+        // re-fires for every new executable path (e.g. running from a fresh git worktree). Loopback
+        // listeners are firewall-exempt. (Production keeps all-interfaces unless DEENV_BIND=loopback.)
         _infraHost = Host.Create()
                     .Handler(assetApp)
                     .Defaults(secureUpgrade: false, strictTransport: false)
-                    .Port((ushort)assetPort);
+                    .Bind(IPAddress.Loopback, (ushort)assetPort, dualStack: false);
 
         _appHost = Host.Create()
                     .Handler(appApp)
                     // Plain HTTP for tests: no HTTPS endpoint, so don't upgrade/redirect.
                     .Defaults(secureUpgrade: false, strictTransport: false)
-                    .Port((ushort)appPort);
+                    .Bind(IPAddress.Loopback, (ushort)appPort, dualStack: false);
 
         await _infraHost.StartAsync();
         await _appHost.StartAsync();

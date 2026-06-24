@@ -443,6 +443,32 @@ Feature: Self-hosted generic UI (object forms)
     Then the note list eventually shows "Buy mi"
     And the draft title is empty
 
+  # ── empty-state for a zero-member collection (UX review, 2026-06-24) ────────
+  # A set/dict with no members rendered a bare header-only table (column header, no body rows, no
+  # message) — which reads as broken or still-loading. It now renders a "No <Element> yet" line under
+  # the header. Adding a member flips the empty-state to a data row (the empty-state is reactive to
+  # membership) — proving a non-empty collection still shows its rows. Surfaced by a devlog dogfood UX
+  # review, deliberately deferred from the create-form-below-the-table slice (commit 4e1a3a7).
+
+  @milestone-11 @single-user
+  Scenario: An empty set table shows an empty-state line, and adding a member shows the row
+    Given the empty-collection app is running
+    When I open "/notes"
+    Then the page shows ".set-table"
+    And the empty state reads "No Note yet"
+    When I click the new button
+    And I fill the new "title" with "First note"
+    And I add to the set
+    Then a set row eventually shows "First note"
+    And the page does not show ".set-empty"
+
+  @milestone-11 @single-user
+  Scenario: An empty dictionary table shows an empty-state line
+    Given the self-hosted dict app is running
+    When I open "/"
+    Then the page shows ".dict-table"
+    And the empty state reads "No Settings yet"
+
   # ── set tables (slice 3) ───────────────────────────────────────────────────
 
   @milestone-9 @single-user

@@ -33,6 +33,14 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    // A Db with an EMPTY set (notes) — drives the collection empty-state scenario.
+    [Given("the empty-collection app is running")]
+    public async Task GivenEmptyCollectionAppRunning()
+    {
+        ctx.Description = InstanceContext.EmptyCollectionDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
     // The committed shop (instances/4) — the fully-auto generic UI over a customer set. Loaded
     // from its real id-dir document so the staged-edit scenarios drive the single source of truth.
     [Given("the shop app is running")]
@@ -1066,6 +1074,13 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task ThenSetRowShows(string text) =>
         await ctx.Page!.WaitForFunctionAsync(
             $"() => [...document.querySelectorAll('.set-row')].some(e => e.textContent.includes({JsString(text)}))");
+
+    // The zero-member empty-state line a set/dict table renders under its header (.set-empty / .dict-empty),
+    // instead of a bare header that reads as broken. WaitForFunction so SSR→hydrate settles to the text.
+    [Then("the empty state reads {string}")]
+    public async Task ThenEmptyStateReads(string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('.set-empty, .dict-empty')?.textContent.includes({JsString(text)})");
 
     [Then("the current reference is {string}")]
     public async Task ThenCurrentReference(string label) =>

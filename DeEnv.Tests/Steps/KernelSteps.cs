@@ -127,7 +127,7 @@ public sealed class KernelSteps(InstanceContext ctx)
     public async Task WhenKernelStartsAsync()
     {
         var registry = RegistryReader.Read(Path.Combine(ctx.KernelDir!, "kernel.json"));
-        ctx.Kernel = new KernelHost(ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"), _appPort, _assetPort);
+        ctx.Kernel = new KernelHost(ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"), _appPort, _assetPort, bindLoopback: true);
         await ctx.Kernel.StartAsync(KernelHost.SpecsFor(registry, ctx.KernelDir!));
     }
 
@@ -340,7 +340,7 @@ public sealed class KernelSteps(InstanceContext ctx)
     {
         await ctx.Kernel!.DisposeAsync();
         var registry = RegistryReader.Read(Path.Combine(ctx.KernelDir!, "kernel.json"));
-        ctx.Kernel = new KernelHost(ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"), _appPort, _assetPort);
+        ctx.Kernel = new KernelHost(ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"), _appPort, _assetPort, bindLoopback: true);
         await ctx.Kernel.StartAsync(KernelHost.SpecsFor(registry, ctx.KernelDir!));
     }
 
@@ -604,7 +604,7 @@ public sealed class KernelSteps(InstanceContext ctx)
         File.WriteAllText(Path.Combine(dir, "kernel.json"), RegistryJsonText(entries));
 
         var registry = RegistryReader.Read(Path.Combine(dir, "kernel.json"));
-        ctx.Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"), _appPort, _assetPort);
+        ctx.Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"), _appPort, _assetPort, bindLoopback: true);
         await ctx.Kernel.StartAsync(KernelHost.SpecsFor(registry, dir));
     }
 

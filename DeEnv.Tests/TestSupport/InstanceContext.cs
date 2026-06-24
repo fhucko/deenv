@@ -111,6 +111,25 @@ public class InstanceContext
             dueDate: "2026-01-01"
     """;
 
+    // A Db holding an EMPTY set: `notes` is unseeded, so it materializes as a zero-member set (SeededFields
+    // still mints its StoredSet id, so adding a member works). Drives the empty-state scenario — a zero-member
+    // set table renders a "No <Element> yet" line under the header instead of a bare header that reads as
+    // broken; adding a member through the create form flips the empty-state to a data row (it is reactive to
+    // membership). Note has a single `title text` prop so the create form is a one-field add (no empty-date gap).
+    public static InstanceDescription EmptyCollectionDb() =>
+        InstanceDescriptionLoader.Load(EmptyCollectionApp);
+
+    private const string EmptyCollectionApp = """
+    types
+        Db
+            notes set of Note
+        Note
+            title text
+
+    initialData
+        Db 1
+    """;
+
     // Milestone 9 (labeled breadcrumbs, deep-route twin invariant): the self-hosted generic UI over a
     // THREE-objects-deep graph (Db → milestones → Milestone → slices → Slice), modelled on the committed
     // devlog app's shape. A route like /milestones/4/slices/5 has an INTERMEDIATE object segment ("4",
@@ -1078,7 +1097,7 @@ public class InstanceContext
             "  \"instances\": [\n    " + string.Join(",\n    ", entries) + "\n  ]\n}");
 
         var registry = RegistryReader.Read(Path.Combine(dir, "kernel.json"));
-        Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"), appPort, assetPort);
+        Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"), appPort, assetPort, bindLoopback: true);
         await Kernel.StartAsync(KernelHost.SpecsFor(registry, dir));
 
         var designer = Kernel.Instances.Single(i => i.Spec.Id == 1);

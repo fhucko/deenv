@@ -479,6 +479,7 @@ public sealed class SsrRenderer
           margin-top: 0.4rem; padding: 0.8rem; background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; }
         .ref-new input, .ref-new select { max-width: 200px; }
         .dict-error { color: var(--danger); font-size: 0.85rem; margin-top: 0.4rem; }
+        .set-empty, .dict-empty { color: var(--muted); font-size: 0.9rem; margin: 0.1rem 0 0; }
 
         /* Flag-gated create view: the `+ New` button replaces the old always-visible inline add row;
            clicking it reveals a labeled create form (.create-form, reusing the .object-form card +

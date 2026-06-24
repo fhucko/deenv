@@ -278,6 +278,11 @@ public static class GenericUi
                                         <td class="row-action">
                                             <button class="set-remove" onClick={() => set.remove(m)}>
                                                 "Remove"
+                        if !set.any(m => true)
+                            <p class="set-empty">
+                                "No "
+                                sys.humanize(desc.name)
+                                " yet"
                         if state.creating
                             <div class="create-form">
                                 <h3>
@@ -356,6 +361,11 @@ public static class GenericUi
                                     <td class="row-action">
                                         <button class="dict-remove" onClick={() => dict.remove(m)}>
                                             "Remove"
+                        if !dict.any(m => true)
+                            <p class="dict-empty">
+                                "No "
+                                sys.humanize(desc.name)
+                                " yet"
                         if state.creating
                             <div class="create-form">
                                 <h3>
