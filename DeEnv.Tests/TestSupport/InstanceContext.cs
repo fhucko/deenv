@@ -978,6 +978,12 @@ public class InstanceContext
     public static InstanceDescription AccessFixtureNoUsers() =>
         InstanceDescriptionLoader.Load(AccessFixtureTypes + AccessFixtureNoUsersSeed + AccessFixtureRules);
 
+    // The bootstrap shape WITHOUT an access section — a User type + role enum but NO rules and no users.
+    // Proves the boot bootstrap's rules guard (AdminSeed.SeedIfRuled): a dormant no-auth app is NOT
+    // boot-seeded even with credentials present (the kernel must skip it, not seed a User into it).
+    public static InstanceDescription AccessFixtureNoUsersNoRules() =>
+        InstanceDescriptionLoader.Load(AccessFixtureTypes + AccessFixtureNoUsersSeed);
+
     private const string AccessFixtureNoUsersSeed = """
 
     initialData

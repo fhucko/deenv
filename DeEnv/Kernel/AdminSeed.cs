@@ -72,6 +72,49 @@ public static class AdminSeed
         return id;
     }
 
+    // The env vars the kernel reads to bootstrap an instance's first admin on boot. The operator sets
+    // DEENV_ADMIN_PASSWORD (the trigger) and optionally USER/ROLE; an unset password means bootstrap is off.
+    public const string UserEnv = "DEENV_ADMIN_USER";
+    public const string PasswordEnv = "DEENV_ADMIN_PASSWORD";
+    public const string RoleEnv = "DEENV_ADMIN_ROLE";
+
+    private const string DefaultAdminName = "admin";
+    private const string DefaultAdminRole = "Admin";
+
+    // Boot bootstrap (M-auth): seed the first admin from the operator's env-var credentials, called by the
+    // kernel on every instance start. Reads the DEENV_ADMIN_* vars and delegates to SeedIfRuled (the
+    // testable policy). BEST-EFFORT: a malformed ruled app (rules but no User type, or a bad role value)
+    // is logged, never thrown — one misconfigured app must not crash the kernel that hosts the others.
+    public static void SeedFromEnv(IInstanceStore store, InstanceDescription desc)
+    {
+        try
+        {
+            SeedIfRuled(store, desc,
+                System.Environment.GetEnvironmentVariable(UserEnv),
+                System.Environment.GetEnvironmentVariable(PasswordEnv),
+                System.Environment.GetEnvironmentVariable(RoleEnv));
+        }
+        catch (Exception ex)
+        {
+            System.Console.Error.WriteLine($"[admin-seed] skipped for a ruled app: {ex.Message}");
+        }
+    }
+
+    // The seed POLICY, testable with EXPLICIT credentials (env reads are process-global → parallel-unsafe
+    // to test): seed an admin ONLY when the operator provided a password AND the app has access rules. A
+    // dormant no-auth app needs no admin (and may declare no User type, which Seed would reject); an unset
+    // password means the operator has not enabled bootstrap. Name/role fall back to the conventional
+    // "admin"/"Admin". Idempotent via Seed. Returns the admin's id, or null when skipped.
+    public static int? SeedIfRuled(IInstanceStore store, InstanceDescription desc, string? name, string? password, string? role)
+    {
+        if (string.IsNullOrEmpty(password)) return null;       // operator has not enabled bootstrap
+        if ((desc.Rules?.Count ?? 0) == 0) return null;        // dormant app → no admin needed
+        return Seed(store, desc,
+            string.IsNullOrEmpty(name) ? DefaultAdminName : name,
+            password,
+            string.IsNullOrEmpty(role) ? DefaultAdminRole : role);
+    }
+
     // The conventional `role` field on User. The framework already knows User + name + passwordHash
     // (UserConvention); the role is a per-app enum the rules read as `currentUser.role`. Kept local —
     // it is the seed's policy input, not (yet) a framework-reserved field name like passwordHash.

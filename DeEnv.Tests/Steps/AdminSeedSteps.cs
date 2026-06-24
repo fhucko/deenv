@@ -44,6 +44,16 @@ public sealed class AdminSeedSteps(InstanceContext ctx)
     public async Task GivenNoUserHoldsRole(string role) =>
         await Assert.That(UsersWithRole(role).Count).IsEqualTo(0);
 
+    // The same shape WITHOUT an access section — a User type + role enum but no rules and no users. Proves
+    // the boot bootstrap's rules guard: a dormant no-auth app must NOT be seeded even with credentials.
+    [Given("an app with a User type and a role enum but no access rules and no users")]
+    public async Task GivenAppNoRulesNoUsers()
+    {
+        ctx.Description = InstanceContext.AccessFixtureNoUsersNoRules();
+        ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+        await Assert.That(ctx.Description!.Rules is null || ctx.Description!.Rules!.Count == 0).IsTrue();
+    }
+
     // ── When ────────────────────────────────────────────────────────────────────────
 
     // Invoke the seed operation directly — the kernel-side bootstrap, with operator-provided credentials
@@ -61,6 +71,15 @@ public sealed class AdminSeedSteps(InstanceContext ctx)
             _seedError = ex;
         }
     }
+
+    // The KERNEL BOOT path: the env-var auto-seed (AdminSeed.SeedIfRuled), driven with EXPLICIT credentials
+    // here (env reads are process-global → parallel-unsafe). It applies the boot policy on top of Seed: an
+    // empty password OR a dormant (no-rules) app is a no-op; otherwise it seeds (idempotently). The boot
+    // wrapper SeedFromEnv just reads the DEENV_ADMIN_* vars into these args, so this proves the real logic.
+    [When("the kernel boot-seeds an admin named {string} with password {string} and role {string}")]
+    [Given("the kernel boot-seeds an admin named {string} with password {string} and role {string}")]
+    public void WhenKernelBootSeeds(string name, string password, string role) =>
+        AdminSeed.SeedIfRuled(ctx.Store!, ctx.Description!, name, password, role);
 
     // Trigger a garbage collection through an ordinary GC-triggering mutation (removing a non-existent
     // set member runs CollectGarbage). Proves the seeded admin, being a linked graph member, is not swept.

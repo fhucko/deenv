@@ -53,6 +53,12 @@ public sealed class HostedInstance
     {
         var description = InstanceDescriptionLoader.LoadFile(spec.SchemaPath);
         var store = new JsonFileInstanceStore(spec.DataPath, description);
+
+        // M-auth bootstrap: a ruled instance with operator env-var credentials (DEENV_ADMIN_PASSWORD)
+        // gets its first admin seeded here, once, idempotently — so a deny-by-default app is loginable on
+        // a fresh deploy. A dormant no-auth app or an unset password is a no-op (best-effort; never throws).
+        AdminSeed.SeedFromEnv(store, description);
+
         var mountBase = MountBaseFor(spec.App);
         var (appApp, assetApp) = InstanceApp.Build(store, description, mountBase, assetPort, registry, hostActions, spec.App);
         return new HostedInstance(spec, store, appApp.Build(), assetApp.Build());

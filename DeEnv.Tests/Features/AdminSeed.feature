@@ -37,3 +37,31 @@ Feature: Seed the first admin (auth bootstrap)
     When the operator seeds an admin named "Root" with password "s3cret" and role "Superuser"
     Then the seed is refused
     And no User holds the "Superuser" role
+
+  # ── boot bootstrap: the env-var auto-seed policy (the deploy path) ───────────
+  # On boot the kernel calls AdminSeed.SeedFromEnv per instance, reading DEENV_ADMIN_{USER,PASSWORD,ROLE}.
+  # The policy (SeedIfRuled, driven here with explicit creds since env reads are parallel-unsafe): seed an
+  # admin ONLY when a password is provided AND the app has access rules — so a fresh deploy of a ruled app
+  # is loginable, while a dormant no-auth app (todo/crm/…) or an unset password is a no-op. Idempotent.
+
+  Scenario: The kernel boot-seeds a loginable admin into a ruled app when a password is set
+    Given an app with access rules, a User type and a role enum but no users yet
+    When the kernel boot-seeds an admin named "admin" with password "s3cret" and role "Admin"
+    Then a User holds the "Admin" role
+    And the seeded admin can log in as "admin" with password "s3cret"
+
+  Scenario: The kernel does not boot-seed when no password is set (bootstrap is off)
+    Given an app with access rules, a User type and a role enum but no users yet
+    When the kernel boot-seeds an admin named "admin" with password "" and role "Admin"
+    Then no User holds the "Admin" role
+
+  Scenario: The kernel does not boot-seed a dormant no-auth app
+    Given an app with a User type and a role enum but no access rules and no users
+    When the kernel boot-seeds an admin named "admin" with password "s3cret" and role "Admin"
+    Then no User holds the "Admin" role
+
+  Scenario: Boot-seeding is idempotent across restarts
+    Given an app with access rules, a User type and a role enum but no users yet
+    And the kernel boot-seeds an admin named "admin" with password "s3cret" and role "Admin"
+    When the kernel boot-seeds an admin named "admin" with password "s3cret" and role "Admin"
+    Then there is exactly one "Admin" User

@@ -58,6 +58,22 @@ journalctl -u deenv -n 20            # "Kernel listening on 127.0.0.1 ... assets
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/apps/todo/   # 200
 ```
 
+### Bootstrap the app admin (ruled apps)
+
+An app with access rules — e.g. `devlog` (public read, admin-only write) — is deny-by-default: it needs
+a seeded admin before anyone can log in. Set `DEENV_ADMIN_PASSWORD` (and optionally `DEENV_ADMIN_USER`,
+default `admin`, and `DEENV_ADMIN_ROLE`, default `Admin`) in the service environment; on boot the kernel
+seeds that admin into every **ruled** instance once. Add it to `deenv.service`:
+
+```ini
+Environment=DEENV_ADMIN_PASSWORD=a-strong-password
+```
+
+Then `systemctl daemon-reload && systemctl restart deenv`. Notes:
+- **Idempotent** — a later restart never duplicates the admin, and (today) never *rotates* the password:
+  changing the env var after the first seed has no effect. Rotate via the in-app setPassword path (later).
+- An **unset** password leaves ruled apps read-only (no admin to log in as); no-auth apps are unaffected.
+
 ### Trim what runs (optional, low RAM)
 
 Each hosted instance costs RAM (all five together ~27 MB). Edit `/var/lib/deenv/kernel.json` to keep
@@ -87,10 +103,11 @@ acme.sh --install-cert -d deenv.org --ecc \
   --reloadcmd      "systemctl reload nginx"
 ```
 
-### Basic-auth gate (interim — DeEnv has no login yet)
+### Basic-auth gate (interim — the designer + no-auth apps have no login)
 
-The designer can create/delete instances, so don't expose it open. Generate an htpasswd (keep the
-plaintext only in a root-only file):
+Ruled apps (e.g. `devlog`) now have their own login, but the designer can create/delete instances and
+the no-auth apps (todo/crm/…) are open, so keep the subdomain set behind a gate for now. Generate an
+htpasswd (keep the plaintext only in a root-only file):
 
 ```bash
 PW=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)
