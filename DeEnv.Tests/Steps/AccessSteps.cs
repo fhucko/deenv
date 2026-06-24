@@ -174,6 +174,37 @@ public sealed class AccessSteps(InstanceContext ctx)
         await Assert.That(ctx.RenderedHtml!.Contains("<h1>Error</h1>")).IsFalse();
     }
 
+    // The synthesized generic render shows a <SignInBar> (collapsed: a `.sign-in-bar` div) to an anonymous
+    // visitor when the app HAS access rules but is NOT anonymousLockedOut (a public app) — the login-as-state
+    // entry point that reserves no URL. Asserts on the rendered BODY (not the whole document): the shipped
+    // window.initUi island carries the WHOLE library AST — every component's definition, SignInBar's `class=
+    // "sign-in-bar"` literal included — so a whole-document substring would match even when nothing rendered.
+    [Then("the rendered document includes a sign-in control")]
+    public async Task ThenHasSignIn()
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        await Assert.That(RenderedBody().Contains("sign-in-bar")).IsTrue();
+    }
+
+    // A DORMANT no-auth app (accessActive false) must NOT sprout a stray sign-in control — the affordance is
+    // gated on auth being on, so a plain generic app (todo/crm/…) is byte-identical to before this slice.
+    [Then("the rendered document includes no sign-in control")]
+    public async Task ThenNoSignIn()
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        await Assert.That(RenderedBody().Contains("sign-in-bar")).IsFalse();
+    }
+
+    // The rendered <body> (the markup a visitor sees), EXCLUDING the window.initData/initUi hydration island
+    // that ships the full component AST. That island lives in the <head> (UiLayout), so taking from <body>
+    // onward yields only what actually RENDERED — the one region where a SignInBar that fired shows up.
+    private string RenderedBody()
+    {
+        var html = ctx.RenderedHtml!;
+        var i = html.IndexOf("<body", StringComparison.Ordinal);
+        return i < 0 ? html : html[i..];
+    }
+
     // ── write enforcement (the mutation seam, driven at WsHandler) ──────────────
     //
     // The write floor lives in WsHandler (server-side), so these steps drive it directly — exactly like

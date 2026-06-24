@@ -102,6 +102,10 @@ public static class GenericUi
                     return <div class="app-shell">
                         <UserMenu>
                         view
+                if accessActive
+                    return <div class="app-shell">
+                        <SignInBar>
+                        view
                 return view
 
             fn route()
@@ -447,6 +451,18 @@ public static class GenericUi
                                 "Password"
                             <input type="password" class="password" value={state.password}>
                         <button class="login-submit" onClick={submit}>
+                            "Sign in"
+                return render
+
+            fn SignInBar()
+                var state = { open: false }
+                fn expand()
+                    state.open = true
+                fn render()
+                    if state.open
+                        return <LoginForm>
+                    return <div class="sign-in-bar">
+                        <button class="sign-in" onClick={expand}>
                             "Sign in"
                 return render
 

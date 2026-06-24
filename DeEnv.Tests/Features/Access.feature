@@ -268,3 +268,37 @@ Feature: The access floor (read enforcement by principal)
     When the visitor logs out through the user menu
     Then the login form is shown and "Gate #3" is not
     And the URL is still "/"
+
+  # ── public-roadmap policy + the sign-in affordance (the devlog dogfood) ───────
+  # A PUBLIC app grants anonymous reads with a bare `read` rule while gating writes to an admin — a public
+  # roadmap anyone can read and only the operator can edit. Because a public app is NOT anonymousLockedOut,
+  # the auto login-gate never fires, so the synthesized render instead offers an always-present sign-in
+  # control (a `<SignInBar>` — login-as-state, no reserved URL). It is gated on `accessActive` (the app has
+  # rules), so a DORMANT no-auth app shows no stray sign-in button. (Deterministic at the SsrRenderer/WsHandler
+  # level; the sign-in click→login flow reuses the proven LoginForm path.)
+
+  Scenario: A bare read rule makes the data public to an anonymous visitor
+    Given the access rule "Milestone read"
+    And there is no current user
+    When the page state is rendered for "/"
+    Then the shipped data includes a "Milestone" titled "Gate #3"
+
+  Scenario: A public-read app still denies an anonymous write
+    Given the access rule "Milestone read"
+    And the access rule "Milestone edit where currentUser.role == \"Admin\""
+    And there is no current user
+    When the anonymous edits the "Milestone" titled "Gate #3" to set "title" to "Hacked"
+    Then the mutation is rejected
+    And the stored "Milestone" 2 has "title" equal to "Gate #3"
+
+  Scenario: A public auth app offers an anonymous visitor a sign-in control
+    Given the access rule "Milestone read"
+    And there is no current user
+    When the page state is rendered for "/"
+    Then the rendered document includes a sign-in control
+
+  Scenario: A dormant no-auth app shows no sign-in control
+    Given the app has no access rules
+    And there is no current user
+    When the page state is rendered for "/"
+    Then the rendered document includes no sign-in control

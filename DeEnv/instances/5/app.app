@@ -1,6 +1,7 @@
 types
     Db
         milestones set of Milestone
+        users set of User
     Milestone
         name text
         status Status
@@ -15,10 +16,17 @@ types
         active
         done
         deferred
+    Role enum
+        Admin
+    User
+        name text
+        role Role
+        passwordHash text
 
 initialData
     Db 1
         milestones: [2, 3, 4]
+        users: []
     Milestone 2
         name: "M11 - reactive components + public library"
         status: "done"
@@ -37,3 +45,13 @@ initialData
     Slice 6
         name: "Evolve the schema by using it"
         status: "planned"
+
+access
+    Milestone
+        read
+        * where currentUser.role == "Admin"
+    Slice
+        read
+        * where currentUser.role == "Admin"
+    User
+        * where currentUser.role == "Admin"

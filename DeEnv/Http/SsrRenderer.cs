@@ -230,6 +230,18 @@ public sealed class SsrRenderer
             IsReadOnly = true,
         };
 
+        // `accessActive` (M-auth login UI) — true when the app has ANY access rule, i.e. auth is turned on.
+        // Distinct from `anonymousLockedOut`: a PUBLIC app (a bare `read` rule grants anonymous) is NOT
+        // locked out, yet still has auth, so it must offer the operator a way to log in. The synthesized
+        // render reads it to show a <SignInBar> on a public auth app (login is a state, no reserved URL),
+        // while a DORMANT no-auth app (accessActive false) shows no sign-in control. Rules-only (data-
+        // independent), shipped like currentUser/anonymousLockedOut.
+        system.Items["accessActive"] = new ExecScopeItem
+        {
+            Value = new ExecBool { Value = (_desc.Rules?.Count ?? 0) > 0 },
+            IsReadOnly = true,
+        };
+
         // db root (the object graph), read-only. A recompute reuses the warm graph the
         // session holds (already reflecting the client's mutations) instead of reloading. The read floor
         // gates what enters the graph: an object the principal may not read never ships (denied set
