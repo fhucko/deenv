@@ -39,6 +39,18 @@ interface JournalEntry {
 const journal: JournalEntry[] = [];
 let nextWsMsgId = 1;
 
+// THE mutation chokepoint (client data layer, slice 1c — the generation guard). Every journaled DATA
+// MUTATION (objectPropChange / write / setReferenceField / arrayAdd / arrayRemove / addEntry / removeEntry)
+// records its entry through here, so pushing a journal entry IS the mutation signature: it bumps `stateGen`,
+// invalidating any in-flight refetch (whose reply was computed over the PRE-mutation store and would
+// otherwise clobber the optimistic value — see `stateGen`/`inFlightGen`). Non-mutation sends that push NO
+// journal entry (hello / refetch / ackRemap / hostAction / login / logout / setPassword) do NOT bump on this
+// path; session ops (login/logout) keep their own explicit bump.
+function recordMutation(entry: JournalEntry): void {
+    stateGen++;
+    journal.push(entry);
+}
+
 // The reply for msgId was ok: the mutation is server-committed, the entry retires.
 function commitJournal(msgId: number): void {
     const idx = journal.findIndex(e => e.msgId === msgId);
@@ -149,7 +161,7 @@ function connectWs(): void {
             // before the round-trip returns still saves.
             if (obj.id <= 0 && !pendingAdds.has(obj.id)) return;
             const msgId = nextWsMsgId++;
-            journal.push({
+            recordMutation({
                 msgId,
                 undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
                 redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
@@ -162,7 +174,7 @@ function connectWs(): void {
             // op sets the leaf at the entry's path (an object entry's field at path/prop, a
             // scalar entry's value at path). DeserializeLeaf reads a BARE value.
             const msgId = nextWsMsgId++;
-            journal.push({
+            recordMutation({
                 msgId,
                 undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
                 redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
@@ -171,7 +183,7 @@ function connectWs(): void {
         },
         setRef: (obj, prop, value, before) => {
             const msgId = nextWsMsgId++;
-            journal.push({
+            recordMutation({
                 msgId,
                 undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
                 redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
@@ -191,7 +203,7 @@ function connectWs(): void {
         arrayAdd: (arr, item, typeName) => {
             const msgId = nextWsMsgId++;
             pendingAdds.set(item.key, arr.id);
-            journal.push({
+            recordMutation({
                 msgId,
                 undo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
                 redo: () => { arr.items.push(item); invalidateMember(arr.id); },
@@ -202,7 +214,7 @@ function connectWs(): void {
         },
         arrayRemove: (arr, item, index) => {
             const msgId = nextWsMsgId++;
-            journal.push({
+            recordMutation({
                 msgId,
                 undo: () => { arr.items.splice(Math.min(index, arr.items.length), 0, item); invalidateMember(arr.id); },
                 redo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
@@ -215,7 +227,7 @@ function connectWs(): void {
         // → the reply is an error → the journal rolls the optimistic row back automatically.
         entryAdd: (arr, item, key, value) => {
             const msgId = nextWsMsgId++;
-            journal.push({
+            recordMutation({
                 msgId,
                 undo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
                 redo: () => { if (!arr.items.includes(item)) arr.items.push(item); invalidateMember(arr.id); },
@@ -229,7 +241,7 @@ function connectWs(): void {
         },
         entryRemove: (arr, item, key, index) => {
             const msgId = nextWsMsgId++;
-            journal.push({
+            recordMutation({
                 msgId,
                 undo: () => { arr.items.splice(Math.min(index, arr.items.length), 0, item); invalidateMember(arr.id); },
                 redo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
@@ -326,7 +338,7 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // resetViewState drops the `comp:` slot-cache (the SAME helper a navigation uses, ui.ts) and forces
         // the refetch, so the data view re-runs fresh at the root slot and the DOM swaps. (A navigation
         // doesn't hit this because it already calls resetViewState; login is the other same-slot-swap edge.)
-        if (msg.ok) { sessionEpoch++; resetViewState(); maybeRefetch(); }
+        if (msg.ok) { stateGen++; resetViewState(); maybeRefetch(); }
     } else if (msg.op === "logout") {
         // The MIRROR of the login reply (M-auth login UI 1e-2). The WS session is now anonymous again, so
         // refetch: the re-render runs with NO principal, the access floor denies the now-unreadable data,
@@ -341,7 +353,7 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // `fn render()` that key on the same root slot path. Without dropping the `comp:` slot-cache the stale
         // logged-in view would sit under the root slot and renderUi would hand it back for the LoginForm call —
         // the page would never return to the gate. resetViewState drops `comp:` (ui.ts) + forces the refetch.
-        sessionEpoch++; resetViewState(); maybeRefetch();
+        stateGen++; resetViewState(); maybeRefetch();
     } else if (msg.op === "setPassword") {
         // The setPassword reply (M-auth user admin). passwordHash never ships and nothing re-renders on
         // success, so an OK is a no-op here. A failure (denied by the write floor, or an unknown user) is a
@@ -353,13 +365,19 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }
     } else if (msg.op === "refetch" && msg.state != null) {
         refetchInFlight = false;
-        if (inFlightEpoch !== sessionEpoch) {
-            // A login/logout superseded the session this refetch was computed under: its reply is STALE
-            // (a dead session's render — e.g. a logout's anonymous state arriving after a login). DROP it
-            // (do NOT mergeState) and re-fetch under the CURRENT session. The session change already set
-            // needsServerData (resetViewState); set it again defensively so maybeRefetch is guaranteed to
-            // re-fire. Self-terminating: the re-fetch is stamped with the current epoch, so it is only
-            // discarded again if ANOTHER login/logout lands meanwhile (no loop while the session is stable).
+        if (inFlightGen !== stateGen) {
+            // The client state was SUPERSEDED while this refetch was in flight (client data layer, I5):
+            //   • a login/logout changed the session (a dead session's render — e.g. a logout's anonymous
+            //     state arriving after a login — must not overwrite the just-logged-in view); OR
+            //   • a DATA MUTATION landed (slice 1c) — this reply was computed over the PRE-mutation store, so
+            //     merging it would REVERT the just-made optimistic value (the optimistic-clobber hazard).
+            // Either way the reply is STALE: DROP it (do NOT mergeState) and re-fetch under the CURRENT state.
+            // The supersession already set needsServerData (resetViewState on a session change; the mutation
+            // hooks that set it on a ref pick/create), but set it again defensively so maybeRefetch is
+            // guaranteed to re-fire. The WS is FIFO-ordered, so a re-fetch fired now is processed AFTER the
+            // mutation that bumped the gen and its reply reflects it — the merge never clobbers the optimistic
+            // edit. Self-terminating: the re-fetch is stamped with the current gen, so it is discarded again
+            // only if ANOTHER change lands meanwhile (no loop once the state settles).
             needsServerData = true;
             maybeRefetch();
             return;
@@ -416,19 +434,28 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
 // — the first-paint invariant.)
 let refetchInFlight = false;
 
-// A refetch's result is computed under the SERVER SESSION at the moment the server runs it. If a
-// login/logout supersedes that session while the refetch is in flight, its reply is STALE — applying it
-// would let a dead session's state (e.g. a logout's anonymous render) overwrite the current one (the
-// just-logged-in view). `sessionEpoch` is a generation counter bumped on every login/logout;
-// `inFlightEpoch` stamps the refetch in flight, so its reply can be recognised as stale and discarded.
-let sessionEpoch = 0;
-let inFlightEpoch = 0;
+// A refetch's reply is computed over the CLIENT STATE the server reproduced from the intent at the moment
+// it ran. If that state is superseded while the refetch is in flight, the reply is STALE — merging it would
+// overwrite the current state with a render of a state that no longer exists. `stateGen` is a generation
+// counter bumped on every change that would make an in-flight reply wrong (client data layer, I5 —
+// "apply-iff-current"); `inFlightGen` stamps the refetch in flight, so its reply can be recognised as stale
+// and discarded. Two kinds of change bump the generation:
+//   • a SESSION change — login/logout (a different principal; a dead session's render, e.g. a logout's
+//     anonymous state arriving after a login, must not overwrite the just-logged-in view); and
+//   • a DATA MUTATION — an optimistic edit/add/remove (recordMutation below): the in-flight reply was
+//     computed over the PRE-mutation store, so merging it would revert the just-made optimistic value (the
+//     optimistic-clobber hazard). Bumping the gen discards that reply; the WS is FIFO-ordered, so the
+//     re-fetch is processed AFTER the mutation and reflects it — the merge never clobbers an optimistic edit.
+// A pure view-state toggle / the slotState ship do NOT bump: their stale reply is harmless same-principal
+// ADDITIVE data, absorbed by the additive merge + the trailing re-fetch (nav rides mergeState's path-skip).
+let stateGen = 0;
+let inFlightGen = 0;
 
 function maybeRefetch(): void {
     if (refetchInFlight || (!hasStaleEntry() && !needsServerData)) return;
     needsServerData = false;
     refetchInFlight = true;
-    inFlightEpoch = sessionEpoch; // the session this refetch is computed under (checked on its reply)
+    inFlightGen = stateGen; // the client-state generation this refetch is computed under (checked on its reply, I5)
     // lastId: the server mints its re-render transients BELOW everything this client
     // already holds, so shipped negative ids never collide with local drafts.
     // slotState: the live per-component view-state (client data layer, slice 1b), so the server

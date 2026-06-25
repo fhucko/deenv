@@ -256,6 +256,84 @@ public sealed class CodeClientTests
         });
     }
 
+    // Client data layer, slice 1c — the GENERATION GUARD (optimistic-clobber safety for the async window).
+    // A refetch is asynchronous: client state can move while its reply is in flight. The hazard: a refetch is
+    // computed over the PRE-mutation store; an optimistic mutation lands while it is in flight; the stale
+    // (pre-mutation) reply then arrives and mergeState OVERWRITES the just-edited object prop — reverting the
+    // optimistic value. The fix (ws.ts) GENERALIZES the existing login/logout epoch guard from "the session
+    // changed" to "the state changed": every journaled data mutation bumps `stateGen` (recordMutation), so a
+    // reply whose in-flight generation no longer matches is DISCARDED + re-fetched. The WS is FIFO-ordered, so
+    // the re-fetch is processed AFTER the mutation and reflects it — the merge never clobbers the edit.
+    //
+    // DETERMINISM (the project rule for client-runtime ordering — same approach as the negative→real remap
+    // reconciler test above and LoginViewSwapTests): the real-world race is timing-dependent, but this FORCES
+    // the interleaving by driving the real client directly — stamp a refetch in flight over the pre-mutation
+    // state, apply a real optimistic edit (the production objectPropChange hook → recordMutation → stateGen++),
+    // then deliver the STALE reply by invoking the real onWsMessage with a {op:"refetch", state} carrying the
+    // IN-FLIGHT generation. No real WS reply can race it: the in-flight refetch is only stamped (not sent), and
+    // the page has fully settled (hydration gate), so the only refetch reply is the one this test injects.
+    // BEFORE the fix (recordMutation not bumping the gen) the injected reply's generation still matches → it
+    // merges → the optimistic "z" is clobbered back to "a" and the model assertion fails (fail-before).
+    [Test]
+    public async Task An_optimistic_edit_survives_a_stale_in_flight_refetch_reply()
+    {
+        await WithPageAsync(InstanceContext.InteractiveUiDb(), s => { SeedItem(s, "a"); SeedItem(s, "b"); }, async page =>
+        {
+            // The "a" row (ordered first by name) is rendered with its db id; capture that id so the stale
+            // reply can target the same object. Also stamp a refetch IN FLIGHT over the current (pre-mutation)
+            // state — exactly what maybeRefetch does, but without sending, so no real reply can race the
+            // injected one. `inFlightGen`/`refetchInFlight`/`stateGen` are the production ws.ts module globals.
+            var itemId = await page.EvaluateAsync<int>(
+                """
+                () => {
+                    const obj = Object.values(uiStatic.state.objects)
+                        .find(o => o.props.name && o.props.name.value === "a");
+                    inFlightGen = stateGen;     // the refetch was computed under the pre-mutation generation
+                    refetchInFlight = true;     // …and is awaiting its reply
+                    return obj.id;
+                }
+                """);
+
+            // The optimistic mutation: type "z" into the "a" row's bound input. This fires the REAL
+            // objectPropChange hook → recordMutation → stateGen++ (the bump under test), applies "z"
+            // optimistically to the model + DOM, and sends an objectPropChange the server will commit.
+            await page.Locator("input.name").Nth(0).FillAsync("z");
+
+            // Deliver the STALE refetch reply (computed over the pre-mutation store, so it ships name "a"),
+            // stamped with the captured in-flight generation. Because the mutation bumped stateGen,
+            // inFlightGen !== stateGen → onWsMessage DISCARDS the reply (no mergeState) and re-fetches. Assert
+            // synchronously, in the same evaluate, that the optimistic value was NOT reverted and a re-fetch
+            // was re-armed. (Before the fix the generations match, mergeState overwrites name → "a", and the
+            // model name below is "a".)
+            var diag = await page.EvaluateAsync<string>(
+                $$"""
+                () => {
+                    const staleReply = {
+                        op: "refetch",
+                        state: {
+                            leaves: {
+                                objects: { {{itemId}}: { props: { name: { type: "simple", value: { type: "text", value: "a" } } } } },
+                                arrays: {}
+                            },
+                            scope: {},
+                            cache: []
+                        }
+                    };
+                    onWsMessage(staleReply);
+                    const modelName = uiStatic.state.objects[{{itemId}}].props.name.value;
+                    return `model=${JSON.stringify(modelName)} refetching=${refetchInFlight}`;
+                }
+                """);
+
+            // (a) the optimistic edit survived the stale reply (NOT reverted to "a"); (b) a re-fetch was fired
+            // (refetchInFlight re-armed) — the discard self-heals by re-asking under the current state.
+            await Assert.That(diag).IsEqualTo("model=\"z\" refetching=true");
+
+            // And the live input still shows the optimistic value — the discard path did not re-render it back.
+            await Assert.That(await page.Locator($"[data-key=\"{itemId}\"] input.name").InputValueAsync()).IsEqualTo("z");
+        });
+    }
+
     private static string? Name(ObjectValue o) =>
         o.Fields.TryGetValue("name", out var n) && n is TextValue t ? t.Text : null;
 

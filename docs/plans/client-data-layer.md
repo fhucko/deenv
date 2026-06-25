@@ -271,6 +271,16 @@ refetch; it hung 3/3). ALL scalar view-state ships by value. The genuinely-defer
 draft whose *values DRIVE a query* (`where x == draft.field`), which 1b does not enable (the harvest depends
 on which BRANCH renders, not on field values).
 
+**Slice 1c — DONE** (built + reviewed, suite **532/532**, 2026-06-25): the GENERATION GUARD. `ws.ts`
+generalizes the login/logout epoch guard from "session changed" to "state changed" — a `recordMutation`
+chokepoint bumps `stateGen` on every journaled DATA MUTATION (the 7 mutation hooks route through it), so a
+refetch reply computed BEFORE a mutation is recognized as stale (`inFlightGen !== stateGen`) and DISCARDED +
+re-fetched instead of clobbering the optimistic edit (I5). Renamed `sessionEpoch`/`inFlightEpoch` →
+`stateGen`/`inFlightGen`. Proven by a DETERMINISTIC `CodeClientTests` test (forces the interleaving via
+`onWsMessage`: stamp a refetch in flight → a real edit bumps the gen → inject the stale reply → the edit
+survives + a re-fetch arms; fail-before/pass-after). Client-only — NO twin/server change. Bumps on data
+mutations + session only (view-state toggles don't; the draft-drives-a-query predicate stays I3).
+
 ## GC — the LAST slice (renamed from "Slice 2": it must ship after the round-trip can re-pull)
 
 The client graph (`uiStatic.state.objects/arrays`) grows as views pull data and never shrinks. Add the
