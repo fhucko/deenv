@@ -863,6 +863,17 @@ function execCanWrite(codeCall: CodeCall, scope: ExecScope, context: ExecContext
     return r;
 }
 
+// canRead(typeName): may the principal read ANY member of the type — server-resolved (the floor never
+// crosses the wire) and shipped as a cached bool, like canWrite. The self-hosted UI reads it to hide a
+// collection/route whose element type the principal cannot read. A miss → "Value not available" → refetch.
+function execCanRead(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const t = executeValue(codeCall.params[0], scope, context).value;
+    if (t.type !== "text") throw new Error("canRead() expects a text type name.");
+    const r = memoize("canRead:" + t.value, context, () => { throw new Error("Value not available"); });
+    if (r.type === "nothing") throw new Error("Value not available"); // a miss (never shipped)
+    return r;
+}
+
 // setRef(obj, prop, value): set/clear an object REFERENCE prop and persist it. value is an
 // existing candidate (id>0 → refId), a fresh draft (id<0 → its scalar props), or null
 // (clear). Stages in memory (UI reflects it), then sends the id-addressed WS op.
@@ -1194,6 +1205,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "extent": return execExtent(codeCall, scope, context);
         case "schema": return execSchema(codeCall, scope, context);
         case "canWrite": return execCanWrite(codeCall, scope, context);
+        case "canRead": return execCanRead(codeCall, scope, context);
         case "setRef": return execSetRef(codeCall, scope, context);
         case "publish": return execPublish(codeCall, scope, context);
         case "create": return execCreate(codeCall, scope, context);

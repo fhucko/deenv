@@ -111,6 +111,46 @@ public sealed class AccessFloor
     // The DbBridge floor consults this while loading the graph: a denied object never enters the graph.
     public bool CanRead(string typeName, ExecObject obj) => Can("read", typeName, obj);
 
+    // May the principal read ANY member of `typeName` — a CONSERVATIVE, DATA-FREE capability (no object, no
+    // store), the read counterpart to canWrite. The generic UI reads it (via sys.canRead) to HIDE a
+    // collection/route whose element type the principal cannot read at all (e.g. an admin-only `users` set
+    // is hidden from anonymous, and /users 404s) WITHOUT shipping the role. It ERRS TOWARD READABLE so it
+    // never hides a collection that has members the per-member read floor WOULD admit (a false-negative
+    // here would make readable data vanish — far worse than canWrite's permissive false-positive). Readable
+    // UNLESS the type is read-ruled AND every read rule is principal-only AND fails for this principal:
+    //   - unruled for read (no read rule) → readable (the floor only restricts what is ruled);
+    //   - a bare `read` (no condition) → readable (public);
+    //   - a condition referencing `object` (e.g. `status == "published"`) → some member could match → readable;
+    //   - a principal-only condition (`currentUser.role == "Admin"`) → evaluated EXACTLY for this principal.
+    public bool CanReadType(string typeName)
+    {
+        if (Dormant) return true;
+        var readRules = _rules.Where(r => r.Type == typeName && Grants(r, "read")).ToList();
+        if (readRules.Count == 0) return true; // unruled for read → readable
+        foreach (var rule in readRules)
+        {
+            if (rule.When == null) return true;            // bare read → public
+            if (ReferencesObject(rule.When)) return true;  // reads the target → some member could match
+            if (EvaluateCondition(rule.When, new ExecObject { Props = [], Id = 0, TypeName = typeName }))
+                return true;                               // principal-only condition holds for this principal
+        }
+        return false;
+    }
+
+    // Does a condition reference the `object` symbol (the candidate member)? Mirrors ReferencesCurrentUser.
+    // A rule that reads the target could hold for SOME member, so CanReadType treats it as readable (show).
+    private static bool ReferencesObject(ICodeValue value) => value switch
+    {
+        CodeSymbol s => s.Name == "object",
+        CodeInfixOp op => ReferencesObject(op.Left) || ReferencesObject(op.Right),
+        CodeNot n => ReferencesObject(n.Operand),
+        CodeCall c => ReferencesObject(c.Fn) || c.Params.Any(ReferencesObject),
+        CodeArray a => a.Items.Any(ReferencesObject),
+        CodeObject o => o.Props.Any(p => ReferencesObject(p.Value)),
+        CodeAssignment asn => ReferencesObject(asn.Target) || ReferencesObject(asn.Value),
+        _ => false,
+    };
+
     // May the principal perform a WRITE `verb` (create | edit | delete) on `obj` of `typeName`? The
     // WsHandler mutation floor consults this: a denied create/edit/delete is rejected, the store untouched.
     // For an EDIT/DELETE `obj` is the existing target (its current scalar fields); for a CREATE it is the

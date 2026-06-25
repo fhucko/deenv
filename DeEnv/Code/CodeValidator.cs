@@ -69,6 +69,7 @@ public static class CodeValidator
         ["humanize"] = 1,
         ["extent"] = 1,
         ["canWrite"] = 2, // (typeName, verb) — server-resolved write capability, shipped like extent/schema
+        ["canRead"] = 1,  // (typeName) — server-resolved read capability (hide unreadable collections/routes)
         ["setRef"] = 3,
         ["publish"] = 2, // (schema, targetId)
         ["create"] = 2,  // (schema, name) — addressing is by path, so no port args

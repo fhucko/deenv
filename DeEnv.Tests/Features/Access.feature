@@ -383,6 +383,56 @@ Feature: The access floor (read enforcement by principal)
     When the page state is rendered for "/"
     Then the rendered body shows a "new-btn" marker
 
+  # ── unreadable collections hidden (sys.canRead): an admin-only set is hidden from / and its route 404s ──
+  # A collection whose element type the principal cannot read at all is hidden — the ObjectForm omits the
+  # field and the route 404s (hide-existence). The `users` set is admin-only, so an anonymous visitor of a
+  # public app sees no users table on the root and cannot reach /users; an admin sees both. canRead errs
+  # toward READABLE (a public or partially-readable collection is never hidden).
+
+  Scenario: A read-only visitor does not see an admin-only collection on the root
+    Given the access rule "Milestone read"
+    And the User access rule "User read where currentUser.role == \"Admin\""
+    And there is no current user
+    When the page state is rendered for "/"
+    Then the rendered body shows no "/users" marker
+    And the shipped data includes a "Milestone" titled "Gate #3"
+
+  Scenario: An admin sees the admin-only collection on the root
+    Given the access rule "Milestone read"
+    And the User access rule "User read where currentUser.role == \"Admin\""
+    And the current user is the admin
+    When the page state is rendered for "/"
+    Then the rendered body shows a "/users" marker
+
+  Scenario: A read-only visitor cannot reach the admin-only collection's route
+    Given the access rule "Milestone read"
+    And the User access rule "User read where currentUser.role == \"Admin\""
+    And there is no current user
+    When the page state is rendered for "/users"
+    Then the rendered body shows a "not-found" marker
+
+  Scenario: An admin can reach the admin-only collection's route
+    Given the access rule "Milestone read"
+    And the User access rule "User read where currentUser.role == \"Admin\""
+    And the current user is the admin
+    When the page state is rendered for "/users"
+    Then the rendered body shows no "not-found" marker
+
+  # ── read-only fields: a principal who cannot edit gets read-only inputs (not just a hidden Save) ──
+  Scenario: A read-only visitor's fields are read-only inputs
+    Given the access rule "Milestone read"
+    And the access rule "Milestone edit where currentUser.role == \"Admin\""
+    And there is no current user
+    When the page state is rendered for "/milestones/2"
+    Then the rendered body shows a "readonly" marker
+
+  Scenario: An admin's fields are editable inputs
+    Given the access rule "Milestone read"
+    And the access rule "Milestone edit where currentUser.role == \"Admin\""
+    And the current user is the admin
+    When the page state is rendered for "/milestones/2"
+    Then the rendered body shows no "readonly" marker
+
   # End-to-end: an admin creates a user and sets a password through <UserAdmin>, and that new user can then
   # log in — the full multi-user thread (create → setPassword → re-login) in a real browser.
   Scenario: An admin creates a user and sets a password, and the new user can log in

@@ -112,9 +112,9 @@ public static class GenericUi
                 var r = sys.resolve(path)
                 if r.kind == "object" && r.target != null
                     return <ObjectForm obj={r.target} meta={sys.schema(r.typeName)} base={path}>
-                else if r.kind == "set"
+                else if r.kind == "set" && sys.canRead(r.typeName)
                     return <SetTable set={sys.field(r.parent, r.prop)} desc={sys.schema(r.typeName)} setPath={path}>
-                else if r.kind == "ref"
+                else if r.kind == "ref" && sys.canRead(r.typeName)
                     return <RefEditor parent={r.parent} prop={r.prop} target={sys.schema(r.typeName)}>
                 else if r.kind == "dict"
                     return <DictTable dict={sys.field(r.parent, r.prop)} desc={sys.schema(r.parentType, r.prop)} base={path}>
@@ -124,11 +124,11 @@ public static class GenericUi
                     status = 404
                     return NotFoundForm()
 
-            fn Input(obj, desc, variant)
+            fn Input(obj, desc, variant, readonly)
                 if desc.baseType == "bool"
-                    return <input type="checkbox" class={desc.name} checked={sys.field(obj, desc.name)}>
+                    return <input type="checkbox" class={desc.name} checked={sys.field(obj, desc.name)} disabled={readonly}>
                 else if desc.baseType == "enum"
-                    return <select class={desc.name} value={sys.field(obj, desc.name)}>
+                    return <select class={desc.name} value={sys.field(obj, desc.name)} disabled={readonly}>
                         <option value="">
                             "(none)"
                         foreach v in desc.values
@@ -136,21 +136,21 @@ public static class GenericUi
                                 sys.humanize(v)
                 else if desc.baseType == "text"
                     if desc.multiline
-                        return <textarea class={desc.name} rows="4" value={sys.field(obj, desc.name)}>
+                        return <textarea class={desc.name} rows="4" value={sys.field(obj, desc.name)} readonly={readonly}>
                     else if variant == "standard"
-                        return <input type="text" class={desc.name} value={sys.field(obj, desc.name)} variant="standard">
+                        return <input type="text" class={desc.name} value={sys.field(obj, desc.name)} variant="standard" readonly={readonly}>
                     else
-                        return <input type="text" class={desc.name} value={sys.field(obj, desc.name)}>
+                        return <input type="text" class={desc.name} value={sys.field(obj, desc.name)} readonly={readonly}>
                 else if variant == "standard"
-                    return <input type={InputType(desc.baseType)} class={desc.name} value={sys.field(obj, desc.name)} variant="standard">
+                    return <input type={InputType(desc.baseType)} class={desc.name} value={sys.field(obj, desc.name)} variant="standard" readonly={readonly}>
                 else
-                    return <input type={InputType(desc.baseType)} class={desc.name} value={sys.field(obj, desc.name)}>
+                    return <input type={InputType(desc.baseType)} class={desc.name} value={sys.field(obj, desc.name)} readonly={readonly}>
 
-            fn Field(obj, desc)
+            fn Field(obj, desc, readonly)
                 return <div class="field">
                     <label class={desc.name}>
                         sys.humanize(desc.name)
-                    <Input obj={obj} desc={desc}>
+                    <Input obj={obj} desc={desc} readonly={readonly}>
 
             fn ObjectForm(obj, meta, base, autosave)
                 ambient ctx = ctx.new(autosave)
@@ -159,28 +159,31 @@ public static class GenericUi
                 fn discard()
                     ctx.discard()
                 fn render()
+                    var canEdit = sys.canWrite(meta.name, "edit")
                     return <div class="object-form">
                         <h2>
                             meta.name
                         foreach p in meta.props
                             if p.baseType == "object"
-                                <div class="field">
-                                    <label class={p.name}>
-                                        sys.humanize(p.name)
-                                    <RefEditor parent={obj} prop={p.name} target={sys.schema(p.target)}>
+                                if sys.canRead(p.target)
+                                    <div class="field">
+                                        <label class={p.name}>
+                                            sys.humanize(p.name)
+                                        <RefEditor parent={obj} prop={p.name} target={sys.schema(p.target)}>
                             else if p.baseType == "set"
-                                <div class="field">
-                                    <a class="list-title" href={sys.nest(base, p.name)}>
-                                        sys.humanize(p.name)
-                                    <SetTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)}>
+                                if sys.canRead(p.element)
+                                    <div class="field">
+                                        <a class="list-title" href={sys.nest(base, p.name)}>
+                                            sys.humanize(p.name)
+                                        <SetTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)}>
                             else if p.baseType == "dictionary"
                                 <div class="field">
                                     <a class="list-title" href={sys.nest(base, p.name)}>
                                         sys.humanize(p.name)
                                     <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
                             else
-                                <Field obj={obj} desc={p}>
-                        if autosave != true && sys.canWrite(meta.name, "edit")
+                                <Field obj={obj} desc={p} readonly={!canEdit}>
+                        if autosave != true && canEdit
                             <div class="form-actions">
                                 <button class="save" onClick={save}>
                                     "Save"

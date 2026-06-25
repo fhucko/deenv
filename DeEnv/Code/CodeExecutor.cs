@@ -455,6 +455,21 @@ public sealed class CodeExecutor
         });
     }
 
+    // canRead(typeName): may the principal read ANY member of the type — a CONSERVATIVE, data-free capability
+    // (AccessFloor.CanReadType), server-resolved + shipped like canWrite. The self-hosted UI reads it to HIDE
+    // a collection/route whose element type the principal cannot read (an admin-only `users` set is hidden
+    // from anonymous, /users 404s) without shipping the role. Errs toward READABLE (never hides a collection
+    // with admissible members). No floor ⇒ readable (dormant).
+    private IExecValue ExecuteCanRead(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 1)
+            throw new CodeRuntimeException("canRead(typeName) takes one argument.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecText typeName)
+            throw new CodeRuntimeException("canRead() expects a text type name.");
+        return Memoize($"canRead:{typeName.Value}", context,
+            () => new ExecBool { Value = _floor?.CanReadType(typeName.Value) ?? true });
+    }
+
     // schema(typeName): a type's descriptor — { name, labelProp, props } — the reflective
     // shape the self-hosted generic UI walks (objectForm/refEditor/setTable). The replacement for
     // the old `__descs` registry global: the descriptor is computed from the schema (the literal
@@ -559,6 +574,14 @@ public sealed class CodeExecutor
                     Deps = new Deps(),
                 };
             }
+            var readKey = $"canRead:{name}";
+            if (!context.Memo.ContainsKey(readKey))
+                context.Memo[readKey] = new CacheEntry
+                {
+                    Key = readKey,
+                    Result = new ExecBool { Value = _floor.CanReadType(name) },
+                    Deps = new Deps(),
+                };
         }
     }
 
@@ -942,6 +965,7 @@ public sealed class CodeExecutor
         "extent" => ExecuteExtent(call, scope, context),
         "schema" => ExecuteSchema(call, scope, context),
         "canWrite" => ExecuteCanWrite(call, scope, context),
+        "canRead" => ExecuteCanRead(call, scope, context),
         "nest" => ExecuteNest(call, scope, context),
         "segment" => ExecuteSegment(call, scope, context),
         "toInt" => ExecuteToInt(call, scope, context),
