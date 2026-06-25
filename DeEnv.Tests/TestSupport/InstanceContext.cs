@@ -1013,6 +1013,62 @@ public class InstanceContext
     // bare "comp:". The seed step targets this; whole-object overwrite replaces the panel's `state`.
     public const string AccessSeedPanelSlot = "comp:";
 
+    // Client data layer, slice 1b (the CLIENT SHIP + server reconstruct round-trip — proven in a real
+    // browser): the SAME devlog shape + seed, with a CUSTOM `fn render()` whose whole UI is ONE stateful root
+    // component `<panel>` carrying `var state = { open: false }` and a "Show" button that flips it open. Its
+    // view renders the milestone rows (each `m.title` in a `.gated-row`) ONLY when `state.open`.
+    //
+    // THE ROUND-TRIP (why it proves 1b and nothing else does): the root render is JUST the panel, and the
+    // panel reads `db.milestones` ONLY inside `if state.open` — so with open:false (first paint) NOTHING reads
+    // it, and STRUCTURAL PRIVACY (the memo/dependency harvest, not the access floor) ships no Milestone →
+    // "Gate #3" is absent. Clicking "Show" flips `state.open` CLIENT-side; the re-render now reads the
+    // un-shipped `db.milestones`, the swallowed VNA sets needsServerData, and maybeRefetch fires — carrying
+    // the new `slotState` ({ "comp:" → { state: { open: true } } }). The server seeds it (ApplySeed),
+    // reproduces the open panel, reads `db.milestones`, harvests "Gate #3", and ships it; the client merges +
+    // repaints the rows. So the rows appear ONLY via the ship→seed round-trip — there is no other server-side
+    // reader of `db.milestones`, so reverting EITHER the ws.ts ship OR the HandleRefetch reconstruct leaves
+    // the panel permanently empty (the empty-popup footgun, controlled).
+    //
+    // OBJECT state (`var state = { open }`) — REQUIRED, not incidental: a component-local var is non-top, and
+    // ONLY an object-prop write (`state.open = …` → invalidateProp on the object's id) re-renders a component
+    // (a bare scalar `var` in a component scope is NOT a tracked dep, so its assignment never re-renders). So
+    // the universal component-state shape is an object, and the round-trip ships it BY VALUE (a transient,
+    // negative-id object — see ws.ts slotState's ship-rule). This is pure VIEW-STATE (a popup flag), NOT a
+    // draft that drives a query (the harvest depends on WHICH branch runs, never on the field VALUES — and
+    // stays floor-gated), so it does not pull in the deferred draft-driven-query work (spec I3).
+    //
+    // PUBLIC read rule (anonymous may read) so the round-trip needs NO login: the access-FLOOR layer (the
+    // harvest stays gated through a refetch) is already proven by 1a — 1b isolates the CLIENT-ship + SERVER-
+    // reconstruct mechanism, where login would only add a flaky moving part. The custom render owns the whole
+    // page (no generic-UI sign-in chrome), so an anonymous visitor exercises the loop directly. A test fixture
+    // (not a committed app), so no designer-seed regen.
+    public static InstanceDescription AccessToggleFixtureDb() =>
+        InstanceDescriptionLoader.Load(AccessFixtureTypes + AccessFixtureSeed + """
+
+    access
+        Milestone
+            read
+
+    ui
+
+        fn panel()
+            var state = { open: false }
+            fn show()
+                state.open = true
+            fn render()
+                return <div class="panel">
+                    <button class="show" onClick={show}>
+                        "Show"
+                    if state.open
+                        foreach m in db.milestones
+                            <div class="gated-row">
+                                m.title
+            return render
+
+        fn render()
+            return <panel>
+    """);
+
     // M-auth floor-hardening (Fix 3 — a throwing condition must DENY, not crash the render): the SAME
     // shape + seed, but the ONLY access rule's condition divides by zero (`1 / 0 == 1`). Integer `/` by a
     // zero divisor throws DivideByZeroException (CodeExecutor.ExecuteInfixOp) — a .NET exception, NOT a

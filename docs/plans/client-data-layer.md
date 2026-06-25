@@ -254,6 +254,23 @@ consume a seed across a re-render, `applySeed` must also stale the `slotKey + ":
 sets `context.seed`). And: whole-object seed overwrite is fine for scalar toggles — revisit per-field
 before seeding a draft-bearing component (`<SetPasswordControl>` `{password}`).
 
+**Slice 1b — DONE** (built + reviewed *sound-with-conditions*, suite **531/531**, 2026-06-25): the CLIENT
+SHIP + server reconstruct → the full round-trip. `ws.ts` `slotState()` serializes mounted `comp:` slots'
+writable view-state by the `sessionVars` id-axis rule (scalar by value, positive-id by ref, transient
+object by its scalar props — **all scalars incl. text**); `WsHandler` (`WsRequest.SlotState` +
+`SlotStateFromWire`) rebuilds it and threads it into 1a's `seed`. Proven by a browser e2e over a controlled
+`<panel>` fixture (data reaches the toggled-open component ONLY via the round-trip; fail-before/pass-after
+both halves). Client-only TS + C# wire-handler — NO twin/conformance change.
+
+**RESOLVED (1b review):** a typed `text` view-state value (e.g. `<SetPasswordControl>`'s `state.password`)
+rides the refetch payload to the authenticated server. ACCEPTED (user 2026-06-25: *"it's just a data field,
+sent anyways later"*) — the client's own input, bound for the same authenticated server `setPassword`
+already sends it to; no new exposure, not a floor breach. **LESSON: do NOT omit `text` from the ship-rule**
+— a tried "ship bool/int only" fix broke a legitimate case (per-row component TEXT state must survive a
+refetch; it hung 3/3). ALL scalar view-state ships by value. The genuinely-deferred I3 case is narrower: a
+draft whose *values DRIVE a query* (`where x == draft.field`), which 1b does not enable (the harvest depends
+on which BRANCH renders, not on field values).
+
 ## GC — the LAST slice (renamed from "Slice 2": it must ship after the round-trip can re-pull)
 
 The client graph (`uiStatic.state.objects/arrays`) grows as views pull data and never shrinks. Add the

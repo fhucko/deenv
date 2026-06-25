@@ -364,6 +364,24 @@ Feature: The access floor (read enforcement by principal)
     And the page state is rendered for "/"
     Then the shipped data includes a "Milestone" titled "Gate #3"
 
+  # ── client data layer, slice 1b — the CLIENT SHIP + server reconstruct round-trip (real browser) ──
+  # 1a proved the server CONSUMING a seed (injected directly). 1b proves the full loop: the CLIENT ships its
+  # live component view-state, the server reproduces the exact render and ships the demanded data, the client
+  # merges it. The fixture's whole UI is one stateful root <panel> with a SCALAR `var open = false` and a
+  # "Show" button; the milestone rows read `db.milestones` ONLY when open, and NOTHING else server-side reads
+  # it — so the rows can populate ONLY via the ship→seed round-trip (the empty-popup footgun, controlled). The
+  # data is absent while the panel is closed (structural privacy ships only what the closed render touched);
+  # a click flips `open` client-side → the re-render's swallowed VNA fires a refetch carrying the new
+  # slotState → the server seeds open:true, reproduces the open panel, harvests "Gate #3", ships it → the rows
+  # appear. Reverting either the ws.ts ship or the HandleRefetch reconstruct leaves the panel empty forever.
+  @milestone-client-data
+  Scenario: A client-toggled component's demanded data is shipped via the state round-trip
+    Given the access-toggle app is served
+    And a visitor opens the toggle app at "/"
+    Then no gated row is shown
+    When the visitor clicks the panel's Show control
+    Then a gated row titled "Gate #3" eventually appears
+
   # ── read-only affordances: write controls hidden when the principal cannot write ──
   # The generic UI gates Save (form-actions), New (new-btn), and Remove (set-remove) on sys.canWrite(type,
   # verb) — server-resolved from the floor, shipped like sys.extent. So a read-only principal (e.g. an

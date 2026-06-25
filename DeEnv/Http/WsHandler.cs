@@ -36,6 +36,11 @@ public sealed record WsRequest
     public bool? Clear { get; init; }
     public JsonElement? Value { get; init; }
     public JsonElement? Vars { get; init; }
+    // refetch: the client's live per-component view-state (client data layer, slice 1b), a map from a
+    // component's render-slot key (`comp:<slotpath>`) to its setup-scope locals ({ varName: wireValue }).
+    // HandleRefetch rebuilds it into the `seed` RenderState applies, so the server reproduces the client's
+    // EXACT render (a toggled-open popup) and ships the data it demands. Same shape/handling as `Vars`.
+    public JsonElement? SlotState { get; init; }
     // login: the credentials a `login` op carries. `name` is the User's login identifier
     // (UserConvention.NameField), `password` the plaintext verified against the stored hash.
     public string? Name { get; init; }
@@ -603,10 +608,18 @@ public sealed class WsHandler
 
         // Transients mint below the client's id floor (no collisions with its local drafts).
         var lastId = req.LastId ?? 0;
+
+        // The client's live per-component view-state (client data layer, slice 1b): rebuild { slotKey →
+        // (varName → ExecValue) } from the wire — scalar by value; in-store (positive-id) object ref against
+        // the loaded `byId` graph; a TRANSIENT object (the common `var state = { … }` shape) by value, rebuilt
+        // as a throwaway transient minted below the client's id floor. Threaded as the `seed` RenderState
+        // applies, so the server reproduces the client's EXACT render (the toggled-open popup) and structural
+        // privacy harvests + ships the data that state demands.
+        var seed = SlotStateFromWire(req.SlotState, byId, lastId);
         // The refetch renderer gets the SAME live registry provider as the SSR path, so a refetch
         // re-render reflects the kernel's current instances — no stale `instances` list.
         var state = new SsrRenderer(_store, _desc, registry: _registry)
-            .RenderState(pathStr, sessionVars, db, lastId, principalUserId);
+            .RenderState(pathStr, sessionVars, db, lastId, principalUserId, seed);
         return Serialize(new RefetchResponse { State = state });
     }
 
@@ -647,6 +660,56 @@ public sealed class WsHandler
         }
         Walk(root);
         return byId;
+    }
+
+    // Rebuild the client's per-component view-state seed (client data layer, slice 1b): a map from each
+    // component's render-slot key to its setup-scope locals as ExecValues. A null / empty payload (the common
+    // case — no mounted stateful component shipped state) yields null, so the render is byte-identical to
+    // today. The result feeds SsrRenderer.RenderState's `seed`, which ApplySeed overwrites the matching
+    // component's setup locals with (whole-object, v1).
+    // `transientFloor` is the client's id floor (req.LastId): a reconstructed transient mints BELOW it (a
+    // descending local counter), so it never collides with an in-store (positive) id NOR with a draft the
+    // client already holds. The counter is request-local (no shared mutable state) and discarded with the
+    // render — the exact value is immaterial beyond being a unique negative id within this reproduction.
+    private static IReadOnlyDictionary<string, IReadOnlyDictionary<string, Code.IExecValue>>? SlotStateFromWire(
+        JsonElement? slotState, Dictionary<int, Code.ExecObject> byId, int transientFloor)
+    {
+        if (slotState is not { ValueKind: JsonValueKind.Object } slots) return null;
+        var nextTransient = Math.Min(0, transientFloor);
+        var seed = new Dictionary<string, IReadOnlyDictionary<string, Code.IExecValue>>();
+        foreach (var slot in slots.EnumerateObject())
+        {
+            if (slot.Value.ValueKind != JsonValueKind.Object) continue;
+            var locals = new Dictionary<string, Code.IExecValue>();
+            foreach (var local in slot.Value.EnumerateObject())
+                if (SlotLocalFromWire(local.Value, byId, ref nextTransient) is { } value)
+                    locals[local.Name] = value;
+            if (locals.Count > 0) seed[slot.Name] = locals;
+        }
+        return seed.Count > 0 ? seed : null;
+    }
+
+    // A single setup-scope local from the slotState wire (client data layer, slice 1b). Scalars and an
+    // in-store object REF resolve exactly like a session var (SessionVarFromWire). A TRANSIENT object ships
+    // BY VALUE ({ type:"object", props:{…} }, no id) — the common component-state shape (`var state = { … }`):
+    // reconstruct it as a throwaway ExecObject (a fresh negative id below the client floor) carrying its
+    // scalar fields, which the render reads + discards after harvesting. It is never persisted and never held
+    // (I2/I3): it is pure view-state the server reproduces to plan the fetch. A by-id ref that no longer
+    // resolves is dropped (fail-soft, same as a session var).
+    private static Code.IExecValue? SlotLocalFromWire(JsonElement el, Dictionary<int, Code.ExecObject> byId, ref int nextTransient)
+    {
+        if ((el.TryGetProperty("type", out var t) ? t.GetString() : null) == "object")
+        {
+            if (el.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.Number)
+                return byId.TryGetValue(idEl.GetInt32(), out var obj) ? obj : null; // an in-store ref
+            // A transient object by value: rebuild its scalar props (no identity in the store).
+            var props = new Dictionary<string, Code.IExecValue>();
+            if (el.TryGetProperty("props", out var p) && p.ValueKind == JsonValueKind.Object)
+                foreach (var f in p.EnumerateObject())
+                    props[f.Name] = ExecValueFromWire(f.Value);
+            return new Code.ExecObject { Id = --nextTransient, Props = props };
+        }
+        return ExecValueFromWire(el);
     }
 
     private static Code.IExecValue? SessionVarFromWire(JsonElement el, Dictionary<int, Code.ExecObject> byId)

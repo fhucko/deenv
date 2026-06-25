@@ -431,8 +431,12 @@ function maybeRefetch(): void {
     inFlightEpoch = sessionEpoch; // the session this refetch is computed under (checked on its reply)
     // lastId: the server mints its re-render transients BELOW everything this client
     // already holds, so shipped negative ids never collide with local drafts.
+    // slotState: the live per-component view-state (client data layer, slice 1b), so the server
+    // reproduces the EXACT client render — including a popup the client toggled open — and ships the
+    // data that state demands (which a URL-only refetch never reaches). Client-only orchestration,
+    // exactly like `vars`/sessionVars (no twin, no conformance).
     wsSend({ op: "refetch", clientId: uiStatic.clientId, path: location.pathname,
-        vars: sessionVars(), lastId: uiStatic.lastId.value });
+        vars: sessionVars(), slotState: slotState(), lastId: uiStatic.lastId.value });
 }
 
 function hasStaleEntry(): boolean {
@@ -452,6 +456,58 @@ function sessionVars(): { [name: string]: object } {
         else if (v.type === "object" && v.id > 0) out[name] = { type: "object", id: v.id };
     }
     return out;
+}
+
+// The live per-component view-state the server re-renders with (client data layer, slice 1b): a map from
+// a MOUNTED component's render-slot key (`comp:<slotpath>`) to its setup-scope locals (its `var state …`).
+// The server seeds these after the matching component's setup runs (CodeExecutor.ApplySeed), reproducing
+// the client's EXACT component view-state — so a popup the client toggled open renders on the server too,
+// and the data that state demands is harvested + shipped (the URL-keyed refetch alone never reaches it).
+//
+// Source: the memo cache's `comp:<slot>` entries whose result is a render CLOSURE (a stateful component —
+// its setup returned `fn render()`). The closure captures the setup's body scope, where its `var state`
+// lives (the SAME scope ApplySeed writes into). Read-only setup locals (the component's bound PARAMS) are
+// skipped — the server re-binds those from the tag attributes; only the writable `var` state ships. Bounded
+// to the LIVE cache's mounted slots (what is on screen), so "whole state" stays bounded.
+//
+// Ship-rule — the SAME identity axis as sessionVars (does the server already have this object? = id sign):
+//   • scalar (int/bool/text) → by value;
+//   • in-store object (positive id) → an id-ref the server resolves against its canonical load;
+//   • TRANSIENT object (negative id) → by VALUE — its scalar fields ({ type:"object", props:{…} }), which
+//     the server reconstructs as a throwaway transient and discards after harvesting. This is the COMMON
+//     case for component state: a `var state = { open: false }` is a transient object (a component-local
+//     object is non-top, so a `state.open = …` toggle re-renders via invalidateProp — a SCALAR `var` in a
+//     component scope is NOT reactive and so is never the toggle), so the round-trip MUST carry it. It is
+//     pure VIEW-STATE (a popup-open flag), not a draft that FEEDS a query — the harvested data depends on
+//     WHICH branch runs, never on the object's field VALUES — so a crafted value can't widen the floor-
+//     gated read (I3). (Draft-objects-that-DRIVE-a-query stay deferred; they are a different concern.)
+function slotState(): { [slotKey: string]: { [name: string]: object } } {
+    const out: { [slotKey: string]: { [name: string]: object } } = {};
+    for (const [key, entry] of uiStatic.cache) {
+        if (!key.startsWith("comp:") || key.endsWith(":view")) continue; // the setup entry, not its :view
+        if (entry.stale || entry.result.type !== "fn") continue;          // a render closure = a stateful component
+        const locals: { [name: string]: object } = {};
+        for (const [name, item] of Object.entries(entry.result.scope.items)) {
+            if (item.isReadOnly) continue; // a bound param — the server re-binds it; only `var` state ships
+            const v = item.value;
+            if (v.type === "int" || v.type === "bool" || v.type === "text") locals[name] = scalarOf(v);
+            else if (v.type === "object" && v.id > 0) locals[name] = { type: "object", id: v.id };
+            else if (v.type === "object") locals[name] = { type: "object", props: scalarPropsOf(v) }; // transient → by value
+        }
+        if (Object.keys(locals).length > 0) out[key] = locals;
+    }
+    return out;
+}
+
+// A transient object's SCALAR props as tagged wire values ({ open: { type:"bool", value:true } }) — the
+// by-value shape slotState ships a component's `var state` object in, reconstructed server-side as a
+// throwaway ExecObject (WsHandler.ExecValueFromWire per field). Scalars only: a nested object/collection in
+// component view-state is not part of the toggle footprint v1 reproduces (and would re-introduce identity).
+function scalarPropsOf(value: ExecObject): { [name: string]: object } {
+    const props: { [name: string]: object } = {};
+    for (const [name, v] of Object.entries(value.props))
+        if (v.type === "int" || v.type === "bool" || v.type === "text") props[name] = scalarOf(v);
+    return props;
 }
 
 // Re-key a just-persisted set member from its transient negative id to the real extent

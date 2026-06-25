@@ -172,9 +172,10 @@ public sealed class SsrRenderer
     // `lastIdFloor` is the client's current transient-id counter: the re-render mints
     // its transients below it, so shipped negative ids never collide with the drafts
     // the client already holds.
-    // `seed` (client data layer, slice 1a) reproduces the client's component view-state on the refetch
-    // path too — same shape + effect as Render's. The WS does NOT pass it yet (slice 1b ships state
-    // from the client and threads it through HandleRefetch); this is the consuming seam, null today.
+    // `seed` (client data layer, slice 1a/1b) reproduces the client's component view-state on the refetch
+    // path too — same shape + effect as Render's. The WS now ships this state (slice 1b: ws.ts slotState →
+    // HandleRefetch rebuilds it via SlotStateFromWire), so a client-toggled popup's demanded data is
+    // harvested + shipped. Null = today's behavior (no mounted stateful component shipped state).
     public JsonObject RenderState(
         string urlPath, IReadOnlyDictionary<string, IExecValue>? sessionVars, ExecObject? warmDb,
         int lastIdFloor = 0, int? principalUserId = null,
