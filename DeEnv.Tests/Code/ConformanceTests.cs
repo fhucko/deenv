@@ -20,9 +20,13 @@ public sealed class ConformanceTests
     private sealed record Suite(Case[] Cases);
     // A case is either a single `Expr` (evaluated once) or the lifecycle protocol — optional
     // `Setup` statements run once into a retained scope, then `Renders` value-exprs evaluated in
-    // order against that same scope+context, with `Expect` checked on the LAST render.
+    // order against that same scope+context, with `Expect` checked on the LAST render. `Seed`
+    // (client data layer, slice 1a) is an optional { slotKey → { varName → value-expr } } map
+    // installed as context.Seed before the renders — its value-exprs evaluate once (like Setup),
+    // exercising the component-state seeding path the server uses.
     public sealed record Case(string Name, Expectation Expect, JsonElement? Expr = null,
-        string? Text = null, JsonElement? Setup = null, JsonElement? Renders = null);
+        string? Text = null, JsonElement? Setup = null, JsonElement? Renders = null,
+        JsonElement? Seed = null);
     public sealed record Expectation(string Kind, JsonElement Value);
 
     public static IEnumerable<Func<Case>> Cases()
@@ -70,6 +74,21 @@ public sealed class ConformanceTests
         if (c.Setup is { } setup)
             foreach (var stmt in setup.EnumerateArray())
                 executor.ExecuteStatement(stmt.Deserialize<ICodeStatement>(JsonOpts)!, scope, context);
+        // Install the component-state seed (slice 1a): evaluate each slot's var value-exprs once
+        // against the retained scope/context (like Setup) and thread them into context.Seed, so the
+        // renders below reproduce a seeded component exactly as the server's Render does.
+        if (c.Seed is { } seedJson)
+        {
+            var seed = new Dictionary<string, IReadOnlyDictionary<string, IExecValue>>();
+            foreach (var slot in seedJson.EnumerateObject())
+            {
+                var vars = new Dictionary<string, IExecValue>();
+                foreach (var v in slot.Value.EnumerateObject())
+                    vars[v.Name] = executor.ExecuteValue(v.Value.Deserialize<ICodeValue>(JsonOpts)!, scope, context);
+                seed[slot.Name] = vars;
+            }
+            context.Seed = seed;
+        }
         IExecValue result = new ExecNothing();
         foreach (var render in renders.EnumerateArray())
             result = executor.ExecuteValue(render.Deserialize<ICodeValue>(JsonOpts)!, scope, context);

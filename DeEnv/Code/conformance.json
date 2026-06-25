@@ -725,6 +725,26 @@
       "expect": { "kind": "int", "value": 5 }
     },
     {
+      "name": "a seeded component renders the seeded state, not its setup default",
+      "comment": "Client data layer, slice 1a: a STATEFUL component `c` (its setup mints `var state = { x: 0 }` and returns a render closure that reads `state.x`) is rendered in value position — so it occupies slot `comp:` (empty slot path). The case SEEDS that slot's `state` var with `{ x: 7 }` (a whole-object overwrite). After the setup runs and BEFORE the view is invoked, both twins overwrite `state` in the setup's captured scope, so the view reads 7, NOT the default 0. This proves the server can REPRODUCE the client's exact component state (the seed-consumption half of render-as-planner) — identically on both interpreters. The SHIP of state from the client + the refetch threading are later (client-only) slices, not provable here.",
+      "setup": [
+        { "type": "fn", "name": "c", "params": [], "body": { "type": "block", "statements": [
+          { "type": "varDec", "name": "state", "value": { "type": "object", "props": [ { "name": "x", "value": { "type": "int", "value": 0 } } ] } },
+          { "type": "fn", "name": "view", "params": [], "body": { "type": "block", "statements": [
+            { "type": "return", "value": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "state" }, "right": { "type": "symbol", "name": "x" } } }
+          ] } },
+          { "type": "return", "value": { "type": "symbol", "name": "view" } }
+        ] } }
+      ],
+      "seed": {
+        "comp:": { "state": { "type": "object", "props": [ { "name": "x", "value": { "type": "int", "value": 7 } } ] } }
+      },
+      "renders": [
+        { "type": "tag", "name": "c", "attributes": [], "children": [] }
+      ],
+      "expect": { "kind": "int", "value": 7 }
+    },
+    {
       "name": "a function compared to null is not equal (fn != null)",
       "comment": "A function value compared to null yields a bool by reference identity: a function is never null, so `fn != null` is true. Pins the C#/TS twin divergence where C# (ExecFunction.Value => this, ExecNull.Value => null, compared via object.Equals) was correct but the TS twin's getCompareValue had no `fn` case and threw. Both twins must now agree.",
       "text": "(() => 5) != null",

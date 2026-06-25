@@ -225,6 +225,17 @@ public sealed class ExecContext
     // pushes a frame, a block save/restores this (popping provides on exit), and a symbol read
     // falls back to it after a lexical miss.
     public AmbientFrame? Ambient { get; set; }
+
+    // ── component-state seed (client data layer, slice 1a) ───────────────────────
+    // A render reproducing the CLIENT's exact view-state: keyed by a component's render-slot
+    // (the `comp:<slotpath>` string ExecuteComponentValue builds), each entry overwrites that
+    // component's setup-scope locals (its `var state …`) right after the setup runs and before
+    // the view is invoked — so the server reaches the same tree the client has (e.g. a popup the
+    // client toggled open), harvests its data (structural privacy), and ships it. Whole-object
+    // overwrite (v1): the named var's value is replaced wholesale. Null/empty = today's behavior
+    // (the setup's own defaults stand), so every existing render is byte-identical. This is the
+    // SEED-CONSUMPTION half; the client SHIP of state + the refetch threading are later slices.
+    public IReadOnlyDictionary<string, IReadOnlyDictionary<string, IExecValue>>? Seed { get; set; }
 }
 
 // One immutable frame in the ambient chain — dynamic scoping over the call/render extent.

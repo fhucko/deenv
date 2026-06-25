@@ -344,6 +344,26 @@ Feature: The access floor (read enforcement by principal)
     When the page state is rendered for "/"
     Then the rendered document includes no user-management control
 
+  # ── component-state seed (client data layer, slice 1a) ───────────────────────
+  # The server can reproduce the CLIENT's exact component view-state. The fixture's whole UI is one
+  # stateful root component `<panel>` whose view reveals the (admin-ruled) milestone rows only when its
+  # `state.open` is true — the `<UserAdmin>`-behind-`if state.managing` footgun in miniature. Rendering
+  # as the admin with the panel's slot UNSEEDED leaves open:false (the setup default), so nothing reads
+  # `db.milestones` and "Gate #3" is never harvested — it is absent from the shipped document (the exact
+  # empty-popup bug). SEEDING the panel's slot `state = { open: true }` makes the server render the SAME
+  # tree the client has: the rows render, `db.milestones` is read, and structural privacy harvests
+  # "Gate #3" into the shipped document. The harvest stays floor-gated (the Milestone read rule). This is
+  # the seed-CONSUMPTION proof; the client SHIP of state + the refetch threading are later slices, so the
+  # seed is injected directly here.
+  Scenario: A seeded component reproduces the client's view-state and ships its demanded data
+    Given the access-seed app whose panel reveals the milestones only when its slot is open
+    And the current user is the admin
+    When the page state is rendered for "/"
+    Then the shipped data includes no "Milestone"
+    When the "panel" slot is seeded "open" = true
+    And the page state is rendered for "/"
+    Then the shipped data includes a "Milestone" titled "Gate #3"
+
   # ── read-only affordances: write controls hidden when the principal cannot write ──
   # The generic UI gates Save (form-actions), New (new-btn), and Remove (set-remove) on sys.canWrite(type,
   # verb) — server-resolved from the floor, shipped like sys.extent. So a read-only principal (e.g. an

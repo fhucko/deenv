@@ -83,9 +83,15 @@ public sealed class SsrRenderer
     // access read floor (a denied object never enters the `db` graph). Floor-first: the test harness
     // passes it directly; a later slice binds it on the WS session (ClientSession.PrincipalUserId), the
     // durable home this threads from. With no access rules the app is dormant and the principal is inert.
+    // `seed` (client data layer, slice 1a) reproduces the client's exact component view-state: a map
+    // from a component's render-slot (`comp:<slotpath>`) to its setup-scope locals (`state`), applied
+    // after that component's setup runs so the server renders the same tree the client has (e.g. a
+    // popup the client toggled open) and harvests the data it demands. Null = today's behavior (the
+    // setup defaults stand). The SHIP of state from the client + the refetch threading are later slices.
     public (string Html, int Status) Render(string urlPath, string @base = "/", string assetAuthority = "",
-        int? principalUserId = null) =>
-        RenderPage(urlPath, @base, assetAuthority, principalUserId);
+        int? principalUserId = null,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, IExecValue>>? seed = null) =>
+        RenderPage(urlPath, @base, assetAuthority, principalUserId, seed);
 
     // ── code-owned UI (every page is `fn render()`) ─────────────────────────────
     //
@@ -96,9 +102,10 @@ public sealed class SsrRenderer
     // scenarios. A runtime error on first paint becomes an SSR error page.
 
     private (string Html, int Status) RenderPage(string urlPath, string @base, string assetAuthority,
-        int? principalUserId = null)
+        int? principalUserId = null,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, IExecValue>>? seed = null)
     {
-        var context = new ExecContext();
+        var context = new ExecContext { Seed = seed };
         try
         {
             var (result, title, scope, status, trail) = ExecuteRender(urlPath, context, principalUserId: principalUserId);
@@ -165,11 +172,15 @@ public sealed class SsrRenderer
     // `lastIdFloor` is the client's current transient-id counter: the re-render mints
     // its transients below it, so shipped negative ids never collide with the drafts
     // the client already holds.
+    // `seed` (client data layer, slice 1a) reproduces the client's component view-state on the refetch
+    // path too — same shape + effect as Render's. The WS does NOT pass it yet (slice 1b ships state
+    // from the client and threads it through HandleRefetch); this is the consuming seam, null today.
     public JsonObject RenderState(
         string urlPath, IReadOnlyDictionary<string, IExecValue>? sessionVars, ExecObject? warmDb,
-        int lastIdFloor = 0, int? principalUserId = null)
+        int lastIdFloor = 0, int? principalUserId = null,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, IExecValue>>? seed = null)
     {
-        var context = new ExecContext();
+        var context = new ExecContext { Seed = seed };
         context.LastId.Value = Math.Min(0, lastIdFloor);
         var (_, _, scope, _, _) = ExecuteRender(urlPath, context, sessionVars, warmDb, principalUserId);
         return ClientState.Serialize(scope, context);

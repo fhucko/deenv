@@ -1341,9 +1341,31 @@ public sealed class CodeExecutor
         var args = BindParams(component, attrs);
         var view = Memoize(slotKey, context, () => InvokeClosure(component, args, context));
         if (view is ExecFunction renderClosure)
+        {
+            // Seed (client data layer, slice 1a): if a state seed targets THIS slot, overwrite the
+            // setup's locals with the seeded values BEFORE invoking the view — so the server reproduces
+            // the client's exact component state (e.g. a popup the client toggled open) and harvests the
+            // data that state demands. The render closure captures the setup's local scope (where its
+            // `var state …` lives), so the seed writes straight into renderClosure.Scope. Whole-object
+            // overwrite (v1): replace the named var's value wholesale; a var absent from the closure scope
+            // is ignored (a seed for a different component shape can never inject a new local). No seed for
+            // this slot → the setup's own defaults stand (today's behavior, byte-identical).
+            ApplySeed(slotKey, renderClosure.Scope, context);
             view = Memoize(slotKey + ":view", context,
                 () => InvokeClosure(renderClosure, [], context));
+        }
         return view;
+    }
+
+    // Overwrite the seeded locals for `slotKey` in the component setup's scope (client data layer,
+    // slice 1a). Each (varName → value) replaces that var's value wholesale (whole-object overwrite,
+    // v1) — but only when the var actually exists in the setup scope, so a stale/foreign seed can
+    // never inject a new local. Twin of codeExec.ts's applySeed; both must overwrite identically.
+    private static void ApplySeed(string slotKey, ExecScope setupScope, ExecContext context)
+    {
+        if (context.Seed is not { } seed || !seed.TryGetValue(slotKey, out var vars)) return;
+        foreach (var (name, value) in vars)
+            if (setupScope.Items.TryGetValue(name, out var item)) item.Value = value;
     }
 
     // Bind evaluated attributes to the component's params BY NAME (desc={d} → the `desc` param), in

@@ -96,6 +96,20 @@ public sealed class AccessSteps(InstanceContext ctx)
             .IsTrue();
     }
 
+    // Client data layer, slice 1a (component-state seed). Swap in the fixture whose whole UI is one
+    // stateful root component `<panel>` that reveals the (admin-ruled) milestone rows only when its
+    // `state.open` is true, carrying the `Milestone read` rule. The store is rebuilt over the same seed so
+    // the seeded milestone/users remain. With the panel's slot unseeded the rows never render → "Gate #3"
+    // is not harvested; seeding its slot open reproduces the client's open popup and ships the data.
+    [Given("the access-seed app whose panel reveals the milestones only when its slot is open")]
+    public async Task GivenSeedPanelApp()
+    {
+        ctx.Description = InstanceContext.AccessSeedFixtureDb();
+        ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+        await Assert.That(ctx.Description!.Rules!.Any(r => r.Type == "Milestone" && r.Verbs.Contains("read")))
+            .IsTrue();
+    }
+
     // The extent listing is the custom render's ONLY content (just the .extent-row list), so a row's title
     // appears in the rendered document iff it survived the read floor into the candidate list. Present →
     // the admin saw the candidate; absent → the denied member/anonymous reader did not.
@@ -138,11 +152,34 @@ public sealed class AccessSteps(InstanceContext ctx)
     // ── When ────────────────────────────────────────────────────────────────────
 
     // Render at the given path with the bound principal — the floor gates what enters the shipped graph.
+    // `ctx.Seed` (client data layer, slice 1a) reproduces a component's client view-state when a scenario
+    // set it (else null = the unseeded default render).
     [When("the page state is rendered for {string}")]
     public void WhenPageStateRendered(string path)
     {
         var renderer = new SsrRenderer(ctx.Store!, ctx.Description!);
-        ctx.RenderedHtml = renderer.Render(path, principalUserId: ctx.PrincipalUserId).Html;
+        ctx.RenderedHtml = renderer.Render(path, principalUserId: ctx.PrincipalUserId, seed: ctx.Seed).Html;
+    }
+
+    // Seed the named component's render-slot with a `state` object carrying the given `open` flag (client
+    // data layer, slice 1a). v1 is a WHOLE-OBJECT overwrite, so the seed replaces the component's `state`
+    // var wholesale with `{ open: <value> }`. The panel is a value-position root component, so its slot key
+    // is the bare "comp:" (AccessSeedPanelSlot). The next render step passes ctx.Seed into Render, which —
+    // after the panel's setup runs — overwrites `state` before invoking its view, reproducing the client's
+    // open popup. (Directly injected here; the client SHIP of this state is a later slice.)
+    [When("the {string} slot is seeded {string} = {word}")]
+    public void WhenSlotSeeded(string _component, string field, string value)
+    {
+        var open = bool.Parse(value);
+        var state = new DeEnv.Code.ExecObject
+        {
+            Id = -1000,
+            Props = new Dictionary<string, DeEnv.Code.IExecValue> { [field] = new DeEnv.Code.ExecBool { Value = open } },
+        };
+        ctx.Seed = new Dictionary<string, IReadOnlyDictionary<string, DeEnv.Code.IExecValue>>
+        {
+            [InstanceContext.AccessSeedPanelSlot] = new Dictionary<string, DeEnv.Code.IExecValue> { ["state"] = state },
+        };
     }
 
     // ── Then ────────────────────────────────────────────────────────────────────

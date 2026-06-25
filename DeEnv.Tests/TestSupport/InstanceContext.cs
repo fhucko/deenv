@@ -973,6 +973,46 @@ public class InstanceContext
                         m.title
     """;
 
+    // Client data layer, slice 1a (component-state seed): the SAME devlog shape + seed + the admin-only
+    // `Milestone read` rule, with a CUSTOM `fn render()` whose whole UI is ONE stateful root component
+    // `<panel>`. The panel holds `var state = { open: false }`; its view renders the milestone rows
+    // (each `m.title` in a `.gated-row`) ONLY when `state.open`. So with the panel's slot UNSEEDED
+    // (open:false, the setup default) nothing reads `db.milestones` → "Gate #3" is never harvested →
+    // absent from the shipped document; with the slot SEEDED `state = { open: true }` the rows render →
+    // `db.milestones` is read → structural privacy harvests "Gate #3" → it ships. This is the
+    // <UserAdmin>-behind-`if state.managing` footgun in miniature, at a STABLE slot: the panel is a
+    // value-position root component, so its slot key is the empty-path `comp:`. A test fixture (not a
+    // committed app), so no designer-seed regen. The Milestone rule means the harvest is floor-gated.
+    public static InstanceDescription AccessSeedFixtureDb() =>
+        InstanceDescriptionLoader.Load(AccessSeedFixtureApp);
+
+    private const string AccessSeedFixtureApp = AccessFixtureTypes + AccessFixtureSeed + """
+
+    access
+        Milestone
+            read where currentUser.role == "Admin"
+
+    ui
+
+        fn panel()
+            var state = { open: false }
+            fn render()
+                return <div class="panel">
+                    if state.open
+                        foreach m in db.milestones
+                            <div class="gated-row">
+                                m.title
+            return render
+
+        fn render()
+            return <panel>
+    """;
+
+    // The component's render-slot key in AccessSeedFixtureApp: the panel is a value-position root
+    // component (returned directly from `fn render()`), so its slot path is empty and its key is the
+    // bare "comp:". The seed step targets this; whole-object overwrite replaces the panel's `state`.
+    public const string AccessSeedPanelSlot = "comp:";
+
     // M-auth floor-hardening (Fix 3 — a throwing condition must DENY, not crash the render): the SAME
     // shape + seed, but the ONLY access rule's condition divides by zero (`1 / 0 == 1`). Integer `/` by a
     // zero divisor throws DivideByZeroException (CodeExecutor.ExecuteInfixOp) — a .NET exception, NOT a
@@ -1062,6 +1102,12 @@ public class InstanceContext
     // (anonymous). A step sets it; the render step passes it into SsrRenderer.Render. This is the
     // floor-first harness hook the locked slice calls for (no WS login/bind handshake).
     public int? PrincipalUserId { get; set; }
+
+    // The component-state seed for the next render (client data layer, slice 1a) — a map { slotKey →
+    // { varName → value } } that reproduces a component's client view-state. A step sets it; the render
+    // step passes it into SsrRenderer.Render (the seed-consumption seam; the client SHIP of state is a
+    // later slice, so the test injects the seed directly). Null = the unseeded default render.
+    public IReadOnlyDictionary<string, IReadOnlyDictionary<string, DeEnv.Code.IExecValue>>? Seed { get; set; }
 
     // The `Milestone` access rule lines installed via the "Given the access rule" step (accumulated across
     // the Background read rule + a write scenario's verb rule). Rebuilding from the full set keeps every

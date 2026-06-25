@@ -71,7 +71,12 @@ interface ExecTag { type: "tag"; name: string; attributes: { [name: string]: Exe
 // invalidate the memo cache. Transient local scopes (fn calls, blocks, foreach) leave it unset.
 interface ExecScope { items: { [name: string]: ExecScopeItem }; parent: ExecScope | null; isTop?: boolean; }
 interface ExecScopeItem { value: ExecValue; isReadOnly: boolean; }
-interface ExecContext { lastId: LastId; ambient?: AmbientFrame | null; }
+// `seed` (client data layer, slice 1a) — twin of C# ExecContext.Seed: a map from a component's
+// render-slot (`comp:<slotpath>`) to its setup-scope locals (`state`), applied right after that
+// component's setup runs so a render reproduces the client's exact component view-state. Undefined =
+// today's behavior (the setup defaults stand). The SEED-CONSUMPTION half; the client SHIP of state is
+// a later slice. (Slot paths are twin-identical, so the same key lands on the same component.)
+interface ExecContext { lastId: LastId; ambient?: AmbientFrame | null; seed?: { [slotKey: string]: { [varName: string]: ExecValue } } | null; }
 interface AmbientFrame { name: string; value: ExecValue; parent: AmbientFrame | null; }
 interface LastId { value: number; }
 
@@ -1347,9 +1352,25 @@ function executeComponentValue(tag: CodeTag, component: ExecFunction, scope: Exe
     if (entry != null) entry.argsKey = argsKey;
     if (view.type === "fn") {
         const renderClosure = view;
+        // Seed (client data layer, slice 1a): if a state seed targets THIS slot, overwrite the setup's
+        // locals BEFORE invoking the view — so a render reproduces the client's exact component state.
+        // The render closure captures the setup's local scope (where its `var state …` lives), so the
+        // seed writes straight into renderClosure.scope. Twin of CodeExecutor.ApplySeed.
+        applySeed(slotKey, renderClosure.scope, context);
         view = memoize(slotKey + ":view", context, () => invokeFn(renderClosure, [], context));
     }
     return view;
+}
+
+// Overwrite the seeded locals for `slotKey` in the component setup's scope (client data layer, slice
+// 1a). Each (varName → value) replaces that var's value wholesale (whole-object overwrite, v1) — but
+// only when the var actually exists in the setup scope, so a stale/foreign seed can never inject a new
+// local. Twin of CodeExecutor.ApplySeed; both must overwrite identically.
+function applySeed(slotKey: string, setupScope: ExecScope, context: ExecContext): void {
+    const vars = context.seed?.[slotKey];
+    if (vars == null) return;
+    for (const name in vars)
+        if (name in setupScope.items) setupScope.items[name].value = vars[name];
 }
 
 // The identity signature of a component's BINDABLE object arguments (param-index : object id), the key the
@@ -1573,7 +1594,12 @@ function sendSetPassword(userId: number, newPassword: ExecValue): void {
 // value-exprs evaluated in order against that same scope+context, returning the LAST result. The
 // C# side runs the identical protocol in ConformanceTests; any drift fails on one side or the other.
 function runConformance(caseJson: string): string {
-    const c = JSON.parse(caseJson) as { expr?: CodeValue; setup?: CodeStatement[]; renders?: CodeValue[] };
+    // `seed` (client data layer, slice 1a) is an OPTIONAL case-level map { slotKey → { varName →
+    // value-expr } } that reproduces a component's client view-state: its value-exprs are evaluated
+    // once (in the retained scope/context, like setup) and installed as context.seed for the renders,
+    // exercising the same seeding path the server uses. Absent = today's protocol, unchanged.
+    const c = JSON.parse(caseJson) as
+        { expr?: CodeValue; setup?: CodeStatement[]; renders?: CodeValue[]; seed?: { [slotKey: string]: { [varName: string]: CodeValue } } };
     // Memoize like the live client (and like the C# runner, whose Memo is always on): a
     // where/orderBy memo-key collision — and the component slot identity — only surface when the
     // cache is active, so the conformance suite must exercise the cached path to prove both twins agree.
@@ -1586,6 +1612,15 @@ function runConformance(caseJson: string): string {
     let result: ExecValue = { type: "nothing" };
     if (c.renders) {
         for (const stmt of c.setup ?? []) executeStatement(stmt, scope, context);
+        if (c.seed) {
+            const seed: { [slotKey: string]: { [varName: string]: ExecValue } } = {};
+            for (const slotKey in c.seed) {
+                seed[slotKey] = {};
+                for (const varName in c.seed[slotKey])
+                    seed[slotKey][varName] = executeValue(c.seed[slotKey][varName], scope, context).value;
+            }
+            context.seed = seed;
+        }
         for (const render of c.renders) result = executeValue(render, scope, context).value;
     } else {
         result = executeValue(c.expr!, scope, context).value;
