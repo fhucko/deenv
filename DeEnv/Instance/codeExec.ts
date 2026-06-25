@@ -58,7 +58,11 @@ interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id:
 // literal or where/orderBy result). ElementTypeName is the member type (set/dict only).
 interface ExecArray { type: "array"; kind: "set" | "dict" | "list"; items: ExecArrayItem[]; id: number; elementTypeName?: string; sourcePath?: string; }
 interface ExecArrayItem { key: number; value: ExecValue; }
-interface ExecFunction { type: "fn"; fn: CodeFunction; scope: ExecScope; capturedAmbient?: AmbientFrame | null; }
+// `handlerSlot` (client data layer, slice 4): the render-slot path active when an onClick handler closure was
+// built (stamped by executeTag), so a click can report the handler's (slot, fn-id) to the server's action-miss
+// harvest — the slot path is reset per render, so it must be captured on the closure at build time. Set only on
+// onClick handler closures; absent on every other fn.
+interface ExecFunction { type: "fn"; fn: CodeFunction; scope: ExecScope; capturedAmbient?: AmbientFrame | null; handlerSlot?: string; }
 interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
 // A data context: staged field writes over a parent, read-through. live = the root (writes go
 // live); a sub-context (ctx.new) stages until commit. Staged keyed by object reference.
@@ -1250,8 +1254,22 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
 function executeTag(codeTag: CodeTag, scope: ExecScope, context: ExecContext): ExecTag {
     const attributes: { [name: string]: ExecResult } = {};
     for (const attr of codeTag.attributes) attributes[attr.name] = executeValue(attr.value, scope, context);
+    // Stamp this element's onClick handler closure with the LIVE slot path (client data layer, slice 4):
+    // executeTagChildren pushed this element's static index (and any enclosing foreach row identity) before
+    // rendering it, so slotPath is the handler's render-slot here — capture it on the closure so a later click
+    // can report (slot, fn-id) to the server's action-miss harvest (the slot path is reset each render, so it
+    // cannot be recovered at click time otherwise). The server derives the SAME key during its reproduced
+    // render (CodeExecutor.ExecuteTag), so the two match. Twin of the C# indexing.
+    const onClick = attributes["onClick"]?.value;
+    if (onClick != null && onClick.type === "fn") onClick.handlerSlot = slotPath.join("/");
     return { type: "tag", name: codeTag.name, attributes, children: executeTagChildren(codeTag.children, scope, context) };
 }
+
+// The address of an onClick handler closure: its render-slot path joined with its lambda's twin-stable
+// fn-id (slot alone is not unique — every foreach row's button shares the lambda AST). Twin of
+// CodeExecutor.HandlerKey; both must derive identically so the server's reproduced index matches the
+// handler the client reports.
+function handlerKey(slot: string, fnId: number): string { return slot + "#fn" + fnId; }
 
 function executeTagChild(child: CodeTagChild, scope: ExecScope, context: ExecContext): ExecTagChild[] {
     switch (child.type) {

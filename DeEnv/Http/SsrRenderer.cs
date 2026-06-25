@@ -176,14 +176,20 @@ public sealed class SsrRenderer
     // path too — same shape + effect as Render's. The WS now ships this state (slice 1b: ws.ts slotState →
     // HandleRefetch rebuilds it via SlotStateFromWire), so a client-toggled popup's demanded data is
     // harvested + shipped. Null = today's behavior (no mounted stateful component shipped state).
+    // `harvestAction` (client data layer, slice 4 — the action-miss round-trip) is the (slot, fn-id) key of a
+    // CLICK HANDLER the client could not complete because it read un-shipped data. When present, the server
+    // reproduces the render (binding that handler's closure — its captured row/locals), then INVOKES it
+    // READ-ONLY to harvest the data it reads (structural privacy ships it); the client merges it + re-invokes
+    // the handler over the now-present data. Null = a normal render miss (today's path), no handler invoke.
     public JsonObject RenderState(
         string urlPath, IReadOnlyDictionary<string, IExecValue>? sessionVars, ExecObject? warmDb,
         int lastIdFloor = 0, int? principalUserId = null,
-        IReadOnlyDictionary<string, IReadOnlyDictionary<string, IExecValue>>? seed = null)
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, IExecValue>>? seed = null,
+        string? harvestAction = null)
     {
         var context = new ExecContext { Seed = seed };
         context.LastId.Value = Math.Min(0, lastIdFloor);
-        var (_, _, scope, _, _) = ExecuteRender(urlPath, context, sessionVars, warmDb, principalUserId);
+        var (_, _, scope, _, _) = ExecuteRender(urlPath, context, sessionVars, warmDb, principalUserId, harvestAction);
         return ClientState.Serialize(scope, context);
     }
 
@@ -192,9 +198,14 @@ public sealed class SsrRenderer
     // (which owns its own chrome) or the root page. `Title` already joins them under the root label.
     private (IExecTagChild Result, string Title, ExecScope Scope, int Status, IReadOnlyList<string> Trail) ExecuteRender(
         string urlPath, ExecContext context, IReadOnlyDictionary<string, IExecValue>? sessionVars = null,
-        ExecObject? warmDb = null, int? principalUserId = null)
+        ExecObject? warmDb = null, int? principalUserId = null, string? harvestAction = null)
     {
         var ui = _ui!;
+        // Action-miss harvest (client data layer, slice 4): opt the render into indexing its onClick handler
+        // closures (by (slot, fn-id)), so after the render the named handler can be looked up + invoked
+        // read-only to harvest the data it reads. Only when an action is present, so a normal render is
+        // unchanged (HandlerIndex stays null → ExecuteTag does no indexing).
+        if (harvestAction != null) context.HandlerIndex = new Dictionary<string, ExecFunction>();
 
         // The bound principal + the access read floor (M-auth), built FIRST so the SAME floor gates BOTH
         // the graph load (DbBridge.LoadRoot below) AND the executor's `sys.extent(...)` listing (threaded
@@ -353,6 +364,14 @@ public sealed class SsrRenderer
 
         if (result is not IExecTagChild child)
             throw new CodeRuntimeException("The render did not return a renderable value.");
+
+        // Action-miss harvest (client data layer, slice 4): the render reproduced the client's exact tree and
+        // indexed its onClick handlers; now invoke the one the client clicked READ-ONLY, so the data IT reads
+        // (which the render itself never touched — hence un-shipped) records as displayed leaves and ships.
+        // Runs AFTER the render (so the handler's closure — its captured foreach row, its ambient ctx — is the
+        // SAME one the client holds) and BEFORE the harvest serialize below. A no-op when the action's handler
+        // is not in this render (a stale intent). The render() must restore the live ambient first — done above.
+        if (harvestAction != null) exec.InvokeHandlerForHarvest(harvestAction, context);
 
         // The first-paint HTTP status: the (possibly render-assigned) `status` system var. The
         // generic render's NotFound branch sets it to 404; read back here.

@@ -297,6 +297,29 @@ unwrapped.
 stale-flags `setRef` coarse-stales (captured at tx-begin), so a setRef-then-throw handler leaks NO refetch
 (architecture-reviewer caught it; the snapshot subsumes both `invalidateExtents` + the undo's own staling).
 
+**Slice 4 — DONE** (built + reviewed *sound*, suite **535/535**, 2026-06-26): the ACTION-MISS round-trip.
+A button whose handler reads UNLOADED data now completes: client catches the VNA (a read-before-write =
+zero buffered sends) → aborts (slice 3) → records a `pendingAction` (handler fn-id + slot + state) →
+fetches; the reply re-invokes the handler in a fresh transaction over the merged data. SERVER harvest
+(the spec's server-invoke-a-handler design): `HandleRefetch` carries `handlerFn`/`handlerSlot`; the
+reproduced render indexes every onClick closure by `(slot, fn-id)` (`HandlerIndex`, built ONLY for an
+action-carrying refetch); `InvokeHandlerForHarvest` runs the named handler under `MemoBypass` + `ReadOnly`
+(writes → discardable `ReadOnlyOverlay`; set add/remove suppressed; host actions are `ExecNothing`
+server-side) to harvest its reads via structural privacy. **SECURITY airtight** (architecture-reviewer
+verified in code): the index only holds render-created handlers (no arbitrary invoke); reads are
+floor-gated (the floor-loaded graph + the floor-gated `sys.extent`); and EVERY effect — incl. `sys.delete`/
+`publish`/`setPassword` — is a no-op server-side (the executor has NO `IHostActions` path), so a harvested
+handler causes no server side effect, independent of `ReadOnly`. Twin: the `(slot,fn-id)` addressing is
+twin-identical metadata (proven by the e2e); the harvest is server-only (no conformance case, like
+`RenderState`/the floor). The `didWork` discriminator keeps a write-then-incidental-VNA handler on today's
+flush+re-throw (the re-invoke carries NO action → a second/multi-hop miss safely re-throws, no loop). All
+new server modes default off → normal render byte-identical (conformance 114/114 unchanged). v1 limits
+(documented): single-hop harvest, read-then-write only.
+
+**Tracked (minor, non-blocking, from the slice-4 review):** (1) add a deterministic `CodeClientTests` for
+the `didWork==true` write-then-spurious-VNA branch (covered by TodoApp today, not pinned by a focused
+test); (2) a `Console.Error` log on a persistent harvest error (silent best-effort swallow today).
+
 ## GC — the LAST slice (renamed from "Slice 2": it must ship after the round-trip can re-pull)
 
 The client graph (`uiStatic.state.objects/arrays`) grows as views pull data and never shrinks. Add the

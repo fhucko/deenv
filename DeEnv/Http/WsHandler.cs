@@ -41,6 +41,13 @@ public sealed record WsRequest
     // HandleRefetch rebuilds it into the `seed` RenderState applies, so the server reproduces the client's
     // EXACT render (a toggled-open popup) and ships the data it demands. Same shape/handling as `Vars`.
     public JsonElement? SlotState { get; init; }
+    // refetch: the ACTION-MISS intent (client data layer, slice 4) — present when this refetch is driven by a
+    // CLICK HANDLER that read un-shipped data. `HandlerFn` is the clicked handler closure's twin-stable lambda
+    // fn-id; `HandlerSlot` its render-slot path. HandleRefetch combines them (CodeExecutor.HandlerKey) into the
+    // key the server uses to locate that handler in the reproduced render and invoke it read-only to harvest
+    // the data it reads. Absent on an ordinary (render-miss) refetch — then no handler is invoked (today's path).
+    public int? HandlerFn { get; init; }
+    public string? HandlerSlot { get; init; }
     // login: the credentials a `login` op carries. `name` is the User's login identifier
     // (UserConvention.NameField), `password` the plaintext verified against the stored hash.
     public string? Name { get; init; }
@@ -616,10 +623,20 @@ public sealed class WsHandler
         // applies, so the server reproduces the client's EXACT render (the toggled-open popup) and structural
         // privacy harvests + ships the data that state demands.
         var seed = SlotStateFromWire(req.SlotState, byId, lastId);
+
+        // The action-miss intent (client data layer, slice 4): when this refetch is driven by a click handler
+        // that read un-shipped data, the client sends the handler's (slot, fn-id). Combine them into the key
+        // RenderState uses to locate that handler in the reproduced render and invoke it READ-ONLY, harvesting
+        // the data it reads. Absent → a normal render-miss refetch (no handler invoke). Built via the SAME
+        // HandlerKey both twins derive, so the server's reproduced index matches the client's reported handler.
+        var harvestAction = req.HandlerFn is { } fnId && req.HandlerSlot is { } slot
+            ? Code.CodeExecutor.HandlerKey([.. slot.Split('/', StringSplitOptions.RemoveEmptyEntries)], fnId)
+            : null;
+
         // The refetch renderer gets the SAME live registry provider as the SSR path, so a refetch
         // re-render reflects the kernel's current instances — no stale `instances` list.
         var state = new SsrRenderer(_store, _desc, registry: _registry)
-            .RenderState(pathStr, sessionVars, db, lastId, principalUserId, seed);
+            .RenderState(pathStr, sessionVars, db, lastId, principalUserId, seed, harvestAction);
         return Serialize(new RefetchResponse { State = state });
     }
 

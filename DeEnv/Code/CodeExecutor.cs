@@ -119,13 +119,23 @@ public sealed class CodeExecutor
             {
                 if (ExecuteValue(left, scope, context) is not ExecObject obj)
                     throw new CodeRuntimeException("Cannot assign a field on a non-object.");
+                // READ-ONLY harvest (client data layer, slice 4): the write stages into the throwaway overlay,
+                // never the loaded graph — so the prop ships at its STORE value (the harvest reads the data the
+                // handler READ, not what it wrote) while the handler still reads its own write back below
+                // (RecordPropAccess/the overlay-first read). Discarded with the context. Checked FIRST so a
+                // read-only invoke never mutates in place regardless of the ambient ctx.
+                if (context.ReadOnly)
+                {
+                    if (!context.ReadOnlyOverlay.TryGetValue(obj, out var ov)) context.ReadOnlyOverlay[obj] = ov = [];
+                    ov[member.Name] = value;
+                }
                 // In a staging context the write stages — the live object is untouched until commit.
                 // Gated to persisted (positive-id) objects: a transient draft (sys.new, id<0) writes
                 // live, so a create-form's draft is not entangled in the surrounding edit transaction.
                 // (id>0 is today's proxy for "real identity in the live store". A just-added object
                 // still awaiting its negative→real remap is also id<0 but has no route, so nothing
                 // renders it in a staging form — revisit this gate if that ever changes.)
-                if (obj.Id > 0 && NearestStagingCtx(context) is { } staging)
+                else if (obj.Id > 0 && NearestStagingCtx(context) is { } staging)
                 {
                     if (!staging.Staged.TryGetValue(obj, out var fields)) staging.Staged[obj] = fields = [];
                     fields[member.Name] = value;
@@ -323,6 +333,15 @@ public sealed class CodeExecutor
 
             if (target is not ExecObject obj)
                 throw new CodeRuntimeException($"Cannot read '{member.Name}' on a non-object.");
+
+            // READ-ONLY harvest overlay read (client data layer, slice 4): a value the handler itself wrote
+            // this run wins, so it reads its own writes back (branch-correctness) — but the read is NOT
+            // recorded as an accessed prop (the value came from the handler, not the store; recording it would
+            // ship a fabricated leaf). A prop the handler did NOT write falls through to the store value below
+            // and IS recorded — that is the real demanded data.
+            if (context.ReadOnly && context.ReadOnlyOverlay.TryGetValue(obj, out var rov)
+                && rov.TryGetValue(member.Name, out var rovValue))
+                return rovValue;
 
             // Overlay read: in a staging context the staged value for this (object, field) wins.
             if (NearestStagedValue(obj, member.Name, context) is { } stagedValue)
@@ -1017,6 +1036,45 @@ public sealed class CodeExecutor
         return ExecuteBlock(fn.Body, callScope, context) ?? new ExecNothing();
     }
 
+    // Invoke an indexed onClick handler closure READ-ONLY to harvest its data footprint (client data layer,
+    // slice 4 — the action-miss round-trip). After RenderState reproduced the render and indexed the
+    // handlers, the server looks up the one the client clicked (by its (slot, fn-id) key) and runs it here:
+    //   • at the TOP level (DepStack empty) so its reads record as displayed LEAVES — exactly what
+    //     ClientState.Serialize ships — rather than as private deps of an enclosing computation; and
+    //   • under ReadOnly, so its writes stage into a DISCARDABLE overlay (ReadOnlyOverlay), never the loaded
+    //     graph — so a written prop still ships at its STORE value (the harvest demands the data the handler
+    //     READ, not what it wrote) while the handler reads its own write back, and the one store-touching
+    //     effect (a db set add/remove) is suppressed. So the invoke is EFFECT-FREE by construction, and its
+    //     reads stay floor-gated (the graph was floor-loaded).
+    // A missing key (the handler is not in this render — a stale/foreign intent) is a no-op: nothing is
+    // harvested, the client re-renders over whatever shipped. The closure's captured ambient (its birthplace
+    // `ctx`) is restored by InvokeClosure, exactly like the client invoking it. No-throw: a runtime error in
+    // the handler is swallowed (the harvest is best-effort — whatever it read BEFORE the error still ships,
+    // and the client's own re-invoke surfaces a genuine bug), so a planning invoke never fails the refetch.
+    public void InvokeHandlerForHarvest(string handlerKey, ExecContext context)
+    {
+        if (context.HandlerIndex is not { } index || !index.TryGetValue(handlerKey, out var handler)) return;
+        var wasReadOnly = context.ReadOnly;
+        var wasBypass = context.MemoBypass;
+        context.ReadOnly = true;
+        // Bypass the memo cache for the WHOLE handler run — exactly as the client runs a handler under
+        // memoBypass (ui.ts runWithMemoBypass). WITHOUT this, a fn the handler calls (e.g. `bump(c)`) would be
+        // wrapped in Memoize, pushing a Deps frame; its reads would then record as private DEPENDENCIES (and
+        // pending leaves dropped when the fn returns no tags), NOT as displayed LEAVES — so the harvest would
+        // ship nothing. Bypassing keeps DepStack empty throughout, so every read records straight as a leaf
+        // (ClientState ships it). This is the heart of "the view/action is the query": the handler's reads ARE
+        // the demanded data.
+        context.MemoBypass = true;
+        try { InvokeClosure(handler, [], context); }
+        catch (Exception ex) when (ex is CodeRuntimeException or InvalidOperationException)
+        {
+            // Best-effort harvest: the reads made before the error already recorded as leaves and ship; the
+            // client's authoritative re-invoke (over the merged data) re-runs the handler and surfaces a real
+            // bug there. A planning invoke must never break the refetch.
+        }
+        finally { context.ReadOnly = wasReadOnly; context.MemoBypass = wasBypass; }
+    }
+
     // Like InvokeFunction but on an ExecFunction closure — restores its captured ambient (RunBody),
     // so a component's setup body and its returned render view resolve the ambient context that was
     // provided inside the component's body.
@@ -1063,6 +1121,10 @@ public sealed class CodeExecutor
     // (a caller transitively depends on what its callees read).
     public static IExecValue Memoize(string key, ExecContext context, Func<IExecValue> compute)
     {
+        // Memo bypass (client data layer, slice 4 — the action-miss harvest): run the compute directly, with
+        // NO Deps frame and NO caching, so the reads inside stay in output position and harvest as leaves
+        // (the twin of the client's runWithMemoBypass). Only set while invoking a handler to plan its fetch.
+        if (context.MemoBypass) return compute();
         var deps = new Deps();
         var leaves = new LeafFrame();
         var lastIdBefore = context.LastId.Value;
@@ -1156,10 +1218,10 @@ public sealed class CodeExecutor
         switch (sysFn.Method)
         {
             case "add":
-                AddToCollection(sysFn.Target, ExecuteValue(args[0], scope, context));
+                AddToCollection(sysFn.Target, ExecuteValue(args[0], scope, context), context);
                 return new ExecNothing();
             case "remove":
-                RemoveFromCollection(sysFn.Target, ExecuteValue(args[0], scope, context));
+                RemoveFromCollection(sysFn.Target, ExecuteValue(args[0], scope, context), context);
                 return new ExecNothing();
             // setEntry(key, value): a dictionary create/replace. Dict entries persist through
             // the PATH-addressed addEntry WS op (handled on the client); server-side (SSR /
@@ -1197,12 +1259,16 @@ public sealed class CodeExecutor
         ExecuteValue(arg, scope, context) as ExecFunction
         ?? throw new CodeRuntimeException("Expected a lambda argument.");
 
-    private void AddToCollection(ExecArray coll, IExecValue value)
+    private void AddToCollection(ExecArray coll, IExecValue value, ExecContext context)
     {
         // Persist to a db set (addressed by its intrinsic id); a set member is keyed
         // by its own object identity. A transient object (negative id) is minted into
         // the extent first — its id flips positive, so it is now "in db" by definition.
-        if (coll is { Kind: ArrayKind.Set, ElementTypeName: { } elemType } && _store != null && value is ExecObject obj)
+        // READ-ONLY (client data layer, slice 4 — a planning re-invoke): the in-memory add still happens (so
+        // a later read in the handler sees it + harvests) but the STORE is left untouched — the graph is
+        // discarded after harvesting, so this is the one store-touching effect the read-only invoke suppresses.
+        if (coll is { Kind: ArrayKind.Set, ElementTypeName: { } elemType } && _store != null
+            && !context.ReadOnly && value is ExecObject obj)
         {
             if (obj.Id < 0)
             {
@@ -1218,13 +1284,14 @@ public sealed class CodeExecutor
         }
     }
 
-    private void RemoveFromCollection(ExecArray coll, IExecValue value)
+    private void RemoveFromCollection(ExecArray coll, IExecValue value, ExecContext context)
     {
         var item = coll.Items.FirstOrDefault(i => ReferenceEquals(i.Value, value)
             || (i.Value is ExecObject a && value is ExecObject b && a.Id == b.Id));
         if (item != null) coll.Items.Remove(item);
 
-        if (coll.Kind == ArrayKind.Set && _store != null && value is ExecObject obj && obj.Id > 0)
+        // READ-ONLY (slice 4): the in-memory remove stands but the store is left untouched (see AddToCollection).
+        if (coll.Kind == ArrayKind.Set && _store != null && !context.ReadOnly && value is ExecObject obj && obj.Id > 0)
             _store.RemoveFromSet(coll.Id, obj.Id);
     }
 
@@ -1263,9 +1330,26 @@ public sealed class CodeExecutor
     public ExecTag ExecuteTag(CodeTag codeTag, ExecScope scope, ExecContext context)
     {
         var attrs = codeTag.Attributes.ToDictionary(p => p.Name, p => ExecuteValue(p.Value, scope, context));
+        // Index this element's onClick handler closure by its (render-slot, lambda fn-id) key (client data
+        // layer, slice 4). The slot path is LIVE here — ExecuteTagChildren pushed this element's static index
+        // (and any enclosing foreach row identity) before rendering it — so the key matches exactly the one
+        // the CLIENT reports for the handler it clicked (the same twin-stable derivation). The server's
+        // action-miss harvest then looks the closure up + invokes it read-only. Only built when a render
+        // opted in (HandlerIndex non-null, i.e. an action-carrying refetch), so a normal render is unchanged.
+        if (context.HandlerIndex is { } index
+            && attrs.GetValueOrDefault("onClick") is ExecFunction handler)
+            index[HandlerKey(context.SlotPath, handler.Function.Id)] = handler;
         var children = ExecuteTagChildren(codeTag.Children, scope, context);
         return new ExecTag { Name = codeTag.Name, Attributes = attrs, Children = children };
     }
+
+    // The address of an onClick handler closure: its enclosing render-slot path joined with its lambda's
+    // twin-stable fn-id. Built identically on both twins (the client stamps it on the closure at render so a
+    // click can report it; the server indexes by it during the reproduced render) — the slot path alone is
+    // not unique (every foreach row's button shares the lambda AST), so the fn-id disambiguates the static
+    // shape and the slot the row. Keep in lockstep with codeExec.ts handlerKey.
+    public static string HandlerKey(IReadOnlyList<string> slotPath, int fnId) =>
+        string.Join("/", slotPath) + "#fn" + fnId;
 
     private IExecTagChild[] ExecuteTagChild(ICodeTagChild child, ExecScope scope, ExecContext context) => child switch
     {

@@ -382,6 +382,28 @@ Feature: The access floor (read enforcement by principal)
     When the visitor clicks the panel's Show control
     Then a gated row titled "Gate #3" eventually appears
 
+  # ── client data layer, slice 4 — the ACTION-MISS round-trip (real browser) ──────────────────
+  # 1b shipped the data a RENDER demands; slice 4 does the same for the data a CLICK HANDLER demands. The
+  # fixture SHOWS the counter's value `a` (= 0, shipped) but NEVER reads its self-`link` reference on first
+  # paint, so `c.link` is un-shipped. The Bump handler increments THROUGH that link: `c.link.a = c.link.a +
+  # 1`. On click the handler reads `c.link` -> "Value not available"; TODAY (slice 3) that VNA flushes the
+  # pre-throw sends and re-throws -- the action SILENTLY DIES, the value stays 0. After slice 4 the handler
+  # transaction CATCHES the VNA, ABORTS atomically (zero partial writes -- slice 3's rollback), RECORDS the
+  # pending action (its handler fn-id + render-slot + view-state), and FETCHES: the server reproduces the
+  # exact render, locates that handler closure by (slot, fn-id), INVOKES it READ-ONLY (its writes stage into
+  # the throwaway in-memory graph that is discarded), and HARVESTS its reads (`c.link`) through the same
+  # structural-privacy + access floor. The client merges the now-present data and RE-INVOKES the handler
+  # over it -- atomically, in a fresh transaction -- so the increment lands on the visible `a` (0 -> 1) and
+  # persists. Reverting the slice-4 wiring leaves the action dead (the counter never increments).
+  @milestone-client-data
+  Scenario: A handler that reads un-shipped data completes its action via the action-miss round-trip
+    Given the action-miss app is served
+    And a visitor opens the action-miss app at "/"
+    Then the counter reads 0
+    When the visitor clicks the counter's Bump control
+    Then the counter eventually reads 1
+    And the stored counter value is 1
+
   # ── read-only affordances: write controls hidden when the principal cannot write ──
   # The generic UI gates Save (form-actions), New (new-btn), and Remove (set-remove) on sys.canWrite(type,
   # verb) — server-resolved from the floor, shipped like sys.extent. So a read-only principal (e.g. an

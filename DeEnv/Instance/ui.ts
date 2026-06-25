@@ -622,11 +622,19 @@ function wireEvents(el: HTMLElement, tag: ExecTag): void {
             // Run the handler as a commit-on-success transaction (client data layer, slice 3): its writes
             // apply optimistically but their WS sends BUFFER until it completes cleanly — so a handler is
             // atomic and nothing is sent mid-run. A genuine-bug throw rolls every write back and sends
-            // nothing (runHandlerTransaction re-renders + re-throws); a missing-data (VNA) throw keeps
-            // today's behavior until slice 4 wires the action-miss fetch. On success the trailing renderUi
-            // paints once as before.
-            runHandlerTransaction(() =>
-                runWithMemoBypass(() => callFunction(fn, { lastId: uiStatic.lastId, ambient: rootAmbient() })));
+            // nothing (runHandlerTransaction re-renders + re-throws). A missing-data (VNA) throw is the
+            // ACTION-MISS (slice 4): the transaction aborts atomically, RECORDS this handler (its fn-id +
+            // render-slot — captured below) as a pending action, and FETCHES; on the reply the server-
+            // harvested data merges and the handler RE-RUNS over it (the `body` thunk below). On success the
+            // trailing renderUi paints once as before.
+            const body = () => runWithMemoBypass(() => callFunction(fn, { lastId: uiStatic.lastId, ambient: rootAmbient() }));
+            // The action identity for the miss path: the handler's twin-stable fn-id + the render-slot
+            // stamped on its closure (codeExec.ts executeTag). undefined when not stamped (defensive — a
+            // handler built outside a render); then a VNA falls back to today's passthrough.
+            const action = fn.handlerSlot != null
+                ? { fnId: fn.fn.id, slot: fn.handlerSlot, reinvoke: body }
+                : undefined;
+            runHandlerTransaction(body, action);
             renderUi();
         };
     } else {

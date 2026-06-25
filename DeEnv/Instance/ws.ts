@@ -104,14 +104,14 @@ let txStaleSnapshot: Map<string, boolean> | null = null;
 //    fetch → re-invoke-over-the-now-present-data (the proper atomic action-miss round-trip); until then the
 //    VNA path is left exactly as it is today, so the existing handler-driven suite is unchanged. (A handler
 //    that hits a spurious sys.schema-under-memoBypass VNA after its real writes is precisely this case.)
-function runHandlerTransaction(body: () => void): void {
+function runHandlerTransaction(body: () => void, action?: PendingAction): void {
     if (txDepth > 0) { body(); return; }   // already in a transaction: just participate (defensive)
     txDepth = 1;
     txJournalMark = journal.length;
     txStartGen = stateGen;
     txSendBuffer = [];
     // Capture the out-of-journal client state (see the note above): the refetch flag and a snapshot of
-    // every cache entry's stale flag, so the non-VNA abort can restore the EXACT pre-handler state.
+    // every cache entry's stale flag, so an abort can restore the EXACT pre-handler state.
     txStartNeedsServerData = needsServerData;
     txStaleSnapshot = new Map();
     for (const [key, e] of uiStatic.cache) txStaleSnapshot.set(key, e.stale);
@@ -120,33 +120,60 @@ function runHandlerTransaction(body: () => void): void {
         flushHandlerTx();   // success: send everything the handler buffered, in order
     } catch (e) {
         if (e instanceof Error && e.message === "Value not available") {
-            // Action-miss (slice 4 territory) — keep EXACTLY today's net effect: flush the pre-throw sends
-            // (today these fired per-statement, so the sent-set is identical), leave the optimistic writes +
-            // journal standing, and re-throw — WITHOUT rendering here, because today the throw also skipped
-            // the handler's trailing renderUi (the eventual WS reply re-renders). Rolling back is wrong (it
-            // would revert the real work the handler did before the miss); rendering here is a behavior
-            // change (a synchronous extra render + refetch can race the optimistic add). Slice 4 replaces
-            // this branch with catch → record → fetch → re-invoke over the now-present data.
-            flushHandlerTx();
+            // A VALUE-NOT-AVAILABLE throw is one of two very different things, told apart by whether the
+            // handler had already BUFFERED a send (done real work) before it threw:
+            //
+            //  • NO buffered send yet → a genuine ACTION-MISS (client data layer, slice 4): the handler could
+            //    not even start because it READ data the client does not hold (the canonical "read unloaded
+            //    data to compute, then write" — the read comes first). ABORT atomically (it made no committed
+            //    write — there is nothing partial), RECORD this handler as a pending action, and FETCH: the
+            //    server reproduces the exact render, invokes this handler READ-ONLY, harvests the data it reads
+            //    and ships it; on the reply (onWsMessage) the data merges and the handler RE-RUNS over it and
+            //    completes. Do NOT re-throw — the action is in flight, not failed. (Requires an `action`: a
+            //    handler built outside a render carries no slot to address it by; then fall through.)
+            //
+            //  • a send ALREADY buffered → the handler DID its real work (e.g. a `.add` that staged an
+            //    arrayAdd) and the VNA is INCIDENTAL — a trailing read over un-shipped data (the spurious
+            //    sys.schema/sys.extent-under-memoBypass case the slice-3 note names). Keep TODAY's behavior:
+            //    flush the pre-throw sends (the real work persists) + re-throw. Re-running this on the server
+            //    read-only would mis-harvest (it reads client-only draft state the server cannot reproduce —
+            //    "Unknown field" — and would re-do the mutation), so it must NOT take the action-miss path.
+            const didWork = (txSendBuffer?.length ?? 0) > 0;
+            if (action != null && !didWork) {
+                abortHandlerTx();
+                pendingAction = action;
+                needsServerData = true; // the fetch must carry the action even if nothing is stale
+                renderUi();             // paint the rolled-back state; the eventual reply re-runs + repaints
+                maybeRefetch();
+                return;
+            }
+            flushHandlerTx();   // the handler did real work (or carries no action): flush pre-throw sends + re-throw
             throw e;
         }
-        // Genuine bug — atomic rollback. Undo the journal slice this handler pushed (reverse order), then
-        // restore the OUT-OF-JOURNAL state the undo does not cover — `needsServerData` and every cache
-        // entry's stale flag — back to their begin values. This reverts a `setRef`'s coarse extent-staling +
-        // needsServerData (and the staling the undo itself just did) so the abort leaves ZERO trace: the
-        // trailing renderUi finds nothing stale and nothing needed → maybeRefetch sends NOTHING. (Restore
-        // AFTER the undo: the undo re-stales prop/member entries, which this snapshot then unwinds.)
-        for (let i = journal.length - 1; i >= txJournalMark; i--) { journal[i].undo(); journal[i].onReject?.(); }
-        journal.length = txJournalMark;
-        stateGen = txStartGen;
-        needsServerData = txStartNeedsServerData;
-        for (const [key, wasStale] of txStaleSnapshot!) { const e = uiStatic.cache.get(key); if (e) e.stale = wasStale; }
-        txStaleSnapshot = null;
-        txSendBuffer = null;
-        txDepth = 0;
+        // Genuine bug — atomic rollback, then re-throw so the bug still surfaces.
+        abortHandlerTx();
         renderUi();
         throw e;
     }
+}
+
+// Atomically roll back the current handler transaction (client data layer, slice 3): undo the journal slice
+// this handler pushed (reverse order), then restore the OUT-OF-JOURNAL state the undo does not cover —
+// `needsServerData` and every cache entry's stale flag — back to their begin values. This reverts a
+// `setRef`'s coarse extent-staling + needsServerData (and the staling the undo itself just did) so the abort
+// leaves ZERO trace: a trailing renderUi finds nothing stale and nothing needed → maybeRefetch sends NOTHING.
+// (Restore AFTER the undo: the undo re-stales prop/member entries, which this snapshot then unwinds.) Discards
+// the buffered sends and leaves the transaction. Shared by the genuine-bug abort and the action-miss abort.
+function abortHandlerTx(): void {
+    for (let i = journal.length - 1; i >= txJournalMark; i--) { journal[i].undo(); journal[i].onReject?.(); }
+    journal.length = txJournalMark;
+    stateGen = txStartGen;
+    needsServerData = txStartNeedsServerData;
+    if (txStaleSnapshot != null)
+        for (const [key, wasStale] of txStaleSnapshot) { const e = uiStatic.cache.get(key); if (e) e.stale = wasStale; }
+    txStaleSnapshot = null;
+    txSendBuffer = null;
+    txDepth = 0;
 }
 
 // Flush + clear the current handler transaction's buffered sends (in handler order), then leave the
@@ -158,6 +185,18 @@ function flushHandlerTx(): void {
     txDepth = 0;
     for (const text of buffered) wsSendText(text);
 }
+
+// ── action-miss pending action (client data layer, slice 4) ────────────────────────────────────────────
+//
+// A click handler that read un-shipped data is ABANDONED (atomic rollback) and recorded here: its (slot,
+// fn-id) — which the refetch ships so the server invokes the SAME handler read-only to harvest its data — plus
+// a `reinvoke` thunk that re-runs the handler. On the refetch reply (onWsMessage), once the harvested data has
+// merged, the handler re-runs over it in a FRESH transaction (so the re-run is atomic too) and completes. The
+// abandoned attempt left no trace (the abort), so the action runs exactly once FOR REAL. Single-slot: a second
+// miss while one is pending overwrites it (the latest interaction wins — the older one is superseded), the
+// same single-in-flight discipline the refetch itself uses.
+interface PendingAction { fnId: number; slot: string; reinvoke: () => void; }
+let pendingAction: PendingAction | null = null;
 
 // The reply for msgId was ok: the mutation is server-committed, the entry retires.
 function commitJournal(msgId: number): void {
@@ -523,6 +562,19 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
             if (e.stale || e.incomplete || (key.startsWith("fn:") && (e.result.type === "tag" || e.result.type === "fn")))
                 uiStatic.cache.delete(key);
         markReadyIfSettled(); // the connect-time settle (if any) is now applied
+        // ACTION-MISS re-invoke (client data layer, slice 4): the server harvested the data the abandoned
+        // handler reads and it has now merged, so RE-RUN the handler over the now-present data — in a FRESH
+        // transaction (atomic, commit-on-success, exactly like the original click), so the writes it abandoned
+        // now actually apply + persist. Clear the pending action FIRST (a re-run that misses AGAIN would
+        // re-arm it via the same VNA path — but the server reproduced exactly what it reads, so it completes).
+        // runHandlerTransaction renders the rolled-back state on its own abort; the trailing renderUi below
+        // paints the committed result. Runs BEFORE that renderUi so the handler's optimistic writes are in the
+        // tree it paints.
+        if (pendingAction != null) {
+            const action = pendingAction;
+            pendingAction = null;
+            runHandlerTransaction(action.reinvoke);
+        }
         renderUi();
         // A navigation that fired DURING this refetch found refetchInFlight set and self-serialized
         // (maybeRefetch no-op'd), leaving needsServerData set for the NEW path. The reply we just merged
@@ -570,8 +622,13 @@ function maybeRefetch(): void {
     // reproduces the EXACT client render — including a popup the client toggled open — and ships the
     // data that state demands (which a URL-only refetch never reaches). Client-only orchestration,
     // exactly like `vars`/sessionVars (no twin, no conformance).
-    wsSend({ op: "refetch", clientId: uiStatic.clientId, path: location.pathname,
-        vars: sessionVars(), slotState: slotState(), lastId: uiStatic.lastId.value });
+    // handlerFn/handlerSlot: the ACTION-MISS intent (client data layer, slice 4) — present when a click
+    // handler abandoned on un-shipped data; the server invokes that handler read-only in the reproduced
+    // render and harvests its data, which the reply merges before the handler re-runs (onWsMessage).
+    const refetch: { [k: string]: unknown } = { op: "refetch", clientId: uiStatic.clientId,
+        path: location.pathname, vars: sessionVars(), slotState: slotState(), lastId: uiStatic.lastId.value };
+    if (pendingAction != null) { refetch.handlerFn = pendingAction.fnId; refetch.handlerSlot = pendingAction.slot; }
+    wsSend(refetch);
 }
 
 function hasStaleEntry(): boolean {

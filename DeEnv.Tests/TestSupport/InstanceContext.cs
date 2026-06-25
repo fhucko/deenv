@@ -1131,6 +1131,62 @@ public class InstanceContext
             return <panel>
     """);
 
+    // Client data layer, slice 4 (the ACTION-MISS round-trip — proven in a real browser): a button handler
+    // that READS data the first paint never shipped, then WRITES based on it. The whole UI is a foreach over
+    // `db.counters`; each row SHOWS the counter's value `a` (so `a` is shipped) and a "Bump" button, but the
+    // render NEVER reads the counter's self-`link` reference — so `c.link` is un-shipped (only ACCESSED props
+    // ship, structural privacy). The Bump handler increments THROUGH the link: `c.link.a = c.link.a + 1`.
+    //
+    // THE ROUND-TRIP (why it proves slice 4 and nothing else does): on click the handler's first read is
+    // `c.link` — un-shipped on the client → "Value not available". TODAY (slice 3) the handler transaction's
+    // VNA branch flushes the pre-throw sends (none here) and re-throws, so the action DIES — `a` stays 0.
+    // After slice 4 the VNA is CAUGHT → the handler ABORTS atomically (slice 3's rollback: it made no writes
+    // before the miss, so nothing to undo) → a PENDING ACTION is recorded (the handler's fn-id + its render-
+    // slot + the live view-state) → a refetch ships that intent → the server reproduces the exact render,
+    // finds the handler closure at (slot, fn-id), invokes it READ-ONLY (the increment stages into the
+    // throwaway loaded graph, discarded) and HARVESTS its reads (`c.link`, which is `c` itself) → ships them
+    // → the client merges + RE-INVOKES the handler over the now-present `c.link`, so `c.link.a = 0 + 1` lands
+    // on the visible `a` (0 → 1) and persists (objectPropChange on the positive-id object). There is NO other
+    // path that increments `a`, so reverting the slice-4 wiring (catch/record/re-invoke OR the server harvest)
+    // leaves the action dead — `a` never moves.
+    //
+    // `link` is a SELF reference (the seed points the counter's link at its own id) so the harvested target
+    // IS the on-screen object — the increment lands on the SAME `a` the test observes, keeping the assertion
+    // direct. PUBLIC (no access rules) so the loop needs no login — slice 4 isolates the action-miss
+    // mechanism; the floor-gated harvest is already proven by 1a. A test fixture, so no designer-seed regen.
+    public static InstanceDescription ActionMissFixtureDb() =>
+        InstanceDescriptionLoader.Load(ActionMissFixtureApp);
+
+    private const string ActionMissFixtureApp = """
+    types
+        Db
+            counters set of Counter
+        Counter
+            a int
+            link Counter
+
+    initialData
+        Db 1
+            counters: [2]
+        Counter 2
+            a: 0
+            link: 2
+
+    ui
+
+        fn bump(c)
+            c.link.a = c.link.a + 1
+
+        fn render()
+            return <main>
+                foreach c in db.counters
+                    <div class="counter">
+                        <span class="counter-a">
+                            c.a
+                        <button class="bump" onClick={() => bump(c)}>
+                            "Bump"
+    """;
+
     // M-auth floor-hardening (Fix 3 — a throwing condition must DENY, not crash the render): the SAME
     // shape + seed, but the ONLY access rule's condition divides by zero (`1 / 0 == 1`). Integer `/` by a
     // zero divisor throws DivideByZeroException (CodeExecutor.ExecuteInfixOp) — a .NET exception, NOT a

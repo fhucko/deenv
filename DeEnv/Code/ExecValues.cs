@@ -226,6 +226,44 @@ public sealed class ExecContext
     // falls back to it after a lexical miss.
     public AmbientFrame? Ambient { get; set; }
 
+    // ── handler index (client data layer, slice 4 — the action-miss round-trip) ──────────────
+    // While reproducing a render, every onClick handler closure is indexed here by its
+    // (render-slot, lambda fn-id) key — the SAME key the client reports for the handler it clicked
+    // (built identically on both twins; the slot path + fn-id substrate is twin-stable). After the
+    // render, the server looks up the clicked handler and invokes it READ-ONLY (ReadOnly below) to
+    // harvest the data it reads (structural privacy ships it). Null until a render opts in
+    // (RenderState sets it only when the refetch carried an action) — so every other render is
+    // byte-identical (no indexing cost). See CodeExecutor.ExecuteTag / HandlerKey.
+    public Dictionary<string, ExecFunction>? HandlerIndex { get; set; }
+
+    // ── memo bypass (client data layer, slice 4) ─────────────────────────────────────────────
+    // True while the server runs a handler ONLY to harvest its reads (InvokeHandlerForHarvest) — the twin of
+    // the client's runWithMemoBypass (ui.ts), which runs every click handler with the memo cache off. With it
+    // on, Memoize runs its compute DIRECTLY (no Deps frame pushed, nothing cached), so a fn the handler calls
+    // does not wrap its reads in a computation — the reads stay in OUTPUT position (DepStack empty) and record
+    // as displayed LEAVES rather than private deps, which is exactly the data footprint the harvest must ship.
+    // Default false (a normal render memoizes as before).
+    public bool MemoBypass { get; set; }
+
+    // ── read-only invoke (client data layer, slice 4) ────────────────────────────────────────
+    // True while the server is invoking a handler ONLY to plan its data fetch (harvest its reads),
+    // never to commit its effects. The handler's writes are then a DISCARDABLE OVERLAY (ReadOnlyOverlay
+    // below) over the loaded graph — never an in-place mutation — exactly the spec's "writes stage into a
+    // throwaway overlay, discarded." This matters for the harvest's CORRECTNESS, not just effect-freedom: an
+    // in-place write (e.g. `c.a = c.a + 1`) would corrupt the value that prop ships (the harvest would ship
+    // the POST-write 1, then the client re-invoke would increment AGAIN to 2). Overlaying keeps `c.a` at its
+    // store value for the harvest while still letting the handler READ its own write (branch-correctness). The
+    // one store-touching path — a db set add/remove — is also suppressed (it mutates only the discarded
+    // in-memory collection). Reads still pass the access read floor (the graph was floor-loaded), so the
+    // harvest can never widen what the principal may read. Default false (every normal render).
+    public bool ReadOnly { get; set; }
+
+    // The discardable write overlay for a read-only harvest invoke (ReadOnly above): object-prop writes stage
+    // here (keyed by object reference, like ExecCtx.Staged) and object-prop reads consult it first, so the
+    // handler sees its own writes while the loaded graph stays UNMUTATED — its props ship at their store
+    // values. Discarded with the context after harvesting. Only ever populated under ReadOnly.
+    public Dictionary<ExecObject, Dictionary<string, IExecValue>> ReadOnlyOverlay { get; } = [];
+
     // ── component-state seed (client data layer, slice 1a) ───────────────────────
     // A render reproducing the CLIENT's exact view-state: keyed by a component's render-slot
     // (the `comp:<slotpath>` string ExecuteComponentValue builds), each entry overwrites that
