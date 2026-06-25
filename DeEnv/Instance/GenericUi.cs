@@ -461,15 +461,17 @@ public static class GenericUi
 
             fn SignInBar()
                 var state = { open: false }
-                fn expand()
-                    state.open = true
+                fn toggle()
+                    state.open = !state.open
                 fn render()
                     return <div class="sign-in-bar">
+                        <button class="sign-in" onClick={toggle}>
+                            if state.open
+                                "Close"
+                            else
+                                "Sign in"
                         if state.open
                             <LoginForm>
-                        else
-                            <button class="sign-in" onClick={expand}>
-                                "Sign in"
                 return render
 
             fn UserMenu()
