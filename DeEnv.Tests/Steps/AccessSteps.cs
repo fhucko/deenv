@@ -195,6 +195,23 @@ public sealed class AccessSteps(InstanceContext ctx)
         await Assert.That(RenderedBody().Contains("sign-in-bar")).IsFalse();
     }
 
+    // The admin-only "Manage users" control (the `<UserMenu>` button that toggles `<UserAdmin>`), gated on
+    // the derived `canManageUsers` capability — NOT the shipped role. Body-only (the AST island ships the
+    // component definitions), like the sign-in assertions.
+    [Then("the rendered document includes a user-management control")]
+    public async Task ThenHasManageUsers()
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        await Assert.That(RenderedBody().Contains("manage-users")).IsTrue();
+    }
+
+    [Then("the rendered document includes no user-management control")]
+    public async Task ThenNoManageUsers()
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        await Assert.That(RenderedBody().Contains("manage-users")).IsFalse();
+    }
+
     // The rendered <body> (the markup a visitor sees), EXCLUDING the window.initData/initUi hydration island
     // that ships the full component AST. That island lives in the <head> (UiLayout), so taking from <body>
     // onward yields only what actually RENDERED — the one region where a SignInBar that fired shows up.

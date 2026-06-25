@@ -242,6 +242,22 @@ public sealed class SsrRenderer
             IsReadOnly = true,
         };
 
+        // `canManageUsers` (M-auth user admin) — true when the principal may EDIT User objects (the write
+        // floor's User `edit` capability). The generic UI reads it to show admin-only user management WITHOUT
+        // shipping the principal's role: the role stays private (the floor-hardening invariant) and only this
+        // derived capability bit ships. Evaluated over a throwaway empty User target — a role-based rule
+        // (`currentUser.role == "Admin"`) reads only the principal, so the target is irrelevant; for an
+        // anonymous/non-admin principal the User-edit rule's condition fails → false. Shipped like accessActive.
+        system.Items["canManageUsers"] = new ExecScopeItem
+        {
+            Value = new ExecBool
+            {
+                Value = floor.CanWrite("edit", UserConvention.TypeName,
+                    AccessFloor.ScalarObject(UserConvention.TypeName, 0, new ObjectValue(new Dictionary<string, NodeValue>()))),
+            },
+            IsReadOnly = true,
+        };
+
         // db root (the object graph), read-only. A recompute reuses the warm graph the
         // session holds (already reflecting the client's mutations) instead of reloading. The read floor
         // gates what enters the graph: an object the principal may not read never ships (denied set

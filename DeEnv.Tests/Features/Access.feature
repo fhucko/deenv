@@ -302,3 +302,57 @@ Feature: The access floor (read enforcement by principal)
     And there is no current user
     When the page state is rendered for "/"
     Then the rendered document includes no sign-in control
+
+  # End-to-end in a real browser: the full sign-in/sign-out loop of a PUBLIC generic app. The data is
+  # public, so the visitor sees it AND a sign-in control (no auto-gate); opening that control reveals the
+  # login form in place (login-as-state, no navigation); logging in swaps to the user menu; logging out
+  # returns to the sign-in control with the data still readable — all at the same URL.
+  Scenario: A visitor signs in and out of a public generic app
+    Given the access-fixture app is served as a public roadmap with admin password "hunter2"
+    And an anonymous visitor opens "/"
+    Then "Gate #3" eventually appears
+    And a sign-in control is shown
+    When the visitor opens the sign-in form
+    And the visitor logs in through the form as "Ada" with password "hunter2"
+    Then the user menu is shown
+    And "Gate #3" eventually appears
+    When the visitor logs out through the user menu
+    Then a sign-in control is shown
+    And "Gate #3" eventually appears
+    And the URL is still "/"
+
+  # ── user management: the library <UserAdmin>, reached from <UserMenu> ─────────
+  # Multi-user management is a library component an admin reaches from the user menu (login-as-state, no
+  # reserved URL). Its visibility is gated on a derived `canManageUsers` capability (the floor's User
+  # `edit`), NOT on the principal's role — so the role stays private while the admin-only control still
+  # gates correctly.
+
+  Scenario: An admin sees the user-management control
+    Given the access rule "Milestone read where currentUser.role == \"Admin\""
+    And the User access rule "User edit where currentUser.role == \"Admin\""
+    And the current user is the admin
+    When the page state is rendered for "/"
+    Then the rendered document includes a user-management control
+
+  Scenario: A non-admin sees no user-management control
+    Given the access rule "Milestone read where currentUser.role == \"Admin\""
+    And the User access rule "User edit where currentUser.role == \"Admin\""
+    And the current user is the member
+    When the page state is rendered for "/"
+    Then the rendered document includes no user-management control
+
+  # End-to-end: an admin creates a user and sets a password through <UserAdmin>, and that new user can then
+  # log in — the full multi-user thread (create → setPassword → re-login) in a real browser.
+  Scenario: An admin creates a user and sets a password, and the new user can log in
+    Given the access-fixture app is served as a public roadmap with admin password "hunter2"
+    And an anonymous visitor opens "/"
+    When the visitor opens the sign-in form
+    And the visitor logs in through the form as "Ada" with password "hunter2"
+    Then the user menu is shown
+    When the admin opens user management
+    And the admin creates a user "Cleo" with role "Member"
+    And the admin sets "Cleo"'s password to "cleopw"
+    And the visitor logs out through the user menu
+    And the visitor opens the sign-in form
+    And the visitor logs in through the form as "Cleo" with password "cleopw"
+    Then the user menu is shown

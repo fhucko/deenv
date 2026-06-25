@@ -459,22 +459,53 @@ public static class GenericUi
                 fn expand()
                     state.open = true
                 fn render()
-                    if state.open
-                        return <LoginForm>
                     return <div class="sign-in-bar">
-                        <button class="sign-in" onClick={expand}>
-                            "Sign in"
+                        if state.open
+                            <LoginForm>
+                        else
+                            <button class="sign-in" onClick={expand}>
+                                "Sign in"
                 return render
 
             fn UserMenu()
+                var state = { managing: false }
                 fn logout()
                     sys.logout()
+                fn toggleManage()
+                    state.managing = !state.managing
                 fn render()
                     return <div class="user-menu">
                         <span class="user-name">
                             sys.field(currentUser, "name")
+                        if canManageUsers
+                            <button class="manage-users" onClick={toggleManage}>
+                                "Manage users"
                         <button class="logout" onClick={logout}>
                             "Log out"
+                        if state.managing
+                            <UserAdmin>
+                return render
+
+            fn UserAdmin()
+                fn passwordCell(m)
+                    return <SetPasswordControl user={m}>
+                fn render()
+                    return <div class="user-admin">
+                        <h2>
+                            "Users"
+                        <SetTable set={sys.field(db, "users")} desc={sys.schema("User")} setPath="/users" rowActions={passwordCell}>
+                return render
+
+            fn SetPasswordControl(user)
+                var state = { password: "" }
+                fn submit()
+                    sys.setPassword(user, state.password)
+                    state.password = ""
+                fn render()
+                    return <td class="set-password-cell">
+                        <input type="password" class="new-password" value={state.password}>
+                        <button class="set-password" onClick={submit}>
+                            "Set password"
                 return render
 
             fn InputType(baseType)

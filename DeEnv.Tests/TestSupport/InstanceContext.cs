@@ -930,6 +930,24 @@ public class InstanceContext
 
     private const string AccessFixtureAppNoRule = AccessFixtureTypes + AccessFixtureSeed;
 
+    // The PUBLIC-ROADMAP variant (the sign-in affordance + user-management e2e): the same shape + seed, but
+    // the Milestone is PUBLICLY readable (a bare `read` rule) with writes gated to the admin — so an
+    // anonymous visitor reads the data AND is offered a <SignInBar> (the app is NOT anonymousLockedOut).
+    // User is admin-only (no anonymous enumeration; the admin may read+write users for management). Mirrors
+    // the devlog dogfood's policy.
+    public static InstanceDescription AccessPublicFixtureDb() =>
+        InstanceDescriptionLoader.Load(AccessPublicFixtureApp);
+
+    public const string AccessPublicFixtureApp = AccessFixtureTypes + AccessFixtureSeed + """
+
+    access
+        Milestone
+            read
+            * where currentUser.role == "Admin"
+        User
+            * where currentUser.role == "Admin"
+    """;
+
     // M-auth floor-hardening (Fix 1 — sys.extent gating): the SAME shape + the `Milestone read` rule, but
     // with a CUSTOM `fn render()` that LISTS the Milestone extent via `sys.extent("Milestone")` (the seam
     // the reference picker uses: `foreach c in sys.extent(target)`). This is the exposure the graph floor

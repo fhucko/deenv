@@ -77,6 +77,7 @@ public static class CodeValidator
         ["setDesign"] = 2, // (schema, targetId)
         ["login"] = 2,   // (name, password) — a client-only host effect (the session→principal bind)
         ["logout"] = 0,  // () — the mirror of login: a client-only host effect (clear the principal)
+        ["setPassword"] = 2, // (user, newPassword) — a client-only host effect (gated User-edit; user admin)
         ["nest"] = 2,
         ["segment"] = 2,
         ["toInt"] = 1,
