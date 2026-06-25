@@ -695,6 +695,26 @@ public sealed class SsrRenderer
         .item-row .remove-item:hover { color: var(--danger); background: #fff0f0; border-color: var(--danger); }
         .todo-card .add-item { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
         .todo-card .add-item input.new-item { flex: 1; min-width: 0; }
+
+        /* Auth chrome: the sign-in / user menu sits on the breadcrumb ROW, right-aligned to the content
+           column. #app is the positioned, max-width-centered ancestor (so right:0 is the column edge); the
+           negative top lifts the bar up onto the breadcrumb line above #app (whose height is the breadcrumb's
+           0.9rem line + 1.2rem margin). The expandable panels (login form / user admin) drop DOWN from the
+           bar (absolute, top:100%) so opening them never disturbs the bar's row. */
+        #app { position: relative; }
+        .app-shell > .sign-in-bar, .app-shell > .user-menu {
+          position: absolute; top: -2.4rem; right: 0; margin: 0;
+          display: flex; align-items: center; gap: 0.6rem; font-size: 0.9rem; }
+        .user-menu .user-name { color: var(--muted); }
+        .sign-in-bar button.sign-in, .user-menu button.logout, .user-menu button.manage-users {
+          padding: 0.25rem 0.65rem; font-size: 0.85rem; }
+        .sign-in-bar .login-form, .user-menu .user-admin {
+          position: absolute; top: 100%; right: 0; margin: 0.45rem 0 0; z-index: 20; text-align: left;
+          background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+          padding: 1rem 1.15rem; box-shadow: 0 6px 22px rgba(31,35,40,.14); }
+        .sign-in-bar .login-form { min-width: 240px; }
+        .user-menu .user-admin { min-width: 440px; max-width: 90vw; }
+        .user-menu .user-admin h2 { margin-top: 0; }
         """;
 
     private static void DefineFunction(CodeFunction fn, ExecScope scope)
