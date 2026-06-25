@@ -390,6 +390,14 @@ function focusNewCreateForm(): void {
 function resetViewState(): void {
     for (const key of Array.from(uiStatic.cache.keys()))
         if (key.startsWith("comp:")) uiStatic.cache.delete(key);
+    // Reachability GC (client data layer, the LAST slice): a navigation is the point a whole view's data
+    // goes out of scope, so collect the now-unreachable objects/arrays the prior views accumulated in
+    // uiStatic.state (mergeState only grows it). Run AFTER dropping the `comp:` entries above, so the old
+    // view's component-held data is no longer cache-reachable and is actually collected; what is still live
+    // (the db graph via scope, surviving cache results, the pending journal) is marked and kept. Safe because
+    // the round-trip re-pulls anything the target view needs (the forced refetch below + slices 1a–4). See
+    // sweepUnreachable (dt.ts) for the root set. Nav is the right cadence — never the per-keystroke renderUi.
+    sweepUnreachable();
     needsServerData = true;
 }
 

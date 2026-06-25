@@ -515,6 +515,87 @@ public sealed class CodeClientTests
         });
     }
 
+    // Client data layer, the LAST slice — the CLIENT REACHABILITY GC (the dual of the server store GC). The
+    // client data graph (uiStatic.state.objects/arrays) GROWS as views pull data over the round-trip
+    // (mergeState merges by id on every refetch; old views' rows + transient extents/where-results/descriptors
+    // linger) and never shrinks. A mark-and-sweep on NAVIGATION (resetViewState → sweepUnreachable) drops the
+    // entries no live root reaches. SAFE only because the round-trip can re-pull anything (slices 1a–4), so a
+    // conservative sweep is fine — but a FALSE-sweep (dropping a still-reachable entry) is NOT, so this proves
+    // BOTH directions: the unreachable data is GONE after a nav, and EVERY root class (scope, the memo cache,
+    // the pending journal) protects its data from the sweep.
+    //
+    // DETERMINISM (the project rule for client-runtime state, as in the slice-1c/slice-3 tests above): drive
+    // the REAL client directly — plant the four cases into the production uiStatic.state / cache / journal
+    // exactly as mergeState + the mutation hooks would, then invoke the PRODUCTION resetViewState() (the nav
+    // choke point that calls sweepUnreachable) and inspect the graph synchronously. No server timing.
+    //
+    // FAIL-BEFORE / PASS-AFTER: without sweepUnreachable() wired into resetViewState, the DEAD detached entries
+    // linger after the nav and the "gone" assertion fails; the three kept-cases pass either way (they prove the
+    // sweep is conservative — that it did NOT over-collect). With the sweep, dead is dropped + reachable kept.
+    [Test]
+    public async Task Navigating_away_drops_unreachable_data_but_keeps_every_root()
+    {
+        await WithPageAsync(InstanceContext.InteractiveUiDb(), s => { SeedItem(s, "a"); SeedItem(s, "b"); }, async page =>
+        {
+            await page.WaitReadyAsync();
+
+            // Plant the four cases into the LIVE client graph the way an accumulation of past views would, then
+            // run the production resetViewState() (→ sweepUnreachable) and report what survived. All ids are
+            // distinct positives well above the seeded data so they can't collide.
+            //
+            //  • DEAD — a detached object (7000) + a detached array (7001) referenced by NOTHING: the lingering
+            //    cross-view data the GC exists to drop. Must be GONE after the nav.
+            //  • SCOPE root — a db item ("a"), reachable from the `db` var (scope → items array → item). Kept.
+            //  • CACHE root — a detached array (7010) holding a detached object (7011), installed as a memo
+            //    entry's `result` (a where/orderBy-style cached computation). The walk descends the result, so
+            //    both are kept — proving a surviving cache result protects its data.
+            //  • JOURNAL root — a detached object (7020) pinned ONLY by a pending journal entry's `roots` (an
+            //    optimistic arrayRemove's detached item is reachable nowhere else). Kept — proving the rollback's
+            //    data survives the sweep.
+            var report = await page.EvaluateAsync<string>(
+                """
+                () => {
+                    const st = uiStatic.state;
+                    const aId = Object.values(st.objects).find(o => o.props.name && o.props.name.value === "a").id;
+
+                    // DEAD: detached object + array, referenced by nothing.
+                    st.objects[7000] = { type: "object", id: 7000, props: { tag: { type: "text", value: "dead" } } };
+                    st.arrays[7001] = { type: "array", id: 7001, kind: "list", items: [] };
+
+                    // CACHE root: a detached array (7010) → detached object (7011), held by a memo entry result.
+                    const cacheObj = { type: "object", id: 7011, props: { tag: { type: "text", value: "cache" } } };
+                    const cacheArr = { type: "array", id: 7010, kind: "list", items: [{ key: 1, value: cacheObj }] };
+                    st.objects[7011] = cacheObj;
+                    st.arrays[7010] = cacheArr;
+                    uiStatic.cache.set("test:cacheResult", { result: cacheArr, deps: { props: [], members: [], vars: [] }, stale: false });
+
+                    // JOURNAL root: a detached object (7020) pinned ONLY by a pending journal entry (an
+                    // arrayRemove's removed item — in no array). Pushed via the production recordMutation so its
+                    // `roots` is what sweepUnreachable reads.
+                    const journalObj = { type: "object", id: 7020, props: { tag: { type: "text", value: "journal" } } };
+                    st.objects[7020] = journalObj;
+                    recordMutation({ msgId: nextWsMsgId++, undo: () => {}, redo: () => {}, roots: [journalObj] });
+
+                    // The production navigation choke point — drops `comp:` entries then sweeps.
+                    resetViewState();
+
+                    const has = (id) => st.objects[id] != null;
+                    const hasArr = (id) => st.arrays[id] != null;
+                    return [
+                        `deadObj=${has(7000)}`, `deadArr=${hasArr(7001)}`,   // expect false, false (swept)
+                        `scope=${has(aId)}`,                                  // expect true  (db graph)
+                        `cacheArr=${hasArr(7010)}`, `cacheObj=${has(7011)}`, // expect true  (cache result)
+                        `journalObj=${has(7020)}`,                            // expect true  (journal root)
+                    ].join(" ");
+                }
+                """);
+
+            // Dead detached entries are GONE; every root class kept its data (no false-sweep).
+            await Assert.That(report).IsEqualTo(
+                "deadObj=false deadArr=false scope=true cacheArr=true cacheObj=true journalObj=true");
+        });
+    }
+
     private static string? Name(ObjectValue o) =>
         o.Fields.TryGetValue("name", out var n) && n is TextValue t ? t.Text : null;
 

@@ -35,6 +35,13 @@ interface JournalEntry {
     undo(): void;     // restore the captured before-state
     redo(): void;     // re-apply after a rollback of an earlier entry (recaptures before)
     onReject?(): void; // extra cleanup when this entry itself is the rejected one
+    // The objects/arrays this entry's undo/redo closures capture — exposed for the reachability GC
+    // (sweepUnreachable, dt.ts) to MARK as roots, since a closure's captured vars are opaque to a graph
+    // walk. A pending mutation must keep its referenced data alive for rollback — crucially an
+    // arrayRemove/entryRemove's DETACHED item, which is no longer in any array and so is reachable ONLY
+    // through this entry. The walk descends each root (an object's props, an array's items), so listing the
+    // top object(s)/array(s) suffices; the removed item is listed by its value explicitly.
+    roots?: ExecValue[];
 }
 const journal: JournalEntry[] = [];
 let nextWsMsgId = 1;
@@ -312,6 +319,7 @@ function connectWs(): void {
                 msgId,
                 undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
                 redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
+                roots: [obj],
             });
             wsSend({ op: "objectPropChange", id: msgId, clientId: uiStatic.clientId,
                 objectId: obj.id, prop, value: scalarOf(value) });
@@ -325,6 +333,7 @@ function connectWs(): void {
                 msgId,
                 undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
                 redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
+                roots: [obj],
             });
             wsSend({ op: "write", id: msgId, clientId: uiStatic.clientId, path, value: bareScalar(value) });
         },
@@ -334,6 +343,9 @@ function connectWs(): void {
                 msgId,
                 undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
                 redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
+                // obj, plus the referenced objects on both sides of the swap (a clear's `before` holds the
+                // previously-pointed object that undo restores; a pick's `value` the newly-pointed one).
+                roots: [obj, value, before],
             });
             const base = { op: "setReferenceField", id: msgId, clientId: uiStatic.clientId, objectId: obj.id, prop };
             if (value.type === "object" && value.id > 0)
@@ -355,6 +367,7 @@ function connectWs(): void {
                 undo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
                 redo: () => { arr.items.push(item); invalidateMember(arr.id); },
                 onReject: () => pendingAdds.delete(item.key),
+                roots: [arr, item.value],
             });
             wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
                 setId: arr.id, tempId: item.key, typeName, value: objectOf(item.value) });
@@ -365,6 +378,9 @@ function connectWs(): void {
                 msgId,
                 undo: () => { arr.items.splice(Math.min(index, arr.items.length), 0, item); invalidateMember(arr.id); },
                 redo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
+                // item.value is DETACHED (already spliced out of arr.items) — reachable ONLY through here, so
+                // marking it is what keeps a removed-then-rolled-back member from being false-swept.
+                roots: [arr, item.value],
             });
             wsSend({ op: "arrayRemove", id: msgId, clientId: uiStatic.clientId,
                 setId: arr.id, objectId: item.key });
@@ -378,6 +394,7 @@ function connectWs(): void {
                 msgId,
                 undo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
                 redo: () => { if (!arr.items.includes(item)) arr.items.push(item); invalidateMember(arr.id); },
+                roots: [arr, item.value],
             });
             // addEntry's DeserializeValue/DeserializeLeaf reads BARE values at the top level
             // (an object entry's fields as { name: rawScalar }, a scalar entry as the raw
@@ -392,6 +409,7 @@ function connectWs(): void {
                 msgId,
                 undo: () => { arr.items.splice(Math.min(index, arr.items.length), 0, item); invalidateMember(arr.id); },
                 redo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
+                roots: [arr, item.value], // item.value is detached on removal — see arrayRemove
             });
             wsSend({ op: "removeEntry", id: msgId, clientId: uiStatic.clientId,
                 path: arr.sourcePath, key });

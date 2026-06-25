@@ -322,6 +322,17 @@ test); (2) a `Console.Error` log on a persistent harvest error (silent best-effo
 
 ## GC — the LAST slice (renamed from "Slice 2": it must ship after the round-trip can re-pull)
 
+**DONE + on `main` (2026-06-26, suite 536/536, self-reviewed) — THE MILESTONE IS COMPLETE.**
+`sweepUnreachable()` (`dt.ts`, the dual of `mergeState`) mark-and-sweeps `uiStatic.state.objects/arrays`
+from a CONSERVATIVE root set — scope (`db` → the whole graph, `currentUser`, selection, drafts) + the memo
+cache (each result + render closures' captured `var state`) + the pending journal's exposed `roots` (incl.
+an arrayRemove/entryRemove's DETACHED item, reachable only through the journal) — skipping the sweep while a
+`pendingAction` is in flight (opaque `reinvoke` closure). Swept on nav (`resetViewState`, ui.ts), never
+per-keystroke. Client-only (NO twin). The only hazard is a FALSE-sweep (identity split); the complete root
+set + the 536-green regression net close it. Caught + fixed a real fn-walk overflow (`visitedScopes` — fns
+share the top scope). New optional `roots?` on `JournalEntry` (JS closures are opaque to the walk). Test:
+*nav-away drops unreachable data but keeps every root* (fail-before/pass-after).
+
 The client graph (`uiStatic.state.objects/arrays`) grows as views pull data and never shrinks. Add the
 server store-GC's **dual**: roots = scope vars (`db`, `currentUser`, selection, drafts) + the journal's
 pending mutations + **what the current render reaches**; mark-and-sweep the unreachable; sweep on
