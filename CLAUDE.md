@@ -152,26 +152,32 @@ steps, when reached, use Playwright.)
 
 ## Current focus
 
-**ACTIVE MILESTONE (2026-06-24): M-auth — access control.** Designed and approved this session;
-full spec in `docs/plans/m-auth.md`, decision record in DECISIONS.md ("M-auth — access control"). A
-**deny-by-default ruleset over the object model** (per-type + per-field); **conditions = pure Code**
-(Code-as-data AST) run by the existing interpreter over `{db, currentUser, now, client, object}`,
-**enforced at a kernel floor BELOW Code** on the store/wire seam; **roles are just a `User.role`
-enum** (no role primitive); a condition can test **set membership** (`customer in customers` — soft-
-delete = move to `deletedCustomers`, same type); **users/roles baked into every instance but dormant**;
-auth UI = `lib` components with **login-as-state** (custom UI reserves no URL). Pulled ahead of M12
-(visual designer) and M13 (versioning); first sliver dovetails with the `devlog` dogfood. **BUILD WELL
-UNDERWAY (suite 513):** the engine (read floor + write enforcement + floor-hardening), self-hosted
-password login/logout (login-as-state, no reserved URL), and the **`devlog` public-roadmap dogfood**
-(public read + admin-only write, via an `accessActive` system var + a `<SignInBar>`) all landed; the
-**first-admin bootstrap is RESOLVED** — env-var auto-seed on kernel boot (`DEENV_ADMIN_PASSWORD`,
-`AdminSeed.SeedFromEnv`/`SeedIfRuled`). **Multi-user management** is a `lib` component (`<UserAdmin>`:
-list + create-form + per-row set-password, reached from `<UserMenu>` via an admin-only "Manage users"
-toggle), gated on a derived `canManageUsers` capability so the role stays private; `sys.setPassword`
-mirrors `sys.login`. A real-browser **e2e** covers the sign-in/out loop AND create-user→set-password→
-re-login (suite 517). **Open/next:** wire login on the deenv.org deploy (set the env var, drop the
-basic-auth gate for devlog) = gate #2 follow-on; remove-user / inline role-edit = `UserAdmin` follow-ups.
-The usable-MVP context below stands.
+**M-auth — access control — is DONE (2026-06-25; core delivered).** Full spec in `docs/plans/m-auth.md`,
+decision record in DECISIONS.md ("M-auth — access control"). A **deny-by-default ruleset over the object
+model** (per-type + per-field); **conditions = pure Code** (Code-as-data AST) run by the existing
+interpreter over `{db, currentUser, now, client, object}`, **enforced at a kernel floor BELOW Code** on
+the store/wire seam; **roles are just a `User.role` enum** (no role primitive); a condition can test
+**set membership** (`customer in customers` — soft-delete = move to `deletedCustomers`, same type);
+**users/roles baked into every instance but dormant**; auth UI = `lib` components with **login-as-state**
+(custom UI reserves no URL). Pulled ahead of M12 (visual designer) and M13 (versioning). **Delivered:**
+the engine (read floor + write enforcement + floor-hardening); self-hosted password login/logout; the
+**`devlog` public-roadmap dogfood** (public read + admin-only write, via an `accessActive` system var +
+a `<SignInBar>`); **first-admin bootstrap** (env-var auto-seed on kernel boot — `DEENV_ADMIN_PASSWORD`,
+`AdminSeed.SeedFromEnv`/`SeedIfRuled`); **multi-user management** (`<UserAdmin>`: create-form + per-row
+set-password, reached from `<UserMenu>` via an admin-only "Manage users" toggle, gated on a derived
+`canManageUsers` so the role stays private; `sys.setPassword` mirrors `sys.login`); a real-browser
+**e2e** (sign-in/out + create-user→set-password→re-login).
+
+**NEXT = the client data layer (render-as-planner)** — its own milestone at M11 altitude, spec'd this
+session (NOT built). The **proper fix** for the URL-keyed-refetch
+gap found closing M-auth: a client-only-toggled component (`<UserAdmin>` behind `if state.managing`)
+carries open-state the server never sees, so structural privacy never ships its data and it renders
+empty. The reframe — **the view is the query**: the client ships its actual view-state, the server
+reproduces the exact render and ships the harvested footprint (an `(action, state)` intent over the
+twin-stable fn ids, with a state-generation guard for the async window). See [[project_client_data_layer]]
++ [[project_client_toggle_needs_shipped_data]]. **M-auth follow-ups** sit in ROADMAP.md "Near-future"
+(deploy login wiring; remove-user + inline role-edit; the Users-twice dedup, **blocked on the client
+data layer**; set-password feedback + styling). The usable-MVP context below stands.
 
 **Milestone 11 — SolidJS-style reactive components + the public component library (the UI
 middle-ground) — is DONE (the generic-UI-as-first-consumer COLLAPSE landed 2026-06-19, suite 348).

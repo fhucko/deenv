@@ -1,12 +1,21 @@
 # Plan: M-auth — access control (the auth milestone)
 
-**Status:** designed 2026-06-24, **approved as the active milestone** (recorded in DECISIONS.md;
-pulled ahead of M12 visual designer and M13 versioning). **BUILD WELL UNDERWAY (suite 513):** the
-engine (read floor + write enforcement + floor-hardening), self-hosted password login/logout
-(login-as-state, no reserved URL), the `devlog` **public-roadmap** dogfood (public read + admin-only
-write, via an `accessActive` system var + a `<SignInBar>`), and the **first-admin bootstrap** (env-var
-auto-seed on kernel boot) have all landed. Both original open threads are **resolved** (see
+**Status:** designed 2026-06-24, **DONE 2026-06-25** (core delivered; recorded in DECISIONS.md;
+pulled ahead of M12 visual designer and M13 versioning). The engine (read floor + write enforcement +
+floor-hardening), self-hosted password login/logout (login-as-state, no reserved URL), the `devlog`
+**public-roadmap** dogfood (public read + admin-only write, via an `accessActive` system var + a
+`<SignInBar>`), the **first-admin bootstrap** (env-var auto-seed on kernel boot), and **multi-user
+management** (`<UserAdmin>` create + per-row set-password, gated on a derived `canManageUsers`, with a
+real-browser e2e) all landed. Both original open threads are **resolved** (see
 [Open questions](#open-questions)). The first sliver dovetailed with the `devlog` dogfood as planned.
+
+**Follow-ups deferred to Near-future** (ROADMAP.md "Near-future"): wiring login on the deenv.org deploy
+(set `DEENV_ADMIN_PASSWORD`, drop the basic-auth gate); **remove-user** + **inline role-edit** in
+`<UserAdmin>` (role-edit already works via the user's `/users/<id>` page — inline is the convenience);
+the **Users-twice dedup** (hiding the inline `users` table on the root), which is **blocked on the
+client data layer** — the menu's management panel is a client-only
+toggle that reuses the row data the inline table currently ships, so the dedup needs the
+render-as-planner fetch first; and set-password success feedback + broader auth styling.
 
 ## Goal
 

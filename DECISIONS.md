@@ -1971,7 +1971,7 @@ signal; that signal only works if the tagging is honest.
 
 ## M-auth — access control (graph-data rules + Code conditions, enforced below Code)
 
-**Now the active milestone (decided 2026-06-24). Full spec: `docs/plans/m-auth.md`.**
+**DONE 2026-06-25 (core delivered; decided 2026-06-24). Full spec: `docs/plans/m-auth.md`.**
 
 deenv gets users + access control as a **deny-by-default ruleset over the object model**, per-**type**
 and per-**field**: a rule is `{type, field?, verbs (read/create/edit/delete), condition}`. Designed in
@@ -2015,3 +2015,51 @@ today; ≥1 rule → enforce, deny-by-default, login required); the first **publ
 Admin** requires initial admin credentials → the kernel seeds an Admin + the designer scaffolds the
 `* where role == "Admin"` override (no lockout); the **designer instance** is kernel-seeded at first
 boot. No public first-run race. See the spec.
+
+**Delivered (2026-06-25):** the engine (read floor + write enforcement + floor-hardening), self-hosted
+password login/logout, the `devlog` public-roadmap dogfood, env-var first-admin bootstrap
+(`DEENV_ADMIN_PASSWORD`), and multi-user management (`<UserAdmin>` create + per-row set-password, gated
+on a derived `canManageUsers`), with a real-browser e2e. **Follow-ups deferred to ROADMAP "Near-future"**
+(none blocking the milestone): wiring login on the deenv.org deploy; remove-user + inline role-edit
+(role-edit already works via the `/users/<id>` page); the Users-twice dedup, **blocked on the client
+data layer** (below); set-password feedback + styling.
+
+## Client data layer — render-as-planner (the proper fix for URL-keyed refetch)
+
+**Spec'd 2026-06-25, its own milestone, build AFTER M-auth.**
+
+The trigger surfaced closing M-auth: a **client-only-toggled** component (the `<UserAdmin>` panel behind
+`if state.managing`) carries open-state the server never sees. Refetch is **URL-keyed** (`maybeRefetch`
+ships `location.pathname`; the server re-renders *that URL*), so the server renders a smaller footprint
+than the client's actual view, structural privacy ships only what the server touched, and the
+component's data (`db.users`) never ships → it renders empty forever. The decisions:
+
+- **The view is the query.** Run the app render over the client's *actual* view-state, harvest its dep
+  footprint (structural privacy already does this), ship exactly that. URL becomes a projection of
+  view-state, not its key. *Why:* the only way the server can ship what a component demands is to know
+  the component's state — so the client must tell it. The user's rule: "the server needs to know
+  **exactly** the client's state to respond properly."
+- **The unit is `(action, state)`, action = a twin-stable fn id.** Fn ids already exist (`CodeIds.Assign`,
+  ride in `initUi`, the memo cache depends on them). v1 = the render fn replayed over full view-state
+  ("dumb": whole state, whole re-render); the same shape later carries a *mutation* (action = a handler
+  the server applies), unifying render-intent with the mutation journal.
+- **No server warm graph (I2).** The server reproduces a *render* per request (fresh canonical load +
+  shipped view-state) and discards it after harvesting — the thing M9 deleted; a per-client server graph
+  goes stale and collapses structural privacy. Fetch reads through `IInstanceStore` in model terms (I1).
+- **One async guard — a state generation generalizing the login/logout epoch.** A reply merges only if
+  its generation is current (I5); a data mutation or session change bumps it (a pure view-state toggle
+  does not). This dissolves optimistic-clobber for free (mutation bumps gen → stale pre-mutation reply
+  discarded; FIFO WS → the re-fetch reflects the mutation). The reply is **database data only**;
+  client-owned state (component state, drafts/`ctx`, pending journal) is never written by it.
+- **Immutability is the unifier.** Eval is over immutable data; writes are a discardable `ctx` overlay,
+  never in-place. So abandoning a partial render/action (on a missing read) leaves no trace, and running
+  an action server-side to *plan* it is effect-free by construction (run it, discard the write-overlay,
+  keep the reads). The interpreter stays **synchronous** (twin conformance) — async lives only in the
+  client orchestration around the fn; a fn needing un-shipped data is **abandoned and re-run, not paused**.
+
+**Framing (vision-keeper, aligned-with-conditions):** this is the **client transfer/runtime layer** (M11
+altitude, the continuation of `ctx`), **NOT** the pillar-5 render-coupled storage engine (deferred — the
+render-coupled DB is the destination this moves *toward*, not what this builds). Slice 1 = intent loading
+(server reproduces the exact render); slice 2 = client reachability GC (safe only because slice 1 can
+re-pull anything). See `docs/plans/data-context-refactor.md` (the predecessor that deferred
+this re-layer).

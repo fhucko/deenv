@@ -18,9 +18,11 @@ completed, move its entry above the divider.
 (2) a minimal real deploy (a self-contained build as a systemd service behind nginx) ✅
 done; (3) dogfood one real app — in progress (`instances/5`, `devlog`). The visual
 designer is deferred until after the MVP; M13 (schema versioning) sits on instance
-management. See CLAUDE.md "Current focus" for detail. **M-auth (access control) is now the active
-build milestone (2026-06-24)** — pulled ahead of M12/M13; spec `docs/plans/m-auth.md`, decision in
-DECISIONS.md; its first sliver dovetails with the `devlog` dogfood.
+management. See CLAUDE.md "Current focus" for detail. **M-auth (access control) — DONE 2026-06-25**: the access
+engine, self-hosted login/logout, the `devlog` dogfood, first-admin bootstrap, and multi-user
+management all landed (spec `docs/plans/m-auth.md`, decision in DECISIONS.md). **Next = the client data
+layer** (render-as-planner) — see the **Near-future** section;
+the M-auth follow-ups (deploy login wiring, remove-user/role-edit, the Users-twice dedup) live there too.
 
 ---
 
@@ -279,23 +281,58 @@ hand-written `fn render()`, with the generic UI as the library's **first consume
 completeness proof). Delivers VISION pillar 8's "auto with overrides" via the mechanism settled
 in DECISIONS ("UI middle-ground"). See `docs/plans/m11-reactivity-foundation.md`.
 
-## Milestone — M-auth: access control  ← ACTIVE (2026-06-24, pulled ahead of M12/M13)
+## Milestone — M-auth: access control  ← DONE 2026-06-25 (core delivered; follow-ups → Near-future)
 
-Users + access control, designed in a long interview this session. A **deny-by-default ruleset over
-the object model**, per-**type** and per-**field**: `{type, field?, verbs, condition}`. **Roles are
-not a primitive** — a role is just a `User.role` **enum**; a rule's "who" is a condition
+Users + access control, designed in a long interview and built this milestone. A **deny-by-default
+ruleset over the object model**, per-**type** and per-**field**: `{type, field?, verbs, condition}`.
+**Roles are not a primitive** — a role is just a `User.role` **enum**; a rule's "who" is a condition
 (`currentUser.role == "Admin"`). **Conditions are pure Code expressions** (Code-as-data AST) run by the
 existing interpreter over `{db, currentUser, now, client, object}`; a condition can test **set
 membership** (`customer in customers`), so soft-delete = "move to a `deletedCustomers` set, same type"
 (no field flag). Enforcement is a **kernel floor, below Code, on the store/wire seam** (gates reads +
 writes, non-bypassable). **Flexible base, simplified by UI** — the role×verb grid is one UI over the
 engine. **Users/roles baked into every instance but dormant**; `User` (`name`+`passwordHash`) by
-convention, injected on publish; password crypto = kernel builtins; auth UI = `lib` components with
-**login-as-state** (custom UI reserves nothing in URL space). Policy ships in the **app document**,
-constant between publishes; conditions evaluate live. **First slice:** one type, read-only enforcement,
-equality conditions, at the floor, with password login + session→principal — dovetails with the
-`devlog` dogfood. **Open:** bootstrap (first admin) + the dormant→active trigger. Full spec
+convention; password crypto = kernel builtins; auth UI = `lib` components with **login-as-state**
+(custom UI reserves nothing in URL space). Policy ships in the **app document**, constant between
+publishes; conditions evaluate live.
+
+**Delivered:** the engine (read floor + write enforcement + floor-hardening); self-hosted password
+login/logout (login-as-state, no reserved URL); the `devlog` **public-roadmap** dogfood (public read +
+admin-only write, via `accessActive` + a `<SignInBar>`); **first-admin bootstrap** (env-var auto-seed
+on kernel boot — `DEENV_ADMIN_PASSWORD`); multi-user management (`<UserAdmin>` create + per-row
+set-password, gated on a derived `canManageUsers` so the role stays private); a real-browser e2e
+(sign-in/out + create-user → set-password → re-login). Both original open threads — bootstrap and the
+dormant→active trigger (the rules ARE the switch, no flag) — **resolved**. Full spec
 `docs/plans/m-auth.md`; decision record in DECISIONS.md ("M-auth — access control").
+
+**Follow-ups deferred to Near-future** (below): wiring login on the deenv.org deploy; remove-user +
+inline role-edit; the Users-twice dedup (blocked on the client data layer); set-password feedback +
+auth styling.
+
+---
+
+## Near-future — sequenced next, not yet built
+
+- **Client data layer (render-as-planner).**  ← NEXT
+  The proper fix for the **URL-keyed-refetch** gap discovered closing M-auth: a client-only-toggled
+  component (`<UserAdmin>` behind `if state.managing`) carries open-state the server never sees, so
+  structural privacy never ships its data and it renders empty. Reframe: **the view is the query** — the
+  client ships its actual view-state (component state keyed by render-slot), the server **reproduces the
+  exact render** over it and ships the harvested footprint. An `(action, state)` intent over the existing
+  twin-stable fn ids, with a state-generation guard (generalizing the login/logout epoch) for the async
+  window. Its **own milestone at M11 altitude** — the continuation of `ctx`, **NOT** the pillar-5
+  render-coupled storage engine (that stays deferred; this only moves toward it) — sequenced here because
+  M12 (visual designer) will want it. Vetted
+  *aligned-with-conditions* by vision-keeper.
+
+- **M-auth follow-ups.** Small, non-blocking; do as wanted:
+  - **Wire login on the deenv.org deploy** — set `DEENV_ADMIN_PASSWORD` on the box and drop the
+    basic-auth gate for `devlog` (gate #2 follow-on). Operator ops action; steps in `deploy/DEPLOY.md`.
+  - **remove-user + inline role-edit** in `<UserAdmin>` (editing a role already works via the user's
+    `/users/<id>` page; inline in the panel is the convenience).
+  - **Users-twice dedup** — hide the inline `users` table on the root when the menu manages it; **blocked
+    on the client data layer** (the menu panel needs the row data the inline table currently ships).
+  - **set-password success feedback** (needs reply↔control correlation) and broader auth-component styling.
 
 ---
 
