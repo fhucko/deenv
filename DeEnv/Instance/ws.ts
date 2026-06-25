@@ -326,7 +326,7 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // resetViewState drops the `comp:` slot-cache (the SAME helper a navigation uses, ui.ts) and forces
         // the refetch, so the data view re-runs fresh at the root slot and the DOM swaps. (A navigation
         // doesn't hit this because it already calls resetViewState; login is the other same-slot-swap edge.)
-        if (msg.ok) { resetViewState(); maybeRefetch(); }
+        if (msg.ok) { sessionEpoch++; resetViewState(); maybeRefetch(); }
     } else if (msg.op === "logout") {
         // The MIRROR of the login reply (M-auth login UI 1e-2). The WS session is now anonymous again, so
         // refetch: the re-render runs with NO principal, the access floor denies the now-unreadable data,
@@ -341,7 +341,7 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // `fn render()` that key on the same root slot path. Without dropping the `comp:` slot-cache the stale
         // logged-in view would sit under the root slot and renderUi would hand it back for the LoginForm call —
         // the page would never return to the gate. resetViewState drops `comp:` (ui.ts) + forces the refetch.
-        resetViewState(); maybeRefetch();
+        sessionEpoch++; resetViewState(); maybeRefetch();
     } else if (msg.op === "setPassword") {
         // The setPassword reply (M-auth user admin). passwordHash never ships and nothing re-renders on
         // success, so an OK is a no-op here. A failure (denied by the write floor, or an unknown user) is a
@@ -353,6 +353,17 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }
     } else if (msg.op === "refetch" && msg.state != null) {
         refetchInFlight = false;
+        if (inFlightEpoch !== sessionEpoch) {
+            // A login/logout superseded the session this refetch was computed under: its reply is STALE
+            // (a dead session's render — e.g. a logout's anonymous state arriving after a login). DROP it
+            // (do NOT mergeState) and re-fetch under the CURRENT session. The session change already set
+            // needsServerData (resetViewState); set it again defensively so maybeRefetch is guaranteed to
+            // re-fire. Self-terminating: the re-fetch is stamped with the current epoch, so it is only
+            // discarded again if ANOTHER login/logout lands meanwhile (no loop while the session is stable).
+            needsServerData = true;
+            maybeRefetch();
+            return;
+        }
         mergeState(msg.state); // shipped entries arrive fresh (stale: false)
         // After a fresh data merge, drop the client-local RECOMPUTE entries so the next render
         // recomputes them over the merged data instead of reusing an outdated tree:
@@ -405,10 +416,19 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
 // — the first-paint invariant.)
 let refetchInFlight = false;
 
+// A refetch's result is computed under the SERVER SESSION at the moment the server runs it. If a
+// login/logout supersedes that session while the refetch is in flight, its reply is STALE — applying it
+// would let a dead session's state (e.g. a logout's anonymous render) overwrite the current one (the
+// just-logged-in view). `sessionEpoch` is a generation counter bumped on every login/logout;
+// `inFlightEpoch` stamps the refetch in flight, so its reply can be recognised as stale and discarded.
+let sessionEpoch = 0;
+let inFlightEpoch = 0;
+
 function maybeRefetch(): void {
     if (refetchInFlight || (!hasStaleEntry() && !needsServerData)) return;
     needsServerData = false;
     refetchInFlight = true;
+    inFlightEpoch = sessionEpoch; // the session this refetch is computed under (checked on its reply)
     // lastId: the server mints its re-render transients BELOW everything this client
     // already holds, so shipped negative ids never collide with local drafts.
     wsSend({ op: "refetch", clientId: uiStatic.clientId, path: location.pathname,
