@@ -165,9 +165,13 @@ UNDERWAY (suite 513):** the engine (read floor + write enforcement + floor-harde
 password login/logout (login-as-state, no reserved URL), and the **`devlog` public-roadmap dogfood**
 (public read + admin-only write, via an `accessActive` system var + a `<SignInBar>`) all landed; the
 **first-admin bootstrap is RESOLVED** — env-var auto-seed on kernel boot (`DEENV_ADMIN_PASSWORD`,
-`AdminSeed.SeedFromEnv`/`SeedIfRuled`). **Open/next:** wire login on the deenv.org deploy (set the env
-var, drop the basic-auth gate for devlog) = gate #2 follow-on; `UserAdmin` (multi-user management)
-deferred until an app needs >1 human login. The usable-MVP context below stands.
+`AdminSeed.SeedFromEnv`/`SeedIfRuled`). **Multi-user management** is a `lib` component (`<UserAdmin>`:
+list + create-form + per-row set-password, reached from `<UserMenu>` via an admin-only "Manage users"
+toggle), gated on a derived `canManageUsers` capability so the role stays private; `sys.setPassword`
+mirrors `sys.login`. A real-browser **e2e** covers the sign-in/out loop AND create-user→set-password→
+re-login (suite 517). **Open/next:** wire login on the deenv.org deploy (set the env var, drop the
+basic-auth gate for devlog) = gate #2 follow-on; remove-user / inline role-edit = `UserAdmin` follow-ups.
+The usable-MVP context below stands.
 
 **Milestone 11 — SolidJS-style reactive components + the public component library (the UI
 middle-ground) — is DONE (the generic-UI-as-first-consumer COLLAPSE landed 2026-06-19, suite 348).
