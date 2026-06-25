@@ -433,6 +433,14 @@ Feature: The access floor (read enforcement by principal)
     When the page state is rendered for "/milestones/2"
     Then the rendered body shows no "readonly" marker
 
+  # The root object (Db) holds only collections — no scalar fields to stage — so its form shows no Save,
+  # even for an admin who could edit it (there is simply nothing to save).
+  Scenario: A form for an object with only collections shows no Save
+    Given the access rule "Milestone read"
+    And the current user is the admin
+    When the page state is rendered for "/"
+    Then the rendered body shows no "form-actions" marker
+
   # End-to-end: an admin creates a user and sets a password through <UserAdmin>, and that new user can then
   # log in — the full multi-user thread (create → setPassword → re-login) in a real browser.
   Scenario: An admin creates a user and sets a password, and the new user can log in

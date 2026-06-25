@@ -160,6 +160,7 @@ public static class GenericUi
                     ctx.discard()
                 fn render()
                     var canEdit = sys.canWrite(meta.name, "edit")
+                    var hasFields = meta.props.any(p => p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary")
                     return <div class="object-form">
                         <h2>
                             meta.name
@@ -183,7 +184,7 @@ public static class GenericUi
                                     <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
                             else
                                 <Field obj={obj} desc={p} readonly={!canEdit}>
-                        if autosave != true && canEdit
+                        if autosave != true && canEdit && hasFields
                             <div class="form-actions">
                                 <button class="save" onClick={save}>
                                     "Save"
