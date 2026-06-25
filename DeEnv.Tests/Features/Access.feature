@@ -312,12 +312,15 @@ Feature: The access floor (read enforcement by principal)
     And an anonymous visitor opens "/"
     Then "Gate #3" eventually appears
     And a sign-in control is shown
+    And no create control is shown
     When the visitor opens the sign-in form
     And the visitor logs in through the form as "Ada" with password "hunter2"
     Then the user menu is shown
+    And a create control is shown
     And "Gate #3" eventually appears
     When the visitor logs out through the user menu
     Then a sign-in control is shown
+    And no create control is shown
     And "Gate #3" eventually appears
     And the URL is still "/"
 
@@ -340,6 +343,45 @@ Feature: The access floor (read enforcement by principal)
     And the current user is the member
     When the page state is rendered for "/"
     Then the rendered document includes no user-management control
+
+  # ── read-only affordances: write controls hidden when the principal cannot write ──
+  # The generic UI gates Save (form-actions), New (new-btn), and Remove (set-remove) on sys.canWrite(type,
+  # verb) — server-resolved from the floor, shipped like sys.extent. So a read-only principal (e.g. an
+  # anonymous visitor of a public-read app) sees the data but NOT controls the floor would reject; an admin
+  # sees them. The floor still RE-decides every real write — this governs only what the UI OFFERS.
+
+  Scenario: A read-only visitor sees no edit control on a ruled object
+    Given the access rule "Milestone read"
+    And the access rule "Milestone edit where currentUser.role == \"Admin\""
+    And there is no current user
+    When the page state is rendered for "/milestones/2"
+    Then the rendered body shows no "form-actions" marker
+
+  Scenario: An admin sees the edit control on a ruled object
+    Given the access rule "Milestone read"
+    And the access rule "Milestone edit where currentUser.role == \"Admin\""
+    And the current user is the admin
+    When the page state is rendered for "/milestones/2"
+    Then the rendered body shows a "form-actions" marker
+
+  # Both collections on the Db root (milestones + the baked-in users set) are create-ruled, so a read-only
+  # visitor sees NO "New …" anywhere. (An unruled type's create stays allowed — the floor only restricts
+  # what is ruled — so a partial ruleset would correctly still offer New for the unruled type.)
+  Scenario: A read-only visitor sees no create control on a ruled collection
+    Given the access rule "Milestone read"
+    And the access rule "Milestone create where currentUser.role == \"Admin\""
+    And the User access rule "User create where currentUser.role == \"Admin\""
+    And there is no current user
+    When the page state is rendered for "/"
+    Then the rendered body shows no "new-btn" marker
+
+  Scenario: An admin sees the create control on a ruled collection
+    Given the access rule "Milestone read"
+    And the access rule "Milestone create where currentUser.role == \"Admin\""
+    And the User access rule "User create where currentUser.role == \"Admin\""
+    And the current user is the admin
+    When the page state is rendered for "/"
+    Then the rendered body shows a "new-btn" marker
 
   # End-to-end: an admin creates a user and sets a password through <UserAdmin>, and that new user can then
   # log in — the full multi-user thread (create → setPassword → re-login) in a real browser.

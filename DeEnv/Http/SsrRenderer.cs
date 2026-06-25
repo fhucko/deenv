@@ -198,6 +198,10 @@ public sealed class SsrRenderer
         // composing sys.schema(...) over a row that appears only after a client-side add still finds
         // its descriptor in the cache instead of missing. Descriptors are static, user-data-free.
         exec.PrewarmDescriptors(context);
+        // Ship every type's write capabilities too (sys.canWrite create/edit/delete), so a client
+        // navigation to a not-yet-rendered view (e.g. a freshly-created object's form) never misses → no
+        // disruptive refetch. Mirrors PrewarmDescriptors; the floor is the only input.
+        exec.PrewarmCapabilities(context);
 
         // Three scopes, chained system ← lib ← app, so the generic-UI library is a PUBLIC layer
         // between framework state and the user's code:

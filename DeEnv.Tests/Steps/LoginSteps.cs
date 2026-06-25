@@ -79,8 +79,9 @@ public sealed class LoginSteps(InstanceContext ctx)
             ctx.AccessRuleLines.ToArray(), ctx.UserAccessRuleLines.ToArray());
         ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
 
-        await Assert.That(ctx.Description!.Rules!.Any(r => r.Type == "User" && r.Verbs.Contains("edit")))
-            .IsTrue();
+        // Sanity: a User rule is now active (any verb — edit for setPassword/management, create for the
+        // create-control gating). Asserting Type only keeps this step reusable across User rule verbs.
+        await Assert.That(ctx.Description!.Rules!.Any(r => r.Type == "User")).IsTrue();
     }
 
     // ── setPassword (driven through the WS action, gated by the write floor) ─────

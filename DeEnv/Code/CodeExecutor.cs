@@ -429,6 +429,32 @@ public sealed class CodeExecutor
             () => DbBridge.LoadExtent(_store, typeName.Value, context, _floor));
     }
 
+    // canWrite(typeName, verb): the bound principal's WRITE capability for a type + verb (create/edit/delete)
+    // — SERVER-RESOLVED from the access floor (the floor never crosses the wire) and shipped as a cached
+    // bool, exactly like extent/schema; the client reads the cache (a miss → refetch). The self-hosted UI
+    // reads it to hide write affordances (Save/New/Remove) a read-only principal cannot use — the floor still
+    // RE-decides every real write, so this only governs what the UI OFFERS, never what it ALLOWS.
+    //
+    // Evaluated over a throwaway EMPTY target object, so it is EXACT for principal-only conditions
+    // (`currentUser.role == "Admin"`) and a PERMISSIVE over-approximation for target-referencing rules
+    // (same caveat as SsrRenderer's canManageUsers). No floor (a non-UI executor) ⇒ allow-all, like a
+    // dormant app. The result refreshes on login/logout via the full refetch (as extent does).
+    private IExecValue ExecuteCanWrite(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 2)
+            throw new CodeRuntimeException("canWrite(typeName, verb) takes two arguments.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecText typeName)
+            throw new CodeRuntimeException("canWrite() expects a text type name.");
+        if (ExecuteValue(call.Params[1], scope, context) is not ExecText verb)
+            throw new CodeRuntimeException("canWrite() expects a text verb.");
+        return Memoize($"canWrite:{typeName.Value}:{verb.Value}", context, () =>
+        {
+            if (_floor == null) return new ExecBool { Value = true }; // no enforcement ⇒ allow (dormant)
+            var target = new ExecObject { Props = [], Id = 0, TypeName = typeName.Value };
+            return new ExecBool { Value = _floor.CanWrite(verb.Value, typeName.Value, target) };
+        });
+    }
+
     // schema(typeName): a type's descriptor — { name, labelProp, props } — the reflective
     // shape the self-hosted generic UI walks (objectForm/refEditor/setTable). The replacement for
     // the old `__descs` registry global: the descriptor is computed from the schema (the literal
@@ -504,6 +530,35 @@ public sealed class CodeExecutor
             var key = $"schema:{name}";
             if (!context.Memo.ContainsKey(key))
                 context.Memo[key] = new CacheEntry { Key = key, Result = MarkConstant(ExecuteValue(literal, new ExecScope(), context)), Deps = new Deps() };
+        }
+    }
+
+    private static readonly string[] CapabilityVerbs = ["create", "edit", "delete"];
+
+    // Eagerly compute every TYPE's WRITE capabilities (create/edit/delete) into the memo, exactly like
+    // PrewarmDescriptors does for schema descriptors — so a CLIENT navigation to a not-yet-server-rendered
+    // view finds the sys.canWrite bool in the SHIPPED cache instead of MISSING. Without this, a freshly-
+    // created object's ObjectForm reads sys.canWrite(type, "edit") that the prior set page never shipped (it
+    // only shipped create/delete), so the miss throws "Value not available" → a refetch that disrupts the
+    // transient-id navigation and the new object's form never renders. Cheap: types × 3 verbs, bools only.
+    public void PrewarmCapabilities(ExecContext context)
+    {
+        if (_floor == null) return; // no enforcement ⇒ no gating ⇒ nothing to ship
+        foreach (var name in _descriptors.Keys)
+        {
+            if (name.Contains('/')) continue; // skip "Type/prop" dict-prop descriptor keys — not types
+            foreach (var verb in CapabilityVerbs)
+            {
+                var key = $"canWrite:{name}:{verb}";
+                if (context.Memo.ContainsKey(key)) continue;
+                var target = new ExecObject { Props = [], Id = 0, TypeName = name };
+                context.Memo[key] = new CacheEntry
+                {
+                    Key = key,
+                    Result = new ExecBool { Value = _floor.CanWrite(verb, name, target) },
+                    Deps = new Deps(),
+                };
+            }
         }
     }
 
@@ -886,6 +941,7 @@ public sealed class CodeExecutor
         "humanize" => ExecuteHumanize(call, scope, context),
         "extent" => ExecuteExtent(call, scope, context),
         "schema" => ExecuteSchema(call, scope, context),
+        "canWrite" => ExecuteCanWrite(call, scope, context),
         "nest" => ExecuteNest(call, scope, context),
         "segment" => ExecuteSegment(call, scope, context),
         "toInt" => ExecuteToInt(call, scope, context),

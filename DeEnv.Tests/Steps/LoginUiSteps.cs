@@ -141,6 +141,17 @@ public sealed class LoginUiSteps(InstanceContext ctx)
         await ctx.Page!.Locator(".user-menu button.logout").ClickAsync();
     }
 
+    // Read-only affordances (M-auth, sys.canWrite): a principal who cannot create sees no "New …" control.
+    // Proves the gating CLIENT-side (the generic UI reads the shipped sys.canWrite cache after hydration).
+    [Then("no create control is shown")]
+    public async Task ThenNoCreateControl() =>
+        await Assert.That(await ctx.Page!.Locator(".new-btn").CountAsync()).IsEqualTo(0);
+
+    // After logging in as an admin the create control appears (sys.canWrite flips on the login refetch).
+    [Then("a create control is shown")]
+    public async Task ThenCreateControlShown() =>
+        await ctx.Page!.Locator(".new-btn").First.WaitForAsync();
+
     // ── user administration (M-auth, the library <UserAdmin> reached from <UserMenu>) ──
 
     // An admin clicks "Manage users" in the user menu — gated on the canManageUsers capability (NOT the

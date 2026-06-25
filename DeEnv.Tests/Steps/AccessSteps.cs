@@ -212,6 +212,23 @@ public sealed class AccessSteps(InstanceContext ctx)
         await Assert.That(RenderedBody().Contains("manage-users")).IsFalse();
     }
 
+    // A write-affordance marker in the rendered BODY: "form-actions" (ObjectForm Save/Discard), "new-btn"
+    // (SetTable New), "set-remove" (SetTable Remove). The generic UI gates each on sys.canWrite(type, verb),
+    // so a read-only principal's body carries none. Body-only (the AST island ships the component defs).
+    [Then("the rendered body shows a {string} marker")]
+    public async Task ThenBodyShowsMarker(string marker)
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        await Assert.That(RenderedBody().Contains(marker)).IsTrue();
+    }
+
+    [Then("the rendered body shows no {string} marker")]
+    public async Task ThenBodyShowsNoMarker(string marker)
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        await Assert.That(RenderedBody().Contains(marker)).IsFalse();
+    }
+
     // The rendered <body> (the markup a visitor sees), EXCLUDING the window.initData/initUi hydration island
     // that ships the full component AST. That island lives in the <head> (UiLayout), so taking from <body>
     // onward yields only what actually RENDERED — the one region where a SignInBar that fired shows up.

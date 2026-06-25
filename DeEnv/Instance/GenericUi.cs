@@ -180,7 +180,7 @@ public static class GenericUi
                                     <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
                             else
                                 <Field obj={obj} desc={p}>
-                        if autosave != true
+                        if autosave != true && sys.canWrite(meta.name, "edit")
                             <div class="form-actions">
                                 <button class="save" onClick={save}>
                                     "Save"
@@ -256,7 +256,8 @@ public static class GenericUi
                                         if p.baseType != "set" && p.baseType != "dictionary" && p.name != desc.labelProp && p.multiline != true
                                             <th>
                                                 sys.humanize(p.name)
-                                <th>
+                                if rowActions != null || sys.canWrite(desc.name, "delete")
+                                    <th>
                             foreach m in set
                                 <tr class="set-row">
                                     if columns != null
@@ -297,7 +298,7 @@ public static class GenericUi
                                                         sys.field(m, p.name)
                                     if rowActions != null
                                         rowActions(m)
-                                    else
+                                    else if sys.canWrite(desc.name, "delete")
                                         <td class="row-action">
                                             <button class="set-remove" onClick={() => set.remove(m)}>
                                                 "Remove"
@@ -322,7 +323,7 @@ public static class GenericUi
                                         "Save"
                                     <button class="cancel" onClick={cancel}>
                                         "Cancel"
-                        else
+                        else if sys.canWrite(desc.name, "create")
                             <button class="new-btn" onClick={startCreate}>
                                 "New "
                                 sys.humanize(desc.name)
