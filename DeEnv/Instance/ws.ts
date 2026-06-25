@@ -51,6 +51,114 @@ function recordMutation(entry: JournalEntry): void {
     journal.push(entry);
 }
 
+// ── handler transaction (client data layer, slice 3 — atomic, commit-on-success handlers) ──────────
+//
+// A click handler runs as a TRANSACTION: its writes apply optimistically in place (so an intra-handler
+// read sees an earlier write), but the WS SENDS they trigger are BUFFERED — flushed only when the
+// handler COMPLETES cleanly. If the handler throws (a runtime error, or — slice 4 — a missing-data VNA),
+// the staged effects are rolled back atomically: the journal entries it pushed are reverse-undone and
+// dropped, `stateGen` is restored, and the buffered sends are discarded (NOTHING reached the server).
+//
+// WHY here, not a `ctx` overlay: the data-context `ctx` (an ambient overlay) does NOT redirect a
+// handler's writes — a closure resolves `ctx` from its BIRTHPLACE ambient (data-context-refactor slice
+// 3a), so wrapping the call site in a fresh `ctx.new()` is overridden by the captured ambient — AND `ctx`
+// only stages object-prop writes (positive-id), not set/ref/dict/entry ops (which `recordMutation` +
+// `wsSend` directly). Bracketing at the SEND + JOURNAL boundary catches EVERY effect kind uniformly, below
+// the ambient resolution, with no interpreter/twin change. This is the "discardable overlay" the spec's
+// atomicity model calls for, realized at the transport seam (client-only orchestration around the fn).
+//
+// Single-level: handlers are invoked only from the DOM (onClick), never re-entrantly mid-handler, so a
+// nested transaction cannot arise. A defensive guard makes a nested begin a no-op (it just participates in
+// the outer transaction) rather than corrupting the marks.
+let txDepth = 0;
+let txJournalMark = 0;   // journal length when the (outermost) transaction began
+let txStartGen = 0;      // stateGen when it began — restored on abort (the undone mutations didn't happen)
+let txSendBuffer: string[] | null = null;
+// OUT-OF-JOURNAL client state a handler can flip that the journal `undo` does NOT reverse — captured at
+// BEGIN, restored verbatim on the non-VNA abort so the rolled-back state leaves ZERO trace and triggers NO
+// refetch. Two things leak today, both from the `setRef` hook (it stages the prop in the journal but also,
+// OUTSIDE the entry, sets `needsServerData = true` + `invalidateExtents()` which coarse-stales every
+// `extent:` memo entry): (1) `needsServerData`, and (2) the cache entries' `stale` flags. Restoring
+// `stale` per-key also subsumes the staling the journal `undo` itself does (invalidateProp/invalidateMember
+// inside undo), so the abort is a complete restore-to-begin. SOUND because handlers run under memoBypass —
+// no NEW cache entries appear mid-handler and none are deleted, so the begin-time keys are exactly the
+// keys at abort, and a key→stale snapshot maps cleanly back.
+let txStartNeedsServerData = false;
+let txStaleSnapshot: Map<string, boolean> | null = null;
+
+// Run `body` as a commit-on-success handler transaction. Three outcomes:
+//
+//  • CLEAN COMPLETION — flush the buffered sends in handler order (their msg ids were allocated in that
+//    order, so FIFO ordering on the wire is preserved). Net effect identical to the pre-slice-3
+//    per-statement send; the handler is now ATOMIC (nothing was sent mid-run).
+//
+//  • a NON-VNA throw (a genuine runtime bug — a bad call, an invalid op) — ABORT: reverse-replay + drop the
+//    journal entries this handler pushed (so its optimistic local writes are undone), restore stateGen, and
+//    discard the buffered sends. Zero partial trace, nothing sent. Re-render the rolled-back state, then
+//    re-throw so the bug still surfaces. This is the new atomicity guarantee.
+//
+//  • a VALUE-NOT-AVAILABLE throw (the handler read data the client does not hold — the action-miss case) —
+//    for slice 3, PRESERVE today's behavior: flush whatever was buffered BEFORE the throw (today these
+//    sends fired per-statement, so flushing the buffer reproduces exactly the same sent-set), keep the
+//    local writes + journal, re-render, and re-throw. Slice 4 replaces this branch with catch → record →
+//    fetch → re-invoke-over-the-now-present-data (the proper atomic action-miss round-trip); until then the
+//    VNA path is left exactly as it is today, so the existing handler-driven suite is unchanged. (A handler
+//    that hits a spurious sys.schema-under-memoBypass VNA after its real writes is precisely this case.)
+function runHandlerTransaction(body: () => void): void {
+    if (txDepth > 0) { body(); return; }   // already in a transaction: just participate (defensive)
+    txDepth = 1;
+    txJournalMark = journal.length;
+    txStartGen = stateGen;
+    txSendBuffer = [];
+    // Capture the out-of-journal client state (see the note above): the refetch flag and a snapshot of
+    // every cache entry's stale flag, so the non-VNA abort can restore the EXACT pre-handler state.
+    txStartNeedsServerData = needsServerData;
+    txStaleSnapshot = new Map();
+    for (const [key, e] of uiStatic.cache) txStaleSnapshot.set(key, e.stale);
+    try {
+        body();
+        flushHandlerTx();   // success: send everything the handler buffered, in order
+    } catch (e) {
+        if (e instanceof Error && e.message === "Value not available") {
+            // Action-miss (slice 4 territory) — keep EXACTLY today's net effect: flush the pre-throw sends
+            // (today these fired per-statement, so the sent-set is identical), leave the optimistic writes +
+            // journal standing, and re-throw — WITHOUT rendering here, because today the throw also skipped
+            // the handler's trailing renderUi (the eventual WS reply re-renders). Rolling back is wrong (it
+            // would revert the real work the handler did before the miss); rendering here is a behavior
+            // change (a synchronous extra render + refetch can race the optimistic add). Slice 4 replaces
+            // this branch with catch → record → fetch → re-invoke over the now-present data.
+            flushHandlerTx();
+            throw e;
+        }
+        // Genuine bug — atomic rollback. Undo the journal slice this handler pushed (reverse order), then
+        // restore the OUT-OF-JOURNAL state the undo does not cover — `needsServerData` and every cache
+        // entry's stale flag — back to their begin values. This reverts a `setRef`'s coarse extent-staling +
+        // needsServerData (and the staling the undo itself just did) so the abort leaves ZERO trace: the
+        // trailing renderUi finds nothing stale and nothing needed → maybeRefetch sends NOTHING. (Restore
+        // AFTER the undo: the undo re-stales prop/member entries, which this snapshot then unwinds.)
+        for (let i = journal.length - 1; i >= txJournalMark; i--) { journal[i].undo(); journal[i].onReject?.(); }
+        journal.length = txJournalMark;
+        stateGen = txStartGen;
+        needsServerData = txStartNeedsServerData;
+        for (const [key, wasStale] of txStaleSnapshot!) { const e = uiStatic.cache.get(key); if (e) e.stale = wasStale; }
+        txStaleSnapshot = null;
+        txSendBuffer = null;
+        txDepth = 0;
+        renderUi();
+        throw e;
+    }
+}
+
+// Flush + clear the current handler transaction's buffered sends (in handler order), then leave the
+// transaction. Shared by the success and the VNA-passthrough paths.
+function flushHandlerTx(): void {
+    const buffered = txSendBuffer ?? [];
+    txSendBuffer = null;
+    txStaleSnapshot = null;   // not an abort: keep the staling the handler/undo did, just drop the snapshot
+    txDepth = 0;
+    for (const text of buffered) wsSendText(text);
+}
+
 // The reply for msgId was ok: the mutation is server-committed, the entry retires.
 function commitJournal(msgId: number): void {
     const idx = journal.findIndex(e => e.msgId === msgId);
@@ -594,9 +702,18 @@ function wsReady(): boolean {
     return codeWs != null && codeWs.readyState === WebSocket.OPEN && helloAcked;
 }
 
-// Send now if the socket is open; otherwise queue and flush on open.
+// Send now if the socket is open; otherwise queue and flush on open. DURING a handler transaction
+// (slice 3) the send is BUFFERED instead — held until the handler completes cleanly (then flushed in
+// order) or discarded if it throws — so nothing reaches the server mid-handler.
 function wsSend(msg: object): void {
     const text = JSON.stringify(msg);
+    if (txSendBuffer != null) { txSendBuffer.push(text); return; }
+    wsSendText(text);
+}
+
+// Put an already-serialized frame on the wire (or the connect-time outbox). The transaction flush sends
+// its buffered frames through here, bypassing the buffer (which it has already cleared).
+function wsSendText(text: string): void {
     if (codeWs && codeWs.readyState === WebSocket.OPEN) codeWs.send(text);
     else codeWsOutbox.push(text);
 }

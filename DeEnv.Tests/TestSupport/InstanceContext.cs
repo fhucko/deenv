@@ -518,6 +518,68 @@ public class InstanceContext
                         <input class="name" value={i.name}>
     """;
 
+    // Client data layer, slice 3: two throwing-handler shapes for the atomic-rollback proof.
+    //
+    //  • `bumpThenThrow(c)` makes TWO real writes to a persisted (positive-id) db object and THEN throws
+    //    (the trailing `c.name.add(c)` calls a collection method on a text value — a runtime "cannot read
+    //    'add' on a non-object", which the validator passes but execution rejects). Each write is an
+    //    objectPropChange mutation that, pre-slice-3, applied + SENT per statement — so a throw after them
+    //    leaked both partial writes (locally and to the server). The atomic transaction must roll BOTH back.
+    //
+    //  • `setRefThenThrow(c)` performs a REFERENCE set (sys.setRef on a positive-id object) and THEN throws.
+    //    setRef stages the prop in the journal but ALSO, outside the entry, sets needsServerData = true +
+    //    invalidateExtents() (coarse-staling every extent: memo entry). The journal undo does NOT reverse
+    //    those, so before the abort-state fix the rolled-back handler still left needsServerData set + the
+    //    extent entries stale → the abort's renderUi → maybeRefetch SENT a refetch (a partial trace + a
+    //    half-state: stale extent memos over a reverted model). The fix captures/restores that out-of-journal
+    //    state on the non-VNA abort, so the rolled-back handler leaves ZERO trace and triggers NO refetch.
+    //
+    // `link Counter` is the single object-typed (reference) prop setRef points at; two int fields so the
+    // test can assert exact values in the store. The render iterates sys.extent("Counter") (rather than
+    // db.items) so a real `extent:Counter` memo entry exists at click time — that is what setRef's
+    // invalidateExtents() stales, so the setRef test can prove the stale-flag restore, not just the
+    // needsServerData restore. (The single seeded Counter is in both the extent and items, so the
+    // bumpThenThrow assertions — span.a/span.b, the name lookup, the store readback — are unaffected.)
+    public static InstanceDescription AtomicHandlerUiDb() =>
+        InstanceDescriptionLoader.Load(AtomicHandlerUiApp);
+
+    private const string AtomicHandlerUiApp = """
+    types
+        Db
+            items set of Counter
+        Counter
+            name text
+            a int
+            b int
+            link Counter
+
+    ui
+
+        fn bumpThenThrow(c)
+            c.a = 1
+            c.b = 2
+            c.name.add(c)
+
+        fn setRefThenThrow(c)
+            sys.setRef(c, "link", c)
+            c.name.add(c)
+
+        fn render()
+            return <main>
+                foreach c in sys.extent("Counter")
+                    <div>
+                        <span class="name">
+                            c.name
+                        <span class="a">
+                            c.a
+                        <span class="b">
+                            c.b
+                        <button class="bump" onClick={() => bumpThenThrow(c)}>
+                            "Bump"
+                        <button class="setref" onClick={() => setRefThenThrow(c)}>
+                            "SetRef"
+    """;
+
     // Code milestone, Stage 4: a private field (`salary`) by construction. `highEarners`
     // filters by salary; its result is the `rich` var (a memoized computation), so salary
     // is a dependency, never a leaf — the client gets the high earners' names but never any

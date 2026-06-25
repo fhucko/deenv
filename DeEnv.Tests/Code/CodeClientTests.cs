@@ -334,6 +334,187 @@ public sealed class CodeClientTests
         });
     }
 
+    // Client data layer, slice 3 — ATOMIC, COMMIT-ON-SUCCESS HANDLERS. A handler runs as a transaction:
+    // its writes apply optimistically but are SENT only on clean completion; if it throws, the staged
+    // effects are rolled back (model restored, NOTHING sent) — atomic, zero partial trace. Before slice 3
+    // each write applied + sent per statement (objectPropChange fires immediately in the ws hook), so a
+    // handler that wrote `a` and `b` and THEN threw leaked both writes locally AND to the server.
+    //
+    // The fixture's `bumpThenThrow(c)` writes c.a=1, c.b=2, then calls `c.name.add(c)` (a collection method
+    // on a text — a runtime "cannot read 'add' on a non-object"), which throws AFTER both writes. This is a
+    // NON-VNA throw (a genuine bug), so the handler transaction takes the atomic-rollback branch (a VNA —
+    // missing data — is the separate slice-4 action-miss path and is left as today). The two writes hit the
+    // bound db object via objectProp assignment → objectPropChange. BEFORE slice 3 those fired + sent per
+    // statement, so a throw after them left the writes locally AND on the server. The browser scenario drives
+    // a real click; the assertions on the model value, the journal length, and the store all catch the leak
+    // (fail-before, proven: `a=1 b=2 journal=2`).
+    [Test]
+    public async Task A_throwing_handler_rolls_back_all_its_writes_atomically()
+    {
+        await WithPageAsync(InstanceContext.AtomicHandlerUiDb(), s => SeedCounter(s, "x", 0, 0), async (page, store) =>
+        {
+            // The single Counter row is rendered (a=0, b=0); capture its db id so we can read its model
+            // object back after the click, and assert the starting state: a=0, b=0, an empty journal, gen 0.
+            var counterId = await page.EvaluateAsync<int>(
+                """() => Object.values(uiStatic.state.objects).find(o => o.props.name && o.props.name.value === "x").id""");
+            var probe = await page.EvaluateAsync<string>(
+                $$"""
+                () => {
+                    const c = uiStatic.state.objects[{{counterId}}];
+                    return `a=${c.props.a.value} b=${c.props.b.value} journal=${journal.length} gen=${stateGen}`;
+                }
+                """);
+            await Assert.That(probe).IsEqualTo("a=0 b=0 journal=0 gen=0");
+
+            // Click the Bump button: its handler writes a=1, b=2, then throws (a collection method on a text).
+            // The throw propagates out of the handler (re-thrown after the atomic rollback) as a page error —
+            // capture it so the click itself does not fail, and so we can confirm the handler DID run far
+            // enough to throw (proving the two writes were attempted, then undone).
+            var errored = new TaskCompletionSource<bool>();
+            page.PageError += (_, _) => errored.TrySetResult(true);
+            await page.Locator("button.bump").ClickAsync();
+            await Task.WhenAny(errored.Task, Task.Delay(2000));
+            await Assert.That(errored.Task.IsCompleted).IsTrue();
+
+            // The model object's a/b are back to 0 (the writes were rolled back), the journal is empty
+            // (neither write was left pending — i.e. NOTHING was sent), and stateGen returned to 0 (the
+            // mutations were unwound, so the generation reflects no standing optimistic change).
+            var after = await page.EvaluateAsync<string>(
+                $$"""
+                () => {
+                    const c = uiStatic.state.objects[{{counterId}}];
+                    return `a=${c.props.a.value} b=${c.props.b.value} journal=${journal.length} gen=${stateGen}`;
+                }
+                """);
+            await Assert.That(after).IsEqualTo("a=0 b=0 journal=0 gen=0");
+
+            // And nothing reached the server: a brief settle, then the store still holds a=0, b=0. (Before
+            // the fix the per-statement objectPropChange sends persisted a=1, b=2 even though the handler
+            // threw.) Read the Counter extent's single object directly.
+            await Task.Delay(150);
+            var stored = store.ReadExtent("Counter").Values.Single();
+            await Assert.That(IntField(stored, "a")).IsEqualTo(0);
+            await Assert.That(IntField(stored, "b")).IsEqualTo(0);
+
+            // The rolled-back values also re-render to the DOM (the abort path re-renders), so the view is
+            // not left showing the partially-applied state.
+            await Assert.That(await page.Locator("span.a").InnerTextAsync()).IsEqualTo("0");
+            await Assert.That(await page.Locator("span.b").InnerTextAsync()).IsEqualTo("0");
+        });
+    }
+
+    // Client data layer, slice 3 (review fix) — a throwing handler that did a REFERENCE SET must roll back
+    // the OUT-OF-JOURNAL side effects too, so the abort leaves ZERO trace and triggers NO refetch.
+    //
+    // THE GAP THIS PROVES: the setRef hook (ws.ts) stages the prop in the journal but ALSO, outside the
+    // journal entry, sets needsServerData = true + invalidateExtents() (coarse-staling every `extent:` memo
+    // entry). The journal `undo` only restores the prop — it does NOT reverse those two. So a handler that
+    // does sys.setRef(...) and THEN throws a genuine (non-VNA) bug took the atomic-rollback branch, reverted
+    // the model + discarded the buffered send — but LEFT needsServerData set + the extent entries stale. The
+    // abort's trailing renderUi → maybeRefetch then SENT a refetch (and armed refetchInFlight), violating the
+    // slice's own guarantee ("zero partial trace, nothing sent") and leaving a half-state: stale extent memos
+    // over a rolled-back model. The fix captures needsServerData + a snapshot of every cache entry's stale
+    // flag at transaction BEGIN and restores them on the non-VNA abort (after the journal undo).
+    //
+    // The fixture's render iterates sys.extent("Counter"), so a real `extent:Counter` memo entry is present
+    // + fresh at click time — invalidateExtents() actually STALES it during the handler, so this exercises
+    // the stale-flag restore (not just needsServerData). Both halves are asserted via the `staleExtents`
+    // count + the needsServerData/refetchInFlight probe + the WS send-spy.
+    //
+    // FAIL-BEFORE / PASS-AFTER: before the fix the post-abort probe reads needsServerData=true /
+    // refetching=true / staleExtents>0 and the send-spy records a "refetch" op; after the fix all of those
+    // are clean (false / false / 0 / no refetch). DETERMINISTIC: the abort path (undo + restore + renderUi +
+    // maybeRefetch) is fully SYNCHRONOUS inside the click's handler, so reading the module globals + the
+    // send-spy immediately after the throw observes the settled post-abort state with no race.
+    [Test]
+    public async Task A_throwing_handler_after_a_setRef_rolls_back_its_out_of_journal_effects()
+    {
+        await WithPageAsync(InstanceContext.AtomicHandlerUiDb(), s => SeedCounter(s, "x", 0, 0), async (page, store) =>
+        {
+            // FULL readiness: the WS is open + claimed and the connect-time refetch has applied, so
+            // needsServerData has settled to false and no refetch is in flight — the clean baseline the abort
+            // must return to. (Without this the connecting-window state could mask the leak.)
+            await page.WaitReadyAsync();
+
+            var counterId = await page.EvaluateAsync<int>(
+                """() => Object.values(uiStatic.state.objects).find(o => o.props.name && o.props.name.value === "x").id""");
+
+            // Baseline: the `link` reference is unset, the model is settled (empty journal, gen 0), and —
+            // critically for this test — needsServerData is false, no refetch is in flight, and no `extent:`
+            // memo entry is stale. An unset single reference ships as {type:"null"}, so normalize null/nothing/
+            // absent → "unset" — the post-abort assertion proves it was restored to exactly that.
+            var before = await page.EvaluateAsync<string>(
+                $$"""
+                () => {
+                    const c = uiStatic.state.objects[{{counterId}}];
+                    const lv = c.props.link;
+                    const link = (!lv || lv.type === "null" || lv.type === "nothing") ? "unset" : "set";
+                    let staleExtents = 0;
+                    for (const [k, e] of uiStatic.cache) if (k.startsWith("extent:") && e.stale) staleExtents++;
+                    return `link=${link} journal=${journal.length} gen=${stateGen} needs=${needsServerData} `
+                         + `refetching=${refetchInFlight} staleExtents=${staleExtents}`;
+                }
+                """);
+            await Assert.That(before).IsEqualTo("link=unset journal=0 gen=0 needs=false refetching=false staleExtents=0");
+
+            // Spy on the live WS send: record every sent frame's `op` so the test can prove NOTHING was sent
+            // by the aborted handler — neither the setReferenceField the setRef staged (discarded) nor a
+            // refetch leaked by un-reverted needsServerData/stale extents. codeWs is the production module
+            // global; the page has settled so the socket is open and this send is the real one.
+            await page.EvaluateAsync(
+                """
+                () => {
+                    window.__sentOps = [];
+                    const orig = codeWs.send.bind(codeWs);
+                    codeWs.send = (text) => { try { window.__sentOps.push(JSON.parse(text).op); } catch {} return orig(text); };
+                }
+                """);
+
+            // Click SetRef: the handler does sys.setRef(c, "link", c) — which sets c.props.link, stages a
+            // journal entry, BUFFERS a setReferenceField send, and (outside the journal) sets needsServerData
+            // + coarse-stales the extents — then throws (a collection method on a text). The throw re-surfaces
+            // as a page error after the atomic rollback; capture it so the click does not fail the test.
+            var errored = new TaskCompletionSource<bool>();
+            page.PageError += (_, _) => errored.TrySetResult(true);
+            await page.Locator("button.setref").ClickAsync();
+            await Task.WhenAny(errored.Task, Task.Delay(2000));
+            await Assert.That(errored.Task.IsCompleted).IsTrue();
+
+            // Post-abort: the reference is back to unset (the journal undo), AND the out-of-journal state is
+            // back to the begin values — needsServerData false, NO refetch armed, NO `extent:` entry stale.
+            // Before the fix this read `needs=true refetching=true staleExtents>0`. (gen restored to 0 too.)
+            var after = await page.EvaluateAsync<string>(
+                $$"""
+                () => {
+                    const c = uiStatic.state.objects[{{counterId}}];
+                    const lv = c.props.link;
+                    const link = (!lv || lv.type === "null" || lv.type === "nothing") ? "unset" : "set";
+                    let staleExtents = 0;
+                    for (const [k, e] of uiStatic.cache) if (k.startsWith("extent:") && e.stale) staleExtents++;
+                    return `link=${link} journal=${journal.length} gen=${stateGen} needs=${needsServerData} `
+                         + `refetching=${refetchInFlight} staleExtents=${staleExtents}`;
+                }
+                """);
+            await Assert.That(after).IsEqualTo("link=unset journal=0 gen=0 needs=false refetching=false staleExtents=0");
+
+            // And NOTHING was put on the wire by the aborted handler: no setReferenceField (the staged send
+            // was discarded) and — the crux — NO refetch (the un-reverted needsServerData/stale extents would
+            // have triggered one through the abort's renderUi → maybeRefetch). A short settle lets any
+            // erroneously-armed refetch actually flush before we read the spy.
+            await Task.Delay(150);
+            var sentOps = await page.EvaluateAsync<string[]>("() => window.__sentOps");
+            await Assert.That(sentOps).DoesNotContain("refetch");
+            await Assert.That(sentOps).DoesNotContain("setReferenceField");
+
+            // The server never saw the ref either: the stored Counter's `link` is still an UNSET reference
+            // (TargetId null) — the setReferenceField the handler staged was discarded by the abort, so it
+            // never reached storage. (An unset single reference loads as ReferenceValue(null, ...).)
+            var stored = store.ReadExtent("Counter").Values.Single();
+            var link = stored.Fields.GetValueOrDefault("link") as ReferenceValue;
+            await Assert.That(link?.TargetId).IsNull();
+        });
+    }
+
     private static string? Name(ObjectValue o) =>
         o.Fields.TryGetValue("name", out var n) && n is TextValue t ? t.Text : null;
 
@@ -455,4 +636,18 @@ public sealed class CodeClientTests
         }));
         store.AddToSet(NodePath.Root.Field("items"), id);
     }
+
+    private static void SeedCounter(IInstanceStore store, string name, int a, int b)
+    {
+        var id = store.CreateObject("Counter", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name),
+            ["a"] = new IntValue(a),
+            ["b"] = new IntValue(b),
+        }));
+        store.AddToSet(NodePath.Root.Field("items"), id);
+    }
+
+    private static int? IntField(ObjectValue o, string field) =>
+        o.Fields.TryGetValue(field, out var v) && v is IntValue i ? i.Value : null;
 }

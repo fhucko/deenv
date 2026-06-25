@@ -281,6 +281,22 @@ re-fetched instead of clobbering the optimistic edit (I5). Renamed `sessionEpoch
 survives + a re-fetch arms; fail-before/pass-after). Client-only — NO twin/server change. Bumps on data
 mutations + session only (view-state toggles don't; the draft-drives-a-query predicate stays I3).
 
+**Slice 3 — DONE** (built + reviewed *sound-with-conditions* → fix applied, suite **534/534**, 2026-06-25):
+implicit commit-on-success ATOMIC HANDLERS. Every onClick runs as a transaction — writes apply
+optimistically in place, but their WS SENDS BUFFER until the handler completes; a non-VNA throw (a genuine
+bug) ATOMICALLY ROLLS BACK (reverse-undo the journal slice + `onReject`, restore `stateGen` + the
+out-of-journal `needsServerData`/cache-stale state, discard the buffer — zero trace, nothing sent), a VNA
+throw preserves today's behavior (the slice-4 seam). Realized at the SEND+JOURNAL boundary (`ws.ts`
+`runHandlerTransaction`), NOT a `ctx` overlay (a closure resolves `ctx` from its birthplace + `ctx` only
+stages object-props) — so it catches every effect kind with NO interpreter/twin change. Client-only
+(`ws.ts`/`ui.ts`). Proven by deterministic `CodeClientTests` (a throwing handler + a setRef-then-throw
+handler both fully roll back; fail-before/pass-after). `oninput`/`onchange` (single-write) intentionally
+unwrapped.
+
+**Review finding #1 FIXED (abort completeness):** the abort now restores `needsServerData` + the cache
+stale-flags `setRef` coarse-stales (captured at tx-begin), so a setRef-then-throw handler leaks NO refetch
+(architecture-reviewer caught it; the snapshot subsumes both `invalidateExtents` + the undo's own staling).
+
 ## GC — the LAST slice (renamed from "Slice 2": it must ship after the round-trip can re-pull)
 
 The client graph (`uiStatic.state.objects/arrays`) grows as views pull data and never shrinks. Add the

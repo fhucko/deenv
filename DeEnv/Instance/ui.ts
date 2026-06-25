@@ -619,7 +619,14 @@ function wireEvents(el: HTMLElement, tag: ExecTag): void {
         // onClick handler still navigate as usual (this only guards code-wired handlers).
         el.onclick = (e: MouseEvent) => {
             e.stopPropagation();
-            runWithMemoBypass(() => callFunction(fn, { lastId: uiStatic.lastId, ambient: rootAmbient() }));
+            // Run the handler as a commit-on-success transaction (client data layer, slice 3): its writes
+            // apply optimistically but their WS sends BUFFER until it completes cleanly — so a handler is
+            // atomic and nothing is sent mid-run. A genuine-bug throw rolls every write back and sends
+            // nothing (runHandlerTransaction re-renders + re-throws); a missing-data (VNA) throw keeps
+            // today's behavior until slice 4 wires the action-miss fetch. On success the trailing renderUi
+            // paints once as before.
+            runHandlerTransaction(() =>
+                runWithMemoBypass(() => callFunction(fn, { lastId: uiStatic.lastId, ambient: rootAmbient() })));
             renderUi();
         };
     } else {
