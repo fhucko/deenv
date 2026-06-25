@@ -242,18 +242,23 @@ public sealed class SsrRenderer
             IsReadOnly = true,
         };
 
-        // `canManageUsers` (M-auth user admin) — true when the principal may EDIT User objects (the write
-        // floor's User `edit` capability). The generic UI reads it to show admin-only user management WITHOUT
-        // shipping the principal's role: the role stays private (the floor-hardening invariant) and only this
-        // derived capability bit ships. Evaluated over a throwaway empty User target — a role-based rule
-        // (`currentUser.role == "Admin"`) reads only the principal, so the target is irrelevant; for an
-        // anonymous/non-admin principal the User-edit rule's condition fails → false. Shipped like accessActive.
+        // `canManageUsers` (M-auth user admin) — true when auth is ON and the principal may EDIT User objects
+        // (the write floor's User `edit` capability). The generic UI reads it to show admin-only user
+        // management WITHOUT shipping the principal's role: the role stays private (the floor-hardening
+        // invariant) and only this derived capability bit ships. The `accessActive &&` guard is load-bearing:
+        // a DORMANT (no-rules) app's floor is allow-all, which would otherwise report true on a no-auth app.
+        // CAVEAT: evaluated over a throwaway EMPTY User target, so it is EXACT only for PRINCIPAL-ONLY
+        // conditions (`currentUser.role == "Admin"`). A TARGET-referencing User-edit rule (e.g. `object.role
+        // != "Admin"`) yields a PERMISSIVE over-approximation here (the control may show though some rows are
+        // denied) — harmless, because the floor RE-decides every write over the REAL target (WsHandler). No
+        // app uses such a rule today; tighten to an all-targets check if/when per-field/target rules land.
         system.Items["canManageUsers"] = new ExecScopeItem
         {
             Value = new ExecBool
             {
-                Value = floor.CanWrite("edit", UserConvention.TypeName,
-                    AccessFloor.ScalarObject(UserConvention.TypeName, 0, new ObjectValue(new Dictionary<string, NodeValue>()))),
+                Value = (_desc.Rules?.Count ?? 0) > 0
+                    && floor.CanWrite("edit", UserConvention.TypeName,
+                        AccessFloor.ScalarObject(UserConvention.TypeName, 0, new ObjectValue(new Dictionary<string, NodeValue>()))),
             },
             IsReadOnly = true,
         };
