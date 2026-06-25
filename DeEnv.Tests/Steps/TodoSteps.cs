@@ -26,6 +26,11 @@ public sealed class TodoSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
         await ctx.Page!.GotoContentAsync("/");
         await ctx.Page!.WaitForSelectorAsync("[data-key]"); // hydrated (client adds keys)
+        // Every Todo scenario mutates over the WS (add user/list/item). Gate on FULL readiness, not just
+        // hydration: a mutation staged before the socket is open + the session claimed rides the connecting-
+        // window outbox and can be delayed (or its negative→real id remap deferred) under peak load — which
+        // is what left a just-added user's selected view churning (the add-list button detaching mid-click).
+        await ctx.Page!.WaitReadyAsync();
     }
 
     // ── When ────────────────────────────────────────────────────────────────────
@@ -55,7 +60,16 @@ public sealed class TodoSteps(InstanceContext ctx)
     {
         await ctx.Page!.Locator("input.new-user").FillAsync(name);
         await ctx.Page.Locator("button.add-user").ClickAsync();
-        await ctx.Page.WaitForSelectorAsync($"button.user-chip:has-text({Quoted(name)})");
+        // Wait for the new user's chip AND for its negative→real id remap to land (a POSITIVE data-key),
+        // not just the chip's appearance. The new user becomes `selectedUser`, so until its id is real the
+        // render keeps re-running on each WS reply (chipClass reads sys.id(selectedUser)) — which detaches
+        // and rebuilds the selected-user section (its add-list button included). A test that selects this
+        // user and clicks "Add list" during that churn window hit "element detached from the DOM, retrying"
+        // until timeout under load. Gating on the remap settles the view before the next interaction.
+        await ctx.Page.WaitForFunctionAsync(
+            "name => { const b = [...document.querySelectorAll('button.user-chip')]" +
+            ".find(e => e.textContent.includes(name)); return b != null && +b.getAttribute('data-key') > 0; }",
+            name);
     }
 
     [When("I add a new list {string}")]

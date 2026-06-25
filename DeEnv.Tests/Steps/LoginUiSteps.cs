@@ -133,12 +133,26 @@ public sealed class LoginUiSteps(InstanceContext ctx)
 
     // Log out THROUGH the UserMenu (sub-slice 1e-2): click the Log out button the generic render shows once
     // logged in. The button fires sys.logout → a `logout` WS op whose reply refetches as anonymous, so the
-    // same URL re-renders with the ruled data denied and the gate back. (No extra readiness gate: the WS was
-    // already established for login and stays open; the button only exists after the post-login refetch ran.)
+    // same URL re-renders with the ruled data denied and the gate back.
+    //
+    // Then WAIT for the logout to FULLY SETTLE (data-ready = the logout's refetch returned, refetchInFlight
+    // cleared) before returning. A scenario that LOGS BACK IN right after (the create-user e2e: logout →
+    // open sign-in → log in as the new user) must not fire the next login's refetch while the logout's
+    // refetch is still in flight — the two coalesce, and the login's bound state is lost under the logout's
+    // anonymous merge, so the user menu never reappears (a 30s flake, intermittent under load). Gating on
+    // the settle makes the re-login act on a quiescent session; for a scenario that just asserts the
+    // anonymous gate afterward, the wait is harmless (that state is already what data-ready settles to).
     [When("the visitor logs out through the user menu")]
     public async Task WhenLogsOut()
     {
         await ctx.Page!.Locator(".user-menu button.logout").ClickAsync();
+        // Wait for the logout's view swap to LAND (the user menu gone — the anonymous re-render ran) and
+        // THEN for the session to settle (data-ready, refetch no longer in flight). The disappearance gate
+        // is essential: data-ready is still set from the logged-in state in the window between the click
+        // and the logout reply, so waiting on it alone could return before the logout even starts its
+        // refetch. Together they guarantee the logout is fully processed before the next interaction.
+        await ctx.Page!.Locator(".user-menu").WaitForAsync(new() { State = WaitForSelectorState.Detached });
+        await ctx.Page!.WaitReadyAsync();
     }
 
     // Read-only affordances (M-auth, sys.canWrite): a principal who cannot create sees no "New …" control.
@@ -174,18 +188,39 @@ public sealed class LoginUiSteps(InstanceContext ctx)
         await panel.Locator(".create-form input.name").FillAsync(name);
         await panel.Locator(".create-form select.role").SelectOptionAsync(role);
         await panel.Locator(".create-form button.set-add").ClickAsync();
+        // Wait for the new user's row AND its negative→real id remap to land (a POSITIVE data-key), not
+        // just the row's appearance: the following set-password addresses this row, so until the optimistic
+        // add is remapped to its real id the write would target a transient id. (The same remap gate the
+        // TodoApp add-flows use.)
         await panel.Locator($".set-row:has-text(\"{name}\")").WaitForAsync();
+        await ctx.Page.WaitForFunctionAsync(
+            "name => { const r = [...document.querySelectorAll('.user-admin .set-row')]" +
+            ".find(e => e.textContent.includes(name)); return r != null && +r.getAttribute('data-key') > 0; }",
+            name);
     }
 
     // Set a named user's password via that row's set-password control (sys.setPassword). The just-created
     // user may still carry its transient negative id, but the server resolves it through the session remap
     // (the arrayAdd was sent first, WS messages are ordered) — so no wait-for-remap is needed.
+    //
+    // GATE on the hash actually PERSISTING before returning. setPassword is an admin-gated write
+    // (User edit where currentUser.role == "Admin"); the scenario LOGS OUT right after, which flips the
+    // session anonymous. Under peak load the logout can win the race, so the write lands against an
+    // already-anonymous session and the floor REJECTS it — the hash is never stored and the later
+    // re-login as this user silently fails (a wrong/empty password is not an error → the user menu never
+    // appears, the 30s flake). Polling the store until the user has a non-empty passwordHash proves the
+    // admin-gated write committed while still admin, so the subsequent login can verify against it. Polls
+    // by name (the row text), reading the live store (the same seam LoginSteps writes the seed hash to).
     [When("the admin sets {string}'s password to {string}")]
     public async Task WhenSetsUserPassword(string name, string password)
     {
         var row = ctx.Page!.Locator($".user-admin .set-row:has-text(\"{name}\")");
         await row.Locator("input.new-password").FillAsync(password);
         await row.Locator("button.set-password").ClickAsync();
+        await Polling.EventuallyAsync(() => ctx.Store!.ReadExtent("User").Values.Any(u =>
+            u.Fields.TryGetValue("name", out var n) && n is TextValue { Text: var nm } && nm == name
+            && u.Fields.TryGetValue(UserConvention.PasswordHashField, out var h)
+            && h is TextValue { Text.Length: > 0 }), $"{name}'s password to persist");
     }
 
     // Login is a STATE, not a route: the URL never changed (no /login redirect). The visitor stayed on the

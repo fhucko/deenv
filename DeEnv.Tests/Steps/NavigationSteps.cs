@@ -80,12 +80,16 @@ public sealed class NavigationSteps(InstanceContext ctx)
     // Matches: Then I see a form for "Shop"
     // The self-hosted object page is a div.object-form with an <h2> heading; the retiring
     // C# auto-form used a <form id="node-form">. Either way the heading is the type name.
+    // POLL for the expected heading rather than reading it once: a row-click navigates CLIENT-SIDE
+    // (pushState happens BEFORE the re-render), so right after the URL settles the heading can briefly
+    // still read the PREVIOUS view's type (e.g. the root "Db" before "/customers/42" paints "Customer")
+    // — the "wrong content" flake under load. Polling for the target type returns the instant the new
+    // view paints and never reads the stale frame; a fresh deep-link (heading already correct in SSR)
+    // satisfies it immediately.
     [Then(@"I see a form for {string}")]
-    public async Task ThenFormForAsync(string typeName)
-    {
-        var text = await ctx.Page!.Locator(".object-form h2, form h2").First.InnerTextAsync();
-        await Assert.That(text).IsEqualTo(typeName);
-    }
+    public async Task ThenFormForAsync(string typeName) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('.object-form h2, form h2')?.textContent.trim() === {JsString(typeName)}");
 
     // Matches: And the "customers" field renders as a table
     [Then(@"the {string} field renders as a table")]
@@ -166,4 +170,8 @@ public sealed class NavigationSteps(InstanceContext ctx)
         // A fresh isolated page on the shared browser (launched once for the whole run; see SharedBrowser).
         ctx.Page ??= await SharedBrowser.NewPageAsync(ctx.BaseUrl);
     }
+
+    // A C# string as a single-quoted JS string literal (quotes/backslashes escaped), for embedding in a
+    // WaitForFunction body.
+    private static string JsString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 }
