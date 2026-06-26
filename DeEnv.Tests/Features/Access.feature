@@ -324,11 +324,12 @@ Feature: The access floor (read enforcement by principal)
     And "Gate #3" eventually appears
     And the URL is still "/"
 
-  # ── user management: the library <UserAdmin>, reached from <UserMenu> ─────────
-  # Multi-user management is a library component an admin reaches from the user menu (login-as-state, no
-  # reserved URL). Its visibility is gated on a derived `canManageUsers` capability (the floor's User
-  # `edit`), NOT on the principal's role — so the role stays private while the admin-only control still
-  # gates correctly.
+  # ── user management: the "Users" link in <UserMenu> ──────────────────────────
+  # Multi-user management is reached from the user menu's "Users" link, which navigates to the generic
+  # User list (`/users`); set-password lives on each User's own object page (`/users/<id>`) — no popup,
+  # no reserved URL. The link's visibility is gated on a derived `canManageUsers` capability (the floor's
+  # User `edit`), NOT on the principal's role — so the role stays private while the admin-only control
+  # still gates correctly.
 
   Scenario: An admin sees the user-management control
     Given the access rule "Milestone read where currentUser.role == \"Admin\""
@@ -501,8 +502,9 @@ Feature: The access floor (read enforcement by principal)
     When the page state is rendered for "/"
     Then the rendered body shows no "form-actions" marker
 
-  # End-to-end: an admin creates a user and sets a password through <UserAdmin>, and that new user can then
-  # log in — the full multi-user thread (create → setPassword → re-login) in a real browser.
+  # End-to-end: an admin creates a user on the generic User list (reached via the menu's "Users" link) and
+  # sets that user's password on its own object page (`/users/<id>`), and the new user can then log in —
+  # the full multi-user thread (create on /users → setPassword on /users/<id> → re-login) in a real browser.
   Scenario: An admin creates a user and sets a password, and the new user can log in
     Given the access-fixture app is served as a public roadmap with admin password "hunter2"
     And an anonymous visitor opens "/"

@@ -232,21 +232,22 @@ public sealed class AccessSteps(InstanceContext ctx)
         await Assert.That(RenderedBody().Contains("sign-in-bar")).IsFalse();
     }
 
-    // The admin-only "Manage users" control (the `<UserMenu>` button that toggles `<UserAdmin>`), gated on
-    // the derived `canManageUsers` capability — NOT the shipped role. Body-only (the AST island ships the
-    // component definitions), like the sign-in assertions.
+    // The admin-only "Users" control (the `<UserMenu>` link to the generic User list /users), gated on the
+    // derived `canManageUsers` capability — NOT the shipped role. Body-only (the AST island ships the
+    // component definitions), like the sign-in assertions. The link carries class `manage-users` and the
+    // text "Users".
     [Then("the rendered document includes a user-management control")]
     public async Task ThenHasManageUsers()
     {
         await Assert.That(ctx.RenderedHtml).IsNotNull();
-        await Assert.That(RenderedBody().Contains("manage-users")).IsTrue();
+        await Assert.That(RenderedBody().Contains("class=\"manage-users\"")).IsTrue();
     }
 
     [Then("the rendered document includes no user-management control")]
     public async Task ThenNoManageUsers()
     {
         await Assert.That(ctx.RenderedHtml).IsNotNull();
-        await Assert.That(RenderedBody().Contains("manage-users")).IsFalse();
+        await Assert.That(RenderedBody().Contains("class=\"manage-users\"")).IsFalse();
     }
 
     // A write-affordance marker in the rendered BODY: "form-actions" (ObjectForm Save/Discard), "new-btn"

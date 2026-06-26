@@ -166,42 +166,40 @@ public sealed class LoginUiSteps(InstanceContext ctx)
     public async Task ThenCreateControlShown() =>
         await ctx.Page!.Locator(".new-btn").First.WaitForAsync();
 
-    // ── user administration (M-auth, the library <UserAdmin> reached from <UserMenu>) ──
+    // ── user administration (M-auth: the "Users" link in <UserMenu> → the generic User list /users; ──
+    // ── set-password lives on each User's own object page /users/<id>) ──
 
-    // An admin clicks "Manage users" in the user menu — gated on the canManageUsers capability (NOT the
-    // shipped role) — which toggles the <UserAdmin> panel into view. Waits for the panel.
+    // An admin clicks the "Users" link in the user menu — gated on the canManageUsers capability (NOT the
+    // shipped role) — which navigates to the generic User list at /users. Waits for the list's create
+    // control (its SetTable `+ New` button), proving the page rendered.
     [When("the admin opens user management")]
     public async Task WhenOpensUserManagement()
     {
-        await ctx.Page!.Locator(".user-menu button.manage-users").ClickAsync();
-        await ctx.Page.Locator(".user-admin").WaitForAsync();
+        await ctx.Page!.Locator(".user-menu a.manage-users").ClickAsync();
+        await ctx.Page.Locator("button.new-btn").First.WaitForAsync();
     }
 
-    // Create a User through the panel's generic create-form (name + role; passwordHash is hidden, so it is
-    // not in the form): open it, fill the name, pick the role, save. Waits for the new row to appear (the
-    // optimistic add) before returning, so a following set-password addresses a present row.
+    // Create a User through the /users list's generic create-form (name + role; passwordHash is hidden, so
+    // it is not in the form): open it, fill the name, pick the role, save. Waits for the new row to appear
+    // AND its negative→real id remap to land (a POSITIVE data-key), not just the row's appearance: the next
+    // step NAVIGATES to this user's page by its real id, so until the optimistic add is remapped the link
+    // would point at a transient id. (The same remap gate the TodoApp add-flows use.)
     [When("the admin creates a user {string} with role {string}")]
     public async Task WhenCreatesUser(string name, string role)
     {
-        var panel = ctx.Page!.Locator(".user-admin");
-        await panel.Locator("button.new-btn").ClickAsync();
-        await panel.Locator(".create-form input.name").FillAsync(name);
-        await panel.Locator(".create-form select.role").SelectOptionAsync(role);
-        await panel.Locator(".create-form button.set-add").ClickAsync();
-        // Wait for the new user's row AND its negative→real id remap to land (a POSITIVE data-key), not
-        // just the row's appearance: the following set-password addresses this row, so until the optimistic
-        // add is remapped to its real id the write would target a transient id. (The same remap gate the
-        // TodoApp add-flows use.)
-        await panel.Locator($".set-row:has-text(\"{name}\")").WaitForAsync();
+        await ctx.Page!.Locator("button.new-btn").First.ClickAsync();
+        await ctx.Page.Locator(".create-form input.name").FillAsync(name);
+        await ctx.Page.Locator(".create-form select.role").SelectOptionAsync(role);
+        await ctx.Page.Locator(".create-form button.set-add").ClickAsync();
+        await ctx.Page.Locator($".set-row:has-text(\"{name}\")").WaitForAsync();
         await ctx.Page.WaitForFunctionAsync(
-            "name => { const r = [...document.querySelectorAll('.user-admin .set-row')]" +
+            "name => { const r = [...document.querySelectorAll('.set-row')]" +
             ".find(e => e.textContent.includes(name)); return r != null && +r.getAttribute('data-key') > 0; }",
             name);
     }
 
-    // Set a named user's password via that row's set-password control (sys.setPassword). The just-created
-    // user may still carry its transient negative id, but the server resolves it through the session remap
-    // (the arrayAdd was sent first, WS messages are ordered) — so no wait-for-remap is needed.
+    // Set a named user's password on that user's OWN object page (/users/<id>): navigate there via the
+    // row's member link, then fill the page-level set-password control and submit (sys.setPassword).
     //
     // GATE on the hash actually PERSISTING before returning. setPassword is an admin-gated write
     // (User edit where currentUser.role == "Admin"); the scenario LOGS OUT right after, which flips the
@@ -214,9 +212,14 @@ public sealed class LoginUiSteps(InstanceContext ctx)
     [When("the admin sets {string}'s password to {string}")]
     public async Task WhenSetsUserPassword(string name, string password)
     {
-        var row = ctx.Page!.Locator($".user-admin .set-row:has-text(\"{name}\")");
-        await row.Locator("input.new-password").FillAsync(password);
-        await row.Locator("button.set-password").ClickAsync();
+        // Navigate to the user's object page by clicking its row link, then wait for the page's
+        // set-password control to render. (`div.set-password` disambiguates the control container from the
+        // `button.set-password` submit it contains — both carry the `set-password` class.)
+        await ctx.Page!.Locator($".set-row:has-text(\"{name}\") a.row-link").ClickAsync();
+        var control = ctx.Page.Locator("div.set-password");
+        await control.WaitForAsync();
+        await control.Locator("input.new-password").FillAsync(password);
+        await control.Locator("button.set-password").ClickAsync();
         await Polling.EventuallyAsync(() => ctx.Store!.ReadExtent("User").Values.Any(u =>
             u.Fields.TryGetValue("name", out var n) && n is TextValue { Text: var nm } && nm == name
             && u.Fields.TryGetValue(UserConvention.PasswordHashField, out var h)

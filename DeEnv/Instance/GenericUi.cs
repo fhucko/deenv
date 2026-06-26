@@ -184,6 +184,8 @@ public static class GenericUi
                                     <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
                             else
                                 <Field obj={obj} desc={p} readonly={!canEdit}>
+                        if canManageUsers && meta.isPrincipal
+                            <SetPasswordControl user={obj}>
                         if autosave != true && canEdit && hasFields
                             <div class="form-actions">
                                 <button class="save" onClick={save}>
@@ -475,32 +477,17 @@ public static class GenericUi
                 return render
 
             fn UserMenu()
-                var state = { managing: false }
                 fn logout()
                     sys.logout()
-                fn toggleManage()
-                    state.managing = !state.managing
                 fn render()
                     return <div class="user-menu">
                         <span class="user-name">
                             sys.field(currentUser, "name")
                         if canManageUsers
-                            <button class="manage-users" onClick={toggleManage}>
-                                "Manage users"
+                            <a class="manage-users" href="/users">
+                                "Users"
                         <button class="logout" onClick={logout}>
                             "Log out"
-                        if state.managing
-                            <UserAdmin>
-                return render
-
-            fn UserAdmin()
-                fn passwordCell(m)
-                    return <SetPasswordControl user={m}>
-                fn render()
-                    return <div class="user-admin">
-                        <h2>
-                            "Users"
-                        <SetTable set={sys.field(db, "users")} desc={sys.schema("User")} setPath="/users" rowActions={passwordCell}>
                 return render
 
             fn SetPasswordControl(user)
@@ -509,7 +496,9 @@ public static class GenericUi
                     sys.setPassword(user, state.password)
                     state.password = ""
                 fn render()
-                    return <td class="set-password-cell">
+                    return <div class="set-password">
+                        <label class="new-password">
+                            "New password"
                         <input type="password" class="new-password" value={state.password}>
                         <button class="set-password" onClick={submit}>
                             "Set password"
@@ -633,6 +622,11 @@ public static class GenericUi
         return Obj(
             ("name", Text(t.Name)),
             ("labelProp", Text(labelProp)),
+            // True for the framework's principal (User) type — the only type carrying the hidden
+            // password-hash convention field — sourced from the SAME pinned predicate the load/descriptor
+            // boundaries use, so there is no magic "User" string here. ObjectForm reads it to surface the
+            // (admin-gated) SetPasswordControl on the principal's object page only; the hash stays out of props.
+            ("isPrincipal", new CodeBool { Value = (t.Props ?? []).Any(p => UserConvention.IsHiddenField(t.Name, p.Name)) }),
             ("props", Arr(VisibleProps(t).Select(p => (ICodeValue)PropDesc(p, desc)))));
     }
 

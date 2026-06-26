@@ -730,22 +730,26 @@ public sealed class SsrRenderer
         /* Auth chrome: the sign-in / user menu sits on the breadcrumb ROW, right-aligned to the content
            column. #app is the positioned, max-width-centered ancestor (so right:0 is the column edge); the
            negative top lifts the bar up onto the breadcrumb line above #app (whose height is the breadcrumb's
-           0.9rem line + 1.2rem margin). The expandable panels (login form / user admin) drop DOWN from the
-           bar (absolute, top:100%) so opening them never disturbs the bar's row. */
+           0.9rem line + 1.2rem margin). The sign-in login form drops DOWN from the bar (absolute, top:100%)
+           so opening it never disturbs the bar's row; user management is a "Users" link to the generic list
+           (/users), not a drop-down panel. */
         #app { position: relative; }
         .app-shell > .sign-in-bar, .app-shell > .user-menu {
           position: absolute; top: -2.4rem; right: 0; margin: 0;
           display: flex; align-items: center; gap: 0.6rem; font-size: 0.9rem; }
         .user-menu .user-name { color: var(--muted); }
-        .sign-in-bar button.sign-in, .user-menu button.logout, .user-menu button.manage-users {
+        .sign-in-bar button.sign-in, .user-menu button.logout, .user-menu a.manage-users {
           padding: 0.25rem 0.65rem; font-size: 0.85rem; }
-        .sign-in-bar .login-form, .user-menu .user-admin {
+        .user-menu a.manage-users {
+          border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+          color: var(--text); text-decoration: none; }
+        .sign-in-bar .login-form {
           position: absolute; top: 100%; right: 0; margin: 0.45rem 0 0; z-index: 20; text-align: left;
           background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-          padding: 1rem 1.15rem; box-shadow: 0 6px 22px rgba(31,35,40,.14); }
-        .sign-in-bar .login-form { min-width: 240px; }
-        .user-menu .user-admin { min-width: 440px; max-width: 90vw; }
-        .user-menu .user-admin h2 { margin-top: 0; }
+          padding: 1rem 1.15rem; box-shadow: 0 6px 22px rgba(31,35,40,.14); min-width: 240px; }
+        .set-password { display: flex; align-items: center; gap: 0.5rem;
+          margin: 0.9rem 0 0; padding-top: 0.9rem; border-top: 1px solid var(--border); }
+        .set-password label.new-password { color: var(--muted); }
         """;
 
     private static void DefineFunction(CodeFunction fn, ExecScope scope)
