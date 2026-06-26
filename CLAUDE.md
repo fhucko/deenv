@@ -184,9 +184,10 @@ generation guard (async-window safety) · 3 atomic commit-on-success handlers ·
 plan): gate #1 non-destructive apply ✅; gate #2 = minimal real deploy (slice 1 running on a Linode; next =
 nginx TLS + the basic-auth gate); gate #3 = dogfood `devlog` (instance 5). M-auth AND the client data layer
 are both DONE; **M12 (visual designer) stays deferred until after the MVP**. **M-auth follow-ups** sit in
-ROADMAP.md "Near-future" (deploy login wiring; remove-user + inline role-edit; set-password success
-feedback (the control's own styling — separator + label — landed with `b06b532`; broader auth styling
-remains)). The usable-MVP context below stands.
+ROADMAP.md "Near-future" (deploy login wiring; remove-user + inline role-edit). Set-password feedback is
+DONE — slice 1 the `password`-type field (`d2e1503`/`79bc1b1`), slice 2 the inline form-Save feedback (a
+reactive `ctx.status` "Saving… → Saved" on the generic ObjectForm; failures via the global error banner;
+`eedad11`/`3e632c5`, suite 547); broader auth-component styling remains. The usable-MVP context below stands.
 
 **Milestone 11 — SolidJS-style reactive components + the public component library (the UI
 middle-ground) — is DONE (the generic-UI-as-first-consumer COLLAPSE landed 2026-06-19, suite 348).

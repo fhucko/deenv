@@ -1,12 +1,14 @@
 # The `password` type — set-password as a field, not an action
 
-**Status: slice 1 DONE 2026-06-26 (`d2e1503`/`79bc1b1`).** The `password` type (`BaseType.Password`) +
+**Status: DONE 2026-06-26 — slice 1 (`d2e1503`/`79bc1b1`), slice 2 (`eedad11`/`3e632c5`, suite 547).** The `password` type (`BaseType.Password`) +
 the load-blank / WS-layer hash chokepoints + the `dict of password` value-blank + the
 `password`-as-dict-key forbid + the `initialData` forbid + the descriptor/`Input` masking + login-by-type
 + the deletions (`sys.setPassword`, the `setPassword` WS op + `SetPasswordResponse` + client handler,
 `<SetPasswordControl>`, `UserConvention.PasswordHashField`/`IsHiddenField`, the `.set-password` CSS) all
-landed; the `dict` blank + key-forbid were folded in during review. **Slice 2 (the form-Save feedback —
-"Saving… → Saved / Couldn't save") is the remaining piece.** (Spec'd 2026-06-26, rev 6 — both review
+landed; the `dict` blank + key-forbid were folded in during review. **Slice 2 (the form-Save feedback) then
+landed: an inline reactive `ctx.status` lifecycle shows "Saving… → Saved" on the generic ObjectForm; a
+rejected save surfaces via the existing global error banner (one surface — the inline "Couldn't save" was
+dropped in review).** (Spec'd 2026-06-26, rev 6 — both review
 passes folded in.) Supersedes the
 M-auth follow-up "set-password feedback" and the explored-and-rejected "action half / effectful `server fn`".
 Design record: memory `project_persistence_modes` ("THE EFFECTS / SERVER-MUTATION MODEL"), DECISIONS
@@ -141,9 +143,15 @@ migration → the e2e retarget. Set/change a password through the form; re-login
 - After slice 1, throw a quick **ui-architecture-reviewer** at the Input-masking + columns-exclusion (the UI
   half neither prior pass fully owned).
 
-**Slice 2 — form Save feedback.** "Saving… → Saved / Couldn't save" by rendering the commit lifecycle (journal
-drain on ack / rollback on reject — a render over existing state, not a new async channel). Closes the
-original feedback gap, for every form.
+**Slice 2 — form Save feedback — DONE (`eedad11`/`3e632c5`, suite 547).** An inline reactive `ctx.status`
+lifecycle renders the commit lifecycle: a per-ctx status (a synthetic `ctxStatus:<id>` var dep on the
+existing `recordVar`/`invalidateVar` channel) flips to "saving" on `ctx.commit`, drains to "saved" as the
+journal's acks retire, and clears to "idle" on a reject or a discard. The generic ObjectForm shows
+"Saving… → Saved" near Save (gated on `!ctx.dirty`). **Failures surface via the existing global error
+banner, not inline** — the "Couldn't save" inline branch was built then dropped in review (one failure
+surface, not two). CLIENT-only (the C# twin returns "idle"; no conformance case). Scoped to the **edit**
+form (the `ctx.commit` path); the create form (`set.add`) is a follow-up if wanted. **Deferred
+(UI-styling axis):** the Save button's primary-green treatment + the indicator's color/spacing.
 
 ## Caveats to document (raised in review, accepted)
 
@@ -155,5 +163,6 @@ original feedback gap, for every form.
 
 ## Open questions
 
-- **Save-feedback signal (slice 2)** — observe the journal drain/rollback (preferred) vs a `ctx.commit`
-  lifecycle.
+- **Save-feedback signal (slice 2)** — RESOLVED: a reactive `ctx.status` set by `ctx.commit` and driven by
+  the journal ack/reject, surfaced through the existing `recordVar`/`invalidateVar` reactive channel (the
+  "render the commit lifecycle" path). Failures go to the global banner, not inline (one surface).

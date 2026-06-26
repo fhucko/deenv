@@ -2022,10 +2022,11 @@ password login/logout, the `devlog` public-roadmap dogfood, env-var first-admin 
 (`DEENV_ADMIN_PASSWORD`), and multi-user management (`<UserAdmin>` create + per-row set-password, gated
 on a derived `canManageUsers`), with a real-browser e2e. **Follow-ups deferred to ROADMAP "Near-future"**
 (none blocking the milestone): wiring login on the deenv.org deploy; remove-user + inline role-edit
-(role-edit already works via the `/users/<id>` page); set-password success feedback (now the form's
-Save feedback — the set-password **field** landed with its chokepoints, `d2e1503`/`79bc1b1`, leaving
-form-Save feedback the remaining piece; the field's own styling — separator + label — landed with
-`b06b532`; broader auth styling remains).
+(role-edit already works via the `/users/<id>` page); **set-password feedback — DONE**: the set-password
+**field** landed with its chokepoints (`d2e1503`/`79bc1b1`), and the **form-Save feedback** then landed
+(`eedad11`/`3e632c5`, suite 547) — an inline reactive `ctx.status` lifecycle ("Saving… → Saved" on the
+generic ObjectForm; a rejected save surfaces via the global error banner, one surface not two; CLIENT-only,
+no conformance case). Broader auth-component styling (incl. the Save button's primary treatment) remains.
 
 ## Client data layer — render-as-planner (the proper fix for URL-keyed refetch)
 
