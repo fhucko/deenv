@@ -2021,12 +2021,24 @@ password login/logout, the `devlog` public-roadmap dogfood, env-var first-admin 
 (`DEENV_ADMIN_PASSWORD`), and multi-user management (`<UserAdmin>` create + per-row set-password, gated
 on a derived `canManageUsers`), with a real-browser e2e. **Follow-ups deferred to ROADMAP "Near-future"**
 (none blocking the milestone): wiring login on the deenv.org deploy; remove-user + inline role-edit
-(role-edit already works via the `/users/<id>` page); the Users-twice dedup, **blocked on the client
-data layer** (below); set-password feedback + styling.
+(role-edit already works via the `/users/<id>` page); the Users-twice dedup (now unblocked — the client
+data layer landed, below); set-password feedback + styling.
 
 ## Client data layer — render-as-planner (the proper fix for URL-keyed refetch)
 
-**Spec'd 2026-06-25, its own milestone, build AFTER M-auth.**
+**Spec'd 2026-06-25, BUILT + DONE 2026-06-26 — 6 slices on `main` `b63d788..3edc35e`, suite 537.**
+
+**Delivered (how it was built):** **1a** server-side component-state seeding (`ExecContext.Seed`/`ApplySeed`,
+twin) · **1b** client ship + server reconstruct round-trip (`slotState` → `HandleRefetch`; ships ALL scalar
+view-state — it is just data, floor-gated like everything else) · **1c** generation guard (`recordMutation`/
+`stateGen`, the optimistic-clobber safety) · **3** atomic commit-on-success handlers (`runHandlerTransaction`
+over the send-buffer + journal boundary — NOT a `ctx` overlay, since closures resolve `ctx` from their
+birthplace) · **4** action-miss harvest (the server invokes a named handler read-only — security-reviewed
+airtight: addressing-limited to render-created handlers, floor-gated reads, every host action a server-side
+no-op by construction since the executor holds no `IHostActions`) · **GC** client-reachability mark-sweep
+(`sweepUnreachable`, the store-GC's dual; safe only because the round-trip can re-pull anything). Each
+test-first, twin-locked where it touched the interpreters, reviewed (vision-keeper, architecture-reviewer
+×4 incl. a security pass).
 
 The trigger surfaced closing M-auth: a **client-only-toggled** component (the `<UserAdmin>` panel behind
 `if state.managing`) carries open-state the server never sees. Refetch is **URL-keyed** (`maybeRefetch`
@@ -2059,7 +2071,7 @@ component's data (`db.users`) never ships → it renders empty forever. The deci
 
 **Framing (vision-keeper, aligned-with-conditions):** this is the **client transfer/runtime layer** (M11
 altitude, the continuation of `ctx`), **NOT** the pillar-5 render-coupled storage engine (deferred — the
-render-coupled DB is the destination this moves *toward*, not what this builds). Slice 1 = intent loading
-(server reproduces the exact render); slice 2 = client reachability GC (safe only because slice 1 can
-re-pull anything). See `docs/plans/data-context-refactor.md` (the predecessor that deferred
-this re-layer).
+render-coupled DB is the destination this moves *toward*, not what this builds). Built in 6 slices
+(1a/1b/1c/3/4/GC — see **Delivered** above); the GC was safe only because the round-trip can re-pull
+anything. See `docs/plans/data-context-refactor.md` (the predecessor that deferred this re-layer) and
+`docs/plans/client-data-layer.md` (this milestone's spec + per-slice delivery record).

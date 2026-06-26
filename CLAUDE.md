@@ -168,16 +168,23 @@ set-password, reached from `<UserMenu>` via an admin-only "Manage users" toggle,
 `canManageUsers` so the role stays private; `sys.setPassword` mirrors `sys.login`); a real-browser
 **e2e** (sign-in/out + create-user→set-password→re-login).
 
-**NEXT = the client data layer (render-as-planner)** — its own milestone at M11 altitude, spec'd this
-session (NOT built). The **proper fix** for the URL-keyed-refetch
-gap found closing M-auth: a client-only-toggled component (`<UserAdmin>` behind `if state.managing`)
-carries open-state the server never sees, so structural privacy never ships its data and it renders
-empty. The reframe — **the view is the query**: the client ships its actual view-state, the server
-reproduces the exact render and ships the harvested footprint (an `(action, state)` intent over the
-twin-stable fn ids, with a state-generation guard for the async window). See [[project_client_data_layer]]
-+ [[project_client_toggle_needs_shipped_data]]. **M-auth follow-ups** sit in ROADMAP.md "Near-future"
-(deploy login wiring; remove-user + inline role-edit; the Users-twice dedup, **blocked on the client
-data layer**; set-password feedback + styling). The usable-MVP context below stands.
+**Client data layer (render-as-planner) — DONE 2026-06-26** (6 slices on `main` `b63d788..3edc35e`, suite
+537). The proper fix for the URL-keyed-refetch footgun found closing M-auth: a client-toggled `<UserAdmin>`
+rendered empty because the server never saw its open-state, so structural privacy never shipped its data.
+**The view is the query** — the client ships its actual view-state as an `(action, state)` intent over the
+twin-stable fn ids; the server reproduces the exact render/computation and ships the harvested footprint.
+Slices: 1a server-side component-state seeding · 1b client-ship + server-reconstruct round-trip · 1c
+generation guard (async-window safety) · 3 atomic commit-on-success handlers · 4 action-miss harvest
+(button-click data access, security-reviewed airtight) · GC client-reachability sweep. Spec + delivery:
+`docs/plans/client-data-layer.md`, [[project_client_data_layer]]. The **Users-twice dedup is now UNBLOCKED**
+(the toggled menu gets its rows via the round-trip).
+
+**Current focus = the usable-MVP gates** (DECISIONS "Data must survive schema changes" + the usable-MVP
+plan): gate #1 non-destructive apply ✅; gate #2 = minimal real deploy (slice 1 running on a Linode; next =
+nginx TLS + the basic-auth gate); gate #3 = dogfood `devlog` (instance 5). M-auth AND the client data layer
+are both DONE; **M12 (visual designer) stays deferred until after the MVP**. **M-auth follow-ups** sit in
+ROADMAP.md "Near-future" (deploy login wiring; remove-user + inline role-edit; the now-unblocked
+Users-twice dedup; set-password feedback + styling). The usable-MVP context below stands.
 
 **Milestone 11 — SolidJS-style reactive components + the public component library (the UI
 middle-ground) — is DONE (the generic-UI-as-first-consumer COLLAPSE landed 2026-06-19, suite 348).

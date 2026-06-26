@@ -20,9 +20,9 @@ done; (3) dogfood one real app — in progress (`instances/5`, `devlog`). The vi
 designer is deferred until after the MVP; M13 (schema versioning) sits on instance
 management. See CLAUDE.md "Current focus" for detail. **M-auth (access control) — DONE 2026-06-25**: the access
 engine, self-hosted login/logout, the `devlog` dogfood, first-admin bootstrap, and multi-user
-management all landed (spec `docs/plans/m-auth.md`, decision in DECISIONS.md). **Next = the client data
-layer** (render-as-planner) — see the **Near-future** section;
-the M-auth follow-ups (deploy login wiring, remove-user/role-edit, the Users-twice dedup) live there too.
+management all landed (spec `docs/plans/m-auth.md`, decision in DECISIONS.md). **The client data layer
+(render-as-planner) — DONE 2026-06-26** (6 slices, suite 537; its entry is below). The M-auth follow-ups
+(deploy login wiring, remove-user/role-edit, the now-unblocked Users-twice dedup) live in Near-future too.
 
 ---
 
@@ -306,32 +306,38 @@ dormant→active trigger (the rules ARE the switch, no flag) — **resolved**. F
 `docs/plans/m-auth.md`; decision record in DECISIONS.md ("M-auth — access control").
 
 **Follow-ups deferred to Near-future** (below): wiring login on the deenv.org deploy; remove-user +
-inline role-edit; the Users-twice dedup (blocked on the client data layer); set-password feedback +
-auth styling.
+inline role-edit; the Users-twice dedup (now unblocked — the client data layer landed); set-password
+feedback + auth styling.
+
+---
+
+## Client data layer (render-as-planner) — DONE 2026-06-26
+
+The proper fix for the URL-keyed-refetch footgun found closing M-auth: a client-toggled `<UserAdmin>`
+(behind `if state.managing`) carried open-state the server never saw, so structural privacy never shipped
+its data and it rendered empty. **The view is the query** — the client ships its actual view-state
+(component state keyed by render-slot) as an `(action, state)` intent over the twin-stable fn ids; the
+server **reproduces the exact render/computation** over it and ships the harvested footprint, with a
+state-generation guard (generalizing the login/logout epoch) for the async window. Delivered in 6 slices
+on `main` `b63d788..3edc35e` (suite 537): **1a** server-side component-state seeding · **1b** client-ship +
+server-reconstruct round-trip · **1c** generation guard (optimistic-clobber safety) · **3** atomic
+commit-on-success handlers · **4** action-miss harvest (button-click data access, security-reviewed) ·
+**GC** client-reachability sweep. **M11 altitude** (the continuation of `ctx`), **NOT** the pillar-5
+render-coupled storage engine (that stays the deferred destination this moves toward). Vetted
+*aligned-with-conditions* by vision-keeper. Spec + delivery record: `docs/plans/client-data-layer.md`,
+DECISIONS.md.
 
 ---
 
 ## Near-future — sequenced next, not yet built
-
-- **Client data layer (render-as-planner).**  ← NEXT
-  The proper fix for the **URL-keyed-refetch** gap discovered closing M-auth: a client-only-toggled
-  component (`<UserAdmin>` behind `if state.managing`) carries open-state the server never sees, so
-  structural privacy never ships its data and it renders empty. Reframe: **the view is the query** — the
-  client ships its actual view-state (component state keyed by render-slot), the server **reproduces the
-  exact render** over it and ships the harvested footprint. An `(action, state)` intent over the existing
-  twin-stable fn ids, with a state-generation guard (generalizing the login/logout epoch) for the async
-  window. Its **own milestone at M11 altitude** — the continuation of `ctx`, **NOT** the pillar-5
-  render-coupled storage engine (that stays deferred; this only moves toward it) — sequenced here because
-  M12 (visual designer) will want it. Vetted
-  *aligned-with-conditions* by vision-keeper.
 
 - **M-auth follow-ups.** Small, non-blocking; do as wanted:
   - **Wire login on the deenv.org deploy** — set `DEENV_ADMIN_PASSWORD` on the box and drop the
     basic-auth gate for `devlog` (gate #2 follow-on). Operator ops action; steps in `deploy/DEPLOY.md`.
   - **remove-user + inline role-edit** in `<UserAdmin>` (editing a role already works via the user's
     `/users/<id>` page; inline in the panel is the convenience).
-  - **Users-twice dedup** — hide the inline `users` table on the root when the menu manages it; **blocked
-    on the client data layer** (the menu panel needs the row data the inline table currently ships).
+  - **Users-twice dedup** — hide the inline `users` table on the root when the menu manages it; now
+    **UNBLOCKED** (the client data layer landed — the menu panel can demand its own row data via the round-trip).
   - **set-password success feedback** (needs reply↔control correlation) and broader auth-component styling.
 
 ---
