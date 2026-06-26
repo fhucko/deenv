@@ -518,7 +518,8 @@ public class InstanceContext
                         <input class="name" value={i.name}>
     """;
 
-    // Client data layer, slice 3: two throwing-handler shapes for the atomic-rollback proof.
+    // Client data layer, slice 3 (+ a slice-4 discriminator case): throwing-handler shapes for the
+    // atomic-rollback / VNA-branch proofs.
     //
     //  • `bumpThenThrow(c)` makes TWO real writes to a persisted (positive-id) db object and THEN throws
     //    (the trailing `c.name.add(c)` calls a collection method on a text value — a runtime "cannot read
@@ -533,6 +534,17 @@ public class InstanceContext
     //    extent entries stale → the abort's renderUi → maybeRefetch SENT a refetch (a partial trace + a
     //    half-state: stale extent memos over a reverted model). The fix captures/restores that out-of-journal
     //    state on the non-VNA abort, so the rolled-back handler leaves ZERO trace and triggers NO refetch.
+    //
+    //  • `bumpThenSchemaMiss(c)` is the slice-4 DISCRIMINATOR case: a REAL write (c.a = 1 → an
+    //    objectPropChange that BUFFERS a send) and THEN a `sys.schema("Counter")` read. A handler runs under
+    //    memoBypass (ui.ts runWithMemoBypass), and under bypass the client's execSchema's memoize calls its
+    //    compute DIRECTLY (no cache consult) — whose body unconditionally throws "Value not available". So
+    //    this is a SPURIOUS post-write VNA: the descriptor IS shipped, but the bypass forces a re-compute that
+    //    throws. runHandlerTransaction's VNA branch must tell it apart from a genuine action-miss by the
+    //    `didWork` discriminator (a send was ALREADY buffered): a write-then-VNA must take the FLUSH +
+    //    RE-THROW path (the real write persists, NO pendingAction armed, NO action-carrying refetch), NOT the
+    //    action-miss path (which would abort the write + plan a server harvest that mis-reads client-only
+    //    draft state). Proven by A_write_then_spurious_VNA_handler_flushes_and_does_not_arm_an_action.
     //
     // `link Counter` is the single object-typed (reference) prop setRef points at; two int fields so the
     // test can assert exact values in the store. The render iterates sys.extent("Counter") (rather than
@@ -564,6 +576,10 @@ public class InstanceContext
             sys.setRef(c, "link", c)
             c.name.add(c)
 
+        fn bumpThenSchemaMiss(c)
+            c.a = 1
+            sys.schema("Counter")
+
         fn render()
             return <main>
                 foreach c in sys.extent("Counter")
@@ -578,6 +594,8 @@ public class InstanceContext
                             "Bump"
                         <button class="setref" onClick={() => setRefThenThrow(c)}>
                             "SetRef"
+                        <button class="schemamiss" onClick={() => bumpThenSchemaMiss(c)}>
+                            "SchemaMiss"
     """;
 
     // Code milestone, Stage 4: a private field (`salary`) by construction. `highEarners`

@@ -1070,7 +1070,10 @@ public sealed class CodeExecutor
         {
             // Best-effort harvest: the reads made before the error already recorded as leaves and ship; the
             // client's authoritative re-invoke (over the merged data) re-runs the handler and surfaces a real
-            // bug there. A planning invoke must never break the refetch.
+            // bug there. A planning invoke must never break the refetch. Log it (still swallowed) so an
+            // operator can diagnose a handler that consistently fails to plan — mirrors the SSR-render-error
+            // / WS-op-failure diagnostics; the same error also surfaces on the client's re-invoke.
+            Console.Error.WriteLine($"Handler harvest planning of '{handlerKey}' failed: {ex.Message}");
         }
         finally { context.ReadOnly = wasReadOnly; context.MemoBypass = wasBypass; }
     }

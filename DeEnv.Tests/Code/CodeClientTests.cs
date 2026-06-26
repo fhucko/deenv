@@ -515,6 +515,115 @@ public sealed class CodeClientTests
         });
     }
 
+    // Client data layer, slice 4 (the `didWork` DISCRIMINATOR — the guard that protects the write-then-VNA
+    // case from the action-miss round-trip). A click handler's VNA throw is one of two very different things,
+    // told apart by whether the handler had already BUFFERED a send (done real work) before it threw:
+    //   • NO buffered send → a genuine ACTION-MISS: the handler READ un-shipped data first → abort, record a
+    //     pending action, fetch (the server harvests + re-invokes). Proven in a real browser by
+    //     A_button_handler_that_reads_unshipped_data_round_trips (ActionMissFixture).
+    //   • a send ALREADY buffered → the handler DID its real work and the VNA is INCIDENTAL (a trailing read
+    //     over un-shipped data). It must take the FLUSH + RE-THROW path: the real write persists, NOTHING is
+    //     planned as an action. Re-running it on the server read-only would mis-harvest (it reads client-only
+    //     draft state the server cannot reproduce — "Unknown field" — and would re-do the mutation).
+    //
+    // THIS pins the second branch deterministically. The fixture's `bumpThenSchemaMiss(c)` writes c.a = 1 (a
+    // real objectPropChange → a BUFFERED send) and THEN reads `sys.schema("Counter")`. A handler runs under
+    // memoBypass, and under bypass the client's execSchema memoize calls its compute DIRECTLY (no cache
+    // consult), whose body unconditionally throws "Value not available" — so this is the SPURIOUS post-write
+    // VNA the slice-3 note names (the descriptor IS shipped; the bypass forces a re-compute that throws). The
+    // button is in the render's foreach, so its onClick closure carries a render-slot → an `action` IS passed
+    // to runHandlerTransaction; with `didWork == true` the VNA branch FLUSHES the buffered write + re-throws
+    // (does NOT arm pendingAction, does NOT send an action-carrying refetch).
+    //
+    // FAIL-BEFORE / PASS-AFTER: reverting the `didWork` guard (so the write-then-VNA wrongly takes the
+    // action-miss path — `if (action != null)` without `&& !didWork`) ABORTS the write and arms pendingAction
+    // + fires an action-carrying refetch. The assertions then fail three ways: pendingAction is non-null, a
+    // `refetch` frame carrying `handlerFn` was sent, and no `objectPropChange` reached the wire/store. With
+    // the guard they are clean: pendingAction null, no action-refetch, the objectPropChange sent + c.a = 1
+    // in the store, and the spurious VNA re-throws as a page error.
+    //
+    // DETERMINISTIC: the VNA branch (flush + re-throw, or — fail-before — abort + arm + refetch) runs fully
+    // SYNCHRONOUSLY inside the click's handler, so reading pendingAction + the send-spy immediately after the
+    // throw observes the settled state with no race; the store readback polls the async WS round-trip.
+    [Test]
+    public async Task A_write_then_spurious_VNA_handler_flushes_and_does_not_arm_an_action()
+    {
+        await WithPageAsync(InstanceContext.AtomicHandlerUiDb(), s => SeedCounter(s, "x", 0, 0), async (page, store) =>
+        {
+            // FULL readiness: the WS is open + claimed and the connect-time refetch has applied, so no refetch
+            // is in flight and pendingAction is clean — the baseline the discriminator acts from. (Without
+            // this the connecting-window state could mask which refetch the spy records.)
+            await page.WaitReadyAsync();
+
+            var counterId = await page.EvaluateAsync<int>(
+                """() => Object.values(uiStatic.state.objects).find(o => o.props.name && o.props.name.value === "x").id""");
+
+            // Baseline: a=0, an empty journal, gen 0, and NO pending action. (a real objectPropChange will be
+            // staged + sent by the handler before the VNA; the discriminator keeps it.)
+            var before = await page.EvaluateAsync<string>(
+                $$"""
+                () => {
+                    const c = uiStatic.state.objects[{{counterId}}];
+                    return `a=${c.props.a.value} journal=${journal.length} gen=${stateGen} pending=${pendingAction == null ? "none" : "set"}`;
+                }
+                """);
+            await Assert.That(before).IsEqualTo("a=0 journal=0 gen=0 pending=none");
+
+            // Spy on the live WS send: record every sent frame's `op` AND whether it carries a `handlerFn`
+            // (the action-miss intent). The pass case sends an objectPropChange (the real write) and NO
+            // action-carrying refetch; the fail-before case sends a `refetch` WITH handlerFn and NO
+            // objectPropChange. codeWs is the production module global; the page has settled so this send is
+            // the real one.
+            await page.EvaluateAsync(
+                """
+                () => {
+                    window.__sent = [];
+                    const orig = codeWs.send.bind(codeWs);
+                    codeWs.send = (text) => {
+                        try { const m = JSON.parse(text); window.__sent.push({ op: m.op, action: m.handlerFn != null }); } catch {}
+                        return orig(text);
+                    };
+                }
+                """);
+
+            // Click SchemaMiss: the handler writes c.a = 1 (an objectPropChange → a BUFFERED send), then reads
+            // sys.schema("Counter") which throws a SPURIOUS VNA under memoBypass. With didWork == true the VNA
+            // branch flushes the buffered write + re-throws — the re-throw surfaces as a page error after the
+            // flush; capture it so the click does not fail the test (and it proves the handler ran to the VNA).
+            var errored = new TaskCompletionSource<bool>();
+            page.PageError += (_, _) => errored.TrySetResult(true);
+            await page.Locator("button.schemamiss").ClickAsync();
+            await Task.WhenAny(errored.Task, Task.Delay(2000));
+            await Assert.That(errored.Task.IsCompleted).IsTrue();
+
+            // Post-throw (synchronous): NO pending action was armed, and the optimistic write STANDS — the
+            // journal holds the one objectPropChange entry (gen bumped to 1), not rolled back. Before the fix
+            // pendingAction would be set and the journal empty (the write was aborted).
+            var after = await page.EvaluateAsync<string>(
+                $$"""
+                () => {
+                    const c = uiStatic.state.objects[{{counterId}}];
+                    return `a=${c.props.a.value} journal=${journal.length} gen=${stateGen} pending=${pendingAction == null ? "none" : "set"}`;
+                }
+                """);
+            await Assert.That(after).IsEqualTo("a=1 journal=1 gen=1 pending=none");
+
+            // The wire: the real objectPropChange WAS sent, and NO action-carrying refetch was. A short settle
+            // lets any erroneously-armed action refetch actually flush before we read the spy. Before the fix
+            // the spy would show a `refetch` with handlerFn and NO objectPropChange.
+            await Task.Delay(150);
+            var sentOps = await page.EvaluateAsync<string[]>("() => window.__sent.map(s => s.op)");
+            var actionRefetches = await page.EvaluateAsync<int>(
+                """() => window.__sent.filter(s => s.op === "refetch" && s.action).length""");
+            await Assert.That(sentOps).Contains("objectPropChange");
+            await Assert.That(actionRefetches).IsEqualTo(0);
+
+            // And the write reached the server: the stored Counter's `a` is 1 (the flushed objectPropChange
+            // persisted). Before the fix the aborted write never reached storage — `a` would still be 0.
+            await AssertEventuallyAsync(() => IntField(store.ReadExtent("Counter").Values.Single(), "a") == 1);
+        });
+    }
+
     // Client data layer, the LAST slice — the CLIENT REACHABILITY GC (the dual of the server store GC). The
     // client data graph (uiStatic.state.objects/arrays) GROWS as views pull data over the round-trip
     // (mergeState merges by id on every refetch; old views' rows + transient extents/where-results/descriptors
