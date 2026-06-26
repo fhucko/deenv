@@ -1997,7 +1997,8 @@ a long interview; the key decisions and *why*:
 - **Flexible base, simplified by UI.** The engine is fully expressive; the role×verb grid / condition
   builder is one UI over it (auto-vs-custom, as everywhere). *Why:* don't pick a simplicity point — let
   the base be maximal and let UIs tame it.
-- **Users/roles baked into every instance but dormant.** `User` (`name` + `passwordHash`) by
+- **Users/roles baked into every instance but dormant.** `User` (`name` + a `password`-typed field,
+  found by the `password` type, not a reserved field name) by
   convention, injected/merged on publish; password crypto is **kernel builtins**, not app Code; the
   apparatus is invisible until an app adds rules. *Why:* multi-user for free without burdening a solo
   app (minimal-by-default).
@@ -2021,8 +2022,10 @@ password login/logout, the `devlog` public-roadmap dogfood, env-var first-admin 
 (`DEENV_ADMIN_PASSWORD`), and multi-user management (`<UserAdmin>` create + per-row set-password, gated
 on a derived `canManageUsers`), with a real-browser e2e. **Follow-ups deferred to ROADMAP "Near-future"**
 (none blocking the milestone): wiring login on the deenv.org deploy; remove-user + inline role-edit
-(role-edit already works via the `/users/<id>` page); set-password success feedback (the set-password
-control's own styling — separator + label — landed with `b06b532`; broader auth styling remains).
+(role-edit already works via the `/users/<id>` page); set-password success feedback (now the form's
+Save feedback — the set-password **field** landed with its chokepoints, `d2e1503`/`79bc1b1`, leaving
+form-Save feedback the remaining piece; the field's own styling — separator + label — landed with
+`b06b532`; broader auth styling remains).
 
 ## Client data layer — render-as-planner (the proper fix for URL-keyed refetch)
 

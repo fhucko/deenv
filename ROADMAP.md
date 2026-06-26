@@ -335,11 +335,13 @@ DECISIONS.md.
     basic-auth gate for `devlog` (gate #2 follow-on). Operator ops action; steps in `deploy/DEPLOY.md`.
   - **remove-user + inline role-edit** on the generic `/users` list / `/users/<id>` page (remove-user = a Remove control on the `/users` set table; role-edit already works on `/users/<id>` — inline-on-the-list is the convenience).
   - **Users-twice dedup — DONE (`b06b532`).** Solved by deleting the client-toggled `<UserAdmin>` popup and moving set-password onto the generic `/users/<id>` page; the menu now links to `/users`. (Not via the round-trip — a real route was the clean fix.)
-  - **set-password feedback** — reframed 2026-06-26 to a **virtual write-only `password` field** on User
-    (set like any field → stages in `ctx` → hashed server-side on Save → `passwordHash`); feedback then becomes
-    the form's normal **Save** feedback. No setPassword call, no server fn, no action-half (effectful server fns
-    rejected as an abstraction — writes belong to ctx/commit). Needs: the virtual field + real form-Save
-    feedback. Plus broader auth-component styling.
+  - **set-password feedback** — reframed 2026-06-26 to a `password`-type field on User (set like any
+    field → stages in `ctx` → hashed server-side on Save). **The field half is DONE** (slice 1 of
+    `docs/plans/virtual-password-field.md`: the `password` type + the read-blank/WS-hash chokepoints +
+    `dict` forbids + the masked field landed, `d2e1503`/`79bc1b1`). **Remaining = the form-Save feedback
+    (slice 2)** — "Saving… → Saved / Couldn't save" over the commit lifecycle. No setPassword call, no
+    server fn, no action-half (effectful server fns rejected as an abstraction — writes belong to
+    ctx/commit). Plus broader auth-component styling.
 
 ---
 
@@ -360,13 +362,14 @@ DECISIONS.md.
   infra. See DECISIONS ("UI middle-ground → Visual component designer").
 
 - **Admin credential flows (auth, post-MVP).** The best-practice admin-set-password model:
-  instead of an admin typing a *permanent* password for another user (today's `<SetPasswordControl>`),
-  **generate a temporary password** (shown once, copyable) or **send a reset link**, with
-  **force-change-on-first-login**. Feedback becomes inherent (the artifact IS the result) and the admin
-  never invents or transmits a lasting secret — the pattern AWS IAM / Google Workspace / Okta use. A
-  different credential *model* (generate → show-once → change-on-first-login flag), not just feedback.
-  Surfaced by the ux-reviewer closing the Users-twice dedup; the smaller inline set-password *feedback*
-  fix on the existing control is being done separately (the reply↔control correlation).
+  instead of an admin typing a *permanent* password for another user (today's masked
+  `password`-field-on-Save), **generate a temporary password** (shown once, copyable) or **send a reset
+  link**, with **force-change-on-first-login**. Feedback becomes inherent (the artifact IS the result)
+  and the admin never invents or transmits a lasting secret — the pattern AWS IAM / Google Workspace /
+  Okta use. A different credential *model* (generate → show-once → change-on-first-login flag), not just
+  feedback. Surfaced by the ux-reviewer closing the Users-twice dedup; the smaller set-password
+  *feedback* fix is the form's Save feedback, done separately (slice 2 of
+  `docs/plans/virtual-password-field.md`).
 
 - **Schema versioning  (sits on multi-instance management — now M13, after the UI milestones).**
   Git-style versioning of the schema, built inside the environment itself using

@@ -16,6 +16,13 @@ is the convenience; the **Users-twice dedup** is **DONE (`b06b532`)** — solved
 by deleting the client-toggled popup and relocating set-password to the generic `/users/<id>` page (the
 menu links to `/users`); and set-password success feedback + broader auth styling.
 
+> **Superseded (2026-06-26): the credential field.** What this plan calls `passwordHash` (a reserved
+> field name) is now a `password`-typed field, found **by the `password` type** (not a reserved name).
+> Set-password is a **masked `password`-type field committed on the form's Save** — NOT a `setPassword`
+> action/builtin (the `sys.setPassword` op, `<SetPasswordControl>`, and the WS `setPassword` handler are
+> deleted). References below to `passwordHash` / `sys.setPassword` / a set-password control are
+> historical. See `docs/plans/virtual-password-field.md`.
+
 ## Goal
 
 Give a deenv app real **users and access control** without bolting on a separate auth system, and

@@ -665,10 +665,10 @@ public static class GenericUi
     private static (string, ICodeValue) MultilineField(bool value) =>
         ("multiline", new CodeBool { Value = value });
 
-    // A `password`-typed single scalar (the M-auth `password` type) — the honest successor to the deleted
-    // `UserConvention.IsHiddenField`, the ONE place the descriptor side recognizes the credential field
-    // (isPrincipal keys on it; Scalars excludes it from columns/labelProp). Keyed on the declared type, the
-    // same shape DbBridge/AccessFloor/WsHandler key their chokepoints on.
+    // A `password`-typed single scalar (the M-auth `password` type) — the descriptor side's mirror of
+    // `IsPasswordProp` / the `password`-type read-blank, the ONE place here that recognizes the credential
+    // field (isPrincipal keys on it; Scalars excludes it from columns/labelProp). Keyed on the declared
+    // type, the same shape DbBridge/AccessFloor/WsHandler key their chokepoints on.
     private static bool IsPassword(PropDefinition p) =>
         p.Cardinality == Cardinality.Single && p.Type == "password";
 

@@ -1,6 +1,13 @@
 # The `password` type — set-password as a field, not an action
 
-**Status: spec'd 2026-06-26 (rev 6 — both review passes folded in; build-ready). Not built.** Supersedes the
+**Status: slice 1 DONE 2026-06-26 (`d2e1503`/`79bc1b1`).** The `password` type (`BaseType.Password`) +
+the load-blank / WS-layer hash chokepoints + the `dict of password` value-blank + the
+`password`-as-dict-key forbid + the `initialData` forbid + the descriptor/`Input` masking + login-by-type
++ the deletions (`sys.setPassword`, the `setPassword` WS op + `SetPasswordResponse` + client handler,
+`<SetPasswordControl>`, `UserConvention.PasswordHashField`/`IsHiddenField`, the `.set-password` CSS) all
+landed; the `dict` blank + key-forbid were folded in during review. **Slice 2 (the form-Save feedback —
+"Saving… → Saved / Couldn't save") is the remaining piece.** (Spec'd 2026-06-26, rev 6 — both review
+passes folded in.) Supersedes the
 M-auth follow-up "set-password feedback" and the explored-and-rejected "action half / effectful `server fn`".
 Design record: memory `project_persistence_modes` ("THE EFFECTS / SERVER-MUTATION MODEL"), DECISIONS
 "Data-context (`ctx`)". Rev history: 1 secret-flag → 2 hash-type → 3 hash+secret modifiers → 4 password-type

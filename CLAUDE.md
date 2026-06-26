@@ -163,9 +163,10 @@ the store/wire seam; **roles are just a `User.role` enum** (no role primitive); 
 the engine (read floor + write enforcement + floor-hardening); self-hosted password login/logout; the
 **`devlog` public-roadmap dogfood** (public read + admin-only write, via an `accessActive` system var +
 a `<SignInBar>`); **first-admin bootstrap** (env-var auto-seed on kernel boot — `DEENV_ADMIN_PASSWORD`,
-`AdminSeed.SeedFromEnv`/`SeedIfRuled`); **multi-user management** (`<UserAdmin>`: create-form + per-row
-set-password, reached from `<UserMenu>` via an admin-only "Manage users" toggle, gated on a derived
-`canManageUsers` so the role stays private; `sys.setPassword` mirrors `sys.login`); a real-browser
+`AdminSeed.SeedFromEnv`/`SeedIfRuled`); **multi-user management** (`<UserAdmin>`: create-form, reached
+from `<UserMenu>` via an admin-only "Manage users" toggle, gated on a derived `canManageUsers` so the
+role stays private; set-password is a masked `password`-type field on the User's `/users/<id>` page,
+committed via the form's Save — read-blank + WS-layer hash chokepoints); a real-browser
 **e2e** (sign-in/out + create-user→set-password→re-login).
 
 **Client data layer (render-as-planner) — DONE 2026-06-26** (6 slices on `main` `b63d788..3edc35e`, suite
