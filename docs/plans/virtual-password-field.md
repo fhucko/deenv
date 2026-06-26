@@ -64,9 +64,13 @@ through the stack, plus making the User credential field implicit (it mostly alr
    `objectPropChange` path (`persistFieldEdit`, id>0 — `codeExec.ts` ~:467). No special path; Discard/nav
    drops the overlay (plaintext gone).
 
-6. **Server write (by type).** `HandleObjectPropChange` (`WsHandler.cs` ~:294, already floor-gated), for a
-   `password`-typed field, applies `AuthCrypto.Hash` and stores the hash — driven by the field's TYPE, not
-   `UserConvention`. Floor-gated identically to any prop change. Plaintext hashed and dropped; reply is `{ok}`.
+6. **Server write (by type) — both edit AND create.** A shared "hash `password`-typed fields before store"
+   step runs in **both** write paths: `HandleObjectPropChange` (edit, `WsHandler.cs` ~:294) and
+   `HandleArrayAdd` (create — the new object's field values). Each applies `AuthCrypto.Hash`, driven by the
+   field's TYPE, floor-gated identically to any write. Plaintext hashed and dropped; never echoed (the create
+   reply carries the new id, not the values). So a password can be set when **editing** an existing user *or*
+   **creating** a new one — the create-form renders the `password` field generically, the draft holds the
+   typed value, `arrayAdd` sends it, the server hashes it.
 
 7. **Login.** Verifies a sign-in against `User`'s `password`-typed field (the credential) — found by type
    (`User`'s `password` field), so even "which field authenticates" stops being a name convention.
@@ -105,13 +109,14 @@ through the stack, plus making the User credential field implicit (it mostly alr
 
 ## Slices
 
-**Slice 1 — the `password` type (set-password becomes a field).** The built-in type end to end (parse →
-type-system → by-type read-exclusion → descriptor → `Input` → server hash-on-write → login by type), the
-implicit `User.password`, the deletions, the e2e retarget. Set-password works through the form; re-login
-proves it.
-- *Gherkin:* an admin types a new password into the User form's password field, clicks **Save**, the user logs
-  in with it; AND the page never ships a password value (the field is empty on load, the value never in the
-  document).
+**Slice 1 — the `password` type (set-password becomes a field), edit AND create.** The built-in type end to
+end (parse → type-system → by-type read-exclusion → descriptor → `Input` → server hash-on-write in **both**
+`objectPropChange` and `arrayAdd` → login by type), the implicit `User.password`, the deletions, the e2e
+retarget. Set/change a password works through the form; re-login proves it.
+- *Gherkin (edit):* an admin types a new password on an existing user's page, clicks **Save**, the user logs
+  in with it; AND the page never ships a password value (empty on load, never in the document).
+- *Gherkin (create):* an admin creates a user with a name + password in one form, and that user can log in —
+  no separate set-password step.
 
 **Slice 2 — form Save feedback.** "Saving… → Saved / Couldn't save" by rendering the commit lifecycle (the
 journal drains on ack / rolls back on reject — a render over existing state, NOT a new async channel). Covers
@@ -120,7 +125,5 @@ the password's write-only confirmation and every form.
 
 ## Open questions
 
-- **Create-with-password** — a *new* user (transient id<0) setting a password at creation needs handling the
-  edit path doesn't. Defer; first slice is **edit** an existing user.
 - **Save-feedback signal (slice 2)** — observe the journal drain/rollback (preferred) vs a `ctx.commit`
   lifecycle.
