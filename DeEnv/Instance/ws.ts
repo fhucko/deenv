@@ -42,7 +42,18 @@ interface JournalEntry {
     // through this entry. The walk descends each root (an object's props, an array's items), so listing the
     // top object(s)/array(s) suffices; the removed item is listed by its value explicitly.
     roots?: ExecValue[];
+    // The ObjectForm ctx whose ctx.commit() produced this entry (form-Save feedback), set only for sends
+    // fired inside a commit bracket (beginCommit/endCommit). The ack drains it to "saved" once this ctx's
+    // last pending entry retires; the reject flips it to "failed". Undefined for a LIVE collection edit
+    // (set/dict add/remove, ref, autosave per-keystroke) — those fire outside any commit, so they never
+    // touch a form's lifecycle.
+    ctx?: ExecCtx;
 }
+// The ctx whose commit is currently flushing — set by beginCommit, cleared by endCommit. A commit's
+// staged-walk fires its WS sends SYNCHRONOUSLY inside that bracket, so recordMutation reads this to know
+// which form ctx an entry belongs to. Per-ctx (not a global counter) because a live collection edit can
+// interleave with a form's pending commit and must NOT decrement the form's count.
+let committingCtx: ExecCtx | null = null;
 const journal: JournalEntry[] = [];
 let nextWsMsgId = 1;
 
@@ -55,6 +66,9 @@ let nextWsMsgId = 1;
 // path; session ops (login/logout) keep their own explicit bump.
 function recordMutation(entry: JournalEntry): void {
     stateGen++;
+    // Form-Save feedback: if this send fired inside a ctx.commit bracket, tag it with that ctx and count
+    // it as in-flight, so the ack/reject can drive the form's "Saving… → Saved / Couldn't save" lifecycle.
+    if (committingCtx != null) { entry.ctx = committingCtx; committingCtx.pending++; }
     journal.push(entry);
 }
 
@@ -208,7 +222,15 @@ let pendingAction: PendingAction | null = null;
 // The reply for msgId was ok: the mutation is server-committed, the entry retires.
 function commitJournal(msgId: number): void {
     const idx = journal.findIndex(e => e.msgId === msgId);
-    if (idx >= 0) journal.splice(idx, 1);
+    if (idx < 0) return;
+    const [done] = journal.splice(idx, 1);
+    // Form-Save feedback: as this commit's last in-flight send retires, settle the form to "Saved" and
+    // re-render so the inline indicator updates (the ONE new wire — the ack path did not re-render before).
+    // setCtxStatus invalidates the ctx-status var dep so the memoized component view actually recomputes.
+    if (done.ctx != null && --done.ctx.pending === 0 && done.ctx.status === "saving") {
+        setCtxStatus(done.ctx, "saved");
+        renderUi();
+    }
 }
 
 // The reply for msgId was an error: the server refused the mutation. Undo every pending
@@ -224,6 +246,11 @@ function rollbackJournal(msgId: number, error: string): boolean {
     for (let i = journal.length - 1; i >= idx; i--) journal[i].undo();
     const [failed] = journal.splice(idx, 1);
     failed.onReject?.();
+    // Form-Save feedback: a rejected commit send fails the whole form — flip its ctx to "Couldn't save"
+    // and clear its pending count (the other entries from this commit are reverse-undone above; their
+    // later acks must not then flip it back to "saved"). setCtxStatus invalidates the ctx-status var dep;
+    // renderUi() below paints the inline indicator.
+    if (failed.ctx != null) { setCtxStatus(failed.ctx, "failed"); failed.ctx.pending = 0; }
     for (let i = idx; i < journal.length; i++) journal[i].redo();
     uiStatic.lastError = error;
     console.error("Mutation rejected by the server:", error);
@@ -442,6 +469,10 @@ function connectWs(): void {
         logout: () => {
             wsSend({ op: "logout", clientId: uiStatic.clientId });
         },
+        // Form-Save feedback: mark/clear the ctx whose commit is flushing, so recordMutation tags the
+        // commit's sends with it (and bumps its pending count). Sends nothing — pure client bookkeeping.
+        beginCommit: ctx => { committingCtx = ctx; },
+        endCommit: () => { committingCtx = null; },
     });
 }
 

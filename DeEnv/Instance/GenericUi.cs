@@ -192,6 +192,14 @@ public static class GenericUi
                                     "Save"
                                 <button class="discard" onClick={discard}>
                                     "Discard"
+                                <span class="save-status">
+                                    if ctx.dirty != true
+                                        if ctx.status == "saving"
+                                            "Saving…"
+                                        else if ctx.status == "saved"
+                                            "Saved"
+                                        else if ctx.status == "failed"
+                                            "Couldn't save"
                 return render
 
             fn RefEditor(parent, prop, target)

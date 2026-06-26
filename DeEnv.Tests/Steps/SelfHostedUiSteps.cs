@@ -85,6 +85,14 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task ThenNoSaveButton() =>
         await Assert.That(await ctx.Page!.Locator(".object-form button.save").CountAsync()).IsEqualTo(0);
 
+    // The inline Save-status indicator (.save-status, next to the Save/Discard buttons) renders the
+    // form's commit lifecycle: "Saving…" then "Saved" on the ack, "Couldn't save" on a reject. The
+    // settled text is the proof of feedback; polled because the ack→render is an async WS round-trip.
+    [Then("the form save status eventually reads {string}")]
+    public async Task ThenSaveStatusEventuallyReads(string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('.object-form .save-status')?.textContent.trim() === {JsString(text)}");
+
     // A staged edit must NOT reach the store: the named type's stored object STILL holds the
     // original value. A direct read (not "eventually") — a staged edit fires no WS op, so the store
     // cannot have changed by the time the awaited fill/discard completed.

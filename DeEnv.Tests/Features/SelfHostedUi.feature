@@ -235,6 +235,19 @@ Feature: Self-hosted generic UI (object forms)
     When I save the form
     Then the store eventually has a "Note" whose "title" is "Renamed"
 
+  # The edited form shows its commit lifecycle INLINE near Save: a clean Save settles on "Saved".
+  # This renders EXISTING client lifecycle state (the journal drain on ack), not a new async channel —
+  # the C# server renders once (status="idle"), so the saved state only exists on the client across the
+  # WS ack. The transient "Saving…" is near-instant on localhost and deliberately NOT asserted (racy);
+  # the settled "Saved" is the real proof the original "no success confirmation" gap is closed.
+  @milestone-11 @single-user
+  Scenario: A saved form shows a "Saved" confirmation near the Save button
+    Given the self-hosted form app is running
+    When I open "/notes/2"
+    And I fill the "title" field with "Renamed"
+    And I save the form
+    Then the form save status eventually reads "Saved"
+
   # Navigating away (SPA) unmounts the form, dropping its staging ctx — so a staged-but-unsaved edit is
   # DISCARDED: Back to the set table, forward into the form again, and the returning form shows the
   # STORED value (not the staged one), with the store unchanged (leaving is a discard, not a save). The

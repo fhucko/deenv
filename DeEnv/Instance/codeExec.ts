@@ -66,7 +66,25 @@ interface ExecFunction { type: "fn"; fn: CodeFunction; scope: ExecScope; capture
 interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
 // A data context: staged field writes over a parent, read-through. live = the root (writes go
 // live); a sub-context (ctx.new) stages until commit. Staged keyed by object reference.
-interface ExecCtx { type: "ctx"; staged: Map<ExecObject, Map<string, ExecValue>>; parent: ExecCtx | null; live: boolean; }
+// `status`/`pending` are the form-Save lifecycle (rendered by the generic ObjectForm as inline
+// feedback). status is "idle" | "saving" | "saved" | "failed"; pending counts THIS ctx's in-flight
+// commit sends. CLIENT-only — the C# twin renders once, so ctx.status there is always "idle" and
+// these fields don't exist server-side (the property read returns the literal "idle"). `id` is a
+// unique handle so a `ctx.status` READ records a reactive var dep (`ctxStatus:<id>`) and a status
+// WRITE invalidates it — that is what makes the rendered indicator re-render on the WS ack (the
+// memoized component view is otherwise served from cache, since ctx is not a tracked object).
+interface ExecCtx { type: "ctx"; id: number; staged: Map<ExecObject, Map<string, ExecValue>>; parent: ExecCtx | null; live: boolean; status: string; pending: number; }
+// Unique per-ctx id (form-Save feedback) — namespaced into the var-dep key, so it never collides with
+// an object id or a real var name.
+let nextCtxId = 1;
+function ctxStatusDep(ctxId: number): string { return "ctxStatus:" + ctxId; }
+// Set a ctx's Save status and invalidate the reactive var dep so any rendered ctx.status indicator
+// re-renders. The single write path for the lifecycle — called from the commit branch (codeExec) and
+// the WS ack/reject (ws.ts), so every transition both updates the value and triggers the re-render.
+function setCtxStatus(ctx: ExecCtx, status: string): void {
+    ctx.status = status;
+    invalidateVar(ctxStatusDep(ctx.id));
+}
 interface ExecCtxMethod { type: "ctxMethod"; ctx: ExecCtx; method: string; }
 interface ExecTag { type: "tag"; name: string; attributes: { [name: string]: ExecResult }; children: ExecTagChild[]; key?: number; }
 
@@ -434,10 +452,15 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
     if (left.type === "array" && collectionMethods.includes(right.name))
         return { value: collectionSysFunction(left, right.name, context) };
 
-    if (left.type === "ctx")
-        return { value: right.name === "dirty"
-            ? { type: "bool", value: left.staged.size > 0 }
-            : { type: "ctxMethod", ctx: left, method: right.name } };
+    if (left.type === "ctx") {
+        if (right.name === "dirty") return { value: { type: "bool", value: left.staged.size > 0 } };
+        // ctx.status: the form-Save lifecycle ("idle" | "saving" | "saved" | "failed"), a readable
+        // property like dirty. CLIENT-only state — on the C# twin (which renders once) it is always "idle".
+        // Record a reactive var dep so the enclosing (memoized) component view re-renders when a status
+        // WRITE invalidates it — otherwise the cached view would never reflect the WS ack.
+        if (right.name === "status") { recordVar(ctxStatusDep(left.id)); return { value: { type: "text", value: left.status } }; }
+        return { value: { type: "ctxMethod", ctx: left, method: right.name } };
+    }
 
     // Property access on null/nothing FAILS CLOSED: it yields null, never a throw — the twin of
     // CodeExecutor.ExecuteInfixOp. The M-auth obligation: a currentUser-dependent access condition
@@ -1044,7 +1067,7 @@ function runBody(fn: ExecFunction, callScope: ExecScope, context: ExecContext): 
 // The live root data context provided by the framework as ambient `ctx` (writes persist; a form
 // opens a staging child via ctx.new()). Fresh per render — the root is a stateless live sentinel.
 function rootAmbient(): AmbientFrame {
-    return { name: "ctx", value: { type: "ctx", staged: new Map(), parent: null, live: true }, parent: null };
+    return { name: "ctx", value: { type: "ctx", id: nextCtxId++, staged: new Map(), parent: null, live: true, status: "idle", pending: 0 }, parent: null };
 }
 
 function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext): void {
@@ -1496,13 +1519,21 @@ function nearestStagedValue(obj: ExecObject, prop: string, context: ExecContext)
 function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
     switch (m.method) {
         // ctx.new(autosave): autosave=true → the live parent (writes persist); else a staging child.
-        case "new": return args.length > 0 && args[0].type === "bool" && args[0].value ? m.ctx : { type: "ctx", staged: new Map(), parent: m.ctx, live: false };
+        case "new": return args.length > 0 && args[0].type === "bool" && args[0].value ? m.ctx : { type: "ctx", id: nextCtxId++, staged: new Map(), parent: m.ctx, live: false, status: "idle", pending: 0 };
         case "discard":
             for (const [obj, fields] of m.ctx.staged)
                 for (const prop of fields.keys()) invalidateProp(obj.id, prop);   // re-render the reverted fields
             m.ctx.staged.clear();
             return { type: "nothing" };
         case "commit":
+            // Begin the Save lifecycle: enter "saving" and tag the commit's WS sends with THIS ctx so the
+            // ack/reject can drive it to "saved"/"failed" (sendBeginCommit makes recordMutation stamp
+            // entry.ctx = m.ctx + bump m.ctx.pending for each send). The staged-walk's sends fire
+            // SYNCHRONOUSLY inside the bracket (buffered by the handler transaction), so the module-level
+            // committing-ctx is reliably the right ctx for exactly those sends.
+            setCtxStatus(m.ctx, "saving");
+            m.ctx.pending = 0;
+            sendBeginCommit(m.ctx);
             for (const [obj, fields] of m.ctx.staged)
                 for (const [prop, val] of fields) {
                     const p = m.ctx.parent;
@@ -1517,6 +1548,10 @@ function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
                         if (obj.id > 0) propValueChange(obj, prop, val, before);
                     }
                 }
+            sendEndCommit();
+            // Nothing was staged-to-server (no sends, e.g. an empty commit or a flush into a staging
+            // parent) → there is no ack coming, so don't get stuck on "saving": settle back to "idle".
+            if (m.ctx.pending === 0) setCtxStatus(m.ctx, "idle");
             m.ctx.staged.clear();
             return { type: "nothing" };
         default: throw new Error(`Unknown context method '${m.method}'.`);
@@ -1548,6 +1583,11 @@ interface WsHooks {
     // credentials; like login its REPLY (not a host action) drives a refetch, so the page swaps the root
     // view back to the anonymous gate at the same URL.
     logout(): void;
+    // Form-Save feedback: bracket a ctx.commit's staged-walk so the WS sends it triggers are TAGGED with
+    // the committing ctx (recordMutation stamps entry.ctx + bumps ctx.pending). The ack/reject then drives
+    // that ctx's status to "saved"/"failed". CLIENT-only — the C# twin has no wsHooks and renders once.
+    beginCommit(ctx: ExecCtx): void;
+    endCommit(): void;
 }
 let wsHooks: WsHooks | null = null;
 function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
@@ -1581,6 +1621,12 @@ function sendLogin(name: ExecValue, password: ExecValue): void {
 }
 function sendLogout(): void {
     wsHooks?.logout();
+}
+function sendBeginCommit(ctx: ExecCtx): void {
+    wsHooks?.beginCommit(ctx);
+}
+function sendEndCommit(): void {
+    wsHooks?.endCommit();
 }
 
 // ── conformance entry point ───────────────────────────────────────────────────────
