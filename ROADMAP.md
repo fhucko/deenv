@@ -355,6 +355,15 @@ DECISIONS.md.
   Extends pillar 1 (design visually) from data to UI. Needs M11 + the Stage-2 live-preview
   infra. See DECISIONS ("UI middle-ground → Visual component designer").
 
+- **Admin credential flows (auth, post-MVP).** The best-practice admin-set-password model:
+  instead of an admin typing a *permanent* password for another user (today's `<SetPasswordControl>`),
+  **generate a temporary password** (shown once, copyable) or **send a reset link**, with
+  **force-change-on-first-login**. Feedback becomes inherent (the artifact IS the result) and the admin
+  never invents or transmits a lasting secret — the pattern AWS IAM / Google Workspace / Okta use. A
+  different credential *model* (generate → show-once → change-on-first-login flag), not just feedback.
+  Surfaced by the ux-reviewer closing the Users-twice dedup; the smaller inline set-password *feedback*
+  fix on the existing control is being done separately (the reply↔control correlation).
+
 - **Schema versioning  (sits on multi-instance management — now M13, after the UI milestones).**
   Git-style versioning of the schema, built inside the environment itself using
   the code milestone (versioning is behaviour-shaped). The structural
