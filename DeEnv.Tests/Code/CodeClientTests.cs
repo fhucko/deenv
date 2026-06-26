@@ -593,8 +593,11 @@ public sealed class CodeClientTests
             var errored = new TaskCompletionSource<bool>();
             page.PageError += (_, _) => errored.TrySetResult(true);
             await page.Locator("button.schemamiss").ClickAsync();
-            await Task.WhenAny(errored.Task, Task.Delay(2000));
-            await Assert.That(errored.Task.IsCompleted).IsTrue();
+            // The page error IS guaranteed here (it is the VNA re-throw), so just wait for it with a generous
+            // ceiling — a tight 2s ceiling raced the click→re-throw under full-suite browser oversubscription
+            // (the documented flake: failed ~2/5, passed in isolation). WaitAsync throws TimeoutException on a
+            // genuine miss, so no separate IsCompleted assert is needed.
+            await errored.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
             // Post-throw (synchronous): NO pending action was armed, and the optimistic write STANDS — the
             // journal holds the one objectPropChange entry (gen bumped to 1), not rolled back. Before the fix
