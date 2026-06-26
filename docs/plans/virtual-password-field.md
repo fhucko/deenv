@@ -1,10 +1,10 @@
-# `hash` + `secret` field modifiers — set-password as a field, not an action
+# The `password` type — set-password as a field, not an action
 
-**Status: spec'd 2026-06-26 (rev 3 — two orthogonal modifiers `hash` + `secret`, replacing rev-2's single
-`hash` type that wrongly bundled "hidden"), not built.** Supersedes the M-auth follow-up "set-password
-feedback (reply↔control correlation)" and the explored-and-rejected "action half / effectful `server fn`"
-direction. Design record: the memory `project_persistence_modes` ("THE EFFECTS / SERVER-MUTATION MODEL") and
-DECISIONS "Data-context (`ctx`)".
+**Status: spec'd 2026-06-26 (rev 4 — a single built-in `password` type; the general `secret`+`hash` modifiers
+explored in rev 3 are deferred to the day a second secret/hash field exists — YAGNI), not built.** Supersedes
+the M-auth follow-up "set-password feedback (reply↔control correlation)" and the explored-and-rejected
+"action half / effectful `server fn`" direction. Design record: the memory `project_persistence_modes` ("THE
+EFFECTS / SERVER-MUTATION MODEL") and DECISIONS "Data-context (`ctx`)".
 
 ## Problem
 
@@ -14,85 +14,73 @@ global error surfaces, nothing on success). The ux-reviewer flagged it twice: an
 among Save-gated fields, with **no success feedback**.
 
 Chasing the feedback led down a long path — server-authoritative action execution, reply↔control correlation,
-an intent-id idempotency key — all **rejected**, because it fights `ctx`: writes stage and commit on Save, so
-a password is a *write*, and writes belong to the data model. So it's a **field**.
+an intent-id idempotency key — all **rejected**, because it fights `ctx`: writes stage and commit on Save. A
+password is a *write*, and writes belong to the data model. So it's a **field**.
 
-## The design — two orthogonal field modifiers, `hash` + `secret`
+## The design — a built-in `password` type
 
-The behavior decomposes into two independent, composable modifiers:
+A built-in scalar type **`password`**: *write-only (hidden / read-excluded) + PBKDF2-hashed on write*. One
+type, the one behavior a password needs.
 
-- **`hash`** — *hash-on-write*: the written value is PBKDF2-hashed server-side (`AuthCrypto`); the stored value
-  is the hash. Says nothing about visibility — a `hash` value still ships unless also `secret`.
-- **`secret`** — *hidden / read-excluded*: the value never ships to the client (write-only from the client's
-  side). Generalizes today's system-only / `UserConvention.IsHiddenField` hiding. Says nothing about
-  transformation.
+- **Why a type, not the general `secret`+`hash` modifiers (rev 3):** there's exactly one consumer (the
+  password). The modifiers were a general mechanism for a single use — speculative. `password` is honest
+  (a password genuinely *is* hidden and hashed — no ambiguity, unlike rev-2's `hash`, whose name didn't
+  connote "hidden") and minimal. **When a second secret/hash field appears**, generalize to `secret`
+  (read-excluded) + `hash` (hash-on-write, *requires* `secret`) — that rev-3 design, deferred, not deleted.
 
-A password is **both**. The framework already bakes the `User` type into every instance (M-auth), so the
-baked-in schema is just:
+- **Implicit on User.** The framework bakes the `User` type into every instance (M-auth). `name` and
+  `password` are **framework-provided — the app author declares neither**; the app description never mentions
+  them (the author may extend `User` with their own fields + the role enum):
 
-```
-User
-    name text
-    role Role
-    password hash secret
-```
+  ```
+  # the framework supplies, implicitly, the equivalent of:
+  #     name text
+  #     password password
+  # the app writes only its own additions (role, profile fields, …)
+  ```
 
-**Composition (why two, not one):**
-- `secret` alone → a hidden plaintext stored as-is (an **API token**).
-- `hash` alone → a hashed value that *does* ship (a **content fingerprint / etag**).
-- `hash secret` → a **password** (hashed *and* hidden).
-
-The app author never writes the `User` line (baked in), but the modifiers are general — any app can mark its
-own fields `hash` and/or `secret`. Password management stops being password-specific; `User` just *uses* the
-modifiers. (Grammar — whether these are flags on a `text` base, e.g. `password text hash secret`, or `hash`
-is a scalar type carrying a `secret` flag — is a parser detail to settle in the build; the model is the two
-orthogonal concerns.)
-
-The payoff stays: it reuses the field/`ctx`/commit machinery wholesale; the new code is the two modifiers
-threaded through the stack.
+The payoff: it reuses the field / `ctx` / Save machinery wholesale; the new code is one built-in type threaded
+through the stack, plus making the User credential field implicit (it mostly already is — M-auth bakes User).
 
 ## Walk down the stack
 
-1. **Type system / parser.** A `text` field gains two optional modifiers, `hash` and `secret` (composable).
-   `hash` = hash-on-write; `secret` = read-excluded. Algorithm is the framework's (`AuthCrypto`, PBKDF2) — not
-   parameterized (YAGNI).
+1. **Type system / parser.** A built-in scalar type `password` (alongside `text`/`int`/…). Semantics: stored
+   as a PBKDF2 string, **write-only**, **hash-on-write**. Algorithm is the framework's (`AuthCrypto`).
 
-2. **Read exclusion = `secret` (THE security invariant).** A `secret` field's *value* never enters the shipped
-   graph — the read floor / `DbBridge` excludes it by the modifier, generalizing today's `IsHiddenField`
-   (name-convention) into a field rule. **A `secret` field that ever ships is the whole failure mode.**
+2. **Read exclusion (THE security invariant).** A `password`-typed field's *value* never enters the shipped
+   graph — the read floor / `DbBridge` excludes it **by type**, generalizing today's
+   `UserConvention.IsHiddenField` from the `passwordHash` *name* to the `password` *type*. **A `password` value
+   that ever ships is the whole failure mode.**
 
-3. **Descriptor.** A `secret` field IS in the descriptor (so the form renders an input) but value-excluded; a
-   `hash` field carries its write-transform marker. The descriptor exposes the field's *existence + modifiers*
-   (schema), never a value.
+3. **Descriptor.** A `password` field IS in the type descriptor (so the form renders an input), value-excluded
+   — contrast today, where `passwordHash` is excluded from the descriptor entirely.
 
-4. **Generic UI — `Input` (`GenericUi.cs` ~:127).** A `secret` field → `<input type="password">`, masked +
-   **write-only** (no `value={sys.field(...)}` binding — the value never ships anyway). `hash` does not affect
-   the input (it drives the server). For a password (`hash secret`): masked write-only input, hashed on the
-   server. `Field` otherwise unchanged.
+4. **Generic UI — `Input` (`GenericUi.cs` ~:127).** `baseType: "password"` → `<input type="password">`,
+   masked + **write-only** (no `value={sys.field(...)}` binding — the value never ships anyway). Renders only
+   when the field is writable (the form's existing `canEdit` — a write-only field you can't write is hidden).
+   `Field` otherwise unchanged.
 
 5. **`ctx` staging + commit.** `user.password = "…"` stages by prop name; **Save** flushes via the normal
    `objectPropChange` path (`persistFieldEdit`, id>0 — `codeExec.ts` ~:467). No special path; Discard/nav
    drops the overlay (plaintext gone).
 
-6. **Server write = `hash` (by modifier).** `HandleObjectPropChange` (`WsHandler.cs` ~:294, already
-   floor-gated), for a `hash` field, applies `AuthCrypto.Hash` and stores the hash — driven by the field's
-   modifier, not `UserConvention`. Floor-gated identically to any prop change. Plaintext hashed and dropped;
-   reply is `{ok}` (no value back).
+6. **Server write (by type).** `HandleObjectPropChange` (`WsHandler.cs` ~:294, already floor-gated), for a
+   `password`-typed field, applies `AuthCrypto.Hash` and stores the hash — driven by the field's TYPE, not
+   `UserConvention`. Floor-gated identically to any prop change. Plaintext hashed and dropped; reply is `{ok}`.
 
-7. **Login.** Verifies a sign-in against `User`'s stored credential field. It needs to know *which* field —
-   name it (`User.password`) or find `User`'s single `hash secret` field by type (more generic, mirrors the
-   by-type `usersPath` fix). Only "which field authenticates" stays a `User` convention; the modifiers are
-   generic.
+7. **Login.** Verifies a sign-in against `User`'s `password`-typed field (the credential) — found by type
+   (`User`'s `password` field), so even "which field authenticates" stops being a name convention.
+
+8. **Implicit User fields.** `name` + `password` are injected into the baked-in `User` type by the framework;
+   the app declares neither. (Rides the existing M-auth User-baking seam.)
 
 ## Security invariants (a credential feature — load-bearing)
 
-- **`secret` is the read-exclusion invariant:** a `secret` field's value **never enters the shipped graph**
-  (read floor + descriptor + Input all exclude it). This is the one that must be airtight.
-- **`hash` is the write transform + defense-in-depth:** the plaintext is PBKDF2'd server-side and dropped, so
-  the stored value is a hash, never plaintext. (Even if a `secret hash` value somehow leaked, it's a hash, not
-  the password — but `secret` is what actually hides it.)
+- **A `password`-typed field's value never enters the shipped graph** (read floor + descriptor + Input all
+  exclude it) — the one invariant that must be airtight.
+- **Hashed server-side, never stored plaintext:** the plaintext is PBKDF2'd on write and dropped.
 - **Plaintext transient + in-transit only:** `ctx` overlay (client memory) → `objectPropChange` (WS, TLS) →
-  hashed server-side → dropped. Never stored plaintext, never shipped back.
+  hashed → dropped. Never shipped back.
 - **Floor-gated** by the `objectPropChange` write floor — identical to today.
 - **Discarded on Discard/nav** with the overlay.
 
@@ -100,48 +88,39 @@ threaded through the stack.
 
 - `<SetPasswordControl>`; `sys.setPassword` (twin builtin + the `setPassword` WS op + `SetPasswordResponse` +
   the client reply handler).
-- `UserConvention.PasswordHashField` / `IsHiddenField` (name-convention) → generalized into the `secret`
-  modifier (read-excluded) + the `hash` modifier (transform) + a thin "which field authenticates" convention.
-- The baked-in `User` type gains `password hash secret`; the old `passwordHash` stored field is gone.
+- `UserConvention.PasswordHashField` / `IsHiddenField` (name-convention) → the `password` type's by-type
+  read-exclusion.
+- The baked-in `User` type's `passwordHash` → an implicit `password`-typed field. **Migration: rename — existing
+  hashes drop, the admin re-seeds on boot (`AdminSeed` env var) and UI-created users re-set. Flag for the
+  deploy.**
 - The M-auth e2e retargets: set the password as a **field on `/users/<id>`**, then **Save**.
-
-## Slices
-
-**Slice 1 — the `hash` + `secret` modifiers (set-password becomes a typed field).** Both modifiers end to
-end (parse → type-system → `secret` read-exclusion → descriptor → `Input` → `hash` server hash-on-write →
-login reads the credential), the baked-in `User` schema using them, the deletions, the e2e retarget.
-Set-password works through the form; re-login proves it.
-- *Gherkin:* an admin types a new password into the User form's password field, clicks **Save**, the user logs
-  in with it; AND the page never ships a password value (the field is empty on load, the value never in the
-  document).
-- Chunky but coherent. Could split "`secret` (read-exclusion, the security half)" from "`hash` (the
-  transform)" if it needs thinning — `secret` is the harder, security-critical half.
-
-**Slice 2 — form Save feedback.** "Saving… → Saved / Couldn't save" by rendering the commit lifecycle (the
-journal drains on ack / rolls back on reject — a render over existing state, NOT a new async channel). Covers
-the password's write-only confirmation and every other form.
-- *Gherkin:* a successful Save shows a confirmation; a floor-denied write shows an error and leaves the store
-  unchanged.
 
 ## Decided
 
-- **Field visibility = the form's existing `canEdit`.** A `secret` (write-only) field renders only if you can
-  write it (`sys.canWrite("User","edit")`), else it's **hidden** (a disabled write-only input is pointless —
-  unlike a normal field, which goes readonly). This subsumes "admin-only," reuses the form's existing check,
-  and is robust if rules ever split read-from-edit (a read-only User viewer correctly sees no password field).
-  The non-admin case is moot anyway — the read floor blocks them from the User page entirely. The
-  `objectPropChange` write floor re-decides at commit regardless (the real boundary). No separate
-  `canManageUsers` check. *(Per-field "edit user but not password" gating is a later refinement; the form gates
-  type-level today.)*
-- **Migration = rename `passwordHash → password`.** Existing hashes drop; the admin re-seeds on boot
-  (`AdminSeed` env var) and UI-created users re-set their passwords. Acceptable at the dev/dogfood stage —
-  **flag it for the deploy** (set `DEENV_ADMIN_PASSWORD`, re-set any other users).
+- **`password` type** (not the general `secret`/`hash` modifiers — deferred to a second use).
+- **Field visibility = the form's `canEdit`** (a write-only field renders only if writable, else hidden; the
+  read floor already blocks non-admins from the User page; the write floor re-decides at commit).
+- **Migration = rename** `passwordHash → password` (passwords reset; flag for deploy).
+- **Implicit User fields** — `name` + `password` not declared in the app.
+
+## Slices
+
+**Slice 1 — the `password` type (set-password becomes a field).** The built-in type end to end (parse →
+type-system → by-type read-exclusion → descriptor → `Input` → server hash-on-write → login by type), the
+implicit `User.password`, the deletions, the e2e retarget. Set-password works through the form; re-login
+proves it.
+- *Gherkin:* an admin types a new password into the User form's password field, clicks **Save**, the user logs
+  in with it; AND the page never ships a password value (the field is empty on load, the value never in the
+  document).
+
+**Slice 2 — form Save feedback.** "Saving… → Saved / Couldn't save" by rendering the commit lifecycle (the
+journal drains on ack / rolls back on reject — a render over existing state, NOT a new async channel). Covers
+the password's write-only confirmation and every form.
+- *Gherkin:* a successful Save shows a confirmation; a floor-denied write shows an error, store unchanged.
 
 ## Open questions
 
-- **Which field authenticates** — name (`User.password`) or by type (`User`'s `hash secret` field)? Lean
-  by-type if cheap (mirrors the `usersPath` fix).
-- **Create-with-password** — a *new* user (transient id<0) setting a password at creation; defer (edit-only
-  first).
+- **Create-with-password** — a *new* user (transient id<0) setting a password at creation needs handling the
+  edit path doesn't. Defer; first slice is **edit** an existing user.
 - **Save-feedback signal (slice 2)** — observe the journal drain/rollback (preferred) vs a `ctx.commit`
   lifecycle.
