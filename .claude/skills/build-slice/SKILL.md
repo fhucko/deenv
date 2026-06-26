@@ -28,7 +28,12 @@ See memory `env_agent_worktree_base`, `feedback_isolate_concurrent_sessions`.
 
 ## 2. Brief the slice-builder agent
 
-Point it at the worktree. The brief should pin:
+Point it at the worktree. **Spawn it on `model: "sonnet"`** — the design is yours and
+lives in the brief, and the suite + reviewers are a hard gate, so the builder's job is
+mechanical execution against a precise spec, where Sonnet matches and max effort stops
+earning its cost. Escalate to `opus` only when the slice lands in deenv's subtle zones
+(twin memo cache, client reconcile, negative-id remap) where a plausible-but-wrong diff
+costs more round-trips than the tier saves. The brief should pin:
 
 - **The one Gherkin scenario** it must make pass (write the scenario first — it's the
   spec). Tag it with the current milestone.
@@ -59,7 +64,11 @@ Point it at the worktree. The brief should pin:
 
 Trivial mechanical edits skip review. For an interpreter/parser/storage/object-model/wire
 slice, spawn **`architecture-reviewer`**. For a rendered-UI slice, spawn
-**`ui-architecture-reviewer` + `ux-reviewer` together**. Reconcile a reviewer flag against
+**`ui-architecture-reviewer` + `ux-reviewer` together**. **Keep reviewers on `model:
+"opus"`** (the opposite of the builder) — adversarial review is judgment, and a shallow
+reviewer is worse than none: it gives false confidence. The password slice's review caught
+a real `currentUser` credential leak + three plaintext write seams a rubber-stamp would
+have waved through. Don't cheap out on the gate. Reconcile a reviewer flag against
 decisions already settled *in this conversation* before relaying it as fresh — a re-litigated
 agreement wastes a round-trip (memory `feedback_auto_review_after_slices`). Fix findings in
 the worktree, re-verify.
