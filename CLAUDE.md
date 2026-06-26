@@ -176,15 +176,16 @@ twin-stable fn ids; the server reproduces the exact render/computation and ships
 Slices: 1a server-side component-state seeding · 1b client-ship + server-reconstruct round-trip · 1c
 generation guard (async-window safety) · 3 atomic commit-on-success handlers · 4 action-miss harvest
 (button-click data access, security-reviewed airtight) · GC client-reachability sweep. Spec + delivery:
-`docs/plans/client-data-layer.md`, [[project_client_data_layer]]. The **Users-twice dedup is now UNBLOCKED**
-(the toggled menu gets its rows via the round-trip).
+`docs/plans/client-data-layer.md`, [[project_client_data_layer]]. The **Users-twice dedup is DONE**
+(`b06b532` — the popup was deleted; set-password moved onto the generic `/users/<id>` page, the menu now links to `/users`).
 
 **Current focus = the usable-MVP gates** (DECISIONS "Data must survive schema changes" + the usable-MVP
 plan): gate #1 non-destructive apply ✅; gate #2 = minimal real deploy (slice 1 running on a Linode; next =
 nginx TLS + the basic-auth gate); gate #3 = dogfood `devlog` (instance 5). M-auth AND the client data layer
 are both DONE; **M12 (visual designer) stays deferred until after the MVP**. **M-auth follow-ups** sit in
-ROADMAP.md "Near-future" (deploy login wiring; remove-user + inline role-edit; the now-unblocked
-Users-twice dedup; set-password feedback + styling). The usable-MVP context below stands.
+ROADMAP.md "Near-future" (deploy login wiring; remove-user + inline role-edit; set-password success
+feedback (the control's own styling — separator + label — landed with `b06b532`; broader auth styling
+remains)). The usable-MVP context below stands.
 
 **Milestone 11 — SolidJS-style reactive components + the public component library (the UI
 middle-ground) — is DONE (the generic-UI-as-first-consumer COLLAPSE landed 2026-06-19, suite 348).

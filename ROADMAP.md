@@ -22,7 +22,7 @@ management. See CLAUDE.md "Current focus" for detail. **M-auth (access control) 
 engine, self-hosted login/logout, the `devlog` dogfood, first-admin bootstrap, and multi-user
 management all landed (spec `docs/plans/m-auth.md`, decision in DECISIONS.md). **The client data layer
 (render-as-planner) — DONE 2026-06-26** (6 slices, suite 537; its entry is below). The M-auth follow-ups
-(deploy login wiring, remove-user/role-edit, the now-unblocked Users-twice dedup) live in Near-future too.
+(deploy login wiring, remove-user/role-edit) live in Near-future too.
 
 ---
 
@@ -306,8 +306,7 @@ dormant→active trigger (the rules ARE the switch, no flag) — **resolved**. F
 `docs/plans/m-auth.md`; decision record in DECISIONS.md ("M-auth — access control").
 
 **Follow-ups deferred to Near-future** (below): wiring login on the deenv.org deploy; remove-user +
-inline role-edit; the Users-twice dedup (now unblocked — the client data layer landed); set-password
-feedback + auth styling.
+inline role-edit; set-password success feedback (needs reply↔control correlation); broader auth styling.
 
 ---
 
@@ -334,10 +333,8 @@ DECISIONS.md.
 - **M-auth follow-ups.** Small, non-blocking; do as wanted:
   - **Wire login on the deenv.org deploy** — set `DEENV_ADMIN_PASSWORD` on the box and drop the
     basic-auth gate for `devlog` (gate #2 follow-on). Operator ops action; steps in `deploy/DEPLOY.md`.
-  - **remove-user + inline role-edit** in `<UserAdmin>` (editing a role already works via the user's
-    `/users/<id>` page; inline in the panel is the convenience).
-  - **Users-twice dedup** — hide the inline `users` table on the root when the menu manages it; now
-    **UNBLOCKED** (the client data layer landed — the menu panel can demand its own row data via the round-trip).
+  - **remove-user + inline role-edit** on the generic `/users` list / `/users/<id>` page (remove-user = a Remove control on the `/users` set table; role-edit already works on `/users/<id>` — inline-on-the-list is the convenience).
+  - **Users-twice dedup — DONE (`b06b532`).** Solved by deleting the client-toggled `<UserAdmin>` popup and moving set-password onto the generic `/users/<id>` page; the menu now links to `/users`. (Not via the round-trip — a real route was the clean fix.)
   - **set-password success feedback** (needs reply↔control correlation) and broader auth-component styling.
 
 ---
