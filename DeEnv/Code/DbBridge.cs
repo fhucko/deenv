@@ -116,11 +116,22 @@ public static class DbBridge
                             {
                                 foreach (var (n, v) in entryOv.Fields)
                                     if (v is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue)
-                                        entry.Props[n] = ScalarToExec(v);
+                                        // The READ chokepoint (M-auth `password`): a password-typed field on a
+                                        // DICT-ENTRY object ships blank too (the branch the prior by-name
+                                        // exclusion missed) — never the stored hash.
+                                        entry.Props[n] = desc.IsPasswordProp(elemType!.Name, n)
+                                            ? new ExecText { Value = "" }
+                                            : ScalarToExec(v);
                             }
                             else if (!elementIsObject)
                             {
-                                entry.Props["value"] = ScalarToExec(entryVal);
+                                // The READ chokepoint (M-auth `password`): a `dict of password` scalar entry
+                                // ships BLANK "" too — the twin of the object-entry blank above (this scalar
+                                // branch was the last leaf-materialization that shipped the raw value). The
+                                // whole entry value IS the credential, so key on the dict's element type.
+                                entry.Props["value"] = prop.Type == "password"
+                                    ? new ExecText { Value = "" }
+                                    : ScalarToExec(entryVal);
                             }
                             entry.Props[EntryKeyProp] = new ExecText { Value = keyText };
                             items.Add(new ExecItem { Key = entry.Id, Value = entry });
@@ -161,13 +172,14 @@ public static class DbBridge
                     }
                     else
                     {
-                        // The User-type password hash NEVER enters the graph (M-auth) — a structural,
-                        // RULE-INDEPENDENT exclusion at the load boundary (even a dormant app with no
-                        // access rules must not ship it). Skipping it here means it is absent from every
-                        // ExecObject, so neither a generic page nor a custom render can read it in-graph.
-                        if (UserConvention.IsHiddenField(type.Name, prop.Name)) break;
-                        obj.Props[prop.Name] = ScalarToExec(
-                            ov.Fields.GetValueOrDefault(prop.Name));
+                        // The READ chokepoint of the `password` type (M-auth): a password-typed leaf ships
+                        // BLANK ("") into the graph, NEVER the stored hash — RULE-INDEPENDENTLY (even a
+                        // dormant app must not ship it). Blank (not omit) so the field is PRESENT: a generic
+                        // <input type="password"> binds to "" with no crash, and a custom render reading it
+                        // in-graph gets "" — the secret is unreachable from the client either way.
+                        obj.Props[prop.Name] = prop.Type == "password"
+                            ? new ExecText { Value = "" }
+                            : ScalarToExec(ov.Fields.GetValueOrDefault(prop.Name));
                     }
                     break;
             }
@@ -185,22 +197,25 @@ public static class DbBridge
     // row the principal may not READ is OMITTED from the list — so a read-denied type's objects never
     // become pick candidates (the reference picker's `foreach c in sys.extent(target)`) and never leak
     // through a custom render's own `sys.extent(...)`. This mirrors the graph floor in LoadObject: the
-    // candidate is built SCALAR-only (passwordHash already excluded), exactly the shape CanRead's
-    // condition reads (`object.status`, the row's own fields), so the listing floor decides over the
-    // SAME inputs as the graph floor.
+    // candidate is built SCALAR-only (a password-typed field blanked to "" below), exactly the shape
+    // CanRead's condition reads (`object.status`, the row's own fields), so the listing floor decides over
+    // the SAME inputs as the graph floor.
     public static ExecArray LoadExtent(IInstanceStore store, string typeName, ExecContext context,
-        AccessFloor? floor = null)
+        AccessFloor? floor = null, InstanceDescription? desc = null)
     {
         var items = new List<ExecItem>();
         foreach (var (id, ov) in store.ReadExtent(typeName))
         {
             var obj = new ExecObject { Props = [], Id = id, TypeName = typeName };
             foreach (var (name, v) in ov.Fields)
-                // RULE-INDEPENDENT: the User password hash is excluded from the candidate list too (it
-                // is never a column/label), so the reference picker's option objects never carry it.
-                if (v is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue
-                    && !UserConvention.IsHiddenField(typeName, name))
-                    obj.Props[name] = ScalarToExec(v);
+                if (v is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue)
+                    // The READ chokepoint (M-auth `password`): a password-typed candidate field ships BLANK
+                    // ("") — never the stored hash — so the reference picker's option objects can carry the
+                    // field for binding without leaking the secret. (desc null ⇒ a bare executor with no
+                    // schema; then no password field exists to blank.)
+                    obj.Props[name] = desc?.IsPasswordProp(typeName, name) == true
+                        ? new ExecText { Value = "" }
+                        : ScalarToExec(v);
             // The read floor: a row the principal may not read is omitted — it never enters the candidate
             // list. Built scalar-only above, so CanRead reads the same fields it would on the graph.
             if (floor != null && !floor.CanRead(typeName, obj)) continue;

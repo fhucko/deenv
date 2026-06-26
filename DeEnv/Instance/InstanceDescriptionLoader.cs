@@ -151,6 +151,17 @@ public static class InstanceDescriptionLoader
                         ?? throw new SchemaValidationException(
                             $"initialData entry '{typeName}/{idText}' has unknown field '{field.Name}'.");
 
+                    // A `password`-typed field is FORBIDDEN in initialData (the M-auth `password` type): a
+                    // literal password in the app document would be PLAINTEXT-in-source (never hashed, since
+                    // the WS write hash is the only hashing path), which is never wanted. The first admin's
+                    // credential is seeded out-of-band (AdminSeed, env-var); a password is set/changed through
+                    // the gated form edit. So seeding one in the document is a load error, caught here.
+                    if (prop.Cardinality == Cardinality.Single && prop.Type == "password")
+                        throw new SchemaValidationException(
+                            $"initialData entry '{typeName}/{idText}' sets the `password`-typed field " +
+                            $"'{field.Name}': a password may not be seeded in the app document (it would be " +
+                            $"plaintext in source). Set it via the gated form edit, or seed an admin out-of-band.");
+
                     if (prop.Cardinality == Cardinality.Set)
                         foreach (var m in field.Value.EnumerateArray())
                             RequireRef(seed, prop.Type, m.GetInt32(), $"{typeName}/{idText}.{field.Name}");
@@ -190,6 +201,23 @@ public static class InstanceDescriptionLoader
             && !BaseTypes.IsName(prop.KeyType))
             throw new SchemaValidationException(
                 $"Prop '{prop.Name}' on type '{typeName}' has unknown keyType '{prop.KeyType}'.");
+
+        // A `password`-typed value is VALUE-ONLY — never a dict KEY (the M-auth `password` type). A dict key
+        // is ADDRESSING: it goes in the URL (`/<dict>/<key>`, so logs/history/the address bar), ships to the
+        // client as the entry label, and the WS write hash chokepoint transforms field VALUES, never keys —
+        // so a `password` key would be stored, addressed, AND shipped as PLAINTEXT (worse than a value, and
+        // un-blankable since the key IS the identity). `password` (BaseType.Password) is the only secret
+        // scalar today; this is the general rule a future secret type inherits. (Checked even though
+        // `BaseTypes.IsName("password")` is true above — registering it as a base NAME is what makes this
+        // explicit forbid necessary, so it is intentional, not incidental.)
+        if (prop.Cardinality == Cardinality.Dictionary
+            && prop.KeyType != null
+            && BaseTypes.IsName(prop.KeyType)
+            && BaseTypes.Parse(prop.KeyType) == BaseType.Password)
+            throw new SchemaValidationException(
+                $"Prop '{prop.Name}' on type '{typeName}' uses a 'password' dictionary key, but a password " +
+                $"is value-only: a key is addressing (it appears in the URL and ships as a label) and cannot " +
+                $"be hashed. Use a non-secret key type.");
 
         // A set is a collection of object references keyed by member identity, so
         // its element type must be an object type and it carries no key fields. A base

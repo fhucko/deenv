@@ -52,11 +52,6 @@ public sealed record WsRequest
     // (UserConvention.NameField), `password` the plaintext verified against the stored hash.
     public string? Name { get; init; }
     public string? Password { get; init; }
-    // setPassword: the TARGET user (`userId`) whose `passwordHash` is (re)set to the hash of
-    // `newPassword`. Distinct from `login`'s by-name credentials — setPassword addresses an
-    // existing User by id and is gated as an `edit` of that User (the write floor).
-    public int? UserId { get; init; }
-    public string? NewPassword { get; init; }
 }
 
 // Response records — one per op. Each property's camelCase (the shared `_jsonOpts`
@@ -173,17 +168,6 @@ public sealed record LogoutResponse
     public bool Ok => true;
 }
 
-// setPassword: the result of a gated password (re)set (M-auth). `ok` is the one bit the client acts on:
-// true when the principal was allowed to edit the target User AND it exists (the hash was written);
-// false when denied OR the target user is unknown. Like a denied write and a failed login, a false here
-// is a NORMAL negative result, NOT routed through the `{ error }` rollback path (nothing was staged
-// optimistically — passwordHash is never on the client). Write-only: the hash is never read back.
-public sealed record SetPasswordResponse
-{
-    public string Op => "setPassword";
-    public required bool Ok { get; init; }
-}
-
 public sealed record ErrorResponse
 {
     public required string Error { get; init; }
@@ -252,7 +236,7 @@ public sealed class WsHandler
     // gap (DbBridge does not gate dict members either), so the read+write dict gates land together. Per-field
     // rules and richer condition inputs (now/client/cross-row) are later slices too.
     private Code.AccessFloor Floor(WsRequest req) =>
-        new(_desc.Rules ?? [], Code.AccessFloor.LoadPrincipal(_store, Session(req)?.PrincipalUserId));
+        new(_desc.Rules ?? [], Code.AccessFloor.LoadPrincipal(_store, _desc, Session(req)?.PrincipalUserId));
 
     // Reject a denied write: throw whose message ProcessMessage's catch turns into the `{ error }` reply
     // (→ client rollback). A single chokepoint so every gated handler reads the same.
@@ -267,7 +251,48 @@ public sealed class WsHandler
     // so a condition like `where object.status == "draft"` reads the NEW data. Built from the same parsed
     // ObjectValue the create would persist (id 0 — it has no identity until minted).
     private Code.ExecObject CandidateFromValue(JsonElement value, TypeDefinition type) =>
-        Code.AccessFloor.ScalarObject(type.Name, 0, (ObjectValue)DeserializeValue(value, type));
+        Code.AccessFloor.ScalarObject(type.Name, 0, (ObjectValue)DeserializeValue(value, type), _desc);
+
+    // ── the password write chokepoint (M-auth `password` type) ───────────────────
+    //
+    // A `password`-typed plaintext from ANY client write path is PBKDF2-hashed HERE, at the WS layer (above
+    // the store), before it persists — so the IInstanceStore stays dumb (CLAUDE rule 6: a future pillar-5
+    // storage engine inherits the hashing for free) and NO client write path ever stores plaintext. Every
+    // WS write handler that materializes fields routes through these (objectPropChange/arrayAdd/addEntry/
+    // path-write/setReferenceField create-new/addSetMember). The two NON-WS write paths bypass them on
+    // purpose: AdminSeed writes an ALREADY-hashed value direct to the store (a store-level hash would
+    // double-hash it), and a `password` in initialData is a load/validate ERROR (never persisted).
+    //
+    // EMPTY = NO CHANGE. An empty password value writes nothing — so a field that loads BLANK ("" from the
+    // read chokepoint) and is re-submitted unchanged never clobbers the stored hash with "". A create that
+    // omits the password yields a credential-less user (the documented "create-then-set" contract).
+
+    // Every password-typed plaintext field in a create/edit ObjectValue, hashed (empty ones DROPPED so they
+    // persist nothing). Non-password fields pass through untouched. Used by the object-create paths.
+    private ObjectValue HashPasswordFields(string typeName, ObjectValue obj)
+    {
+        var fields = new Dictionary<string, NodeValue>();
+        foreach (var (name, value) in obj.Fields)
+            if (HashLeaf(typeName, name, value) is { } toWrite)
+                fields[name] = toWrite;
+        return new ObjectValue(fields);
+    }
+
+    // A single leaf, hashed when (typeName, prop) is a password field: the plaintext → its PBKDF2 hash, an
+    // EMPTY plaintext → null (the caller writes nothing). A non-password field returns the leaf unchanged.
+    private NodeValue? HashLeaf(string typeName, string prop, NodeValue leaf) =>
+        _desc.IsPasswordProp(typeName, prop) ? HashPlaintext(leaf) : leaf;
+
+    // A scalar leaf whose DECLARED type is itself `password` (a `dict of password` entry value, or a path
+    // `write` onto a password leaf): same hash-or-skip as a password field. A non-password type is unchanged.
+    private NodeValue? HashScalarLeaf(string declaredTypeName, NodeValue leaf) =>
+        declaredTypeName == "password" ? HashPlaintext(leaf) : leaf;
+
+    // Hash a plaintext leaf into its self-describing PBKDF2 string (AuthCrypto), or null when empty (= unset,
+    // write nothing). The leaf is text-shaped (BaseType.Password maps to Text), so a non-text/empty leaf is
+    // treated as "no value".
+    private static NodeValue? HashPlaintext(NodeValue leaf) =>
+        leaf is TextValue { Text: var t } && t.Length > 0 ? new TextValue(Code.AuthCrypto.Hash(t)) : null;
 
     // ── message dispatch ──────────────────────────────────────────────────────
 
@@ -300,7 +325,6 @@ public sealed class WsHandler
                 "ackRemap"          => HandleAckRemap(req),
                 "login"             => HandleLogin(req),
                 "logout"            => HandleLogout(req),
-                "setPassword"       => HandleSetPassword(req),
                 _                   => Error($"Unknown op '{op}'")
             };
             return WithId(result, id);
@@ -349,7 +373,18 @@ public sealed class WsHandler
         if (parentPath != null && SetMemberOwnerId(parentPath) is { } ownerId
             && _store.ReadById(ownerId) is { } owner)
             RequireWrite(Floor(req), "edit", owner.TypeName,
-                Code.AccessFloor.ScalarObject(owner.TypeName, ownerId, owner.Fields));
+                Code.AccessFloor.ScalarObject(owner.TypeName, ownerId, owner.Fields, _desc));
+
+        // The WRITE chokepoint (M-auth `password`): a path `write` onto a `password`-typed leaf (a set
+        // member's password field, or a `dict of password` entry) hashes the plaintext before the store —
+        // so this seam never routes plaintext around the WS hash. An EMPTY value writes NOTHING (= "no
+        // change", the same blank-is-unchanged rule as objectPropChange). Decided AFTER the floor gate.
+        if (typeInfo.Type.Name == "password")
+        {
+            if (HashScalarLeaf(typeInfo.Type.Name, value) is not { } hashed)
+                return Serialize(new WriteResponse { Path = pathStr }); // empty → no change, store untouched
+            value = hashed;
+        }
 
         // A SCALAR dictionary entry's value lives at its path but is addressed by (dict, key)
         // — WriteLeaf can't walk into a dict, so upsert the entry. (An OBJECT entry's field
@@ -405,6 +440,12 @@ public sealed class WsHandler
             return Error("A dictionary entry requires a non-empty 'key'.");
 
         var value = DeserializeValue(valueEl, typeInfo.Type);
+        // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store. An
+        // object-entry dict's value is an ObjectValue (hash its password fields); a scalar-entry dict whose
+        // element type is itself `password` hashes the leaf. An empty value persists as-is (an empty entry).
+        value = value is ObjectValue ov
+            ? HashPasswordFields(typeInfo.Type.Name, ov)
+            : HashScalarLeaf(typeInfo.Type.Name, value) ?? value;
         var key = ParseKey(keyStr, typeInfo.KeyTypeName ?? "text");
         _store.CreateEntry(path, key, value); // throws on duplicate → caught as { error }
 
@@ -428,7 +469,7 @@ public sealed class WsHandler
             // The write floor: removing a set member is a `delete` of that member (same as arrayRemove).
             if (_store.ReadById(memberId) is { } member)
                 RequireWrite(Floor(req), "delete", member.TypeName,
-                    Code.AccessFloor.ScalarObject(member.TypeName, memberId, member.Fields));
+                    Code.AccessFloor.ScalarObject(member.TypeName, memberId, member.Fields, _desc));
             _store.RemoveFromSet(path, memberId);
         }
         else if (typeInfo.Cardinality == Cardinality.Dictionary)
@@ -458,15 +499,16 @@ public sealed class WsHandler
         if (req.RefId is { } refId)
         {
             if (_store.ReadById(refId) is { } linked)
-                RequireWrite(floor, "create", typeName, Code.AccessFloor.ScalarObject(typeName, refId, linked.Fields));
+                RequireWrite(floor, "create", typeName, Code.AccessFloor.ScalarObject(typeName, refId, linked.Fields, _desc));
             id = refId;
             _store.AddToSet(path, id); // link an existing object
         }
         else if (req.Value is { } valueEl)
         {
             var obj = (ObjectValue)DeserializeValue(valueEl, typeInfo.Type);
-            RequireWrite(floor, "create", typeName, Code.AccessFloor.ScalarObject(typeName, 0, obj));
-            id = _store.CreateObject(typeName, obj);            // mint a new object…
+            RequireWrite(floor, "create", typeName, Code.AccessFloor.ScalarObject(typeName, 0, obj, _desc));
+            // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store.
+            id = _store.CreateObject(typeName, HashPasswordFields(typeName, obj)); // mint a new object…
             _store.AddToSet(path, id);                          // …then link it
         }
         else
@@ -511,8 +553,13 @@ public sealed class WsHandler
 
         // The write floor: editing a field is an `edit` of the (existing) object, decided over its
         // CURRENT scalar fields. A denied edit throws → the `{ error }` reply rolls the client back.
-        RequireWrite(Floor(req), "edit", hit.TypeName, Code.AccessFloor.ScalarObject(hit.TypeName, objectId, hit.Fields));
-        _store.WriteField(objectId, prop, leaf);
+        RequireWrite(Floor(req), "edit", hit.TypeName, Code.AccessFloor.ScalarObject(hit.TypeName, objectId, hit.Fields, _desc));
+        // The WRITE chokepoint of the `password` type (M-auth): a `password`-typed plaintext is PBKDF2-hashed
+        // here, at the WS layer (above the dumb store), before it persists — so no client write path ever
+        // stores plaintext. An empty value writes NOTHING (= "no change", so a blank-on-load password field
+        // re-submitted unchanged never clobbers the stored hash); HashLeaf returns null for that case.
+        if (HashLeaf(hit.TypeName, prop, leaf) is { } toWrite)
+            _store.WriteField(objectId, prop, toWrite);
 
         return Serialize(new ObjectPropChangeResponse());
     }
@@ -545,7 +592,7 @@ public sealed class WsHandler
         // edit verb is non-bypassable via this seam too (not just objectPropChange). A create-new pick ALSO
         // mints a target object, gated as `create` on the target type below.
         var floor = Floor(req);
-        RequireWrite(floor, "edit", hit.TypeName, Code.AccessFloor.ScalarObject(hit.TypeName, objectId, hit.Fields));
+        RequireWrite(floor, "edit", hit.TypeName, Code.AccessFloor.ScalarObject(hit.TypeName, objectId, hit.Fields, _desc));
 
         int? newId = null;
         if (req.RefId is { } refIdRaw)
@@ -555,7 +602,8 @@ public sealed class WsHandler
         else if (req.Value is { } valueEl)
         {
             RequireWrite(floor, "create", targetType.Name, CandidateFromValue(valueEl, targetType));
-            newId = _store.CreateObject(targetType.Name, ExecObjectValue(valueEl, targetType));
+            // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store.
+            newId = _store.CreateObject(targetType.Name, HashPasswordFields(targetType.Name, ExecObjectValue(valueEl, targetType)));
             _store.WriteReference(objectId, prop, newId, targetType.Name);
         }
         else if (req.Clear is not null)
@@ -776,9 +824,10 @@ public sealed class WsHandler
         // The write floor: adding a set member is a `create` of the element type, decided over the NEW
         // object's scalar fields (so `where object.status == "draft"` reads the new data). Rejected BEFORE
         // minting, so a denied create leaves no orphan object in the extent. id 0 = no identity yet.
-        RequireWrite(Floor(req), "create", typeName, Code.AccessFloor.ScalarObject(typeName, 0, value));
+        RequireWrite(Floor(req), "create", typeName, Code.AccessFloor.ScalarObject(typeName, 0, value, _desc));
 
-        var id = _store.CreateObject(typeName, value);
+        // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store.
+        var id = _store.CreateObject(typeName, HashPasswordFields(typeName, value));
         _store.AddToSet(setId, id);
 
         // Record the negative→real mapping so the client's follow-up ops (a field edit, a remove) that
@@ -818,7 +867,8 @@ public sealed class WsHandler
     //
     // Authentication over the EXISTING WS connection — no reserved route (login is a STATE, not a URL;
     // the app keeps a clean URL space). `login` resolves the `User` by `name` through the store seam,
-    // verifies the plaintext `password` against the stored `passwordHash` (PBKDF2, server-side), and on
+    // verifies the plaintext `password` against the stored hash in the User's `password`-typed field
+    // (PBKDF2, server-side; the store keeps the real hash, only the SHIPPED value is blanked), and on
     // success SETS this session's PrincipalUserId — the durable home the renderer/floors read. On failure
     // it leaves the principal unchanged. The principal binds THIS session only (no cross-session/real-time
     // propagation this slice).
@@ -838,12 +888,17 @@ public sealed class WsHandler
         if (req.Name is not { } name || req.Password is not { } password)
             return Error("login requires 'name' and 'password'.");
 
+        // The User's credential field — the `password`-typed prop. No password field declared ⇒ login is
+        // impossible (the negative reply), exactly like a missing user.
+        if (Code.UserConvention.PasswordFieldName(_desc) is not { } passwordField)
+            return Serialize(new LoginResponse { Ok = false });
+
         // Resolve the principal by name through the store seam (the model's terms — an extent read), then
         // verify. A missing user, a user with no/blank hash, or a wrong password ALL fall to the same
-        // negative reply. (FindUserByName reads the raw stored fields — passwordHash is excluded only from
-        // the SHIPPED graph, never from this kernel-side lookup.)
+        // negative reply. (FindUserByName reads the raw stored fields — the password value is blanked only
+        // in the SHIPPED graph, never in this kernel-side lookup, so the real hash is here to verify.)
         if (FindUserByName(name) is (int userId, ObjectValue userFields)
-            && userFields.Fields.GetValueOrDefault(Code.UserConvention.PasswordHashField) is TextValue { Text: var hash }
+            && userFields.Fields.GetValueOrDefault(passwordField) is TextValue { Text: var hash }
             && hash.Length > 0
             && Code.AuthCrypto.Verify(password, hash))
         {
@@ -863,48 +918,11 @@ public sealed class WsHandler
         return Serialize(new LogoutResponse());
     }
 
-    // setPassword: (re)set a target User's password, GATED by the EXISTING write floor (M-auth 1b). The
-    // principal must be allowed to `edit` the target User — the SAME deny-by-default rule that gates an
-    // objectPropChange edit — so "who may set a password" is an ordinary access rule (e.g. `User edit where
-    // currentUser.role == "Admin"`), never a special case. On allow: hash `newPassword` (PBKDF2,
-    // server-side, the only place passwords are handled) and write it through the store seam. Write-only —
-    // passwordHash is never read back (it stays excluded from the shipped graph), so it is never set from
-    // the client via objectPropChange (the client never sees the field); THIS kernel action is the one path
-    // that sets it. A denied write OR an unknown user is the SAME negative reply ({ ok:false }) — and, like
-    // login, NOT routed through the `{ error }` rollback path (nothing was staged optimistically).
-    //
-    // ponytail: the principal is the session's bound currentUser (set by `login`); the floor decision reads
-    // only currentUser (the rule's condition) — the target's CURRENT scalar fields are the candidate, exactly
-    // as the objectPropChange edit floor builds it. Per-field rules, self-service "change my own password",
-    // and signup/user-creation are later slices (1b sets a password on an EXISTING user).
-    private string HandleSetPassword(WsRequest req)
-    {
-        if (req.UserId is not { } userIdRaw)
-            return Error("setPassword requires a numeric 'userId'.");
-        if (req.NewPassword is not { } newPassword)
-            return Error("setPassword requires 'newPassword'.");
-        var userId = Resolve(Session(req), userIdRaw);
-
-        // The target must be a known User. An unknown id, or an id pointing at a non-User object, is the
-        // negative reply — same as a denied write (no user-enumeration distinction, and nothing is written).
-        if (_store.ReadById(userId) is not { TypeName: Code.UserConvention.TypeName } target)
-            return Serialize(new SetPasswordResponse { Ok = false });
-
-        // The write floor: setting a password is an `edit` of the (existing) target User, decided over its
-        // CURRENT scalar fields. Denied ⇒ the negative reply, the store untouched (no hash written).
-        if (!Floor(req).CanWrite("edit", Code.UserConvention.TypeName,
-                Code.AccessFloor.ScalarObject(Code.UserConvention.TypeName, userId, target.Fields)))
-            return Serialize(new SetPasswordResponse { Ok = false });
-
-        // Allowed: hash the new plaintext and write it through the store seam (the same field the seed/login
-        // path use). The hash is self-describing (AuthCrypto) so a later login verifies against it directly.
-        _store.WriteField(userId, Code.UserConvention.PasswordHashField, new TextValue(Code.AuthCrypto.Hash(newPassword)));
-        return Serialize(new SetPasswordResponse { Ok = true });
-    }
 
     // Resolve a User by its `name` field through the store seam (an extent scan). Returns the matching
-    // object's intrinsic id + its raw stored fields, or null when no User carries that name. Kernel-side
-    // only (never app Code): it reads the stored passwordHash that the load boundary hides from the graph.
+    // object's intrinsic id + its RAW stored fields (so the caller reads the real hash in the User's
+    // `password`-typed field — the load boundary blanks only the SHIPPED value, never this kernel lookup),
+    // or null when no User carries that name. Kernel-side only (never app Code).
     private (int Id, ObjectValue Fields)? FindUserByName(string name)
     {
         foreach (var (id, fields) in _store.ReadExtent(Code.UserConvention.TypeName))
@@ -930,7 +948,7 @@ public sealed class WsHandler
         // scalar fields. Rejected BEFORE removal (and its GC), so a denied delete leaves the object intact.
         if (_store.ReadById(objectId) is { } member)
             RequireWrite(Floor(req), "delete", member.TypeName,
-                Code.AccessFloor.ScalarObject(member.TypeName, objectId, member.Fields));
+                Code.AccessFloor.ScalarObject(member.TypeName, objectId, member.Fields, _desc));
         _store.RemoveFromSet(setId, objectId);
 
         return Serialize(new ArrayRemoveResponse());
@@ -998,6 +1016,10 @@ public sealed class WsHandler
             BaseType.Text     => new TextValue(el.GetString() ?? ""),
             // An enum value is its value name — text-shaped, no new value-kind.
             BaseType.Enum     => new TextValue(el.GetString() ?? ""),
+            // A password's plaintext is text-shaped here (the WS write LAYER hashes it before the
+            // store — see HashPasswordFields — so this only materializes the leaf; it never stores
+            // plaintext). The two chokepoints key on the declared `password` type, not this base.
+            BaseType.Password => new TextValue(el.GetString() ?? ""),
             // An empty date/datetime means UNSET — the empty leaf, not a force-parse of "" (which threw).
             BaseType.Date     => OptionalLeaf(el.GetString() ?? "", s => new DateValue(DateOnly.Parse(s))),
             BaseType.DateTime => OptionalLeaf(el.GetString() ?? "", s => new DateTimeValue(DateTimeOffset.Parse(s))),

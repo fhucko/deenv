@@ -445,7 +445,7 @@ public sealed class CodeExecutor
         if (_store == null)
             throw new CodeRuntimeException("extent() requires a store.");
         return Memoize($"extent:{typeName.Value}", context,
-            () => DbBridge.LoadExtent(_store, typeName.Value, context, _floor));
+            () => DbBridge.LoadExtent(_store, typeName.Value, context, _floor, _resolver?.Schema));
     }
 
     // canWrite(typeName, verb): the bound principal's WRITE capability for a type + verb (create/edit/delete)
@@ -1018,10 +1018,6 @@ public sealed class CodeExecutor
         // URL). Like login it no-ops in the SSR/refetch renderer — the unbind lives on the connection, not
         // here — and is OUTSIDE the conformance contract (no conformance case).
         "logout" => new ExecNothing(),
-        // setPassword(user, newPassword) — a CLIENT-only host effect (M-auth user admin): the client fires
-        // the `setPassword` hook → the gated setPassword WS op (write floor's User `edit`). Like login it
-        // no-ops in the SSR/refetch renderer and is OUTSIDE the conformance contract (no conformance case).
-        "setPassword" => new ExecNothing(),
         _ => null,
     };
 

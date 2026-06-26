@@ -995,19 +995,6 @@ function execLogout(_codeCall: CodeCall, _scope: ExecScope, _context: ExecContex
     return { type: "nothing" };
 }
 
-// sys.setPassword(user, newPassword): a CLIENT-only host effect (M-auth user admin) — (re)set a User's
-// password. Reads the target user's intrinsic id (the same id sys.id returns) + the plaintext, and fires
-// the `setPassword` hook → the already-built setPassword WS op (gated by the write floor's User `edit`).
-// Stages NOTHING (passwordHash is never on the client); the reply surfaces only a failure (nothing
-// re-renders on success). Returns nothing; the SSR/refetch renderer no-ops it. OUTSIDE conformance.
-function execSetPassword(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
-    const user = executeValue(codeCall.params[0], scope, context).value;
-    if (user.type !== "object") throw new Error("setPassword expects a user object.");
-    const password = executeValue(codeCall.params[1], scope, context).value;
-    sendSetPassword(user.id, password);
-    return { type: "nothing" };
-}
-
 function collectionSysFunction(arr: ExecArray, method: string, context: ExecContext): ExecSysFunction {
     switch (method) {
         case "add": return { type: "sysFn", fn: args => { addToCollection(arr, args[0], context); return { type: "nothing" }; } };
@@ -1224,7 +1211,6 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "setDesign": return execSetDesign(codeCall, scope, context);
         case "login": return execLogin(codeCall, scope, context);
         case "logout": return execLogout(codeCall, scope, context);
-        case "setPassword": return execSetPassword(codeCall, scope, context);
         case "nest": return execNest(codeCall, scope, context);
         case "segment": return execSegment(codeCall, scope, context);
         case "toInt": return execToInt(codeCall, scope, context);
@@ -1562,10 +1548,6 @@ interface WsHooks {
     // credentials; like login its REPLY (not a host action) drives a refetch, so the page swaps the root
     // view back to the anonymous gate at the same URL.
     logout(): void;
-    // (Re)set a target User's password (sys.setPassword, M-auth user admin): send the user's id + the new
-    // plaintext over the WS to the gated setPassword op. Like login/logout the reply is uncorrelated and
-    // drives no journal (passwordHash is never staged on the client); only a failure surfaces.
-    setPassword(userId: number, newPassword: ExecValue): void;
 }
 let wsHooks: WsHooks | null = null;
 function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
@@ -1599,9 +1581,6 @@ function sendLogin(name: ExecValue, password: ExecValue): void {
 }
 function sendLogout(): void {
     wsHooks?.logout();
-}
-function sendSetPassword(userId: number, newPassword: ExecValue): void {
-    wsHooks?.setPassword(userId, newPassword);
 }
 
 // ── conformance entry point ───────────────────────────────────────────────────────

@@ -3,10 +3,11 @@ using System.Text;
 
 namespace DeEnv.Code;
 
-// Password hashing + verification for the `User.passwordHash` convention (M-auth). KERNEL code — a
-// sibling of AccessFloor, consulted by the login floor (WsHandler) — NOT callable from app Code: app
-// authors never touch crypto, the framework handles it server-side. BCL-only (no NuGet): PBKDF2 via
-// Rfc2898DeriveBytes, the .NET-built-in password-based KDF.
+// Password hashing + verification for the `password` TYPE (M-auth — a User's `password`-typed credential
+// field). KERNEL code — a sibling of AccessFloor, consulted by the WS write chokepoint (WsHandler hashes a
+// plaintext before the store) and the login floor (verifies against the stored hash) — NOT callable from
+// app Code: app authors never touch crypto, the framework handles it server-side. BCL-only (no NuGet):
+// PBKDF2 via Rfc2898DeriveBytes, the .NET-built-in password-based KDF.
 //
 // The stored value is a SELF-DESCRIBING string so Verify needs no out-of-band parameters — it reads the
 // algorithm, iteration count, and salt back out of the stored hash:

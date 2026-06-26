@@ -40,7 +40,7 @@ public sealed class LogoutViewSwapTests
 
         // Seed Ada's (the admin's) password into the LIVE store the same way LoginSteps does — AFTER the
         // server/store exists (the hash is not in initialData). Login verifies against this hash.
-        server.Store!.WriteField(InstanceContext.AccessAdminId, UserConvention.PasswordHashField,
+        server.Store!.WriteField(InstanceContext.AccessAdminId, InstanceContext.AccessPasswordField,
             new TextValue(AuthCrypto.Hash("hunter2")));
 
         var page = await SharedBrowser.NewPageAsync(server.BaseUrl);

@@ -981,7 +981,7 @@ public class InstanceContext
         User
             name text
             role Role
-            passwordHash text
+            password password
     """;
 
     private const string AccessFixtureSeed = """
@@ -1052,7 +1052,7 @@ public class InstanceContext
         User
             name text
             role Role
-            passwordHash text
+            password password
 
     initialData
         Db 1
@@ -1329,9 +1329,15 @@ public class InstanceContext
     public const int AccessMemberId = 4;
 
     // The admin's plaintext password (M-auth login). The seed step hashes it (AuthCrypto.Hash) into Ada's
-    // `passwordHash` so a `login` action can verify against the real PBKDF2 hash. NOT in initialData —
+    // `password` field so a `login` action can verify against the real PBKDF2 hash. NOT in initialData —
     // the seed is in friendly scalar form, so the hash is written into the store directly by the step.
     public const string AccessAdminPassword = "hunter2";
+
+    // The User's credential field name in the access fixtures (the M-auth `password` type — `password
+    // password` on User). The seed/privacy steps write/read the real hash on this field RAW through the
+    // store seam (the store keeps the hash; only the SHIPPED value is blanked to ""), exactly the field
+    // the kernel's UserConvention.PasswordFieldName resolves by type.
+    public const string AccessPasswordField = "password";
 
     // The seeded "Gate #3" milestone's id (a set member of Db.milestones) — the write scenarios edit /
     // delete it by id and assert the store directly. Mirrors the initialData seed above.

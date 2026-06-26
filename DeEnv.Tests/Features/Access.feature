@@ -148,6 +148,25 @@ Feature: The access floor (read enforcement by principal)
     Then the rendered document does not contain the admin's password hash
     And the rendered document does not contain the "pbkdf2" marker
 
+  # The READ chokepoint on the user's OWN object page — where the `password`-typed field IS displayed (its
+  # masked <input> reads sys.field(obj,"password"), unlike /milestones which never touches it). The field is
+  # ACCESSED, so it ships — but BLANK ("") never the stored hash. Proves the masked control binds to "" and the
+  # secret stays server-side even on the page that renders the field.
+  Scenario: A user's password field ships blank on its own object page (never the hash)
+    Given the member user has the password "original"
+    And the current user is the admin
+    When the page state is rendered for "/users/4"
+    Then the user 4's password field ships blank in the graph
+
+  # The SetTable default columns EXCLUDE the password field — the users list shows no "Password" column of
+  # blank cells (a secret is not a scannable list value; it belongs on the member page). This is the
+  # SetTable companion of the Scalars/labelProp exclusion the descriptor already applies.
+  Scenario: The users list shows no password column
+    Given the member user has the password "original"
+    And the current user is the admin
+    When the page state is rendered for "/users"
+    Then the rendered users list has no password column
+
   # Rendered at the milestone member page (/milestones/2) — which has NO users table — so the only way
   # the principal's role "Admin" could appear is via the currentUser scope. The access condition DOES
   # read currentUser.role (to admit the milestone), but over a throwaway context, so it never ships.
@@ -158,13 +177,13 @@ Feature: The access floor (read enforcement by principal)
     Then the shipped data includes a "Milestone" titled "Gate #3"
     And the rendered document does not expose the current user's role "Admin"
 
-  # ── setPassword (a gated write action, login sub-slice 1b) ───────────────────
-  # Setting a User's password is an `edit` of that User, gated by the SAME write floor: an
-  # ordinary `User edit where currentUser.role == "Admin"` rule decides who may do it — no
-  # special case. The action hashes the new plaintext (PBKDF2, server-side) and writes it to
-  # the target's passwordHash through the store seam. passwordHash is write-only (never shipped,
-  # never set from the client), so this kernel action is the one path that sets it; a denied
-  # write or an unknown user is the same negative reply ({ ok:false }), not an { error }.
+  # ── set-password-as-a-field (the M-auth `password` type) ─────────────────────
+  # Setting a User's password is now just an EDIT of its `password`-typed field — an objectPropChange
+  # gated by the SAME write floor (an ordinary `User edit where currentUser.role == "Admin"` rule decides
+  # who may do it; no bespoke setPassword op). The WS layer PBKDF2-hashes the plaintext before the store
+  # (the write chokepoint); the stored hash is blanked to "" on the way out (the read chokepoint), so it is
+  # write-only from the client's view. An admin's edit is accepted; a member's is the `{ error }` reply
+  # (the floor throw → client rollback), leaving the original hash intact.
 
   Scenario: An admin sets a member's password and the member can then log in with it
     Given the User access rule "User edit where currentUser.role == \"Admin\""
@@ -174,7 +193,7 @@ Feature: The access floor (read enforcement by principal)
     When the member logs in with password "freshpass"
     Then the login succeeds as the member
 
-  Scenario: A non-admin's setPassword is rejected and the original password still works
+  Scenario: A non-admin's set-password edit is rejected and the original password still works
     Given the User access rule "User edit where currentUser.role == \"Admin\""
     And the member user has the password "original"
     And the current user is the member
@@ -512,9 +531,12 @@ Feature: The access floor (read enforcement by principal)
     When the page state is rendered for "/"
     Then the rendered body shows no "form-actions" marker
 
-  # End-to-end: an admin creates a user on the generic User list (reached via the menu's "Users" link) and
-  # sets that user's password on its own object page (`/users/<id>`), and the new user can then log in —
-  # the full multi-user thread (create on /users → setPassword on /users/<id> → re-login) in a real browser.
+  # End-to-end (the M-auth `password` type, EDIT path): an admin creates a user on the generic User list
+  # (reached via the menu's "Users" link) and sets that user's password on its own object page by EDITING
+  # the masked password FIELD and clicking Save (no bespoke control — set-password is a field edit). The new
+  # user can then log in — the full multi-user thread (create on /users → edit-password on /users/<id> →
+  # re-login) in a real browser. The password field's value is BLANK on the wire throughout (the read
+  # chokepoint), so the admin types into an empty masked input and the hash is computed server-side.
   Scenario: An admin creates a user and sets a password, and the new user can log in
     Given the access-fixture app is served as a public roadmap with admin password "hunter2"
     And an anonymous visitor opens "/"
@@ -527,4 +549,20 @@ Feature: The access floor (read enforcement by principal)
     And the visitor logs out through the user menu
     And the visitor opens the sign-in form
     And the visitor logs in through the form as "Cleo" with password "cleopw"
+    Then the user menu is shown
+
+  # End-to-end (the M-auth `password` type, CREATE path): the password is a FIELD, so it can be set at
+  # CREATION — the admin fills name + role + password in ONE create-form submit, and the new user can log in.
+  # The WS layer hashes the password from the create payload (the write chokepoint); no separate set step.
+  Scenario: An admin creates a user with a password in one form, and that user can log in
+    Given the access-fixture app is served as a public roadmap with admin password "hunter2"
+    And an anonymous visitor opens "/"
+    When the visitor opens the sign-in form
+    And the visitor logs in through the form as "Ada" with password "hunter2"
+    Then the user menu is shown
+    When the admin opens user management
+    And the admin creates a user "Dani" with role "Member" and password "danipw"
+    And the visitor logs out through the user menu
+    And the visitor opens the sign-in form
+    And the visitor logs in through the form as "Dani" with password "danipw"
     Then the user menu is shown

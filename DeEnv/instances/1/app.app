@@ -26,7 +26,7 @@ ui
     var newInstanceName = ""
     var renameId = 0
     var renameName = ""
-    var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime"]
+    var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime", "password"]
     var typeKinds = ["object", "enum"]
     var cardinalities = ["single", "set", "dictionary"]
     var confirmDeleteId = 0

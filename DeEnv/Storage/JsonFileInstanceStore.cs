@@ -584,7 +584,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private static string LeafTag(string typeName, InstanceDescription desc)
     {
         var b = LeafBase(typeName, desc);
-        return b == BaseType.Enum ? "text" : b.ToString().ToLowerInvariant();
+        // Enum and Password both store on disk as text (an enum value name; a password's plaintext
+        // hash — see BaseType.Password), so their tag is "text".
+        return b is BaseType.Enum or BaseType.Password ? "text" : b.ToString().ToLowerInvariant();
     }
 
     // An unset optional decimal/date/datetime is stored as an empty-text leaf (the validator's canonical
@@ -608,6 +610,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         return BaseTypes.Parse(toTypeName) switch
         {
             BaseType.Text     => new TextValue(ScalarToText(from) ?? ""),
+            // A password stores/migrates as text (its plaintext hash — see BaseType.Password), so
+            // converting toward it is the same lossless text widening as Text.
+            BaseType.Password => new TextValue(ScalarToText(from) ?? ""),
             BaseType.Int      => ToInt(from),
             BaseType.Decimal  => ToDecimal(from),
             BaseType.Bool     => ToBool(from),
@@ -920,6 +925,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // An unset enum field defaults to empty (the decided default — NOT the first value);
         // it stores as text, so the <select> shows its empty option until a value is chosen.
         BaseType.Enum     => new TextValue(""),
+        // A password defaults to empty text (= "no password set"); stored as text (the hash).
+        // Reachable for an absent password field on a freshly-created User (BuildFields).
+        BaseType.Password => new TextValue(""),
         BaseType.Date     => new DateValue(DateOnly.FromDateTime(DateTime.Today)),
         BaseType.DateTime => new DateTimeValue(DateTimeOffset.Now),
         _ => throw new InvalidOperationException($"No base default for {bt}")
@@ -1059,6 +1067,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         BaseType.Text     => new TextValue(v.GetString() ?? ""),
         // A seeded enum value is its value name — text-shaped (loader-validated membership).
         BaseType.Enum     => new TextValue(v.GetString() ?? ""),
+        // A password is never seeded from initialData (the loader FORBIDS it — a literal password
+        // in the app document is plaintext-in-source), so this arm is defensive only; were it
+        // reached, it stores as text like the value's hash would.
+        BaseType.Password => new TextValue(v.GetString() ?? ""),
         BaseType.Date     => new DateValue(DateOnly.Parse(v.GetString() ?? "")),
         BaseType.DateTime => new DateTimeValue(DateTimeOffset.Parse(v.GetString() ?? "")),
         _ => throw new InvalidOperationException($"No scalar seed for {bt}"),

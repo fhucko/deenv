@@ -48,6 +48,19 @@ public sealed class AppPrintTests
         await AssertRoundTrips(File.ReadAllText(InstanceContext.AppFixture(1)));
     }
 
+    // The committed devlog app (instances/5) — migrated to a `password password` User field (the M-auth
+    // `password` type) — round-trips AND LOADS cleanly (full validation, not just parse): proves the
+    // migration is a valid document, the `password` type parses/prints/validates in a real committed app.
+    [Test]
+    public async Task The_devlog_document_round_trips_and_loads()
+    {
+        var text = File.ReadAllText(InstanceContext.AppFixture(5));
+        await AssertRoundTrips(text);
+        var desc = InstanceDescriptionLoader.Load(text); // full semantic validation
+        var user = desc.FindType("User");
+        await Assert.That(user!.Props!.Any(p => p.Type == "password")).IsTrue();
+    }
+
     // An enum type (`Name: enum` + an indented value list) round-trips: parse∘print is the
     // identity and the printed form is a fixpoint, with the values in declared order.
     [Test]
@@ -66,11 +79,30 @@ public sealed class AppPrintTests
     }
 
     // The M-auth `access` section round-trips: parse∘print is the identity and the printed form is a
-    // fixpoint, with the ruleset grouped by type. The fixture carries one type-level read rule.
+    // fixpoint, with the ruleset grouped by type. The fixture carries one type-level read rule. (The access
+    // fixture's User now declares a `password password` field — so this also covers the `password` type's
+    // round-trip; the dedicated test below isolates it.)
     [Test]
     public async Task The_access_fixture_round_trips()
     {
         await AssertRoundTrips(InstanceContext.AccessFixtureApp);
+    }
+
+    // A `password`-typed prop (`name password` on a type — the M-auth `password` type, a leaf base name that
+    // maps to text but is its OWN BaseType member) round-trips: parse∘print is the identity (the prop prints
+    // its declared type "password" back) and the printed form is a fixpoint. Proves BaseType.Password does not
+    // break the printer the way a text-alias would have.
+    [Test]
+    public async Task A_password_typed_prop_round_trips()
+    {
+        await AssertRoundTrips("""
+        types
+            Db
+                users set of User
+            User
+                name text
+                password password
+        """);
     }
 
     // A richer `access` section — a `where`-conditioned rule, a multi-verb rule, and a `*` (all-verbs)

@@ -14,6 +14,11 @@ public static class BaseTypes
         ["text"]     = BaseType.Text,
         ["date"]     = BaseType.Date,
         ["datetime"] = BaseType.DateTime,
+        // `password` is a leaf base name like the rest (so `password password` on User parses +
+        // round-trips), but a DISTINCT BaseType member that maps to Text in every value switch —
+        // see BaseType.Password. It is its own member (not a "text" key) so NameOf stays a
+        // bijection (NameOf(Text)="text", NameOf(Password)="password").
+        ["password"] = BaseType.Password,
     };
 
     public static IReadOnlyCollection<string> Names => ByName.Keys;

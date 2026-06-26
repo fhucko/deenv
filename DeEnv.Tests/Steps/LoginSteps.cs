@@ -31,19 +31,20 @@ public sealed class LoginSteps(InstanceContext ctx)
 
     // ── seed ────────────────────────────────────────────────────────────────────
 
-    // Seed the admin's password: hash the plaintext with the kernel helper and write it into Ada's
-    // `passwordHash` through the store seam (the seed is in friendly scalar form, so the hash is not in
-    // initialData — it is written here, AFTER any fixture rebuild a scenario did, against the live store).
-    // 1a only VERIFIES against a seeded hash; there is no setPassword-from-client this slice.
+    // Seed the admin's password: hash the plaintext with the kernel helper and write it RAW into Ada's
+    // `password` field through the store seam (the store keeps the real hash; only the SHIPPED value is
+    // blanked). The seed is in friendly scalar form, so the hash is not in initialData — it is written
+    // here, AFTER any fixture rebuild a scenario did, against the live store. This is the legitimate
+    // pre-hashed write (like AdminSeed) that bypasses the WS hash, so it must NOT be double-hashed.
     [Given("the admin user has the password {string}")]
     public async Task GivenAdminPassword(string password)
     {
         _seededHash = AuthCrypto.Hash(password);
-        ctx.Store!.WriteField(InstanceContext.AccessAdminId, UserConvention.PasswordHashField, new TextValue(_seededHash));
+        ctx.Store!.WriteField(InstanceContext.AccessAdminId, InstanceContext.AccessPasswordField, new TextValue(_seededHash));
 
         // Confirm it landed (and recover the exact stored string for the privacy assertion).
         var stored = ctx.Store!.ReadById(InstanceContext.AccessAdminId)!.Value.Fields
-            .Fields[UserConvention.PasswordHashField];
+            .Fields[InstanceContext.AccessPasswordField];
         await Assert.That(stored).IsEqualTo((NodeValue)new TextValue(_seededHash));
     }
 
@@ -53,11 +54,11 @@ public sealed class LoginSteps(InstanceContext ctx)
     [Given("the member user has the password {string}")]
     public async Task GivenMemberPassword(string password)
     {
-        var hash = AuthCrypto.Hash(password);
-        ctx.Store!.WriteField(InstanceContext.AccessMemberId, UserConvention.PasswordHashField, new TextValue(hash));
+        _seededHash = AuthCrypto.Hash(password); // recover the exact stored string for a no-leak assertion
+        ctx.Store!.WriteField(InstanceContext.AccessMemberId, InstanceContext.AccessPasswordField, new TextValue(_seededHash));
         var stored = ctx.Store!.ReadById(InstanceContext.AccessMemberId)!.Value.Fields
-            .Fields[UserConvention.PasswordHashField];
-        await Assert.That(stored).IsEqualTo((NodeValue)new TextValue(hash));
+            .Fields[InstanceContext.AccessPasswordField];
+        await Assert.That(stored).IsEqualTo((NodeValue)new TextValue(_seededHash));
     }
 
     // ── the User access rule (login 1b: setPassword is gated as a `User edit`) ───
@@ -84,13 +85,14 @@ public sealed class LoginSteps(InstanceContext ctx)
         await Assert.That(ctx.Description!.Rules!.Any(r => r.Type == "User")).IsTrue();
     }
 
-    // ── setPassword (driven through the WS action, gated by the write floor) ─────
+    // ── set-password-as-a-field (the M-auth `password` type) ─────────────────────
 
-    // Send a `setPassword` op over a WS session bound to the currently-chosen principal (ctx.PrincipalUserId,
-    // set by "the current user is …"), exactly the way AccessSteps binds the write-floor scenarios — so the
-    // floor reads the real principal. The `{word}` (admin/member) is the actor label; the principal is what
-    // decides, so the same step serves both. The target user is addressed by id; the reply is captured for
-    // the succeeds/rejected assertions.
+    // Set a User's password the SAME way the UI does now: an objectPropChange EDIT of the User's `password`
+    // field (no bespoke setPassword op — setting a password is just editing a field). The WS layer hashes the
+    // plaintext before the store (the write chokepoint); the EXISTING write floor gates it as a `User edit`.
+    // Sent over a WS session bound to the currently-chosen principal (ctx.PrincipalUserId, set by "the current
+    // user is …"), exactly the way AccessSteps binds the write-floor scenarios. The `{word}` (admin/member)
+    // is the actor label; the principal decides. The reply is captured for the succeeds/rejected assertions.
     [When("the {word} sets user {int}'s password to {string}")]
     public void WhenSetsPassword(string _actor, int userId, string newPassword)
     {
@@ -99,29 +101,29 @@ public sealed class LoginSteps(InstanceContext ctx)
         session.PrincipalUserId = ctx.PrincipalUserId;
         var ws = new WsHandler(ctx.Store!, ctx.Description!, _sessions);
         _setPasswordReply = ws.ProcessMessage(
-            $$"""{ "op": "setPassword", "clientId": "{{session.Id}}", "userId": {{userId}}, "newPassword": "{{newPassword}}" }""");
+            $$"""{ "op": "objectPropChange", "clientId": "{{session.Id}}", "objectId": {{userId}}, "prop": "{{InstanceContext.AccessPasswordField}}", "value": { "type": "text", "value": "{{newPassword}}" } }""");
     }
 
+    // The edit was accepted (the floor allowed the `User edit`): an objectPropChange ok reply, no error. The
+    // store now holds the PBKDF2 hash of the new plaintext (asserted end-to-end by the member re-login).
     [Then("the setPassword succeeds")]
     public async Task ThenSetPasswordSucceeds()
     {
         using var doc = JsonDocument.Parse(_setPasswordReply);
         var root = doc.RootElement;
-        await Assert.That(root.GetProperty("op").GetString()).IsEqualTo("setPassword");
+        await Assert.That(root.GetProperty("op").GetString()).IsEqualTo("objectPropChange");
         await Assert.That(root.GetProperty("ok").GetBoolean()).IsTrue();
         await Assert.That(root.TryGetProperty("error", out _)).IsFalse();
     }
 
-    // A denied setPassword is the NORMAL negative reply ({ ok:false }) — NOT an { error } (nothing was
-    // staged optimistically; passwordHash is never on the client, so there is nothing to roll back).
+    // A denied edit IS the `{ error }` reply (the write floor throws → the client rolls back), exactly like
+    // any other denied objectPropChange — the original hash is untouched (the member can still log in with it).
     [Then("the setPassword is rejected")]
     public async Task ThenSetPasswordRejected()
     {
         using var doc = JsonDocument.Parse(_setPasswordReply);
         var root = doc.RootElement;
-        await Assert.That(root.GetProperty("op").GetString()).IsEqualTo("setPassword");
-        await Assert.That(root.GetProperty("ok").GetBoolean()).IsFalse();
-        await Assert.That(root.TryGetProperty("error", out _)).IsFalse();
+        await Assert.That(root.TryGetProperty("error", out _)).IsTrue();
     }
 
     // ── the member logs in (proves a written/unchanged hash is verifiable) ───────
@@ -274,21 +276,24 @@ public sealed class LoginSteps(InstanceContext ctx)
     }
 
     // (b) the principal's SENSITIVE fields never leak: the `role`, read by the access condition to admit the
-    // milestone, is read over a THROWAWAY context and so never enters the shipped graph; the `passwordHash`
-    // is excluded by convention. The principal SHIPS as a scope reference (window.initData scope.currentUser
-    // → an object id); its serialized object carries ONLY the fields the render legitimately DISPLAYED — and
-    // role/passwordHash are not among them.
+    // milestone, is read over a THROWAWAY context and so never enters the shipped graph; the `password`-typed
+    // credential is BLANKED to "" at the load chokepoint (the M-auth `password` type), so even when the
+    // principal ships the field it carries "" not the hash. The principal SHIPS as a scope reference
+    // (window.initData scope.currentUser → an object id); its serialized object carries the fields the render
+    // legitimately DISPLAYED, and the role/hash are not among the values.
     //
     // 1e-2 NOTE: this used to assert the principal object is FIELDS-LESS (zero props). That was a proxy that
     // held only while NOTHING read currentUser's fields. The <UserMenu> (the logged-in chrome) now displays
     // currentUser.name, so the principal legitimately ships its `name` leaf — the user is allowed to see
     // their OWN name; it is not a privacy leak. So the assertion is narrowed to the REAL invariant the
-    // scenario name promises: the principal ships NO `role` and NO `passwordHash` prop (the sensitive
-    // fields), whatever else it carries. The role-VALUE string check below is unchanged and still the
-    // strongest guard (a whole-document "Admin" check would be WRONG — "Admin" legitimately appears as the
-    // `Role` enum value name in the shipped schema descriptor; this drills into the principal's own object
-    // entry, immune to that metadata). Rendered at /milestones/2 (no users table), so the principal id is
-    // not also a displayed db.users row.
+    // scenario name promises: the principal ships NO `role` field, its `password` field (if present) is "" —
+    // NEVER the hash — and no pbkdf2 marker appears anywhere in its serialized object. (`password` is now a
+    // PRESENT "" rather than absent — the `password`-type caveat — so the check is value-based, not
+    // key-absence.) The role-VALUE string check below is unchanged and still the strongest guard (a
+    // whole-document "Admin" check would be WRONG — "Admin" legitimately appears as the `Role` enum value
+    // name in the shipped schema descriptor; this drills into the principal's own object entry, immune to
+    // that metadata). Rendered at /milestones/2 (no users table), so the principal id is not also a displayed
+    // db.users row.
     [Then("the rendered document does not expose the current user's role {string}")]
     public async Task ThenNoRole(string role)
     {
@@ -300,13 +305,88 @@ public sealed class LoginSteps(InstanceContext ctx)
             .GetProperty("leaves").GetProperty("objects")
             .GetProperty(InstanceContext.AccessAdminId.ToString())
             .GetProperty("props");
-        // The SENSITIVE fields never enter the principal's shipped object: its role (read only by the access
-        // condition, over a throwaway context) and its passwordHash (convention-excluded) are absent as keys.
+        // The principal's role (read only by the access condition, over a throwaway context) never enters the
+        // shipped object as a key.
         var props = principal.EnumerateObject().Select(p => p.Name).ToList();
         await Assert.That(props).DoesNotContain("role");
-        await Assert.That(props).DoesNotContain(UserConvention.PasswordHashField);
+        // The credential field, when shipped (the `password` type blanks it to a PRESENT ""), carries "" — never
+        // the hash — and its self-describing pbkdf2 marker never appears in the principal's serialized object. A
+        // shipped leaf is { type:"simple", value:{ type:"text", value:"" } }; at /milestones/2 nothing reads
+        // currentUser.password, so it is typically not even accessed/shipped — but if it is, it must be blank.
+        if (principal.TryGetProperty(InstanceContext.AccessPasswordField, out var pw))
+            await Assert.That(pw.GetProperty("value").GetProperty("value").GetString() ?? "").IsEqualTo("");
+        await Assert.That(principal.GetRawText().Contains("pbkdf2")).IsFalse();
+        await Assert.That(principal.GetRawText().Contains(_seededHash)).IsFalse();
         // And the role value is nowhere inside the principal's serialized object (belt-and-suspenders).
         await Assert.That(principal.GetRawText().Contains(role)).IsFalse();
+    }
+
+    // The password-typed field on the rendered USER object ships BLANK ("") into the data graph — never the
+    // stored hash (the read chokepoint of the `password` type). The user's object entry is in the leaves; its
+    // `password` prop, when shipped, is { type:"text", value:"" }. Combined with the no-hash / no-pbkdf2
+    // document checks, this proves a user's own object page (where the field IS displayed, unlike /milestones)
+    // ships the masked field's value as "" and the secret never crosses the wire.
+    [Then("the user {int}'s password field ships blank in the graph")]
+    public async Task ThenUserPasswordBlank(int userId)
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        var initData = ExtractInitData(ctx.RenderedHtml!);
+        using var doc = JsonDocument.Parse(initData);
+        var props = doc.RootElement.GetProperty("leaves").GetProperty("objects")
+            .GetProperty(userId.ToString()).GetProperty("props");
+        // The field is shipped (the user page displays it) and it is blank — never the hash. A shipped leaf is
+        // { type:"simple", value:{ type:"text", value:"" } }.
+        await Assert.That(props.TryGetProperty(InstanceContext.AccessPasswordField, out var pw)).IsTrue();
+        await Assert.That(pw.GetProperty("value").GetProperty("value").GetString() ?? "").IsEqualTo("");
+        // And the seeded hash / its marker appear nowhere in the whole shipped document.
+        await Assert.That(ctx.RenderedHtml!.Contains(_seededHash)).IsFalse();
+        await Assert.That(ctx.RenderedHtml!.Contains("pbkdf2")).IsFalse();
+    }
+
+    // The SetTable's DEFAULT columns must EXCLUDE the `password`-typed field (a secret is not a scannable
+    // list value — the same exclusion `Scalars`/labelProp already apply, now also on the SetTable
+    // default-columns path). The users list's SSR-rendered column-header row (`<tr class="set-head">`) has
+    // NO "Password" <th>; the data rows (`<tr class="set-row">`) carry no password cell. FAIL-BEFORE:
+    // without excluding p.baseType == "password" from the SetTable header/row foreach, a spurious "Password"
+    // <th> + blank cells render here.
+    //
+    // Scoped to the RENDERED ELEMENTS (the actual `class="set-head"`/`class="set-row"` tags), NOT a loose
+    // "Password" search: the page's hydration island (window.initUi) legitimately carries the create-form's
+    // "Password" label + masked input (you DO set a password when creating a user — the create form is right
+    // to have the field), so a whole-document search would false-positive on that.
+    [Then("the rendered users list has no password column")]
+    public async Task ThenNoPasswordColumn()
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        var html = ctx.RenderedHtml!;
+        // The column-header row: from `class="set-head">` to its `</tr>`. None of its <th>s is "Password".
+        var head = ElementInner(html, "class=\"set-head\">", "</tr>");
+        await Assert.That(head).IsNotNull();
+        await Assert.That(head!.Contains("Password")).IsFalse();
+        // No data row carries a password cell: each `<tr class="set-row">` (to its `</tr>`) has no "Password"
+        // text and no masked input (the read-only table shows the label value + scalar cells, never a secret).
+        var idx = 0;
+        var sawRow = false;
+        while ((idx = html.IndexOf("class=\"set-row\">", idx, StringComparison.Ordinal)) >= 0)
+        {
+            sawRow = true;
+            var row = ElementInner(html, "class=\"set-row\">", "</tr>", idx)!;
+            await Assert.That(row.Contains("type=\"password\"")).IsFalse();
+            await Assert.That(row.Contains("Password")).IsFalse();
+            idx += "class=\"set-row\">".Length;
+        }
+        await Assert.That(sawRow).IsTrue(); // the seeded users render rows (a real list, not empty)
+    }
+
+    // The inner text of the first element whose open-tag-fragment `openMarker` appears at/after `from`,
+    // up to the next `closeMarker`. A small SSR-HTML slice helper for the column/row assertions.
+    private static string? ElementInner(string html, string openMarker, string closeMarker, int from = 0)
+    {
+        var start = html.IndexOf(openMarker, from, StringComparison.Ordinal);
+        if (start < 0) return null;
+        start += openMarker.Length;
+        var end = html.IndexOf(closeMarker, start, StringComparison.Ordinal);
+        return end < 0 ? html[start..] : html[start..end];
     }
 
     // Pull the window.initData JSON island out of the rendered page. It is emitted as

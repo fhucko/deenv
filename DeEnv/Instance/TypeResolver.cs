@@ -17,6 +17,11 @@ public sealed class TypeResolver
 
     public TypeResolver(InstanceDescription desc) => _desc = desc;
 
+    // The schema this resolver wraps — read-only, so a caller that already holds the resolver
+    // (e.g. CodeExecutor, for the extent-listing password blank) can reach the description
+    // WITHOUT threading it a second time.
+    public InstanceDescription Schema => _desc;
+
     // Returns type info at the given path, or null if the path doesn't resolve.
     public ResolvedTypeInfo? ResolveType(NodePath path)
     {

@@ -51,7 +51,7 @@ let nextWsMsgId = 1;
 // records its entry through here, so pushing a journal entry IS the mutation signature: it bumps `stateGen`,
 // invalidating any in-flight refetch (whose reply was computed over the PRE-mutation store and would
 // otherwise clobber the optimistic value — see `stateGen`/`inFlightGen`). Non-mutation sends that push NO
-// journal entry (hello / refetch / ackRemap / hostAction / login / logout / setPassword) do NOT bump on this
+// journal entry (hello / refetch / ackRemap / hostAction / login / logout) do NOT bump on this
 // path; session ops (login/logout) keep their own explicit bump.
 function recordMutation(entry: JournalEntry): void {
     stateGen++;
@@ -442,13 +442,6 @@ function connectWs(): void {
         logout: () => {
             wsSend({ op: "logout", clientId: uiStatic.clientId });
         },
-        // (Re)set a target User's password (sys.setPassword, M-auth user admin). Sends the user's id + the
-        // new plaintext to the already-built setPassword op (gated server-side by the write floor's User
-        // `edit`). Stages NOTHING / no journal (passwordHash is never on the client); the reply is
-        // recognized by its `op` and only a failure is surfaced (nothing re-renders on success).
-        setPassword: (userId, newPassword) => {
-            wsSend({ op: "setPassword", clientId: uiStatic.clientId, userId, newPassword: bareScalar(newPassword) });
-        },
     });
 }
 
@@ -519,12 +512,6 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // logged-in view would sit under the root slot and renderUi would hand it back for the LoginForm call —
         // the page would never return to the gate. resetViewState drops `comp:` (ui.ts) + forces the refetch.
         stateGen++; resetViewState(); maybeRefetch();
-    } else if (msg.op === "setPassword") {
-        // The setPassword reply (M-auth user admin). passwordHash never ships and nothing re-renders on
-        // success, so an OK is a no-op here. A failure (denied by the write floor, or an unknown user) is a
-        // normal negative reply — uncorrelated (no id), recognized by `op` like login/logout — so surface
-        // it (the admin's draft stays put). No resetViewState/refetch: this is not a root-slot swap.
-        if (!msg.ok) { uiStatic.lastError = "Could not set the password."; renderUi(); }
     } else if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
         const arrayId = pendingAdds.get(msg.tempId);
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }

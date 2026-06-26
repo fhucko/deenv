@@ -221,27 +221,35 @@ public sealed class AccessFloor
     // object (a stale/deleted principal) → ExecNull, which fails every role condition closed (deny).
     // Object/collection fields are omitted: a condition reads scalar facts, and the floor evaluates over a
     // throwaway context, so reading only scalars is also a privacy floor on what a condition could touch.
+    // `desc` is threaded so a `password`-typed field is blanked (see ScalarObject) — the principal becomes
+    // the shipped `currentUser` scope, so the hash must never ride along.
     // ponytail: scalar-only + by-id is this slice's ceiling; a richer principal (the User's references/sets
     // for graph-position conditions) layers on with the membership operator.
-    public static IExecValue LoadPrincipal(IInstanceStore store, int? principalUserId)
+    public static IExecValue LoadPrincipal(IInstanceStore store, InstanceDescription desc, int? principalUserId)
     {
         if (principalUserId is not { } id || store.ReadById(id) is not { } hit) return new ExecNull();
-        return ScalarObject(hit.TypeName, id, hit.Fields);
+        return ScalarObject(hit.TypeName, id, hit.Fields, desc);
     }
 
     // A candidate object (the access decision's `object`) as an ExecObject of its SCALAR fields — what a
     // condition like `where object.status == "draft"` reads. Built from a store ObjectValue (an existing
     // edit/delete target) the same scalar-only way the principal is.
-    public static ExecObject ScalarObject(string typeName, int id, ObjectValue fields)
+    //
+    // A `password`-typed scalar is BLANKED to "" (not omitted) — the read chokepoint of the `password` type
+    // (M-auth). ScalarObject is the single shared builder for the shipped `currentUser` AND every read/write
+    // access-rule candidate (10+ call sites), so one blank here keeps the stored hash out of the principal
+    // scope AND out of every condition's reach. Blank rather than omit so the value is PRESENT (a rule
+    // reading `currentUser.password` gets "" instead of null — harmless; the field is never a meaningful
+    // condition input). Keyed on the DECLARED `password` type via desc, the by-type successor to the old
+    // by-name passwordHash exclusion.
+    public static ExecObject ScalarObject(string typeName, int id, ObjectValue fields, InstanceDescription desc)
     {
         var props = new Dictionary<string, IExecValue>();
         foreach (var (name, value) in fields.Fields)
-            // RULE-INDEPENDENT: never carry the User password hash into a principal/candidate ExecObject.
-            // The principal becomes the `currentUser` system var, so excluding it here ALSO keeps the
-            // hash out of any condition's reach and out of the shipped currentUser scope.
-            if (value is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue
-                && !UserConvention.IsHiddenField(typeName, name))
-                props[name] = DbBridge.ScalarToExec(value);
+            if (value is IntValue or TextValue or BoolValue or DecimalValue or DateValue or DateTimeValue)
+                props[name] = desc.IsPasswordProp(typeName, name)
+                    ? new ExecText { Value = "" }            // ship blank, never the stored hash
+                    : DbBridge.ScalarToExec(value);
         return new ExecObject { Props = props, Id = id, TypeName = typeName };
     }
 }

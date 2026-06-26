@@ -21,7 +21,7 @@ types
     User
         name text
         role Role
-        passwordHash text
+        password password
 
 initialData
     Db 1

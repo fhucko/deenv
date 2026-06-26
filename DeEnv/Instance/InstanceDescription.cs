@@ -8,7 +8,16 @@ namespace DeEnv.Instance;
 // An enum VALUE is a value name and travels/stores/interprets as Text — there is no new
 // storage value-kind, wire tag, or Code-runtime value; the type-kind only carries its
 // ordered value names (TypeDefinition.Values) for validation and the generic UI <select>.
-public enum BaseType { Bool, Int, Decimal, Text, Date, DateTime, Object, Enum }
+//
+// Password is a leaf base-type NAME (used in prop position like `text`/`int`, never a
+// declared type) whose VALUE behaves exactly like Text everywhere — parser, storage, wire,
+// interpreter — EXCEPT two kernel chokepoints (M-auth, the `password` type): the load
+// boundary ships "" instead of the stored hash (DbBridge / AccessFloor.ScalarObject) and the
+// WS write layer PBKDF2-hashes a plaintext before the store (WsHandler.HashPasswordFields). So
+// every value switch maps Password → Text (mirroring Enum → Text); only those two chokepoints
+// key on BaseType.Password. It is its OWN member (not a Text alias) so NameOf stays unambiguous
+// (BaseTypes round-trips `password` ↔ Password) and AppPrint reproduces it.
+public enum BaseType { Bool, Int, Decimal, Text, Date, DateTime, Object, Enum, Password }
 
 public enum Cardinality { Single, Dictionary, Set }
 

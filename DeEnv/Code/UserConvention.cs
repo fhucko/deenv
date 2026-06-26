@@ -1,19 +1,22 @@
+using DeEnv.Instance;
+
 namespace DeEnv.Code;
 
-// The `User`-type convention (M-auth). The framework knows ONE type by name — `User` — and two of its
-// fields by name: `name` (the login identifier) and `passwordHash` (the salted PBKDF2 hash that
-// authenticates a login). These names are FRAMEWORK vocabulary, so per the system/user-separation rule
-// they live here in the system layer (pinned to their C# source by a guard test) rather than being woven
-// into a user-editable meta-schema or hung on the global `sys` namespace.
+// The `User`-type convention (M-auth). The framework knows ONE type by name — `User` — and its `name`
+// field (the login identifier). The CREDENTIAL field is no longer a reserved field NAME: it is whichever
+// field the schema declares with the `password` TYPE (BaseType.Password). These remaining names are
+// FRAMEWORK vocabulary, so per the system/user-separation rule they live here in the system layer (pinned
+// to their C# source by a guard test) rather than being woven into a user-editable meta-schema.
 //
-// This slice uses the convention for exactly two things, both at the kernel floor (never from app Code):
-//   • the login lookup resolves the principal by `name` and verifies against `passwordHash`;
-//   • the load boundary (DbBridge / AccessFloor) STRUCTURALLY excludes `passwordHash` from every shipped
-//     graph — RULE-INDEPENDENTLY (a dormant app with no access rules must still never ship it), so the
-//     secret cannot reach the client even through a custom render that reads the field in-graph.
+// The credential is handled at the kernel floor (never from app Code) by the `password` TYPE's two
+// chokepoints — the load boundary blanks a `password`-typed leaf to "" (DbBridge / AccessFloor) and the WS
+// write layer PBKDF2-hashes a plaintext (WsHandler) — so the secret cannot reach the client even through a
+// custom render. The login lookup resolves the principal by `name` and verifies against the User's
+// password-typed field, read RAW from the store (the store keeps the hash; only the value headed to a
+// client/condition is blanked).
 //
-// ponytail: only `User` + `name` + `passwordHash` are conventional this slice. The publish-time
-// inject/merge of the User shape, a richer principal, and any other reserved field layer on additively.
+// ponytail: only `User` + `name` + the password TYPE are conventional this slice. The publish-time
+// inject/merge of the User shape and a richer principal layer on additively.
 public static class UserConvention
 {
     // The conventional type name the framework treats as the principal type.
@@ -22,15 +25,11 @@ public static class UserConvention
     // The login identifier field — looked up by the `login` action to resolve a principal by name.
     public const string NameField = "name";
 
-    // The secret field: a self-describing PBKDF2 string (see AuthCrypto). NEVER enters a shipped graph
-    // and is never set from the client — the structural exclusion at the load boundary enforces the read
-    // half; this slice only verifies against it (the write half — setPassword — is a later slice).
-    public const string PasswordHashField = "passwordHash";
-
-    // True for the password-hash field ON the User type — the predicate the load loops consult to skip it.
-    // Keyed on BOTH the type name and the field name so a same-named field on any OTHER type is unaffected
-    // (the secret is a User-type convention, not a global field-name ban). Rule-independent by construction:
-    // it reads only the type/field names, never the access ruleset, so a dormant app excludes it too.
-    public static bool IsHiddenField(string? typeName, string fieldName) =>
-        typeName == TypeName && fieldName == PasswordHashField;
+    // The name of the User's CREDENTIAL field — the (first) `password`-typed prop the schema declares on
+    // User — or null when the app declares no password field (then login is impossible, the dormant case).
+    // The credential is found BY TYPE (BaseType.Password), not by a reserved field name: the login floor
+    // reads this field raw from the store to verify, and the seed/set-password write paths target it.
+    public static string? PasswordFieldName(InstanceDescription desc) =>
+        desc.FindType(TypeName)?.Props?.FirstOrDefault(p =>
+            p.Cardinality == Cardinality.Single && p.Type == "password")?.Name;
 }

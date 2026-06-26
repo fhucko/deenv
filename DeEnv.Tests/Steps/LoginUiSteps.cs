@@ -37,10 +37,10 @@ public sealed class LoginUiSteps(InstanceContext ctx)
 
         // Hash ONCE (AuthCrypto.Hash salts randomly, so re-hashing yields a different string) and write it;
         // verify the stored hash authenticates the password — the property login depends on, salt-independent.
-        ctx.Store!.WriteField(InstanceContext.AccessAdminId, UserConvention.PasswordHashField,
+        ctx.Store!.WriteField(InstanceContext.AccessAdminId, InstanceContext.AccessPasswordField,
             new TextValue(AuthCrypto.Hash(password)));
         var stored = ctx.Store!.ReadById(InstanceContext.AccessAdminId)!.Value.Fields
-            .Fields[UserConvention.PasswordHashField];
+            .Fields[InstanceContext.AccessPasswordField];
         await Assert.That(stored is TextValue tv && AuthCrypto.Verify(password, tv.Text)).IsTrue();
     }
 
@@ -55,7 +55,7 @@ public sealed class LoginUiSteps(InstanceContext ctx)
         ctx.Server = new TestInstanceServer();
         await ctx.Server.StartAsync(ctx.Description, ctx.DataFilePath);
         ctx.Store = ctx.Server.Store;
-        ctx.Store!.WriteField(InstanceContext.AccessAdminId, UserConvention.PasswordHashField,
+        ctx.Store!.WriteField(InstanceContext.AccessAdminId, InstanceContext.AccessPasswordField,
             new TextValue(AuthCrypto.Hash(password)));
     }
 
@@ -179,11 +179,13 @@ public sealed class LoginUiSteps(InstanceContext ctx)
         await ctx.Page.Locator("button.new-btn").First.WaitForAsync();
     }
 
-    // Create a User through the /users list's generic create-form (name + role; passwordHash is hidden, so
-    // it is not in the form): open it, fill the name, pick the role, save. Waits for the new row to appear
-    // AND its negative→real id remap to land (a POSITIVE data-key), not just the row's appearance: the next
-    // step NAVIGATES to this user's page by its real id, so until the optimistic add is remapped the link
-    // would point at a transient id. (The same remap gate the TodoApp add-flows use.)
+    // Create a User through the /users list's generic create-form: open it, fill the name, pick the role,
+    // save. The create-form NOW also shows a masked password input (the `password` type is a visible field),
+    // but this scenario leaves it blank — the documented "create-then-set" path (the password is set on the
+    // user's own page in the next step); an empty password persists nothing (HashLeaf skips it). Waits for the
+    // new row to appear AND its negative→real id remap to land (a POSITIVE data-key), not just the row's
+    // appearance: the next step NAVIGATES to this user's page by its real id, so until the optimistic add is
+    // remapped the link would point at a transient id. (The same remap gate the TodoApp add-flows use.)
     [When("the admin creates a user {string} with role {string}")]
     public async Task WhenCreatesUser(string name, string role)
     {
@@ -198,31 +200,58 @@ public sealed class LoginUiSteps(InstanceContext ctx)
             name);
     }
 
-    // Set a named user's password on that user's OWN object page (/users/<id>): navigate there via the
-    // row's member link, then fill the page-level set-password control and submit (sys.setPassword).
+    // Create a User with name + role + PASSWORD in ONE create-form submit (the M-auth `password` type makes
+    // the password an ordinary field, so it can be set at creation): open the form, fill all three, save. The
+    // WS layer hashes the password before the store. Waits for the new row + its id remap, like WhenCreatesUser.
+    [When("the admin creates a user {string} with role {string} and password {string}")]
+    public async Task WhenCreatesUserWithPassword(string name, string role, string password)
+    {
+        await ctx.Page!.Locator("button.new-btn").First.ClickAsync();
+        await ctx.Page.Locator(".create-form input.name").FillAsync(name);
+        await ctx.Page.Locator(".create-form select.role").SelectOptionAsync(role);
+        await ctx.Page.Locator(".create-form input.password").FillAsync(password);
+        await ctx.Page.Locator(".create-form button.set-add").ClickAsync();
+        await ctx.Page.Locator($".set-row:has-text(\"{name}\")").WaitForAsync();
+        await ctx.Page.WaitForFunctionAsync(
+            "name => { const r = [...document.querySelectorAll('.set-row')]" +
+            ".find(e => e.textContent.includes(name)); return r != null && +r.getAttribute('data-key') > 0; }",
+            name);
+        // Gate on the hash actually persisting (the create's add + the password write are both async).
+        await Polling.EventuallyAsync(() => ctx.Store!.ReadExtent("User").Values.Any(u =>
+            u.Fields.TryGetValue("name", out var n) && n is TextValue { Text: var nm } && nm == name
+            && u.Fields.TryGetValue(InstanceContext.AccessPasswordField, out var h)
+            && h is TextValue { Text.Length: > 0 }), $"{name}'s password to persist");
+    }
+
+    // Set a named user's password on that user's OWN object page (/users/<id>): navigate there via the row's
+    // member link, then set the password as an ordinary FORM FIELD — fill the masked <input class="password">
+    // (the M-auth `password` type's generic control) and click the form's Save (an objectPropChange edit,
+    // gated as a `User edit`). The bespoke set-password control + sys.setPassword are gone; setting a
+    // password is now just editing a field.
     //
-    // GATE on the hash actually PERSISTING before returning. setPassword is an admin-gated write
-    // (User edit where currentUser.role == "Admin"); the scenario LOGS OUT right after, which flips the
-    // session anonymous. Under peak load the logout can win the race, so the write lands against an
-    // already-anonymous session and the floor REJECTS it — the hash is never stored and the later
-    // re-login as this user silently fails (a wrong/empty password is not an error → the user menu never
-    // appears, the 30s flake). Polling the store until the user has a non-empty passwordHash proves the
-    // admin-gated write committed while still admin, so the subsequent login can verify against it. Polls
-    // by name (the row text), reading the live store (the same seam LoginSteps writes the seed hash to).
+    // GATE on the hash actually PERSISTING before returning. The Save is an admin-gated write (User edit where
+    // currentUser.role == "Admin"); the scenario LOGS OUT right after, which flips the session anonymous.
+    // Under peak load the logout can win the race, so the write lands against an already-anonymous session and
+    // the floor REJECTS it — the hash is never stored and the later re-login as this user silently fails (a
+    // wrong/empty password is not an error → the user menu never appears, the 30s flake). Polling the store
+    // until the user has a non-empty password field proves the admin-gated write committed while still admin,
+    // so the subsequent login can verify against it. Polls by name (the row text), reading the live store (the
+    // same seam LoginSteps writes the seed hash to). The stored value is the HASH (the WS layer hashed the
+    // plaintext), so a non-empty value here means a real credential, not the plaintext.
     [When("the admin sets {string}'s password to {string}")]
     public async Task WhenSetsUserPassword(string name, string password)
     {
-        // Navigate to the user's object page by clicking its row link, then wait for the page's
-        // set-password control to render. (`div.set-password` disambiguates the control container from the
-        // `button.set-password` submit it contains — both carry the `set-password` class.)
+        // Navigate to the user's object page by clicking its row link, then wait for the masked password
+        // input the generic form renders for the `password`-typed field.
         await ctx.Page!.Locator($".set-row:has-text(\"{name}\") a.row-link").ClickAsync();
-        var control = ctx.Page.Locator("div.set-password");
-        await control.WaitForAsync();
-        await control.Locator("input.new-password").FillAsync(password);
-        await control.Locator("button.set-password").ClickAsync();
+        var field = ctx.Page.Locator(".object-form input.password");
+        await field.WaitForAsync();
+        await field.FillAsync(password);
+        // Save the form (the staged edit commits via objectPropChange — the gated User edit).
+        await ctx.Page.Locator(".object-form button.save").ClickAsync();
         await Polling.EventuallyAsync(() => ctx.Store!.ReadExtent("User").Values.Any(u =>
             u.Fields.TryGetValue("name", out var n) && n is TextValue { Text: var nm } && nm == name
-            && u.Fields.TryGetValue(UserConvention.PasswordHashField, out var h)
+            && u.Fields.TryGetValue(InstanceContext.AccessPasswordField, out var h)
             && h is TextValue { Text.Length: > 0 }), $"{name}'s password to persist");
     }
 

@@ -49,17 +49,25 @@ public static class AdminSeed
             throw new InvalidOperationException(
                 $"Cannot seed an admin: '{adminRole}' is not a value of the enum '{roleProp.Type}'.");
 
+        // The credential field — the User's `password`-typed prop (BaseType.Password). The seed writes the
+        // ALREADY-hashed value DIRECTLY to it (bypassing the WS write hash, which would double-hash a
+        // finished hash). No password field ⇒ the app can never log anyone in: an operator error.
+        var passwordField = UserConvention.PasswordFieldName(desc)
+            ?? throw new InvalidOperationException(
+                $"Cannot seed an admin: '{UserConvention.TypeName}' declares no `password`-typed field.");
+
         // Idempotent: if any User already holds the admin role, leave it — never duplicate the admin.
         if (FindAdmin(store, adminRole) is { } existingId) return existingId;
 
-        // Mint the admin through the store seam: name + role + the hashed password (the same passwordHash
-        // field a `login` verifies against). The hash is self-describing (AuthCrypto), so a later login
-        // re-derives against its own stored parameters.
+        // Mint the admin through the store seam: name + role + the hashed password written DIRECTLY to the
+        // User's `password`-typed field (the same field a `login` verifies against). This is the legitimate
+        // pre-hashed write — it bypasses the WS write hash (which would double-hash a finished hash). The
+        // hash is self-describing (AuthCrypto), so a later login re-derives against its own stored parameters.
         var id = store.CreateObject(UserConvention.TypeName, new ObjectValue(new Dictionary<string, NodeValue>
         {
             [UserConvention.NameField] = new TextValue(name),
             [RoleField] = new TextValue(adminRole),
-            [UserConvention.PasswordHashField] = new TextValue(AuthCrypto.Hash(password)),
+            [passwordField] = new TextValue(AuthCrypto.Hash(password)),
         }));
 
         // Link it into the root's `set of User` (the baked-in `users` convention) so it is reachable from
@@ -115,9 +123,9 @@ public static class AdminSeed
             string.IsNullOrEmpty(role) ? DefaultAdminRole : role);
     }
 
-    // The conventional `role` field on User. The framework already knows User + name + passwordHash
-    // (UserConvention); the role is a per-app enum the rules read as `currentUser.role`. Kept local —
-    // it is the seed's policy input, not (yet) a framework-reserved field name like passwordHash.
+    // The conventional `role` field on User. The framework already knows User + name + the `password`-typed
+    // credential (UserConvention); the role is a per-app enum the rules read as `currentUser.role`. Kept
+    // local — it is the seed's policy input, not (yet) framework-reserved like the `password` type.
     private const string RoleField = "role";
 
     // The id of an existing User holding `adminRole`, else null — the idempotency probe. Reads the

@@ -170,6 +170,45 @@
     When the document is loaded
     Then loading is rejected with an error mentioning "multiline"
 
+  # The M-auth `password` type: a literal password in initialData is FORBIDDEN — it would be plaintext in
+  # the app document (the source). The credential is seeded out-of-band (AdminSeed) or set via the gated
+  # form edit (which hashes it at the WS layer); it is never authored in the document.
+  @milestone-auth @single-user
+  Scenario: A password value in initialData is rejected
+    Given the app description:
+      """
+      types
+          Db
+              users set of User
+          User
+              name text
+              password password
+
+      initialData
+          Db 1
+              users: [2]
+          User 2
+              name: "Ada"
+              password: "hunter2"
+      """
+    When the document is loaded
+    Then loading is rejected with an error mentioning "password"
+
+  # The M-auth `password` type is VALUE-ONLY — never a dictionary KEY. A key is addressing: it appears in
+  # the URL (`/<dict>/<key>`, so logs/history) and ships as the entry label, and the WS write hash
+  # transforms field values not keys — so a `password` key would be stored, addressed, AND shipped as
+  # plaintext. The loader rejects it (the general rule a future secret type inherits).
+  @milestone-auth @single-user
+  Scenario: A password dictionary key is rejected
+    Given the app description:
+      """
+      types
+          Db
+              secrets dict of text by password
+      """
+    When the document is loaded
+    Then loading is rejected with an error mentioning "password"
+
   @milestone-enum @single-user
   Scenario: An enum field stores an in-list value and rejects an off-list one
     Given the enum fixture instance is running

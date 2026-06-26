@@ -210,11 +210,12 @@ public static class StoredDataValidator
         };
 
         // The tag a scalar of this declared type is stored with ("text", "bool", …). An enum
-        // value is stored as text (its value name), so its tag is "text" too.
+        // value is stored as text (its value name), so its tag is "text" too; a `password` stores
+        // as text (its hash is plain text — see BaseType.Password), so its tag is "text" too.
         private string BaseTag(string typeName)
         {
             var baseType = BaseTypes.IsName(typeName)
-                ? BaseTypes.Parse(typeName)
+                ? BaseTypes.Parse(typeName) switch { BaseType.Password => BaseType.Text, var bt => bt }
                 : desc.FindType(typeName)?.BaseType switch
                   {
                       BaseType.Enum => BaseType.Text,

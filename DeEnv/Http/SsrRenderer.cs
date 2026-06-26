@@ -285,7 +285,7 @@ public sealed class SsrRenderer
             {
                 Value = (_desc.Rules?.Count ?? 0) > 0
                     && floor.CanWrite("edit", UserConvention.TypeName,
-                        AccessFloor.ScalarObject(UserConvention.TypeName, 0, new ObjectValue(new Dictionary<string, NodeValue>()))),
+                        AccessFloor.ScalarObject(UserConvention.TypeName, 0, new ObjectValue(new Dictionary<string, NodeValue>()), _desc)),
             },
             IsReadOnly = true,
         };
@@ -747,9 +747,6 @@ public sealed class SsrRenderer
           position: absolute; top: 100%; right: 0; margin: 0.45rem 0 0; z-index: 20; text-align: left;
           background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
           padding: 1rem 1.15rem; box-shadow: 0 6px 22px rgba(31,35,40,.14); min-width: 240px; }
-        .set-password { display: flex; align-items: center; gap: 0.5rem;
-          margin: 0.9rem 0 0; padding-top: 0.9rem; border-top: 1px solid var(--border); }
-        .set-password label.new-password { color: var(--muted); }
         """;
 
     private static void DefineFunction(CodeFunction fn, ExecScope scope)
@@ -927,7 +924,7 @@ public sealed class SsrRenderer
     // The bound principal as a scalar-only ExecObject (M-auth) — see AccessFloor.LoadPrincipal, the single
     // source of truth shared with the WsHandler write floor so both decide over an identical principal.
     private IExecValue LoadPrincipal(int? principalUserId) =>
-        AccessFloor.LoadPrincipal(_store, principalUserId);
+        AccessFloor.LoadPrincipal(_store, _desc, principalUserId);
 
     // ── helpers ───────────────────────────────────────────────────────────────
 

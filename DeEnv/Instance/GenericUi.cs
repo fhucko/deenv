@@ -127,6 +127,8 @@ public static class GenericUi
             fn Input(obj, desc, variant, readonly)
                 if desc.baseType == "bool"
                     return <input type="checkbox" class={desc.name} checked={sys.field(obj, desc.name)} disabled={readonly}>
+                else if desc.baseType == "password"
+                    return <input type="password" class={desc.name} value={sys.field(obj, desc.name)} readonly={readonly}>
                 else if desc.baseType == "enum"
                     return <select class={desc.name} value={sys.field(obj, desc.name)} disabled={readonly}>
                         <option value="">
@@ -184,8 +186,6 @@ public static class GenericUi
                                     <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
                             else
                                 <Field obj={obj} desc={p} readonly={!canEdit}>
-                        if canManageUsers && meta.isPrincipal
-                            <SetPasswordControl user={obj}>
                         if autosave != true && canEdit && hasFields
                             <div class="form-actions">
                                 <button class="save" onClick={save}>
@@ -259,7 +259,7 @@ public static class GenericUi
                                     <th>
                                         sys.humanize(desc.labelProp)
                                     foreach p in desc.props
-                                        if p.baseType != "set" && p.baseType != "dictionary" && p.name != desc.labelProp && p.multiline != true
+                                        if p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "password" && p.name != desc.labelProp && p.multiline != true
                                             <th>
                                                 sys.humanize(p.name)
                                 if rowActions != null || sys.canWrite(desc.name, "delete")
@@ -290,7 +290,7 @@ public static class GenericUi
                                             <a class="row-link" href={sys.nest(setPath, m)}>
                                                 sys.field(m, desc.labelProp)
                                         foreach p in desc.props
-                                            if p.baseType != "set" && p.baseType != "dictionary" && p.name != desc.labelProp && p.multiline != true
+                                            if p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "password" && p.name != desc.labelProp && p.multiline != true
                                                 <td>
                                                     if p.baseType == "bool"
                                                         <span class="bool-cell">
@@ -493,20 +493,6 @@ public static class GenericUi
                             "Log out"
                 return render
 
-            fn SetPasswordControl(user)
-                var state = { password: "" }
-                fn submit()
-                    sys.setPassword(user, state.password)
-                    state.password = ""
-                fn render()
-                    return <div class="set-password">
-                        <label class="new-password">
-                            "New password"
-                        <input type="password" class="new-password" value={state.password}>
-                        <button class="set-password" onClick={submit}>
-                            "Set password"
-                return render
-
             fn InputType(baseType)
                 if baseType == "int"
                     return "number"
@@ -514,6 +500,8 @@ public static class GenericUi
                     return "number"
                 if baseType == "date"
                     return "date"
+                if baseType == "password"
+                    return "password"
                 return "text"
 
             fn boolGlyph(v)
@@ -601,21 +589,20 @@ public static class GenericUi
         var map = objectTypes.ToDictionary(t => t.Name, t => TypeDescriptor(t, desc));
         foreach (var t in objectTypes)
             foreach (var p in t.Props ?? [])
-                // The User password hash is hidden from the reflective UI surface (M-auth), the
-                // schema-shape companion of the data-graph exclusion: the generic UI iterates a type's
-                // descriptor props to build its fields/columns, so a descriptor that omits the hash never
-                // renders a control for it (and never reads sys.field(row, "passwordHash") — which would
-                // throw, since the value is excluded from the graph). A secret is not a visible field.
-                if (!UserConvention.IsHiddenField(t.Name, p.Name))
-                    map[t.Name + "/" + p.Name] = PropDesc(p, desc);
+                // A `password`-typed prop IS now a visible field (the M-auth `password` type): its descriptor
+                // carries baseType "password" so Input renders a masked <input type="password"> bound to
+                // sys.field(obj,"password") — which reads the BLANKED "" the load chokepoint ships (never the
+                // hash). So the field is editable from the form (set/change a password) while the value never
+                // leaks; it is only kept OUT of table columns / labelProp (Scalars excludes it).
+                map[t.Name + "/" + p.Name] = PropDesc(p, desc);
         return map;
     }
 
-    // The props of a type that the reflective UI surfaces — every declared prop EXCEPT a hidden
-    // convention field (the User password hash). The single place the descriptor's prop list is
-    // narrowed, so the type descriptor + its column/field consumers all agree.
-    private static IEnumerable<PropDefinition> VisibleProps(TypeDefinition t) =>
-        (t.Props ?? []).Where(p => !UserConvention.IsHiddenField(t.Name, p.Name));
+    // The props of a type that the reflective UI surfaces — EVERY declared prop. A `password`-typed prop is
+    // included (the M-auth `password` type): it renders a masked control bound to the blanked-"" value, so a
+    // password can be SET/changed from the object form. (It is excluded only from columns/labelProp, by
+    // Scalars — long-form/secret fields don't belong in a scannable list.)
+    private static IEnumerable<PropDefinition> VisibleProps(TypeDefinition t) => t.Props ?? [];
 
     private static CodeObject TypeDescriptor(TypeDefinition t, InstanceDescription desc)
     {
@@ -625,11 +612,11 @@ public static class GenericUi
         return Obj(
             ("name", Text(t.Name)),
             ("labelProp", Text(labelProp)),
-            // True for the framework's principal (User) type — the only type carrying the hidden
-            // password-hash convention field — sourced from the SAME pinned predicate the load/descriptor
-            // boundaries use, so there is no magic "User" string here. ObjectForm reads it to surface the
-            // (admin-gated) SetPasswordControl on the principal's object page only; the hash stays out of props.
-            ("isPrincipal", new CodeBool { Value = (t.Props ?? []).Any(p => UserConvention.IsHiddenField(t.Name, p.Name)) }),
+            // True for the framework's principal type — the type carrying a `password`-typed credential
+            // field (the M-auth `password` type). Sourced from the field's TYPE, so there is no magic
+            // "User" string here. <UserMenu> reads it (via sys.schema(p.element).isPrincipal) to find the
+            // root's user collection BY TYPE for the "Users" management link.
+            ("isPrincipal", new CodeBool { Value = (t.Props ?? []).Any(IsPassword) }),
             ("props", Arr(VisibleProps(t).Select(p => (ICodeValue)PropDesc(p, desc)))));
     }
 
@@ -678,12 +665,20 @@ public static class GenericUi
     private static (string, ICodeValue) MultilineField(bool value) =>
         ("multiline", new CodeBool { Value = value });
 
+    // A `password`-typed single scalar (the M-auth `password` type) — the honest successor to the deleted
+    // `UserConvention.IsHiddenField`, the ONE place the descriptor side recognizes the credential field
+    // (isPrincipal keys on it; Scalars excludes it from columns/labelProp). Keyed on the declared type, the
+    // same shape DbBridge/AccessFloor/WsHandler key their chokepoints on.
+    private static bool IsPassword(PropDefinition p) =>
+        p.Cardinality == Cardinality.Single && p.Type == "password";
+
     // Scalar (leaf-valued) props for the label prop and the table columns: base
     // leaves and enums (an enum value is text-shaped). References/sets/dicts are excluded — and so is a
-    // hidden convention field (the User password hash), so it can never become a labelProp or a column.
+    // `password`-typed field (the M-auth `password` type): it is a visible FORM field (set/change a
+    // password) but never a labelProp or a table column (a secret is not a scannable list value).
     private static List<PropDefinition> Scalars(TypeDefinition t, InstanceDescription desc) => (t.Props ?? [])
-        .Where(p => p.Cardinality == Cardinality.Single && (BaseTypes.IsName(p.Type) || desc.IsEnumType(p.Type))
-            && !UserConvention.IsHiddenField(t.Name, p.Name))
+        .Where(p => p.Cardinality == Cardinality.Single && !IsPassword(p)
+            && (BaseTypes.IsName(p.Type) || desc.IsEnumType(p.Type)))
         .ToList();
 
     // ── tiny AST builders (the descriptor literals only) ──────────────────────────────
