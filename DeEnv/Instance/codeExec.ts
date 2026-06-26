@@ -67,7 +67,8 @@ interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
 // A data context: staged field writes over a parent, read-through. live = the root (writes go
 // live); a sub-context (ctx.new) stages until commit. Staged keyed by object reference.
 // `status`/`pending` are the form-Save lifecycle (rendered by the generic ObjectForm as inline
-// feedback). status is "idle" | "saving" | "saved" | "failed"; pending counts THIS ctx's in-flight
+// feedback). status is "idle" | "saving" | "saved" (a reject clears back to "idle" — the failure
+// surfaces via the global error banner, not inline); pending counts THIS ctx's in-flight
 // commit sends. CLIENT-only — the C# twin renders once, so ctx.status there is always "idle" and
 // these fields don't exist server-side (the property read returns the literal "idle"). `id` is a
 // unique handle so a `ctx.status` READ records a reactive var dep (`ctxStatus:<id>`) and a status
@@ -454,7 +455,7 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
 
     if (left.type === "ctx") {
         if (right.name === "dirty") return { value: { type: "bool", value: left.staged.size > 0 } };
-        // ctx.status: the form-Save lifecycle ("idle" | "saving" | "saved" | "failed"), a readable
+        // ctx.status: the form-Save lifecycle ("idle" | "saving" | "saved"), a readable
         // property like dirty. CLIENT-only state — on the C# twin (which renders once) it is always "idle".
         // Record a reactive var dep so the enclosing (memoized) component view re-renders when a status
         // WRITE invalidates it — otherwise the cached view would never reflect the WS ack.
@@ -1524,33 +1525,39 @@ function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
             for (const [obj, fields] of m.ctx.staged)
                 for (const prop of fields.keys()) invalidateProp(obj.id, prop);   // re-render the reverted fields
             m.ctx.staged.clear();
+            setCtxStatus(m.ctx, "idle");   // a discard saved nothing — clear any lingering "Saved" indicator
             return { type: "nothing" };
         case "commit":
             // Begin the Save lifecycle: enter "saving" and tag the commit's WS sends with THIS ctx so the
-            // ack/reject can drive it to "saved"/"failed" (sendBeginCommit makes recordMutation stamp
-            // entry.ctx = m.ctx + bump m.ctx.pending for each send). The staged-walk's sends fire
-            // SYNCHRONOUSLY inside the bracket (buffered by the handler transaction), so the module-level
-            // committing-ctx is reliably the right ctx for exactly those sends.
+            // ack can drive it to "saved" (sendBeginCommit makes recordMutation stamp entry.ctx = m.ctx +
+            // bump m.ctx.pending for each send). The staged-walk's sends fire SYNCHRONOUSLY inside the
+            // bracket (buffered by the handler transaction), so the module-level committing-ctx is reliably
+            // the right ctx for exactly those sends. pending is NOT reset here — it accrues per-send and
+            // retires per-ack, so a rapid second commit before the first's acks return stays correct; the
+            // finally guarantees the bracket closes even if the walk throws (no leaked committing-ctx).
             setCtxStatus(m.ctx, "saving");
-            m.ctx.pending = 0;
             sendBeginCommit(m.ctx);
-            for (const [obj, fields] of m.ctx.staged)
-                for (const [prop, val] of fields) {
-                    const p = m.ctx.parent;
-                    if (p != null && !p.live) {
-                        let pf = p.staged.get(obj);
-                        if (pf == null) p.staged.set(obj, pf = new Map());
-                        pf.set(prop, val);
-                    } else {
-                        const before = obj.props[prop];
-                        obj.props[prop] = val;
-                        invalidateProp(obj.id, prop);
-                        if (obj.id > 0) propValueChange(obj, prop, val, before);
+            try {
+                for (const [obj, fields] of m.ctx.staged)
+                    for (const [prop, val] of fields) {
+                        const p = m.ctx.parent;
+                        if (p != null && !p.live) {
+                            let pf = p.staged.get(obj);
+                            if (pf == null) p.staged.set(obj, pf = new Map());
+                            pf.set(prop, val);
+                        } else {
+                            const before = obj.props[prop];
+                            obj.props[prop] = val;
+                            invalidateProp(obj.id, prop);
+                            if (obj.id > 0) propValueChange(obj, prop, val, before);
+                        }
                     }
-                }
-            sendEndCommit();
-            // Nothing was staged-to-server (no sends, e.g. an empty commit or a flush into a staging
-            // parent) → there is no ack coming, so don't get stuck on "saving": settle back to "idle".
+            } finally {
+                sendEndCommit();
+            }
+            // Nothing in flight (no sends this commit AND no prior pending — e.g. an empty commit or a
+            // flush into a staging parent) → no ack is coming, so don't get stuck on "saving": settle to
+            // "idle". (pending is not zeroed above, so this stays non-zero while a prior batch is in flight.)
             if (m.ctx.pending === 0) setCtxStatus(m.ctx, "idle");
             m.ctx.staged.clear();
             return { type: "nothing" };
@@ -1585,7 +1592,8 @@ interface WsHooks {
     logout(): void;
     // Form-Save feedback: bracket a ctx.commit's staged-walk so the WS sends it triggers are TAGGED with
     // the committing ctx (recordMutation stamps entry.ctx + bumps ctx.pending). The ack/reject then drives
-    // that ctx's status to "saved"/"failed". CLIENT-only — the C# twin has no wsHooks and renders once.
+    // that ctx's status to "saved" (a reject clears it back to "idle"). CLIENT-only — the C# twin has no
+    // wsHooks and renders once.
     beginCommit(ctx: ExecCtx): void;
     endCommit(): void;
 }

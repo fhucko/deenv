@@ -318,7 +318,7 @@ public sealed class CodeExecutor
 
             // A data context: `ctx.dirty` (a bool), `ctx.status` (the form-Save lifecycle), or a bound
             // method (`ctx.new`/`commit`/`discard`). `ctx.status` is twin-PARITY only: the server renders
-            // once, so it is always "idle" here — the "saving/saved/failed" lifecycle is a CLIENT behavior
+            // once, so it is always "idle" here — the "saving/saved" lifecycle is a CLIENT behavior
             // (across WS acks, in codeExec.ts), so there is no conformance case, only this read so SSR
             // does not crash when a form renders the indicator.
             if (target is ExecCtx ctx)

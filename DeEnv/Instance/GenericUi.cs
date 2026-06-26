@@ -198,8 +198,6 @@ public static class GenericUi
                                             "Saving…"
                                         else if ctx.status == "saved"
                                             "Saved"
-                                        else if ctx.status == "failed"
-                                            "Couldn't save"
                 return render
 
             fn RefEditor(parent, prop, target)

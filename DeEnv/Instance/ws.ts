@@ -44,7 +44,7 @@ interface JournalEntry {
     roots?: ExecValue[];
     // The ObjectForm ctx whose ctx.commit() produced this entry (form-Save feedback), set only for sends
     // fired inside a commit bracket (beginCommit/endCommit). The ack drains it to "saved" once this ctx's
-    // last pending entry retires; the reject flips it to "failed". Undefined for a LIVE collection edit
+    // last pending entry retires; a reject clears it back to "idle". Undefined for a LIVE collection edit
     // (set/dict add/remove, ref, autosave per-keystroke) — those fire outside any commit, so they never
     // touch a form's lifecycle.
     ctx?: ExecCtx;
@@ -67,7 +67,7 @@ let nextWsMsgId = 1;
 function recordMutation(entry: JournalEntry): void {
     stateGen++;
     // Form-Save feedback: if this send fired inside a ctx.commit bracket, tag it with that ctx and count
-    // it as in-flight, so the ack/reject can drive the form's "Saving… → Saved / Couldn't save" lifecycle.
+    // it as in-flight, so the ack can drive the form's "Saving… → Saved" lifecycle (a reject clears to idle).
     if (committingCtx != null) { entry.ctx = committingCtx; committingCtx.pending++; }
     journal.push(entry);
 }
@@ -246,11 +246,12 @@ function rollbackJournal(msgId: number, error: string): boolean {
     for (let i = journal.length - 1; i >= idx; i--) journal[i].undo();
     const [failed] = journal.splice(idx, 1);
     failed.onReject?.();
-    // Form-Save feedback: a rejected commit send fails the whole form — flip its ctx to "Couldn't save"
-    // and clear its pending count (the other entries from this commit are reverse-undone above; their
-    // later acks must not then flip it back to "saved"). setCtxStatus invalidates the ctx-status var dep;
-    // renderUi() below paints the inline indicator.
-    if (failed.ctx != null) { setCtxStatus(failed.ctx, "failed"); failed.ctx.pending = 0; }
+    // Form-Save feedback: a rejected commit send fails the whole form — clear its ctx back to "idle" and
+    // zero its pending count (the other entries from this commit are reverse-undone above; their later
+    // acks must not then flip it to "saved"). The failure itself surfaces via the global error banner
+    // (uiStatic.lastError below), so the inline indicator just returns to neutral — one failure surface,
+    // not two. setCtxStatus invalidates the ctx-status var dep; renderUi() below repaints.
+    if (failed.ctx != null) { setCtxStatus(failed.ctx, "idle"); failed.ctx.pending = 0; }
     for (let i = idx; i < journal.length; i++) journal[i].redo();
     uiStatic.lastError = error;
     console.error("Mutation rejected by the server:", error);
