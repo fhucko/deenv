@@ -123,16 +123,25 @@ the password's write-only confirmation and every other form.
 - *Gherkin:* a successful Save shows a confirmation; a floor-denied write shows an error and leaves the store
   unchanged.
 
+## Decided
+
+- **Field visibility = the form's existing `canEdit`.** A `secret` (write-only) field renders only if you can
+  write it (`sys.canWrite("User","edit")`), else it's **hidden** (a disabled write-only input is pointless —
+  unlike a normal field, which goes readonly). This subsumes "admin-only," reuses the form's existing check,
+  and is robust if rules ever split read-from-edit (a read-only User viewer correctly sees no password field).
+  The non-admin case is moot anyway — the read floor blocks them from the User page entirely. The
+  `objectPropChange` write floor re-decides at commit regardless (the real boundary). No separate
+  `canManageUsers` check. *(Per-field "edit user but not password" gating is a later refinement; the form gates
+  type-level today.)*
+- **Migration = rename `passwordHash → password`.** Existing hashes drop; the admin re-seeds on boot
+  (`AdminSeed` env var) and UI-created users re-set their passwords. Acceptable at the dev/dogfood stage —
+  **flag it for the deploy** (set `DEENV_ADMIN_PASSWORD`, re-set any other users).
+
 ## Open questions
 
-- **Who sees the field?** admin-only (`canManageUsers`) for slice 1; self-service "change my own" (wants
-  current-password confirmation) is separate and later.
 - **Which field authenticates** — name (`User.password`) or by type (`User`'s `hash secret` field)? Lean
-  by-type if cheap.
+  by-type if cheap (mirrors the `usersPath` fix).
 - **Create-with-password** — a *new* user (transient id<0) setting a password at creation; defer (edit-only
   first).
 - **Save-feedback signal (slice 2)** — observe the journal drain/rollback (preferred) vs a `ctx.commit`
   lifecycle.
-- **Migration** — renaming the stored field `passwordHash → password` drops existing hashes (admin re-seeds on
-  boot; UI-created users re-set). Fine for the single-operator MVP; flag for the deploy. Alternative: keep the
-  stored name `passwordHash`, marked `hash secret`, to avoid the reset.
