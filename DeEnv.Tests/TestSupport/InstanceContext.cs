@@ -1028,6 +1028,53 @@ public class InstanceContext
             * where currentUser.role == "Admin"
     """;
 
+    // The user-management menu link resolves the User set BY TYPE, not by the name "users". This fixture
+    // names the root's `set of User` prop `members` instead of `users` — everything else (the User type, the
+    // role enum, the seed, the public-roadmap policy) matches AccessPublicFixtureDb. The framework finds the
+    // principal set by type (AdminSeed.UsersSetPath filters on `p.Type == "User"`), so the seeded admin lands
+    // in `members`; a `<UserMenu>` whose "Users" link hard-coded `/users` would 404. The link is computed in
+    // Code from the schema descriptor (the root's set-of-`isPrincipal` prop), so it must point at `/members`.
+    // A test fixture (not a committed app), so no designer-seed regen. The admin-only User rule makes
+    // `canManageUsers` true for the admin, so the menu link renders.
+    public static InstanceDescription AccessRenamedUserSetDb() =>
+        InstanceDescriptionLoader.Load(AccessRenamedUserSetApp);
+
+    private const string AccessRenamedUserSetApp = """
+    types
+        Role enum
+            Admin
+            Member
+        Db
+            milestones set of Milestone
+            members set of User
+        Milestone
+            title text
+        User
+            name text
+            role Role
+            passwordHash text
+
+    initialData
+        Db 1
+            milestones: [2]
+            members: [3, 4]
+        Milestone 2
+            title: "Gate #3"
+        User 3
+            name: "Ada"
+            role: "Admin"
+        User 4
+            name: "Bob"
+            role: "Member"
+
+    access
+        Milestone
+            read
+            * where currentUser.role == "Admin"
+        User
+            * where currentUser.role == "Admin"
+    """;
+
     // M-auth floor-hardening (Fix 1 — sys.extent gating): the SAME shape + the `Milestone read` rule, but
     // with a CUSTOM `fn render()` that LISTS the Milestone extent via `sys.extent("Milestone")` (the seam
     // the reference picker uses: `foreach c in sys.extent(target)`). This is the exposure the graph floor

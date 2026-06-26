@@ -480,12 +480,15 @@ public static class GenericUi
                 fn logout()
                     sys.logout()
                 fn render()
+                    var root = sys.schema(sys.resolve("/").typeName)
                     return <div class="user-menu">
                         <span class="user-name">
                             sys.field(currentUser, "name")
                         if canManageUsers
-                            <a class="manage-users" href="/users">
-                                "Users"
+                            foreach p in root.props
+                                if p.baseType == "set" && sys.schema(p.element).isPrincipal
+                                    <a class="manage-users" href={sys.nest("/", p.name)}>
+                                        "Users"
                         <button class="logout" onClick={logout}>
                             "Log out"
                 return render

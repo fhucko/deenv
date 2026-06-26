@@ -345,6 +345,16 @@ Feature: The access floor (read enforcement by principal)
     When the page state is rendered for "/"
     Then the rendered document includes no user-management control
 
+  # The "Users" link resolves the User set BY TYPE, not by the literal name "users": an app whose root names
+  # its `set of User` prop `members` (not `users`) must have the menu link point at the RESOLVED `/members`,
+  # not a dead `/users`. The link is computed in Code from the schema descriptor (the root's set-of-principal
+  # prop via the `isPrincipal` flag), mirroring how ObjectForm builds a set's list-title link.
+  Scenario: The user-management link resolves the User set by type, not the name "users"
+    Given an app whose root User set is named "members"
+    And the current user is the admin
+    When the page state is rendered for "/"
+    Then the user-management link points at "/members"
+
   # ── component-state seed (client data layer, slice 1a) ───────────────────────
   # The server can reproduce the CLIENT's exact component view-state. The fixture's whole UI is one
   # stateful root component `<panel>` whose view reveals the (admin-ruled) milestone rows only when its

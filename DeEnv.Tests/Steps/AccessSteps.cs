@@ -250,6 +250,35 @@ public sealed class AccessSteps(InstanceContext ctx)
         await Assert.That(RenderedBody().Contains("class=\"manage-users\"")).IsFalse();
     }
 
+    // Swap in the fixture whose root names its `set of User` prop `members` (not `users`). Everything else
+    // mirrors the public-roadmap fixture (Role enum, the User type, the seed, the admin-only User rule that
+    // makes canManageUsers true). The framework seeds the admin by type, so the menu's "Users" link — if it
+    // resolves the set by type rather than the literal name — must point at `/members`.
+    [Given("an app whose root User set is named {string}")]
+    public async Task GivenRenamedUserSet(string setName)
+    {
+        await Assert.That(setName).IsEqualTo("members");
+        ctx.Description = InstanceContext.AccessRenamedUserSetDb();
+        // A FRESH data file: the Background seeded the default `users`-named fixture into ctx.DataFilePath,
+        // and this fixture renames that set to `members`, so the stored Db/1 carries a `users` field this app
+        // does not declare (the StoredDataValidator rejects a stale file). A new temp path reseeds cleanly
+        // from this fixture's own initialData (the admin lands in `members`).
+        ctx.DataFilePath = Path.GetTempFileName();
+        ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+    }
+
+    // The user-management anchor (class "manage-users", emitted as `<a class="manage-users" href="…">` since
+    // attributes ship in source order) carries the RESOLVED path, not the hard-coded `/users`. Body-only (the
+    // AST island ships the component defs). Asserts the anchor's href equals the expected path AND that the
+    // old hard-coded `/users` href is absent — so the link came from the schema descriptor, not a literal.
+    [Then("the user-management link points at {string}")]
+    public async Task ThenManageUsersLinkPath(string path)
+    {
+        await Assert.That(ctx.RenderedHtml).IsNotNull();
+        await Assert.That(RenderedBody().Contains($"class=\"manage-users\" href=\"{path}\"")).IsTrue();
+        await Assert.That(RenderedBody().Contains("class=\"manage-users\" href=\"/users\"")).IsFalse();
+    }
+
     // A write-affordance marker in the rendered BODY: "form-actions" (ObjectForm Save/Discard), "new-btn"
     // (SetTable New), "set-remove" (SetTable Remove). The generic UI gates each on sys.canWrite(type, verb),
     // so a read-only principal's body carries none. Body-only (the AST island ships the component defs).
