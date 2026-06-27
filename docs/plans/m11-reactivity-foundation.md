@@ -152,6 +152,10 @@ Today **one function — `memoize`** (`DeEnv/Code/CodeExecutor.cs:448`, keyed by
    mints `var state = {draft}` and returns a render closure; the *cached closure* holds the state,
    so "run once" = "memo key unchanged."
 
+> NOTE: the generic create card was later collapsed into a create-mode `ObjectForm` (atomic-commit
+> B1, `5597cba`) — see `docs/plans/atomic-commit.md`. The reactivity mechanism described here is
+> unchanged.
+
 **`__descs` / `__dictDescs`** (`DeEnv/Code/GenericUi.cs:311`, parked in the `internal` scope) exist
 **solely** because job #3 rides argument identity: a component's memo key includes its descriptor
 arg's object id, so a rebuilt descriptor → new id → new key → body re-runs → **draft resets**.
@@ -240,6 +244,10 @@ Exercised both SSR-then-hydrate and live, so both interpreters are on the hook.
    plain rebuilt descriptors; delete the registries + their `internal`-scope plumbing. The generic
    UI now relies on slot identity; its existing `SelfHostedUi.feature` scenarios are the regression
    proof. **This is where the foundation pays off across every app.**
+
+> NOTE: the generic create card was later collapsed into a create-mode `ObjectForm` (atomic-commit
+> B1, `5597cba`) — see `docs/plans/atomic-commit.md`. The reactivity mechanism described here is
+> unchanged.
 5. **The public component library + generic-UI-as-first-consumer** — the **feature half** of M11 (a
    designed public `ObjectForm`/`Field`/… API; the generic UI rewritten to compose it). Decomposes
    into several slices; plan separately when the foundation lands.

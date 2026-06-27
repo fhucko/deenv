@@ -69,7 +69,7 @@ isolating its draft) or go live. The old slice-3/slice-4 split collapses.
 - Privacy stays deferred; keep the transfer/fetch seam clean so it re-layers later.
 
 ## Deferred (separate, later)
-Conflict-resolver (commit-time CAS) · atomic batch commit · graph-save (recursive create + subtree
+Conflict-resolver (commit-time CAS) · graph-save (recursive create + subtree
 id-remap) · privacy re-layer · per-page vs per-form ctx (settled per-form for now) · declared
 ambient consumption (static checker) · the indented-block `ambient` sub-scope form — **colonless** (`ambient x = v` then a deeper-indented block, like `fn`/`if`/`foreach`; provides `x` only within the block). The block MODE is kept; only the colon punctuation was dropped.
 
@@ -100,5 +100,7 @@ Two reviewers (architecture + ui) cleared the slice; their notes:
 - **The `id>0` gate** is a proxy for "real identity in the live store"; a just-added object pending
   its neg→real remap is also id<0 but has no route, so it can't reach a staging form today. The gate
   comment names the assumption to revisit if that changes.
-- Per-field commit is **not atomic** (N independent WS ops; a mid-batch reject rolls back only that
-  op — the same semantics autosave always had). Atomic batch commit stays deferred.
+- Per-field commit was made atomic by the atomic-commit arc (`docs/plans/atomic-commit.md`,
+  2026-06-27): a commit now ships one all-or-none `commit` WS op over the whole changeset, replacing
+  the N independent per-field WS ops described here. Recursive multi-level graph-save (nested create +
+  subtree id-remap) remains deferred.
