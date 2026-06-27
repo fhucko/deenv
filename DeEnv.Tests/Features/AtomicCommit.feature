@@ -70,3 +70,14 @@ Feature: Atomic ctx.commit (edits)
     Then the commit is accepted
     And the stored "User" "Carol" password is not the plaintext "s3cret"
     And the stored "User" "Carol" password verifies against "s3cret"
+
+  # SECURITY (floor-widening guard): a create has exactly one join. A forged message linking ONE create's
+  # tempId into TWO sets would let the create be floor-checked as one type but linked as another (the
+  # create-type would be last-write-wins) — so a tempId named by more than one relation is REJECTED whole,
+  # the store untouched. The interpreter never emits this; only a hand-forged WS message can.
+  Scenario: A changeset linking one create into two sets is rejected and persists nothing
+    Given the atomic-changeset fixture app
+    When a changeset links one create into both tags and users
+    Then the commit is rejected
+    And the "tags" set is empty
+    And no "Tag" labelled "forged" exists in the store

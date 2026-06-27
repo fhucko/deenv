@@ -792,6 +792,41 @@
       "expect": { "kind": "bool", "value": false }
     },
     {
+      "name": "atomic-commit Step B: a NESTED ctx's commit flushes its create UP into the parent (the two-level unit-of-work)",
+      "comment": "The two-level core of the nested-unit-of-work model: a create staged in an INNER ctx.new() (nested under another staging ctx) transfers UP into the PARENT on the inner's commit, instead of persisting — so the OUTER ctx is then dirty (its creates hold the transferred one) while the inner is cleared. This is the `nested == true` commit branch (parent is a staging ctx, !live), the twin-divergence-prone spot the single-level staging cases don't reach. `outer`/`inner` are bound as vars so each `.dirty`/`.commit()` is addressable independently; `ambient ctx = inner` makes the inner the nearest staging ctx, so set.add stages into it. Render: add → inner.commit() (flush up) → outer.dirty == true on both twins.",
+      "setup": [
+        { "type": "varDec", "name": "outer", "value": { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "new" } } } },
+        { "type": "varDec", "name": "inner", "value": { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "outer" }, "right": { "type": "symbol", "name": "new" } } } },
+        { "type": "varDec", "name": "box", "value": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "new" } }, "params": [ { "type": "object", "props": [ { "name": "props", "value": { "type": "array", "items": [ { "type": "object", "props": [ { "name": "name", "value": { "type": "text", "value": "items" } }, { "name": "baseType", "value": { "type": "text", "value": "set" } }, { "name": "element", "value": { "type": "text", "value": "T" } } ] } ] } } ] } ] } },
+        { "type": "varDec", "name": "draft", "value": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "new" } }, "params": [ { "type": "object", "props": [ { "name": "props", "value": { "type": "array", "items": [ { "type": "object", "props": [ { "name": "name", "value": { "type": "text", "value": "n" } }, { "name": "baseType", "value": { "type": "text", "value": "int" } } ] } ] } } ] } ] } },
+        { "type": "ambient", "name": "ctx", "value": { "type": "symbol", "name": "inner" } }
+      ],
+      "renders": [
+        { "type": "call", "params": [ { "type": "symbol", "name": "draft" } ], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "field" } }, "params": [ { "type": "symbol", "name": "box" }, { "type": "text", "value": "items" } ] }, "right": { "type": "symbol", "name": "add" } } },
+        { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "inner" }, "right": { "type": "symbol", "name": "commit" } } },
+        { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "outer" }, "right": { "type": "symbol", "name": "dirty" } }
+      ],
+      "expect": { "kind": "bool", "value": true }
+    },
+    {
+      "name": "atomic-commit Step B: after a nested flush-up, the OUTER commit consumes the transferred create (dirty false)",
+      "comment": "The completion of the nested case: the inner commit flushed its create up into the OUTER (dirty true above); committing the OUTER then consumes it (the OUTER is the outermost — its parent is the live root — so it 'persists', a no-op in the harness) and clears its creates, so outer.dirty is false. Proves the transferred create lives in the parent until the OUTER commits, identically on both twins. Same two-level setup; render: add → inner.commit() (up) → outer.commit() (consume) → outer.dirty == false.",
+      "setup": [
+        { "type": "varDec", "name": "outer", "value": { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "new" } } } },
+        { "type": "varDec", "name": "inner", "value": { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "outer" }, "right": { "type": "symbol", "name": "new" } } } },
+        { "type": "varDec", "name": "box", "value": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "new" } }, "params": [ { "type": "object", "props": [ { "name": "props", "value": { "type": "array", "items": [ { "type": "object", "props": [ { "name": "name", "value": { "type": "text", "value": "items" } }, { "name": "baseType", "value": { "type": "text", "value": "set" } }, { "name": "element", "value": { "type": "text", "value": "T" } } ] } ] } } ] } ] } },
+        { "type": "varDec", "name": "draft", "value": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "new" } }, "params": [ { "type": "object", "props": [ { "name": "props", "value": { "type": "array", "items": [ { "type": "object", "props": [ { "name": "name", "value": { "type": "text", "value": "n" } }, { "name": "baseType", "value": { "type": "text", "value": "int" } } ] } ] } } ] } ] } },
+        { "type": "ambient", "name": "ctx", "value": { "type": "symbol", "name": "inner" } }
+      ],
+      "renders": [
+        { "type": "call", "params": [ { "type": "symbol", "name": "draft" } ], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "field" } }, "params": [ { "type": "symbol", "name": "box" }, { "type": "text", "value": "items" } ] }, "right": { "type": "symbol", "name": "add" } } },
+        { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "inner" }, "right": { "type": "symbol", "name": "commit" } } },
+        { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "outer" }, "right": { "type": "symbol", "name": "commit" } } },
+        { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "outer" }, "right": { "type": "symbol", "name": "dirty" } }
+      ],
+      "expect": { "kind": "bool", "value": false }
+    },
+    {
       "name": "unary ! negates true to false",
       "text": "!true",
       "expr": { "type": "not", "operand": { "type": "bool", "value": true } },

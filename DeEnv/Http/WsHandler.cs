@@ -633,9 +633,19 @@ public sealed class WsHandler
                 if (ParseRelation(relEl, session) is not { } rel)
                     return Error("commit relation is malformed.");
                 relations.Add(rel);
-                // A relation whose child is a transient create supplies that create's declared TYPE.
+                // A relation whose child is a transient create supplies that create's declared TYPE. A create
+                // has EXACTLY ONE join (the interpreter emits one relation per draft), so a tempId appearing
+                // as the child of MORE THAN ONE relation is a forged/malformed message — REJECT the whole
+                // commit. Without this, two relations for one tempId would make this map last-write-wins: the
+                // create would be minted + floor-checked as the LAST relation's type but linked by the FIRST
+                // (e.g. minted as type X yet linked into a set declared for type Y), so the create-floor
+                // decision would be made against the WRONG type — a floor-widening hole. One-join-per-create
+                // closes it (the link then always matches the create-floor's type).
                 if (rel.ChildRef < 0 && rel.ChildType is { } ct)
-                    createTypeByTempId[rel.ChildRef] = ct;
+                {
+                    if (!createTypeByTempId.TryAdd(rel.ChildRef, ct))
+                        return Error($"Commit create {rel.ChildRef} has more than one relation.");
+                }
             }
 
         // ── creates: validate each against its relation-derived type — built EXACTLY as HandleAddSetMember

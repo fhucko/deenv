@@ -163,6 +163,31 @@ public sealed class AtomicCommitSteps(InstanceContext ctx)
             """);
     }
 
+    // A FORGED changeset: one create (tempId -1) named by TWO set relations (into tags AND users). The
+    // interpreter never emits this (a create has exactly one join); the floor-widening guard rejects it
+    // whole — so neither the create nor either link persists.
+    [When("a changeset links one create into both tags and users")]
+    public void WhenChangesetDoubleRelation()
+    {
+        var (ws, clientId) = BoundWs();
+        var tagsSetId = SetId("tags");
+        var usersSetId = SetId("users");
+        _reply = ws.ProcessMessage($$"""
+            {
+              "op": "commit",
+              "clientId": "{{clientId}}",
+              "edits": [],
+              "creates": [
+                { "tempId": -1, "value": { "props": { "label": { "type": "text", "value": "forged" } } } }
+              ],
+              "relations": [
+                { "kind": "set", "setId": {{tagsSetId}}, "childId": -1 },
+                { "kind": "set", "setId": {{usersSetId}}, "childId": -1 }
+              ]
+            }
+            """);
+    }
+
     // A malformed changeset: a set relation references a create tempId (-99) for which NO create is sent.
     // The store's pre-validate rejects it whole, untouched (the flat-remap invariant's teeth).
     [When("a changeset links a non-existent create into tags")]
