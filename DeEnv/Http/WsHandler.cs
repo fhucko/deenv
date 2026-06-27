@@ -52,6 +52,9 @@ public sealed record WsRequest
     // (UserConvention.NameField), `password` the plaintext verified against the stored hash.
     public string? Name { get; init; }
     public string? Password { get; init; }
+    // commit: the batch of field edits from a ctx.commit(). Shaped as a list so Step B can add
+    // `creates`/`relations` without re-cutting the message format. Step A only sends/handles `edits`.
+    public JsonElement? Edits { get; init; }
 }
 
 // Response records — one per op. Each property's camelCase (the shared `_jsonOpts`
@@ -91,6 +94,14 @@ public sealed record HelloResponse
 public sealed record ObjectPropChangeResponse
 {
     public string Op => "objectPropChange";
+    public bool Ok => true;
+}
+
+// The reply for a `commit` op: all-or-nothing batch of field edits from a ctx.commit().
+// Step B will extend with idMap (negative→real id remap for creates); Step A edits-only carries just ok.
+public sealed record CommitResponse
+{
+    public string Op => "commit";
     public bool Ok => true;
 }
 
@@ -317,6 +328,7 @@ public sealed class WsHandler
                 "removeEntry"       => HandleRemoveEntry(path, pathStr, req),
                 "hello"             => HandleHello(req),
                 "objectPropChange"  => HandleObjectPropChange(req),
+                "commit"            => HandleCommit(req),
                 "setReferenceField" => HandleSetReferenceField(req),
                 "arrayAdd"          => HandleArrayAdd(req),
                 "arrayRemove"       => HandleArrayRemove(req),
@@ -562,6 +574,67 @@ public sealed class WsHandler
             _store.WriteField(objectId, prop, toWrite);
 
         return Serialize(new ObjectPropChangeResponse());
+    }
+
+    // Atomic batch commit of staged field edits from ctx.commit() (Step A — edits only; Step B adds creates/relations).
+    // Payload: { edits: [ { objectId, prop, value } ] }. Validates ALL edits first (schema + access floor);
+    // if ALL pass, applies every edit in one store batch (one Save()) and replies { ok }; if ANY fails,
+    // applies NOTHING and replies { error } — so partial persistence is impossible (today's N-objectPropChange
+    // fan-out left the first accepted edit persisted even when a later one was denied).
+    private string HandleCommit(WsRequest req)
+    {
+        if (req.Edits is not { ValueKind: JsonValueKind.Array } editsEl)
+            return Error("commit requires an 'edits' array.");
+
+        var session = Session(req);
+        var floor = Floor(req);
+
+        // Validate phase: collect every (id, prop, leaf, type) without touching the store.
+        var validated = new List<(int ObjectId, string Prop, NodeValue Leaf)>();
+        foreach (var editEl in editsEl.EnumerateArray())
+        {
+            if (!editEl.TryGetProperty("objectId", out var idEl) || idEl.ValueKind != JsonValueKind.Number)
+                return Error("commit edit missing numeric 'objectId'.");
+            var objectIdRaw = idEl.GetInt32();
+            var objectId = Resolve(session, objectIdRaw);
+
+            if (!editEl.TryGetProperty("prop", out var propEl) || propEl.ValueKind != JsonValueKind.String)
+                return Error("commit edit missing 'prop'.");
+            var prop = propEl.GetString()!;
+
+            if (!editEl.TryGetProperty("value", out var valEl))
+                return Error("commit edit missing 'value'.");
+
+            if (_store.ReadById(objectId) is not { } hit)
+                return Error($"No object with id {objectId}.");
+            var propDef = _desc.FindType(hit.TypeName)?.Props?.FirstOrDefault(p => p.Name == prop);
+            if (propDef is null)
+                return Error($"Type '{hit.TypeName}' has no field '{prop}'.");
+            if (propDef.Cardinality != Cardinality.Single || _desc.ScalarBaseOf(propDef.Type) is not { } baseType)
+                return Error($"Field '{prop}' on '{hit.TypeName}' is not a scalar field.");
+
+            var leaf = LeafForType(valEl, baseType);
+            if (leaf is TextValue tv && !_desc.EnumAccepts(propDef.Type, tv.Text))
+                return Error($"'{tv.Text}' is not a value of enum '{propDef.Type}'.");
+
+            // Write floor: same decision as HandleObjectPropChange — an edit of the existing object.
+            RequireWrite(floor, "edit", hit.TypeName, Code.AccessFloor.ScalarObject(hit.TypeName, objectId, hit.Fields, _desc));
+
+            // Password hash chokepoint: same as HandleObjectPropChange.
+            NodeValue toWrite;
+            if (HashLeaf(hit.TypeName, prop, leaf) is { } hashed)
+                toWrite = hashed;
+            else
+                continue; // blank password → no change for this field (same rule as today)
+
+            validated.Add((objectId, prop, toWrite));
+        }
+
+        // Apply phase: all passed — write the batch in one lock + one Save().
+        if (validated.Count > 0)
+            _store.WriteFieldBatch(validated);
+
+        return Serialize(new CommitResponse());
     }
 
     // Set/clear a single object REFERENCE prop on the object with this intrinsic id —

@@ -54,6 +54,12 @@ interface JournalEntry {
 // which form ctx an entry belongs to. Per-ctx (not a global counter) because a live collection edit can
 // interleave with a form's pending commit and must NOT decrement the form's count.
 let committingCtx: ExecCtx | null = null;
+// The edits accumulated during a commit bracket (beginCommit..endCommit). The propChange hook buffers
+// here instead of sending individual objectPropChange messages; endCommit flushes ONE `commit` message.
+// null = no commit bracket is open (live edits fire objectPropChange directly, unchanged).
+// Each entry carries the wire payload AND the closure data (obj, before) needed for the journal undo/redo.
+interface CommitEdit { obj: ExecObject; prop: string; value: ExecValue; before: ExecValue; wire: object }
+let commitEdits: CommitEdit[] | null = null;
 const journal: JournalEntry[] = [];
 let nextWsMsgId = 1;
 
@@ -342,6 +348,16 @@ function connectWs(): void {
             // IS sent: the server resolves the transient id through the add's remap, so a field edited
             // before the round-trip returns still saves.
             if (obj.id <= 0 && !pendingAdds.has(obj.id)) return;
+            // Inside a commit bracket (beginCommit..endCommit): buffer the edit into the batch instead of
+            // sending an individual objectPropChange. The local optimistic write (obj.props[prop] = val) and
+            // the cache invalidation have already happened in codeExec.ts before this hook fires, so the
+            // render is already correct; only the server send is deferred. endCommit flushes ONE `commit`.
+            if (commitEdits != null) {
+                commitEdits.push({ obj, prop, value, before,
+                    wire: { objectId: obj.id, prop, value: scalarOf(value) } });
+                return;
+            }
+            // Live edit (autosave, path-write, live collection op) — send immediately, unchanged.
             const msgId = nextWsMsgId++;
             recordMutation({
                 msgId,
@@ -470,10 +486,34 @@ function connectWs(): void {
         logout: () => {
             wsSend({ op: "logout", clientId: uiStatic.clientId });
         },
-        // Form-Save feedback: mark/clear the ctx whose commit is flushing, so recordMutation tags the
-        // commit's sends with it (and bumps its pending count). Sends nothing — pure client bookkeeping.
-        beginCommit: ctx => { committingCtx = ctx; },
-        endCommit: () => { committingCtx = null; },
+        // Form-Save feedback + atomic-commit batch (Step A): open the commit bracket so the propChange
+        // hook buffers edits instead of sending individual objectPropChange messages. endCommit flushes
+        // the accumulated edits as ONE `commit` message (ONE journal entry, ONE stateGen bump).
+        beginCommit: ctx => {
+            committingCtx = ctx;
+            commitEdits = [];   // open the buffer — propChange hooks into it from now on
+        },
+        endCommit: () => {
+            const edits = commitEdits ?? [];
+            commitEdits = null; // close the buffer — any propChange after this point goes to live path
+            if (edits.length === 0) { committingCtx = null; return; } // nothing staged
+            // Build the journal undo/redo closures from the per-edit (obj, prop, before/value) captured by
+            // propChange at the moment each write landed. ONE journal entry → ONE ack commits all, ONE
+            // reject rolls all back atomically. Roots = the union of all edited objects.
+            const msgId = nextWsMsgId++;
+            const snapshots = edits.map(e => ({ obj: e.obj, prop: e.prop, before: e.before, after: e.value }));
+            // recordMutation reads committingCtx to tag this entry with the form's ctx for the
+            // "Saving… → Saved" lifecycle — call it WHILE committingCtx is still set, then clear.
+            recordMutation({
+                msgId,
+                undo: () => { for (const s of snapshots) { s.obj.props[s.prop] = s.before; invalidateProp(s.obj.id, s.prop); } },
+                redo: () => { for (const s of snapshots) { s.obj.props[s.prop] = s.after;  invalidateProp(s.obj.id, s.prop); } },
+                roots: edits.map(e => e.obj),
+            });
+            committingCtx = null; // close the bracket after recordMutation has read it
+            wsSend({ op: "commit", id: msgId, clientId: uiStatic.clientId,
+                edits: edits.map(e => e.wire) });
+        },
     });
 }
 

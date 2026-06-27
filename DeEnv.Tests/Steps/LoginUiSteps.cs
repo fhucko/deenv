@@ -225,9 +225,9 @@ public sealed class LoginUiSteps(InstanceContext ctx)
 
     // Set a named user's password on that user's OWN object page (/users/<id>): navigate there via the row's
     // member link, then set the password as an ordinary FORM FIELD — fill the masked <input class="password">
-    // (the M-auth `password` type's generic control) and click the form's Save (an objectPropChange edit,
-    // gated as a `User edit`). The bespoke set-password control + sys.setPassword are gone; setting a
-    // password is now just editing a field.
+    // (the M-auth `password` type's generic control) and click the form's Save (sends one atomic `commit`
+    // message, gated as a `User edit`). The bespoke set-password control + sys.setPassword are gone; setting
+    // a password is now just editing a field.
     //
     // GATE on the hash actually PERSISTING before returning. The Save is an admin-gated write (User edit where
     // currentUser.role == "Admin"); the scenario LOGS OUT right after, which flips the session anonymous.
@@ -247,7 +247,7 @@ public sealed class LoginUiSteps(InstanceContext ctx)
         var field = ctx.Page.Locator(".object-form input.password");
         await field.WaitForAsync();
         await field.FillAsync(password);
-        // Save the form (the staged edit commits via objectPropChange — the gated User edit).
+        // Save the form (the staged edit commits via one atomic `commit` WS message — the gated User edit).
         await ctx.Page.Locator(".object-form button.save").ClickAsync();
         await Polling.EventuallyAsync(() => ctx.Store!.ReadExtent("User").Values.Any(u =>
             u.Fields.TryGetValue("name", out var n) && n is TextValue { Text: var nm } && nm == name

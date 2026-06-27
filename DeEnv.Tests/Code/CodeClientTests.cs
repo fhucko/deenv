@@ -599,17 +599,17 @@ public sealed class CodeClientTests
             // genuine miss, so no separate IsCompleted assert is needed.
             await errored.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
-            // Post-throw (synchronous): NO pending action was armed, and the optimistic write STANDS — the
-            // journal holds the one objectPropChange entry (gen bumped to 1), not rolled back. Before the fix
-            // pendingAction would be set and the journal empty (the write was aborted).
-            var after = await page.EvaluateAsync<string>(
-                $$"""
+            // Post-throw: the optimistic write STANDS (a=1, gen bumped), NO pending action was armed.
+            // The journal entry exists briefly then retires when the server acks the objectPropChange; checking
+            // journal.length is inherently racy (ack may arrive before EvaluateAsync). We check the observable
+            // OUTCOMES: stateGen was bumped (gen=1), no pending action, and the store eventually holds a=1.
+            var after = await page.EvaluateAsync<string>($$"""
                 () => {
                     const c = uiStatic.state.objects[{{counterId}}];
-                    return `a=${c.props.a.value} journal=${journal.length} gen=${stateGen} pending=${pendingAction == null ? "none" : "set"}`;
+                    return `a=${c.props.a.value} gen=${stateGen} pending=${pendingAction == null ? "none" : "set"}`;
                 }
                 """);
-            await Assert.That(after).IsEqualTo("a=1 journal=1 gen=1 pending=none");
+            await Assert.That(after).IsEqualTo("a=1 gen=1 pending=none");
 
             // The wire: the real objectPropChange WAS sent, and NO action-carrying refetch was. A short settle
             // lets any erroneously-armed action refetch actually flush before we read the spy. Before the fix

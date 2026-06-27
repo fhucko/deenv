@@ -281,6 +281,20 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
     }
 
+    public void WriteFieldBatch(IReadOnlyList<(int ObjectId, string Prop, NodeValue Value)> edits)
+    {
+        lock (_sync)
+        {
+            foreach (var (objectId, prop, value) in edits)
+            {
+                var entry = ExtentEntryById(objectId)
+                    ?? throw new InvalidOperationException($"No object with id {objectId}.");
+                entry.Fields[prop] = new StoredLeaf(value);
+            }
+            Save(); // one atomic file write for the whole batch
+        }
+    }
+
     // Walk to the object a path lands on (following set/dict/refs).
     private (StoredObject Object, TypeDefinition Type)? WalkToObject(NodePath path)
     {

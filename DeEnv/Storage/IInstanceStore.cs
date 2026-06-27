@@ -18,6 +18,13 @@ public interface IInstanceStore
     // prop write persists this way. Throws if no object carries the id.
     void WriteField(int objectId, string prop, NodeValue value);
 
+    // Apply a batch of field-writes under ONE held lock + ONE Save() — model-term mutations (id/prop/value),
+    // not a flat KV blob. Every entry in the batch is applied in-memory first, then the file is written once
+    // (OS-atomic temp-file-then-move). The batch is ALL-OR-NOTHING at the application layer: the caller
+    // must validate every edit BEFORE calling this (WsHandler.HandleCommit does so); an exception thrown
+    // from a StoredLeaf or a missing id is a bug, not a user error. No on-disk format change.
+    void WriteFieldBatch(IReadOnlyList<(int ObjectId, string Prop, NodeValue Value)> edits);
+
     // Create a dictionary entry under a caller-supplied (manual) key.
     // Throws if an entry with that key already exists.
     void CreateEntry(NodePath dictPath, NodeValue key, NodeValue value);

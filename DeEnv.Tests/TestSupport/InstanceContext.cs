@@ -1339,6 +1339,59 @@ public class InstanceContext
     // the kernel's UserConvention.PasswordFieldName resolves by type.
     public const string AccessPasswordField = "password";
 
+    // ── atomic-commit fixture (AtomicCommit.feature) ─────────────────────────────────────────
+    //
+    // A minimal two-field app whose sole Item (id 2) has `title text` and `count int`. The `commit`
+    // op is tested against this fixture: a batch of field edits is validated-all-then-applied-all-or-none.
+    // Carries a Role enum + User set so the access-denial scenario can install an edit rule.
+    //
+    // A separate fixture (NOT reusing AccessFixtureTypes) so the type/seed shape is self-contained and
+    // the count field is unambiguous (the milestone fixture has only `title`).
+    public static InstanceDescription TwoFieldCommitFixtureDb(string? itemRuleLines = null) =>
+        InstanceDescriptionLoader.Load(TwoFieldCommitApp(itemRuleLines));
+
+    private static string TwoFieldCommitApp(string? itemRuleLines) =>
+        TwoFieldCommitTypes + TwoFieldCommitSeed + (itemRuleLines == null ? "" : $"\n\naccess\n    Item\n        {itemRuleLines}");
+
+    private const string TwoFieldCommitTypes = """
+    types
+        Role enum
+            Admin
+            Member
+        Db
+            items set of Item
+            users set of User
+        Item
+            title text
+            count int
+        User
+            name text
+            role Role
+            password password
+    """;
+
+    private const string TwoFieldCommitSeed = """
+
+    initialData
+        Db 1
+            items: [2]
+            users: [3, 4]
+        Item 2
+            title: "Seed title"
+            count: 0
+        User 3
+            name: "Ada"
+            role: "Admin"
+        User 4
+            name: "Bob"
+            role: "Member"
+    """;
+
+    // Ids from the seed above.
+    public const int TwoFieldItemId = 2;
+    public const int TwoFieldAdminId = 3;
+    public const int TwoFieldMemberId = 4;
+
     // The seeded "Gate #3" milestone's id (a set member of Db.milestones) — the write scenarios edit /
     // delete it by id and assert the store directly. Mirrors the initialData seed above.
     public const int AccessMilestoneId = 2;

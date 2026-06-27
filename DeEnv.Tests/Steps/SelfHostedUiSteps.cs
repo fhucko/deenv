@@ -55,8 +55,8 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     // Save (autosave OFF by default). These drive that form-level flow.
 
     // Commit the staged scalar edits: the ObjectForm's Save button (.object-form button.save) flushes
-    // the ctx overlay back onto the live object via ctx.commit() (one id-addressed objectPropChange per
-    // staged field). The commit is an async WS round-trip, so gate on it landing in the persisted store
+    // the ctx overlay back onto the live object via ctx.commit() (one atomic `commit` WS message with
+    // all staged fields in an `edits` array — all-or-none). The commit is an async WS round-trip, so gate on it landing in the persisted store
     // before the scenario reads it (or navigates and re-renders from it) — the pending edits recorded by
     // the fill steps. (A non-emptying assertion that follows — "the store eventually has …" — would also
     // poll, but a save→navigate flow has no such gate, so awaiting here makes every Save path safe.)
@@ -105,9 +105,9 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     // Capture every WS frame the page SENDS, so a later assertion can prove a staged Save never tried
     // to persist a collection prop. The discriminator is the SENT frame, not a server reply or a
     // console message: the frame is emitted synchronously when Save runs (before any round-trip), so
-    // asserting on it is deterministic and race-free. (The server rejects an `objectPropChange` for a
-    // SET before writing anything, so the stored set is untouched EITHER WAY — the bug's only effect is
-    // the wrongly-sent frame + the rollback's console error; the sent frame is the robust signal.)
+    // asserting on it is deterministic and race-free. (A staged Save now sends a single `commit` with
+    // an `edits` array; SET props must not appear in that array — the server would reject the whole
+    // batch and the stored set stays untouched; the sent frame is the robust signal.)
     // Must be wired BEFORE the navigation opens the WS, so it observes the connection from the start.
     private readonly List<string> _sentWsFrames = new();
 
@@ -132,17 +132,19 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
                 && sv is SetValue set && set.Members.Count == count;
         });
 
-    // No `objectPropChange` for the named (collection) prop was ever SENT — proving the staged Save
-    // persisted only scalars and left the set live. The preceding "eventually has … name" + "still has
-    // N orders" steps already waited for the Save's WS round-trip to complete, so every frame the Save
-    // emits is captured by now; this reads the settled buffer (no sleep).
-    [Then("no objectPropChange was sent for {string}")]
+    // No WS message for the named (collection) prop was ever SENT — proving the staged Save persisted
+    // only scalars and left the set live. After the atomic-commit change, a staged Save sends one
+    // `commit` with an `edits` array; before it sent individual `objectPropChange` frames. Either way,
+    // the set prop (`orders`) must not appear. The preceding "eventually has…" + "still has N orders"
+    // steps already waited for the WS round-trip, so the buffer is settled; this reads it without sleep.
+    [Then("no commit was sent for {string}")]
     public async Task ThenNoPropChangeSentFor(string prop)
     {
         string[] offending;
         lock (_sentWsFrames)
             offending = _sentWsFrames
-                .Where(f => f.Contains("\"op\":\"objectPropChange\"") && f.Contains($"\"prop\":\"{prop}\""))
+                .Where(f => (f.Contains("\"op\":\"objectPropChange\"") && f.Contains($"\"prop\":\"{prop}\""))
+                         || (f.Contains("\"op\":\"commit\"") && f.Contains($"\"prop\":\"{prop}\"")))
                 .ToArray();
         await Assert.That(offending).IsEmpty();
     }
@@ -632,7 +634,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
             new[] { ContextSelector(context), expected });
 
     // Commit the named context's staged edits: that form's Save button (.object-form button.save,
-    // scoped to the section). Replays the draft's scalars onto the live object via objectPropChange.
+    // scoped to the section). Sends one atomic `commit` message with all staged scalars.
     [When("I save context {string}")]
     public async Task WhenSaveContext(string context)
     {

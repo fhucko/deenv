@@ -491,8 +491,8 @@ public sealed class KernelSteps(InstanceContext ctx)
     {
         await ctx.Page!.WaitReadyAsync(); // the save commits over the WS — wait for the settled socket
         // The generic ObjectForm stages scalar edits in a draft (autosave off by default), so toggling
-        // the checkbox stages it; clicking Save commits it over the WS (objectPropChange) — the full
-        // round-trip over the path-mounted asset endpoint, which is what this scenario exercises.
+        // the checkbox stages it; clicking Save commits it over the WS (one atomic `commit` message) —
+        // the full round-trip over the path-mounted asset endpoint, which is what this scenario exercises.
         await ctx.Page!.Locator("input[type=checkbox]").First.CheckAsync();
         await ctx.Page!.Locator(".object-form button.save").First.ClickAsync();
     }

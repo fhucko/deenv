@@ -292,8 +292,7 @@ Feature: Self-hosted generic UI (object forms)
   # Regression: Saving a scalar edit on an object that also HAS a set prop (a customer with orders)
   # must persist ONLY the staged scalar — not the set. The form stages scalar Field edits in its ctx
   # and binds collection props (orders) to the LIVE object (never staged), so commit flushes only the
-  # edited scalar: no objectPropChange is sent for the set, and the orders keep their members. (A set
-  # objectPropChange would be rejected — "Field 'orders' on 'Customer' is not a scalar field".)
+  # edited scalar: no WS message is sent for the set, and the orders keep their members.
   @milestone-11 @single-user
   Scenario: Saving an object with a set prop persists the scalar and leaves the set untouched
     Given the shop app is running
@@ -303,7 +302,7 @@ Feature: Self-hosted generic UI (object forms)
     And I save the form
     Then the store eventually has a "Customer" whose "name" is "Ada L."
     And the "Customer" whose "name" is "Ada L." still has 2 orders
-    And no objectPropChange was sent for "orders"
+    And no commit was sent for "orders"
 
   # ── enum support (first slice) ─────────────────────────────────────────────
 
