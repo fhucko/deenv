@@ -1,7 +1,7 @@
 # Atomic commit — the ctx's staged set (edits + creates) as one transaction
 
-**Status: BUILDING — Step A (atomic edits) LANDED `ec076eb`/`932430d` (suite 550), the internal foundation (not yet "the feature"); Step B (transient-create staging, the twin change) next. Invariants (the validity "teeth") deferred — see end.** The destination
-is a commit where **the `ctx` is the true atomic unit**: everything staged in it — field edits, *and* new
+**Status: DONE 2026-06-27.** Step A (atomic edits) `ec076eb`/`932430d`; B1 (the card/form collapse) `5597cba`; B2 (stage creates + relations, commit the whole changeset) `e2bb210`/`ad2d544` (suite 561, both twins + conformance). **The `ctx` is now the atomic unit over an arbitrary changeset** — edits + creates + relations, all-or-none, with the credential chokepoint intact and the floor un-widenable. Invariants (the validity "teeth") + sequential-ids stay deferred — see end. The destination
+was a commit where **the `ctx` is the true atomic unit**: everything staged in it — field edits, *and* new
 objects, *and* the relations linking them — applies as one all-or-nothing transaction. Off the slice-2 (form
 Save feedback) thread; pairs with `docs/plans/virtual-password-field.md` (the reactive status that renders the
 outcome) and memory `project_persistence_modes`.

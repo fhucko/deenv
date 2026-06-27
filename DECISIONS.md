@@ -287,6 +287,28 @@ implemented **in the environment itself, after a code milestone exists.** Reason
   the snapshot/branch/merge machinery waits. Branches and 3-way structural merge
   are themselves later sub-milestones.
 
+## Atomic commit — the ctx as a nested transaction (DONE 2026-06-27)
+
+The data-context `ctx` is now the **atomic unit of persistence** over an **arbitrary changeset** — field edits
++ new objects (creates) + the relations linking them, possibly across *unrelated* entities — committed
+**all-or-none**. This is the "commit grows teeth" direction realized: the staged Save became a real
+transaction. **Model (nested unit-of-work):** contexts nest; a write isolates in its context until that context
+commits; an inner commit **transfers** its staged changes up into its parent; only the **outermost** context
+(parent = the live store, i.e. one that *has a Save*) **persists**, as one atomic `commit` WS op. A container
+without a Save (the Db root, a top-level set route) holds a **live** context → its creates persist immediately
+(nothing to defer to). Creates obey the **same** rule as edits — no "creates always mint" special-case; a
+staged create is `{draft-by-reference, join}` (fields read at commit, never snapshotted, which retires the
+create-then-populate staleness class). **Delivered in three slices:** Step A (atomic *edits* — one `commit` op,
+validate-all-then-apply, a model-term batch store write); B1 (the **card/form collapse** — the bespoke
+SetTable/RefEditor create forms are deleted, replaced by a create-mode `ObjectForm`; one component for edit AND
+create); B2 (stage creates + relations on the twin interpreters + the server **create phase**: mint + a flat
+negId→realId batch remap + the `HashPasswordFields` credential chokepoint + an all-or-none store `CommitBatch`).
+**Security:** every minted object routes through the single structural `HashPasswordFields` chokepoint (no
+plaintext ever reaches the store), and the access floor is un-widenable (a forged commit naming one create in
+>1 relation is rejected). **Deferred:** invariant "teeth" (uniqueness / no-oversell — per-type Code predicates
+over the *resulting* state, with `db` in scope) and sequential-ids (server allocation under the commit lock).
+Full design + the long context-model dialogue: `docs/plans/atomic-commit.md`; memory `project_persistence_modes`.
+
 ## Data must survive schema changes (non-destructive apply) — MVP-critical, ahead of full versioning
 
 **Decided 2026-06-19.** For DeEnv to be *useful*, existing data must survive a schema
