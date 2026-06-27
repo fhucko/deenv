@@ -509,10 +509,10 @@ public sealed class SsrRenderer
           background: var(--surface); color: var(--text); cursor: pointer; transition: background .12s, border-color .12s; }
         button:hover { background: #f3f4f6; }
         button:active { background: #e9ebee; }
-        .set-add, .dict-add, .ref-create, .add-type, .add-prop, .create-instance, .rename-save, .apply-design,
+        .create-save, .dict-add, .add-type, .add-prop, .create-instance, .rename-save, .apply-design,
         .add-user, .add-list-btn, .add-item-btn {
           background: var(--green); border-color: var(--green); color: #fff; }
-        .set-add:hover, .dict-add:hover, .ref-create:hover, .add-type:hover, .add-prop:hover,
+        .create-save:hover, .dict-add:hover, .add-type:hover, .add-prop:hover,
         .create-instance:hover, .rename-save:hover, .apply-design:hover,
         .add-user:hover, .add-list-btn:hover, .add-item-btn:hover { background: #1a7f37; border-color: #1a7f37; }
         .set-remove, .dict-remove, .ref-clear, .remove-type, .remove-prop, .delete-design, .delete-instance {
@@ -560,18 +560,16 @@ public sealed class SsrRenderer
         .set-remove:hover, .dict-remove:hover { color: var(--danger); background: #fff0f0; border-color: var(--danger); }
         .bool-cell { font-size: 1rem; line-height: 1; color: var(--muted); }
 
-        .ref-new { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
-          margin-top: 0.4rem; padding: 0.8rem; background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; }
-        .ref-new input, .ref-new select { max-width: 200px; }
         .dict-error { color: var(--danger); font-size: 0.85rem; margin-top: 0.4rem; }
         .set-empty, .dict-empty { color: var(--muted); font-size: 0.9rem; margin: 0.1rem 0 0; }
 
         /* Flag-gated create view: the `+ New` button replaces the old always-visible inline add row;
            clicking it reveals a labeled create form (.create-form, reusing the .object-form card +
-           .field labels) BELOW the still-visible read-only table, with Save (primary green,
-           .set-add/.dict-add) and a plain Cancel — the list stays in view while appending. Hidden
-           until asked — the create-then-populate model; collections are added on the entry's own page
-           after it exists. (The table's own bottom margin separates it from the create-form card.) */
+           .field labels) BELOW the still-visible read-only table OR ref editor, with Save (primary
+           green, .create-save) and a plain Cancel — the list stays in view while appending. Both the
+           SetTable and the RefEditor now gate their create behind this `+ New` toggle (the single
+           create path is a nested create-mode ObjectForm). Hidden until asked — the create-then-
+           populate model; collections are added on the entry's own page after it exists. */
         .new-btn { margin-top: 0.3rem; border-color: var(--accent); color: var(--accent); }
         .new-btn:hover { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); border-color: var(--accent); }
         .create-form > .field > input:not([type=checkbox]), .create-form > .field > select { width: 100%; max-width: 440px; }

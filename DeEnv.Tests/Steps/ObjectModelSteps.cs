@@ -58,7 +58,7 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
     {
         await ctx.Page!.RevealCreateFormAsync(); // reveal the gated create form (the set page was a read-only nav)
         await ctx.Page!.Locator(".create-form input.name").FillAsync(name);
-        await ctx.Page.Locator("button.set-add").ClickAsync();
+        await ctx.Page.Locator("button.create-save").ClickAsync();
         await ctx.Page.Locator(".set-row", new() { HasTextString = name }).First.WaitForAsync();
         // Wait for the negative→real id remap to land in the DOM: the row's link now addresses a
         // real (positive) identity, so following it reaches the member page, not a transient id.
@@ -71,7 +71,7 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
         await ctx.Page.WaitForUrlContentAsync(new Regex(@"/[0-9]+$"));
     }
 
-    // The self-hosted reference editor's create-new: fill the .ref-new draft, then Create.
+    // The self-hosted reference editor's create-new: reveal the gated create form, fill the draft, Save.
     [When(@"I create a new {string} named {string} through the reference")]
     public async Task WhenCreateNewThroughReferenceAsync(string typeName, string name)
     {
@@ -80,8 +80,12 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
         // hydrated-but-not-ready page would ride the connecting-window outbox and could delay/lose
         // the mutation under load. The reference page was reached by a read-only nav.
         await ctx.Page!.WaitReadyAsync();
-        await ctx.Page!.Locator(".ref-new input.name").FillAsync(name);
-        await ctx.Page.Locator("button.ref-create").ClickAsync();
+        // ponytail: was `.ref-new input.name` + `button.ref-create`; the bespoke ref-new form was
+        // replaced by a nested create-mode ObjectForm behind the same `+ New` toggle as SetTable (B1
+        // collapse). Reveal it first; the save button is the join-agnostic `.create-save`.
+        await ctx.Page!.RevealCreateFormAsync();
+        await ctx.Page!.Locator(".create-form input.name").FillAsync(name);
+        await ctx.Page.Locator("button.create-save").ClickAsync();
         // Wait for the created object to be minted + referenced — the editor shows it as current.
         await ctx.Page.WaitForFunctionAsync(
             "n => document.querySelector('.ref-current')?.textContent.includes(n)", name);

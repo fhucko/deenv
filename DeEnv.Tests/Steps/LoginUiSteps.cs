@@ -192,7 +192,7 @@ public sealed class LoginUiSteps(InstanceContext ctx)
         await ctx.Page!.Locator("button.new-btn").First.ClickAsync();
         await ctx.Page.Locator(".create-form input.name").FillAsync(name);
         await ctx.Page.Locator(".create-form select.role").SelectOptionAsync(role);
-        await ctx.Page.Locator(".create-form button.set-add").ClickAsync();
+        await ctx.Page.Locator(".create-form button.create-save").ClickAsync();
         await ctx.Page.Locator($".set-row:has-text(\"{name}\")").WaitForAsync();
         await ctx.Page.WaitForFunctionAsync(
             "name => { const r = [...document.querySelectorAll('.set-row')]" +
@@ -210,7 +210,7 @@ public sealed class LoginUiSteps(InstanceContext ctx)
         await ctx.Page.Locator(".create-form input.name").FillAsync(name);
         await ctx.Page.Locator(".create-form select.role").SelectOptionAsync(role);
         await ctx.Page.Locator(".create-form input.password").FillAsync(password);
-        await ctx.Page.Locator(".create-form button.set-add").ClickAsync();
+        await ctx.Page.Locator(".create-form button.create-save").ClickAsync();
         await ctx.Page.Locator($".set-row:has-text(\"{name}\")").WaitForAsync();
         await ctx.Page.WaitForFunctionAsync(
             "name => { const r = [...document.querySelectorAll('.set-row')]" +

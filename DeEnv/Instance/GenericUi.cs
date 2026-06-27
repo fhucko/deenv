@@ -22,19 +22,29 @@ namespace DeEnv.Instance;
 //     for it yet; add one only if a caller needs an inline multiline control.)
 //   • Field(obj, desc) — a labeled field: a <div class="field"> wrapping the prop's humanized
 //     <label> and its Input. The labeled-field composite ObjectForm and a custom render compose.
-//   • ObjectForm(obj, meta, base, autosave) — an object page: a field per prop (a Field for a
-//     scalar, a nested RefEditor for a single object reference, an inline SetTable for an object set,
-//     or an inline DictTable for a dictionary). A collection's label is a navigable list-title link to
-//     its own route. `base` is the page's URL path, so inline links nest. A COMPONENT: it opens a
-//     staging data-context — `ambient ctx = ctx.new(autosave)` — and binds Fields to the LIVE `obj`
-//     directly; the ctx decides whether a write stages or persists. `autosave` (bool) controls that:
-//     omitted/false (the DEFAULT, what the synthesized object view passes) makes `ctx.new` a STAGING
-//     child, so scalar edits stage in the overlay (the stored object is untouched) and commit on a
-//     Save button (`ctx.commit()`); Discard drops the overlay (`ctx.discard()`) and the inputs re-read
-//     the stored value. true makes `ctx.new(true)` the live parent → per-keystroke autosave, no
-//     buttons. Either way COLLECTION props (reference/set/dictionary) bind to the LIVE object, and a
-//     nested create-form's draft (transient, negative id) writes live — never staged in this form's
-//     ctx (each manages its own members, which persist on their own).
+//   • ObjectForm(obj, meta, base, autosave, join, body, onSave, onCancel) — EITHER an object page
+//     (edit-mode, no `join`) OR a create form over a draft (create-mode, `join` given). Edit-mode:
+//     a field per prop (a Field for a scalar, a nested RefEditor for a single object reference, an
+//     inline SetTable for an object set, or an inline DictTable for a dictionary). A collection's
+//     label is a navigable list-title link to its own route. `base` is the page's URL path, so inline
+//     links nest. A COMPONENT: it opens a staging data-context — `ambient ctx = ctx.new(autosave)` —
+//     and binds Fields to the LIVE `obj` directly; the ctx decides whether a write stages or persists.
+//     `autosave` (bool) controls that: omitted/false (the DEFAULT, what the synthesized object view
+//     passes) makes `ctx.new` a STAGING child, so scalar edits stage in the overlay (the stored object
+//     is untouched) and commit on a Save button (`ctx.commit()`); Discard drops the overlay
+//     (`ctx.discard()`) and the inputs re-read the stored value. true makes `ctx.new(true)` the live
+//     parent → per-keystroke autosave, no buttons. COLLECTION props (reference/set/dictionary) bind to
+//     the LIVE object and each manages its own members (which persist on their own).
+//       Create-mode (B1 collapse): when `join(obj)` is given, ObjectForm renders the `.create-form`
+//     card instead — a scalar-only field list (or the supplied `body(draft)`) + a Save that calls
+//     `join(obj)` and an optional Cancel. This is the SINGLE create path the SetTable and RefEditor
+//     both reveal (a nested create-mode ObjectForm over a `sys.new` draft). `join` + `body` are
+//     PERMANENT params. `onSave`/`onCancel` are B1 LIVE-MODE SCAFFOLDING — they exist only because
+//     the draft slot lives in the CALLER (SetTable/RefEditor owns the draft + the open/close toggle),
+//     so the form must call back to reset/close it; B2/B3 deletes them when ObjectForm owns its own
+//     draft and the create confirm becomes `ctx.commit()`. (A draft's negative id makes its field
+//     edits bypass staging today, so the `ctx.new()` the form opens is INERT in create-mode — B2 is
+//     the seam that wires the commit; see the create-mode `save()`.)
 //   • RefEditor(parent, prop, target) — a reference editor: current label, a pick button
 //     per extent() candidate, a clear button, and a create-new form. A COMPONENT: its body
 //     runs once as init (a local `state` holding a draft), and it returns a render fn.
@@ -154,57 +164,85 @@ public static class GenericUi
                         sys.humanize(desc.name)
                     <Input obj={obj} desc={desc} readonly={readonly}>
 
-            fn ObjectForm(obj, meta, base, autosave)
+            fn ObjectForm(obj, meta, base, autosave, join, body, onSave, onCancel)
                 ambient ctx = ctx.new(autosave)
                 fn save()
-                    ctx.commit()
+                    if join != null
+                        join(obj)
+                        if onSave != null
+                            onSave()
+                    else
+                        ctx.commit()
                 fn discard()
-                    ctx.discard()
+                    if onCancel != null
+                        onCancel()
+                    else
+                        ctx.discard()
                 fn render()
                     var canEdit = sys.canWrite(meta.name, "edit")
                     var hasFields = meta.props.any(p => p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary")
-                    return <div class="object-form">
-                        <h2>
-                            meta.name
-                        foreach p in meta.props
-                            if p.baseType == "object"
-                                if sys.canRead(p.target)
-                                    <div class="field">
-                                        <label class={p.name}>
-                                            sys.humanize(p.name)
-                                        <RefEditor parent={obj} prop={p.name} target={sys.schema(p.target)}>
-                            else if p.baseType == "set"
-                                if sys.canRead(p.element)
+                    if join != null
+                        return <div class="create-form">
+                            <h3>
+                                "New "
+                                sys.humanize(meta.name)
+                            if body != null
+                                body(obj)
+                            else
+                                foreach p in meta.props
+                                    if p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary"
+                                        <Field obj={obj} desc={p}>
+                            <div class="create-actions">
+                                <button class="create-save" onClick={save}>
+                                    "Save"
+                                if onCancel != null
+                                    <button class="cancel" onClick={discard}>
+                                        "Cancel"
+                    else
+                        return <div class="object-form">
+                            <h2>
+                                meta.name
+                            foreach p in meta.props
+                                if p.baseType == "object"
+                                    if sys.canRead(p.target)
+                                        <div class="field">
+                                            <label class={p.name}>
+                                                sys.humanize(p.name)
+                                            <RefEditor parent={obj} prop={p.name} target={sys.schema(p.target)}>
+                                else if p.baseType == "set"
+                                    if sys.canRead(p.element)
+                                        <div class="field">
+                                            <a class="list-title" href={sys.nest(base, p.name)}>
+                                                sys.humanize(p.name)
+                                            <SetTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)}>
+                                else if p.baseType == "dictionary"
                                     <div class="field">
                                         <a class="list-title" href={sys.nest(base, p.name)}>
                                             sys.humanize(p.name)
-                                        <SetTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)}>
-                            else if p.baseType == "dictionary"
-                                <div class="field">
-                                    <a class="list-title" href={sys.nest(base, p.name)}>
-                                        sys.humanize(p.name)
-                                    <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
-                            else
-                                <Field obj={obj} desc={p} readonly={!canEdit}>
-                        if autosave != true && canEdit && hasFields
-                            <div class="form-actions">
-                                <button class="save" onClick={save}>
-                                    "Save"
-                                <button class="discard" onClick={discard}>
-                                    "Discard"
-                                <span class="save-status">
-                                    if ctx.dirty != true
-                                        if ctx.status == "saving"
-                                            "Saving…"
-                                        else if ctx.status == "saved"
-                                            "Saved"
+                                        <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
+                                else
+                                    <Field obj={obj} desc={p} readonly={!canEdit}>
+                            if autosave != true && canEdit && hasFields
+                                <div class="form-actions">
+                                    <button class="save" onClick={save}>
+                                        "Save"
+                                    <button class="discard" onClick={discard}>
+                                        "Discard"
+                                    <span class="save-status">
+                                        if ctx.dirty != true
+                                            if ctx.status == "saving"
+                                                "Saving…"
+                                            else if ctx.status == "saved"
+                                                "Saved"
                 return render
 
             fn RefEditor(parent, prop, target)
-                var state = { pick: 0, draft: sys.new(target) }
-                fn createNew()
-                    sys.setRef(parent, prop, state.draft)
+                var state = { pick: 0, draft: sys.new(target), creating: false }
+                fn startCreate()
+                    state.creating = true
+                fn closeCreate()
                     state.draft = sys.new(target)
+                    state.creating = false
                 fn render()
                     return <div class="ref-editor">
                         <h3 class="ref-type">
@@ -228,25 +266,19 @@ public static class GenericUi
                                         "Set"
                             <button class="ref-clear" onClick={() => sys.setRef(parent, prop, null)}>
                                 "Clear"
-                        <div class="ref-new">
-                            foreach p in target.props
-                                if p.baseType != "object" && p.baseType != "set"
-                                    <label class={p.name}>
-                                        sys.humanize(p.name)
-                                    <Input obj={state.draft} desc={p}>
-                            <button class="ref-create" onClick={createNew}>
-                                "Create new"
+                        if state.creating
+                            <ObjectForm obj={state.draft} meta={target} join={d => sys.setRef(parent, prop, d)} onSave={closeCreate} onCancel={closeCreate}>
+                        else if sys.canWrite(target.name, "create")
+                            <button class="new-btn" onClick={startCreate}>
+                                "New "
+                                sys.humanize(target.name)
                 return render
 
             fn SetTable(set, desc, setPath, columns, rowActions, createForm)
                 var state = { draft: sys.new(desc), creating: false }
-                fn save()
-                    set.add(state.draft)
-                    state.draft = sys.new(desc)
-                    state.creating = false
                 fn startCreate()
                     state.creating = true
-                fn cancel()
+                fn closeCreate()
                     state.draft = sys.new(desc)
                     state.creating = false
                 fn render()
@@ -320,21 +352,7 @@ public static class GenericUi
                                 sys.humanize(desc.name)
                                 " yet"
                         if state.creating
-                            <div class="create-form">
-                                <h3>
-                                    "New "
-                                    sys.humanize(desc.name)
-                                if createForm != null
-                                    createForm(state.draft)
-                                else
-                                    foreach p in desc.props
-                                        if p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary"
-                                            <Field obj={state.draft} desc={p}>
-                                <div class="create-actions">
-                                    <button class="set-add" onClick={save}>
-                                        "Save"
-                                    <button class="cancel" onClick={cancel}>
-                                        "Cancel"
+                            <ObjectForm obj={state.draft} meta={desc} join={d => set.add(d)} body={createForm} onSave={closeCreate} onCancel={closeCreate}>
                         else if sys.canWrite(desc.name, "create")
                             <button class="new-btn" onClick={startCreate}>
                                 "New "

@@ -129,7 +129,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // race-free), first carrying the draft's NEGATIVE transient id; the WS persist then remaps it.
         await ctx.Page!.Locator("main.ide-designs .new-btn").ClickAsync();
         await ctx.Page.Locator("main.ide-designs .create-form input.label").FillAsync(label);
-        await ctx.Page.Locator("main.ide-designs .create-form button.set-add").ClickAsync();
+        await ctx.Page.Locator("main.ide-designs .create-form button.create-save").ClickAsync();
         // Confirm the new row shows in the list (the race-free client re-render). The list renders via
         // the generic <SetTable>, so a row is .set-row and the label is the stretched a.row-link.
         await ctx.Page.WaitForSelectorAsync(

@@ -1020,17 +1020,17 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task WhenClearReference() =>
         await ctx.Page!.Locator("button.ref-clear").First.ClickAsync();
 
-    // The set/dict create form (flag-gated: revealed by `+ New`) and the reference create-new form
-    // class their inputs by prop name. For a set/dict, reveal the create form first (idempotent), then
-    // fill its labeled .create-form field; the reference editor keeps its always-visible .ref-new form.
+    // The set/dict create form AND the reference create-new form are now both flag-gated (revealed by
+    // `+ New` — the B1 collapse made RefEditor's create a nested create-mode ObjectForm behind the same
+    // toggle as SetTable). They class their inputs by prop name. Reveal the create form first
+    // (idempotent), then fill its labeled .create-form field.
     [When("I fill the new {string} with {string}")]
     public async Task WhenFillNewField(string field, string value)
     {
-        // A reference route/field has a .ref-new form with no `+ New`; a set/dict route has the gated
-        // create form. Reveal the create form when one is gated (a .new-btn is present).
+        // Reveal the gated create form when one is present (a .new-btn) — true for set/dict AND ref now.
         if (await ctx.Page!.Locator(".new-btn").CountAsync() > 0)
             await ctx.Page!.RevealCreateFormAsync();
-        var input = ctx.Page!.Locator($".create-form input.{field}, .ref-new input.{field}").First;
+        var input = ctx.Page!.Locator($".create-form input.{field}").First;
         await input.FillAsync(value);
         // FillAsync sets .value and fires `input` for a text input, but NOT reliably for an
         // <input type="date"> — so the two-way binding's `oninput` (which writes the draft) can miss
@@ -1070,14 +1070,19 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             $"() => ![...document.querySelectorAll('.dict-row')].some(e => e.textContent.includes({JsString(text)}))");
 
+    // ponytail: was `button.ref-create`; RefEditor's create-new form is now a nested create-mode
+    // ObjectForm (B1 collapse), revealed by the same `+ New` toggle as SetTable; its Save button is the
+    // join-agnostic `.create-save` (shared by every create-mode ObjectForm — set OR ref). The prior
+    // fill step reveals the form via .new-btn, so the button is present by the time we click it.
     [When("I create the new object")]
     public async Task WhenCreateNewObject() =>
-        await ctx.Page!.Locator("button.ref-create").First.ClickAsync();
+        await ctx.Page!.Locator("button.create-save").First.ClickAsync();
 
-    // The set create form's Save button (commits the new member) keeps the .set-add class (primary look).
+    // The set create form's Save button (commits the new member) is the create-mode ObjectForm's
+    // join-agnostic .create-save (primary green look).
     [When("I add to the set")]
     public async Task WhenAddToSet() =>
-        await ctx.Page!.Locator("button.set-add").First.ClickAsync();
+        await ctx.Page!.Locator("button.create-save").First.ClickAsync();
 
     [Then("a set row shows {string}")]
     [Then("a set row eventually shows {string}")]
