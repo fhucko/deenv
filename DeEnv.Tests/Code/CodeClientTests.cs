@@ -708,8 +708,84 @@ public sealed class CodeClientTests
         });
     }
 
+    // ── atomic-commit Step B: the generic create DEFERS / persists IMMEDIATELY by context ──────────────
+    //
+    // A generic create under an OBJECT's form (a nested inline set) STAGES into that form's ctx — it does NOT
+    // persist on the create card's Add; the enclosing form's Save (ctx.commit) is what persists it. The Order
+    // (/orders/2) has a scalar `title` (so its ObjectForm has a Save) plus an inline `lines` SetTable. Adding a
+    // Line through the inline create form must leave the store unchanged UNTIL the Order form's Save. This is
+    // the heart of B2's generic-UI change; driven through the real client over a real server (the store is the
+    // observable). NB the top-level case is the OPPOSITE — proven by the existing /notes & /tasks scenarios,
+    // where the SetTable sits under the LIVE page ctx and its creates persist on Add.
+    [Test]
+    public async Task A_create_under_an_object_form_defers_to_that_forms_save()
+    {
+        await WithPageAsync(InstanceContext.NestedSetCreateDb(), _ => { }, async (page, store) =>
+        {
+            await page.GotoContentAsync("/orders/2");
+            await page.WaitForSelectorAsync(".object-form");     // the Order's edit form (title + inline lines)
+            await page.WaitReadyAsync();
+
+            // Open the inline lines create form, fill a Line, and Add — the create STAGES into the Order
+            // form's ctx (the card's Add does not persist).
+            await page.Locator(".set-table .new-btn").ClickAsync();
+            await page.Locator(".create-form input.label").FillAsync("First line");
+            await page.Locator(".create-form button.create-save").ClickAsync();
+
+            // The optimistic row appears…
+            await page.WaitForFunctionAsync(
+                "() => [...document.querySelectorAll('.set-table .row-link')].some(a => a.textContent.includes('First line'))");
+
+            // …but NOTHING is persisted yet: the create is staged in the form's ctx, not on the wire. Give any
+            // erroneous live send time to land, then assert the store still has no Line.
+            await Task.Delay(250);
+            await Assert.That(store.ReadExtent("Line").Values.Any(o => Label(o) == "First line")).IsFalse();
+
+            // Save the Order form — its ctx.commit flushes the staged Line as one atomic commit, which persists.
+            await page.Locator(".object-form .form-actions button.save").ClickAsync();
+            await AssertEventuallyAsync(() => store.ReadExtent("Line").Values.Any(o => Label(o) == "First line"));
+
+            // And it is LINKED into the Order's lines set (not just minted): the Order's lines set contains it.
+            await AssertEventuallyAsync(() =>
+            {
+                var order = store.ReadById(2);
+                var lines = order?.Fields.Fields.GetValueOrDefault("lines") as SetValue;
+                var lineIds = store.ReadExtent("Line").Where(kv => Label(kv.Value) == "First line").Select(kv => kv.Key).ToHashSet();
+                return lines != null && lines.Members.Keys.Any(lineIds.Contains);
+            });
+        });
+    }
+
+    // The contrast (atomic-commit Step B point 4): a create under a SAVE-LESS container — a TOP-LEVEL set
+    // route — persists IMMEDIATELY on Add (the SetTable sits under the LIVE page ctx, so nothing defers). The
+    // Db's `orders` set at /orders is exactly that. Proven directly here so the immediate path is pinned next
+    // to the deferred one (the existing /notes & /tasks scenarios also exercise it).
+    [Test]
+    public async Task A_create_under_a_save_less_container_persists_immediately()
+    {
+        await WithPageAsync(InstanceContext.NestedSetCreateDb(), _ => { }, async (page, store) =>
+        {
+            await page.GotoContentAsync("/orders");
+            await page.WaitForSelectorAsync(".set-table");       // the top-level orders set route (no Save)
+            await page.WaitReadyAsync();
+
+            await page.Locator(".set-table .new-btn").ClickAsync();
+            await page.Locator(".create-form input.title").FillAsync("Second order");
+            await page.Locator(".create-form button.create-save").ClickAsync();
+
+            // No enclosing form Save exists — the create persists on Add (the live page ctx).
+            await AssertEventuallyAsync(() => store.ReadExtent("Order").Values.Any(o => Title(o) == "Second order"));
+        });
+    }
+
     private static string? Name(ObjectValue o) =>
         o.Fields.TryGetValue("name", out var n) && n is TextValue t ? t.Text : null;
+
+    private static string? Label(ObjectValue o) =>
+        o.Fields.TryGetValue("label", out var n) && n is TextValue t ? t.Text : null;
+
+    private static string? Title(ObjectValue o) =>
+        o.Fields.TryGetValue("title", out var n) && n is TextValue t ? t.Text : null;
 
     // A computation over a hidden field (the earners list filters by a private salary)
     // cannot be re-derived on the client when membership changes — the existing members'

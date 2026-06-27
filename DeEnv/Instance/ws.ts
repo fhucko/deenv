@@ -60,8 +60,21 @@ let committingCtx: ExecCtx | null = null;
 // Each entry carries the wire payload AND the closure data (obj, before) needed for the journal undo/redo.
 interface CommitEdit { obj: ExecObject; prop: string; value: ExecValue; before: ExecValue; wire: object }
 let commitEdits: CommitEdit[] | null = null;
+// The CREATES accumulated during a commit bracket (atomic-commit Step B). The commitCreate hook buffers each
+// staged create here; endCommit folds them into the ONE `commit` message's creates+relations. null = no commit
+// bracket open (parallel to commitEdits). Each carries the draft + join so endCommit can build the wire
+// create/relation AND the journal undo (drop the created object) + the ack re-key (negId→realId).
+interface CommitCreate { draft: ExecObject; join: CreateJoin }
+let commitCreates: CommitCreate[] | null = null;
 const journal: JournalEntry[] = [];
 let nextWsMsgId = 1;
+
+// Correlation for a commit's staged creates (atomic-commit Step B): the draft's transient negative id → how
+// to re-key it on the ack. The ONE `commit` reply carries an idMap (negId→realId + the minted object's nested
+// collection ids); the per-op `pendingAdds` covers only live single arrayAdds, so a commit's N creates need
+// their own table. Populated at endCommit, consumed by the commit ack's batch remap, then cleared.
+interface PendingCommitCreate { join: CreateJoin; obj: ExecObject }
+const pendingCommitCreates = new Map<number, PendingCommitCreate>();
 
 // THE mutation chokepoint (client data layer, slice 1c — the generation guard). Every journaled DATA
 // MUTATION (objectPropChange / write / setReferenceField / arrayAdd / arrayRemove / addEntry / removeEntry)
@@ -270,6 +283,33 @@ function rollbackJournal(msgId: number, error: string): boolean {
 // Set adds awaiting their real id: tempId (the negative client id) → the array it
 // went into, so the reply can re-key item + object from negative to real.
 const pendingAdds = new Map<number, number>();
+
+// Drop a staged create's optimistic row (atomic-commit Step B): the commit journal entry's undo reverts
+// it on a server reject — remove the draft from the set it was added to (set join) or unset the reference
+// it was pointed at (ref join), so a denied changeset leaves NO orphan row. invalidateMember/Prop re-renders.
+function dropStagedCreate(c: CommitCreate): void {
+    if (c.join.kind === "set") {
+        const i = c.join.set.items.findIndex(it => it.value === c.draft);
+        if (i >= 0) c.join.set.items.splice(i, 1);
+        invalidateMember(c.join.set.id);
+    } else {
+        if (c.join.parent.props[c.join.prop] === c.draft) c.join.parent.props[c.join.prop] = { type: "null" };
+        invalidateProp(c.join.parent.id, c.join.prop);
+    }
+}
+
+// Re-apply a staged create's optimistic row (atomic-commit Step B): the commit journal entry's redo, used
+// when an EARLIER entry's rollback reverse-replayed this one. The mirror of dropStagedCreate.
+function restageCreate(c: CommitCreate): void {
+    if (c.join.kind === "set") {
+        if (!c.join.set.items.some(it => it.value === c.draft))
+            c.join.set.items.push({ key: c.draft.id, value: c.draft });
+        invalidateMember(c.join.set.id);
+    } else {
+        c.join.parent.props[c.join.prop] = c.draft;
+        invalidateProp(c.join.parent.id, c.join.prop);
+    }
+}
 
 let wsRetryDelay = 1000;
 
@@ -486,42 +526,76 @@ function connectWs(): void {
         logout: () => {
             wsSend({ op: "logout", clientId: uiStatic.clientId });
         },
-        // Form-Save feedback + atomic-commit batch (Step A): open the commit bracket so the propChange
-        // hook buffers edits instead of sending individual objectPropChange messages. endCommit flushes
-        // the accumulated edits as ONE `commit` message (ONE journal entry, ONE stateGen bump).
+        // Form-Save feedback + atomic-commit batch: open the commit bracket so the propChange hook buffers
+        // edits (Step A) and the commitCreate hook buffers creates (Step B) instead of firing individual
+        // objectPropChange / arrayAdd / setReferenceField messages. endCommit flushes the whole changeset as
+        // ONE `commit` message (ONE journal entry, ONE stateGen bump) the server applies all-or-none.
         beginCommit: ctx => {
             // ponytail: single-level only — a commit never nests inside a commit (the staged-walk never
-            // calls commit()), so the buffer is reset unconditionally with no txDepth guard. Step B must
-            // preserve that invariant (don't commit from within a staged-walk).
+            // calls commit()), so the buffers are reset unconditionally with no txDepth guard. Step B
+            // preserves that invariant: the create-mode form's inner commit fires BEFORE the enclosing
+            // form's, never DURING its staged-walk (a nested commit only transfers creates up, no send).
             committingCtx = ctx;
-            commitEdits = [];   // open the buffer — propChange hooks into it from now on
+            commitEdits = [];     // open the edit buffer — propChange hooks into it from now on
+            commitCreates = [];   // open the create buffer — commitCreate hooks into it from now on
         },
+        // A staged create in a final commit (atomic-commit Step B): buffer the draft + its join. endCommit
+        // turns each into a `creates` entry (the draft's scalar props) + a `relations` entry (the set/ref the
+        // server links it into — which is ALSO how the server resolves the create's TYPE, so no type is sent).
+        commitCreate: (draft, join) => { commitCreates?.push({ draft, join }); },
         endCommit: () => {
             const edits = commitEdits ?? [];
-            commitEdits = null; // close the buffer — any propChange after this point goes to live path
-            if (edits.length === 0) { committingCtx = null; return; } // nothing staged
-            // Build the journal undo/redo closures from the per-edit (obj, prop, before/value) captured by
-            // propChange at the moment each write landed. ONE journal entry → ONE ack commits all, ONE
-            // reject rolls all back atomically. Roots = the union of all edited objects.
+            const creates = commitCreates ?? [];
+            commitEdits = null; commitCreates = null; // close the buffers — later mutations go the live path
+            if (edits.length === 0 && creates.length === 0) { committingCtx = null; return; } // nothing staged
             const msgId = nextWsMsgId++;
-            const snapshots = edits.map(e => ({ obj: e.obj, prop: e.prop, before: e.before, after: e.value }));
+            // Edits: the per-edit (obj, prop, before/value) captured by propChange at the moment each write
+            // landed (Step A). Creates: each draft's transient id correlated for the ack's batch remap, plus
+            // the wire create (its scalar props) and relation (set/ref). ONE journal entry → ONE ack commits
+            // all (remapping every created id), ONE reject rolls all back atomically (edits reverted AND
+            // created rows dropped). Roots = every edited object + every created object (kept alive for undo).
+            const editSnapshots = edits.map(e => ({ obj: e.obj, prop: e.prop, before: e.before, after: e.value }));
+            const wireCreates: object[] = [];
+            const wireRelations: object[] = [];
+            for (const c of creates) {
+                pendingCommitCreates.set(c.draft.id, { join: c.join, obj: c.draft });
+                // `value` carries the draft's scalar props in the SAME tagged { props: { name: leaf } } shape
+                // an arrayAdd ships (objectOf), so the server reads it with the SAME ExecObjectValue.
+                wireCreates.push({ tempId: c.draft.id, value: objectOf(c.draft) });
+                if (c.join.kind === "set")
+                    wireRelations.push({ kind: "set", setId: c.join.set.id, childId: c.draft.id });
+                else
+                    wireRelations.push({ kind: "ref", parentId: c.join.parent.id, prop: c.join.prop, childId: c.draft.id });
+            }
             // recordMutation reads committingCtx to tag this entry with the form's ctx for the
             // "Saving… → Saved" lifecycle — call it WHILE committingCtx is still set, then clear.
             recordMutation({
                 msgId,
-                undo: () => { for (const s of snapshots) { s.obj.props[s.prop] = s.before; invalidateProp(s.obj.id, s.prop); } },
-                redo: () => { for (const s of snapshots) { s.obj.props[s.prop] = s.after;  invalidateProp(s.obj.id, s.prop); } },
-                roots: edits.map(e => e.obj),
+                undo: () => {
+                    for (const s of editSnapshots) { s.obj.props[s.prop] = s.before; invalidateProp(s.obj.id, s.prop); }
+                    for (const c of creates) dropStagedCreate(c);
+                },
+                redo: () => {
+                    for (const s of editSnapshots) { s.obj.props[s.prop] = s.after; invalidateProp(s.obj.id, s.prop); }
+                    for (const c of creates) restageCreate(c);
+                },
+                // The created objects are reachable through their join's set/parent (listed below), but a ref
+                // create's object sits in a field, so list each draft explicitly too — the reachability GC
+                // marks it alive until this entry retires (it must survive for the undo to drop it).
+                onReject: () => { for (const c of creates) pendingCommitCreates.delete(c.draft.id); },
+                roots: [...edits.map(e => e.obj), ...creates.map(c => c.draft),
+                        ...creates.map(c => c.join.kind === "set" ? c.join.set : c.join.parent)],
             });
             committingCtx = null; // close the bracket after recordMutation has read it
             wsSend({ op: "commit", id: msgId, clientId: uiStatic.clientId,
-                edits: edits.map(e => e.wire) });
+                edits: edits.map(e => e.wire), creates: wireCreates, relations: wireRelations });
         },
     });
 }
 
 function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: number; ok?: boolean;
                             collections?: { [prop: string]: { id: number; elementTypeName?: string } };
+                            idMap?: { tempId: number; realId: number; collections?: { [prop: string]: { id: number; elementTypeName?: string } } }[];
                             state?: ServerDtState; error?: string }): void {
     // Correlated accept/reject first: an error rolls the journal back, an ok commits.
     if (typeof msg.id === "number") {
@@ -536,6 +610,11 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
             return;
         }
         commitJournal(msg.id);
+        // An atomic-commit (Step B) `commit` ack: batch-remap every created object's transient id to the real
+        // one the server minted (negId→realId + the minted nested-collection ids). Done AFTER commitJournal
+        // retires the entry, so the optimistic rows now address their real ids. (A commit with only edits
+        // carries no idMap — no-op.)
+        if (msg.op === "commit" && msg.idMap != null && msg.idMap.length > 0) applyCommitRemap(msg.idMap);
     }
 
     // An uncorrelated error is a failed refetch (it carries no id) — clear the
@@ -793,29 +872,63 @@ function remapAddedId(arrayId: number, tempId: number, realId: number,
     const item = arr?.items.find(i => i.key === tempId);
     if (item) {
         item.key = realId;
-        if (item.value.type === "object") {
-            item.value.id = realId;
-            uiStatic.state.objects[realId] = item.value;
-            for (const [prop, coll] of Object.entries(collections ?? {})) {
-                const propArr = item.value.props[prop];
-                if (propArr?.type === "array") {
-                    propArr.id = coll.id;
-                    propArr.kind = "set";
-                    propArr.elementTypeName = coll.elementTypeName;
-                    uiStatic.state.arrays[coll.id] = propArr;
-                }
-            }
-        }
+        if (item.value.type === "object") rekeyCreatedObject(item.value, tempId, realId, collections);
     }
-    uiStatic.state.localToServerIds[tempId] = realId;
-    uiStatic.state.serverToLocalIds[realId] = tempId;
-    // Ack the remap so the server can drop its transient→real entry for tempId: from here on we address
-    // this object by its real id and never send the transient one again (every op referencing it that we
-    // sent BEFORE this point was already ordered ahead of this ack). Uncorrelated (no journal entry).
-    wsSend({ op: "ackRemap", clientId: uiStatic.clientId, tempId });
+    if (item == null || item.value.type !== "object") registerRemap(tempId, realId);
     // The re-keyed member changes what dependents render (row data-keys), so cached
     // computations over this array must rebuild.
     invalidateMember(arrayId);
+    renderUi();
+}
+
+// Re-key a just-persisted CREATED OBJECT from its transient negative id to the real extent id (the shared
+// core of remapAddedId, reused by the atomic-commit Step B batch remap): set the object's id, index it under
+// the real id, re-key its store-minted nested collections (so adds into them persist), and register the
+// negId→realId maps + ack. Used for BOTH a live arrayAdd's member and a commit batch's creates (a set member
+// or a ref target) — a ref-created object has no parent array, so the id/collections/maps re-key is exactly
+// what it needs (its containing field already points at the same object instance, whose id we mutate here).
+function rekeyCreatedObject(obj: ExecObject, tempId: number, realId: number,
+                            collections?: { [prop: string]: { id: number; elementTypeName?: string } }): void {
+    obj.id = realId;
+    uiStatic.state.objects[realId] = obj;
+    for (const [prop, coll] of Object.entries(collections ?? {})) {
+        const propArr = obj.props[prop];
+        if (propArr?.type === "array") {
+            propArr.id = coll.id;
+            propArr.kind = "set";
+            propArr.elementTypeName = coll.elementTypeName;
+            uiStatic.state.arrays[coll.id] = propArr;
+        }
+    }
+    registerRemap(tempId, realId);
+}
+
+// Record a transient→real id mapping and ack it so the server can drop its own transient entry for tempId:
+// from here on the client addresses the object by its real id and never sends the transient one again (every
+// op referencing it sent BEFORE this point was already ordered ahead of this ack). Uncorrelated (no journal).
+function registerRemap(tempId: number, realId: number): void {
+    uiStatic.state.localToServerIds[tempId] = realId;
+    uiStatic.state.serverToLocalIds[realId] = tempId;
+    wsSend({ op: "ackRemap", clientId: uiStatic.clientId, tempId });
+}
+
+// Apply an atomic-commit (Step B) `commit` ack's batch remap: for each created object the server minted, re-key
+// its transient negative id to the real extent id (via the SAME rekeyCreatedObject the live arrayAdd uses),
+// using the per-create `collections` the server shipped so nested sets persist. The commit's journal entry has
+// already retired (commitJournal on the ok). One re-render after the whole batch refreshes every re-keyed row.
+function applyCommitRemap(idMap: { tempId: number; realId: number;
+                                   collections?: { [prop: string]: { id: number; elementTypeName?: string } } }[]): void {
+    for (const m of idMap) {
+        const pending = pendingCommitCreates.get(m.tempId);
+        const obj = pending?.obj ?? (uiStatic.state.objects[m.tempId] as ExecValue | undefined);
+        if (obj != null && obj.type === "object") rekeyCreatedObject(obj, m.tempId, m.realId, m.collections);
+        if (pending != null) {
+            const join = pending.join;
+            if (join.kind === "set") invalidateMember(join.set.id);
+            else invalidateProp(join.parent.id, join.prop);
+        }
+        pendingCommitCreates.delete(m.tempId);
+    }
     renderUi();
 }
 

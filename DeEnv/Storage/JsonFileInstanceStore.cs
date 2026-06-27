@@ -295,6 +295,109 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
     }
 
+    // Apply a whole changeset (atomic-commit Step B) — mint creates, then link + write — under ONE held lock
+    // + ONE Save(), so the batch persists all-or-none. Mints first (so the tempId→realId map exists), then
+    // applies each mutation with its object refs remapped (a negative tempId → its just-minted real id; a
+    // positive id passes through). No GC (a commit only ADDS — it can orphan nothing). The mechanical apply;
+    // the caller (WsHandler.HandleCommit) has already validated every create/edit against the schema + floor
+    // + password hash. A reference to a tempId not in this batch's creates throws — a caller bug, never
+    // silent. Returns each create's real id + its minted nested-collection ids (for the client re-key).
+    public IReadOnlyList<CommitCreateResult> CommitBatch(
+        IReadOnlyList<CommitCreate> creates, IReadOnlyList<CommitMutation> mutations)
+    {
+        lock (_sync)
+        {
+            // PRE-VALIDATE every object reference resolves BEFORE mutating anything — a negative tempId must
+            // name a create in THIS batch, a positive id must exist — so a malformed batch throws with the
+            // store UNTOUCHED (no half-minted in-memory state served to the next read). This is the store's
+            // own all-or-none guard, independent of the caller's validation. (The minted-id pass below cannot
+            // dangle thereafter: every ref is known-good here.)
+            var tempIds = creates.Select(c => c.TempId).ToHashSet();
+            void RequireResolvable(int idRef)
+            {
+                if (idRef < 0)
+                {
+                    if (!tempIds.Contains(idRef))
+                        throw new InvalidOperationException($"Commit references unknown temp id {idRef}.");
+                }
+                else if (ExtentEntryById(idRef) is null)
+                    throw new InvalidOperationException($"No object with id {idRef}.");
+            }
+            foreach (var mutation in mutations)
+                switch (mutation)
+                {
+                    case SetLinkMutation(var setId, var memberRef):
+                        if (FindSetNode(setId) is null) throw new InvalidOperationException($"No set with id {setId}.");
+                        RequireResolvable(memberRef);
+                        break;
+                    case RefLinkMutation(var ownerRef, _, var targetRef, _):
+                        RequireResolvable(ownerRef);
+                        if (targetRef is { } t) RequireResolvable(t);
+                        break;
+                    case FieldWriteMutation(var objectRef, _, _):
+                        RequireResolvable(objectRef);
+                        break;
+                }
+
+            var idMap = new Dictionary<int, int>();
+            var results = new List<CommitCreateResult>();
+
+            // Mint every create first — no per-create Save; the whole batch Saves once at the end.
+            foreach (var c in creates)
+            {
+                var realId = MintObject(c.TypeName, c.Fields);
+                idMap[c.TempId] = realId;
+                var minted = ExtentEntryById(realId)!;
+                var type = _desc.FindType(c.TypeName)!;
+                var collections = new Dictionary<string, CommitCollection>();
+                foreach (var prop in type.Props ?? [])
+                    if (prop.Cardinality == Cardinality.Set
+                        && minted.Fields.GetValueOrDefault(prop.Name) is StoredSet sv)
+                        collections[prop.Name] = new CommitCollection(sv.Id, prop.Type);
+                results.Add(new CommitCreateResult(c.TempId, realId, collections));
+            }
+
+            // A reference id: a positive real id passes through; a negative tempId resolves to the create it
+            // introduced (a ref to an un-minted tempId is a caller bug — fail loudly, never persist a dangle).
+            int ResolveRefId(int idRef) => idRef >= 0 ? idRef
+                : idMap.TryGetValue(idRef, out var real) ? real
+                : throw new InvalidOperationException($"Commit references unknown temp id {idRef}.");
+
+            foreach (var mutation in mutations)
+                switch (mutation)
+                {
+                    case SetLinkMutation(var setId, var memberRef):
+                    {
+                        var memberId = ResolveRefId(memberRef);
+                        var set = FindSetNode(setId)
+                            ?? throw new InvalidOperationException($"No set with id {setId}.");
+                        var typeName = ExtentEntryById(memberId)?.TypeName
+                            ?? throw new InvalidOperationException($"No object with id {memberId}.");
+                        set.Members[memberId] = new StoredRef(typeName, memberId);
+                        break;
+                    }
+                    case RefLinkMutation(var ownerRef, var prop, var targetRef, var targetType):
+                    {
+                        var entry = ExtentEntryById(ResolveRefId(ownerRef))
+                            ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
+                        if (targetRef is { } t) entry.Fields[prop] = new StoredRef(targetType, ResolveRefId(t));
+                        else entry.Fields.Remove(prop);
+                        break;
+                    }
+                    case FieldWriteMutation(var objectRef, var prop, var value):
+                    {
+                        var entry = ExtentEntryById(ResolveRefId(objectRef))
+                            ?? throw new InvalidOperationException($"No object with id {objectRef}.");
+                        entry.Fields[prop] = new StoredLeaf(value);
+                        break;
+                    }
+                }
+
+            Save(); // one atomic file write for the whole changeset
+            return results;
+        }
+    }
+
     // Walk to the object a path lands on (following set/dict/refs).
     private (StoredObject Object, TypeDefinition Type)? WalkToObject(NodePath path)
     {

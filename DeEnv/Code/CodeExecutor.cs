@@ -274,19 +274,27 @@ public sealed class CodeExecutor
         {
             // ctx.new(autosave): autosave=true → the live parent (writes persist); else a staging child.
             case "new": return args.Length > 0 && args[0] is ExecBool { Value: true } ? m.Ctx : new ExecCtx { Parent = m.Ctx, Live = false };
-            case "discard": m.Ctx.Staged.Clear(); return new ExecNothing();
+            case "discard": m.Ctx.Staged.Clear(); m.Ctx.Creates.Clear(); return new ExecNothing();
             case "commit":
+            {
+                var nested = m.Ctx.Parent is { Live: false }; // NON-final: transfer up into the parent ctx
                 foreach (var (obj, fields) in m.Ctx.Staged)
                     foreach (var (prop, val) in fields)
-                        if (m.Ctx.Parent is { Live: false } p)
+                        if (nested)
                         {
-                            if (!p.Staged.TryGetValue(obj, out var pf)) p.Staged[obj] = pf = [];
+                            if (!m.Ctx.Parent!.Staged.TryGetValue(obj, out var pf)) m.Ctx.Parent.Staged[obj] = pf = [];
                             pf[prop] = val;
                         }
                         else
                             obj.Props[prop] = val;   // committed to the live object (the client also persists)
+                // Creates (atomic-commit Step B): a nested commit TRANSFERS them up into the parent (uniform
+                // with edits); the FINAL commit is a server no-op — the C# twin renders ONCE, so the actual
+                // persistence (mint + link + apply, all-or-none) lives in WsHandler.HandleCommit, not here.
+                if (nested) m.Ctx.Parent!.Creates.AddRange(m.Ctx.Creates);
                 m.Ctx.Staged.Clear();
+                m.Ctx.Creates.Clear();
                 return new ExecNothing();
+            }
             default: throw new CodeRuntimeException($"Unknown context method '{m.Method}'.");
         }
     }
@@ -324,7 +332,9 @@ public sealed class CodeExecutor
             if (target is ExecCtx ctx)
                 return member.Name switch
                 {
-                    "dirty" => new ExecBool { Value = ctx.Staged.Count > 0 },
+                    // dirty counts staged EDITS and staged CREATES (atomic-commit Step B): a form with only a
+                    // staged create still has unsaved work. Twin of codeExec.ts's ctx.dirty read.
+                    "dirty" => new ExecBool { Value = ctx.Staged.Count > 0 || ctx.Creates.Count > 0 },
                     "status" => new ExecText { Value = "idle" },
                     _ => new ExecCtxMethod { Ctx = ctx, Method = member.Name },
                 };
@@ -1267,6 +1277,20 @@ public sealed class CodeExecutor
 
     private void AddToCollection(ExecArray coll, IExecValue value, ExecContext context)
     {
+        // Staging branch (atomic-commit Step B): a TRANSIENT (id<0) draft added to a SET under a STAGING ctx
+        // STAGES — it joins the ctx's Creates instead of persisting, so the changeset commits all-or-none at
+        // the outermost commit. The same id<0 discriminator the object-prop staging gate uses; an EXISTING
+        // (id>0) member falls through to the live/store path below. Checked FIRST and gated only on the ctx
+        // (not the store), so it runs identically to the client twin — including in the store-less conformance
+        // harness, the ONLY place it runs on the server (the live AddToCollection mints in-store, below).
+        if (coll.Kind == ArrayKind.Set && value is ExecObject { Id: < 0 } draft
+            && NearestStagingCtx(context) is { } staging)
+        {
+            staging.Creates.Add(new StagedCreate(draft, new SetJoin(coll)));
+            coll.Items.Add(new ExecItem { Key = draft.Id, Value = draft }); // optimistic row, local only
+            return;
+        }
+
         // Persist to a db set (addressed by its intrinsic id); a set member is keyed
         // by its own object identity. A transient object (negative id) is minted into
         // the extent first — its id flips positive, so it is now "in db" by definition.

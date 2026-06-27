@@ -111,6 +111,33 @@ public class InstanceContext
             dueDate: "2026-01-01"
     """;
 
+    // Atomic-commit Step B: an OBJECT that holds a SET, reachable as an object PAGE. The Db's `orders` set
+    // holds an Order (a scalar `title` + a nested `lines` set of Line). Navigating to /orders/2 renders the
+    // Order's ObjectForm — a scalar field (so it HAS a Save) + an inline `lines` SetTable. Adding a Line
+    // through that inline create form STAGES the new Line into the Order form's staging ctx (it does NOT
+    // persist on the card's Add); the Order form's Save (ctx.commit) is what persists it — the generic-create
+    // DEFERRAL. Contrast the top-level /notes route, whose SetTable sits under the LIVE page ctx (no Save), so
+    // its creates persist on Add. The seeded Order is id 2.
+    public static InstanceDescription NestedSetCreateDb() =>
+        InstanceDescriptionLoader.Load(NestedSetCreateApp);
+
+    private const string NestedSetCreateApp = """
+    types
+        Db
+            orders set of Order
+        Order
+            title text
+            lines set of Line
+        Line
+            label text
+
+    initialData
+        Db 1
+            orders: [2]
+        Order 2
+            title: "First order"
+    """;
+
     // A Db holding an EMPTY set: `notes` is unseeded, so it materializes as a zero-member set (SeededFields
     // still mints its StoredSet id, so adding a member works). Drives the empty-state scenario — a zero-member
     // set table renders a "No <Element> yet" line under the header instead of a bare header that reads as
@@ -1391,6 +1418,63 @@ public class InstanceContext
     // so the denial scenario can reuse AccessSteps' "the current user is the member" binding — keep them
     // aligned if either seed changes (the principal binds by AccessMemberId, not a TwoField* constant).
     public const int TwoFieldItemId = 2;
+
+    // ── atomic-changeset fixture (AtomicCommit.feature, Step B) ──────────────────────────────────
+    //
+    // A two-type app for the HEADLINE atomic-changeset proof: an `Item` (id 2, the edit target) and a
+    // SEPARATE, unrelated `Tag` type. The `commit` op stages, in ONE ctx, an EDIT to the Item + a CREATE of
+    // a Tag + a RELATION (set Db.tags add the new tag) — committed all-or-none. Carries the Role + User set
+    // so the denial scenario can install a `Tag create` rule and prove a denied change rolls the WHOLE
+    // changeset back (no orphan Tag, the Item edit reverted). `optTagRuleLines` installs a Tag access block.
+    public static InstanceDescription AtomicChangesetFixtureDb(string? tagRuleLines = null) =>
+        InstanceDescriptionLoader.Load(AtomicChangesetApp(tagRuleLines));
+
+    private static string AtomicChangesetApp(string? tagRuleLines) =>
+        AtomicChangesetTypes + AtomicChangesetSeed + (tagRuleLines == null ? "" : $"\n\naccess\n    Tag\n        {tagRuleLines}");
+
+    private const string AtomicChangesetTypes = """
+    types
+        Role enum
+            Admin
+            Member
+        Db
+            items set of Item
+            tags set of Tag
+            users set of User
+        Item
+            title text
+            count int
+        Tag
+            label text
+        User
+            name text
+            role Role
+            password password
+    """;
+
+    private const string AtomicChangesetSeed = """
+
+    initialData
+        Db 1
+            items: [2]
+            users: [3, 4]
+        Item 2
+            title: "Seed title"
+            count: 0
+        User 3
+            name: "Ada"
+            role: "Admin"
+        User 4
+            name: "Bob"
+            role: "Member"
+    """;
+
+    // The Item edit target + the Db's tags set id. The tags set is the Db root's (id 1) second collection
+    // prop; the store mints collection ids from the counter starting above the seeded max id (4), so Db's
+    // items/tags/users sets mint 5/6/7. tags is the 2nd → id 6. (Asserted indirectly: the changeset's set
+    // relation names it; a mis-id would fail the commit, surfacing here.)
+    public const int AtomicChangesetItemId = 2;
+    public const int AtomicChangesetTagsSetId = 6;
 
     // The seeded "Gate #3" milestone's id (a set member of Db.milestones) — the write scenarios edit /
     // delete it by id and assert the store directly. Mirrors the initialData seed above.

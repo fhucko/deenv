@@ -137,10 +137,30 @@ public sealed class ExecSysFunction : IExecValue
 public sealed class ExecCtx : IExecValue
 {
     public Dictionary<ExecObject, Dictionary<string, IExecValue>> Staged { get; } = [];
+
+    // Staged CREATES (atomic-commit Step B): transient (id<0) drafts `set.add`/`setRef`'d under a STAGING
+    // ctx — beside Staged (edits to existing objects). The draft is held BY REFERENCE (its fields read at
+    // commit, never snapshotted), so it is the unit that travels up the context chain. A nested commit
+    // transfers these into the parent's Creates; the outermost commit persists them as one atomic `commit`.
+    // (On the SERVER twin AddToCollection mints in-store, so this only ever populates in the conformance
+    // harness — that keeps the staging branch byte-identical to the client for twin-lockstep.)
+    public List<StagedCreate> Creates { get; } = [];
+
     public ExecCtx? Parent { get; set; }
     public bool Live { get; set; }
     object IExecValue.Value => this;
 }
+
+// A staged create (atomic-commit Step B): a transient draft + where it attaches. The TYPE is resolved at the
+// outermost commit from the join (the set's element type / the ref prop's declared type) — never asserted
+// here — so the kernel floor decides over server-resolved data. Twin of codeExec.ts's StagedCreate.
+public sealed record StagedCreate(ExecObject Draft, CreateJoin Join);
+
+// Where a staged create attaches: into a set (set.add) or onto a single-reference field (setRef). A closed
+// union; the conformance harness only exercises the set join (the C# server no-ops setRef). Twin of CreateJoin.
+public abstract record CreateJoin;
+public sealed record SetJoin(ExecArray Set) : CreateJoin;
+public sealed record RefJoin(ExecObject Parent, string Prop) : CreateJoin;
 
 // `ctx.new` / `ctx.commit` / `ctx.discard` bound to their context — invoked via a call.
 public sealed class ExecCtxMethod : IExecValue

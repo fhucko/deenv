@@ -25,6 +25,18 @@ public interface IInstanceStore
     // from a StoredLeaf or a missing id is a bug, not a user error. No on-disk format change.
     void WriteFieldBatch(IReadOnlyList<(int ObjectId, string Prop, NodeValue Value)> edits);
 
+    // Apply a whole changeset (atomic-commit Step B) — creates + relations + field edits — under ONE held
+    // lock + ONE Save(), so it persists all-or-none (OS-atomic temp-file-then-move). A MODEL-TERM mutation
+    // list (CLAUDE rule 6): a closed union of create / set-link / ref-link / field-write, NOT a flat blob.
+    // The store mints each create (allocating its real id), builds the tempId→realId map, applies the
+    // mutations with their object references remapped (a negative tempId resolves to its just-minted real id;
+    // a positive id passes through), links + writes, then Saves ONCE. Returns the idMap (tempId→realId) plus
+    // each created object's minted nested-collection ids, so the caller can re-key the client's optimistic
+    // graph. The caller VALIDATES every create/edit (schema + access floor + password hash) BEFORE calling —
+    // an exception here is a bug, not a user error. No on-disk format change.
+    IReadOnlyList<CommitCreateResult> CommitBatch(
+        IReadOnlyList<CommitCreate> creates, IReadOnlyList<CommitMutation> mutations);
+
     // Create a dictionary entry under a caller-supplied (manual) key.
     // Throws if an entry with that key already exists.
     void CreateEntry(NodePath dictPath, NodeValue key, NodeValue value);
@@ -80,3 +92,26 @@ public interface IInstanceStore
     // existing data) and by tests.
     void Reset();
 }
+
+// ── atomic-commit batch (Step B) — a model-term changeset (CLAUDE rule 6) ──────────────────────
+
+// A create in a commit batch: mint an object of TypeName with these (already validated + password-hashed)
+// scalar Fields. TempId is the client's transient negative id, the key the batch's mutations + the returned
+// idMap reference it by until it is minted to a real id.
+public sealed record CommitCreate(int TempId, string TypeName, ObjectValue Fields);
+
+// One mutation in a commit batch, a closed union over the object-graph write seams. An *Ref field is an
+// OBJECT REFERENCE: a positive real id, or a negative tempId resolved to the create's just-minted real id.
+public abstract record CommitMutation;
+// Add a member (MemberRef) to the set with intrinsic id SetId.
+public sealed record SetLinkMutation(int SetId, int MemberRef) : CommitMutation;
+// Point OwnerRef's single-reference prop at TargetRef (null = clear); TargetType is the prop's declared type.
+public sealed record RefLinkMutation(int OwnerRef, string Prop, int? TargetRef, string TargetType) : CommitMutation;
+// Write a single scalar leaf field on the object with intrinsic id ObjectRef.
+public sealed record FieldWriteMutation(int ObjectRef, string Prop, NodeValue Value) : CommitMutation;
+
+// The result of minting one create in a commit batch: the tempId→realId mapping plus the minted object's
+// nested COLLECTION props (their own intrinsic ids + element types), so the caller re-keys the client's
+// optimistic transient arrays (else later adds into them would silently not persist — mirrors arrayAdd).
+public sealed record CommitCreateResult(int TempId, int RealId, IReadOnlyDictionary<string, CommitCollection> Collections);
+public sealed record CommitCollection(int Id, string ElementTypeName);

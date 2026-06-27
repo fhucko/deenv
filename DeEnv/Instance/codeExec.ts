@@ -74,7 +74,17 @@ interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
 // unique handle so a `ctx.status` READ records a reactive var dep (`ctxStatus:<id>`) and a status
 // WRITE invalidates it — that is what makes the rendered indicator re-render on the WS ack (the
 // memoized component view is otherwise served from cache, since ctx is not a tracked object).
-interface ExecCtx { type: "ctx"; id: number; staged: Map<ExecObject, Map<string, ExecValue>>; parent: ExecCtx | null; live: boolean; status: string; pending: number; }
+interface ExecCtx { type: "ctx"; id: number; staged: Map<ExecObject, Map<string, ExecValue>>; creates: StagedCreate[]; parent: ExecCtx | null; live: boolean; status: string; pending: number; }
+// A staged create (atomic-commit Step B): a transient (id<0) draft `set.add`/`setRef`'d under a staging
+// ctx. The draft is held BY REFERENCE — its fields are read at commit time, never snapshotted, so a later
+// `draft.x = …` (an edit landing on the draft's own live props, since id<0 bypasses staging) is included.
+// `join` is where the draft attaches; at the outermost commit the create mints and the join applies, all
+// in one atomic `commit` op. Beside `staged` (the edits to EXISTING objects).
+interface StagedCreate { draft: ExecObject; join: CreateJoin; }
+// Where a staged create attaches: into a set (set.add) or onto a single reference field (setRef). The
+// element/target TYPE is resolved SERVER-SIDE from the join (the set's element type, or the prop's declared
+// type) — the wire carries no client-asserted type, so the floor can't be widened by a crafted type.
+type CreateJoin = { kind: "set"; set: ExecArray } | { kind: "ref"; parent: ExecObject; prop: string };
 // Unique per-ctx id (form-Save feedback) — namespaced into the var-dep key, so it never collides with
 // an object id or a real var name.
 let nextCtxId = 1;
@@ -454,7 +464,9 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
         return { value: collectionSysFunction(left, right.name, context) };
 
     if (left.type === "ctx") {
-        if (right.name === "dirty") return { value: { type: "bool", value: left.staged.size > 0 } };
+        // dirty counts staged EDITS and staged CREATES (atomic-commit Step B): a form with only a staged
+        // create still has unsaved work, so the Save chrome must light up. Twin of CodeExecutor's ExecCtx read.
+        if (right.name === "dirty") return { value: { type: "bool", value: left.staged.size > 0 || left.creates.length > 0 } };
         // ctx.status: the form-Save lifecycle ("idle" | "saving" | "saved"), a readable
         // property like dirty. CLIENT-only state — on the C# twin (which renders once) it is always "idle".
         // Record a reactive var dep so the enclosing (memoized) component view re-renders when a status
@@ -918,8 +930,15 @@ function execSetRef(codeCall: CodeCall, scope: ExecScope, context: ExecContext):
     if (propV.type !== "text") throw new Error("setRef() expects a text prop name.");
     const prop = propV.value;
     const before = obj.props[prop];
-    obj.props[prop] = value;
+    obj.props[prop] = value;                  // optimistic — local, unchanged whether the persist stages or fires
     invalidateProp(obj.id, prop);
+    // Staging branch (atomic-commit Step B): pointing a reference at a TRANSIENT (id<0) draft under a staging
+    // ctx STAGES the create + its link, so the whole changeset persists all-or-none on the outermost commit
+    // (mirrors addToCollection). An EXISTING (id>0) pick / a clear stays LIVE — the same id discriminator.
+    if (value.type === "object" && value.id < 0) {
+        const staging = nearestStagingCtx(context);
+        if (staging != null) { staging.creates.push({ draft: value, join: { kind: "ref", parent: obj, prop } }); return { type: "nothing" }; }
+    }
     if (obj.id > 0) referenceChange(obj, prop, value, before);
     return { type: "nothing" };
 }
@@ -1068,15 +1087,24 @@ function runBody(fn: ExecFunction, callScope: ExecScope, context: ExecContext): 
 // The live root data context provided by the framework as ambient `ctx` (writes persist; a form
 // opens a staging child via ctx.new()). Fresh per render — the root is a stateless live sentinel.
 function rootAmbient(): AmbientFrame {
-    return { name: "ctx", value: { type: "ctx", id: nextCtxId++, staged: new Map(), parent: null, live: true, status: "idle", pending: 0 }, parent: null };
+    return { name: "ctx", value: { type: "ctx", id: nextCtxId++, staged: new Map(), creates: [], parent: null, live: true, status: "idle", pending: 0 }, parent: null };
 }
 
 function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext): void {
     // A set member is keyed by its object identity; other kinds get a transient key.
     const key = arr.kind === "set" && value.type === "object" ? value.id : --context.lastId.value;
     const item: ExecArrayItem = { key, value };
-    arr.items.push(item);
+    arr.items.push(item);                 // optimistic row — local, unchanged whether the persist stages or fires
     invalidateMember(arr.id);
+    // Staging branch (atomic-commit Step B): a TRANSIENT (id<0) draft added to a SET under a staging ctx
+    // STAGES — it joins the ctx's creates instead of firing the live arrayAdd, so the whole changeset
+    // persists all-or-none on the outermost commit. An EXISTING (id>0) member stays LIVE (the same id>0
+    // discriminator the object-prop staging gate uses): poking an existing collection is immediate, building
+    // new graph is transactional. The row already pushed above either way; only the persistence defers.
+    if (arr.kind === "set" && value.type === "object" && value.id < 0) {
+        const staging = nearestStagingCtx(context);
+        if (staging != null) { staging.creates.push({ draft: value, join: { kind: "set", set: arr } }); return; }
+    }
     if (arr.id > 0) sendArrayItemAdd(arr, item);
 }
 
@@ -1520,7 +1548,7 @@ function nearestStagedValue(obj: ExecObject, prop: string, context: ExecContext)
 function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
     switch (m.method) {
         // ctx.new(autosave): autosave=true → the live parent (writes persist); else a staging child.
-        case "new": return args.length > 0 && args[0].type === "bool" && args[0].value ? m.ctx : { type: "ctx", id: nextCtxId++, staged: new Map(), parent: m.ctx, live: false, status: "idle", pending: 0 };
+        case "new": return args.length > 0 && args[0].type === "bool" && args[0].value ? m.ctx : { type: "ctx", id: nextCtxId++, staged: new Map(), creates: [], parent: m.ctx, live: false, status: "idle", pending: 0 };
         case "discard":
             for (const [obj, fields] of m.ctx.staged)
                 for (const prop of fields.keys()) invalidateProp(obj.id, prop);   // re-render the reverted fields
@@ -1537,13 +1565,16 @@ function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
             // finally guarantees the bracket closes even if the walk throws (no leaked committing-ctx).
             setCtxStatus(m.ctx, "saving");
             sendBeginCommit(m.ctx);
+            const parent = m.ctx.parent;
+            const nested = parent != null && !parent.live; // NON-final: transfer up into the parent ctx
             try {
+                // Edits: flush into the parent ctx (nested) or to the live object (final). Uniform with how
+                // edits already flow; atomic-commit Step B adds the SAME defer-vs-persist rule for creates below.
                 for (const [obj, fields] of m.ctx.staged)
                     for (const [prop, val] of fields) {
-                        const p = m.ctx.parent;
-                        if (p != null && !p.live) {
-                            let pf = p.staged.get(obj);
-                            if (pf == null) p.staged.set(obj, pf = new Map());
+                        if (nested) {
+                            let pf = parent!.staged.get(obj);
+                            if (pf == null) parent!.staged.set(obj, pf = new Map());
                             pf.set(prop, val);
                         } else {
                             const before = obj.props[prop];
@@ -1552,9 +1583,18 @@ function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
                             if (obj.id > 0) propValueChange(obj, prop, val, before);
                         }
                     }
+                // Creates (atomic-commit Step B): a nested commit TRANSFERS each create up into the parent
+                // (it joins the parent's creates, exactly as edits join the parent's staged) — so the outermost
+                // form's Save persists the whole changeset. The FINAL commit hands each create to the WS layer,
+                // which folds it into the ONE `commit` op's creates+relations (sendEndCommit sends it).
+                for (const create of m.ctx.creates) {
+                    if (nested) parent!.creates.push(create);
+                    else sendCommitCreate(create.draft, create.join);
+                }
             } finally {
                 sendEndCommit();
             }
+            m.ctx.creates = [];
             // Nothing in flight (no sends this commit AND no prior pending — e.g. an empty commit or a
             // flush into a staging parent) → no ack is coming, so don't get stuck on "saving": settle to
             // "idle". (pending is not zeroed above, so this stays non-zero while a prior batch is in flight.)
@@ -1596,6 +1636,11 @@ interface WsHooks {
     // wsHooks and renders once.
     beginCommit(ctx: ExecCtx): void;
     endCommit(): void;
+    // A staged CREATE in a final commit (atomic-commit Step B): the transient draft + its join (a set, or a
+    // single-reference field). Called for each create BETWEEN beginCommit and endCommit, so the WS layer folds
+    // it into the ONE `commit` op's creates+relations. The server resolves the create's TYPE from the join
+    // (set element type / ref prop type) — the wire carries no client-asserted type. CLIENT-only.
+    commitCreate(draft: ExecObject, join: CreateJoin): void;
 }
 let wsHooks: WsHooks | null = null;
 function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
@@ -1632,6 +1677,9 @@ function sendLogout(): void {
 }
 function sendBeginCommit(ctx: ExecCtx): void {
     wsHooks?.beginCommit(ctx);
+}
+function sendCommitCreate(draft: ExecObject, join: CreateJoin): void {
+    wsHooks?.commitCreate(draft, join);
 }
 function sendEndCommit(): void {
     wsHooks?.endCommit();

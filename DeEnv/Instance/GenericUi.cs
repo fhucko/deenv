@@ -27,24 +27,30 @@ namespace DeEnv.Instance;
 //     a field per prop (a Field for a scalar, a nested RefEditor for a single object reference, an
 //     inline SetTable for an object set, or an inline DictTable for a dictionary). A collection's
 //     label is a navigable list-title link to its own route. `base` is the page's URL path, so inline
-//     links nest. A COMPONENT: it opens a staging data-context — `ambient ctx = ctx.new(autosave)` —
-//     and binds Fields to the LIVE `obj` directly; the ctx decides whether a write stages or persists.
-//     `autosave` (bool) controls that: omitted/false (the DEFAULT, what the synthesized object view
-//     passes) makes `ctx.new` a STAGING child, so scalar edits stage in the overlay (the stored object
-//     is untouched) and commit on a Save button (`ctx.commit()`); Discard drops the overlay
-//     (`ctx.discard()`) and the inputs re-read the stored value. true makes `ctx.new(true)` the live
-//     parent → per-keystroke autosave, no buttons. COLLECTION props (reference/set/dictionary) bind to
-//     the LIVE object and each manages its own members (which persist on their own).
-//       Create-mode (B1 collapse): when `join(obj)` is given, ObjectForm renders the `.create-form`
-//     card instead — a scalar-only field list (or the supplied `body(draft)`) + a Save that calls
-//     `join(obj)` and an optional Cancel. This is the SINGLE create path the SetTable and RefEditor
-//     both reveal (a nested create-mode ObjectForm over a `sys.new` draft). `join` + `body` are
-//     PERMANENT params. `onSave`/`onCancel` are B1 LIVE-MODE SCAFFOLDING — they exist only because
-//     the draft slot lives in the CALLER (SetTable/RefEditor owns the draft + the open/close toggle),
-//     so the form must call back to reset/close it; B2/B3 deletes them when ObjectForm owns its own
-//     draft and the create confirm becomes `ctx.commit()`. (A draft's negative id makes its field
-//     edits bypass staging today, so the `ctx.new()` the form opens is INERT in create-mode — B2 is
-//     the seam that wires the commit; see the create-mode `save()`.)
+//     links nest. A COMPONENT: it opens a data-context — `ambient ctx = ctx.new(live)` — and binds Fields
+//     to the LIVE `obj` directly; the ctx decides whether a write stages or persists. The ctx is LIVE
+//     when `autosave` is true OR — in EDIT mode — the form renders NO scalar fields (so it has no Save to
+//     commit on: the Db root, a scalar-less container). This aligns "has a Save" with "is a staging
+//     transaction" (atomic-commit Step B): a create under a Save-less container persists IMMEDIATELY
+//     (nothing to defer to), never trapped in a context that can never commit. Otherwise (the common
+//     edit page) the ctx is a STAGING child: scalar edits stage in the overlay (the stored object is
+//     untouched) and commit on a Save button (`ctx.commit()`); Discard drops the overlay
+//     (`ctx.discard()`). A LIVE ctx (`autosave={true}`) → per-keystroke autosave, no buttons. COLLECTION
+//     props (reference/set/dictionary) bind to the LIVE object and each manages its own members.
+//       Create-mode (B1 collapse): when `join(obj)` is given, ObjectForm renders the `.create-form` card
+//     — a scalar-only field list (or the supplied `body(draft)`) + a Save that does `join(obj)` (then the
+//     caller's `onSave` to close). This is the SINGLE create path the SetTable and RefEditor both reveal (a
+//     nested create-mode ObjectForm over a `sys.new` draft). `join(obj)` does `set.add(draft)` /
+//     `setRef(…, draft)`, which AUTO-DEFERS (atomic-commit Step B): a transient draft added under a STAGING
+//     ctx STAGES into that ctx's creates instead of firing live. The relevant staging ctx is the one the
+//     `join` CLOSURE captured — the ENCLOSING SetTable/RefEditor's ambient — so a generic create under an
+//     object's form stages into the OBJECT FORM's ctx and persists on its Save (`ctx.commit` flushes
+//     creates). Under a Save-less container (a top-level set route) that ambient ctx is LIVE, so the create
+//     persists immediately on Add. (The create-mode form's OWN ctx therefore stays empty for these flows —
+//     the draft's scalar edits write to its live `obj` directly (id<0 bypasses staging) and the create joins
+//     the enclosing ctx — so no inner `ctx.commit()` is needed; the deferral is entirely the staging branch
+//     + the enclosing Save.) `join` + `body` are PERMANENT params; `onSave`/`onCancel` close the CALLER's
+//     draft slot (SetTable/RefEditor owns the draft + open/close toggle), so the form calls back after Add.
 //   • RefEditor(parent, prop, target) — a reference editor: current label, a pick button
 //     per extent() candidate, a clear button, and a create-new form. A COMPONENT: its body
 //     runs once as init (a local `state` holding a draft), and it returns a render fn.
@@ -165,7 +171,8 @@ public static class GenericUi
                     <Input obj={obj} desc={desc} readonly={readonly}>
 
             fn ObjectForm(obj, meta, base, autosave, join, body, onSave, onCancel)
-                ambient ctx = ctx.new(autosave)
+                var live = autosave == true || (join == null && !meta.props.any(p => p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary"))
+                ambient ctx = ctx.new(live)
                 fn save()
                     if join != null
                         join(obj)

@@ -763,6 +763,35 @@
       "expect": { "kind": "bool", "value": false }
     },
     {
+      "name": "atomic-commit Step B: set.add of a transient draft under a STAGING ctx stages into ctx.creates (in-memory; ctx.dirty true)",
+      "comment": "Under a STAGING ctx (ctx.new), adding a TRANSIENT (sys.new, id<0) draft to a set STAGES the create — it joins ctx.creates instead of firing/persisting — so ctx.dirty (which counts staged creates) is true. Strictly in-memory: the conformance harness has no store/WS, so 'not persisted' is inherent; the observable is that the create registered as staged work (dirty), identically on both twins. The C# AddToCollection staging branch is gated on the ctx ALONE (not the store), so it runs here exactly as the client twin's — the whole point of the lockstep branch. `box` is an object whose `items` is an empty set (sys.new of a set-prop descriptor); `draft` is a fresh transient object.",
+      "setup": [
+        { "type": "ambient", "name": "ctx", "value": { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "new" } } } },
+        { "type": "varDec", "name": "box", "value": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "new" } }, "params": [ { "type": "object", "props": [ { "name": "props", "value": { "type": "array", "items": [ { "type": "object", "props": [ { "name": "name", "value": { "type": "text", "value": "items" } }, { "name": "baseType", "value": { "type": "text", "value": "set" } }, { "name": "element", "value": { "type": "text", "value": "T" } } ] } ] } } ] } ] } },
+        { "type": "varDec", "name": "draft", "value": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "new" } }, "params": [ { "type": "object", "props": [ { "name": "props", "value": { "type": "array", "items": [ { "type": "object", "props": [ { "name": "name", "value": { "type": "text", "value": "n" } }, { "name": "baseType", "value": { "type": "text", "value": "int" } } ] } ] } } ] } ] } }
+      ],
+      "renders": [
+        { "type": "call", "params": [ { "type": "symbol", "name": "draft" } ], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "field" } }, "params": [ { "type": "symbol", "name": "box" }, { "type": "text", "value": "items" } ] }, "right": { "type": "symbol", "name": "add" } } },
+        { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "dirty" } }
+      ],
+      "expect": { "kind": "bool", "value": true }
+    },
+    {
+      "name": "atomic-commit Step B: committing a STAGING ctx clears its staged create (ctx.dirty false after commit)",
+      "comment": "After staging a create (set.add of a transient draft, as above) a ctx.commit() on the OUTERMOST staging ctx flushes + clears it — so ctx.dirty (staged creates count) is false again. The send is a server-side no-op (no wsHooks in the harness, and the C# final commit never persists — the teeth live in WsHandler.HandleCommit), so the only observable is that the staged create was consumed, identically on both twins. Same set/draft shape as the prior case.",
+      "setup": [
+        { "type": "ambient", "name": "ctx", "value": { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "new" } } } },
+        { "type": "varDec", "name": "box", "value": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "new" } }, "params": [ { "type": "object", "props": [ { "name": "props", "value": { "type": "array", "items": [ { "type": "object", "props": [ { "name": "name", "value": { "type": "text", "value": "items" } }, { "name": "baseType", "value": { "type": "text", "value": "set" } }, { "name": "element", "value": { "type": "text", "value": "T" } } ] } ] } } ] } ] } },
+        { "type": "varDec", "name": "draft", "value": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "new" } }, "params": [ { "type": "object", "props": [ { "name": "props", "value": { "type": "array", "items": [ { "type": "object", "props": [ { "name": "name", "value": { "type": "text", "value": "n" } }, { "name": "baseType", "value": { "type": "text", "value": "int" } } ] } ] } } ] } ] } }
+      ],
+      "renders": [
+        { "type": "call", "params": [ { "type": "symbol", "name": "draft" } ], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "field" } }, "params": [ { "type": "symbol", "name": "box" }, { "type": "text", "value": "items" } ] }, "right": { "type": "symbol", "name": "add" } } },
+        { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "commit" } } },
+        { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "ctx" }, "right": { "type": "symbol", "name": "dirty" } }
+      ],
+      "expect": { "kind": "bool", "value": false }
+    },
+    {
       "name": "unary ! negates true to false",
       "text": "!true",
       "expr": { "type": "not", "operand": { "type": "bool", "value": true } },

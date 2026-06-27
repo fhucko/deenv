@@ -55,6 +55,13 @@ public sealed record WsRequest
     // commit: the batch of field edits from a ctx.commit(). Shaped as a list so Step B can add
     // `creates`/`relations` without re-cutting the message format. Step A only sends/handles `edits`.
     public JsonElement? Edits { get; init; }
+    // commit (atomic-commit Step B): the new objects staged in this ctx — each `{ tempId, props }` (the
+    // draft's scalar fields; its TYPE is derived server-side from the relation that links it, never asserted
+    // on the wire) — and the `relations` linking them in (`{ kind:"set", setId, childId }` /
+    // `{ kind:"ref", parentId, prop, childId }`, where childId may be a create's negative tempId). Absent on
+    // an edits-only commit.
+    public JsonElement? Creates { get; init; }
+    public JsonElement? Relations { get; init; }
 }
 
 // Response records — one per op. Each property's camelCase (the shared `_jsonOpts`
@@ -97,12 +104,23 @@ public sealed record ObjectPropChangeResponse
     public bool Ok => true;
 }
 
-// The reply for a `commit` op: all-or-nothing batch of field edits from a ctx.commit().
-// Step B will extend with idMap (negative→real id remap for creates); Step A edits-only carries just ok.
+// The reply for a `commit` op: all-or-nothing batch of field edits + creates + relations from a ctx.commit().
+// `idMap` (atomic-commit Step B) carries the negative→real id remap for every created object plus its minted
+// nested-collection ids, so the client re-keys its optimistic graph. Omitted (null) on an edits-only commit.
 public sealed record CommitResponse
 {
     public string Op => "commit";
     public bool Ok => true;
+    public IReadOnlyList<CommitIdMapEntry>? IdMap { get; init; }
+}
+
+// One created object's remap in a commit reply: its transient client id → the real extent id, plus the
+// object's minted nested COLLECTION props (id + element type), so the client re-keys its transient arrays.
+public sealed record CommitIdMapEntry
+{
+    public required int TempId { get; init; }
+    public required int RealId { get; init; }
+    public required Dictionary<string, CollectionInfo> Collections { get; init; }
 }
 
 public sealed record SetReferenceFieldResponse
@@ -183,6 +201,15 @@ public sealed record ErrorResponse
 {
     public required string Error { get; init; }
 }
+
+// ── parsed commit relations (atomic-commit Step B) ──────────────────────────────────────────────
+// A relation linking a (possibly just-created) object into the graph. ChildRef is the linked object's id —
+// a transient create's NEGATIVE tempId, or a resolved positive real id. ChildType is the link-derived
+// declared TYPE of the child (a set's element type / a ref prop's target type) — server-resolved, never
+// wire-asserted — used to type a transient create + the store link.
+public abstract record ParsedRelation(int ChildRef, string ChildType);
+public sealed record ParsedSetRelation(int SetId, int Child, string ElementType) : ParsedRelation(Child, ElementType);
+public sealed record ParsedRefRelation(int ParentId, string Prop, int Child, string TargetType) : ParsedRelation(Child, TargetType);
 
 // Transport-agnostic WebSocket message dispatcher.
 // One incoming JSON message → one outgoing JSON response (request/response model).
@@ -576,11 +603,17 @@ public sealed class WsHandler
         return Serialize(new ObjectPropChangeResponse());
     }
 
-    // Atomic batch commit of staged field edits from ctx.commit() (Step A — edits only; Step B adds creates/relations).
-    // Payload: { edits: [ { objectId, prop, value } ] }. Validates ALL edits first (schema + access floor);
-    // if ALL pass, applies every edit in one store batch (one Save()) and replies { ok }; if ANY fails,
-    // applies NOTHING and replies { error } — so partial persistence is impossible (today's N-objectPropChange
-    // fan-out left the first accepted edit persisted even when a later one was denied).
+    // Atomic batch commit of a whole changeset staged in a ctx.commit() — field EDITS (Step A) + new objects
+    // (CREATES) and the RELATIONS linking them (Step B). Payload: { edits: [ { objectId, prop, value } ],
+    // creates: [ { tempId, props } ], relations: [ { kind, … } ] }. VALIDATES EVERYTHING FIRST (schema +
+    // access floor + password hash) without touching the store; if ALL pass, applies the whole changeset in
+    // ONE store batch (mint + link + write, ONE Save()) and replies { ok, idMap }; if ANY fails, applies
+    // NOTHING and replies { error } — so a partial graph is impossible (no orphan object, no half-linked set).
+    //
+    // FLAT remap invariant: mint-all-then-link is correct because a create's draft fields are SCALARS only
+    // (object links are the separate `relations`), so creates have no inter-create field deps — every create
+    // gets a real id, then every relation/edit referencing a tempId is remapped. A reference to a tempId NOT
+    // in the batch fails the whole commit (the store's ResolveRefId throws); a negId never leaks back as a real id.
     private string HandleCommit(WsRequest req)
     {
         if (req.Edits is not { ValueKind: JsonValueKind.Array } editsEl)
@@ -589,14 +622,57 @@ public sealed class WsHandler
         var session = Session(req);
         var floor = Floor(req);
 
-        // Validate phase: collect every (id, prop, leaf, type) without touching the store.
-        var validated = new List<(int ObjectId, string Prop, NodeValue Leaf)>();
+        // ── relations: index each by the create tempId it introduces, so a create can be TYPED from its
+        //    link (a set's element type / a ref prop's declared target type) — the wire asserts no type. A
+        //    relation also drives a write-floor decision (link a member = create; set a ref = edit the owner).
+        var relations = new List<ParsedRelation>();
+        var createTypeByTempId = new Dictionary<int, string>();
+        if (req.Relations is { ValueKind: JsonValueKind.Array } relsEl)
+            foreach (var relEl in relsEl.EnumerateArray())
+            {
+                if (ParseRelation(relEl, session) is not { } rel)
+                    return Error("commit relation is malformed.");
+                relations.Add(rel);
+                // A relation whose child is a transient create supplies that create's declared TYPE.
+                if (rel.ChildRef < 0 && rel.ChildType is { } ct)
+                    createTypeByTempId[rel.ChildRef] = ct;
+            }
+
+        // ── creates: validate each against its relation-derived type — built EXACTLY as HandleAddSetMember
+        //    (ScalarObject(type, 0, fields) candidate + the password-hash chokepoint + RequireWrite "create").
+        var createBatch = new List<CommitCreate>();
+        if (req.Creates is { ValueKind: JsonValueKind.Array } createsEl)
+            foreach (var createEl in createsEl.EnumerateArray())
+            {
+                if (!createEl.TryGetProperty("tempId", out var tEl) || tEl.ValueKind != JsonValueKind.Number)
+                    return Error("commit create missing numeric 'tempId'.");
+                var tempId = tEl.GetInt32();
+                if (!createTypeByTempId.TryGetValue(tempId, out var typeName))
+                    return Error($"Commit create {tempId} has no relation to type it."); // an orphan create
+                if (_desc.FindType(typeName) is not { } typeDef)
+                    return Error($"Unknown type '{typeName}'.");
+
+                if (!createEl.TryGetProperty("value", out var valueEl))
+                    return Error("commit create missing 'value'.");
+                // The draft's scalar fields in the SAME tagged { props: { name: leaf } } shape an arrayAdd
+                // ships, validated against the declared type exactly like HandleAddSetMember (ExecObjectValue).
+                var fields = ExecObjectValue(valueEl, typeDef);
+
+                // The write floor: a create of the element/target type, decided over the NEW object's scalar
+                // fields (id 0 — no identity yet), exactly as HandleAddSetMember / HandleArrayAdd.
+                RequireWrite(floor, "create", typeName, Code.AccessFloor.ScalarObject(typeName, 0, fields, _desc));
+                // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext BEFORE the store —
+                // a staged `User` create can never skip hashing (a SECURITY must), same as every other create path.
+                createBatch.Add(new CommitCreate(tempId, typeName, HashPasswordFields(typeName, fields)));
+            }
+
+        // ── edits: validate each exactly as Step A / HandleObjectPropChange (an edit of an EXISTING object).
+        var mutations = new List<CommitMutation>();
         foreach (var editEl in editsEl.EnumerateArray())
         {
             if (!editEl.TryGetProperty("objectId", out var idEl) || idEl.ValueKind != JsonValueKind.Number)
                 return Error("commit edit missing numeric 'objectId'.");
-            var objectIdRaw = idEl.GetInt32();
-            var objectId = Resolve(session, objectIdRaw);
+            var objectId = Resolve(session, idEl.GetInt32());
 
             if (!editEl.TryGetProperty("prop", out var propEl) || propEl.ValueKind != JsonValueKind.String)
                 return Error("commit edit missing 'prop'.");
@@ -620,21 +696,92 @@ public sealed class WsHandler
             // Write floor: same decision as HandleObjectPropChange — an edit of the existing object.
             RequireWrite(floor, "edit", hit.TypeName, Code.AccessFloor.ScalarObject(hit.TypeName, objectId, hit.Fields, _desc));
 
-            // Password hash chokepoint: same as HandleObjectPropChange.
-            NodeValue toWrite;
+            // Password hash chokepoint: same as HandleObjectPropChange — a blank password is no change.
             if (HashLeaf(hit.TypeName, prop, leaf) is { } hashed)
-                toWrite = hashed;
-            else
-                continue; // blank password → no change for this field (same rule as today)
-
-            validated.Add((objectId, prop, toWrite));
+                mutations.Add(new FieldWriteMutation(objectId, prop, hashed));
         }
 
-        // Apply phase: all passed — write the batch in one lock + one Save().
-        if (validated.Count > 0)
-            _store.WriteFieldBatch(validated);
+        // ── relation write-floor + the link mutations. A set link = a `create` of the member type (whether
+        //    minting it here, or linking an existing object); a ref link = an `edit` of the OWNER (and a clear
+        //    is just an owner edit). A relation to an EXISTING (positive-id) child is decided over its current
+        //    fields, exactly as HandleAddSetMember's link-existing path.
+        foreach (var rel in relations)
+            switch (rel)
+            {
+                case ParsedSetRelation(var setId, var childRef, var childType):
+                {
+                    if (childRef >= 0 && _store.ReadById(childRef) is { } linked)
+                        RequireWrite(floor, "create", linked.TypeName,
+                            Code.AccessFloor.ScalarObject(linked.TypeName, childRef, linked.Fields, _desc));
+                    // a transient (childRef<0) member was already create-gated above (createBatch); childType
+                    // is its element type, used only to type the link in the store.
+                    _ = childType;
+                    mutations.Add(new SetLinkMutation(setId, childRef));
+                    break;
+                }
+                case ParsedRefRelation(var parentId, var prop, var childRef, var childType):
+                {
+                    if (_store.ReadById(parentId) is not { } owner)
+                        return Error($"No object with id {parentId}.");
+                    RequireWrite(floor, "edit", owner.TypeName,
+                        Code.AccessFloor.ScalarObject(owner.TypeName, parentId, owner.Fields, _desc));
+                    if (childRef >= 0 && _store.ReadById(childRef) is { } linkedRef)
+                        RequireWrite(floor, "create", linkedRef.TypeName,
+                            Code.AccessFloor.ScalarObject(linkedRef.TypeName, childRef, linkedRef.Fields, _desc));
+                    mutations.Add(new RefLinkMutation(parentId, prop, childRef, childType));
+                    break;
+                }
+            }
 
-        return Serialize(new CommitResponse());
+        // ── apply: everything validated — mint + link + write the whole changeset in one lock + one Save().
+        var results = createBatch.Count > 0 || mutations.Count > 0
+            ? _store.CommitBatch(createBatch, mutations)
+            : [];
+
+        var idMap = results.Select(r => new CommitIdMapEntry
+        {
+            TempId = r.TempId,
+            RealId = r.RealId,
+            Collections = r.Collections.ToDictionary(
+                kv => kv.Key, kv => new CollectionInfo { Id = kv.Value.Id, ElementTypeName = kv.Value.ElementTypeName }),
+        }).ToList();
+
+        return Serialize(new CommitResponse { IdMap = idMap.Count > 0 ? idMap : null });
+    }
+
+    // Parse a commit relation (atomic-commit Step B). A set relation `{ kind:"set", setId, childId }` links a
+    // member into a set; a ref relation `{ kind:"ref", parentId, prop, childId }` points a single reference at
+    // a target. childId may be a transient create's NEGATIVE id (resolved to its real id in the store batch) or
+    // an existing positive id (resolved through the session's transient-id remap, like every other addressed
+    // id). ChildType — the create's declared TYPE — is derived from the link itself (a set's element type, a
+    // ref prop's declared target type), so the WIRE never asserts a type a client could forge. Null if malformed.
+    private ParsedRelation? ParseRelation(JsonElement el, ClientSession? session)
+    {
+        if ((el.TryGetProperty("kind", out var kindEl) ? kindEl.GetString() : null) is not { } kind) return null;
+        if (!el.TryGetProperty("childId", out var childEl) || childEl.ValueKind != JsonValueKind.Number) return null;
+        var childRaw = childEl.GetInt32();
+        var childRef = childRaw < 0 ? childRaw : Resolve(session, childRaw); // a tempId stays; a real id remaps
+
+        if (kind == "set")
+        {
+            if (!el.TryGetProperty("setId", out var setEl) || setEl.ValueKind != JsonValueKind.Number) return null;
+            var setId = Resolve(session, setEl.GetInt32());
+            var elementType = _store.SetElementType(setId);
+            if (elementType is null) return null; // no such set
+            return new ParsedSetRelation(setId, childRef, elementType);
+        }
+        if (kind == "ref")
+        {
+            if (!el.TryGetProperty("parentId", out var pEl) || pEl.ValueKind != JsonValueKind.Number) return null;
+            if ((el.TryGetProperty("prop", out var propEl) ? propEl.GetString() : null) is not { } prop) return null;
+            var parentId = Resolve(session, pEl.GetInt32());
+            if (_store.ReadById(parentId) is not { } owner) return null;
+            var propDef = _desc.FindType(owner.TypeName)?.Props?.FirstOrDefault(p => p.Name == prop);
+            if (propDef is null || propDef.Cardinality != Cardinality.Single || !_desc.IsObjectType(propDef.Type))
+                return null; // not a single reference
+            return new ParsedRefRelation(parentId, prop, childRef, propDef.Type);
+        }
+        return null;
     }
 
     // Set/clear a single object REFERENCE prop on the object with this intrinsic id —

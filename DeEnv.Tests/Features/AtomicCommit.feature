@@ -26,3 +26,47 @@ Feature: Atomic ctx.commit (edits)
     Then the commit is rejected
     And the stored "Item" 2 has "title" equal to "Seed title"
     And the stored "Item" 2 has "count" equal to 0
+
+  # ── Step B: the atomic changeset (edits + a new object of ANOTHER type + a relation) ──
+  # The headline: a custom render stages, in ONE ctx, an edit to an EXISTING object, a CREATE of a new
+  # object of a SEPARATE unrelated type, and the RELATION linking it — committed all-or-none. A connected
+  # parent+children graph is just one shape of this; the requirement is atomicity over an arbitrary,
+  # possibly-unrelated changeset. The `commit` op is driven directly at the WsHandler level (in-process).
+
+  Scenario: An atomic changeset of an edit + a new object + a relation persists all with real ids
+    Given the atomic-changeset fixture app
+    When the changeset edits item 2 title to "Changed title", creates a Tag "release" and links it into tags
+    Then the commit is accepted
+    And the stored "Item" 2 has "title" equal to "Changed title"
+    And a "Tag" labelled "release" exists in the store
+    And the "tags" set contains a "Tag" labelled "release"
+    And the commit reply maps the new Tag to a real id
+
+  # The all-or-none teeth: ONE denied change in the batch rolls the WHOLE changeset back — no orphan Tag
+  # in the extent, and the Item edit reverted. Before atomic commit, the live set.add minted the Tag
+  # before any edit floor ran, so a denied sibling left an orphan object behind.
+  Scenario: A changeset with one denied change persists nothing — no orphan object, no partial graph
+    Given the atomic-changeset fixture app denying Tag create
+    And the current user is the member
+    When the member's changeset edits item 2 title to "Sneaky", creates a Tag "ghost" and links it into tags
+    Then the commit is rejected
+    And the stored "Item" 2 has "title" equal to "Seed title"
+    And no "Tag" labelled "ghost" exists in the store
+
+  # The flat-remap invariant's teeth: a relation that references a create tempId NOT present in the batch
+  # is a malformed changeset — the WHOLE commit is rejected and the store is left untouched (no half-applied
+  # link, no leaked id). Pins the store's own all-or-none guard (a negId never resolves to a real id).
+  Scenario: A changeset whose relation references a missing create is rejected and persists nothing
+    Given the atomic-changeset fixture app
+    When a changeset links a non-existent create into tags
+    Then the commit is rejected
+    And the "tags" set is empty
+
+  # The password-hash chokepoint (SECURITY): a staged User create carrying a plaintext password is PBKDF2-
+  # hashed before the store, exactly like every other create path — a staged create can never store plaintext.
+  Scenario: A staged User create hashes its password before the store
+    Given the atomic-changeset fixture app
+    When a changeset creates a User "Carol" with password "s3cret" and links it into users
+    Then the commit is accepted
+    And the stored "User" "Carol" password is not the plaintext "s3cret"
+    And the stored "User" "Carol" password verifies against "s3cret"
