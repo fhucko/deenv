@@ -1387,10 +1387,10 @@ public class InstanceContext
             role: "Member"
     """;
 
-    // Ids from the seed above.
+    // Ids from the seed above. NOTE: the User ids deliberately mirror AccessAdminId (3) / AccessMemberId (4)
+    // so the denial scenario can reuse AccessSteps' "the current user is the member" binding — keep them
+    // aligned if either seed changes (the principal binds by AccessMemberId, not a TwoField* constant).
     public const int TwoFieldItemId = 2;
-    public const int TwoFieldAdminId = 3;
-    public const int TwoFieldMemberId = 4;
 
     // The seeded "Gate #3" milestone's id (a set member of Db.milestones) — the write scenarios edit /
     // delete it by id and assert the store directly. Mirrors the initialData seed above.

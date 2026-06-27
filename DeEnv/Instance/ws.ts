@@ -490,6 +490,9 @@ function connectWs(): void {
         // hook buffers edits instead of sending individual objectPropChange messages. endCommit flushes
         // the accumulated edits as ONE `commit` message (ONE journal entry, ONE stateGen bump).
         beginCommit: ctx => {
+            // ponytail: single-level only — a commit never nests inside a commit (the staged-walk never
+            // calls commit()), so the buffer is reset unconditionally with no txDepth guard. Step B must
+            // preserve that invariant (don't commit from within a staged-walk).
             committingCtx = ctx;
             commitEdits = [];   // open the buffer — propChange hooks into it from now on
         },
