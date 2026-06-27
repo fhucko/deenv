@@ -1,6 +1,6 @@
 # Atomic commit — the ctx's staged set (edits + creates) as one transaction
 
-**Status: spec'd 2026-06-27, BUILDING. Invariants (the validity "teeth") deferred — see end.** The destination
+**Status: BUILDING — Step A (atomic edits) LANDED `ec076eb`/`932430d` (suite 550), the internal foundation (not yet "the feature"); Step B (transient-create staging, the twin change) next. Invariants (the validity "teeth") deferred — see end.** The destination
 is a commit where **the `ctx` is the true atomic unit**: everything staged in it — field edits, *and* new
 objects, *and* the relations linking them — applies as one all-or-nothing transaction. Off the slice-2 (form
 Save feedback) thread; pairs with `docs/plans/virtual-password-field.md` (the reactive status that renders the
@@ -81,9 +81,10 @@ remap but once for the batch. `ctx.pending` → 0/1; the reactive `ctx.status` (
 The deliverable is the coherent unit (edits + creates). It is built and verified in steps; the edits-only
 checkpoint is **not** released as "atomic commit" — that would be the split model rightly rejected:
 
-- **Step A — the commit protocol for edits.** One `commit` message (designed with the creates-capable payload
-  *shape* from the start, so B doesn't re-cut it), validate-all-then-apply, one journal entry, one store
-  batch-write. Checkpoint: atomic *edits*. Verified, not shipped as the feature.
+- **Step A — the commit protocol for edits — DONE (`ec076eb`/`932430d`, suite 550).** One `commit` message
+  (creates-capable payload *shape*, so B doesn't re-cut it), validate-all-then-apply, one journal entry, one
+  store batch-write (`WriteFieldBatch`). Review-confirmed byte-identical floor decision + true all-or-none.
+  Checkpoint: atomic *edits*. Landed as the foundation, NOT released as the feature (creates aren't in yet).
 - **Step B — stage creates + relations.** The create-flow change (Save stages, not lives), creates/relations in
   the payload, the subtree id-remap, the bundled-undo journal entry. Completes the coherent unit. **Done = A + B.**
 
