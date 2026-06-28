@@ -1,4 +1,4 @@
-# Instance model
+﻿# Instance model
 
 How an instance is described, addressed, and rendered. This is the
 functional core that was missing when the first slice was scrapped.
@@ -14,20 +14,31 @@ document describes the conceptual model; that one describes the format on
 disk.
 
 A type is one of:
-- **base type** — `bool`, `int`, `decimal`, `text`, `date`, `datetime`.
+- **base type** — `bool`, `int`, `decimal`, `text`, `date`, `datetime`, `password`.
+- **enum** — a user-defined closed set of text values.
 - **object** — a user-defined named type with a **fixed, ordered set of
-  fields**, each field a `(name, type)` pair where `type` is any type
-  (base, object, or dictionary). Structure is declared up front, not
-  dynamic. E.g. `Customer = { name: text, balance: decimal,
-  orders: dictionary of Order }`.
-- **dictionary of <type>** — the only collection kind. Keyed; each entry
-  addressed by a **stable key**.
+  fields**, each field a `(name, type, cardinality)` triple. Structure is
+  declared up front, not dynamic.
+- **reference to <type>** — a single field whose value is an object that
+  lives in its type's extent (not owned inline). Declared `propName TypeName`.
+- **set of <type>** — a collection keyed by **member identity**. Declared
+  `propName set of TypeName`. Members live in their type's extent; the set
+  holds references. Addressed as `/setField/memberId`.
+- **dictionary of <type>** — a collection keyed by a **user-chosen stable
+  key** (text or int). Declared `propName dictionary of TypeName`. Addressed
+  as `/dictField/key`.
+
+All non-constant values (objects, sets, dictionaries) carry an **intrinsic
+`id`** (monotonic int, stored separately from props) — identity is intrinsic
+to being a non-constant. Objects live in per-type **extents** (flat id-keyed
+pools); sets and references point into extents, not own their targets.
 
 Everything below (addressing, rendering, breadcrumbs) is a recursion over
 this definition. The bool-root case is simply the recursion bottoming out
 immediately.
 
-(There is no `set` and no `list`. Dictionary is the only collection — see
+(There is no `list`. Positional addressing is unstable under deletion/reordering;
+sets and dictionaries cover all real use cases with stable identity — see
 "Why dictionaries only" and "Ordering".)
 
 ## URL = navigation into the data
@@ -41,10 +52,11 @@ Every node is addressable by URL; the path walks the data tree from `Db`:
 A URL addresses a node; reading returns that node's data; writes target the
 URL of the thing changed (read/write addressing is symmetric).
 
-## Why dictionaries only (stable identity everywhere)
+## Why stable-keyed collections only (no positional lists)
 
-Because dictionaries are the only collection and every entry has a stable
-key, **every node in the whole tree is addressed by stable identity**. There
+Both collection kinds (sets and dictionaries) use **stable identity as the key** —
+sets by member id, dictionaries by user-chosen key — so **every node in the whole
+tree is addressed by stable identity**. There
 is no positional addressing anywhere, so a URL always means the same node
 until that exact node is deleted. This removes the entire class of "the
 thing under my URL silently changed" problems that positional lists have.
@@ -111,45 +123,50 @@ URL scheme is unaffected: every node stays addressable (e.g.
 `/customers/42/address` resolves), it just renders inline on the parent page
 under normal viewing. The URL works; only dictionaries force a new page.
 
-## Rendering architecture (staged)
+## Rendering architecture
 
-**Now (Milestone 1):**
-- **Server-rendered first paint.** C# renders complete HTML for each URL.
-  Every node is a real page: directly reachable, bookmarkable, works without
-  JS. This is what makes "URL = navigation" literal.
-- **Client takeover after first paint.** TypeScript then drives the app
-  "like React": subsequent navigation is client-side — TS fetches the target
-  node's data as JSON and renders its form/table itself, without a full
-  server page render.
-- **So C# serves two things per node:** rendered HTML (first paint / direct
-  URL hits) and a JSON data endpoint (client-side navigation).
-- **TS owns** rendering-after-first-paint and all interaction, including
-  background save-on-change.
+**First paint — SSR.** `SsrRenderer` loads the instance's `fn render()` (or
+synthesizes the generic one via `GenericUi.Effective` for apps with no custom
+render) and runs it through the Code interpreter. The result is serialized to
+HTML. The page shell also embeds:
+- `window.initData` — the memo-cache/scope snapshot accessed during the render
+  (structural privacy: only what was touched ships, never raw db);
+- `window.initUi` — the AST of the `fn render()` + library functions;
+- `window.initInfraPort` — the port where `/ws` and the compiled `/js` bundle
+  live (separate from the app's clean data URL space).
 
-**Save behavior:**
-- **Explicit Save on every node** — there is no immediate save-on-change.
-  Every editable node (an object form, *and* a single-value leaf such as a
-  bool/text/number) is committed with a Save button. bool checkboxes are
-  ordinary form inputs like any other field. This is one consistent
-  interaction instead of a toggle/form split, and it pairs naturally with the
-  future stale-version conflict flow (see DECISIONS.md) — explicit Save is the
-  natural version-commit unit, whereas immediate per-field save would fight
-  optimistic concurrency. (Decided in Milestone 2; supersedes the earlier
-  "toggles save immediately" rule.)
+**`sys.resolve(path)`.** The generic `fn render()` calls `sys.resolve(path)`
+to determine what the current URL addresses — returning `{kind, target, parent,
+prop, typeName}` where `kind` is one of `object | set | ref | dict | leaf |
+notFound`. The render switches on kind and calls the matching library component
+(`ObjectForm`, `SetTable`, `RefEditor`, …). This single switch replaced the old
+C# per-URL dispatch; a generic app is now literally the custom-render path.
 
-**Creating dictionary entries** is a transient client-side form, not a
-navigable node: clicking "New" opens a blank form (with a key input for
-manual-key dictionaries), and the entry is created only on that form's Save.
-There is no create URL, so a URL only ever addresses an entry that exists
-(and an entry whose key happens to be `new` is unaffected).
+**Client hydration (`init.ts`).** After the page loads the client:
+1. Merges `initData` into its local scope (the warm graph).
+2. Re-executes `initUi` functions to close over the live scope.
+3. Runs the same `fn render()` through the TS interpreter — same Code, same
+   result, proven byte-identical by the conformance suite.
+4. Marks the page hydrated (`data-hydrated` on `<html>`).
 
-**Far future (deferred):**
-- **Predictive prefetching + client-side caching** — loading data for nodes
-  the current view implies you'll visit next, so navigation feels instant.
-  This is explicitly where the render-coupled storage engine (VISION pillar
-  5) belongs: "prefetch what the view implies" *is* that pillar. Not built
-  now; do not pull into Milestone 1.
+After hydration the client drives SPA navigation: a route change re-runs
+`fn render()` client-side over the warm graph.
 
+**Mutations.** Edits go over WebSocket to `WsHandler`. A form's fields stage
+into an editing context (`ctx`) and commit atomically on Save (`ctx.commit()`).
+If the client's warm graph is missing data it sends a `refetch` — the server
+re-runs the render and returns only the delta scope, no HTML.
+
+**Save behavior:** fields stage into a `ctx`; Save commits all-or-none. No
+immediate per-field save. Explicit Save is the natural version-commit unit and
+pairs with the future conflict model.
+
+**Creating set/dict entries** opens a create-mode `ObjectForm` inline (no
+navigable create URL). On Save the draft commits via `set.add`; the create URL
+never exists, so a URL only ever addresses a persisted entry.
+
+**Deferred:** predictive prefetching + client-side caching — the render-coupled
+storage engine (VISION pillar 5) is the destination this moves toward.
 ## Breadcrumbs
 
 Breadcrumbs mirror the URL path **exactly, segment for segment** — the link
