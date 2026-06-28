@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "deenv",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "DeEnv"],
+      "port": 8080,
+      "autoPort": false
+    }
+  ]
+}
