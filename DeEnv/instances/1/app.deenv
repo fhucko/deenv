@@ -29,8 +29,6 @@ ui
     var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime", "password"]
     var typeKinds = ["object", "enum"]
     var cardinalities = ["single", "set", "dictionary"]
-    var confirmDeleteId = 0
-    var confirmDeleteInstanceId = 0
     var creatingInstance = false
 
     fn addType(design)
@@ -50,16 +48,6 @@ ui
         if prop.type == "text" && prop.cardinality == "single"
             return "prop-row is-text-single"
         return "prop-row"
-
-    fn kebabClass(open)
-        if open
-            return "kebab-menu open"
-        return "kebab-menu"
-
-    fn backdropClass(open)
-        if open
-            return "kebab-backdrop open"
-        return "kebab-backdrop"
 
     fn startRename(i)
         renameId = i.id
@@ -86,16 +74,7 @@ ui
             return <td class="design-actions">
                 <a class="edit-design" href={sys.nest("/designs", sys.id(d))}>
                     "Edit"
-                if confirmDeleteId == sys.id(d)
-                    <span class="delete-confirm">
-                        "Delete?"
-                    <button class="delete-yes" onClick={() => db.designs.remove(d)}>
-                        "Yes"
-                    <button class="delete-cancel" onClick={() => confirmDeleteId = 0}>
-                        "Cancel"
-                else
-                    <button class="delete-design" onClick={() => confirmDeleteId = sys.id(d)}>
-                        "Delete"
+                <ConfirmButton label="Delete" onConfirm={() => db.designs.remove(d)} cls="delete-design">
         fn createDesignForm(draft)
             return <Field obj={draft} desc={sys.schema("Design", "label")}>
         return <main class="ide-designs">
@@ -184,9 +163,16 @@ ui
 
     fn instanceActions(inst, showOpen)
         var state = { open: false }
+        fn kebabClass(open)
+            if open
+                return "kebab-menu open"
+            return "kebab-menu"
+        fn backdropClass(open)
+            if open
+                return "kebab-backdrop open"
+            return "kebab-backdrop"
         fn closeMenu()
             state.open = false
-            confirmDeleteInstanceId = 0
         fn pickRename()
             startRename(inst)
             closeMenu()
@@ -206,16 +192,7 @@ ui
                         "Rename"
                     <button class="clone-instance" onClick={() => pickClone()}>
                         "Clone"
-                    if confirmDeleteInstanceId == inst.id
-                        <span class="delete-confirm">
-                            "Delete?"
-                        <button class="delete-yes" onClick={() => sys.delete(inst.id)}>
-                            "Yes"
-                        <button class="delete-cancel" onClick={() => confirmDeleteInstanceId = 0}>
-                            "Cancel"
-                    else
-                        <button class="delete-instance" onClick={() => confirmDeleteInstanceId = inst.id}>
-                            "Delete"
+                    <ConfirmButton label="Delete" onConfirm={() => sys.delete(inst.id)} cls="delete-instance">
         return render
 
     fn instancesListPage()

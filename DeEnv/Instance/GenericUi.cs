@@ -170,6 +170,25 @@ public static class GenericUi
                         sys.humanize(desc.name)
                     <Input obj={obj} desc={desc} readonly={readonly}>
 
+            fn ConfirmButton(label, onConfirm, cls)
+                var state = { confirming: false }
+                fn doConfirm()
+                    onConfirm()
+                    state.confirming = false
+                fn render()
+                    if state.confirming
+                        <span class="delete-confirm">
+                            label
+                            "?"
+                        <button class="delete-yes" onClick={doConfirm}>
+                            "Yes"
+                        <button class="delete-cancel" onClick={() => state.confirming = false}>
+                            "Cancel"
+                    else
+                        <button class={cls} onClick={() => state.confirming = true}>
+                            label
+                return render
+
             fn ObjectForm(obj, meta, base, autosave, join, body, onSave, onCancel)
                 var live = autosave == true || (join == null && !meta.props.any(p => p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary"))
                 ambient ctx = ctx.new(live)
