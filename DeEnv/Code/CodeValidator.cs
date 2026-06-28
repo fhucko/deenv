@@ -200,6 +200,11 @@ public static class CodeValidator
             case CodeNot not:
                 ValidateValue(not.Operand, scope);
                 break;
+            case CodeTernary ternary:
+                ValidateValue(ternary.Condition, scope);
+                ValidateValue(ternary.Then, scope);
+                ValidateValue(ternary.Else, scope);
+                break;
             case CodeCall call:
                 ValidateValue(call.Fn, scope);
                 foreach (var arg in call.Params) ValidateValue(arg, scope);

@@ -12,7 +12,7 @@
 type CodeStatement = CodeAssignment | CodeBlock | CodeVarDec | CodeFunction | CodeReturn | CodeCall | CodeIf | CodeAmbient;
 
 type CodeValue = CodeInt | CodeText | CodeBool | CodeNull | CodeSymbol | CodeObject | CodeArray |
-    CodeFunction | CodeTag | CodeInfixOp | CodeCall | CodeAssignment | CodeNot;
+    CodeFunction | CodeTag | CodeInfixOp | CodeCall | CodeAssignment | CodeNot | CodeTernary;
 
 type CodeTagChild = CodeValue | CodeTagIf | CodeTagForEach;
 
@@ -26,6 +26,7 @@ interface CodeObject { type: "object"; props: CodeObjectProp[]; }
 interface CodeObjectProp { name: string; value: CodeValue; }
 interface CodeInfixOp { type: "infixOp"; op: string; left: CodeValue; right: CodeValue; }
 interface CodeNot { type: "not"; operand: CodeValue; }
+interface CodeTernary { type: "ternary"; condition: CodeValue; then: CodeValue; else: CodeValue; }
 interface CodeAssignment { type: "assign"; target: CodeValue; value: CodeValue; }
 interface CodeBlock { type: "block"; statements: CodeStatement[]; }
 interface CodeVarDec { type: "varDec"; name: string; value: CodeValue | null; }
@@ -220,6 +221,13 @@ function executeValue(value: CodeValue, scope: ExecScope, context: ExecContext):
         }
         case "infixOp": return executeInfixOp(value, scope, context);
         case "not": return executeNot(value, scope, context);
+        // Ternary: evaluate the condition, then ONLY the chosen branch (short-circuit). Delegating
+        // to executeValue on the branch preserves its setValue. Twin of CodeExecutor's CodeTernary arm.
+        case "ternary": {
+            const cond = executeValue(value.condition, scope, context).value;
+            const branch = (cond.type === "bool" ? cond.value : false) ? value.then : value.else;
+            return executeValue(branch, scope, context);
+        }
         // sys.field(obj, name) is a bindable lvalue (two-way binding needs its setValue), so it
         // is resolved here rather than through executeCall (which drops setValue). Its callee is
         // a `sys.field` member access, so recognize the sys-rooted callee (not a bare symbol).
@@ -1215,7 +1223,20 @@ function executeInfixOpBasic(codeInfixOp: CodeInfixOp, scope: ExecScope, context
     const asInt = (v: ExecValue) => { if (v.type !== "int") throw new Error("Expected an int."); return v.value; };
     const asBool = (v: ExecValue) => { if (v.type !== "bool") throw new Error("Expected a bool."); return v.value; };
     switch (codeInfixOp.op) {
-        case "add": return { type: "int", value: asInt(left) + asInt(right) };
+        // `+` is overloaded: a string operand makes it concatenation (both sides stringified),
+        // otherwise integer addition. Twin of CodeExecutor's Add arm + AsText.
+        case "add": {
+            if (left.type === "text" || right.type === "text") {
+                const asText = (v: ExecValue): string => {
+                    if (v.type === "text") return v.value;
+                    if (v.type === "int" || v.type === "bool") return String(v.value);
+                    if (v.type === "null" || v.type === "nothing") return "";
+                    throw new Error("Cannot convert value to text.");
+                };
+                return { type: "text", value: asText(left) + asText(right) };
+            }
+            return { type: "int", value: asInt(left) + asInt(right) };
+        }
         case "subtract": return { type: "int", value: asInt(left) - asInt(right) };
         case "multiply": return { type: "int", value: asInt(left) * asInt(right) };
         case "divide": return { type: "int", value: Math.trunc(asInt(left) / asInt(right)) };

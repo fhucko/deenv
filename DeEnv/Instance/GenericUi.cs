@@ -176,17 +176,31 @@ public static class GenericUi
                     onConfirm()
                     state.confirming = false
                 fn render()
-                    if state.confirming
-                        <span class="delete-confirm">
-                            label
-                            "?"
-                        <button class="delete-yes" onClick={doConfirm}>
-                            "Yes"
-                        <button class="delete-cancel" onClick={() => state.confirming = false}>
-                            "Cancel"
-                    else
-                        <button class={cls} onClick={() => state.confirming = true}>
-                            label
+                    return <span class="confirm-button">
+                        if state.confirming
+                            <span class="delete-confirm">
+                                label
+                                "?"
+                            <button class="delete-yes" onClick={doConfirm}>
+                                "Yes"
+                            <button class="delete-cancel" onClick={() => state.confirming = false}>
+                                "Cancel"
+                        else
+                            <button class={cls} onClick={() => state.confirming = true}>
+                                label
+                return render
+
+            fn KebabMenu(body)
+                var state = { open: false }
+                fn close()
+                    state.open = false
+                fn render()
+                    return <div class="kebab">
+                        <button class="kebab-toggle" onClick={() => state.open = state.open == false}>
+                            "⋯"
+                        <div class={state.open ? "kebab-backdrop open" : "kebab-backdrop"} onClick={close}>
+                        <div class={state.open ? "kebab-menu open" : "kebab-menu"}>
+                            body(close)
                 return render
 
             fn ObjectForm(obj, meta, base, autosave, join, body, onSave, onCancel)

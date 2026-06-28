@@ -37,11 +37,6 @@ ui
     fn addProp(type)
         type.props.add({ name: "", type: "text", cardinality: "single", keyType: "", multiline: false, order: 0 })
 
-    fn typeCardClass(type)
-        if type.baseType == "enum"
-            return "type-card is-enum"
-        return "type-card"
-
     fn propRowClass(prop)
         if prop.cardinality == "dictionary"
             return "prop-row is-dict"
@@ -57,16 +52,11 @@ ui
         sys.rename(i.id, renameName)
         renameId = 0
 
-    fn navClass(active, name)
-        if active == name
-            return "nav-link is-active"
-        return "nav-link"
-
     fn navBar(active)
         return <nav class="ide-nav">
-            <a class={navClass(active, "instances")} href="/instances">
+            <a class={active == "instances" ? "nav-link is-active" : "nav-link"} href="/instances">
                 "Instances"
-            <a class={navClass(active, "designs")} href="/designs">
+            <a class={active == "designs" ? "nav-link is-active" : "nav-link"} href="/designs">
                 "Designs"
 
     fn designsListPage()
@@ -88,7 +78,7 @@ ui
             <button class="add-type" onClick={() => addType(design)}>
                 "+ Type"
             foreach type in design.types
-                <div class={typeCardClass(type)}>
+                <div class={type.baseType == "enum" ? "type-card is-enum" : "type-card"}>
                     <div class="type-head">
                         <input class="type-name" value={type.name}>
                         <select class="type-kind" value={type.baseType}>
@@ -163,14 +153,6 @@ ui
 
     fn instanceActions(inst, showOpen)
         var state = { open: false }
-        fn kebabClass(open)
-            if open
-                return "kebab-menu open"
-            return "kebab-menu"
-        fn backdropClass(open)
-            if open
-                return "kebab-backdrop open"
-            return "kebab-backdrop"
         fn closeMenu()
             state.open = false
         fn pickRename()
@@ -183,14 +165,14 @@ ui
             return <div class="kebab">
                 <button class="kebab-toggle" onClick={() => state.open = state.open == false}>
                     "⋯"
-                <div class={backdropClass(state.open)} onClick={() => closeMenu()}>
-                <div class={kebabClass(state.open)}>
+                <div class={state.open ? "kebab-backdrop open" : "kebab-backdrop"} onClick={closeMenu}>
+                <div class={state.open ? "kebab-menu open" : "kebab-menu"}>
                     if showOpen
                         <a class="open-instance" href={sys.nest("/instances", inst.id)}>
                             "Open"
-                    <button class="rename-instance" onClick={() => pickRename()}>
+                    <button class="rename-instance" onClick={pickRename}>
                         "Rename"
-                    <button class="clone-instance" onClick={() => pickClone()}>
+                    <button class="clone-instance" onClick={pickClone}>
                         "Clone"
                     <ConfirmButton label="Delete" onConfirm={() => sys.delete(inst.id)} cls="delete-instance">
         return render
@@ -303,8 +285,8 @@ ui
                             else
                                 <span class="instance-app">
                                     i.app
-                            instanceActions(i, false)()
-                        designSelector(i.id, i.designId)()
+                            <instanceActions inst={i} showOpen={false}>
+                        <designSelector instanceId={i.id} currentDesignId={i.designId}>
             else
                 <p class="not-found">
                     "Instance not found."

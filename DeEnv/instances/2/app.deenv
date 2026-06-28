@@ -22,48 +22,32 @@ initialData
         items: []
 ui
     var selectedUser
-    var newUser = getNewUser()
-    var newList = getNewList()
-
-    fn getNewUser()
-        return sys.new(sys.schema("User"))
-
-    fn getNewList()
-        return sys.new(sys.schema("TodoList"))
-
-    fn getNewItem()
-        return sys.new(sys.schema("TodoItem"))
+    var newUser = sys.new(sys.schema("User"))
+    var newList = sys.new(sys.schema("TodoList"))
 
     fn addNewUser()
         db.users.add(newUser)
         selectedUser = newUser
-        newUser = getNewUser()
+        newUser = sys.new(sys.schema("User"))
 
     fn addNewList()
         selectedUser.todoLists.add(newList)
-        newList = getNewList()
-
-    fn chipClass(user)
-        if selectedUser == null
-            return "user-chip"
-        if sys.id(user) == sys.id(selectedUser)
-            return "user-chip selected"
-        return "user-chip"
+        newList = sys.new(sys.schema("TodoList"))
 
     fn userSelector()
         return <section class="user-bar">
             foreach user in db.users
-                <button class={chipClass(user)} onClick={() => selectedUser = user}>
+                <button class={selectedUser == null ? "user-chip" : sys.id(user) == sys.id(selectedUser) ? "user-chip selected" : "user-chip"} onClick={() => selectedUser = user}>
                     user.name
             <input class="new-user" value={newUser.name}>
             <button class="add-user" onClick={addNewUser}>
                 "Add user"
 
     fn itemAdder(list)
-        var draft = { item: getNewItem() }
+        var draft = { item: sys.new(sys.schema("TodoItem")) }
         fn add()
             list.items.add(draft.item)
-            draft.item = getNewItem()
+            draft.item = sys.new(sys.schema("TodoItem"))
         fn view()
             return <div class="add-item">
                 <input class="new-item" value={draft.item.text}>

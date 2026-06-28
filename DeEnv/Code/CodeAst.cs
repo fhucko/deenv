@@ -39,6 +39,7 @@ public interface ICodeStatement : ICodeElement;
 [JsonDerivedType(typeof(CodeNull), "null")]
 [JsonDerivedType(typeof(CodeAssignment), "assign")]
 [JsonDerivedType(typeof(CodeNot), "not")]
+[JsonDerivedType(typeof(CodeTernary), "ternary")]
 public interface ICodeValue : ICodeTagChild;
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
@@ -55,6 +56,7 @@ public interface ICodeValue : ICodeTagChild;
 [JsonDerivedType(typeof(CodeNull), "null")]
 [JsonDerivedType(typeof(CodeTagForEach), "foreach")]
 [JsonDerivedType(typeof(CodeNot), "not")]
+[JsonDerivedType(typeof(CodeTernary), "ternary")]
 [JsonDerivedType(typeof(CodeTagIf), "if")]
 public interface ICodeTagChild : ICodeElement;
 
@@ -177,6 +179,17 @@ public sealed class CodeInfixOp : ICodeValue
 public sealed class CodeNot : ICodeValue
 {
     public required ICodeValue Operand { get; set; }
+}
+
+// Ternary conditional: `cond ? then : else`. The lowest-precedence expression form (above it
+// sits only the lambda/assignment value layer) — a bool condition selects one of the two
+// branches, evaluating only the chosen one. Right-associative (`a ? b : c ? d : e` parses the
+// trailing ternary into the else). The boilerplate-killer that replaces per-app `*Class` helpers.
+public sealed class CodeTernary : ICodeValue
+{
+    public required ICodeValue Condition { get; set; }
+    public required ICodeValue Then { get; set; }
+    public required ICodeValue Else { get; set; }
 }
 
 public enum CodeInfixOpType

@@ -182,6 +182,11 @@ public sealed class CodeExecutor
         CodeBool codeBool      => new ExecBool { Value = codeBool.Value },
         CodeInfixOp codeInfix  => ExecuteInfixOp(codeInfix, scope, context),
         CodeNot codeNot        => ExecuteNot(codeNot, scope, context),
+        // Ternary: evaluate the condition, then ONLY the chosen branch (short-circuit). Twin of
+        // codeExec.ts's "ternary" case.
+        CodeTernary codeTernary => AsBool(ExecuteValue(codeTernary.Condition, scope, context))
+                                      ? ExecuteValue(codeTernary.Then, scope, context)
+                                      : ExecuteValue(codeTernary.Else, scope, context),
         CodeSymbol codeSymbol  => ExecuteSymbol(codeSymbol, scope, context),
         CodeObject codeObject  => ExecuteObject(codeObject, scope, context),
         CodeArray codeArray    => ExecuteArray(codeArray, scope, context),
@@ -377,7 +382,11 @@ public sealed class CodeExecutor
         var right = ExecuteValue(codeInfixOp.Right, scope, context);
         return codeInfixOp.Op switch
         {
-            CodeInfixOpType.Add             => new ExecInt { Value = AsInt(left) + AsInt(right) },
+            // `+` is overloaded: a string operand makes it concatenation (both sides stringified),
+            // otherwise integer addition. Kept in lockstep with codeExec.ts's "add" case.
+            CodeInfixOpType.Add             => left is ExecText || right is ExecText
+                                                   ? new ExecText { Value = AsText(left) + AsText(right) }
+                                                   : new ExecInt { Value = AsInt(left) + AsInt(right) },
             CodeInfixOpType.Subtract        => new ExecInt { Value = AsInt(left) - AsInt(right) },
             CodeInfixOpType.Multiply        => new ExecInt { Value = AsInt(left) * AsInt(right) },
             CodeInfixOpType.Divide          => new ExecInt { Value = AsInt(left) / AsInt(right) },
@@ -950,6 +959,17 @@ public sealed class CodeExecutor
         : throw new CodeRuntimeException("Expected an int.");
     private static bool AsBool(IExecValue v) => v is ExecBool b ? b.Value
         : throw new CodeRuntimeException("Expected a bool.");
+
+    // Stringify any scalar for `+` string concatenation (int → decimal, bool → "true"/"false",
+    // text → as-is, null → ""). Kept in lockstep with codeExec.ts's `asText` in the add case.
+    private static string AsText(IExecValue v) => v switch
+    {
+        ExecText t => t.Value,
+        ExecInt i => i.Value.ToString(),
+        ExecBool b => b.Value ? "true" : "false",
+        ExecNull or ExecNothing => "",
+        _ => throw new CodeRuntimeException("Cannot convert value to text."),
+    };
 
     // Unary `!`: negate a bool operand. The operand's reads are tracked by ExecuteValue.
     private IExecValue ExecuteNot(CodeNot codeNot, ExecScope scope, ExecContext context) =>

@@ -41,6 +41,12 @@ public static class CodeIds
                 case CodeInfixOp op:
                     Walk(op.Left); Walk(op.Right);
                     break;
+                case CodeNot not:
+                    Walk(not.Operand);
+                    break;
+                case CodeTernary tern:
+                    Walk(tern.Condition); Walk(tern.Then); Walk(tern.Else);
+                    break;
                 case CodeCall c:
                     Walk(c.Fn);
                     foreach (var p in c.Params) Walk(p);

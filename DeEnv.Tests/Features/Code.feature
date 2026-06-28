@@ -100,8 +100,10 @@
 
   @milestone-code @single-user
   Scenario: A runtime error during first paint renders an SSR error page
-    # The render adds 1 to a text field — structurally-valid code that throws a
-    # type error at runtime. The renderer catches it and serves an error page.
+    # The render takes the intrinsic id of a TEXT field — structurally-valid code that
+    # throws a type error at runtime (sys.id expects an object). The renderer catches it
+    # and serves an error page. (`db.note + 1` no longer errors: `+` now concatenates a
+    # string with an int, so a genuinely type-erroring call is used here instead.)
     Given the code instance:
       """
       types
@@ -111,7 +113,7 @@
       ui
           fn render()
               return <div>
-                  db.note + 1
+                  sys.id(db.note)
       """
     When the page at "/" is rendered
     Then the rendered HTML contains "<h1>Error</h1>"

@@ -155,6 +155,27 @@ public sealed class AppPrintTests
         await AssertPrints("!!a", "!!a");
     }
 
+    [Test]
+    public async Task Ternary_prints_and_parenthesizes_a_nested_condition()
+    {
+        await AssertPrints("a == b ? \"yes\" : \"no\"", "a == b ? \"yes\" : \"no\"");
+        // Right-associative: the trailing ternary lives in the else, no parens needed.
+        await AssertPrints("a ? b : c ? d : e", "a ? b : c ? d : e");
+        // A ternary in CONDITION position must be parenthesized (it binds looser than ternary itself).
+        await AssertPrints("(a ? b : c) ? d : e", "(a ? b : c) ? d : e");
+        // A ternary as an operand of a string concat (the KebabMenu-style class={cond ? x : y}).
+        await AssertPrints("cond ? \"open\" : \"closed\"", "cond ? \"open\" : \"closed\"");
+    }
+
+    [Test]
+    public async Task Block_lambda_prints_as_a_braced_statement_list()
+    {
+        await AssertPrints("() => { f(); g() }", "() => { f(); g() }");
+        await AssertPrints("() => { x = 1; y = 2 }", "() => { x = 1; y = 2 }");
+        // A single-return lambda still prints as the inline sugar (not a block).
+        await AssertPrints("x => x.done", "x => x.done");
+    }
+
     private static async Task AssertPrints(string source, string expected)
     {
         var printed = CodePrint.Value(CodeParse.ParseExpression(source));

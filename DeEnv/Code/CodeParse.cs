@@ -132,6 +132,19 @@ public static class CodeParse
     public static Parser<ICodeValue> Or => InfixLevel(And,
         Text("||").ConvertTo(_ => CodeInfixOpType.Or));
 
+    // ── ternary (the lowest-precedence expression form) ──────────────────────────
+    // `cond ? then : else`: try the full binary chain (Or), then optionally a `? value : value`
+    // tail. Right-associative — the branches are full Values, so `a ? b : c ? d : e` nests the
+    // trailing ternary into the else. `?` and `:` appear nowhere else in expression syntax, so
+    // there is no ambiguity to resolve. When the tail is absent this is just `Or` (falls through).
+    public static Parser<ICodeValue> Ternary => Lazy(() => Seq(
+        Or,
+        Optional(Seq(Ws0, Text("?"), Ws0, Value, Ws0, Text(":"), Ws0, Value,
+            (_, _, _, then, _, _, _, els) => (ICodeValue)new CodeTernary { Condition = default!, Then = then, Else = els })),
+        (cond, tail) => tail is CodeTernary t
+            ? new CodeTernary { Condition = cond, Then = t.Then, Else = t.Else }
+            : cond));
+
     // ── lambdas & assignment as a value ──────────────────────────────────────────
 
     public static Parser<CodeFunctionParam[]> FunctionParams => Seq(
@@ -156,6 +169,24 @@ public static class CodeParse
             Body = new CodeBlock { Statements = [new CodeReturn { Value = body }] },
         });
 
+    // Block lambda: `(params) => { stmt; stmt }` — multiple statements inline, ";"-separated.
+    // The primary use is a JSX `onClick={() => { a(); b() }}` that fires several effects. Only
+    // call and assignment statements are allowed in a block (control flow needs the multiline
+    // form); the body is a CodeBlock with no return, exactly like a multi-statement named fn.
+    public static Parser<CodeFunction> BlockLambda => Lazy(() => Seq(
+        LambdaParams, Ws0, Text("=>"), Ws0, Text("{"), Ws0,
+        Many0Separated(Seq(Ws0, Text(";"), Ws0, (_, _, _) => 0),
+            OneOf<ICodeStatement>(
+                AssignValue.ConvertTo(a => (ICodeStatement)a),
+                Postfix.Filter(v => v is CodeCall).ConvertTo(v => (ICodeStatement)(CodeCall)v))),
+        Ws0, Text("}"),
+        (parms, _, _, _, _, _, stmts, _, _) => new CodeFunction
+        {
+            Name = null,
+            Params = parms,
+            Body = new CodeBlock { Statements = stmts },
+        }));
+
     // An assignment lvalue: a bare symbol (a var) or a `.member` chain (`obj.field`).
     // Calls are not lvalues, so this is symbol + dotted members only.
     public static Parser<ICodeValue> Lvalue => Seq(
@@ -170,7 +201,8 @@ public static class CodeParse
     // ── the expression entry point ───────────────────────────────────────────────
 
     public static Parser<ICodeValue> Value => Lazy(() => OneOf<ICodeValue>(
-        Or,           // the full precedence chain (bottoms out at Primary/Postfix)
+        Ternary,      // cond ? then : else — falls through to Or (the full precedence chain) if no `?`
+        BlockLambda,  // (params) => { stmt; stmt } — tried before InlineLambda (which has no `{` body)
         InlineLambda,
         AssignValue));
 

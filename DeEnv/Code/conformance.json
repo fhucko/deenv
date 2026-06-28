@@ -849,6 +849,74 @@
       "text": "!!false",
       "expr": { "type": "not", "operand": { "type": "not", "operand": { "type": "bool", "value": false } } },
       "expect": { "kind": "bool", "value": false }
+    },
+    {
+      "name": "string concatenation: two text operands",
+      "text": "\"hello\" + \" world\"",
+      "expr": { "type": "infixOp", "op": "add", "left": { "type": "text", "value": "hello" }, "right": { "type": "text", "value": " world" } },
+      "expect": { "kind": "text", "value": "hello world" }
+    },
+    {
+      "name": "string concatenation: text + int stringifies the int",
+      "text": "\"count: \" + 42",
+      "expr": { "type": "infixOp", "op": "add", "left": { "type": "text", "value": "count: " }, "right": { "type": "int", "value": 42 } },
+      "expect": { "kind": "text", "value": "count: 42" }
+    },
+    {
+      "name": "string concatenation: null operand is treated as empty string",
+      "text": "null + \"text\"",
+      "expr": { "type": "infixOp", "op": "add", "left": { "type": "null" }, "right": { "type": "text", "value": "text" } },
+      "expect": { "kind": "text", "value": "text" }
+    },
+    {
+      "name": "int addition preserved when neither operand is text",
+      "text": "1 + 2",
+      "expr": { "type": "infixOp", "op": "add", "left": { "type": "int", "value": 1 }, "right": { "type": "int", "value": 2 } },
+      "expect": { "kind": "int", "value": 3 }
+    },
+    {
+      "name": "ternary: true condition selects the then branch",
+      "text": "true ? 1 : 2",
+      "expr": { "type": "ternary", "condition": { "type": "bool", "value": true }, "then": { "type": "int", "value": 1 }, "else": { "type": "int", "value": 2 } },
+      "expect": { "kind": "int", "value": 1 }
+    },
+    {
+      "name": "ternary: false condition selects the else branch",
+      "text": "false ? 1 : 2",
+      "expr": { "type": "ternary", "condition": { "type": "bool", "value": false }, "then": { "type": "int", "value": 1 }, "else": { "type": "int", "value": 2 } },
+      "expect": { "kind": "int", "value": 2 }
+    },
+    {
+      "name": "ternary: a comparison condition selecting a text branch",
+      "text": "1 == 1 ? \"yes\" : \"no\"",
+      "expr": { "type": "ternary", "condition": { "type": "infixOp", "op": "equals", "left": { "type": "int", "value": 1 }, "right": { "type": "int", "value": 1 } }, "then": { "type": "text", "value": "yes" }, "else": { "type": "text", "value": "no" } },
+      "expect": { "kind": "text", "value": "yes" }
+    },
+    {
+      "name": "ternary short-circuits: the untaken branch is never evaluated (an undefined symbol in it does not throw)",
+      "text": "false ? missingVar : 5",
+      "expr": { "type": "ternary", "condition": { "type": "bool", "value": false }, "then": { "type": "symbol", "name": "missingVar" }, "else": { "type": "int", "value": 5 } },
+      "expect": { "kind": "int", "value": 5 }
+    },
+    {
+      "name": "ternary: right-associative — a nested ternary in the then branch",
+      "text": "true ? false ? 1 : 2 : 3",
+      "expr": { "type": "ternary", "condition": { "type": "bool", "value": true }, "then": { "type": "ternary", "condition": { "type": "bool", "value": false }, "then": { "type": "int", "value": 1 }, "else": { "type": "int", "value": 2 } }, "else": { "type": "int", "value": 3 } },
+      "expect": { "kind": "int", "value": 2 }
+    },
+    {
+      "name": "block lambda executes all statements (two property writes, then read back)",
+      "setup": [
+        { "type": "varDec", "name": "acc", "value": { "type": "object", "props": [ { "name": "x", "value": { "type": "int", "value": 0 } }, { "name": "y", "value": { "type": "int", "value": 0 } } ] } },
+        { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+          { "type": "assign", "target": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "acc" }, "right": { "type": "symbol", "name": "x" } }, "value": { "type": "int", "value": 1 } },
+          { "type": "assign", "target": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "acc" }, "right": { "type": "symbol", "name": "y" } }, "value": { "type": "int", "value": 2 } }
+        ] } } }
+      ],
+      "renders": [
+        { "type": "infixOp", "op": "add", "left": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "acc" }, "right": { "type": "symbol", "name": "x" } }, "right": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "acc" }, "right": { "type": "symbol", "name": "y" } } }
+      ],
+      "expect": { "kind": "int", "value": 3 }
     }
   ]
 }

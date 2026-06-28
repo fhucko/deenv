@@ -8,7 +8,7 @@ using TUnit.Core;
 namespace DeEnv.Tests.Code;
 
 // Guard: the operator designer's type-editor dropdowns (kind / cardinality / prop-type) are populated from
-// three vocabulary lists declared as `ui` vars in DeEnv/instances/1/app.app — scalarTypes / typeKinds /
+// three vocabulary lists declared as `ui` vars in DeEnv/instances/1/app.deenv — scalarTypes / typeKinds /
 // cardinalities. That vocabulary is SYSTEM data (the base scalar types, the authorable type kinds, the prop
 // cardinalities). It is deliberately kept in the designer's own system code — NOT injected into the
 // user-editable meta-schema (system and user content stay separate) and NOT placed on the global `sys`
@@ -19,7 +19,7 @@ namespace DeEnv.Tests.Code;
 public sealed class DesignerVocabularyTests
 {
     private static readonly string DesignerApp =
-        Path.Combine(AppContext.BaseDirectory, "instances", "1", "app.app");
+        Path.Combine(AppContext.BaseDirectory, "instances", "1", "app.deenv");
 
     [Test]
     public async Task Scalar_types_match_the_leaf_base_types() =>

@@ -23,6 +23,7 @@ public static class CodePrint
         CodeInfixOp { Op: CodeInfixOpType.Or } => 40,
         CodeInfixOp => 60, // the comparisons
         CodeFunction or CodeAssignment => 10,
+        CodeTernary => 5, // the lowest-precedence expression form (below lambda/assignment)
         _ => 100, // atoms
     };
 
@@ -63,6 +64,10 @@ public static class CodePrint
         CodeNot n => "!" + Operand(n.Operand, 85),
         CodeCall call => Operand(call.Fn, 90) + "(" + string.Join(", ", call.Params.Select(Value)) + ")",
         CodeAssignment assign => Value(assign.Target) + " = " + Value(assign.Value),
+        // `cond ? then : else`. The condition must out-bind ternary (parens if it is itself a
+        // ternary); the branches are printed at full precedence — the else naturally absorbs a
+        // trailing ternary (right-associative), matching the parser.
+        CodeTernary t => Operand(t.Condition, 6) + " ? " + Value(t.Then) + " : " + Value(t.Else),
         CodeFunction fn => InlineLambda(fn),
         _ => throw new InvalidOperationException($"No inline text form for {value.GetType().Name}."),
     };
@@ -72,11 +77,25 @@ public static class CodePrint
 
     private static string InlineLambda(CodeFunction fn)
     {
-        if (fn.Body.Statements is not [CodeReturn ret])
-            throw new InvalidOperationException(
-                "A multi-statement lambda has no inline form (use a named function).");
-        return LambdaParams(fn) + " => " + Value(ret.Value);
+        // A single-return body is the `params => value` sugar.
+        if (fn.Body.Statements is [CodeReturn ret])
+            return LambdaParams(fn) + " => " + Value(ret.Value);
+        // Otherwise a block lambda: `(params) => { stmt; stmt }` — call/assignment statements only,
+        // ";"-separated, the inverse of CodeParse.BlockLambda. Any other statement (if/foreach/return)
+        // has no inline form and belongs in a multiline position (ValueWithNl handles those).
+        if (fn.Body.Statements.All(s => s is CodeCall or CodeAssignment))
+            return LambdaParams(fn) + " => { " + string.Join("; ", fn.Body.Statements.Select(BlockStatement)) + " }";
+        throw new InvalidOperationException(
+            "A multi-statement lambda with control flow has no inline form (use a named function).");
     }
+
+    // A single block-lambda statement printed inline (a call or an assignment value).
+    private static string BlockStatement(ICodeStatement s) => s switch
+    {
+        CodeCall c => Value(c),
+        CodeAssignment a => Value(a),
+        _ => throw new InvalidOperationException($"No inline block-lambda form for {s.GetType().Name}."),
+    };
 
     // Named functions always parenthesize; a lambda's single parameter prints bare.
     private static string Params(CodeFunction fn) =>

@@ -193,6 +193,76 @@ public sealed class CodeParseTests
             """);
     }
 
+    // ── ternary ───────────────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task Ternary_parses_a_condition_and_two_branches()
+    {
+        // The condition is the full binary chain (a == b), the branches are full values.
+        await AssertParsesTo("a == b ? \"yes\" : \"no\"",
+            """
+            { "type": "ternary",
+              "condition": { "type": "infixOp", "op": "equals",
+                "left": { "type": "symbol", "name": "a" }, "right": { "type": "symbol", "name": "b" } },
+              "then": { "type": "text", "value": "yes" },
+              "else": { "type": "text", "value": "no" } }
+            """);
+    }
+
+    [Test]
+    public async Task Ternary_is_right_associative_in_the_else_branch()
+    {
+        // a ? b : c ? d : e nests the trailing ternary into the else.
+        await AssertParsesTo("a ? b : c ? d : e",
+            """
+            { "type": "ternary",
+              "condition": { "type": "symbol", "name": "a" },
+              "then": { "type": "symbol", "name": "b" },
+              "else": { "type": "ternary",
+                "condition": { "type": "symbol", "name": "c" },
+                "then": { "type": "symbol", "name": "d" },
+                "else": { "type": "symbol", "name": "e" } } }
+            """);
+    }
+
+    [Test]
+    public async Task A_plain_expression_with_no_question_mark_is_not_a_ternary()
+    {
+        // The ternary rule falls through to the binary chain when there is no `?`.
+        await AssertParsesTo("a && b",
+            """
+            { "type": "infixOp", "op": "and",
+              "left": { "type": "symbol", "name": "a" }, "right": { "type": "symbol", "name": "b" } }
+            """);
+    }
+
+    // ── block lambda ──────────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task Block_lambda_parses_semicolon_separated_statements()
+    {
+        // (params) => { stmt; stmt } — a multi-statement body (calls/assignments), no return.
+        await AssertParsesTo("() => { f(); g() }",
+            """
+            { "type": "fn", "name": null, "params": [], "id": 0, "serverOnly": false,
+              "body": { "statements": [
+                { "type": "call", "fn": { "type": "symbol", "name": "f" }, "params": [] },
+                { "type": "call", "fn": { "type": "symbol", "name": "g" }, "params": [] } ] } }
+            """);
+    }
+
+    [Test]
+    public async Task Block_lambda_allows_assignment_statements()
+    {
+        await AssertParsesTo("() => { x = 1; y = 2 }",
+            """
+            { "type": "fn", "name": null, "params": [], "id": 0, "serverOnly": false,
+              "body": { "statements": [
+                { "type": "assign", "target": { "type": "symbol", "name": "x" }, "value": { "type": "int", "value": 1 } },
+                { "type": "assign", "target": { "type": "symbol", "name": "y" }, "value": { "type": "int", "value": 2 } } ] } }
+            """);
+    }
+
     // ── errors ──────────────────────────────────────────────────────────────────
 
     [Test]
