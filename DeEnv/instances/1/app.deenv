@@ -31,6 +31,7 @@ ui
     var cardinalities = ["single", "set", "dictionary"]
     var confirmDeleteId = 0
     var confirmDeleteInstanceId = 0
+    var creatingInstance = false
 
     fn addType(design)
         design.types.add({ name: "", baseType: "object", values: "", order: 0, props: [] })
@@ -218,21 +219,19 @@ ui
         return render
 
     fn instancesListPage()
+        fn doCreate(d)
+            sys.create(d, newInstanceName)
+            newInstanceName = ""
+            creatingInstance = false
+        fn cancelCreate()
+            newInstanceName = ""
+            newDesignId = 0
+            creatingInstance = false
         return <main class="ide-list">
             <h1>
                 "Instances"
-            <div class="new-instance">
-                <select class="new-instance-design" value={newDesignId}>
-                    foreach d in db.designs
-                        <option value={sys.id(d)}>
-                            d.label
-                <input class="new-instance-name" value={newInstanceName}>
-                foreach d in db.designs
-                    if sys.id(d) == newDesignId
-                        <button class="create-instance" onClick={() => sys.create(d, newInstanceName)}>
-                            "Create"
-            <table class="instances-table">
-                <tr class="instances-head">
+            <table class="set-table">
+                <tr class="set-head">
                     <th>
                         "Instance"
                     <th>
@@ -240,10 +239,9 @@ ui
                     <th>
                         "Design"
                     <th>
-                        "Actions"
                 foreach i in sys.instances
-                    <tr class="instance-row">
-                        <td>
+                    <tr class="set-row">
+                        <td class="row-id">
                             if renameId == i.id
                                 <input class="rename-input" value={renameName}>
                                 <button class="rename-save" onClick={() => doRename(i)}>
@@ -251,18 +249,49 @@ ui
                                 <button class="rename-cancel" onClick={() => renameId = 0}>
                                     "Cancel"
                             else
-                                <span class="instance-app">
+                                <a class="row-link" href={sys.nest("/instances", i.id)}>
                                     i.app
-                        <td class="instance-port">
-                            i.path
                         <td>
-                            foreach d in db.designs
-                                if sys.id(d) == i.designId
-                                    <span class="design-label">
-                                        d.label
-                        <td class="row-actions">
+                            <a class="row-link" href={sys.nest("/instances", i.id)}>
+                                i.path
+                        <td>
+                            <a class="row-link" href={sys.nest("/instances", i.id)}>
+                                foreach d in db.designs
+                                    if sys.id(d) == i.designId
+                                        <span class="design-label">
+                                            d.label
+                        <td class="row-action">
                             <instanceActions inst={i} showOpen={true}>
-
+            if !sys.instances.any(i => true)
+                <p class="set-empty">
+                    "No instances yet"
+            if creatingInstance
+                <div class="create-form">
+                    <h3>
+                        "New Instance"
+                    <div class="field">
+                        <label>
+                            "Design"
+                        <select class="new-instance-design" value={newDesignId}>
+                            <option value="0">
+                                "(choose...)"
+                            foreach d in db.designs
+                                <option value={sys.id(d)}>
+                                    d.label
+                    <div class="field">
+                        <label>
+                            "Name"
+                        <input class="new-instance-name" value={newInstanceName}>
+                    <div class="create-actions">
+                        foreach d in db.designs
+                            if sys.id(d) == newDesignId
+                                <button class="create-save" onClick={() => doCreate(d)}>
+                                    "Save"
+                        <button class="cancel" onClick={cancelCreate}>
+                            "Cancel"
+            else
+                <button class="new-btn" onClick={() => creatingInstance = true}>
+                    "New Instance"
     fn designSelector(instanceId, currentDesignId)
         var state = { pick: currentDesignId }
         fn render()

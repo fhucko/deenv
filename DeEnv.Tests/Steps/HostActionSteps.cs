@@ -17,7 +17,7 @@ namespace DeEnv.Tests.Steps;
 // exercises the full server path: WsHandler.HandleHostAction → IHostActions → SchemaBridge.
 //
 // The designer META-SCHEMA here is TEST-LOCAL (a minimal `Db { designs }` shape written to a temp
-// .app), NOT the real instances/1/app.app (which the browser-driven Designer.feature exercises).
+// .app), NOT the real instances/1/app.deenv (which the browser-driven Designer.feature exercises).
 // Keeping the host-action test on its own controlled meta isolates the server-path assertions from
 // the full seeded designer — a minimal design is enough to prove resolve → project → host action.
 [Binding]

@@ -320,6 +320,25 @@ public static class GenericUi
                                                             sys.field(m, p.name)
                                                 else
                                                     <td>
+                                                        <a class="row-link" href={sys.nest(setPath, m)}>
+                                                            if p.baseType == "bool"
+                                                                <span class="bool-cell">
+                                                                    boolGlyph(sys.field(m, p.name))
+                                                            else if p.baseType == "object"
+                                                                if sys.field(m, p.name) != null
+                                                                    sys.field(sys.field(m, p.name), sys.schema(p.target).labelProp)
+                                                            else if p.baseType == "enum"
+                                                                sys.humanize(sys.field(m, p.name))
+                                                            else
+                                                                sys.field(m, p.name)
+                                    else
+                                        <td class="row-id">
+                                            <a class="row-link" href={sys.nest(setPath, m)}>
+                                                sys.field(m, desc.labelProp)
+                                        foreach p in desc.props
+                                            if p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "password" && p.name != desc.labelProp && p.multiline != true
+                                                <td>
+                                                    <a class="row-link" href={sys.nest(setPath, m)}>
                                                         if p.baseType == "bool"
                                                             <span class="bool-cell">
                                                                 boolGlyph(sys.field(m, p.name))
@@ -330,23 +349,6 @@ public static class GenericUi
                                                             sys.humanize(sys.field(m, p.name))
                                                         else
                                                             sys.field(m, p.name)
-                                    else
-                                        <td class="row-id">
-                                            <a class="row-link" href={sys.nest(setPath, m)}>
-                                                sys.field(m, desc.labelProp)
-                                        foreach p in desc.props
-                                            if p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "password" && p.name != desc.labelProp && p.multiline != true
-                                                <td>
-                                                    if p.baseType == "bool"
-                                                        <span class="bool-cell">
-                                                            boolGlyph(sys.field(m, p.name))
-                                                    else if p.baseType == "object"
-                                                        if sys.field(m, p.name) != null
-                                                            sys.field(sys.field(m, p.name), sys.schema(p.target).labelProp)
-                                                    else if p.baseType == "enum"
-                                                        sys.humanize(sys.field(m, p.name))
-                                                    else
-                                                        sys.field(m, p.name)
                                     if rowActions != null
                                         rowActions(m)
                                     else if sys.canWrite(desc.name, "delete")

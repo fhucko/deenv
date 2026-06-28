@@ -16,7 +16,7 @@ public sealed class BridgeSteps(InstanceContext ctx)
 
     // Bridge.feature is a unit-level test of the M4 ROOT-projection mechanism (SchemaBridge.Project/
     // Export: a `Db` whose root `types` set IS the designed schema). The live designer (instances/1/
-    // app.app) has since moved to the `Db { designs }` IDE shape (a SET of whole-app Designs, projected
+    // app.deenv) has since moved to the `Db { designs }` IDE shape (a SET of whole-app Designs, projected
     // by ProjectDesignDocument — the DESIGN path, exercised by HostAction.feature). So this test owns a
     // TEST-LOCAL `Db { types }` meta-schema, decoupled from the live designer — the same isolation
     // HostActionSteps uses for its own `Db { designs }` meta. It still defines MetaType/MetaProp, so the

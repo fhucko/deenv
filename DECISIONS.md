@@ -1,4 +1,4 @@
-# Decisions
+﻿# Decisions
 
 Key decisions and *why*. Future-you needs the reasoning, not just the
 conclusion.
@@ -1417,12 +1417,12 @@ registry-as-kernel-data promotion, refining the "self-hosted image → kernel-ow
 
 **Third slice (`create`) — landed 2026-06-14.** `KernelHost.CreateAsync(appDoc, appPort, assetsPort,
 baseDir, registryPath)` adds one instance to a RUNNING kernel and persists it: mints a restart-stable
-**id** (max numeric `instances/<n>/` dir + 1), writes the app doc to `<baseDir>/instances/<id>/app.app`,
+**id** (max numeric `instances/<n>/` dir + 1), writes the app doc to `<baseDir>/instances/<id>/app.deenv`,
 builds an `InstanceSpec` whose **data co-locates with the app doc** (`AppPaths.DataPath` now resolves
 data beside the resolved schema dir — byte-identical for every baseDir/boot app, so a created
 instance's data lives in its id-dir and resolves on restart via `SpecsFor`), collision-checks the new
 spec against the LIVE set's data files + ports (`EnsureNoCollision`, shared with boot), hot-starts both
-hosts, and appends a `RegistryEntry` (`app = "instances/<id>/app.app"`) via the new `RegistryWriter`
+hosts, and appends a `RegistryEntry` (`app = "instances/<id>/app.deenv"`) via the new `RegistryWriter`
 (sibling of `RegistryReader`: plain bootstrap JSON, NOT `IInstanceStore` — the registry-as-kernel-data
 promotion stays deferred). Persistence runs AFTER a successful start, so a failed start leaves no
 orphan registry entry. **Storage by id, never a user file name** (the direction's first concrete step;
@@ -1565,9 +1565,9 @@ storage, `RelativeApp`/`PathsEqual` matching, delete-refuses-boot, `sys.publish`
   `instances/<n>/` dirs) + 1 (the on-disk union is the ghost-id-dir guard — a create whose registry
   write failed leaves an orphan dir; never re-mint it, or the next create adopts its stale data).
 - **Fully id-based storage; `app` is a display LABEL.** Every instance's files live under
-  `instances/<id>/` (`app.app` + `app-data.json`), resolved PURELY by id (`AppPaths.SchemaPathForId/
+  `instances/<id>/` (`app.deenv` + `app-data.json`), resolved PURELY by id (`AppPaths.SchemaPathForId/
   DataPathForId`). The registry `app` field is a name label, used for nothing functional. The
-  committed apps moved into `instances/1–4/` (`git mv`); `.csproj` globs `instances/**/*.app` into the
+  committed apps moved into `instances/1–4/` (`git mv`); `.csproj` globs `instances/**/*.deenv` into the
   output. (User direction: "the app field should be just name, not used for anything"; "remove .app
   from names.") The `.app` extension is gone from every name.
 - **The boot-vs-created distinction is REMOVED.** There is no `IsCreated`/`CreatedIdOf`; delete/clone/
@@ -1598,7 +1598,7 @@ reference that replaced label-matching:
   (`foreach d in db.designs { if sys.id(d) == routeId { … } }`). `/instances` = the instances list
   (`sys.instances`: app + its CURRENT design's label + Open + Clone + Delete). `/instances/<id>` = ONLY a
   design SELECTOR (a `<select>` dropdown of `db.designs`, current pre-selected + Apply + Clone + Delete).
-  All hand-rolled in `instances/1/app.app`'s custom `fn render()` (still round-trip stable —
+  All hand-rolled in `instances/1/app.deenv`'s custom `fn render()` (still round-trip stable —
   `AppPrintTests`); `sys.segment`/`sys.toInt`/`sys.id` do the routing.
 - **The instance↔design link is an EXPLICIT reference, not label-matching** (the user chose this). Each
   registry entry gains `designId` (the id of a `Design` in the designer's `db.designs`): added to

@@ -1,4 +1,4 @@
-using DeEnv.Kernel;
+﻿using DeEnv.Kernel;
 using DeEnv.Tests.TestSupport;
 using Reqnroll;
 using TUnit.Assertions;
@@ -6,7 +6,7 @@ using TUnit.Assertions.Extensions;
 
 namespace DeEnv.Tests.Steps;
 
-// Steps for Designer.feature — the operator IDE (the REAL DeEnv/instances/1/app.app), a URL-routed
+// Steps for Designer.feature — the operator IDE (the REAL DeEnv/instances/1/app.deenv), a URL-routed
 // multi-instance designer driven end-to-end through a real browser. Unlike the rest of the
 // browser-driven suite it runs against a REAL KernelHost (InstanceContext.StartKernelDesignerBrowserAsync):
 // the IDE renders `sys.instances` (the kernel's hosted set), which is empty under the kernel-less
@@ -66,7 +66,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.GotoReadyAsync(ctx.DesignerUrl("/instances"));
         // Hydration checkpoint: the SSR instance rows are present AND the client bundle has bootstrapped
         // (window.initUi set), so the hand-rolled links/handlers are attached before we interact.
-        await ctx.Page!.WaitForSelectorAsync("main.ide-list .instance-row");
+        await ctx.Page!.WaitForSelectorAsync("main.ide-list .set-row");
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
     }
 
@@ -90,9 +90,9 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // menu — all row actions were consolidated there. Reaching the instance page can start from the
         // instances list OR directly (after editing a design) — go to the list first so the row is present,
         // open its kebab so the Open link is visible, then click it.
-        if (await ctx.Page!.Locator($".instance-row").CountAsync() == 0)
+        if (await ctx.Page!.Locator($"main.ide-list .set-row").CountAsync() == 0)
             await WhenOpenList();
-        await RowFor(label).Locator("td.row-actions button.kebab-toggle").ClickAsync();
+        await RowFor(label).Locator("td.row-action button.kebab-toggle").ClickAsync();
         await RowFor(label).Locator(".kebab-menu.open a.open-instance").ClickAsync();
         await ctx.Page!.WaitForSelectorAsync("main.ide-instance select.design-pick");
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
@@ -152,17 +152,16 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [When("I create an instance named {string} from the design {string}")]
     public async Task WhenCreateInstance(string name, string designLabel)
     {
-        // The inline "New instance" form on /instances: pick the design (its option value is the design
-        // id) and give it a display NAME, then click Create. Create runs sys.create(d, name) — a host
-        // action that spawns a new instance running that design under that name, served at /apps/<name>
-        // (addressing is by path now, so the form has NO port inputs).
-        await ctx.Page!.Locator("select.new-instance-design").SelectOptionAsync(
+        // Open the toggle create form, pick the design, fill the name, then Save.
+        // Save runs sys.create(d, name) — a host action; the hostAction reply triggers a WS refetch
+        // so the new row appears in the list without a page reload.
+        await ctx.Page!.Locator("button.new-btn").ClickAsync();
+        await ctx.Page.Locator("select.new-instance-design").SelectOptionAsync(
             new Microsoft.Playwright.SelectOptionValue { Label = designLabel });
         _newInstanceName = name;
         await ctx.Page.Locator("input.new-instance-name").FillAsync(name);
-        // The Create button is gated on a picked design (it renders inside `if sys.id(d) == newDesignId`),
-        // so it only appears once the <select> onchange has set the picked id — wait for it, then click.
-        await ctx.Page.Locator("button.create-instance").ClickAsync();
+        // Save is gated on a picked design (renders inside `if sys.id(d) == newDesignId`).
+        await ctx.Page.Locator("button.create-save").ClickAsync();
     }
 
     // ── When: editing a design (on /designs/<id>) ────────────────────────────────
@@ -341,7 +340,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // rendered, only toggled by a class), so this asserts hidden, not absent. Proves the actions are
         // consolidated behind the kebab rather than spread across the row's columns.
         var row = RowFor(label);
-        await Assert.That(await row.Locator("td.row-actions button.kebab-toggle").CountAsync()).IsEqualTo(1);
+        await Assert.That(await row.Locator("td.row-action button.kebab-toggle").CountAsync()).IsEqualTo(1);
         await row.Locator(".kebab-menu button.rename-instance").WaitForAsync(Hidden);
         await row.Locator(".kebab-menu button.clone-instance").WaitForAsync(Hidden);
         await row.Locator(".kebab-menu button.delete-instance").WaitForAsync(Hidden);
@@ -352,7 +351,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // Click the row's "⋯" toggle — the component flips its own open state and re-renders, so the
         // menu (class .kebab-menu.open) becomes visible. State is keyed to this row's slot, so only this
         // row's menu opens.
-        await RowFor(label).Locator("td.row-actions button.kebab-toggle").ClickAsync();
+        await RowFor(label).Locator("td.row-action button.kebab-toggle").ClickAsync();
 
     [Then("the instance {string} actions menu shows Open, Rename, Clone, and Delete")]
     public async Task ThenActionsMenuShowsAll(string label)
@@ -389,7 +388,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // pattern): a rename input + Save + Cancel. While renaming, the row's .instance-app name span is
         // gone (the else branch), so locate the renaming row by the input it now shows.
         _ = label;
-        var renaming = ctx.Page!.Locator(".instance-row:has(input.rename-input)");
+        var renaming = ctx.Page!.Locator("main.ide-list .set-row:has(input.rename-input)");
         await renaming.Locator("input.rename-input").WaitForAsync();
         await Assert.That(await renaming.Locator("button.rename-save").CountAsync()).IsEqualTo(1);
         await Assert.That(await renaming.Locator("button.rename-cancel").CountAsync()).IsEqualTo(1);
@@ -691,24 +690,13 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [Then("a new instance {string} running design {string} appears in the instances list")]
     public async Task ThenNewInstanceAppears(string name, string designLabel)
     {
-        // The host action (sys.create) is async; first wait until the kernel has spawned the instance
-        // under the name we typed, with the chosen design recorded on its new registry entry (its
-        // designId is the picked design's id — threaded through CreateAsync). This proves the create
-        // landed. Create writes a doc + builds handlers, so it can run long at the tail of a saturated
-        // full suite — a wide window keeps it deterministic (same reasoning as ThenTargetDescribesType).
-        var designId = ctx.DesignIdForLabel(designLabel);
-        await EventuallyAsync(() => ctx.Kernel!.Instances
-            .Any(i => i.Spec.App == _newInstanceName && i.Spec.DesignId == designId), timeoutMs: 45000);
-
-        // The instances list is a live VIEW, not a live PUSH (a host-action ok does not re-render the open
-        // page), so reload /instances — a fresh SSR over the kernel's refreshed live set now shows the new
-        // row. The created instance carries the name we typed; assert a row for it shows the picked design
-        // (its design-label resolves through the new designId reference) — proving name + design both flowed
-        // through create → registry → list.
-        await ctx.Page!.GotoReadyAsync(ctx.DesignerUrl("/instances"));
-        await ctx.Page!.WaitForSelectorAsync("main.ide-list .instance-row");
-        var newRow = ctx.Page.Locator($".instance-row:has(.instance-app:text-is({CssString(name)}))");
-        await Assert.That(await newRow.CountAsync()).IsGreaterThanOrEqualTo(1);
+        // The hostAction reply triggers a WS refetch (ws.ts), so the list re-renders in-place —
+        // no page reload needed. Wait for the new row to appear in the current DOM. 45s covers
+        // the async create (doc write + handler build) plus the round-trip refetch.
+        await ctx.Page!.WaitForSelectorAsync(
+            $"main.ide-list .set-row a.row-link:text-is({CssString(name)})",
+            new Microsoft.Playwright.PageWaitForSelectorOptions { Timeout = 45000 });
+        var newRow = RowFor(name);
         await Assert.That(
             await newRow.Locator($".design-label:text-is({CssString(designLabel)})").CountAsync())
             .IsGreaterThanOrEqualTo(1);
@@ -978,7 +966,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
     // The instances-list row for an instance, located by its app-name cell (exact match, so "todo"
     // never matches "designer"/"crm").
     private Microsoft.Playwright.ILocator RowFor(string label) =>
-        ctx.Page!.Locator($".instance-row:has(.instance-app:text-is({CssString(label)}))");
+        ctx.Page!.Locator($"main.ide-list .set-row:has(a.row-link:text-is({CssString(label)}))");
 
     // The designs-list row for a design, located by its label (the <SetTable> stretched row link,
     // exact match). The list renders via the generic <SetTable>, so a row is .set-row and the label

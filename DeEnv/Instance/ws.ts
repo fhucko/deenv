@@ -666,6 +666,12 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // logged-in view would sit under the root slot and renderUi would hand it back for the LoginForm call —
         // the page would never return to the gate. resetViewState drops `comp:` (ui.ts) + forces the refetch.
         stateGen++; resetViewState(); maybeRefetch();
+    } else if (msg.op === "hostAction" && msg.ok) {
+        // A host action (sys.create / sys.delete / sys.rename / etc.) completed server-side.
+        // sys.instances is built per-render from the kernel's live registry, so a bare refetch
+        // is all that's needed — no stateGen bump (nothing was staged optimistically).
+        needsServerData = true;
+        maybeRefetch();
     } else if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
         const arrayId = pendingAdds.get(msg.tempId);
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }

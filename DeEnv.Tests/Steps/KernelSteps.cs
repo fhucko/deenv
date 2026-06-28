@@ -1,4 +1,4 @@
-using DeEnv.Kernel;
+﻿using DeEnv.Kernel;
 using DeEnv.Storage;
 using DeEnv.Tests.TestSupport;
 using Reqnroll;
@@ -704,7 +704,7 @@ public sealed class KernelSteps(InstanceContext ctx)
     {
         var idDir = AppPaths.IdDirFor(dir, id);
         Directory.CreateDirectory(idDir);
-        File.WriteAllText(Path.Combine(idDir, "app.app"), appDoc);
+        File.WriteAllText(Path.Combine(idDir, "app.deenv"), appDoc);
     }
 
     // Write kernel.json with the two kernel-level ports + the given (name, id) instances (no

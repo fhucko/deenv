@@ -28,12 +28,12 @@
   </ItemGroup>
 
   <!-- The hand-written instance app documents, one per hosted instance, each in its own id-dir
-       (instances/<id>/app.app). The kernel resolves an instance's schema PURELY by its id (the
+       (instances/<id>/app.deenv). The kernel resolves an instance's schema PURELY by its id (the
        registry `app` field is a display name, used for nothing functional), so the id-dir layout
        must survive into the output. %(RecursiveDir) preserves the instances/<id>/ structure under
-       the executable, so AppContext.BaseDirectory/instances/<id>/app.app exists at runtime. -->
+       the executable, so AppContext.BaseDirectory/instances/<id>/app.deenv exists at runtime. -->
   <ItemGroup>
-    <None Include="instances\**\*.app"
+    <None Include="instances\**\*.deenv"
           CopyToOutputDirectory="PreserveNewest"
           LinkBase="instances" />
     <!-- The kernel registry: which instances the multi-instance kernel host runs, and on which

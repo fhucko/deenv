@@ -1,4 +1,4 @@
-# App description format
+﻿# App description format
 
 An instance is described by **one text document** (`instance.app`): types, an
 optional `initialData` seed, and optional code (`common` / `ui`). Hand-written
@@ -183,7 +183,7 @@ A malformed document is rejected at load with a clear, specific error
 
 ## Worked example
 
-The committed default app is `DeEnv/instances/2/app.app`, the todo application —
+The committed default app is `DeEnv/instances/2/app.deenv`, the todo application —
 types, seed, and the full UI in one document. The operator designer
-(`DeEnv/instances/1/app.app`) is the IDE — a hand-rolled custom `fn render()` over
+(`DeEnv/instances/1/app.deenv`) is the IDE — a hand-rolled custom `fn render()` over
 `db.types` plus the instances list.

@@ -1,4 +1,4 @@
-# DeEnv
+﻿# DeEnv
 
 > A web-first development environment for building database-backed web apps —
 > **design your data visually, work with it as objects, and have it run,
@@ -189,7 +189,7 @@ DeEnv/            The environment: kernel host, twin interpreters, storage, HTTP
   Instance/       The self-hosted UI runtime (TypeScript) + generic UI
   Kernel/         The multi-instance kernel host + registry
   Storage/        The storage interface and the JSON implementation
-  instances/      One hand-written app document per hosted instance (app.app)
+  instances/      One hand-written app document per hosted instance (app.deenv)
   kernel.json     The registry: which instances run, and on which ports
 DeEnv.Tests/      Reqnroll Gherkin features + step definitions
 docs/             Plans and domain reference notes

@@ -59,20 +59,20 @@ public class InstanceContext
         """);
 
     // Milestone 2 CRM-with-orders instance: objects, nested dictionaries, every base type. A
-    // committed fixture in its id-dir (instances/3/app.app).
+    // committed fixture in its id-dir (instances/3/app.deenv).
     public static InstanceDescription CrmDb() =>
         InstanceDescriptionLoader.LoadFile(AppFixture(3));
 
-    // The committed default app (DeEnv/instances/2/app.app): the todo app — types, initialData seed,
+    // The committed default app (DeEnv/instances/2/app.deenv): the todo app — types, initialData seed,
     // and ui code in one text document; tests drive the real single source of truth.
     public static InstanceDescription TodoDb() =>
         InstanceDescriptionLoader.LoadFile(AppFixture(2));
 
-    // A committed app fixture, resolved by its id-dir (instances/<id>/app.app) under the test output
+    // A committed app fixture, resolved by its id-dir (instances/<id>/app.deenv) under the test output
     // — the same id-based layout the kernel hosts. Storage is fully id-based; the file name ("app")
     // no longer carries the app's identity, the id-dir does.
     public static string AppFixture(int id) =>
-        Path.Combine(AppContext.BaseDirectory, "instances", id.ToString(), "app.app");
+        Path.Combine(AppContext.BaseDirectory, "instances", id.ToString(), "app.deenv");
 
     // Code milestone: a hand-written `ui` component over a Task set. The render fn
     // exercises element/text, a bound text field, a bound checkbox, foreach, if/else,
@@ -477,7 +477,7 @@ public class InstanceContext
     """;
 
     // The code-bearing fixture documents, for the printer round-trip tests. The shop app is a
-    // committed fixture in its id-dir (instances/4/app.app).
+    // committed fixture in its id-dir (instances/4/app.deenv).
     public static IReadOnlyList<string> CodeFixtureApps =>
         [TasksUiApp, InteractiveUiApp, SensitiveUiApp, RefetchUiApp,
          File.ReadAllText(AppFixture(4))];
@@ -1576,7 +1576,7 @@ public class InstanceContext
 
     // ── kernel-backed designer browser (milestone 10: the operator IDE) ─────────
 
-    // The operator IDE (instances/1/app.app) renders `sys.instances` — the kernel's hosted set — so it
+    // The operator IDE (instances/1/app.deenv) renders `sys.instances` — the kernel's hosted set — so it
     // can only be driven against a REAL KernelHost (TestInstanceServer hosts a single instance with no
     // kernel, so `sys.instances` would be empty). This boots a kernel hosting the REAL designer as id 1
     // plus the given target instances (each a tiny bool app, labelled to match a seeded design), then
@@ -1588,7 +1588,7 @@ public class InstanceContext
         Directory.CreateDirectory(dir);
         KernelDir = dir;
 
-        // The designer at id 1: the REAL committed instances/1/app.app (copied from the test output),
+        // The designer at id 1: the REAL committed instances/1/app.deenv (copied from the test output),
         // hosted by the kernel exactly as production would.
         WriteIdApp(dir, 1, File.ReadAllText(AppFixture(1)));
 
@@ -1626,7 +1626,7 @@ public class InstanceContext
         return designer;
     }
 
-    // The committed app document file for a label (e.g. "todo" → instances/2/app.app): the SAME app the
+    // The committed app document file for a label (e.g. "todo" → instances/2/app.deenv): the SAME app the
     // production kernel hosts for that label, located by reading the committed kernel.json (app label →
     // its instance id) and resolving its id-dir. The kernel reverse-projects this file into the design,
     // so hosting the real app here gives the designer the real design (real types + real ui).
@@ -1643,7 +1643,7 @@ public class InstanceContext
     {
         var idDir = AppPaths.IdDirFor(dir, id);
         Directory.CreateDirectory(idDir);
-        File.WriteAllText(Path.Combine(idDir, "app.app"), appDoc);
+        File.WriteAllText(Path.Combine(idDir, "app.deenv"), appDoc);
     }
 
     private static string RegistryEntryJson(int id, string label, int? designId = null)
@@ -1664,7 +1664,7 @@ public class InstanceContext
     // designId, labelled with the instance's `app` name — so a target labelled "todo" resolves to the
     // design id its kernel.json entry references, the same value the fixture writes into its own
     // kernel.json. Reading the registry (not instances/1's initialData) matches the new single-source
-    // model: each app's own app.app is its design, kernel.json holds the link.
+    // model: each app's own app.deenv is its design, kernel.json holds the link.
     private static Dictionary<string, int> DesignIdsByLabel()
     {
         var registry = RegistryReader.Read(
