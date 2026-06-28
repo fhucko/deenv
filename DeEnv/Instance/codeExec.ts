@@ -1230,7 +1230,6 @@ function executeInfixOpBasic(codeInfixOp: CodeInfixOp, scope: ExecScope, context
                 const asText = (v: ExecValue): string => {
                     if (v.type === "text") return v.value;
                     if (v.type === "int" || v.type === "bool") return String(v.value);
-                    if (v.type === "null" || v.type === "nothing") return "";
                     throw new Error("Cannot convert value to text.");
                 };
                 return { type: "text", value: asText(left) + asText(right) };

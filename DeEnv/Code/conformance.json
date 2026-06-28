@@ -863,12 +863,6 @@
       "expect": { "kind": "text", "value": "count: 42" }
     },
     {
-      "name": "string concatenation: null operand is treated as empty string",
-      "text": "null + \"text\"",
-      "expr": { "type": "infixOp", "op": "add", "left": { "type": "null" }, "right": { "type": "text", "value": "text" } },
-      "expect": { "kind": "text", "value": "text" }
-    },
-    {
       "name": "int addition preserved when neither operand is text",
       "text": "1 + 2",
       "expr": { "type": "infixOp", "op": "add", "left": { "type": "int", "value": 1 }, "right": { "type": "int", "value": 2 } },

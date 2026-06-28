@@ -960,14 +960,13 @@ public sealed class CodeExecutor
     private static bool AsBool(IExecValue v) => v is ExecBool b ? b.Value
         : throw new CodeRuntimeException("Expected a bool.");
 
-    // Stringify any scalar for `+` string concatenation (int → decimal, bool → "true"/"false",
-    // text → as-is, null → ""). Kept in lockstep with codeExec.ts's `asText` in the add case.
+    // Stringify a scalar for `+` string concatenation. Only text/int/bool are valid; null throws.
+    // Kept in lockstep with codeExec.ts's `asText` in the add case.
     private static string AsText(IExecValue v) => v switch
     {
         ExecText t => t.Value,
         ExecInt i => i.Value.ToString(),
         ExecBool b => b.Value ? "true" : "false",
-        ExecNull or ExecNothing => "",
         _ => throw new CodeRuntimeException("Cannot convert value to text."),
     };
 
