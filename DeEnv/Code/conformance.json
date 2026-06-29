@@ -911,6 +911,104 @@
         { "type": "infixOp", "op": "add", "left": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "acc" }, "right": { "type": "symbol", "name": "x" } }, "right": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "acc" }, "right": { "type": "symbol", "name": "y" } } }
       ],
       "expect": { "kind": "int", "value": 3 }
+    },
+    {
+      "name": "REGRESSION (component keying, surface 1): one render-prop invoked at two component slots runs twice",
+      "comment": "`wrap(body)` is a component whose view invokes its render-prop `body()` at TWO distinct child slots of its `<div>` (div child 0 and child 1). Each invocation renders <item label=\"X\"> which APPENDS to the `seen` text. Both invocations are distinct render-tree slots, so the inner component must run TWICE and `seen` must reach \"XX\". On main it does NOT: a render-prop `body()` is invoked through the function-call path, whose memo key was (lambda fn-id, args) with NO slot segment — so the SECOND `body()` cache-hits the FIRST and returns its view without re-running <item>. The inner component runs once and `seen` stays \"X\". This diverges the twins: the client (read-back memo) cache-hits and yields \"X\"; the write-only C# side re-runs both and yields the CORRECT \"XX\". The fix folds the live render slotPath into the `fn:` call memo key (codeExec executeCall / CodeExecutor CallFunction, byte-identically across the twins): the two child slots get distinct slotPaths, so the two invocations get distinct keys and each re-runs.",
+      "setup": [
+        { "type": "varDec", "name": "seen", "value": { "type": "text", "value": "" } },
+        { "type": "fn", "name": "item", "params": [ { "name": "label" } ], "body": { "type": "block", "statements": [
+          { "type": "assign", "target": { "type": "symbol", "name": "seen" }, "value": {
+            "type": "infixOp", "op": "add", "left": { "type": "symbol", "name": "seen" }, "right": { "type": "symbol", "name": "label" } } },
+          { "type": "return", "value": { "type": "symbol", "name": "label" } }
+        ] } },
+        { "type": "fn", "name": "wrap", "params": [ { "name": "body" } ], "body": { "type": "block", "statements": [
+          { "type": "fn", "name": "view", "params": [], "body": { "type": "block", "statements": [
+            { "type": "return", "value": { "type": "tag", "name": "div", "attributes": [], "children": [
+              { "type": "call", "fn": { "type": "symbol", "name": "body" }, "params": [] },
+              { "type": "call", "fn": { "type": "symbol", "name": "body" }, "params": [] }
+            ] } }
+          ] } },
+          { "type": "return", "value": { "type": "symbol", "name": "view" } }
+        ] } }
+      ],
+      "renders": [
+        { "type": "tag", "name": "main", "attributes": [], "children": [
+          { "type": "tag", "name": "wrap", "attributes": [
+            { "name": "body", "value": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+              { "type": "return", "value": { "type": "tag", "name": "item", "attributes": [
+                { "name": "label", "value": { "type": "text", "value": "X" } } ], "children": [] } }
+            ] } } } ], "children": [] } ] },
+        { "type": "symbol", "name": "seen" }
+      ],
+      "expect": { "kind": "text", "value": "XX" }
+    },
+    {
+      "name": "REGRESSION (component keying, surface 2): each foreach row's fresh render-prop runs its own component",
+      "comment": "Two foreach rows each invoke `menu(body)`, passing a FRESH per-row render-prop closure that renders <item label={row.n}> (the KebabMenu(body) shape). Each row appends its n to the `seen` text, so both rows running yields \"12\". On main only row 1's <item> runs: the per-row closures are SEPARATE objects but share one lambda AST id, and `body()` was invoked through the function-call path whose memo key was (lambda fn-id, args) — identical for every row, with NO foreach-row/slot segment. So row 2's `body()` cache-hits row 1's and renders row 1's <item> again; row 2's own <item> never runs and `seen` stays \"1\". The slot path DOES carry the row identity (comp:0/row<id>/...), but the render-prop invocation ignored it. This diverges the twins (client cache-hits -> \"1\"; write-only C# re-runs each -> CORRECT \"12\"). The fix folds the live render slotPath into the `fn:` call memo key (byte-identically across the twins): each row's invocation carries its `row<id>` slot segment, so the per-row `body()` calls get distinct keys and each row's <item> runs.",
+      "setup": [
+        { "type": "varDec", "name": "seen", "value": { "type": "text", "value": "" } },
+        { "type": "fn", "name": "item", "params": [ { "name": "label" } ], "body": { "type": "block", "statements": [
+          { "type": "assign", "target": { "type": "symbol", "name": "seen" }, "value": {
+            "type": "infixOp", "op": "add", "left": { "type": "symbol", "name": "seen" }, "right": { "type": "symbol", "name": "label" } } },
+          { "type": "return", "value": { "type": "symbol", "name": "label" } }
+        ] } },
+        { "type": "fn", "name": "menu", "params": [ { "name": "body" } ], "body": { "type": "block", "statements": [
+          { "type": "fn", "name": "view", "params": [], "body": { "type": "block", "statements": [
+            { "type": "return", "value": { "type": "tag", "name": "div", "attributes": [], "children": [
+              { "type": "call", "fn": { "type": "symbol", "name": "body" }, "params": [] }
+            ] } }
+          ] } },
+          { "type": "return", "value": { "type": "symbol", "name": "view" } }
+        ] } }
+      ],
+      "renders": [
+        { "type": "tag", "name": "main", "attributes": [], "children": [
+          { "type": "foreach", "item": { "type": "symbol", "name": "row" },
+            "collection": { "type": "array", "items": [
+              { "type": "object", "props": [ { "name": "n", "value": { "type": "text", "value": "1" } } ] },
+              { "type": "object", "props": [ { "name": "n", "value": { "type": "text", "value": "2" } } ] } ] },
+            "body": [
+              { "type": "tag", "name": "menu", "attributes": [
+                { "name": "body", "value": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+                  { "type": "return", "value": { "type": "tag", "name": "item", "attributes": [
+                    { "name": "label", "value": {
+                      "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "row" }, "right": { "type": "symbol", "name": "n" } } } ], "children": [] } }
+                ] } } } ], "children": [] } ] } ] },
+        { "type": "symbol", "name": "seen" }
+      ],
+      "expect": { "kind": "text", "value": "12" }
+    },
+    {
+      "name": "REGRESSION (component keying, surface 3): each foreach row's SCALAR render-prop runs once per row",
+      "comment": "Like surface 2 but the per-row render-prop `body` returns its `row.n` as BARE TEXT (no <item> component, no tag built inside the body's bracket) — the scalar render-prop shape a result/side-effect heuristic CANNOT detect (the body's `fn:` compute produces no display of its own, so a 'did this render?' signal stays false and the entry still cross-collides). `menu`'s view APPENDS `body()` to `seen`, so two rows running yields \"12\". On main only row 1's `body()` runs: every row's fresh `body` closure shares one lambda AST id and is invoked with the same (empty) args, so id+args alone collide with NO row/slot segment — row 2's `body()` cache-hits row 1's and re-appends row 1's \"1\"; `seen` stays \"1\" (TS read-cache) while the write-only C# re-runs each and yields \"12\". The slotPath fold fixes it: each row carries its `row<id>` slot segment in the `fn:` key, so the per-row scalar `body()` calls are distinct and each appends its own n.",
+      "setup": [
+        { "type": "varDec", "name": "seen", "value": { "type": "text", "value": "" } },
+        { "type": "fn", "name": "menu", "params": [ { "name": "body" } ], "body": { "type": "block", "statements": [
+          { "type": "fn", "name": "view", "params": [], "body": { "type": "block", "statements": [
+            { "type": "assign", "target": { "type": "symbol", "name": "seen" }, "value": {
+              "type": "infixOp", "op": "add", "left": { "type": "symbol", "name": "seen" },
+              "right": { "type": "call", "fn": { "type": "symbol", "name": "body" }, "params": [] } } },
+            { "type": "return", "value": { "type": "tag", "name": "div", "attributes": [], "children": [] } }
+          ] } },
+          { "type": "return", "value": { "type": "symbol", "name": "view" } }
+        ] } }
+      ],
+      "renders": [
+        { "type": "tag", "name": "main", "attributes": [], "children": [
+          { "type": "foreach", "item": { "type": "symbol", "name": "row" },
+            "collection": { "type": "array", "items": [
+              { "type": "object", "props": [ { "name": "n", "value": { "type": "text", "value": "1" } } ] },
+              { "type": "object", "props": [ { "name": "n", "value": { "type": "text", "value": "2" } } ] } ] },
+            "body": [
+              { "type": "tag", "name": "menu", "attributes": [
+                { "name": "body", "value": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+                  { "type": "return", "value": {
+                    "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "row" }, "right": { "type": "symbol", "name": "n" } } }
+                ] } } } ], "children": [] } ] } ] },
+        { "type": "symbol", "name": "seen" }
+      ],
+      "expect": { "kind": "text", "value": "12" }
     }
   ]
 }

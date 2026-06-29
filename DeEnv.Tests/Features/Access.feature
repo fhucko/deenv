@@ -434,6 +434,28 @@ Feature: The access floor (read enforcement by principal)
     Then the counter eventually reads 1
     And the stored counter value is 1
 
+  # ── REGRESSION (component slot-keying — Surface 2, the KebabMenu(body) render-prop in a foreach) ──
+  # Each row of `db.rows` renders a `<menu>` (the KebabMenu shape) and passes a FRESH per-row render-prop
+  # `rowBody(r)` (a `fn inner(close)` closing over the row, returning `<div class={"row-action " + r.name}>`).
+  # Opening a row's menu invokes `body(close)` to fill the popup; the popup must show that ROW's name as a
+  # class (`.row-action.Alpha` / `.row-action.Beta`). On main it does NOT: every row's `inner` is a separate
+  # closure but shares one fn AST id, and `menu` invokes it through the function-call memo (key = fn-id +
+  # args; the `close` arg is a function → argKey "?"), with NO per-row/slot segment — so every row's
+  # `body(close)` collides on ONE key. The FIRST menu opened caches its body under that key; opening a LATER
+  # row's menu cache-hits the first and renders the FIRST row's content. (Both menus start CLOSED, so
+  # `body(close)` runs only on a click — the collision needs two opens to race; opening Alpha then Beta is
+  # the minimal trigger.) The symptom is CLIENT-only (the C# twin's memo is write-only, so it re-runs each
+  # call and SSR renders both rows correctly); the fix folds the invocation slot/row into the render-prop's
+  # identity so each row's body renders independently.
+  @milestone-client-data
+  Scenario: Each foreach row's menu shows its own render-prop content, not the first row's
+    Given the menu-keying app is served
+    And a visitor opens the menu-keying app at "/"
+    When the visitor opens the menu for row "Alpha"
+    And the visitor opens the menu for row "Beta"
+    Then the open menu for row "Alpha" shows its own action ".row-action.Alpha"
+    And the open menu for row "Beta" shows its own action ".row-action.Beta"
+
   # ── read-only affordances: write controls hidden when the principal cannot write ──
   # The generic UI gates Save (form-actions), New (new-btn), and Remove (set-remove) on sys.canWrite(type,
   # verb) — server-resolved from the floor, shipped like sys.extent. So a read-only principal (e.g. an

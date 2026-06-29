@@ -1123,12 +1123,19 @@ public sealed class CodeExecutor
 
     private IExecValue CallFunction(ExecFunction fn, ICodeValue[] args, ExecScope scope, ExecContext context)
     {
-        // Args evaluate in the caller's context (their deps are the caller's); the body
-        // is memoized by (function id, arg identities) with its own captured deps.
+        // Args evaluate in the caller's context (their deps are the caller's); the body is memoized by
+        // (function id, RENDER SLOT, arg identities) with its own captured deps. The live SlotPath segment
+        // keeps a RENDER-PROP call (a `body()`) distinct per call site: invoked at two child slots of one
+        // component — or once per `foreach` row (a `row<id>` segment) — it shares the same lambda AST id and
+        // (often) the same args, so id+args alone collide. This C# core is write-only (Memoize never serves a
+        // read-hit), so the fold does not change what it COMPUTES; it must still match the TS twin's key
+        // composition byte-for-byte (codeExec executeCall: "fn:" + id + "@" + slotPath.join("/")), so a `fn:`
+        // result the server SHIPS (private inputs the client can't recompute) is found by the SAME key on the
+        // client. Same render structure ⇒ same SlotPath ⇒ same key on both sides.
         var argVals = new IExecValue[args.Length];
         for (var i = 0; i < args.Length; i++) argVals[i] = ExecuteValue(args[i], scope, context);
 
-        return Memoize(MemoKey($"fn:{fn.Function.Id}", argVals), context, () =>
+        return Memoize(MemoKey($"fn:{fn.Function.Id}@{string.Join("/", context.SlotPath)}", argVals), context, () =>
         {
             var callScope = new ExecScope { Parent = fn.Scope };
             // Bind min(args, params): extra args are ignored, missing params stay

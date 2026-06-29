@@ -1279,6 +1279,67 @@ public class InstanceContext
                             "Bump"
     """;
 
+    // REGRESSION (component slot-keying — Surface 2, the KebabMenu(body) render-prop in a foreach): the
+    // whole UI foreaches `db.rows` and gives each row a `<menu>` (the KebabMenu shape: `var state =
+    // { open: false }`, a toggle button, and the caller's render-prop `body(close)` rendered INSIDE the
+    // open menu). Each row passes a FRESH per-row closure `rowBody(r)` — a `fn inner(close)` that closes
+    // over the row and returns `<div class={"row-action " + r.name}>`, so an open menu's body carries the
+    // row's own name as a class (`.Alpha` / `.Beta`) — the witness. (A render-prop is a named fn, the only
+    // shape the parser accepts; `rowBody(r)` returns a fresh `inner` per row — the KebabMenu(body) shape.)
+    // The closures are separate objects but share one fn AST id, and `menu`'s view invokes them through
+    // the function-call path (memo key = lambda fn-id + args; the `close` arg is a function → argKey "?"),
+    // which carries NO per-row/slot segment. So every row's `body(close)` collides on one memo key: opening
+    // any row's menu renders the FIRST row's `body` (e.g. row "Beta"'s menu shows `.Alpha`, not `.Beta`). PUBLIC (no
+    // login) and a test fixture (no designer-seed regen). The browser test is the vehicle because the
+    // symptom is CLIENT-only: the C# twin's memo is write-only (it re-runs every call), so the divergence
+    // only surfaces in the live client; the menu open is a click-driven re-render.
+    public static InstanceDescription MenuKeyingFixtureDb() =>
+        InstanceDescriptionLoader.Load(MenuKeyingFixtureApp);
+
+    private const string MenuKeyingFixtureApp = """
+    types
+        Db
+            rows set of Row
+        Row
+            name text
+
+    initialData
+        Db 1
+            rows: [2, 3]
+        Row 2
+            name: "Alpha"
+        Row 3
+            name: "Beta"
+
+    ui
+
+        fn menu(body)
+            var state = { open: false }
+            fn close()
+                state.open = false
+            fn render()
+                return <div class="menu">
+                    <button class="menu-toggle" onClick={() => state.open = state.open == false}>
+                        "open"
+                    if state.open
+                        <div class="menu-body">
+                            body(close)
+            return render
+
+        fn rowBody(r)
+            fn inner(close)
+                return <div class={"row-action " + r.name}>
+            return inner
+
+        fn render()
+            return <main>
+                foreach r in db.rows
+                    <div class="menu-row">
+                        <span class="row-name">
+                            r.name
+                        <menu body={rowBody(r)}>
+    """;
+
     // M-auth floor-hardening (Fix 3 — a throwing condition must DENY, not crash the render): the SAME
     // shape + seed, but the ONLY access rule's condition divides by zero (`1 / 0 == 1`). Integer `/` by a
     // zero divisor throws DivideByZeroException (CodeExecutor.ExecuteInfixOp) — a .NET exception, NOT a

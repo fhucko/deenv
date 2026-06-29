@@ -1296,10 +1296,19 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     if (fn.type !== "fn") throw new Error("Target of a call is not a function.");
 
     // Args evaluate in the caller's context (their deps are the caller's); the body is
-    // memoized by (function id, arg identities), capturing its own deps.
+    // memoized by (function id, RENDER SLOT, arg identities), capturing its own deps. The live `slotPath`
+    // segment is what keeps a RENDER-PROP call distinct per call site: a `body()` invoked at two child
+    // slots of one component — or once per `foreach` row (a `row<id>` slot segment) — shares the SAME
+    // lambda AST id and (often) the same args, so id+args alone collide and the read-cache would replay
+    // the FIRST call's render (and its <item> side effects) for the second, dropping the sibling/row's own
+    // content. This holds even when the body returns a bare SCALAR (no tag built inside its bracket), which
+    // a result/side-effect heuristic cannot see. Folding the slot disambiguates every shape uniformly; a
+    // same-site re-render still hits (same slot + args). The C# twin folds context.SlotPath identically
+    // (CallFunction) — same render structure ⇒ same slot ⇒ same key on both sides, so a `fn:` result the
+    // server SHIPPED (private inputs the client can't recompute) is still found by key on the client.
     const argVals = codeCall.params.map(p => executeValue(p, scope, context).value);
     const closure = fn;
-    return memoize(memoKey("fn:" + closure.fn.id, argVals), context, () => {
+    return memoize(memoKey("fn:" + closure.fn.id + "@" + slotPath.join("/"), argVals), context, () => {
         const callScope: ExecScope = { parent: closure.scope, items: {} };
         for (let i = 0; i < argVals.length && i < closure.fn.params.length; i++)
             callScope.items[closure.fn.params[i].name] = { value: argVals[i], isReadOnly: true };

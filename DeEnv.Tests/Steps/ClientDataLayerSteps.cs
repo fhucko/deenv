@@ -173,4 +173,60 @@ public sealed class ClientDataLayerSteps(InstanceContext ctx)
                 && stored.Fields.TryGetValue("a", out var v) && v is IntValue i && i.Value == value,
             "the stored counter value never became " + value);
     }
+
+    // ── REGRESSION (component slot-keying — Surface 2, KebabMenu(body) render-prop in a foreach) ──────────
+
+    // Serve the menu-keying fixture (its own Row-only schema) over the production handler tree. A fresh,
+    // unique data file so it seeds from EMPTY (never inherits another scenario's recycled extent shape).
+    [Given("the menu-keying app is served")]
+    public async Task GivenMenuKeyingServed()
+    {
+        ctx.DataFilePath = Path.Combine(Path.GetTempPath(), "deenv-menukeying-" + Guid.NewGuid().ToString("N") + ".json");
+        ctx.Description = InstanceContext.MenuKeyingFixtureDb();
+        ctx.Server = new TestInstanceServer();
+        await ctx.Server.StartAsync(ctx.Description, ctx.DataFilePath);
+        ctx.Store = ctx.Server.Store;
+    }
+
+    [Given("a visitor opens the menu-keying app at {string}")]
+    public async Task GivenVisitorOpensMenuKeying(string path)
+    {
+        ctx.Page = await SharedBrowser.NewPageAsync(ctx.BaseUrl);
+        await ctx.Page.GotoReadyAsync(path);
+        await ctx.Page.WaitReadyAsync();
+    }
+
+    // The row whose `.row-name` is `name` (e.g. "Beta"). Each `.menu-row` holds the name span and its `.menu`.
+    private static ILocator RowByName(IPage page, string name) =>
+        page.Locator(".menu-row").Filter(new LocatorFilterOptions { Has = page.Locator(".row-name", new PageLocatorOptions { HasTextString = name }) });
+
+    // Click that row's menu toggle — flips its OWN (slot-keyed) `state.open` and re-renders, invoking the
+    // row's render-prop `body(close)` to fill the popup.
+    [When("the visitor opens the menu for row {string}")]
+    public async Task WhenOpensMenuFor(string name)
+    {
+        await RowByName(ctx.Page!, name).Locator(".menu-toggle").ClickAsync();
+    }
+
+    // The open menu's body must carry THIS row's name as a class (the per-row render-prop ran for THIS row).
+    // On the keying bug, opening a non-first row cache-hits the FIRST row's `body` and renders ITS class
+    // instead (e.g. Beta's popup shows `.row-action.Alpha`) — so the row's own action never appears and this
+    // times out. We wait on the live DOM (the menu open is a client re-render) and, on failure, dump the
+    // open menu body so the leaked (first-row) content is visible in the report.
+    [Then("the open menu for row {string} shows its own action {string}")]
+    public async Task ThenOpenMenuShowsOwnAction(string name, string selector)
+    {
+        var ownAction = RowByName(ctx.Page!, name).Locator(".menu-body").Locator(selector);
+        try
+        {
+            await ownAction.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Attached, Timeout = 10000 });
+        }
+        catch (TimeoutException)
+        {
+            var bodyHtml = await RowByName(ctx.Page!, name).Locator(".menu-body").InnerHTMLAsync();
+            throw new Exception($"Row \"{name}\"'s open menu never showed its own action ({selector}) — its " +
+                "render-prop body resolved to another row's content (component slot-keying collision). " +
+                ".menu-body:\n" + bodyHtml);
+        }
+    }
 }
