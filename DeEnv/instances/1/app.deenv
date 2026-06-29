@@ -28,13 +28,11 @@ types
 
 ui
     var newDesignId = 0
-    var newInstanceName = ""
     var renameId = 0
     var renameName = ""
     var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime", "password"]
     var typeKinds = ["object", "enum"]
     var cardinalities = ["single", "set", "dictionary"]
-    var creatingInstance = false
 
     fn addType(design)
         design.types.add({ name: "", baseType: "object", values: "", order: 0, props: [] })
@@ -50,11 +48,11 @@ ui
         return "prop-row"
 
     fn startRename(i)
-        renameId = i.id
-        renameName = i.app
+        renameId = i.runtimeId
+        renameName = i.name
 
     fn doRename(i)
-        sys.rename(i.id, renameName)
+        sys.rename(i.runtimeId, renameName)
         renameId = 0
 
     fn navBar(active)
@@ -156,7 +154,7 @@ ui
                 <p class="not-found">
                     "Design not found."
 
-    fn instanceActions(inst, showOpen)
+    fn instanceActions(inst, showOpen, showRename)
         var state = { open: false }
         fn closeMenu()
             state.open = false
@@ -164,7 +162,7 @@ ui
             startRename(inst)
             closeMenu()
         fn pickClone()
-            sys.cloneInstance(inst.id)
+            sys.cloneInstance(inst.runtimeId)
             closeMenu()
         fn render()
             return <div class="kebab">
@@ -173,89 +171,50 @@ ui
                 <div class={state.open ? "kebab-backdrop open" : "kebab-backdrop"} onClick={closeMenu}>
                 <div class={state.open ? "kebab-menu open" : "kebab-menu"}>
                     if showOpen
-                        <a class="open-instance" href={sys.nest("/instances", inst.id)}>
+                        <a class="open-instance" href={sys.nest("/instances", inst)}>
                             "Open"
-                    <button class="rename-instance" onClick={pickRename}>
-                        "Rename"
+                    if showRename
+                        <button class="rename-instance" onClick={pickRename}>
+                            "Rename"
                     <button class="clone-instance" onClick={pickClone}>
                         "Clone"
-                    <ConfirmButton label="Delete" onConfirm={() => sys.delete(inst.id)} cls="delete-instance">
+                    <ConfirmButton label="Delete" onConfirm={() => sys.delete(inst.runtimeId)} cls="delete-instance">
         return render
 
-    fn instancesListPage()
-        fn doCreate(d)
-            sys.create(d, newInstanceName)
-            newInstanceName = ""
-            creatingInstance = false
-        fn cancelCreate()
-            newInstanceName = ""
+    fn listRowActions(i)
+        return <td class="row-action">
+            <instanceActions inst={i} showOpen={true} showRename={false}>
+
+    fn createInstanceBody(draft)
+        return <div class="instance-create-fields">
+            <div class="field">
+                <label class="design">
+                    "Design"
+                <select class="new-instance-design" value={newDesignId}>
+                    <option value="0">
+                        "(choose…)"
+                    foreach d in db.designs
+                        <option value={sys.id(d)}>
+                            d.label
+            <Field obj={draft} desc={sys.schema("Instance", "name")}>
+            foreach d in db.designs
+                if sys.id(d) == newDesignId
+                    sys.setRef(draft, "design", d)
+
+    fn createInstance(draft)
+        if draft.design != null
+            sys.create(draft.design, draft.name)
             newDesignId = 0
-            creatingInstance = false
+
+    fn instancesListPage()
         return <main class="ide-list">
             <h1>
                 "Instances"
-            <table class="set-table">
-                <tr class="set-head">
-                    <th>
-                        "Instance"
-                    <th>
-                        "URL"
-                    <th>
-                        "Design"
-                    <th>
-                foreach i in sys.instances
-                    <tr class="set-row">
-                        <td class="row-id">
-                            if renameId == i.id
-                                <input class="rename-input" value={renameName}>
-                                <button class="rename-save" onClick={() => doRename(i)}>
-                                    "Save"
-                                <button class="rename-cancel" onClick={() => renameId = 0}>
-                                    "Cancel"
-                            else
-                                <a class="row-link" href={sys.nest("/instances", i.id)}>
-                                    i.app
-                        <td>
-                            <a class="row-link" href={sys.nest("/instances", i.id)}>
-                                i.path
-                        <td>
-                            <a class="row-link" href={sys.nest("/instances", i.id)}>
-                                foreach d in db.designs
-                                    if sys.id(d) == i.designId
-                                        <span class="design-label">
-                                            d.label
-                        <td class="row-action">
-                            <instanceActions inst={i} showOpen={true}>
-            if !sys.instances.any(i => true)
-                <p class="set-empty">
-                    "No instances yet"
-            if creatingInstance
-                <div class="create-form">
-                    <h3>
-                        "New Instance"
-                    <div class="field">
-                        <label>
-                            "Design"
-                        <select class="new-instance-design" value={newDesignId}>
-                            <option value="0">
-                                "(choose...)"
-                            foreach d in db.designs
-                                <option value={sys.id(d)}>
-                                    d.label
-                    <div class="field">
-                        <label>
-                            "Name"
-                        <input class="new-instance-name" value={newInstanceName}>
-                    <div class="create-actions">
-                        foreach d in db.designs
-                            if sys.id(d) == newDesignId
-                                <button class="create-save" onClick={() => doCreate(d)}>
-                                    "Save"
-                        <button class="cancel" onClick={cancelCreate}>
-                            "Cancel"
-            else
-                <button class="new-btn" onClick={() => creatingInstance = true}>
-                    "New Instance"
+            <ul class="designs-data" hidden="hidden">
+                foreach d in db.designs
+                    <li>
+                        d.label
+            <SetTable set={db.instances} desc={sys.schema("Instance")} setPath="/instances" columns={["name", "design"]} rowActions={listRowActions} createForm={createInstanceBody} onCreate={createInstance}>
     fn designSelector(instanceId, currentDesignId)
         var state = { pick: currentDesignId }
         fn render()
@@ -277,11 +236,11 @@ ui
                 "Instance"
             <a class="back" href="/instances">
                 "Back"
-            if sys.instances.any(i => i.id == routeId)
-                foreach i in sys.instances
-                    if i.id == routeId
+            if db.instances.any(i => sys.id(i) == routeId)
+                foreach i in db.instances
+                    if sys.id(i) == routeId
                         <div class="instance-head">
-                            if renameId == i.id
+                            if renameId == i.runtimeId
                                 <input class="rename-input" value={renameName}>
                                 <button class="rename-save" onClick={() => doRename(i)}>
                                     "Save"
@@ -289,9 +248,9 @@ ui
                                     "Cancel"
                             else
                                 <span class="instance-app">
-                                    i.app
-                            <instanceActions inst={i} showOpen={false}>
-                        <designSelector instanceId={i.id} currentDesignId={i.designId}>
+                                    i.name
+                            <instanceActions inst={i} showOpen={false} showRename={true}>
+                        <designSelector instanceId={i.runtimeId} currentDesignId={i.design != null ? sys.id(i.design) : 0}>
             else
                 <p class="not-found">
                     "Instance not found."

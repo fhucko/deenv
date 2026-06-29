@@ -168,11 +168,13 @@ Feature: The operator IDE (designs library + instance design selector)
     When I edit the design "blank"
     Then the design editor shows the design's label "blank"
 
-  # Create an instance: the inline "New instance" form on /instances picks an existing design (a
-  # <select>) + a display name, and Create spawns a new instance running that design under that name,
-  # served at /apps/<name> (addressing is by path now — no port inputs). The kernel refreshes its live
-  # set, so the new instance shows in the list (race-free) under the typed name — and its NEW registry
-  # entry carries the picked design's id, so opening it pre-selects that design in the selector.
+  # Create an instance via the generic <SetTable>'s create form (the `createForm` slot): ONE step — a
+  # design <select> (over db.designs) + a name field, then Save. Save runs SetTable's `onCreate`
+  # override → sys.create(design, name), spawning a new instance running that design under that name,
+  # served at /apps/<name>. The instance is a designer-stored object (db.instances), so the new ROW —
+  # including its design column — must appear IN PLACE via the WS refetch (+ resetViewState), with NO
+  # reload (the kernel mirror writes the design ref after add-to-set, so the in-place design cell is the
+  # load-bearing assertion). Its NEW entry carries the picked design's id, so opening it pre-selects it.
   @milestone-10 @single-user
   Scenario: Creating an instance from the list form spawns it running the picked design
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
@@ -380,33 +382,22 @@ Feature: The operator IDE (designs library + instance design selector)
     And I name the just-added type "Thing"
     Then the design "withtype" has a stored type named "Thing"
 
-  # Each instances-list row gathers ALL its actions (Open/Rename/Clone/Delete) into ONE trailing
-  # actions cell behind a "⋯" overflow (kebab) menu — instead of scattering Rename in the Name column
-  # and Open/Clone/Delete in a separate column. The menu is a per-row REACTIVE component: it is hidden
-  # until the row's kebab is clicked, and its open/closed state is keyed to that row's instance identity,
-  # so opening one row's menu does NOT open another's (independent state that survives re-render). The
-  # menu container is always in the DOM (toggled by a class), not conditionally inserted, so the row's
-  # children reconcile cleanly. The actions behind it invoke the SAME handlers as before.
+  # Each instances-list row gathers its actions into ONE trailing actions cell behind a "⋯" overflow
+  # (kebab) menu — supplied to the generic <SetTable> as its `rowActions` cell. The menu is a per-row
+  # REACTIVE component: hidden until the row's kebab is clicked, its open/closed state keyed to that
+  # row's instance identity, so opening one row's menu does NOT open another's (independent state that
+  # survives re-render). The list kebab offers Open / Clone / Delete. RENAME is NOT in the list kebab:
+  # <SetTable> owns the identity (name) cell, so an inline in-row rename (which swaps that cell to an
+  # input) cannot be driven from a rowActions cell — rename lives on the per-instance detail page
+  # (reached via Open), which keeps its own inline rename. (See the detail-page scenario below.)
   @milestone-10 @single-user
   Scenario: Row actions are consolidated into a per-row kebab menu with independent state
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the instances list
     Then the instance "todo" row actions are hidden behind a kebab
     When I open the actions menu for instance "todo"
-    Then the instance "todo" actions menu shows Open, Rename, Clone, and Delete
+    Then the instance "todo" actions menu shows Open, Clone, and Delete
     And the instance "crm" actions menu stays closed
-
-  # The kebab is only the CONTAINER — the actions still work. Choosing Rename from the "todo" row's
-  # kebab triggers the same start-rename handler as before, so the Name column swaps to the inline
-  # rename input (the established per-row conditional). This proves the consolidation changed only WHERE
-  # the control lives, not the operation it performs.
-  @milestone-10 @single-user
-  Scenario: Rename chosen from the kebab opens the inline rename editor for that row
-    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
-    When I open the instances list
-    And I open the actions menu for instance "todo"
-    And I choose Rename from the instance "todo" kebab
-    Then the instance "todo" row shows the inline rename editor
 
   # The instance DETAIL page (/instances/<id>) carries the same kebab, but it must NOT offer "Open" -
   # that would point at the page you are already on (self-referential). So the detail kebab drops Open
@@ -459,3 +450,16 @@ Feature: The operator IDE (designs library + instance design selector)
     When the "todo" instance is renamed to "mytodo" via host action
     Then the design-host has a stored Instance named "mytodo"
     And the design-host has no stored Instance named "todo"
+
+  # Slice 3 — the instances list and selector now read from db.instances (the store), not sys.instances
+  # (the live kernel set). This scenario verifies that after a host-action rename (which updates
+  # db.instances via Slice 2), the instances list page reflects the new name from the STORED data.
+  # The step reloads the page so the SSR runs fresh from db.instances (the live kernel also has the
+  # new name, so both paths would show it — the key proof is that the SSR uses db.instances fields:
+  # inst.name for the label and inst.design.label for the design column).
+  @milestone-10 @single-user
+  Scenario: The instances list shows renamed instance from db.instances after rename
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When the "todo" instance is renamed to "myrenamedtodo" via host action
+    And I open the instances list
+    Then the instances list shows the instance "myrenamedtodo" running design "todo"

@@ -667,10 +667,17 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // the page would never return to the gate. resetViewState drops `comp:` (ui.ts) + forces the refetch.
         stateGen++; resetViewState(); maybeRefetch();
     } else if (msg.op === "hostAction" && msg.ok) {
-        // A host action (sys.create / sys.delete / sys.rename / etc.) completed server-side.
-        // sys.instances is built per-render from the kernel's live registry, so a bare refetch
-        // is all that's needed — no stateGen bump (nothing was staged optimistically).
-        needsServerData = true;
+        // A host action (sys.create / sys.delete / sys.rename / etc.) completed server-side. A host
+        // action can change a MEMOIZED store set the live view renders — e.g. the operator IDE now lists
+        // db.instances (a set inside a `comp:` SetTable), and sys.create/delete/rename mutate it through
+        // the kernel mirror, NOT through the journaled mutation path that calls invalidateMember. The
+        // refetch MERGES the fresh membership into the set's array, but the SetTable component's foreach
+        // memo (a `comp:` entry, preserved across a plain merge) would keep re-handing back its stale row
+        // tree. resetViewState() drops the `comp:` slot-cache (ui.ts) — the SAME wholesale-rebuild fix
+        // login/logout use — so the SetTable re-renders fresh over the merged set. (A bare refetch alone
+        // sufficed only while the list read sys.instances, re-built per-render from the live registry and
+        // never memoized as a set.) Client-only orchestration: no twin, no conformance.
+        resetViewState();
         maybeRefetch();
     } else if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
         const arrayId = pendingAdds.get(msg.tempId);

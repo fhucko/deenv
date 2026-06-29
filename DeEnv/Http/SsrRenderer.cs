@@ -573,6 +573,10 @@ public sealed class SsrRenderer
         .new-btn { margin-top: 0.3rem; border-color: var(--accent); color: var(--accent); }
         .new-btn:hover { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); border-color: var(--accent); }
         .create-form > .field > input:not([type=checkbox]), .create-form > .field > select { width: 100%; max-width: 440px; }
+        /* A createForm slot body that groups its fields in a wrapper (the IDE's instance create form:
+           a design <select> + the name <Field>) — match the standard full-width field layout so the
+           controls don't stack at default widths. */
+        .instance-create-fields .field > input:not([type=checkbox]), .instance-create-fields .field > select { width: 100%; max-width: 440px; }
         .create-actions { display: flex; gap: 0.5rem; align-items: center; margin-top: 1.1rem; }
         .ref-current { margin-bottom: 0.7rem; color: var(--muted); }
         .ref-type { margin-top: 0; }

@@ -54,7 +54,7 @@ namespace DeEnv.Instance;
 //   • RefEditor(parent, prop, target) — a reference editor: current label, a pick button
 //     per extent() candidate, a clear button, and a create-new form. A COMPONENT: its body
 //     runs once as init (a local `state` holding a draft), and it returns a render fn.
-//   • SetTable(set, desc, setPath, columns, rowActions, createForm) — a set table: an aligned header +
+//   • SetTable(set, desc, setPath, columns, rowActions, createForm, onCreate) — a set table: an aligned header +
 //     member rows + a `+ New` button. A whole data row is navigable — its first cell wraps the member's
 //     identity (labelProp value) in a stretched `<a class="row-link" href=nest(setPath, m)>` (CSS
 //     `::after { inset:0 }` covers the row); a per-row Remove sits z-raised above the overlay. A bool
@@ -79,6 +79,13 @@ namespace DeEnv.Instance;
 //         form (one `Field` per scalar prop), byte-for-byte unchanged. A consumer passes it to show a
 //         FOCUSED create (the designer's designs list shows just a label field, not Design's raw
 //         ui/common/initialData scalars) while still using the generic New + set.add.
+//       · onCreate(draft) — overrides what Save DOES with the finished draft: when given, Save calls
+//         `onCreate(draft)` INSTEAD of `set.add(draft)`. For a HOST-MANAGED set (a set whose membership is
+//         owned by a kernel action, not direct desired-state writes) — e.g. the designer's instances list,
+//         whose rows are created by `sys.create(design, name)`, not by adding a ghost Instance row that has
+//         no runtime. Omitted/null → the default `set.add(draft)`, byte-for-byte unchanged. The draft is a
+//         fully-built `sys.new(desc)` object the body edited, so onCreate reads its props (e.g. draft.name,
+//         draft.design) to drive the host action.
 //
 // Builtins do the reflective work, all under the framework `sys` namespace: sys.field (dynamic
 // access), sys.humanize (labels), sys.extent (a type's objects), sys.schema (a type's descriptor),
@@ -314,7 +321,7 @@ public static class GenericUi
                                 sys.humanize(target.name)
                 return render
 
-            fn SetTable(set, desc, setPath, columns, rowActions, createForm)
+            fn SetTable(set, desc, setPath, columns, rowActions, createForm, onCreate)
                 var state = { draft: sys.new(desc), creating: false }
                 fn startCreate()
                     state.creating = true
@@ -392,7 +399,10 @@ public static class GenericUi
                                 sys.humanize(desc.name)
                                 " yet"
                         if state.creating
-                            <ObjectForm obj={state.draft} meta={desc} join={d => set.add(d)} body={createForm} onSave={closeCreate} onCancel={closeCreate}>
+                            if onCreate != null
+                                <ObjectForm obj={state.draft} meta={desc} join={d => onCreate(d)} body={createForm} onSave={closeCreate} onCancel={closeCreate}>
+                            else
+                                <ObjectForm obj={state.draft} meta={desc} join={d => set.add(d)} body={createForm} onSave={closeCreate} onCancel={closeCreate}>
                         else if sys.canWrite(desc.name, "create")
                             <button class="new-btn" onClick={startCreate}>
                                 "New "
