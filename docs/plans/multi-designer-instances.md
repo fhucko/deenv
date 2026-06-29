@@ -1,11 +1,19 @@
 # Multi-designer instances — milestone plan
 
-> **Status: DEFERRED (2026-06-29).** Fully planned, not being built. It serves the
-> github-style multi-developer pillar + the self-hosted-image north star, but it's
-> **Stage-2 — ahead of the MVP "presentable with one app" bar**, and barely advances the
-> self-editing-ERP dogfood (already done single-designer). Picked up when independent
-> designers actually matter. Near-term designer-cleanup uses the general lib extractions
-> in `designer-lib-collapse.md` instead. Memory: `project_multi_designer_instances`.
+> **Status: NARROW CUT LANDED (2026-06-29).** The user pulled in the single-designer
+> heart of this plan — **slice 1 (stored `db.instances`, seeded from the registry), slice 3
+> (host actions mirror `db.instances` — a registry→store mirror, NOT the full source-of-truth
+> inversion), and slice 8 (the generic `SetTable` display)**. The designer now stores its
+> instances as `Db { designs, instances }` and renders the list with the generic component;
+> the ~75-line hand-rolled table is gone. **Still DEFERRED (Stage-2, independent designers):
+> slice 2 (storage collapse `instances/<designerId>/<instanceId>/`) and slices 4–7 (name→id
+> routing, subdomain facade, uniqueness, bootstrap).** Two flagged shortcuts the deferred
+> slices would dissolve: `Instance.runtimeId` (the store-id↔kernel-id link that storage-collapse
+> removes) and the hidden `designs-data` footprint anchor (a client-data-layer gap — the
+> client-toggled create form's `candidates` access isn't harvested on the toggle refetch).
+> Landing also added three GENERAL primitives not in this plan: the `single(predicate)`
+> collection accessor, an `onChange` attribute on `<select>`, and the `RefSelect` lib component
+> (a ref-binding select). Memory: `project_multi_designer_instances`.
 
 Instances become first-class designer-**stored** objects; the kernel inverts to an
 **id-keyed runtime-projection** target; URLs/domains use **names** as a facade over
