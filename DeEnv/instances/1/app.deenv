@@ -1,6 +1,11 @@
 types
     Db
         designs set of Design
+        instances set of Instance
+    Instance
+        name text
+        runtimeId int
+        design Design
     Design
         label text
         initialData text

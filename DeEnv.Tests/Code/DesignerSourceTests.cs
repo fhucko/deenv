@@ -88,7 +88,7 @@ public sealed class DesignerSourceTests
 
             // Reverse-project this one app into a one-design seed, seed a throwaway store from it (so the
             // Design is a live node the publish path reads by id), read it back, and forward-project it.
-            var seed = DesignerSeed.Build([("app-" + id, designId, committed)]);
+            var seed = DesignerSeed.Build([("app-" + id, designId, committed)], []);
             var designerDesc = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1))
                 with { InitialData = seed };
 

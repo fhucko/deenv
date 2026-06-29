@@ -421,3 +421,17 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the instance page actions menu has no Open item
     When I choose Rename from the instance page kebab
     Then the instance page shows the inline rename editor
+
+  # The design-host's `db.instances` is seeded from the kernel registry on EVERY boot (the INVERSE of
+  # `db.designs`: both are rebuilt from the live specs). One stored Instance per hosted instance, with
+  # `name` = the registry label, `runtimeId` = the kernel id (the link to the runtime row), and `design`
+  # = a reference to the matching Design in `db.designs` (resolves by construction — designId is the key).
+  # This is a STORE read, not a UI assertion — UI is unchanged in this slice; Slice 3 does the UI change.
+  @milestone-10 @single-user
+  Scenario: The design-host seeds db.instances from the kernel registry on boot
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    Then the design-host has a stored Instance for each hosted instance
+    And the stored Instance for "todo" has runtimeId matching the kernel
+    And the stored Instance for "todo" has its design resolved to the "todo" design
+    And the stored Instance for "crm" has runtimeId matching the kernel
+    And the stored Instance for "crm" has its design resolved to the "crm" design

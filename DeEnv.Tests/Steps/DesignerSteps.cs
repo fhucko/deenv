@@ -964,6 +964,64 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task ThenScrolledTop() =>
         await ctx.Page!.WaitForFunctionAsync("() => window.scrollY === 0");
 
+    // ── Then: db.instances seeded from registry (slice 1) ────────────────────────
+
+    [Then("the design-host has a stored Instance for each hosted instance")]
+    public async Task ThenDesignHostHasStoredInstances()
+    {
+        // The design-host's `db.instances` extent must hold one Instance per hosted kernel instance.
+        // The designer itself (id 1) is also a hosted instance and must be present; the targets (todo,
+        // crm) each get their own entry. So the total is 3 (designer + 2 targets).
+        var instances = _designer.Store.ReadExtent("Instance");
+        await Assert.That(instances.Count).IsGreaterThanOrEqualTo(3);
+    }
+
+    [Then("the stored Instance for {string} has runtimeId matching the kernel")]
+    public async Task ThenStoredInstanceRuntimeId(string label)
+    {
+        // The Instance whose `name` == label must have a `runtimeId` that matches the live kernel
+        // instance's spec.Id — the stable link from the stored mirror back to the runtime row.
+        var kernelId = ctx.Kernel!.Instances.Single(i => i.Spec.App == label).Spec.Id;
+        var instances = _designer.Store.ReadExtent("Instance");
+        var match = instances.Values.FirstOrDefault(o =>
+            o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == label);
+        await Assert.That(match).IsNotNull();
+        await Assert.That(
+            match!.Fields.TryGetValue("runtimeId", out var rv) && rv is DeEnv.Storage.IntValue ri
+                ? ri.Value : -1)
+            .IsEqualTo(kernelId);
+    }
+
+    [Then("the stored Instance for {string} has its design resolved to the {string} design")]
+    public async Task ThenStoredInstanceDesign(string instanceLabel, string designLabel)
+    {
+        // The Instance for `instanceLabel` must have its `design` reference pointing at the Design
+        // whose label == `designLabel`. The `design` field is a stored bare id (a single reference);
+        // the Design extent holds objects at those ids — resolves by construction.
+        var instances = _designer.Store.ReadExtent("Instance");
+        var designs = _designer.Store.ReadExtent("Design");
+
+        var instance = instances.Values.FirstOrDefault(o =>
+            o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == instanceLabel);
+        await Assert.That(instance).IsNotNull();
+
+        // The `design` field is a ReferenceValue (a single-object ref stored as an id).
+        await Assert.That(instance!.Fields.ContainsKey("design")).IsTrue();
+        var designRef = instance.Fields["design"];
+        await Assert.That(designRef).IsTypeOf<DeEnv.Storage.ReferenceValue>();
+        var refValue = (DeEnv.Storage.ReferenceValue)designRef;
+        await Assert.That(refValue.TargetId).IsNotNull();
+        var designId = refValue.TargetId!.Value;
+
+        // That id must resolve to a Design with the expected label.
+        await Assert.That(designs.ContainsKey(designId)).IsTrue();
+        var design = designs[designId];
+        await Assert.That(
+            design.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue lt
+                ? lt.Text : "")
+            .IsEqualTo(designLabel);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────
 
     // The instances-list row for an instance, located by its app-name cell (exact match, so "todo"

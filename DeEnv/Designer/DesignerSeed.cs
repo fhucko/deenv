@@ -35,18 +35,24 @@ namespace DeEnv.Designer;
 // keeps the design library reflecting the app files without ever deleting the store.
 public static class DesignerSeed
 {
-    // Build the design-host's `db.designs` seed from the given designs (each an instance's display
-    // label, its kernel.json designId, and its committed app-document text). Returns the friendly
-    // InstanceInitialData the store seeds from: a single root Db holding a `designs` set of the Design
-    // ids, plus the Design / MetaType / MetaProp extents. The designs are emitted in the given order;
+    // Build the design-host's `db.designs` + `db.instances` seed from the given designs (each an
+    // instance's display label, its kernel.json designId, and its committed app-document text) and the
+    // given instance tuples (one per hosted instance: name, runtimeId, optional designId). Returns the
+    // friendly InstanceInitialData the store seeds from: a single root Db holding both sets, plus the
+    // Design / MetaType / MetaProp / Instance extents. The designs are emitted in the given order;
     // the root Db's `designs` set lists their ids in that order.
-    public static InstanceInitialData Build(IReadOnlyList<(string Label, int DesignId, string AppText)> designs)
+    public static InstanceInitialData Build(
+        IReadOnlyList<(string Label, int DesignId, string AppText)> designs,
+        IReadOnlyList<(string Name, int RuntimeId, int? DesignId)> instances)
     {
         var builder = new SeedBuilder(designs.Select(d => d.DesignId));
         var designIds = new List<int>();
         foreach (var (label, designId, appText) in designs)
             designIds.Add(builder.AddDesign(label, designId, appText));
-        builder.AddRootDb(designIds);
+        var instanceIds = new List<int>();
+        foreach (var (name, runtimeId, designId) in instances)
+            instanceIds.Add(builder.AddInstance(name, runtimeId, designId));
+        builder.AddRootDb(designIds, instanceIds);
         return builder.Build();
     }
 
@@ -66,12 +72,19 @@ public static class DesignerSeed
     // designIds AND all preserved Design/MetaType/MetaProp ids), so a freshly-minted file-backed sub-id
     // can never collide with a preserved one. The root Db's `designs` set lists the preserved ids first,
     // then the file-backed ids (order is incidental; ids are the identity).
+    // Reconcile the design-host's EXISTING designs + instances with the current app files — the boot
+    // sync over a non-empty store. `existingDesigns` is the design-host's live `Design` extent (its
+    // objects read inline via IInstanceStore.ReadExtent, keyed by id). `fileBacked` is the same
+    // (Label, DesignId, AppText) tuples as Build. `instances` is the live (Name, RuntimeId, DesignId)
+    // tuples — db.instances is always rebuilt from the kernel registry on every boot (all instances are
+    // file-backed; there are no UI-created instances yet).
     public static InstanceInitialData Merge(
-        IReadOnlyDictionary<int, ObjectValue> existing,
-        IReadOnlyList<(string Label, int DesignId, string AppText)> fileBacked)
+        IReadOnlyDictionary<int, ObjectValue> existingDesigns,
+        IReadOnlyList<(string Label, int DesignId, string AppText)> fileBacked,
+        IReadOnlyList<(string Name, int RuntimeId, int? DesignId)> instances)
     {
         var fileBackedIds = fileBacked.Select(d => d.DesignId).ToHashSet();
-        var preserved = existing
+        var preserved = existingDesigns
             .Where(e => !fileBackedIds.Contains(e.Key))
             .OrderBy(e => e.Key)
             .ToList();
@@ -87,7 +100,11 @@ public static class DesignerSeed
         foreach (var (label, designId, appText) in fileBacked)
             designIds.Add(builder.AddDesign(label, designId, appText));
 
-        builder.AddRootDb(designIds);
+        var instanceIds = new List<int>();
+        foreach (var (name, runtimeId, designId) in instances)
+            instanceIds.Add(builder.AddInstance(name, runtimeId, designId));
+
+        builder.AddRootDb(designIds, instanceIds);
         return builder.Build();
     }
 
@@ -267,8 +284,30 @@ public static class DesignerSeed
         private static bool Bool(ObjectValue obj, string name) =>
             obj.Fields.GetValueOrDefault(name) is BoolValue b && b.Value;
 
-        public void AddRootDb(IReadOnlyList<int> designIds) =>
-            Pool("Db")[MintId().ToString()] = ToElement(new JsonObject { ["designs"] = IdArray(designIds) });
+        // Mint an Instance seed entry: { name, runtimeId, design: <bare designId or absent> }. The
+        // `design` field is a BARE id (a single reference in seed form — INSTANCE_DESCRIPTION_FORMAT.md
+        // "a single reference is a bare id"). When designId is 0 (not-yet-hosted), the field is omitted
+        // so the reference stays unset (same as an omitted single-ref in initialData).
+        // runtimeId comment: this field is the link to the kernel runtime row (0 = not-yet-hosted).
+        // Storage-collapse (plan slice 2) would dissolve it — the store id would BE the runtime id.
+        public int AddInstance(string name, int runtimeId, int? designId)
+        {
+            var fields = new JsonObject
+            {
+                ["name"] = name,
+                ["runtimeId"] = runtimeId,
+            };
+            if (designId is { } did && did != 0)
+                fields["design"] = did;
+            return Add("Instance", fields);
+        }
+
+        public void AddRootDb(IReadOnlyList<int> designIds, IReadOnlyList<int> instanceIds) =>
+            Pool("Db")[MintId().ToString()] = ToElement(new JsonObject
+            {
+                ["designs"] = IdArray(designIds),
+                ["instances"] = IdArray(instanceIds),
+            });
 
         public InstanceInitialData Build()
         {

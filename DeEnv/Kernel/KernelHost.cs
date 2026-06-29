@@ -263,17 +263,25 @@ public sealed class KernelHost(
             .ToList();
         if (fileBacked.Count == 0) return;
 
+        // Build the instance tuples: one per hosted spec (every instance, with or without a design).
+        // `App` is the display name; `Id` is the kernel runtime id; `DesignId` is the design reference
+        // (0 = not-yet-hosted, carried as null here so the reference is omitted from the seed).
+        var instanceTuples = specs
+            .OrderBy(s => s.Id)
+            .Select(s => (s.App, RuntimeId: s.Id, DesignId: s.DesignId))
+            .ToList();
+
         var description = InstanceDescriptionLoader.LoadFile(designHost.SchemaPath);
         var fresh = !File.Exists(designHost.DataPath) || new FileInfo(designHost.DataPath).Length == 0;
 
         if (fresh)
         {
-            _ = new JsonFileInstanceStore(designHost.DataPath, description with { InitialData = DesignerSeed.Build(fileBacked) });
+            _ = new JsonFileInstanceStore(designHost.DataPath, description with { InitialData = DesignerSeed.Build(fileBacked, instanceTuples) });
             return;
         }
 
         var existing = new JsonFileInstanceStore(designHost.DataPath, description).ReadExtent("Design");
-        var merged = DesignerSeed.Merge(existing, fileBacked);
+        var merged = DesignerSeed.Merge(existing, fileBacked, instanceTuples);
         new JsonFileInstanceStore(designHost.DataPath, description with { InitialData = merged }).Reset();
     }
 
