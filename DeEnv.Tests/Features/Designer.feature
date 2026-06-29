@@ -435,3 +435,27 @@ Feature: The operator IDE (designs library + instance design selector)
     And the stored Instance for "todo" has its design resolved to the "todo" design
     And the stored Instance for "crm" has runtimeId matching the kernel
     And the stored Instance for "crm" has its design resolved to the "crm" design
+
+  # db.instances is kept in lockstep with host actions: create/delete/rename/clone/setDesign all
+  # mirror their kernel-registry write into the design-host's db.instances extent. Slice 2 tests
+  # the three most directly observable: create (INSERT row), delete (REMOVE row), rename (UPDATE name).
+  # These are STORE reads — no UI assertion; the UI slice (Slice 3) drives the browser.
+  @milestone-10 @single-user
+  Scenario: Creating an instance via a host action inserts a row in db.instances
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When a new instance named "newapp" is created from the "todo" design via host action
+    Then the design-host has a stored Instance named "newapp"
+    And the stored Instance "newapp" has a runtimeId that matches the new kernel instance
+
+  @milestone-10 @single-user
+  Scenario: Deleting an instance via a host action removes its row from db.instances
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When the "crm" instance is deleted via host action
+    Then the design-host has no stored Instance named "crm"
+
+  @milestone-10 @single-user
+  Scenario: Renaming an instance via a host action updates its name in db.instances
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When the "todo" instance is renamed to "mytodo" via host action
+    Then the design-host has a stored Instance named "mytodo"
+    And the design-host has no stored Instance named "todo"

@@ -61,6 +61,11 @@ public sealed class KernelHost(
     // render on ANY instance reads the LIVE list — no frozen per-instance snapshot.
     private readonly LiveRegistry _registry = new();
 
+    // The design-host's store: cached at boot so mutating host actions (create/delete/rename/clone/
+    // setDesign) can mirror their kernel-registry writes into db.instances in one paired call without
+    // re-scanning or re-opening a store. Null when no design-host is present (rare in practice).
+    private IInstanceStore? _designHostStore;
+
     // Track a newly-started instance, then re-project the registry so every instance's next render
     // sees it. The PathRouter resolves by name over `_instances`, so a tracked instance is routable
     // immediately (no host rebind).
@@ -149,6 +154,8 @@ public sealed class KernelHost(
         RegistryWriter.Write(registryPath, new Registry(
             [.. stored.Instances.Select(e =>
                 e.Id == instance.Spec.Id ? e with { DesignId = designId } : e)]));
+
+        MirrorInstanceSetDesign(instance.Spec.Id, designId);
     }
 
     // Resolve each registry entry to a hosting spec: the schema/data paths are derived PURELY from the
@@ -230,6 +237,10 @@ public sealed class KernelHost(
             // and gets its own host-action seam (a lazy closure over the hosted set).
             foreach (var spec in specs)
                 Register(HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec)));
+
+            // Cache the design-host's store now that all instances are live, so mutating host actions
+            // can mirror writes into db.instances without re-scanning.
+            _designHostStore = _instances.Values.FirstOrDefault(i => IsDesignHost(i.Spec))?.Store;
         }
         catch
         {
@@ -245,6 +256,68 @@ public sealed class KernelHost(
         bindLoopback
             ? host.Bind(IPAddress.Loopback, (ushort)port, dualStack: false)
             : host.Port((ushort)port);
+
+    // ── db.instances mirror — keep the design-host's db.instances in lockstep with kernel actions ──
+
+    // The intrinsic id of the db.instances set — read once per call through the root path.
+    // Null when the design-host store is absent or the set isn't there yet.
+    private int? InstancesSetId() =>
+        _designHostStore?.ReadNode(NodePath.Root.Field("instances")) is SetValue sv ? sv.Id : null;
+
+    // Find the Instance object whose runtimeId matches the given kernel id.
+    private int? FindInstanceObjectId(int runtimeId)
+    {
+        if (_designHostStore is null) return null;
+        foreach (var (id, obj) in _designHostStore.ReadExtent("Instance"))
+            if (obj.Fields.TryGetValue("runtimeId", out var v) && v is IntValue iv && iv.Value == runtimeId)
+                return id;
+        return null;
+    }
+
+    // INSERT a new Instance row into db.instances (after a create or clone kernel action).
+    private void MirrorInstanceInsert(int runtimeId, string name, int? designId)
+    {
+        if (_designHostStore is null) return;
+        var fields = new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name),
+            ["runtimeId"] = new IntValue(runtimeId),
+        };
+        var objId = _designHostStore.CreateObject("Instance", new ObjectValue(fields));
+        // Add to the set BEFORE writing the design reference: WriteReference triggers GC, and a
+        // freshly minted object that has not yet been linked to a set would be collected as unreachable.
+        if (InstancesSetId() is { } setId)
+            _designHostStore.AddToSet(setId, objId);
+        // BuildFields ignores provided reference fields (single-object props start unset), so set the
+        // design reference as a separate write after the object is safely reachable via the set.
+        if (designId.HasValue)
+            _designHostStore.WriteReference(objId, "design", designId, "Design");
+    }
+
+    // REMOVE the Instance row matching runtimeId from db.instances (after a delete kernel action).
+    private void MirrorInstanceDelete(int runtimeId)
+    {
+        if (_designHostStore is null) return;
+        if (FindInstanceObjectId(runtimeId) is not { } objId) return;
+        if (InstancesSetId() is { } setId)
+            _designHostStore.RemoveFromSet(setId, objId);
+    }
+
+    // UPDATE the name on the Instance row matching runtimeId (after a rename kernel action).
+    private void MirrorInstanceRename(int runtimeId, string newName)
+    {
+        if (_designHostStore is null) return;
+        if (FindInstanceObjectId(runtimeId) is not { } objId) return;
+        _designHostStore.WriteField(objId, "name", new TextValue(newName));
+    }
+
+    // UPDATE the design ref on the Instance row matching runtimeId (after setDesign kernel action).
+    private void MirrorInstanceSetDesign(int runtimeId, int? designId)
+    {
+        if (_designHostStore is null) return;
+        if (FindInstanceObjectId(runtimeId) is not { } objId) return;
+        _designHostStore.WriteReference(objId, "design", designId, "Design");
+    }
 
     // ── boot sync of the design library (the design-host's `db.designs`) ──────────────
 
@@ -338,6 +411,8 @@ public sealed class KernelHost(
         RegistryWriter.Write(registryPath, new Registry(
             [.. stored.Instances, new RegistryEntry(id, name, designId)]));
 
+        MirrorInstanceInsert(id, name, designId);
+
         return Task.FromResult(created);
     }
 
@@ -374,6 +449,8 @@ public sealed class KernelHost(
         RegistryWriter.Write(registryPath, new Registry(
             [.. RegistryReader.Read(registryPath).Instances, new RegistryEntry(id, name, null)]));
 
+        MirrorInstanceInsert(id, name, null);
+
         return Task.FromResult(created);
     }
 
@@ -403,6 +480,8 @@ public sealed class KernelHost(
         var stored = RegistryReader.Read(registryPath);
         RegistryWriter.Write(registryPath, new Registry(
             [.. stored.Instances.Where(e => e.Id != instance.Spec.Id)]));
+
+        MirrorInstanceDelete(instance.Spec.Id);
 
         var idDir = AppPaths.IdDirFor(BaseDirOf(instance), instance.Spec.Id);
         if (Directory.Exists(idDir))
@@ -435,6 +514,8 @@ public sealed class KernelHost(
         var stored = RegistryReader.Read(registryPath);
         RegistryWriter.Write(registryPath, new Registry(
             [.. stored.Instances.Select(e => e.Id == id ? e with { App = name } : e)]));
+
+        MirrorInstanceRename(id, name);
         return Task.CompletedTask;
     }
 

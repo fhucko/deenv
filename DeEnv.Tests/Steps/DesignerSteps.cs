@@ -33,6 +33,9 @@ public sealed class DesignerSteps(InstanceContext ctx)
     // display label AND its mount, since addressing is by path now; there are no per-instance ports).
     private string _newInstanceName = "";
 
+    // The kernel id minted for an instance created via a direct host-action step (Slice 2 store assertions).
+    private int _lastCreatedInstanceId;
+
     // The name given to a just-added type (so the base-type / values steps relocate that row once it is
     // no longer the empty-name one).
     private string _justAddedTypeName = "";
@@ -1020,6 +1023,71 @@ public sealed class DesignerSteps(InstanceContext ctx)
             design.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue lt
                 ? lt.Text : "")
             .IsEqualTo(designLabel);
+    }
+
+    // ── When/Then: db.instances mirror (Slice 2 — direct host-action calls, no browser) ────────────
+
+    // Create a new instance via the kernel host action directly (not through the browser UI).
+    // Uses the named design's existing app document as the new instance's source, and passes
+    // the design's id so the mirror can link the Instance row's `design` reference.
+    [When("a new instance named {string} is created from the {string} design via host action")]
+    public async Task WhenCreateInstanceViaHostAction(string name, string designLabel)
+    {
+        var registryPath = Path.Combine(ctx.KernelDir!, "kernel.json");
+        // Borrow the design's existing app document (the kernel already hosts it).
+        var designSource = ctx.Kernel!.Instances.Single(i => i.Spec.App == designLabel);
+        var appDoc = File.ReadAllText(designSource.Spec.SchemaPath);
+        var designId = ctx.DesignIdForLabel(designLabel);
+        var created = await ctx.Kernel.CreateAsync(appDoc, name, ctx.KernelDir!, registryPath, designId);
+        _lastCreatedInstanceId = created.Spec.Id;
+    }
+
+    // Delete an existing instance via the kernel host action directly.
+    [When("the {string} instance is deleted via host action")]
+    public async Task WhenDeleteInstanceViaHostAction(string label)
+    {
+        var registryPath = Path.Combine(ctx.KernelDir!, "kernel.json");
+        var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
+        await ctx.Kernel.DeleteAsync(target, registryPath);
+    }
+
+    // Rename an instance via the kernel host action directly.
+    [When("the {string} instance is renamed to {string} via host action")]
+    public async Task WhenRenameInstanceViaHostAction(string label, string newName)
+    {
+        var registryPath = Path.Combine(ctx.KernelDir!, "kernel.json");
+        var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
+        await ctx.Kernel.RenameAsync(target.Spec.Id, newName, registryPath);
+    }
+
+    [Then("the design-host has a stored Instance named {string}")]
+    public async Task ThenDesignHostHasStoredInstanceNamed(string name)
+    {
+        var instances = _designer.Store.ReadExtent("Instance");
+        var match = instances.Values.FirstOrDefault(o =>
+            o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == name);
+        await Assert.That(match).IsNotNull();
+    }
+
+    [Then("the stored Instance {string} has a runtimeId that matches the new kernel instance")]
+    public async Task ThenStoredInstanceRuntimeIdMatchesNew(string name)
+    {
+        var instances = _designer.Store.ReadExtent("Instance");
+        var match = instances.Values.FirstOrDefault(o =>
+            o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == name);
+        await Assert.That(match).IsNotNull();
+        var actual = match!.Fields.TryGetValue("runtimeId", out var rv) && rv is DeEnv.Storage.IntValue ri
+            ? ri.Value : -1;
+        await Assert.That(actual).IsEqualTo(_lastCreatedInstanceId);
+    }
+
+    [Then("the design-host has no stored Instance named {string}")]
+    public async Task ThenDesignHostHasNoStoredInstanceNamed(string name)
+    {
+        var instances = _designer.Store.ReadExtent("Instance");
+        var match = instances.Values.FirstOrDefault(o =>
+            o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == name);
+        await Assert.That(match).IsNull();
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────
