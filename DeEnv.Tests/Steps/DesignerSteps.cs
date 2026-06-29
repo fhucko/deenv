@@ -693,6 +693,9 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // The hostAction reply triggers a WS refetch (ws.ts), so the list re-renders in-place —
         // no page reload needed. Wait for the new row to appear in the current DOM. 45s covers
         // the async create (doc write + handler build) plus the round-trip refetch.
+        // KNOWN ISSUE: under FULL-SUITE peak load the new instance's host can be spawn-starved and
+        // the row never appears (a hang, not slowness — raising this to 90s still failed 3/3). Passes
+        // in isolation. Tracked as a deploy/host-spawn-starvation issue, NOT a timeout to bump.
         await ctx.Page!.WaitForSelectorAsync(
             $"main.ide-list .set-row a.row-link:text-is({CssString(name)})",
             new Microsoft.Playwright.PageWaitForSelectorOptions { Timeout = 45000 });
