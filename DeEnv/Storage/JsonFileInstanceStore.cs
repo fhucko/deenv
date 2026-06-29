@@ -875,6 +875,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private static void SaveRaw(string path, StoreDoc doc)
     {
         var tmp = path + ".tmp";
+        // Ensure the target directory exists before the temp write. A freshly-created instance
+        // (sys.create) may not have its data dir yet, and File.WriteAllText would otherwise throw
+        // "Could not find a part of the path …app-data.json.tmp" — the host-action deploy race.
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(tmp, JsonSerializer.Serialize(doc, Opts));
         // Atomically replace the data file, retrying through a transient sharing violation. On Windows the
         // overwriting move must replace `path`, which fails ("Access to the path is denied" /
