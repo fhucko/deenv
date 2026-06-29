@@ -54,6 +54,15 @@ namespace DeEnv.Instance;
 //   • RefEditor(parent, prop, target) — a reference editor: current label, a pick button
 //     per extent() candidate, a clear button, and a create-new form. A COMPONENT: its body
 //     runs once as init (a local `state` holding a draft), and it returns a render fn.
+//   • RefSelect(parent, prop, candidates, labelProp) — a generic ref-binding <select>: the
+//     bare picker, no buttons. The select binds a HIDDEN scalar `state.pick` (the chosen
+//     candidate's id, seeded from the parent's current ref); on a native change its `onChange`
+//     handler `applyPick` does `sys.setRef(parent, prop, candidates.single(c => sys.id(c) == state.pick))`
+//     — the write is in HANDLER position (both twins agree: client stages the draft, server no-ops),
+//     never in render. A "(choose…)" pick (id 0) makes `single(…)` return null → the ref CLEARS. The
+//     candidate list is the caller's `candidates` collection (not necessarily the full extent), labeled
+//     by `labelProp`. Use it where a form needs to bind ONE reference from a known candidate set without
+//     the full RefEditor (current-label / per-candidate buttons / create-new).
 //   • SetTable(set, desc, setPath, columns, rowActions, createForm, onCreate) — a set table: an aligned header +
 //     member rows + a `+ New` button. A whole data row is navigable — its first cell wraps the member's
 //     identity (labelProp value) in a stretched `<a class="row-link" href=nest(setPath, m)>` (CSS
@@ -319,6 +328,19 @@ public static class GenericUi
                             <button class="new-btn" onClick={startCreate}>
                                 "New "
                                 sys.humanize(target.name)
+                return render
+
+            fn RefSelect(parent, prop, candidates, labelProp)
+                var state = { pick: sys.field(parent, prop) != null ? sys.id(sys.field(parent, prop)) : 0 }
+                fn applyPick()
+                    sys.setRef(parent, prop, candidates.single(c => sys.id(c) == state.pick))
+                fn render()
+                    return <select class="ref-select" value={state.pick} onChange={applyPick}>
+                        <option value="0">
+                            "(choose…)"
+                        foreach c in candidates
+                            <option value={sys.id(c)}>
+                                sys.field(c, labelProp)
                 return render
 
             fn SetTable(set, desc, setPath, columns, rowActions, createForm, onCreate)

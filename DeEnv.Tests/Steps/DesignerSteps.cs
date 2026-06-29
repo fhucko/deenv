@@ -168,18 +168,48 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task WhenCreateInstance(string name, string designLabel)
     {
         // The instances list is the generic <SetTable>: its "New Instance" button reveals the create
-        // form. The `createForm` slot self-hosts a focused body — a custom design <select> (over
-        // db.designs, bound to the ui var `newDesignId`) plus the generic name <Field>. It is ONE step:
-        // pick the design, type the name, Save. Save runs SetTable's `onCreate` override, which resolves
-        // the picked design by its id and calls sys.create(design, name) — a host action; the reply
-        // triggers a WS refetch (+ resetViewState) so the new row appears via the db.instances mirror,
-        // in place, with no reload.
+        // form. The `createForm` slot self-hosts a focused body — the generic <RefSelect> (a bare
+        // ref-binding <select> over db.designs) plus the generic name <Field>. It is ONE step: pick the
+        // design, type the name, Save. The native SelectOption fires the select's `onChange` (RefSelect's
+        // applyPick) which does sys.setRef on the draft — NO extra "Set"/"Use" click. Save runs SetTable's
+        // `onCreate` override → sys.create(draft.design, name), a host action; the reply triggers a WS
+        // refetch (+ resetViewState) so the new row appears via the db.instances mirror, in place, no reload.
         await ctx.Page!.Locator("main.ide-list .new-btn").ClickAsync();
         var form = ctx.Page.Locator("main.ide-list .create-form");
-        await form.Locator("select.new-instance-design").SelectOptionAsync(
+        await form.Locator("select.ref-select").SelectOptionAsync(
             new Microsoft.Playwright.SelectOptionValue { Label = designLabel });
         _newInstanceName = name;
         // The name field is the generic <Field> for Instance.name, so its input carries class `name`.
+        await form.Locator("input.name").FillAsync(name);
+        await form.Locator("button.create-save").ClickAsync();
+    }
+
+    [When("I reveal the instance create form")]
+    public async Task WhenRevealInstanceCreateForm()
+    {
+        await ctx.Page!.Locator("main.ide-list .new-btn").ClickAsync();
+        await ctx.Page.Locator("main.ide-list .create-form").WaitForAsync();
+    }
+
+    [Then("the instance create form has a bare design ref-select with no Set button")]
+    public async Task ThenBareRefSelect()
+    {
+        var form = ctx.Page!.Locator("main.ide-list .create-form");
+        // The generic RefSelect is the bare ref-binding <select> — present, with the "(choose…)" placeholder.
+        await Assert.That(await form.Locator("select.ref-select").CountAsync()).IsEqualTo(1);
+        // No per-candidate Set/Use button (the old picker pattern) — the native pick is the whole control.
+        await Assert.That(await form.Locator(".ref-set, button:has-text(\"Set\")").CountAsync()).IsEqualTo(0);
+    }
+
+    [When("I pick the design {string} in the create form and name it {string} and save")]
+    public async Task WhenPickViaRefSelect(string designLabel, string name)
+    {
+        var form = ctx.Page!.Locator("main.ide-list .create-form");
+        // SelectOptionAsync fires the native change → RefSelect.applyPick → sys.setRef on the draft. NO
+        // extra "Set"/"Use" click — the single native pick is the whole bind.
+        await form.Locator("select.ref-select").SelectOptionAsync(
+            new Microsoft.Playwright.SelectOptionValue { Label = designLabel });
+        _newInstanceName = name;
         await form.Locator("input.name").FillAsync(name);
         await form.Locator("button.create-save").ClickAsync();
     }

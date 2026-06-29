@@ -184,6 +184,22 @@ Feature: The operator IDE (designs library + instance design selector)
     When I open that new instance
     Then the design dropdown has the design "crm" selected
 
+  # The create form's design picker is the generic <RefSelect> — a BARE ref-binding <select> in the lib,
+  # no Set/Use button. Picking an option fires the native change → RefSelect's onChange (applyPick) →
+  # sys.setRef on the draft (the write is in HANDLER position, not render). So a single native pick (no
+  # extra click) binds the draft's design, and Save spawns the instance running it. This proves the
+  # render-time sys.setRef the old picker used is gone, replaced by the generic component.
+  @milestone-10 @single-user
+  Scenario: The create form picks a design through the generic RefSelect with no extra button
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the instances list
+    And I reveal the instance create form
+    Then the instance create form has a bare design ref-select with no Set button
+    When I pick the design "todo" in the create form and name it "picked" and save
+    Then a new instance "picked" running design "todo" appears in the instances list
+    When I open that new instance
+    Then the design dropdown has the design "todo" selected
+
   # A prop's cardinality (single / set / dictionary) -- and a dictionary's key type -- are editable in
   # the designer, not just authorable in the .app text. A set's element must be an object type; a
   # dictionary carries a key type. Picking them and applying deploys the collection-shaped props through

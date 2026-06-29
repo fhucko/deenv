@@ -27,7 +27,6 @@ types
         order int
 
 ui
-    var newDesignId = 0
     var renameId = 0
     var renameName = ""
     var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime", "password"]
@@ -190,21 +189,12 @@ ui
             <div class="field">
                 <label class="design">
                     "Design"
-                <select class="new-instance-design" value={newDesignId}>
-                    <option value="0">
-                        "(choose…)"
-                    foreach d in db.designs
-                        <option value={sys.id(d)}>
-                            d.label
+                <RefSelect parent={draft} prop="design" candidates={db.designs} labelProp="label">
             <Field obj={draft} desc={sys.schema("Instance", "name")}>
-            foreach d in db.designs
-                if sys.id(d) == newDesignId
-                    sys.setRef(draft, "design", d)
 
     fn createInstance(draft)
         if draft.design != null
             sys.create(draft.design, draft.name)
-            newDesignId = 0
 
     fn instancesListPage()
         return <main class="ide-list">

@@ -1340,6 +1340,11 @@ function executeTag(codeTag: CodeTag, scope: ExecScope, context: ExecContext): E
     // render (CodeExecutor.ExecuteTag), so the two match. Twin of the C# indexing.
     const onClick = attributes["onClick"]?.value;
     if (onClick != null && onClick.type === "fn") onClick.handlerSlot = slotPath.join("/");
+    // A <select>'s onChange handler (RefSelect.applyPick) runs through the same action-miss machinery, so
+    // it needs the SAME slot stamp — the create form is client-toggled, so a pick may be the FIRST access of
+    // the candidate collection and must be able to report (slot, fn-id) and refetch.
+    const onChange = attributes["onChange"]?.value;
+    if (onChange != null && onChange.type === "fn") onChange.handlerSlot = slotPath.join("/");
     return { type: "tag", name: codeTag.name, attributes, children: executeTagChildren(codeTag.children, scope, context) };
 }
 

@@ -1409,6 +1409,12 @@ public sealed class CodeExecutor
         if (context.HandlerIndex is { } index
             && attrs.GetValueOrDefault("onClick") is ExecFunction handler)
             index[HandlerKey(context.SlotPath, handler.Function.Id)] = handler;
+        // A <select>'s onChange handler (RefSelect.applyPick) participates in the SAME action-miss harvest as
+        // onClick: a client-toggled create form may first access its candidate collection inside the pick
+        // handler, so it must be re-invokable read-only off the reported (slot, fn-id). Indexed identically.
+        if (context.HandlerIndex is { } changeIndex
+            && attrs.GetValueOrDefault("onChange") is ExecFunction changeHandler)
+            changeIndex[HandlerKey(context.SlotPath, changeHandler.Function.Id)] = changeHandler;
         var children = ExecuteTagChildren(codeTag.Children, scope, context);
         return new ExecTag { Name = codeTag.Name, Attributes = attrs, Children = children };
     }

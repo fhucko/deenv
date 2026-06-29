@@ -577,6 +577,8 @@ public sealed class SsrRenderer
            a design <select> + the name <Field>) — match the standard full-width field layout so the
            controls don't stack at default widths. */
         .instance-create-fields .field > input:not([type=checkbox]), .instance-create-fields .field > select { width: 100%; max-width: 440px; }
+        /* The generic RefSelect picker (lib): a bare full-width <select>, matching the name field's width. */
+        .ref-select { width: 100%; max-width: 440px; }
         .create-actions { display: flex; gap: 0.5rem; align-items: center; margin-top: 1.1rem; }
         .ref-current { margin-bottom: 0.7rem; color: var(--muted); }
         .ref-type { margin-top: 0; }

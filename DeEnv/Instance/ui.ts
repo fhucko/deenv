@@ -606,10 +606,23 @@ function wireEvents(el: HTMLElement, tag: ExecTag): void {
 
     // Two-way binding for <select>: a change picks a new option, so write the chosen value back
     // (coerced to the bound var's type, like an input — option values are always DOM strings) and
-    // re-render. onchange (not oninput) is the select's commit event.
-    if (tag.name === "select" && value?.setValue) {
+    // re-render. onchange (not oninput) is the select's commit event. A select MAY also carry an
+    // `onChange` fn attribute (RefSelect's applyPick): after the scalar bind writes, that handler runs
+    // through the SAME handler machinery as onClick (transaction / memo-bypass / action-miss), so a pick
+    // that calls sys.setRef stages atomically and refetches on a VNA. Detection is purely "select has an
+    // onChange fn" — no ref-type sniffing; the select still binds a plain scalar.
+    const onChange = tag.attributes["onChange"]?.value;
+    if (tag.name === "select" && (value?.setValue || (onChange != null && onChange.type === "fn"))) {
+        const fn = onChange != null && onChange.type === "fn" ? onChange : null;
         (el as HTMLSelectElement).onchange = () => {
-            value.setValue(coerceInputValue((el as HTMLSelectElement).value, value.value));
+            if (value?.setValue) value.setValue(coerceInputValue((el as HTMLSelectElement).value, value.value));
+            if (fn != null) {
+                const body = () => runWithMemoBypass(() => callFunction(fn, { lastId: uiStatic.lastId, ambient: rootAmbient() }));
+                const action = fn.handlerSlot != null
+                    ? { fnId: fn.fn.id, slot: fn.handlerSlot, reinvoke: body }
+                    : undefined;
+                runHandlerTransaction(body, action);
+            }
             renderUi();
         };
     } else if (tag.name === "select") {
