@@ -601,6 +601,33 @@
       "expect": { "kind": "intList", "value": [ 3, 2, 1 ] }
     },
     {
+      "name": "single returns the one matching member",
+      "text": "[1, 2, 3].single(x => x == 2)",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp",
+          "left": { "type": "array", "items": [ { "type": "int", "value": 1 }, { "type": "int", "value": 2 }, { "type": "int", "value": 3 } ] },
+          "right": { "type": "symbol", "name": "single" } },
+        "params": [ { "type": "fn", "params": [ { "name": "x" } ],
+          "body": { "type": "block", "statements": [ { "type": "return", "value":
+            { "type": "infixOp", "op": "equals", "left": { "type": "symbol", "name": "x" }, "right": { "type": "int", "value": 2 } } } ] } } ]
+      },
+      "expect": { "kind": "int", "value": 2 }
+    },
+    {
+      "name": "single returns null when no member matches",
+      "text": "[1, 2, 3].single(x => false)",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp",
+          "left": { "type": "array", "items": [ { "type": "int", "value": 1 }, { "type": "int", "value": 2 }, { "type": "int", "value": 3 } ] },
+          "right": { "type": "symbol", "name": "single" } },
+        "params": [ { "type": "fn", "params": [ { "name": "x" } ],
+          "body": { "type": "block", "statements": [ { "type": "return", "value": { "type": "bool", "value": false } } ] } } ]
+      },
+      "expect": { "kind": "null", "value": null }
+    },
+    {
       "name": "a tag-invoked component is recognized by name and binds its attribute to the param",
       "comment": "<c d={42}> is a tag-invoked component: the name `c` resolves to a function, so it is invoked (not rendered as an HTML element), and the `d` attribute binds to the `d` param BY NAME — c records it in `seen` and the probe reads 42. Both twins recognize and bind identically. (Run-once-ACROSS-re-renders is a client-cache behavior — C#'s Memoize is write-only, the server renders once — so it is proven by the SelfHostedUi Gherkin scenario, not here.)",
       "setup": [

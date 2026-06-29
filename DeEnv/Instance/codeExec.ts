@@ -274,7 +274,7 @@ function executeSymbol(codeSymbol: CodeSymbol, scope: ExecScope, context: ExecCo
     };
 }
 
-const collectionMethods = ["add", "remove", "setEntry", "where", "orderBy", "any"];
+const collectionMethods = ["add", "remove", "setEntry", "where", "orderBy", "any", "single"];
 
 // ── memoization cache (Stage 4) ────────────────────────────────────────────────────
 // Mirrors the server (DeEnv/Code/MemoCache.cs). Computation boundaries (user-fn calls,
@@ -1068,6 +1068,17 @@ function collectionSysFunction(arr: ExecArray, method: string, context: ExecCont
             }
             return { type: "bool", value: false };
         } };
+        // single(predicate): the first member matching the predicate, or NULL when none match (no throw on
+        // no-match — a "(choose…)" pick that matches nothing must clear a ref). Twin of CodeExecutor's single.
+        case "single": return { type: "sysFn", fn: args => {
+            const lambda = asLambda(args[0]);
+            recordMember(arr.id);
+            for (const item of arr.items) {
+                const r = invokeLambda(lambda, item.value, context);
+                if (r.type === "bool" && r.value) return item.value;
+            }
+            return { type: "null" };
+        } };
         default: throw new Error(`Unknown collection method '${method}'.`);
     }
 }
@@ -1760,6 +1771,7 @@ function runConformance(caseJson: string): string {
         case "bool": return JSON.stringify({ kind: "bool", value: result.value });
         case "array": return JSON.stringify({ kind: "intList", value: result.items.map(i => (i.value as ExecInt).value) });
         case "nothing": return JSON.stringify({ kind: "nothing", value: null });
+        case "null": return JSON.stringify({ kind: "null", value: null });
         default: throw new Error(`Non-scalar conformance result '${result.type}'.`);
     }
 }

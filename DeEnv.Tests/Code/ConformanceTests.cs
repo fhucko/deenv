@@ -129,6 +129,9 @@ public sealed class ConformanceTests
             case "nothing":
                 await Assert.That(result is ExecNothing).IsTrue();
                 break;
+            case "null":
+                await Assert.That(result is ExecNull).IsTrue();
+                break;
             default:
                 throw new InvalidOperationException($"Unknown expect kind '{c.Expect.Kind}' in case '{c.Name}'.");
         }

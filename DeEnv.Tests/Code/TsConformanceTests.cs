@@ -55,6 +55,7 @@ public sealed class TsConformanceTests
                     break;
                 }
                 case "nothing":
+                case "null":
                     break; // the kind comparison above is the whole assertion
                 default:
                     throw new InvalidOperationException($"Unknown expect kind '{kind}' in case '{name}'.");

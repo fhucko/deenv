@@ -11,7 +11,7 @@ namespace DeEnv.Code;
 // the original item references — preserving object identity for reconciliation.
 public sealed class CodeExecutor
 {
-    private static readonly HashSet<string> CollectionMethods = ["add", "remove", "setEntry", "where", "orderBy", "any"];
+    private static readonly HashSet<string> CollectionMethods = ["add", "remove", "setEntry", "where", "orderBy", "any", "single"];
 
     private readonly IInstanceStore? _store;
 
@@ -1291,6 +1291,20 @@ public sealed class CodeExecutor
                     Value = sysFn.Target.Items.Any(
                         item => InvokeLambda(lambda, item.Value, context) is ExecBool { Value: true }),
                 };
+            }
+            // single(predicate): the first member matching the predicate, or NULL when none match (it does
+            // NOT throw on no-match — a "(choose…)" pick that matches nothing must CLEAR a ref, so null is the
+            // needed result). Like `any`, it observes membership (an add/remove can change the answer). The
+            // dialect had no single-element accessor on a collection (.where returns a collection, foreach is
+            // render-only), so a handler could not pull one object out by a predicate — this adds it.
+            case "single":
+            {
+                var lambda = AsLambda(args[0], scope, context);
+                RecordMembership(sysFn.Target, context);
+                foreach (var item in sysFn.Target.Items)
+                    if (InvokeLambda(lambda, item.Value, context) is ExecBool { Value: true })
+                        return item.Value;
+                return new ExecNull();
             }
             default:
                 throw new CodeRuntimeException($"Unknown collection method '{sysFn.Method}'.");
