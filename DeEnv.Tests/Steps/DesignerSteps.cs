@@ -196,9 +196,30 @@ public sealed class DesignerSteps(InstanceContext ctx)
     {
         var form = ctx.Page!.Locator("main.ide-list .create-form");
         // The generic RefSelect is the bare ref-binding <select> — present, with the "(choose…)" placeholder.
+        // It renders only once `candidates` (db.designs) is available: with no footprint anchor, that data
+        // arrives on the toggle REFETCH (the nested-draft round-trip reproducing the open form), so wait for
+        // the select to attach rather than asserting its count synchronously (which would race the refetch).
+        await form.Locator("select.ref-select").WaitForAsync(
+            new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
         await Assert.That(await form.Locator("select.ref-select").CountAsync()).IsEqualTo(1);
         // No per-candidate Set/Use button (the old picker pattern) — the native pick is the whole control.
         await Assert.That(await form.Locator(".ref-set, button:has-text(\"Set\")").CountAsync()).IsEqualTo(0);
+    }
+
+    [Then("the instance create form's design ref-select offers the design {string}")]
+    public async Task ThenRefSelectOffersDesign(string designLabel)
+    {
+        // The picker is the generic <RefSelect> whose `foreach c in db.designs` builds one <option> per
+        // candidate. Those candidates are harvested by the toggle refetch reproducing the OPEN form on the
+        // server — which only works if the SetTable's nested transient `draft` round-tripped (slotState
+        // ships it by value; the server rebuilds it so RefSelect's `parent` is non-null and db.designs is
+        // read). An auto-waiting locator: the option appears once the refetch reply fills the picker.
+        var option = ctx.Page!.Locator("main.ide-list .create-form select.ref-select option")
+            .Filter(new() { HasTextString = designLabel });
+        // An <option> inside a closed <select> is never "visible", so wait for ATTACHED (it exists in the
+        // DOM once the refetch reply re-renders the populated picker), not for visibility.
+        await option.First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
+        await Assert.That(await option.CountAsync()).IsGreaterThanOrEqualTo(1);
     }
 
     [When("I pick the design {string} in the create form and name it {string} and save")]

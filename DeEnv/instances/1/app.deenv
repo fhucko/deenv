@@ -200,10 +200,6 @@ ui
         return <main class="ide-list">
             <h1>
                 "Instances"
-            <ul class="designs-data" hidden="hidden">
-                foreach d in db.designs
-                    <li>
-                        d.label
             <SetTable set={db.instances} desc={sys.schema("Instance")} setPath="/instances" columns={["name", "design"]} rowActions={listRowActions} createForm={createInstanceBody} onCreate={createInstance}>
     fn designSelector(instanceId, currentDesignId)
         var state = { pick: currentDesignId }

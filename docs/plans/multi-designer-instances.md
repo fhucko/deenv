@@ -7,10 +7,12 @@
 > instances as `Db { designs, instances }` and renders the list with the generic component;
 > the ~75-line hand-rolled table is gone. **Still DEFERRED (Stage-2, independent designers):
 > slice 2 (storage collapse `instances/<designerId>/<instanceId>/`) and slices 4–7 (name→id
-> routing, subdomain facade, uniqueness, bootstrap).** Two flagged shortcuts the deferred
+> routing, subdomain facade, uniqueness, bootstrap).** One flagged shortcut the deferred
 > slices would dissolve: `Instance.runtimeId` (the store-id↔kernel-id link that storage-collapse
-> removes) and the hidden `designs-data` footprint anchor (a client-data-layer gap — the
-> client-toggled create form's `candidates` access isn't harvested on the toggle refetch).
+> removes). (The hidden `designs-data` footprint anchor — a client-data-layer gap where the
+> client-toggled create form's `candidates` access wasn't harvested on the toggle refetch — was
+> REMOVED once slotState began shipping nested transient component state (the `state.draft`)
+> recursively, so the reproduced open form harvests `db.designs` on its own.)
 > Landing also added three GENERAL primitives not in this plan: the `single(predicate)`
 > collection accessor, an `onChange` attribute on `<select>`, and the `RefSelect` lib component
 > (a ref-binding select). Memory: `project_multi_designer_instances`.

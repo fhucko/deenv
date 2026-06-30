@@ -988,20 +988,25 @@ public sealed class WsHandler
     // in-store object REF resolve exactly like a session var (SessionVarFromWire). A TRANSIENT object ships
     // BY VALUE ({ type:"object", props:{…} }, no id) — the common component-state shape (`var state = { … }`):
     // reconstruct it as a throwaway ExecObject (a fresh negative id below the client floor) carrying its
-    // scalar fields, which the render reads + discards after harvesting. It is never persisted and never held
-    // (I2/I3): it is pure view-state the server reproduces to plan the fetch. A by-id ref that no longer
-    // resolves is dropped (fail-soft, same as a session var).
+    // props, RECURSIVELY — a nested transient prop ({ type:"object", props:{…} }) rebuilds as its own
+    // throwaway transient (threading the SAME nextTransient counter), an in-store prop ({ type:"object", id })
+    // resolves via byId (unresolved → null, fail-soft), a scalar/null prop via ExecValueFromWire. This carries
+    // a nested draft (SetTable's `state.draft = sys.new(desc)`) so the reproduced open create-form renders
+    // RefSelect/Field over a REAL draft (not null → no `sys.field(null,…)` throw), reads `db.designs`, and
+    // harvests it. The whole graph is never persisted and never held (I2/I3): it is pure view-state the
+    // server reproduces to plan the fetch. A by-id ref that no longer resolves is dropped (fail-soft).
     private static Code.IExecValue? SlotLocalFromWire(JsonElement el, Dictionary<int, Code.ExecObject> byId, ref int nextTransient)
     {
         if ((el.TryGetProperty("type", out var t) ? t.GetString() : null) == "object")
         {
             if (el.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.Number)
                 return byId.TryGetValue(idEl.GetInt32(), out var obj) ? obj : null; // an in-store ref
-            // A transient object by value: rebuild its scalar props (no identity in the store).
+            // A transient object by value: rebuild its props (no identity in the store), each prop routed
+            // back through this method so a nested transient/ref/scalar/null reconstructs uniformly.
             var props = new Dictionary<string, Code.IExecValue>();
             if (el.TryGetProperty("props", out var p) && p.ValueKind == JsonValueKind.Object)
                 foreach (var f in p.EnumerateObject())
-                    props[f.Name] = ExecValueFromWire(f.Value);
+                    props[f.Name] = SlotLocalFromWire(f.Value, byId, ref nextTransient) ?? new Code.ExecNull();
             return new Code.ExecObject { Id = --nextTransient, Props = props };
         }
         return ExecValueFromWire(el);

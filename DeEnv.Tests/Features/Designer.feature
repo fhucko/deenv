@@ -200,6 +200,25 @@ Feature: The operator IDE (designs library + instance design selector)
     When I open that new instance
     Then the design dropdown has the design "todo" selected
 
+  # The create form is client-TOGGLED: revealing it sets the SetTable component's `state.creating = true`
+  # and the client re-renders. RefSelect's `foreach c in db.designs` reads data the first paint never
+  # shipped (the form was closed) → a value-not-available refetch. The refetch ships the SetTable's whole
+  # `state` via slotState — including the NESTED transient `draft` (state.draft = sys.new(desc)) BY VALUE,
+  # recursively. The server reconstructs that draft as a throwaway transient, reproduces the open form
+  # (RefSelect parent = the real draft, not null), reads `db.designs`, and HARVESTS it — so the picker
+  # populates with NO hidden footprint anchor. (The prior build forced db.designs with a `hidden` <ul>
+  # foreach over db.designs in instancesListPage; that anchor is now DELETED — this scenario is its
+  # replacement guard, proving the nested-draft round-trip alone harvests the candidates.)
+  @milestone-10 @single-user
+  Scenario: The create-form design picker populates on toggle with no footprint anchor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the instances list
+    And I reveal the instance create form
+    Then the instance create form's design ref-select offers the design "todo"
+    And the instance create form's design ref-select offers the design "crm"
+    When I pick the design "todo" in the create form and name it "anchored" and save
+    Then a new instance "anchored" running design "todo" appears in the instances list
+
   # A prop's cardinality (single / set / dictionary) -- and a dictionary's key type -- are editable in
   # the designer, not just authorable in the .app text. A set's element must be an object type; a
   # dictionary carries a key type. Picking them and applying deploys the collection-shaped props through

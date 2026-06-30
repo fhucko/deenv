@@ -837,14 +837,20 @@ function sessionVars(): { [name: string]: object } {
 // Ship-rule — the SAME identity axis as sessionVars (does the server already have this object? = id sign):
 //   • scalar (int/bool/text) → by value;
 //   • in-store object (positive id) → an id-ref the server resolves against its canonical load;
-//   • TRANSIENT object (negative id) → by VALUE — its scalar fields ({ type:"object", props:{…} }), which
-//     the server reconstructs as a throwaway transient and discards after harvesting. This is the COMMON
-//     case for component state: a `var state = { open: false }` is a transient object (a component-local
-//     object is non-top, so a `state.open = …` toggle re-renders via invalidateProp — a SCALAR `var` in a
-//     component scope is NOT reactive and so is never the toggle), so the round-trip MUST carry it. It is
-//     pure VIEW-STATE (a popup-open flag), not a draft that FEEDS a query — the harvested data depends on
-//     WHICH branch runs, never on the object's field VALUES — so a crafted value can't widen the floor-
-//     gated read (I3). (Draft-objects-that-DRIVE-a-query stay deferred; they are a different concern.)
+//   • TRANSIENT object (negative id) → by VALUE — its props ({ type:"object", props:{…} }) RECURSIVELY
+//     (a nested transient draft ships whole, an in-store prop as an id-ref, null present-and-null), which
+//     the server reconstructs as a throwaway transient graph and discards after harvesting. This is the
+//     COMMON case for component state: a `var state = { open: false }` is a transient object (a
+//     component-local object is non-top, so a `state.open = …` toggle re-renders via invalidateProp — a
+//     SCALAR `var` in a component scope is NOT reactive and so is never the toggle), so the round-trip
+//     MUST carry it. The recursion matters when that state HOLDS a nested transient draft (SetTable's
+//     `state.draft = sys.new(desc)`): the open create-form renders RefSelect/Field over the draft, and
+//     only a draft that round-trips whole lets the server reproduce the open form and harvest the data its
+//     `foreach db.designs` demands (no hidden footprint anchor needed). It is pure VIEW-STATE (a popup-open
+//     flag + a fresh default-valued draft), not a draft that FEEDS a query — the harvested data depends on
+//     WHICH branch runs / WHETHER the form is open, never on the object's field VALUES — so a crafted value
+//     can't widen the floor-gated read (I3). (Draft-objects whose VALUES DRIVE a query stay deferred; they
+//     are a different concern, and this change does not claim to support them.) See stateValueOf below.
 function slotState(): { [slotKey: string]: { [name: string]: object } } {
     const out: { [slotKey: string]: { [name: string]: object } } = {};
     for (const [key, entry] of uiStatic.cache) {
@@ -854,23 +860,39 @@ function slotState(): { [slotKey: string]: { [name: string]: object } } {
         for (const [name, item] of Object.entries(entry.result.scope.items)) {
             if (item.isReadOnly) continue; // a bound param — the server re-binds it; only `var` state ships
             const v = item.value;
-            if (v.type === "int" || v.type === "bool" || v.type === "text") locals[name] = scalarOf(v);
-            else if (v.type === "object" && v.id > 0) locals[name] = { type: "object", id: v.id };
-            else if (v.type === "object") locals[name] = { type: "object", props: scalarPropsOf(v) }; // transient → by value
+            locals[name] = stateValueOf(v); // scalar by value · in-store object → id-ref · transient → by value (recursive)
         }
         if (Object.keys(locals).length > 0) out[key] = locals;
     }
     return out;
 }
 
-// A transient object's SCALAR props as tagged wire values ({ open: { type:"bool", value:true } }) — the
-// by-value shape slotState ships a component's `var state` object in, reconstructed server-side as a
-// throwaway ExecObject (WsHandler.ExecValueFromWire per field). Scalars only: a nested object/collection in
-// component view-state is not part of the toggle footprint v1 reproduces (and would re-introduce identity).
-function scalarPropsOf(value: ExecObject): { [name: string]: object } {
+// One component view-state value as a tagged wire value, on the SAME identity axis slotState's top level
+// uses (does the server already hold this object? = id sign): a scalar by value; an IN-STORE object
+// (positive id) as an id-ref the server resolves against its canonical load; a TRANSIENT object (negative
+// id) BY VALUE — { type:"object", props:{…} } with EVERY prop recursed through this same function — so a
+// nested transient draft (e.g. SetTable's `state.draft = sys.new(desc)`) round-trips whole; null/other as
+// its tagged form ({ type:"null" }), so a fresh draft's `design: null` arrives PRESENT-and-null (sys.field
+// must find the prop, not throw on absence). Like first-paint's negative-id-transient ship (ClientState.cs)
+// but ARRAYS are skipped (a collection in view-state would re-introduce identity; the server re-loads
+// collections fresh from the store). I3: this ships pure VIEW-STATE whole — the harvest (`foreach db.designs`) depends on
+// WHETHER the form is open, never on the draft's field VALUES, so a crafted value can't widen a floor-gated
+// read. A draft whose VALUES drive a query stays the DEFERRED concern; this does not claim to support it.
+function stateValueOf(v: ExecValue): object {
+    if (v.type === "object") return v.id > 0 ? { type: "object", id: v.id } : { type: "object", props: transientPropsOf(v) };
+    if (v.type === "int" || v.type === "bool" || v.type === "text") return scalarOf(v);
+    return { type: "null" };
+}
+
+// Every prop of a transient object as tagged wire values, recursively (a nested transient prop is itself a
+// { type:"object", props:{…} }; an in-store prop an id-ref; null a { type:"null" }) — the by-value shape
+// slotState ships a component's `var state` (and any nested draft) in, reconstructed server-side as a
+// throwaway ExecObject graph (WsHandler.SlotLocalFromWire per field). A collection prop is skipped (it
+// re-introduces identity and is not part of the toggle footprint v1 reproduces).
+function transientPropsOf(value: ExecObject): { [name: string]: object } {
     const props: { [name: string]: object } = {};
     for (const [name, v] of Object.entries(value.props))
-        if (v.type === "int" || v.type === "bool" || v.type === "text") props[name] = scalarOf(v);
+        if (v.type !== "array") props[name] = stateValueOf(v);
     return props;
 }
 
