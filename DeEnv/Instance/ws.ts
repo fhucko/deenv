@@ -860,6 +860,16 @@ function slotState(): { [slotKey: string]: { [name: string]: object } } {
         for (const [name, item] of Object.entries(entry.result.scope.items)) {
             if (item.isReadOnly) continue; // a bound param — the server re-binds it; only `var` state ships
             const v = item.value;
+            // GUARD (loud, not silent — DECISIONS "Loud guards over silent failures"): a collection placed
+            // DIRECTLY in a component's `var state` is the client-only-transient-collection case slotState
+            // does NOT ship (it would re-introduce collection identity; the server re-loads store collections
+            // fresh). Nothing does this today; if a component adds it, fail HERE with a clear message rather
+            // than silently dropping it → a mystery empty render downstream. (A collection NESTED in a draft —
+            // a fresh `sys.new` set prop — is the benign case transientPropsOf skips; see its note.)
+            if (v.type === "array")
+                throw new Error(`slotState: component view-state local '${name}' is a collection — a `
+                    + `client-only transient collection in a component's var state is not shipped yet (it `
+                    + `would re-introduce collection identity). Nest store-backed data, or extend slotState.`);
             locals[name] = stateValueOf(v); // scalar by value · in-store object → id-ref · transient → by value (recursive)
         }
         if (Object.keys(locals).length > 0) out[key] = locals;
@@ -887,8 +897,12 @@ function stateValueOf(v: ExecValue): object {
 // Every prop of a transient object as tagged wire values, recursively (a nested transient prop is itself a
 // { type:"object", props:{…} }; an in-store prop an id-ref; null a { type:"null" }) — the by-value shape
 // slotState ships a component's `var state` (and any nested draft) in, reconstructed server-side as a
-// throwaway ExecObject graph (WsHandler.SlotLocalFromWire per field). A collection prop is skipped (it
-// re-introduces identity and is not part of the toggle footprint v1 reproduces).
+// throwaway ExecObject graph (WsHandler.SlotLocalFromWire per field). A collection PROP is skipped — the
+// common BENIGN case is a fresh draft's empty set prop (`sys.new` mints `set of X` as []), which create
+// forms never depend on; guarding it would break every create form. (Distinct from slotState's GUARD, which
+// rejects a collection placed DIRECTLY in `var state`.) STILL-SILENT DEFERRED gap: a nested draft array the
+// harvest genuinely DEPENDS on is indistinguishable HERE from the benign empty-set case, so it drops
+// silently — tracked, see memory project_slotstate_recurse_nested_drafts.
 function transientPropsOf(value: ExecObject): { [name: string]: object } {
     const props: { [name: string]: object } = {};
     for (const [name, v] of Object.entries(value.props))

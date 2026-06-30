@@ -2101,3 +2101,27 @@ render-coupled DB is the destination this moves *toward*, not what this builds).
 (1a/1b/1c/3/4/GC — see **Delivered** above); the GC was safe only because the round-trip can re-pull
 anything. See `docs/plans/data-context-refactor.md` (the predecessor that deferred this re-layer) and
 `docs/plans/client-data-layer.md` (this milestone's spec + per-slice delivery record).
+
+## Loud guards over silent failures (engineering principle)
+
+**Adopted 2026-06-30.** When code reaches a case it does not handle, prefer an explicit
+throw/assert AT THE SEAM over silently dropping, defaulting, or skipping. A silent drop turns
+an unsupported case into a *mystery downstream* — an empty render or a missing field whose
+cause is far from the symptom (the class of bug the client-data-layer view-state round-trip
+kept producing: a dropped value → swallowed value-not-available → blank UI, no error). A guard
+where the gap actually is names it on the spot, so the next developer gets a located error
+instead of a debugging hunt. Keep adding these.
+
+- **Guard the genuinely-unsupported shape, not the benign one.** A guard that also fires on a
+  normal, working path is worse than none. Worked example (2026-06-30): `slotState` ships
+  component view-state but can't ship a client-only transient *collection*; it now THROWS when a
+  collection sits DIRECTLY in a component's `var state` (the unsupported pattern — nothing does
+  it today), yet still silently SKIPS a collection nested inside a `draft` (a fresh `sys.new`
+  set prop is a normal byproduct create forms never read — guarding it would break every create
+  form). Same seam, opposite treatment, because one shape is a real gap and the other is benign.
+- **When a silent gap can't be cheaply guarded, TRACK it.** If the unsupported and benign cases
+  are indistinguishable at the seam (a nested-draft array the harvest actually needs vs. a benign
+  empty set), a guard would false-positive — record it as a known deferred limitation (memory +
+  a comment at the seam) so it can't rot into a mystery.
+- **Never weaken a guard to make a test pass.** A firing guard is a real signal: fix the cause or
+  correct the guard's scope — don't soften it.
