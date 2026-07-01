@@ -3,7 +3,10 @@
     "DeEnv (kernel host)": {
       "commandName": "Project",
       "launchBrowser": true,
-      "launchUrl": "http://localhost:8080"
+      "launchUrl": "http://localhost:8080",
+      "environmentVariables": {
+        "DEENV_ADMIN_PASSWORD": "admin"
+      }
     }
   }
 }

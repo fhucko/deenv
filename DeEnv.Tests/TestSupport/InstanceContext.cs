@@ -247,6 +247,38 @@ public class InstanceContext
     public static InstanceDescription PublicLibraryFormDb() =>
         InstanceDescriptionLoader.Load(PublicLibraryFormApp);
 
+    // Milestone 11 (custom-render collection-link gating): a hand-written `fn render()` composing
+    // <ObjectForm> over an object WITH a set prop. The generic router's own object pages resolve a
+    // collection prop's nested route (sys.resolve), so ObjectForm's list-title label is a navigable
+    // <a>; a custom `fn render()` owns ALL of its own routing and has no handler for that nested path
+    // unless it writes one, so the SAME label must render as inert text (`isGeneric` false) here.
+    public static InstanceDescription PublicLibrarySetFormDb() =>
+        InstanceDescriptionLoader.Load(PublicLibrarySetFormApp);
+
+    private const string PublicLibrarySetFormApp = """
+    types
+        Db
+            note Note
+        Note
+            title text
+            tags set of Tag
+        Tag
+            name text
+
+    initialData
+        Db 1
+            note: 2
+        Note 2
+            title: "First"
+            tags: []
+
+    ui
+
+        fn render()
+            return <main>
+                <ObjectForm obj={db.note} meta={sys.schema("Note")} base="/">
+    """;
+
     private const string PublicLibraryFormApp = """
     types
         Db

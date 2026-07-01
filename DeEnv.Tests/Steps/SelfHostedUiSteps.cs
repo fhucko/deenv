@@ -604,6 +604,24 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    // Milestone 11 (custom-render collection-link gating): the same public-library composition, but
+    // over an object with a set prop, to prove the list-title label is INERT (no <a>) under a custom
+    // `fn render()`.
+    [Given("the public-library set-form app is running")]
+    public async Task GivenPublicLibrarySetFormAppRunning()
+    {
+        ctx.Description = InstanceContext.PublicLibrarySetFormDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    [Then("the {string} list title is not a link")]
+    public async Task ThenListTitleIsNotALink(string title)
+    {
+        await ctx.Page!.WaitForSelectorAsync($".list-title:text-is('{title}')");
+        var linkCount = await ctx.Page.Locator($"a.list-title:text-is('{title}')").CountAsync();
+        await Assert.That(linkCount).IsEqualTo(0);
+    }
+
     // Milestone 11: a hand-written `fn render()` composing TWO staged <ObjectForm>s over the SAME
     // object. Proves "same object, two independent editing contexts" on the EXISTING per-form overlay —
     // each form, a distinct render-tree slot, gets its own draft; a staged edit in one doesn't touch the

@@ -6,6 +6,7 @@
 declare const initUi: { ui: ClientUi; common?: ClientCommon };
 declare const initData: ServerDtState;
 declare const initClientId: string;
+declare const initIsGeneric: boolean;
 
 interface ClientUi {
     vars?: unknown[];
@@ -57,6 +58,11 @@ function init(): void {
     // (mount-unaware), so strip the base — exactly the SSR first paint, which gave Code the stripped
     // path. (Identity when root-mounted.)
     scope.items["path"] = { value: { type: "text", value: stripBase(location.pathname) }, isReadOnly: false };
+
+    // `isGeneric`: mirrors SsrRenderer's system-scope flag, fixed for the app's lifetime (an app is
+    // either fully custom or fully generic, never both) — gates GenericUi's collection-prop links,
+    // which only resolve under the framework's own router.
+    scope.items["isGeneric"] = { value: { type: "bool", value: initIsGeneric }, isReadOnly: true };
 
     // Browser back/forward: write the (base-stripped) location back into the path var and re-render
     // over the warm session — the same machinery a forward click uses, just driven by the browser's

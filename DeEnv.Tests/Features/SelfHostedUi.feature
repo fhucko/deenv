@@ -367,6 +367,16 @@ Feature: Self-hosted generic UI (object forms)
   # schema via sys.schema), is LIVE (an edit autosaves through the composed form), and that the
   # autosave mode shows NO Save/Discard buttons — end-to-end.
 
+  # A custom `fn render()` owns ALL of its own routing; the generic router's own object pages are
+  # the only ones that resolve a collection prop's nested route (sys.resolve). So ObjectForm's
+  # list-title label — navigable under the generic router — must render as inert text here instead.
+
+  @milestone-11 @single-user
+  Scenario: A custom render's ObjectForm renders a collection-prop label as inert text
+    Given the public-library set-form app is running
+    When I open "/"
+    Then the "Tags" list title is not a link
+
   @milestone-11 @single-user
   Scenario: A hand-written render composes the public ObjectForm component with autosave
     Given the public-library form app is running

@@ -144,7 +144,7 @@ public sealed class SsrRenderer
             var breadcrumbs = _isGeneric ? Breadcrumbs(ParsePath(urlPath), trail, @base) : "";
 
             return (UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi),
-                    clientId, @base, assetAuthority, _appName),
+                    clientId, @base, assetAuthority, _appName, _isGeneric),
                 status);
         }
         catch (CodeRuntimeException ex)
@@ -347,6 +347,12 @@ public sealed class SsrRenderer
         // the client mirrors it to location.pathname and updates it on navigation).
         system.Items["path"] = new ExecScopeItem { Value = new ExecText { Value = urlPath }, IsReadOnly = false };
 
+        // `isGeneric`: true only when the framework's own generic router owns this render — the one
+        // case where a collection-prop link's target (sys.resolve(path)) is guaranteed handled. A
+        // custom render owns its own routing and generally has no handler for that nested path
+        // (ObjectForm's collection-prop link would 404/blank), so GenericUi gates on it.
+        system.Items["isGeneric"] = new ExecScopeItem { Value = new ExecBool { Value = _isGeneric }, IsReadOnly = true };
+
         // The render: the app's own (custom) or the framework-synthesized generic router — already
         // chosen by GenericUi.Effective and stored as _ui.Render. The generic render runs in the
         // LIBRARY scope (it composes the library, resolving ObjectForm/… by name); a custom render
@@ -437,14 +443,14 @@ public sealed class SsrRenderer
     // too — a custom app overrides via the cascade. (Zero-config good defaults; minimal by default.)
     private static string UiLayout(
         string title, string breadcrumbs, string body, string initData, string initUi, string clientId,
-        string @base, string assetAuthority, string appName) => $$"""
+        string @base, string assetAuthority, string appName, bool isGeneric) => $$"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
           <meta charset="utf-8">
           <title>{{Escape(title)}}</title>
           <style>{{ViewChromeCss}}</style>
-          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initBase="{{JsStringSafe(@base)}}";window.initAssetAuthority="{{JsStringSafe(assetAuthority)}}";window.initAppName="{{JsStringSafe(appName)}}";</script>
+          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initBase="{{JsStringSafe(@base)}}";window.initAssetAuthority="{{JsStringSafe(assetAuthority)}}";window.initAppName="{{JsStringSafe(appName)}}";window.initIsGeneric={{(isGeneric ? "true" : "false")}};</script>
           <script>(function(){var a=window.initAssetAuthority,b=window.initBase==="/"?"":window.initBase;var s=document.createElement("script");s.src=a?location.protocol+"//"+a+b+"/js":b+"/js";document.head.appendChild(s);})();</script>
         </head>
         <body>{{breadcrumbs}}<div id="app">{{body}}</div></body>

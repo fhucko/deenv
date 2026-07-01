@@ -268,13 +268,21 @@ public static class GenericUi
                                 else if p.baseType == "set"
                                     if sys.canRead(p.element)
                                         <div class="field">
-                                            <a class="list-title" href={sys.nest(base, p.name)}>
-                                                sys.humanize(p.name)
+                                            if isGeneric
+                                                <a class="list-title" href={sys.nest(base, p.name)}>
+                                                    sys.humanize(p.name)
+                                            else
+                                                <span class="list-title">
+                                                    sys.humanize(p.name)
                                             <SetTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)}>
                                 else if p.baseType == "dictionary"
                                     <div class="field">
-                                        <a class="list-title" href={sys.nest(base, p.name)}>
-                                            sys.humanize(p.name)
+                                        if isGeneric
+                                            <a class="list-title" href={sys.nest(base, p.name)}>
+                                                sys.humanize(p.name)
+                                        else
+                                            <span class="list-title">
+                                                sys.humanize(p.name)
                                         <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
                                 else
                                     <Field obj={obj} desc={p} readonly={!canEdit}>
