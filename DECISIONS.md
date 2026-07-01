@@ -2125,3 +2125,69 @@ instead of a debugging hunt. Keep adding these.
   a comment at the seam) so it can't rot into a mystery.
 - **Never weaken a guard to make a test pass.** A firing guard is a real signal: fix the cause or
   correct the guard's scope — don't soften it.
+
+## Temporal immutability (pillar 4) — design pass, nothing built yet
+
+**Discussed 2026-07-01, pre-work for M13.** Pillar 4 (VISION.md) promises the live data itself is
+versioned with full history, viewable at any past moment. This is a design memo from an adversarial
+pass (grill-and-revise, 14 rounds) against the model as documented — no code changes; captures the
+shape so M13 doesn't re-litigate it.
+
+- **Don't version-chain the live store.** The common case is reading the present; taxing every read
+  to serve time-travel is backwards. Keep the current-state store as the hot path unchanged.
+- **History is a separate append-only commit-log**, log-authoritative once M13 lands (live store
+  becomes a checkpoint/cache carrying a HEAD-applied marker, rebuildable by replay). Ties to the
+  existing rule above: persist through the storage interface in the model's terms, never side files.
+- **Grain is hybrid by shape, not by choice.** Object scalar-bags: full-copy snapshot per version
+  (objects are small, fixed-field, bounded — decomposition via `reference` already keeps nested
+  structure in its own extent, so wide-object write amplification doesn't arise). Sets/dictionaries:
+  append-only membership *events* (`add`/`remove`), never a mutated edge — a mutated "close this
+  edge" field would silently reintroduce overwrite. Current membership = last-event-wins fold, kept
+  cheap by living in the current-state store, not by scanning the log.
+- **Atomicity = one authoritative log append.** The log append is the single arbiter of "did this
+  commit happen"; the live store replays past its HEAD marker to catch up after a crash. PII/sensitive
+  rows (below) are staged tagged `pending=<commit-id>` *before* the append and promoted only if that
+  commit-id lands in the log — recovery reconciles against the log, never invents a second arbiter.
+  Differential checkpoints (below) are pure functions of already-immutable history, so computing one
+  is safe concurrently with new commits appending — no extra locking needed there.
+- **Version coordinate is a commit-id in a DAG, not a timestamp or a linear clock.** "View the db at a
+  past moment" means "at commit C"; wall-clock only orders within a branch.
+- **Only DATA-id minting is restricted to a single branch (trunk).** Two branches minting the shared
+  monotonic int (the model's intrinsic id) would collide with no merge to reconcile — so data-id
+  minting stays single-writer until content-addressing or a real merge exists. Schema branching is
+  NOT restricted: pillar 3 already frames schema versioning as diffing a declarative document
+  (git-style structural diff), which is branch-safe by construction and carries no shared counter —
+  narrowing the id-collision fix to data only keeps pillar 3's branching promise intact.
+- **Sensitive and high-churn fields are non-temporal by declaration.** A per-field flag excludes a
+  field from the log entirely — plaintext, mutable, live-store-only, erasure is a plain row delete.
+  Two independent reasons use the same mechanism: (a) PII/compliance (erasure law can't coexist with
+  immutable history; encryption was rejected because it kills search — exclusion preserves both
+  search and immutability, at the cost of no historical PII, which is the data you'd be legally
+  forced to drop anyway), and (b) volume (high-frequency operational counters like stock decrements
+  would otherwise flood the log with machine-churn and drown the history that's actually valuable).
+  Reuses the existing `HashPasswordFields`-style chokepoint pattern, generalized to a field mark
+  rather than a new mechanism per reason.
+- **Optimistic-concurrency version stamp is the log's per-object last-commit-id — not a new field.**
+  Resolves the granularity question this doc already deferred ("where the version belongs... a
+  per-object stamp resets when the whole DB is replaced, so a whole-DB version is needed too"): both
+  granularities are the same DAG position (per-object = last commit touching it, whole-DB = HEAD),
+  so the multi-user milestone reuses the pillar-4 log instead of inventing a stamp. The
+  optimistic-concurrency check ("has anything after `C_read` touched this object") must share one
+  critical section with the append itself — otherwise two concurrent commits from the same
+  `C_read` both pass the check before either appends. Reuses the commit-lock already planned for
+  sequential-id allocation; not a new lock.
+- **Rendering needs one optional time parameter, nothing else.** `sys.resolve(path, atCommit?)` —
+  absent = HEAD, today's fast path, unchanged. Present = replay the log to that commit (checkpoint +
+  tail) instead of hitting the live store; `LabelTrail`/`segmentLabel` take the same param so a
+  historical breadcrumb reads as it was at that commit, not blank or current. `atCommit` navigation
+  always forces a server refetch — the client's warm graph only ever holds present-state deltas, so
+  historical resolution can't run client-side, and consequently the replay/checkpoint engine needs
+  **no TS twin** — it's C#-only, and the conformance-suite burden never grows to cover it.
+- **Checkpoints are differential**, not full-state, keyed by commit-id (shared ancestry with trunk is
+  reused, not duplicated per branch); replaying forward across a schema-changing commit re-runs the
+  same non-destructive-apply migration used at write time — reading one version at its own commit
+  never needs re-migration, only cross-schema replay does.
+
+Deliberately unresolved (next real design pass, not now): real merge across data-minting branches
+(needs content-addressing or an id-remap step — deferred same as pillar 3's earlier merge questions);
+UI affordance for picking a commit to view; search/indexing over history.
