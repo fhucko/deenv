@@ -900,7 +900,7 @@ public sealed class WsHandler
         // as a throwaway transient minted below the client's id floor. Threaded as the `seed` RenderState
         // applies, so the server reproduces the client's EXACT render (the toggled-open popup) and structural
         // privacy harvests + ships the data that state demands.
-        var seed = SlotStateFromWire(req.SlotState, byId, lastId);
+        var seed = SlotStateFromWire(req.SlotState, byId, ref lastId);
 
         // The action-miss intent (client data layer, slice 4): when this refetch is driven by a click handler
         // that read un-shipped data, the client sends the handler's (slot, fn-id). Combine them into the key
@@ -964,10 +964,13 @@ public sealed class WsHandler
     // component's setup locals with (whole-object, v1).
     // `transientFloor` is the client's id floor (req.LastId): a reconstructed transient mints BELOW it (a
     // descending local counter), so it never collides with an in-store (positive) id NOR with a draft the
-    // client already holds. The counter is request-local (no shared mutable state) and discarded with the
-    // render — the exact value is immaterial beyond being a unique negative id within this reproduction.
+    // client already holds. Updated by ref to the lowest id minted here, so the caller's subsequent render
+    // counter (SsrRenderer.RenderState's context.LastId) starts BELOW it instead of from the same starting
+    // number — two counters independently seeded from the same floor mint the identical sequence, so a
+    // render-minted object (a schema descriptor) can land on the exact id a transient here already used,
+    // and ClientState's id-keyed dedup then silently drops one of the two colliding objects.
     private static IReadOnlyDictionary<string, IReadOnlyDictionary<string, Code.IExecValue>>? SlotStateFromWire(
-        JsonElement? slotState, Dictionary<int, Code.ExecObject> byId, int transientFloor)
+        JsonElement? slotState, Dictionary<int, Code.ExecObject> byId, ref int transientFloor)
     {
         if (slotState is not { ValueKind: JsonValueKind.Object } slots) return null;
         var nextTransient = Math.Min(0, transientFloor);
@@ -981,6 +984,7 @@ public sealed class WsHandler
                     locals[local.Name] = value;
             if (locals.Count > 0) seed[slot.Name] = locals;
         }
+        transientFloor = nextTransient;
         return seed.Count > 0 ? seed : null;
     }
 
