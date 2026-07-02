@@ -79,10 +79,11 @@ public sealed class WsWireShapeTests
             NewId = 42,
             Collections = new() { ["notes"] = new CollectionInfo { Id = 43, ElementTypeName = "Note" } },
             TempId = -2,
+            NewVersion = 5,
         };
 
         await Assert.That(Serialize(resp)).IsEqualTo(
-            """{"op":"arrayAdd","newId":42,"collections":{"notes":{"id":43,"elementTypeName":"Note"}},"tempId":-2}""");
+            """{"op":"arrayAdd","newId":42,"collections":{"notes":{"id":43,"elementTypeName":"Note"}},"tempId":-2,"newVersion":5}""");
     }
 
     // ── outgoing: arrayAdd WITHOUT a tempId — the field is OMITTED, not null ──────────────
@@ -95,10 +96,11 @@ public sealed class WsWireShapeTests
             NewId = 42,
             Collections = new(),
             TempId = null,
+            NewVersion = 5,
         };
 
         await Assert.That(Serialize(resp)).IsEqualTo(
-            """{"op":"arrayAdd","newId":42,"collections":{}}""");
+            """{"op":"arrayAdd","newId":42,"collections":{},"newVersion":5}""");
     }
 
     // ── outgoing: setReferenceField — newId present (create-new) vs omitted (link/clear) ──
@@ -106,29 +108,34 @@ public sealed class WsWireShapeTests
     [Test]
     public async Task SetReferenceField_includes_newId_only_when_minted()
     {
-        await Assert.That(Serialize(new SetReferenceFieldResponse { NewId = 99 }))
-            .IsEqualTo("""{"op":"setReferenceField","ok":true,"newId":99}""");
-        await Assert.That(Serialize(new SetReferenceFieldResponse { NewId = null }))
-            .IsEqualTo("""{"op":"setReferenceField","ok":true}""");
+        await Assert.That(Serialize(new SetReferenceFieldResponse { NewId = 99, NewVersion = 5 }))
+            .IsEqualTo("""{"op":"setReferenceField","ok":true,"newId":99,"newVersion":5}""");
+        await Assert.That(Serialize(new SetReferenceFieldResponse { NewId = null, NewVersion = 5 }))
+            .IsEqualTo("""{"op":"setReferenceField","ok":true,"newVersion":5}""");
     }
 
     // ── outgoing: the simple ok responses ────────────────────────────────────────────────
+    //
+    // Every mutating op's reply now carries newVersion (optimistic-concurrency anti-clobber —
+    // DECISIONS.md "App versioning — the full design (M13 clump)"): the client must learn the store's
+    // HEAD after ANY of its own writes, not just a `commit`'s, or it silently drifts behind its own
+    // history (see ws.ts's onWsMessage doc). It serializes LAST (declared last on each record).
 
     [Test]
     public async Task The_simple_ok_responses_serialize_to_their_exact_bytes()
     {
-        await Assert.That(Serialize(new WriteResponse { Path = "/a/b" }))
-            .IsEqualTo("""{"op":"write","path":"/a/b","ok":true}""");
-        await Assert.That(Serialize(new AddEntryResponse { Path = "/d", Key = "k" }))
-            .IsEqualTo("""{"op":"addEntry","path":"/d","ok":true,"key":"k"}""");
-        await Assert.That(Serialize(new RemoveEntryResponse { Path = "/d" }))
-            .IsEqualTo("""{"op":"removeEntry","path":"/d","ok":true}""");
+        await Assert.That(Serialize(new WriteResponse { Path = "/a/b", NewVersion = 5 }))
+            .IsEqualTo("""{"op":"write","path":"/a/b","ok":true,"newVersion":5}""");
+        await Assert.That(Serialize(new AddEntryResponse { Path = "/d", Key = "k", NewVersion = 5 }))
+            .IsEqualTo("""{"op":"addEntry","path":"/d","ok":true,"key":"k","newVersion":5}""");
+        await Assert.That(Serialize(new RemoveEntryResponse { Path = "/d", NewVersion = 5 }))
+            .IsEqualTo("""{"op":"removeEntry","path":"/d","ok":true,"newVersion":5}""");
         await Assert.That(Serialize(new HelloResponse { SessionAlive = true }))
             .IsEqualTo("""{"op":"hello","sessionAlive":true}""");
-        await Assert.That(Serialize(new ObjectPropChangeResponse()))
-            .IsEqualTo("""{"op":"objectPropChange","ok":true}""");
-        await Assert.That(Serialize(new ArrayRemoveResponse()))
-            .IsEqualTo("""{"op":"arrayRemove","ok":true}""");
+        await Assert.That(Serialize(new ObjectPropChangeResponse { NewVersion = 5 }))
+            .IsEqualTo("""{"op":"objectPropChange","ok":true,"newVersion":5}""");
+        await Assert.That(Serialize(new ArrayRemoveResponse { NewVersion = 5 }))
+            .IsEqualTo("""{"op":"arrayRemove","ok":true,"newVersion":5}""");
         await Assert.That(Serialize(new HostActionResponse()))
             .IsEqualTo("""{"op":"hostAction","ok":true}""");
         await Assert.That(Serialize(new AckRemapResponse()))

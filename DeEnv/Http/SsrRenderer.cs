@@ -108,6 +108,13 @@ public sealed class SsrRenderer
         var context = new ExecContext { Seed = seed };
         try
         {
+            // Snapshot the store's version BEFORE the render reads it (optimistic-concurrency anti-clobber
+            // — DECISIONS.md "App versioning — the full design (M13 clump)"): the two reads (version, then
+            // the render's own store load) are not one atomic critical section, so reading version-first is
+            // the SAFE order — a concurrent write landing in the gap can only make this an UNDER-estimate
+            // (never claim freshness the render didn't actually see), which fails toward an honest-but-
+            // spurious reject on a later commit, never a silent clobber.
+            var storeVersion = _store.CurrentVersion;
             var (result, title, scope, status, trail) = ExecuteRender(urlPath, context, principalUserId: principalUserId);
             var body = new StringBuilder();
             SerializeChild(result, body, @base);
@@ -144,7 +151,7 @@ public sealed class SsrRenderer
             var breadcrumbs = _isGeneric ? Breadcrumbs(ParsePath(urlPath), trail, @base) : "";
 
             return (UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi),
-                    clientId, @base, assetAuthority, _appName, _isGeneric),
+                    clientId, @base, assetAuthority, _appName, _isGeneric, storeVersion),
                 status);
         }
         catch (CodeRuntimeException ex)
@@ -187,10 +194,16 @@ public sealed class SsrRenderer
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, IExecValue>>? seed = null,
         string? harvestAction = null)
     {
+        // Version-before-render, same safe-under-race ordering as RenderPage (see its comment): the
+        // caller (HandleRefetch) already loaded `warmDb` fresh from the store just before this call, so
+        // this snapshot reflects (at worst, slightly conservatively) the data the render below sees.
+        var storeVersion = _store.CurrentVersion;
         var context = new ExecContext { Seed = seed };
         context.LastId.Value = Math.Min(0, lastIdFloor);
         var (_, _, scope, _, _) = ExecuteRender(urlPath, context, sessionVars, warmDb, principalUserId, harvestAction);
-        return ClientState.Serialize(scope, context);
+        var state = ClientState.Serialize(scope, context);
+        state["storeVersion"] = storeVersion;
+        return state;
     }
 
     // `Trail` is the labeled breadcrumb segments — one human-readable label per URL path segment
@@ -443,14 +456,14 @@ public sealed class SsrRenderer
     // too — a custom app overrides via the cascade. (Zero-config good defaults; minimal by default.)
     private static string UiLayout(
         string title, string breadcrumbs, string body, string initData, string initUi, string clientId,
-        string @base, string assetAuthority, string appName, bool isGeneric) => $$"""
+        string @base, string assetAuthority, string appName, bool isGeneric, int storeVersion) => $$"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
           <meta charset="utf-8">
           <title>{{Escape(title)}}</title>
           <style>{{ViewChromeCss}}</style>
-          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initBase="{{JsStringSafe(@base)}}";window.initAssetAuthority="{{JsStringSafe(assetAuthority)}}";window.initAppName="{{JsStringSafe(appName)}}";window.initIsGeneric={{(isGeneric ? "true" : "false")}};</script>
+          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initBase="{{JsStringSafe(@base)}}";window.initAssetAuthority="{{JsStringSafe(assetAuthority)}}";window.initAppName="{{JsStringSafe(appName)}}";window.initIsGeneric={{(isGeneric ? "true" : "false")}};window.initStoreVersion={{storeVersion}};</script>
           <script>(function(){var a=window.initAssetAuthority,b=window.initBase==="/"?"":window.initBase;var s=document.createElement("script");s.src=a?location.protocol+"//"+a+b+"/js":b+"/js";document.head.appendChild(s);})();</script>
         </head>
         <body>{{breadcrumbs}}<div id="app">{{body}}</div></body>

@@ -23,7 +23,7 @@ namespace DeEnv.Storage;
 // below — so the read/write shapes cannot drift.
 
 // The whole document. A mutable class (minting and writes edit it in place). Property
-// names map to the on-disk keys (extents/root/nextId) via the store's camelCase
+// names map to the on-disk keys (extents/root/nextId/version) via the store's camelCase
 // PropertyNamingPolicy — no per-property name attributes.
 public sealed class StoreDoc
 {
@@ -33,6 +33,14 @@ public sealed class StoreDoc
     public StoredValue? Root { get; set; }
 
     public int NextId { get; set; }
+
+    // Monotonically increasing HEAD of this store: bumped by JsonFileInstanceStore on every mutating
+    // write (persisted so it survives a restart). Named with the M13 app-versioning design in mind
+    // (DECISIONS.md "App versioning — the full design (M13 clump)") — this becomes the log's commit
+    // seq once a durable change-log lands; today it is the optimistic-concurrency stamp a ctx.commit()
+    // is checked against (JsonFileInstanceStore.CommitBatch's baseVersion guard). Starts at 0 (a
+    // brand-new/legacy doc with no counter yet), so the first mutation bumps it to 1.
+    public int Version { get; set; }
 }
 
 // An extent entry: a stored object's authoritative fields. The get-only `Type` makes

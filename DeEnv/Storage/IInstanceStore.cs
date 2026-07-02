@@ -34,8 +34,26 @@ public interface IInstanceStore
     // each created object's minted nested-collection ids, so the caller can re-key the client's optimistic
     // graph. The caller VALIDATES every create/edit (schema + access floor + password hash) BEFORE calling —
     // an exception here is a bug, not a user error. No on-disk format change.
+    //
+    // baseVersion (optimistic-concurrency anti-clobber guard — DECISIONS.md "App versioning — the full
+    // design (M13 clump)", §0's baseVersion bullet): the store version the committing ctx last knew. Null
+    // = no check (a caller with no version concept, e.g. a test harness building a batch directly — kept
+    // nullable for compatibility, not a permanent opt-out: every real WS commit supplies it). When
+    // present, the check and the apply run in ONE critical section (this method's existing `_sync` lock)
+    // — the staleness check must never be a separate call from the apply, or two concurrent commits from
+    // the same stale base could both pass the check before either applies. Rejects (StaleBaseException,
+    // store untouched — no partial apply) iff any EXISTING object this batch EDITS (a FieldWriteMutation's
+    // ObjectRef, a RefLinkMutation's OwnerRef/positive TargetRef, or a SetLinkMutation's positive
+    // MemberRef — never a fresh create, which cannot be stale) has a last-modified version > baseVersion.
+    // Object-granular, not whole-store: a commit touching only objects unchanged since baseVersion applies
+    // even when OTHER objects advanced in the meantime (disjoint interleaved commits auto-merge).
     IReadOnlyList<CommitCreateResult> CommitBatch(
-        IReadOnlyList<CommitCreate> creates, IReadOnlyList<CommitMutation> mutations);
+        IReadOnlyList<CommitCreate> creates, IReadOnlyList<CommitMutation> mutations, int? baseVersion = null);
+
+    // The store's current HEAD version (StoreDoc.Version) — bumped on every mutating write. Shipped to the
+    // client (SSR first paint + refetch) so it can remember "the version I last saw" and stamp a ctx's
+    // baseVersion from it. Read-only; taking the lock so a reader never observes a version bumped mid-write.
+    int CurrentVersion { get; }
 
     // Create a dictionary entry under a caller-supplied (manual) key.
     // Throws if an entry with that key already exists.
@@ -92,6 +110,12 @@ public interface IInstanceStore
     // existing data) and by tests.
     void Reset();
 }
+
+// Thrown by CommitBatch when the caller's baseVersion is stale for an object the batch EDITS (an
+// optimistic-concurrency reject, not a validation error — the batch was well-formed, just based on data
+// someone else has since changed). WsHandler maps this to the ordinary `{ error }` commit-rejection reply
+// (the existing rollback/global-error-banner path); the message is user-facing.
+public sealed class StaleBaseException(string message) : Exception(message);
 
 // ── atomic-commit batch (Step B) — a model-term changeset (CLAUDE rule 6) ──────────────────────
 

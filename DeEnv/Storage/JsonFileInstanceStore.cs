@@ -46,6 +46,30 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private readonly object _sync = new();
     private StoreDoc _doc;
 
+    // Per-object last-modified version (optimistic-concurrency guard — DECISIONS.md "App versioning —
+    // the full design (M13 clump)"). IN-MEMORY only, deliberately not persisted: a missing entry means
+    // "unchanged since this process booted" — correct because nothing can have raced against a version
+    // this same boot minted (the only versions a live client can hold a baseVersion for are ones this
+    // process has shipped), and the rare case of a truly-stale pre-restart base is out of scope for this
+    // slice (no durable per-object history yet — that is the future M13 log; a bare in-memory map is the
+    // documented v0 approximation, not silently swept under a comment). Every mutating write records
+    // here under the SAME _sync lock the mutation itself holds — see BumpVersion.
+    private readonly Dictionary<int, int> _objectVersions = new();
+
+    public int CurrentVersion { get { lock (_sync) return _doc.Version; } }
+
+    // Bump the store's HEAD version and (for a real object write) record it as that object's
+    // last-modified version. Called at the END of every mutating operation's already-held _sync lock —
+    // never on its own lock, so the bump is never observably separate from the write it accompanies.
+    // objectId is null for a mutation with no single "the object this changed" (Reset, a set/dict
+    // structural op reached only by path — those stay ungated by baseVersion, matching today's
+    // unconditional-accept live-edit behavior for everything CommitBatch does not itself route through).
+    private void BumpVersion(int? objectId = null)
+    {
+        _doc.Version++;
+        if (objectId is { } id) _objectVersions[id] = _doc.Version;
+    }
+
     public JsonFileInstanceStore(string filePath, InstanceDescription desc)
     {
         _filePath = filePath;
@@ -243,12 +267,14 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         if (path.IsRoot)
         {
             _doc.Root = new StoredLeaf(value); // scalar Db root
+            BumpVersion();
             Save();
             return;
         }
         var parent = WalkToObject(ParentPath(path))
             ?? throw new InvalidOperationException($"Parent of {path} is not an object.");
         parent.Object.Fields[path.Segments[^1]] = new StoredLeaf(value);
+        BumpVersion(parent.Object.Id);
         Save();
     }
 
@@ -267,6 +293,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 && value.Fields.TryGetValue(prop.Name, out var v))
                 target.Object.Fields[prop.Name] = new StoredLeaf(v);
 
+        BumpVersion(target.Object.Id);
         Save();
     }
 
@@ -277,6 +304,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             var entry = ExtentEntryById(objectId)
                 ?? throw new InvalidOperationException($"No object with id {objectId}.");
             entry.Fields[prop] = new StoredLeaf(value);
+            BumpVersion(objectId);
             Save();
         }
     }
@@ -290,6 +318,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 var entry = ExtentEntryById(objectId)
                     ?? throw new InvalidOperationException($"No object with id {objectId}.");
                 entry.Fields[prop] = new StoredLeaf(value);
+                BumpVersion(objectId);
             }
             Save(); // one atomic file write for the whole batch
         }
@@ -302,8 +331,13 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // the caller (WsHandler.HandleCommit) has already validated every create/edit against the schema + floor
     // + password hash. A reference to a tempId not in this batch's creates throws — a caller bug, never
     // silent. Returns each create's real id + its minted nested-collection ids (for the client re-key).
+    //
+    // baseVersion (optimistic-concurrency anti-clobber — see the interface doc): checked + applied in this
+    // SAME held _sync lock, so the check can never race a concurrent commit's apply. Runs BEFORE any
+    // mutation (alongside the existing reference pre-validation), so a rejected commit leaves the store
+    // fully untouched — matching the all-or-none guarantee this method already gives a malformed batch.
     public IReadOnlyList<CommitCreateResult> CommitBatch(
-        IReadOnlyList<CommitCreate> creates, IReadOnlyList<CommitMutation> mutations)
+        IReadOnlyList<CommitCreate> creates, IReadOnlyList<CommitMutation> mutations, int? baseVersion = null)
     {
         lock (_sync)
         {
@@ -339,6 +373,45 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         break;
                 }
 
+            // The staleness check: iff baseVersion is supplied, every EXISTING object this batch EDITS must
+            // be unchanged since baseVersion. "Edits" = an existing (non-negative) id targeted by a mutation
+            // — a SetLinkMutation's positive MemberRef (linking an EXISTING member in), a RefLinkMutation's
+            // OwnerRef (always existing — the field's owner) and positive TargetRef, or a FieldWriteMutation's
+            // ObjectRef. A fresh create (negative tempId) is exempt — it has no prior version to be stale
+            // against. Object-granular: a batch touching only objects at-or-before baseVersion applies even
+            // when OTHER objects in the store advanced past it (disjoint interleaved commits auto-merge —
+            // no whole-store rejection, no OCC retry storm). A missing _objectVersions entry means unchanged
+            // since this process booted (see the field's doc) — never itself a staleness cause.
+            if (baseVersion is { } bv)
+            {
+                // The message IS what reaches the client (WsHandler's catch surfaces ex.Message verbatim as
+                // the commit-rejection `{ error }`, which the existing rollback path shows in the global
+                // error banner — see WsHandler.cs's ProcessMessage) AND what the server logs alongside it, so
+                // it stays user-facing rather than a raw id/version dump; the technical detail (which id, the
+                // two versions) still rides along for whoever reads the server log.
+                void RequireFresh(int idRef)
+                {
+                    if (idRef >= 0 && _objectVersions.TryGetValue(idRef, out var lastModified) && lastModified > bv)
+                        throw new StaleBaseException(
+                            "Someone else changed this — reload to see the latest. " +
+                            $"(object {idRef}, version {lastModified} > base {bv})");
+                }
+                foreach (var mutation in mutations)
+                    switch (mutation)
+                    {
+                        case SetLinkMutation(_, var memberRef):
+                            RequireFresh(memberRef);
+                            break;
+                        case RefLinkMutation(var ownerRef, _, var targetRef, _):
+                            RequireFresh(ownerRef);
+                            if (targetRef is { } t) RequireFresh(t);
+                            break;
+                        case FieldWriteMutation(var objectRef, _, _):
+                            RequireFresh(objectRef);
+                            break;
+                    }
+            }
+
             var idMap = new Dictionary<int, int>();
             var results = new List<CommitCreateResult>();
 
@@ -355,6 +428,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         && minted.Fields.GetValueOrDefault(prop.Name) is StoredSet sv)
                         collections[prop.Name] = new CommitCollection(sv.Id, prop.Type);
                 results.Add(new CommitCreateResult(c.TempId, realId, collections));
+                BumpVersion(realId); // a create's own first version (so a later stale-base check sees it if edited)
             }
 
             // A reference id: a positive real id passes through; a negative tempId resolves to the create it
@@ -374,6 +448,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         var typeName = ExtentEntryById(memberId)?.TypeName
                             ?? throw new InvalidOperationException($"No object with id {memberId}.");
                         set.Members[memberId] = new StoredRef(typeName, memberId);
+                        BumpVersion(memberId);
                         break;
                     }
                     case RefLinkMutation(var ownerRef, var prop, var targetRef, var targetType):
@@ -382,6 +457,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                             ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
                         if (targetRef is { } t) entry.Fields[prop] = new StoredRef(targetType, ResolveRefId(t));
                         else entry.Fields.Remove(prop);
+                        BumpVersion(ResolveRefId(ownerRef));
                         break;
                     }
                     case FieldWriteMutation(var objectRef, var prop, var value):
@@ -389,6 +465,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         var entry = ExtentEntryById(ResolveRefId(objectRef))
                             ?? throw new InvalidOperationException($"No object with id {objectRef}.");
                         entry.Fields[prop] = new StoredLeaf(value);
+                        BumpVersion(ResolveRefId(objectRef));
                         break;
                     }
                 }
@@ -452,6 +529,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         lock (_sync)
         {
             var id = MintObject(typeName, fields);
+            BumpVersion(id);
             Save();
             return id;
         }
@@ -465,6 +543,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 ?? throw new InvalidOperationException($"{setPath} does not resolve.");
             var set = EnsureSet(setPath);
             set.Members[id] = new StoredRef(typeName, id);
+            BumpVersion(id);
             Save();
         }
     }
@@ -476,6 +555,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             if (SetNodeAt(setPath) is { } set)
                 set.Members.Remove(id);
             CollectGarbage();
+            BumpVersion(id);
             Save();
         }
     }
@@ -491,6 +571,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             var typeName = ExtentEntryById(objectId)?.TypeName
                 ?? throw new InvalidOperationException($"No object with id {objectId}.");
             set.Members[objectId] = new StoredRef(typeName, objectId);
+            BumpVersion(objectId);
             Save();
         }
     }
@@ -502,6 +583,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             if (FindSetNode(setId) is { } set)
                 set.Members.Remove(objectId);
             CollectGarbage();
+            BumpVersion(objectId);
             Save();
         }
     }
@@ -546,6 +628,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             else
                 entry.Fields[prop] = new StoredRef(targetTypeName, targetId.Value);
             CollectGarbage();
+            BumpVersion(objectId);
             Save();
         }
     }
@@ -566,6 +649,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 parent.Object.Fields[field] = new StoredRef(typeName, id.Value);
             }
             CollectGarbage();
+            BumpVersion(parent.Object.Id);
             Save();
         }
     }
@@ -797,16 +881,27 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // the schema carries one, else the default empty root) — in memory and on disk.
     // Used for a FRESH publish (a target with no prior data — apply otherwise PRESERVES
     // existing data) and by tests.
+    //
+    // A brand-new document, not a continuation: the version resets to 0 (BuildInitialDoc's fresh
+    // StoreDoc), and the per-object version map is CLEARED — every old object id is gone/reseeded, so
+    // a stale entry would be meaningless (and could wrongly flag a freshly-reseeded id that happens to
+    // reuse an old integer as "changed since" a version from a document this one has replaced).
     public void Reset()
     {
         lock (_sync)
         {
             _doc = BuildInitialDoc();
+            _objectVersions.Clear();
             Save();
         }
     }
 
     // ── dictionary entries (manual keys; values are scalars or object references) ──
+    //
+    // Dictionary mutation is not yet reachable through ctx.commit()/CommitBatch (the Code runtime has no
+    // dict-entry CommitMutation — dicts stay a later slice, same ponytail as their unmated access floor),
+    // so no baseVersion check can ever target one — only the store-wide HEAD bump matters here (parallel
+    // to WriteLeafCore's root-write branch), not per-object attribution.
 
     public void CreateEntry(NodePath dictPath, NodeValue key, NodeValue value)
     {
@@ -816,6 +911,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 throw new InvalidOperationException(
                     $"An entry with key '{KeyToString(key)}' already exists at {dictPath}.");
             WriteDictionaryEntryInto(dictPath, key, value);
+            BumpVersion();
             Save();
         }
     }
@@ -825,6 +921,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         lock (_sync)
         {
             WriteDictionaryEntryInto(path, key, value);
+            BumpVersion();
             Save();
         }
     }
@@ -853,6 +950,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             if (DictNodeAt(path) is { } dict)
                 dict.Entries.Remove(KeyToString(key));
             CollectGarbage();
+            BumpVersion();
             Save();
         }
     }

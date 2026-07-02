@@ -111,6 +111,34 @@ public class InstanceContext
             dueDate: "2026-01-01"
     """;
 
+    // Concurrency.feature (optimistic-concurrency anti-clobber, DECISIONS.md "App versioning — the full
+    // design (M13 clump)" pulled ahead): a self-hosted-UI Note app (the SelfHostedFormApp shape, kept
+    // separate/self-contained rather than reusing it, so a second seeded Note here never shows up as a
+    // surprise row in the many unrelated SelfHostedUi.feature scenarios that navigate the shared "/"
+    // table). TWO seeded Notes (ids 2 and 3) — the disjoint-objects scenario needs a second object; the
+    // shared fixture's ONE Note cannot express it without touching a widely-reused seed.
+    public static InstanceDescription ConcurrencyFixtureDb() =>
+        InstanceDescriptionLoader.Load(ConcurrencyFixtureApp);
+
+    private const string ConcurrencyFixtureApp = """
+    types
+        Db
+            notes set of Note
+        Note
+            title text
+            count int
+
+    initialData
+        Db 1
+            notes: [2, 3]
+        Note 2
+            title: "Note two"
+            count: 0
+        Note 3
+            title: "Note three"
+            count: 0
+    """;
+
     // Atomic-commit Step B: an OBJECT that holds a SET, reachable as an object PAGE. The Db's `orders` set
     // holds an Order (a scalar `title` + a nested `lines` set of Line). Navigating to /orders/2 renders the
     // Order's ObjectForm — a scalar field (so it HAS a Save) + an inline `lines` SetTable. Adding a Line
@@ -1652,6 +1680,13 @@ public class InstanceContext
     // ── browser ───────────────────────────────────────────────────────────────
 
     public IPage? Page { get; set; }
+
+    // A SECOND independent browser session against the SAME server (Concurrency.feature) — its own
+    // isolated Playwright context, so its cookies/WS/DOM never share state with Page. Two REAL
+    // sessions/tabs is the only way to prove the anti-clobber guard end-to-end (the client remembers a
+    // version, a ctx captures a base, a rejected commit shows the global error banner) — a single-page
+    // scenario cannot observe "another session changed this under me". Null until a scenario opens it.
+    public IPage? Page2 { get; set; }
 
     // Lazily start the in-process server and a page on the shared headless browser. Idempotent, so
     // any step that drives the page can call it (not just "I navigate to …").

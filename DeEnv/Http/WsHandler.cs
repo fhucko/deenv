@@ -62,6 +62,14 @@ public sealed record WsRequest
     // an edits-only commit.
     public JsonElement? Creates { get; init; }
     public JsonElement? Relations { get; init; }
+    // commit: the optimistic-concurrency anti-clobber guard (DECISIONS.md "App versioning — the full
+    // design (M13 clump)", §0's baseVersion bullet). The store version the committing ctx last knew
+    // (ws.ts stamps it from the client's remembered HEAD, captured when the ctx first staged an edit).
+    // Threaded to IInstanceStore.CommitBatch, which rejects (StaleBaseException) iff an object this
+    // batch EDITS changed after this version. Null = no check (an older/lower-level caller with no
+    // version concept) — kept optional for compatibility, not a permanent bypass; every real ws.ts
+    // commit supplies it.
+    public int? BaseVersion { get; init; }
 }
 
 // Response records — one per op. Each property's camelCase (the shared `_jsonOpts`
@@ -70,11 +78,18 @@ public sealed record WsRequest
 // these never carry it. Field order matches the former literals; the get-only computed
 // `Op`/`Ok` props serialize by default.
 
+// `newVersion` (optimistic-concurrency anti-clobber — see CommitResponse's doc): EVERY mutating op's
+// reply carries the store's version AFTER this write, not just `commit`'s. A live write (autosave,
+// arrayAdd, setRef, …) advances the store's HEAD exactly like a commit does (JsonFileInstanceStore
+// bumps it uniformly); a client that only learned the version from `commit` acks would silently drift
+// behind its OWN live writes (e.g. a create's arrayAdd, then a later ctx.commit() editing that SAME
+// just-created object) and its next commit would be wrongly rejected as stale against its own history.
 public sealed record WriteResponse
 {
     public string Op => "write";
     public required string Path { get; init; }
     public bool Ok => true;
+    public required int NewVersion { get; init; }
 }
 
 public sealed record AddEntryResponse
@@ -83,6 +98,7 @@ public sealed record AddEntryResponse
     public required string Path { get; init; }
     public bool Ok => true;
     public required string Key { get; init; }
+    public required int NewVersion { get; init; }
 }
 
 public sealed record RemoveEntryResponse
@@ -90,6 +106,7 @@ public sealed record RemoveEntryResponse
     public string Op => "removeEntry";
     public required string Path { get; init; }
     public bool Ok => true;
+    public required int NewVersion { get; init; }
 }
 
 public sealed record HelloResponse
@@ -102,16 +119,21 @@ public sealed record ObjectPropChangeResponse
 {
     public string Op => "objectPropChange";
     public bool Ok => true;
+    public required int NewVersion { get; init; }
 }
 
 // The reply for a `commit` op: all-or-nothing batch of field edits + creates + relations from a ctx.commit().
 // `idMap` (atomic-commit Step B) carries the negative→real id remap for every created object plus its minted
 // nested-collection ids, so the client re-keys its optimistic graph. Omitted (null) on an edits-only commit.
+// `newVersion` (optimistic-concurrency anti-clobber) is the store's version AFTER this commit landed — the
+// client re-pins the committing ctx's baseVersion to it, so a SECOND commit from the SAME (still-open) ctx
+// is based on its own just-applied change, not the stale version it opened with (ws.ts's ctxBaseVersion).
 public sealed record CommitResponse
 {
     public string Op => "commit";
     public bool Ok => true;
     public IReadOnlyList<CommitIdMapEntry>? IdMap { get; init; }
+    public required int NewVersion { get; init; }
 }
 
 // One created object's remap in a commit reply: its transient client id → the real extent id, plus the
@@ -130,6 +152,7 @@ public sealed record SetReferenceFieldResponse
     // Present only when a new object was minted (a create-new pick), never for link/clear —
     // omitted when null by the options' DefaultIgnoreCondition (WhenWritingNull).
     public int? NewId { get; init; }
+    public required int NewVersion { get; init; }
 }
 
 // A collection prop the store minted on a new object: its intrinsic id + element type, so
@@ -152,12 +175,14 @@ public sealed record ArrayAddResponse
     // Echoed back ONLY when the request carried one (a set add from the client) — omitted
     // when null by the options' DefaultIgnoreCondition (WhenWritingNull).
     public int? TempId { get; init; }
+    public required int NewVersion { get; init; }
 }
 
 public sealed record ArrayRemoveResponse
 {
     public string Op => "arrayRemove";
     public bool Ok => true;
+    public required int NewVersion { get; init; }
 }
 
 public sealed record RefetchResponse
@@ -421,7 +446,8 @@ public sealed class WsHandler
         if (typeInfo.Type.Name == "password")
         {
             if (HashScalarLeaf(typeInfo.Type.Name, value) is not { } hashed)
-                return Serialize(new WriteResponse { Path = pathStr }); // empty → no change, store untouched
+                // empty → no change, store untouched (still reports the CURRENT version — accurate, unbumped).
+                return Serialize(new WriteResponse { Path = pathStr, NewVersion = _store.CurrentVersion });
             value = hashed;
         }
 
@@ -438,7 +464,7 @@ public sealed class WsHandler
             _store.WriteLeaf(path, value);
         }
 
-        return Serialize(new WriteResponse { Path = pathStr });
+        return Serialize(new WriteResponse { Path = pathStr, NewVersion = _store.CurrentVersion });
     }
 
     // The intrinsic id of the EXTENT OBJECT a path addresses, but ONLY when the path is a SET MEMBER
@@ -488,7 +514,7 @@ public sealed class WsHandler
         var key = ParseKey(keyStr, typeInfo.KeyTypeName ?? "text");
         _store.CreateEntry(path, key, value); // throws on duplicate → caught as { error }
 
-        return Serialize(new AddEntryResponse { Path = pathStr, Key = KeyString(key) });
+        return Serialize(new AddEntryResponse { Path = pathStr, Key = KeyString(key), NewVersion = _store.CurrentVersion });
     }
 
     // ── removeEntry ────────────────────────────────────────────────────────────
@@ -522,7 +548,7 @@ public sealed class WsHandler
             return Error($"Path '{pathStr}' is not a dictionary or set.");
         }
 
-        return Serialize(new RemoveEntryResponse { Path = pathStr });
+        return Serialize(new RemoveEntryResponse { Path = pathStr, NewVersion = _store.CurrentVersion });
     }
 
     // ── set members + references (object model) ─────────────────────────────────
@@ -555,7 +581,7 @@ public sealed class WsHandler
             return Error("addEntry on a set requires 'refId' (existing) or 'value' (new).");
         }
 
-        return Serialize(new AddEntryResponse { Path = pathStr, Key = id.ToString() });
+        return Serialize(new AddEntryResponse { Path = pathStr, Key = id.ToString(), NewVersion = _store.CurrentVersion });
     }
 
     // ── code-owned UI mutations (the Code runtime, identity-addressed) ──────────
@@ -600,7 +626,7 @@ public sealed class WsHandler
         if (HashLeaf(hit.TypeName, prop, leaf) is { } toWrite)
             _store.WriteField(objectId, prop, toWrite);
 
-        return Serialize(new ObjectPropChangeResponse());
+        return Serialize(new ObjectPropChangeResponse { NewVersion = _store.CurrentVersion });
     }
 
     // Atomic batch commit of a whole changeset staged in a ctx.commit() — field EDITS (Step A) + new objects
@@ -744,8 +770,12 @@ public sealed class WsHandler
             }
 
         // ── apply: everything validated — mint + link + write the whole changeset in one lock + one Save().
+        // baseVersion rides through to the store's ONE critical section (check + apply, never two calls —
+        // see CommitBatch's doc): a stale base throws StaleBaseException, caught by ProcessMessage's
+        // existing catch and returned as the ordinary `{ error }` commit-rejection reply (the client's
+        // existing rollback + global error banner — no new client-side path needed).
         var results = createBatch.Count > 0 || mutations.Count > 0
-            ? _store.CommitBatch(createBatch, mutations)
+            ? _store.CommitBatch(createBatch, mutations, req.BaseVersion)
             : [];
 
         var idMap = results.Select(r => new CommitIdMapEntry
@@ -756,7 +786,7 @@ public sealed class WsHandler
                 kv => kv.Key, kv => new CollectionInfo { Id = kv.Value.Id, ElementTypeName = kv.Value.ElementTypeName }),
         }).ToList();
 
-        return Serialize(new CommitResponse { IdMap = idMap.Count > 0 ? idMap : null });
+        return Serialize(new CommitResponse { IdMap = idMap.Count > 0 ? idMap : null, NewVersion = _store.CurrentVersion });
     }
 
     // Parse a commit relation (atomic-commit Step B). A set relation `{ kind:"set", setId, childId }` links a
@@ -845,7 +875,7 @@ public sealed class WsHandler
             return Error("setReferenceField requires 'refId', 'value', or 'clear'.");
         }
 
-        return Serialize(new SetReferenceFieldResponse { NewId = newId });
+        return Serialize(new SetReferenceFieldResponse { NewId = newId, NewVersion = _store.CurrentVersion });
     }
 
     // The WS's first message on open: claims the session minted at SSR (keeping it past
@@ -1096,7 +1126,8 @@ public sealed class WsHandler
 
         // `newId`, not `id` — the reply's `id` slot is the request correlation id.
         // tempId is echoed only when the request carried one (omitted otherwise).
-        return Serialize(new ArrayAddResponse { NewId = id, Collections = collections, TempId = req.TempId });
+        return Serialize(new ArrayAddResponse
+            { NewId = id, Collections = collections, TempId = req.TempId, NewVersion = _store.CurrentVersion });
     }
 
     // The client's ack that it has applied an arrayAdd's remap (re-keyed its copy from the transient
@@ -1199,7 +1230,7 @@ public sealed class WsHandler
                 Code.AccessFloor.ScalarObject(member.TypeName, objectId, member.Fields, _desc));
         _store.RemoveFromSet(setId, objectId);
 
-        return Serialize(new ArrayRemoveResponse());
+        return Serialize(new ArrayRemoveResponse { NewVersion = _store.CurrentVersion });
     }
 
     // A new object's scalar props as the client ships them ({ "props": { name: leaf } }),

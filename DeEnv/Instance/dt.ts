@@ -17,6 +17,12 @@ interface ServerDtState {
     leaves: { objects: { [id: number]: ServerDtObject }; arrays: { [id: number]: ServerDtArray } };
     scope: { [key: string]: DtScopeValue };
     cache: ServerCacheEntry[];
+    // The store's version as of THIS render (optimistic-concurrency anti-clobber — DECISIONS.md "App
+    // versioning — the full design (M13 clump)"). A refetch reply carries it (SsrRenderer.RenderState);
+    // ws.ts advances clientKnownVersion from it. Not present on the SSR-embedded initData (that path
+    // ships it separately as window.initStoreVersion — see ws.ts) — optional so both shapes typecheck
+    // against this one interface.
+    storeVersion?: number;
 }
 
 interface ServerCacheEntry { key: string; result: DtValue; deps: CacheDeps; }

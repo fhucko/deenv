@@ -18,6 +18,9 @@ declare const initBase: string;
 // The instance display name (the kernel registry `app` label), injected by the SSR page. The generic-UI
 // breadcrumb/title uses it (humanized) as the ROOT label on a client-side render — see ui.ts rootLabel.
 declare const initAppName: string;
+// The store's version as of THIS first paint (optimistic-concurrency anti-clobber — DECISIONS.md "App
+// versioning — the full design (M13 clump)"). Seeds clientKnownVersion below.
+declare const initStoreVersion: number;
 
 // The mount base as a URL PREFIX: "" when root-mounted ("/"), else the base verbatim ("/apps/todo").
 // Prepended to the asset paths (/ws, /js) and — in ui.ts/init.ts — to the app's root-relative links.
@@ -75,6 +78,37 @@ let nextWsMsgId = 1;
 // their own table. Populated at endCommit, consumed by the commit ack's batch remap, then cleared.
 interface PendingCommitCreate { join: CreateJoin; obj: ExecObject }
 const pendingCommitCreates = new Map<number, PendingCommitCreate>();
+
+// ── optimistic-concurrency anti-clobber (baseVersion) ───────────────────────────────────────────────
+//
+// DECISIONS.md "App versioning — the full design (M13 clump)" (§0's baseVersion bullet) + the pulled-
+// ahead detection-only slice: two sessions editing the same object must not silently clobber each
+// other. The server tracks each object's last-modified STORE VERSION; a ctx.commit() carries the
+// version its ctx was based on (baseVersion); the server rejects iff an object the commit EDITS
+// changed after that version (JsonFileInstanceStore.CommitBatch). This is the client half: remembering
+// the version, and stamping it onto a committing ctx.
+//
+// clientKnownVersion is the client's own single remembered HEAD — kept simple (one number, not
+// per-object) matching the design's "the client remembers it": every data-carrying reply (SSR first
+// paint, a refetch) advances it, and EVERY successful mutating op's ack (not just `commit`'s — see
+// onWsMessage) re-advances it to the version the server says that write landed at. This matters beyond
+// `commit`: a LIVE write (autosave, a create's arrayAdd, a ref pick) bumps the store's HEAD exactly like
+// a commit does, so the client must learn it from THAT ack too — otherwise it silently drifts behind its
+// own history (e.g. create a user via arrayAdd, then ctx.commit() an edit to that SAME object: without
+// this the edit's baseVersion would predate the create's own bump and be wrongly rejected as stale
+// against itself — the regression this fixed, caught by Access.feature's "admin creates a user and sets
+// a password" scenario). Seeded from the SSR first paint's window.initStoreVersion (set BEFORE this
+// bundle loads — see UiLayout's inline bootstrap script).
+let clientKnownVersion = initStoreVersion;
+
+// A ctx's OWN baseVersion, pinned the FIRST time it stages real work (its first commit — see
+// beginCommit), matching the design's "a ctx captures it when it opens/first stages": staying pinned
+// across that SAME ctx's later commits until one actually succeeds (whose ack re-pins it to the fresh
+// result — see the commit ack in onWsMessage) keeps a long-open form's base honest even if OTHER,
+// unrelated client activity advances clientKnownVersion in the meantime (a refetch triggered by a
+// different part of the page must not silently make a stale-loaded form look fresh). A WeakMap needs no
+// manual cleanup — an entry drops with its ctx (component unmount / navigation) automatically.
+const ctxBaseVersion = new WeakMap<ExecCtx, number>();
 
 // THE mutation chokepoint (client data layer, slice 1c — the generation guard). Every journaled DATA
 // MUTATION (objectPropChange / write / setReferenceField / arrayAdd / arrayRemove / addEntry / removeEntry)
@@ -239,9 +273,11 @@ interface PendingAction { fnId: number; slot: string; reinvoke: () => void; }
 let pendingAction: PendingAction | null = null;
 
 // The reply for msgId was ok: the mutation is server-committed, the entry retires.
-function commitJournal(msgId: number): void {
+// Returns the retired entry's ctx (or undefined — no match, or a ctx-less live edit), so a `commit` op's
+// ack (onWsMessage) can re-pin that ctx's anti-clobber baseVersion to this commit's result.
+function commitJournal(msgId: number): ExecCtx | undefined {
     const idx = journal.findIndex(e => e.msgId === msgId);
-    if (idx < 0) return;
+    if (idx < 0) return undefined;
     const [done] = journal.splice(idx, 1);
     // Form-Save feedback: as this commit's last in-flight send retires, settle the form to "Saved" and
     // re-render so the inline indicator updates (the ONE new wire — the ack path did not re-render before).
@@ -250,6 +286,7 @@ function commitJournal(msgId: number): void {
         setCtxStatus(done.ctx, "saved");
         renderUi();
     }
+    return done.ctx;
 }
 
 // The reply for msgId was an error: the server refused the mutation. Undo every pending
@@ -538,6 +575,13 @@ function connectWs(): void {
             committingCtx = ctx;
             commitEdits = [];     // open the edit buffer — propChange hooks into it from now on
             commitCreates = [];   // open the create buffer — commitCreate hooks into it from now on
+            // Anti-clobber: pin this ctx's baseVersion the FIRST time it commits (its "first stages" —
+            // there is no earlier client-side hook point; ctx.new()/staging writes fire no wsHook — see the
+            // ctxBaseVersion doc above for why this stays correct in practice). A LATER commit from the
+            // SAME (still-mounted) ctx keeps its ALREADY-pinned base — re-pinning here would use
+            // clientKnownVersion at THIS commit's time, discarding the fact that an intervening commit from
+            // this ctx may already have advanced it more precisely (the ack handler does that re-pin).
+            if (!ctxBaseVersion.has(ctx)) ctxBaseVersion.set(ctx, clientKnownVersion);
         },
         // A staged create in a final commit (atomic-commit Step B): buffer the draft + its join. endCommit
         // turns each into a `creates` entry (the draft's scalar props) + a `relations` entry (the set/ref the
@@ -586,8 +630,11 @@ function connectWs(): void {
                 roots: [...edits.map(e => e.obj), ...creates.map(c => c.draft),
                         ...creates.map(c => c.join.kind === "set" ? c.join.set : c.join.parent)],
             });
+            // Anti-clobber: this ctx's pinned base (set at its FIRST beginCommit — see there). Read it
+            // BEFORE clearing committingCtx below (the only reference to which ctx this bracket belongs to).
+            const baseVersion = committingCtx != null ? ctxBaseVersion.get(committingCtx) : undefined;
             committingCtx = null; // close the bracket after recordMutation has read it
-            wsSend({ op: "commit", id: msgId, clientId: uiStatic.clientId,
+            wsSend({ op: "commit", id: msgId, clientId: uiStatic.clientId, baseVersion,
                 edits: edits.map(e => e.wire), creates: wireCreates, relations: wireRelations });
         },
     });
@@ -596,6 +643,7 @@ function connectWs(): void {
 function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: number; ok?: boolean;
                             collections?: { [prop: string]: { id: number; elementTypeName?: string } };
                             idMap?: { tempId: number; realId: number; collections?: { [prop: string]: { id: number; elementTypeName?: string } } }[];
+                            newVersion?: number;
                             state?: ServerDtState; error?: string }): void {
     // Correlated accept/reject first: an error rolls the journal back, an ok commits.
     if (typeof msg.id === "number") {
@@ -609,12 +657,28 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
             }
             return;
         }
-        commitJournal(msg.id);
+        const committedCtx = commitJournal(msg.id);
         // An atomic-commit (Step B) `commit` ack: batch-remap every created object's transient id to the real
         // one the server minted (negId→realId + the minted nested-collection ids). Done AFTER commitJournal
         // retires the entry, so the optimistic rows now address their real ids. (A commit with only edits
         // carries no idMap — no-op.)
         if (msg.op === "commit" && msg.idMap != null && msg.idMap.length > 0) applyCommitRemap(msg.idMap);
+        // Anti-clobber: EVERY successful mutating op's ack carries newVersion (write/addEntry/removeEntry/
+        // objectPropChange/commit/setReferenceField/arrayAdd/arrayRemove — see WsHandler.cs's response
+        // records), not just `commit`'s. Advance clientKnownVersion universally (never regress: take the
+        // max) — a LIVE write (autosave, a create's arrayAdd, a ref pick) bumps the store's HEAD exactly
+        // like a commit does, and the client must not silently drift behind its OWN live writes: a create
+        // via arrayAdd, immediately followed by a ctx.commit() editing that SAME just-created object, would
+        // otherwise send a stale baseVersion and be wrongly rejected against its own history (the bug this
+        // fixes — reproduced by Access.feature's "admin creates a user and sets a password" scenario,
+        // whose password edit follows the user's arrayAdd create). A `commit` ack ADDITIONALLY re-pins the
+        // COMMITTING ctx's own base (committedCtx is undefined for every other op, so this is a no-op then),
+        // so its NEXT commit (scenario: two saves in a row from one session) is based on what it just
+        // applied, not the version it opened with.
+        if (typeof msg.newVersion === "number") {
+            clientKnownVersion = Math.max(clientKnownVersion, msg.newVersion);
+            if (committedCtx != null) ctxBaseVersion.set(committedCtx, msg.newVersion);
+        }
     }
 
     // An uncorrelated error is a failed refetch (it carries no id) — clear the
@@ -702,6 +766,11 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
             return;
         }
         mergeState(msg.state); // shipped entries arrive fresh (stale: false)
+        // Anti-clobber: this refetch's render reflects the store as of msg.state.storeVersion — advance
+        // clientKnownVersion to it (never regress: a superseded-gen reply already returned above, but an
+        // ordinary in-order reply's version only ever moves forward). A ctx already pinned to an OLDER
+        // base (mid-edit when this refetch landed) keeps that pin — see ctxBaseVersion's doc.
+        if (typeof msg.state.storeVersion === "number") clientKnownVersion = Math.max(clientKnownVersion, msg.state.storeVersion);
         // After a fresh data merge, drop the client-local RECOMPUTE entries so the next render
         // recomputes them over the merged data instead of reusing an outdated tree:
         //   • any STILL-stale entry — a mutation invalidated its deps but the server could not
