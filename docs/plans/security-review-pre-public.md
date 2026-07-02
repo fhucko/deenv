@@ -39,7 +39,7 @@ DESIGNER." Because this session had ungated `devlog`'s public `/ws`, one anonymo
 | V2 | wire/floor | ruled **dictionary** entries skip read+write floor | LOW (latent MED) | inert in devlog (no dicts); documented constraint |
 | V3 | auth | `clientId` is an unauthenticated bearer token (in page HTML) | LOW | hardening later (bind principal to connection) |
 | V4 | auth | login **timing** side-channel — unknown-user skips PBKDF2 → username enumeration | LOW | fix = dummy-hash the miss path |
-| V5 | perimeter | committed `DEENV_ADMIN_PASSWORD: "admin"` in `DeEnv/Properties/launchSettings.json:8` (public repo) | LOW (dev-only) | **user decision** — deliberate dev commit; recommend untrack/user-secrets |
+| V5 | perimeter | committed `DEENV_ADMIN_PASSWORD: "admin"` in `DeEnv/Properties/launchSettings.json:8` (public repo) | LOW (dev-only) | **user decided 2026-07-02: LEAVE** — accepted dev-only default (prod unaffected; VS-launch/localhost only) |
 | — | perimeter | cross-instance path traversal past the gate | REFUTED | structural (instance bound at path segment 2; nginx forwards raw `$request_uri`; GenHTTP doesn't normalize but can't cross) |
 | — | perimeter | WS cross-instance targeting | REFUTED | socket→instance binding is structural, not message-driven |
 | — | client-data | crafted `(action,state)` intent harvests denied data | REFUTED | floor applied at graph-LOAD; footprint can't contain what the graph lacks |
