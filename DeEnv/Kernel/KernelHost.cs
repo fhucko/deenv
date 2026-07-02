@@ -4,6 +4,7 @@ using DeEnv.Designer;
 using DeEnv.Http;
 using DeEnv.Instance;
 using DeEnv.Storage;
+using GenHTTP.Api.Content;
 using GenHTTP.Api.Infrastructure;
 using GenHTTP.Engine.Internal;
 using GenHTTP.Modules.Practices;
@@ -42,6 +43,28 @@ public sealed class KernelHost(
     // operation, so a fire-and-forget restart (which can outlive its WS message) needs no external lock.
     private readonly ConcurrentDictionary<int, HostedInstance> _instances = new();
     public IReadOnlyList<HostedInstance> Instances => _instances.Values.OrderBy(i => i.Spec.Id).ToList();
+
+    // Instances that FAILED to load at boot, kept aside: never routed as live (not in the registry
+    // projection), but their mounts answer an explicit 503 through the front routers — the loud-guards
+    // principle applied per instance, so one broken instance is visibly down without taking the kernel
+    // or its siblings with it (the 2026-07-02 outage).
+    private readonly ConcurrentDictionary<int, FailedInstance> _failed = new();
+    public IReadOnlyList<FailedInstance> FailedInstances => _failed.Values.OrderBy(f => f.Spec.Id).ToList();
+
+    private IHandler? FailedHandlerFor(string name) =>
+        _failed.Values.FirstOrDefault(f => string.Equals(f.Spec.App, name, StringComparison.Ordinal))?.Handler;
+
+    // Every spec the kernel KNOWS — live AND boot-failed. A failed instance still claims its mount
+    // (the 503 stand-in) and its id-dir, so runtime create/clone/rename collision checks must see it:
+    // shadowing a broken instance's name would silently serve a different app where the operator
+    // expects the failure. Freeing the name is operator-level (fix or remove the instance, restart).
+    private IEnumerable<InstanceSpec> KnownSpecs() =>
+        _instances.Values.Select(i => i.Spec).Concat(_failed.Values.Select(f => f.Spec));
+
+    // Why the design-host boot sync failed this boot (null = reconciled fine). Kept as kernel-level
+    // status for the startup banner — the persistent signal for the one sync failure that fails no
+    // instance (a merge bug / transient IO), where the designer serves a STALE design library.
+    public string? DesignSyncError { get; private set; }
 
     public int AppPort => appPort;
     public int AssetPort => assetPort;
@@ -208,21 +231,31 @@ public sealed class KernelHost(
     }
 
     // Start the kernel: bind the two shared hosts (app + asset) with a PathRouter front handler each,
-    // then load every instance and register it (the routers resolve them by name). If an instance fails
-    // to load mid-startup (e.g. a stale data file trips the storage guard), the hosts are stopped so the
-    // process never leaks bound ports.
+    // then load every instance and register it (the routers resolve them by name). Instance loads are
+    // INDIVIDUALLY guarded — a bad instance is skipped loudly, never aborting the kernel (the
+    // 2026-07-02 outage: one stale designer doc took every hosted app down). Only a kernel-level
+    // failure (a host failing to bind) stops the boot, with the hosts stopped so no port leaks.
     public async Task StartAsync(IReadOnlyList<InstanceSpec> specs)
     {
         // BOOT SYNC of the operator IDE's design library, BEFORE any store is opened (the design-host
         // is reconciled with the current app files). The one sanctioned bootstrap-only peer-file read.
-        SyncDesignHost(specs);
+        // Non-fatal: a sync that cannot seed/merge (a stale designer doc/data after a binary update)
+        // is logged loudly and skipped — the designer then fails or serves a stale library
+        // PER-INSTANCE below, while every other app boots.
+        try { SyncDesignHost(specs); }
+        catch (Exception ex)
+        {
+            DesignSyncError = ex.Message;
+            Console.Error.WriteLine(
+                $"KERNEL BOOT: design-host sync failed — the design library was NOT reconciled this boot. {ex}");
+        }
 
         // The two shared hosts: one front PathRouter each, resolving by name over the live `_instances`.
         // The app router dispatches to each instance's APP handler (SSR); the asset router to its ASSET
         // handler (/ws + /js). Built before the instances load — an early request just 404s until the
         // instance is registered (loads are fast and synchronous below).
-        var appRouter = new PathRouter(n => ByName(n)?.AppHandler, Names);
-        var assetRouter = new PathRouter(n => ByName(n)?.AssetHandler, Names);
+        var appRouter = new PathRouter(n => ByName(n)?.AppHandler ?? FailedHandlerFor(n), Names);
+        var assetRouter = new PathRouter(n => ByName(n)?.AssetHandler ?? FailedHandlerFor(n), Names);
 
         _assetHost = WithBinding(Host.Create()
             .Handler(assetRouter)
@@ -239,10 +272,23 @@ public sealed class KernelHost(
             await _appHost.StartAsync();
 
             // Load every instance (open its store, build its handlers) and register it. Loads are
-            // independent; a failure stops the hosts. Each instance shares the LIVE registry provider
-            // and gets its own host-action seam (a lazy closure over the hosted set).
+            // independent and INDIVIDUALLY guarded: an instance that cannot load (unparseable doc,
+            // stale data tripping the storage guard) is skipped LOUDLY — the full error to stderr with
+            // the remedy, its mount answering 503 via the failed set — while every other instance
+            // serves. Each instance shares the LIVE registry provider and gets its own host-action
+            // seam (a lazy closure over the hosted set).
             foreach (var spec in specs)
-                Register(HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec)));
+            {
+                try { Register(HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec))); }
+                catch (Exception ex)
+                {
+                    _failed[spec.Id] = new FailedInstance(spec, ex);
+                    Console.Error.WriteLine(
+                        $"KERNEL BOOT FAILURE: instance {spec.Id} '{spec.App}' ({spec.SchemaPath}) failed to " +
+                        $"load and is NOT served — /apps/{spec.App} answers 503. Fix its files (or publish a " +
+                        $"corrected document) and restart the kernel. {ex}");
+                }
+            }
 
             // Cache the design-host's store now that all instances are live, so mutating host actions
             // can mirror writes into db.instances without re-scanning.
@@ -398,12 +444,13 @@ public sealed class KernelHost(
 
         var spec = new InstanceSpec(id, name, schemaPath, AppPaths.DataPathForId(baseDir, id), designId);
 
-        // Collision-check the new spec against the LIVE set's data files + mount names (same named
-        // errors as boot), so a created instance can never alias a running one's store or mount path.
+        // Collision-check the new spec against every KNOWN data file + mount name — live and
+        // boot-failed (same named errors as boot), so a created instance can never alias a running
+        // one's store or mount path, nor shadow a failed instance's 503 mount.
         EnsureNoCollision(
             spec,
-            new HashSet<string>(_instances.Values.Select(i => i.Spec.DataPath), StringComparer.OrdinalIgnoreCase),
-            new HashSet<string>(_instances.Values.Select(i => i.Spec.App), StringComparer.Ordinal));
+            new HashSet<string>(KnownSpecs().Select(s => s.DataPath), StringComparer.OrdinalIgnoreCase),
+            new HashSet<string>(KnownSpecs().Select(s => s.App), StringComparer.Ordinal));
 
         // Load it (build its handlers) and register — the front routers resolve it by name immediately,
         // and it shows up on EVERY instance's next render (the shared LIVE registry). No host bind.
@@ -446,8 +493,8 @@ public sealed class KernelHost(
 
         EnsureNoCollision(
             spec,
-            new HashSet<string>(_instances.Values.Select(i => i.Spec.DataPath), StringComparer.OrdinalIgnoreCase),
-            new HashSet<string>(_instances.Values.Select(i => i.Spec.App), StringComparer.Ordinal));
+            new HashSet<string>(KnownSpecs().Select(s => s.DataPath), StringComparer.OrdinalIgnoreCase),
+            new HashSet<string>(KnownSpecs().Select(s => s.App), StringComparer.Ordinal));
 
         var created = HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec));
         Register(created);
@@ -461,11 +508,11 @@ public sealed class KernelHost(
     }
 
     // A mount name not currently in use: `desired`, else `desired-2`, `desired-3`, … The mount path
-    // `/apps/<name>` must be unique across the live set, so a clone of an already-cloned instance still
-    // gets a distinct URL.
+    // `/apps/<name>` must be unique across every KNOWN mount (live + boot-failed), so a clone of an
+    // already-cloned instance still gets a distinct URL.
     private string UniqueName(string desired)
     {
-        var taken = new HashSet<string>(_instances.Values.Select(i => i.Spec.App), StringComparer.Ordinal);
+        var taken = new HashSet<string>(KnownSpecs().Select(s => s.App), StringComparer.Ordinal);
         if (!taken.Contains(desired)) return desired;
         for (var n = 2; ; n++)
             if (!taken.Contains($"{desired}-{n}")) return $"{desired}-{n}";
@@ -506,7 +553,7 @@ public sealed class KernelHost(
         var instance = _instances.GetValueOrDefault(id)
             ?? throw new InvalidOperationException($"No instance with id {id} to rename.");
 
-        if (_instances.Values.Any(i => i.Spec.Id != id && string.Equals(i.Spec.App, name, StringComparison.Ordinal)))
+        if (KnownSpecs().Any(s => s.Id != id && string.Equals(s.App, name, StringComparison.Ordinal)))
             throw new KernelConfigException(
                 $"Another instance is already mounted at the name '{name}' — each instance is served at " +
                 "/apps/<name>, so names must be unique.");
@@ -576,6 +623,8 @@ public sealed class KernelHost(
         // so dropping them from the dictionary is enough; clear it so a lingering restart's TryUpdate
         // finds no key and drops its rebuilt handlers.
         _instances.Clear();
+        _failed.Clear();
+        DesignSyncError = null;
         RefreshRegistry();
         if (_appHost is not null) await _appHost.StopAsync();
         if (_assetHost is not null) await _assetHost.StopAsync();

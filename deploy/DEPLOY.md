@@ -193,9 +193,11 @@ systemctl start deenv
 
 **GOTCHA — framework-owned app docs version WITH the binary (hit 2026-07-02).** "Data stays" is true
 for `app-data.json`, but the **designer's** `app.deenv` (and the registry `kernel.json`) are part of
-the framework: a new binary whose designer schema evolved against a stale designer doc **crash-loops
-the whole kernel at boot** (`SyncDesignHost` → seed abort — and one bad instance takes the kernel
-down; there is no per-instance boot isolation today). When the designer schema (or the doc format —
+the framework: a new binary whose designer schema evolved against a stale designer doc fails that
+instance's boot (`SyncDesignHost` → seed abort). Since the per-instance boot isolation added after
+the 2026-07-02 outage this no longer takes the kernel down — the bad instance is skipped loudly (full
+error in `journalctl -u deenv`, its mount answers 503) while the other apps serve — but the skipped
+instance stays down until fixed. When the designer schema (or the doc format —
 e.g. the 2026-06-28 `*.app` → `*.deenv` rename) has moved since the last deploy, also ship the current
 `kernel.json` + `instances/*/app.deenv` into `/var/lib/deenv`. On a box with no precious data, the
 simple path is a clean reseed (`rm /var/lib/deenv/instances/*/app-data.json`); with real data, the

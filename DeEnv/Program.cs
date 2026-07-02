@@ -1,5 +1,4 @@
 using DeEnv.Kernel;
-using DeEnv.Storage;
 
 // ── Entry point: the kernel host ─────────────────────────────────────────────────
 //
@@ -61,19 +60,10 @@ int? advertisedAssetPort =
 var kernel = new KernelHost(
     baseDir, Path.Combine(baseDir, "kernel.json"), registry.AppPort, registry.AssetPort,
     bindLoopback, advertisedAssetPort);
-try
-{
-    await kernel.StartAsync(specs);
-}
-catch (StoredDataException ex)
-{
-    // The startup guard tripped: an instance's data file belongs to a different/older app. Refuse
-    // to serve (mutations would silently never persist) — the message names the file and the remedy.
-    Console.Error.WriteLine(ex.Message);
-    await kernel.DisposeAsync();
-    Environment.ExitCode = 1;
-    return;
-}
+// Per-instance failures (a stale doc, a tripped storage guard) are handled INSIDE StartAsync — the
+// bad instance is skipped loudly, the rest serve. Anything that escapes here is kernel-level (a host
+// failing to bind); StartAsync has already stopped the hosts, so letting it crash the process is right.
+await kernel.StartAsync(specs);
 
 var iface = bindLoopback ? "127.0.0.1" : "all interfaces";
 var advert = advertisedAssetPort switch
@@ -85,6 +75,10 @@ var advert = advertisedAssetPort switch
 Console.WriteLine($"Kernel listening on {iface} — app:{kernel.AppPort} asset:{kernel.AssetPort}{advert}.");
 foreach (var instance in kernel.Instances)
     Console.WriteLine($"  Hosting {instance.Spec.App} at /apps/{instance.Spec.App}.");
+foreach (var failed in kernel.FailedInstances)
+    Console.WriteLine($"  FAILED {failed.Spec.App} — /apps/{failed.Spec.App} answers 503 (see the boot error above).");
+if (kernel.DesignSyncError is { } syncError)
+    Console.WriteLine($"  Design library NOT reconciled this boot — {syncError}");
 
 // Block until Ctrl+C / process exit, then stop every host cleanly.
 using var shutdown = new CancellationTokenSource();

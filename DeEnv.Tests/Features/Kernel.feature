@@ -254,6 +254,46 @@ Feature: Kernel host (multi-instance, path-addressed)
     Then the page's links are root-relative
     And the page's injected base is "/"
 
+  # ── per-instance boot isolation ───────────────────────────────────────────────
+  # One broken instance must never take the kernel down (the 2026-07-02 deploy outage: a stale
+  # designer doc aborted the whole boot — every hosted app down). A failing instance is skipped
+  # LOUDLY: logged with its files + remedy, its mount answering an explicit 503 (never a silent
+  # 404), while every healthy instance serves normally. Boot-time only — runtime fault/resource
+  # isolation stays the deferred distributed-runtime pillar.
+  @milestone-10 @single-user
+  Scenario: A broken instance is skipped while the others serve
+    Given a registry of two named instances
+    And the second instance's app document is unparseable
+    When the kernel starts
+    Then the instance named "alpha" still serves its root
+    And the kernel reports instance "beta" as failed to boot
+    And the mount "/apps/beta" answers 503 naming the failure
+
+  # A failed instance still CLAIMS its mount (the 503 stand-in), so a runtime create cannot
+  # silently shadow it — same fatal mount-collision rule as two live instances. Freeing the name
+  # is operator-level: fix or remove the broken instance and restart the kernel.
+  @milestone-10 @single-user
+  Scenario: Creating an instance onto a failed instance's name is rejected
+    Given a registry of two named instances
+    And the second instance's app document is unparseable
+    And the kernel has started
+    When the operator creates an instance named "beta" expecting rejection
+    Then the create is rejected with a clear kernel-config error mentioning the name
+    And the mount "/apps/beta" answers 503 naming the failure
+
+  # The incident shape: the DESIGNER's own store cannot seed (stale/corrupt data against the
+  # current schema), which aborts the design-host boot sync AND the designer's own load. Both are
+  # skipped loudly; the plain apps still serve — the designer is framework-owned, but its failure
+  # is its own, not the kernel's.
+  @milestone-10 @single-user
+  Scenario: A designer that cannot seed leaves the other apps serving
+    Given a registry of the committed designer and a bool app named "alpha"
+    And the designer's data file is corrupt
+    When the kernel starts
+    Then the instance named "alpha" still serves its root
+    And the kernel reports instance "designer" as failed to boot
+    And the kernel reports the design library as not reconciled
+
   # The design-host (the designer, holding `db.designs`) is seeded over a FRESH store from each
   # registered app's OWN app.app. For every registered instance that references a design (carries a
   # `designId`), the kernel reverse-projects that instance's app document into a Design at id ==

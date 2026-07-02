@@ -2243,3 +2243,39 @@ One extended design session (inventory + grills). **Authoritative record:
   stale ctx commits) — fixes a CURRENT silent two-tab clobber bug; the staleness check and the
   version bump share one critical section (per the pillar-4 memo). Everything else stays Future
   work, unscheduled; slicing (milestone-planner) runs when M13 is scheduled.
+
+## Per-instance boot isolation — landed 2026-07-02
+
+**One broken instance must never take the kernel down.** The 2026-07-02 deploy refresh proved the
+gap: a stale designer app doc aborted `KernelHost.StartAsync` (`SyncDesignHost` → seed abort),
+systemd restart-looped the process, and every hosted app went down because ONE instance couldn't
+seed. That all-or-none boot was a single-app-era carryover that violated M10's own data-sovereignty
+promise once the kernel hosted N sovereign apps.
+
+**The fix is loud skipping, not tolerance** (per "Loud guards over silent failures"): each
+instance's load is individually guarded — a failure logs the FULL error + files + remedy to stderr
+(the systemd journal) and parks the instance in a failed set whose mount answers an explicit **503
+naming the instance** (never a silent 404 — the mount exists; its instance is broken). The
+design-host boot sync is guarded the same way, so a designer that cannot seed fails ALONE (its sync
+skipped, its own load failing per-instance) while todo/devlog/etc. serve. The startup banner lists
+FAILED instances alongside hosted ones. A failed instance still CLAIMS its mount name and id-dir:
+runtime create/clone/rename collision checks see live + failed alike, so a create can never silently
+shadow a broken instance's 503. KNOWN residual (tracked, per this principle's "track what you can't
+cheaply guard"): a design-host sync failure whose cause does NOT also fail the designer's own load
+(a merge bug / transient IO on the reset) leaves the designer serving a STALE design library. The
+signal is the stderr error plus a persistent "Design library NOT reconciled" line on the startup
+banner (`KernelHost.DesignSyncError`) — what `systemctl status` shows post-deploy. The staleness is
+bounded (the sync reconciles every boot, and the store write is tmp+move, so nothing half-writes);
+surfacing it INSIDE the designer UI would need a new kernel→Code surface and stays future. The guard's teeth are unchanged — a tripped storage guard
+still refuses to serve *that instance* (mutations would silently never persist); only its blast
+radius shrank from the process to the instance.
+
+**Kept deliberately boot-time and thin** (vision-keeper-checked): no runtime crash-recovery,
+watchdog, or restart/backoff loop, and no CPU/memory limits — runtime fault/resource isolation
+stays the deferred distributed-runtime pillar ("M10 kernel host" scope). Recovery is
+operator-level: fix the instance's files (or publish a corrected doc) and restart the kernel. A
+kernel-level failure (a shared host failing to bind) still aborts the process, correctly. Registry
+collisions (`EnsureNoCollisions`) also stay fatal — a registry aliasing two instances' stores is an
+operator config error with no unambiguous "bad instance" to skip. This is the first, cheapest
+increment of the north-star recovery floor (STAGES) — the "mint a fresh known-good designer"
+half stays future.

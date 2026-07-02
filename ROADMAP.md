@@ -238,7 +238,11 @@ id; storage is fully id-based (`instances/<id>/`); the registry `app` field is a
 instance by id). **Named create + rename then completed the operator flow** (the create form takes a
 display name → `sys.create(schema, name)`; a per-instance Rename → `sys.rename(id,
 name)` edits the registry label). Remaining: richer editing. See DECISIONS.md ("Operator instance ops +
-the id-based instance identity model").
+the id-based instance identity model"). **Per-instance boot isolation** hardened 2026-07-02 (after the
+deploy outage where one stale designer doc took every hosted app down): a failing instance load is
+skipped LOUDLY — full error to the journal, its mount answering an explicit 503 — while the kernel and
+the other instances boot normally; the design-host sync is guarded the same way. Boot-time only; see
+DECISIONS.md ("Per-instance boot isolation").
 
 **Kernel discipline:** the kernel gains the *mechanism* (host N instances, bind
 ports, hold the registry) — **not** the management *experience*. Create/list/
@@ -247,7 +251,8 @@ be the M4 mistake (a one-off the self-hosted IDE later tears out).
 
 **Deferred (kept out to stay single-process / single-operator):** cross-machine /
 kernel-to-kernel connectivity + distributed ACID (the *Multi-device* pillar below,
-Stage 5); fault/resource isolation between instances (Stage 5); real-time/multi-
+Stage 5); RUNTIME fault/resource isolation between instances (Stage 5 — boot-time
+skip-a-bad-instance landed 2026-07-02; runtime crash/CPU/memory containment did not); real-time/multi-
 user; dynamic create/destroy-while-running and the management commands (follow-up
 slices); promoting the registry to a real *restricted* kernel-instance (north
 star). See STAGES.md + DECISIONS.md ("Multi-instance management — the kernel host").

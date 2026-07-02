@@ -685,6 +685,74 @@ public sealed class KernelSteps(InstanceContext ctx)
         await Assert.That(_configError!.Message).Contains("mount name");
     }
 
+    // ── per-instance boot isolation ───────────────────────────────────────────────
+
+    [Given("the second instance's app document is unparseable")]
+    public void GivenSecondAppUnparseable() =>
+        File.WriteAllText(AppPaths.SchemaPathForId(ctx.KernelDir!, 2), ")))) this is not an app document ((((");
+
+    [Given("a registry of the committed designer and a bool app named {string}")]
+    public void GivenDesignerAndBoolRegistry(string name)
+    {
+        var dir = NewDir();
+        WriteApp(dir, 1, File.ReadAllText(InstanceContext.AppFixture(1))); // the committed designer
+        WriteApp(dir, 2, BoolApp);
+        File.WriteAllText(Path.Combine(dir, "kernel.json"),
+            RegistryJsonText([("designer", 1, (int?)60), (name, 2, (int?)null)]));
+    }
+
+    [Given("the designer's data file is corrupt")]
+    public void GivenDesignerDataCorrupt() =>
+        File.WriteAllText(AppPaths.DataPathForId(ctx.KernelDir!, 1), "{ this is not the designer's data");
+
+    [Then("the instance named {string} still serves its root")]
+    public async Task ThenNamedStillServesAsync(string name)
+    {
+        using var http = new HttpClient();
+        var resp = await http.GetAsync(Url(MountPath(name)));
+        await Assert.That((int)resp.StatusCode).IsEqualTo(200);
+        await Assert.That(await resp.Content.ReadAsStringAsync()).Contains("input type=\"checkbox\"");
+    }
+
+    [Then("the kernel reports instance {string} as failed to boot")]
+    public async Task ThenReportsFailedAsync(string name) =>
+        await Assert.That(ctx.Kernel!.FailedInstances.Select(f => f.Spec.App).ToList()).Contains(name);
+
+    [Then("the kernel reports the design library as not reconciled")]
+    public async Task ThenDesignSyncFailedAsync() =>
+        await Assert.That(ctx.Kernel!.DesignSyncError).IsNotNull();
+
+    private Exception? _createError;
+
+    [When("the operator creates an instance named {string} expecting rejection")]
+    public async Task WhenOperatorCreatesExpectingRejectionAsync(string name)
+    {
+        try
+        {
+            await ctx.Kernel!.CreateAsync(BoolApp, name, ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"));
+        }
+        catch (Exception ex) { _createError = ex; }
+    }
+
+    [Then("the create is rejected with a clear kernel-config error mentioning the name")]
+    public async Task ThenCreateRejectedAsync()
+    {
+        await Assert.That(_createError).IsNotNull();
+        await Assert.That(_createError is KernelConfigException).IsTrue();
+        await Assert.That(_createError!.Message).Contains("mount name");
+    }
+
+    [Then("the mount {string} answers 503 naming the failure")]
+    public async Task ThenMountAnswers503Async(string path)
+    {
+        using var http = new HttpClient();
+        var resp = await http.GetAsync(Url(path));
+        await Assert.That((int)resp.StatusCode).IsEqualTo(503);
+        var body = await resp.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains(path.Split('/').Last()); // the instance name
+        await Assert.That(body).Contains("failed");
+    }
+
     // ── design-host first-boot seed (the designer's `db.designs`) ────────────────
 
     [Given("a kernel booted from the committed designer, todo and crm apps plus a no-design app")]
