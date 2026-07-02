@@ -6,17 +6,25 @@ public interface IInstanceStore
     // Object nodes include DictionaryValue for dictionary-typed fields.
     NodeValue? ReadNode(NodePath path);
 
-    // Write a base-type (leaf) value at path.
-    void WriteLeaf(NodePath path, NodeValue value);
+    // ── the post-write version (optimistic-concurrency anti-clobber, review finding 3) ──
+    // Every MUTATING method returns the store's HEAD version AFTER its write, captured INSIDE the same
+    // `_sync` lock as the write (see JsonFileInstanceStore.BumpVersion). The WS handler reports THAT as
+    // the reply's `newVersion`, never a second `CurrentVersion` read — a concurrent commit from another
+    // session (WS runs on shared thread-pool threads) could land in the gap between a write returning and
+    // a separate version read, over-counting the reported version and letting the client re-pin its ctx
+    // base too high = a missed clobber. Returning the under-lock version closes that window.
+
+    // Write a base-type (leaf) value at path. Returns the post-write store version.
+    int WriteLeaf(NodePath path, NodeValue value);
 
     // Write an object node's leaf fields at path. Dictionary-typed fields are left
-    // untouched (they are navigation boundaries). Used by object-form Save.
-    void WriteObject(NodePath path, ObjectValue value);
+    // untouched (they are navigation boundaries). Used by object-form Save. Returns the post-write version.
+    int WriteObject(NodePath path, ObjectValue value);
 
     // Write a single leaf field on an extent object addressed by its intrinsic id.
     // The Code runtime addresses objects by identity (not path); a two-way-bound
-    // prop write persists this way. Throws if no object carries the id.
-    void WriteField(int objectId, string prop, NodeValue value);
+    // prop write persists this way. Throws if no object carries the id. Returns the post-write version.
+    int WriteField(int objectId, string prop, NodeValue value);
 
     // Apply a batch of field-writes under ONE held lock + ONE Save() — model-term mutations (id/prop/value),
     // not a flat KV blob. Every entry in the batch is applied in-memory first, then the file is written once
@@ -47,7 +55,13 @@ public interface IInstanceStore
     // MemberRef — never a fresh create, which cannot be stale) has a last-modified version > baseVersion.
     // Object-granular, not whole-store: a commit touching only objects unchanged since baseVersion applies
     // even when OTHER objects advanced in the meantime (disjoint interleaved commits auto-merge).
-    IReadOnlyList<CommitCreateResult> CommitBatch(
+    //
+    // Returns the created-object remaps AND the post-commit store version (captured under the same lock —
+    // review finding 3), which the handler reports as CommitResponse.newVersion so the client re-pins the
+    // committing ctx's base to a value its own commit actually produced, never an over-counted one. Called
+    // even for an EMPTY batch (no creates, no mutations): it then mutates nothing (Version unchanged) and
+    // returns the current version, so the handler needs no separate no-op path / CurrentVersion read.
+    CommitResult CommitBatch(
         IReadOnlyList<CommitCreate> creates, IReadOnlyList<CommitMutation> mutations, int? baseVersion = null);
 
     // The store's current HEAD version (StoreDoc.Version) — bumped on every mutating write. Shipped to the
@@ -56,46 +70,48 @@ public interface IInstanceStore
     int CurrentVersion { get; }
 
     // Create a dictionary entry under a caller-supplied (manual) key.
-    // Throws if an entry with that key already exists.
-    void CreateEntry(NodePath dictPath, NodeValue key, NodeValue value);
+    // Throws if an entry with that key already exists. Returns the post-write version.
+    int CreateEntry(NodePath dictPath, NodeValue key, NodeValue value);
 
     // Add or overwrite a dictionary entry.
-    // Key must be a NodeValue matching the prop's declared keyType.
-    void WriteDictionaryEntry(NodePath path, NodeValue key, NodeValue value);
+    // Key must be a NodeValue matching the prop's declared keyType. Returns the post-write version.
+    int WriteDictionaryEntry(NodePath path, NodeValue key, NodeValue value);
 
-    // Remove a dictionary entry. No-op if key is absent.
-    void RemoveDictionaryEntry(NodePath path, NodeValue key);
+    // Remove a dictionary entry. No-op if key is absent. Returns the post-write version.
+    int RemoveDictionaryEntry(NodePath path, NodeValue key);
 
     // ── object model (identity, references, sets, GC) ───────────────────────────
 
-    // Mint a new object of `typeName` into its per-type extent and return its
-    // intrinsic identity. The object is not yet referenced (link it before GC).
+    // Mint a new object of `typeName` into its per-type extent and return its intrinsic identity. The
+    // object is not yet referenced (link it before GC). Returns the minted ID (not the version) — every WS
+    // create path links it in with a following AddToSet/WriteReference whose returned version is the one
+    // reported, so this method's own version is never the reply value and its id-returning contract stays.
     int CreateObject(string typeName, ObjectValue fields);
 
-    // Add an existing object (by identity) as a member of the set at setPath.
-    void AddToSet(NodePath setPath, int id);
+    // Add an existing object (by identity) as a member of the set at setPath. Returns the post-write version.
+    int AddToSet(NodePath setPath, int id);
 
     // Add/remove a member by the set's own intrinsic id (a set has one identity but
-    // may be reached by many paths). The Code runtime addresses sets this way.
-    void AddToSet(int setId, int objectId);
-    void RemoveFromSet(int setId, int objectId);
+    // may be reached by many paths). The Code runtime addresses sets this way. Return the post-write version.
+    int AddToSet(int setId, int objectId);
+    int RemoveFromSet(int setId, int objectId);
 
     // The declared element type of the set carrying this intrinsic id, or null when
     // no set does. Lets a mutation be validated against the schema before it lands.
     string? SetElementType(int setId);
 
     // Drop a member reference from the set at setPath, then collect unreachable
-    // objects (mark-sweep from the root).
-    void RemoveFromSet(NodePath setPath, int id);
+    // objects (mark-sweep from the root). Returns the post-write version.
+    int RemoveFromSet(NodePath setPath, int id);
 
     // Point a single object-typed prop at an object (or clear it with null),
-    // then collect unreachable objects.
-    void SetReference(NodePath fieldPath, int? id);
+    // then collect unreachable objects. Returns the post-write version.
+    int SetReference(NodePath fieldPath, int? id);
 
     // Like SetReference, but the owning object is addressed by its intrinsic id (not a
     // path) — how the Code runtime persists a reference field set from the self-hosted
-    // reference editor. `targetTypeName` is the prop's declared type. Collects GC after.
-    void WriteReference(int objectId, string prop, int? targetId, string targetTypeName);
+    // reference editor. `targetTypeName` is the prop's declared type. Collects GC after. Returns the version.
+    int WriteReference(int objectId, string prop, int? targetId, string targetTypeName);
 
     // All objects currently in a type's extent, by identity. Used for the
     // pick-existing candidate list.
@@ -139,3 +155,8 @@ public sealed record FieldWriteMutation(int ObjectRef, string Prop, NodeValue Va
 // optimistic transient arrays (else later adds into them would silently not persist — mirrors arrayAdd).
 public sealed record CommitCreateResult(int TempId, int RealId, IReadOnlyDictionary<string, CommitCollection> Collections);
 public sealed record CommitCollection(int Id, string ElementTypeName);
+
+// A whole commit's result: the per-create remaps + the post-commit store Version, both captured under the
+// store's single lock (review finding 3) so the reply's newVersion is the exact version this commit
+// produced — never a separately-read, possibly-over-counted value.
+public sealed record CommitResult(IReadOnlyList<CommitCreateResult> Creates, int Version);

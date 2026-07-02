@@ -446,7 +446,8 @@ public sealed class WsHandler
         if (typeInfo.Type.Name == "password")
         {
             if (HashScalarLeaf(typeInfo.Type.Name, value) is not { } hashed)
-                // empty → no change, store untouched (still reports the CURRENT version — accurate, unbumped).
+                // empty → NO write happened (store untouched): finding 3 (a WRITE's version over-counted by a
+                // separate read) does not apply, there being no write. CurrentVersion is the accurate HEAD.
                 return Serialize(new WriteResponse { Path = pathStr, NewVersion = _store.CurrentVersion });
             value = hashed;
         }
@@ -454,17 +455,13 @@ public sealed class WsHandler
         // A SCALAR dictionary entry's value lives at its path but is addressed by (dict, key)
         // — WriteLeaf can't walk into a dict, so upsert the entry. (An OBJECT entry's field
         // path, e.g. /customers/42/name, has an object parent and writes through WriteLeaf.)
-        if (parentPath != null
-            && _resolver.ResolveType(parentPath) is { Cardinality: Cardinality.Dictionary } parentInfo)
-        {
-            _store.WriteDictionaryEntry(parentPath, ParseKey(path.Segments[^1], parentInfo.KeyTypeName ?? "text"), value);
-        }
-        else
-        {
-            _store.WriteLeaf(path, value);
-        }
+        // Report the version the store returns UNDER ITS LOCK (finding 3) — never a separate read.
+        var newVersion = parentPath != null
+            && _resolver.ResolveType(parentPath) is { Cardinality: Cardinality.Dictionary } parentInfo
+            ? _store.WriteDictionaryEntry(parentPath, ParseKey(path.Segments[^1], parentInfo.KeyTypeName ?? "text"), value)
+            : _store.WriteLeaf(path, value);
 
-        return Serialize(new WriteResponse { Path = pathStr, NewVersion = _store.CurrentVersion });
+        return Serialize(new WriteResponse { Path = pathStr, NewVersion = newVersion });
     }
 
     // The intrinsic id of the EXTENT OBJECT a path addresses, but ONLY when the path is a SET MEMBER
@@ -512,9 +509,10 @@ public sealed class WsHandler
             ? HashPasswordFields(typeInfo.Type.Name, ov)
             : HashScalarLeaf(typeInfo.Type.Name, value) ?? value;
         var key = ParseKey(keyStr, typeInfo.KeyTypeName ?? "text");
-        _store.CreateEntry(path, key, value); // throws on duplicate → caught as { error }
+        // throws on duplicate → caught as { error }. Report the store's under-lock post-write version (finding 3).
+        var newVersion = _store.CreateEntry(path, key, value);
 
-        return Serialize(new AddEntryResponse { Path = pathStr, Key = KeyString(key), NewVersion = _store.CurrentVersion });
+        return Serialize(new AddEntryResponse { Path = pathStr, Key = KeyString(key), NewVersion = newVersion });
     }
 
     // ── removeEntry ────────────────────────────────────────────────────────────
@@ -527,6 +525,7 @@ public sealed class WsHandler
         if (req.Key is not { } keyStr)
             return Error("Missing 'key' in removeEntry message.");
 
+        int newVersion; // the store's under-lock post-write version (finding 3), from whichever branch ran
         if (typeInfo.Cardinality == Cardinality.Set)
         {
             if (!int.TryParse(keyStr, out var memberId))
@@ -535,20 +534,20 @@ public sealed class WsHandler
             if (_store.ReadById(memberId) is { } member)
                 RequireWrite(Floor(req), "delete", member.TypeName,
                     Code.AccessFloor.ScalarObject(member.TypeName, memberId, member.Fields, _desc));
-            _store.RemoveFromSet(path, memberId);
+            newVersion = _store.RemoveFromSet(path, memberId);
         }
         else if (typeInfo.Cardinality == Cardinality.Dictionary)
         {
             // ponytail: dictionary-entry delete is NOT gated yet — the read floor doesn't gate dict reads
             // either, so the write floor matches that staging (gated when dict reads are).
-            _store.RemoveDictionaryEntry(path, ParseKey(keyStr, typeInfo.KeyTypeName ?? "text"));
+            newVersion = _store.RemoveDictionaryEntry(path, ParseKey(keyStr, typeInfo.KeyTypeName ?? "text"));
         }
         else
         {
             return Error($"Path '{pathStr}' is not a dictionary or set.");
         }
 
-        return Serialize(new RemoveEntryResponse { Path = pathStr, NewVersion = _store.CurrentVersion });
+        return Serialize(new RemoveEntryResponse { Path = pathStr, NewVersion = newVersion });
     }
 
     // ── set members + references (object model) ─────────────────────────────────
@@ -561,12 +560,13 @@ public sealed class WsHandler
         var typeName = typeInfo.Type.Name;
 
         int id;
+        int newVersion; // the LAST store op's under-lock version — the AddToSet link, in both branches (finding 3)
         if (req.RefId is { } refId)
         {
             if (_store.ReadById(refId) is { } linked)
                 RequireWrite(floor, "create", typeName, Code.AccessFloor.ScalarObject(typeName, refId, linked.Fields, _desc));
             id = refId;
-            _store.AddToSet(path, id); // link an existing object
+            newVersion = _store.AddToSet(path, id); // link an existing object
         }
         else if (req.Value is { } valueEl)
         {
@@ -574,14 +574,14 @@ public sealed class WsHandler
             RequireWrite(floor, "create", typeName, Code.AccessFloor.ScalarObject(typeName, 0, obj, _desc));
             // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store.
             id = _store.CreateObject(typeName, HashPasswordFields(typeName, obj)); // mint a new object…
-            _store.AddToSet(path, id);                          // …then link it
+            newVersion = _store.AddToSet(path, id);             // …then link it (its version is the reported one)
         }
         else
         {
             return Error("addEntry on a set requires 'refId' (existing) or 'value' (new).");
         }
 
-        return Serialize(new AddEntryResponse { Path = pathStr, Key = id.ToString(), NewVersion = _store.CurrentVersion });
+        return Serialize(new AddEntryResponse { Path = pathStr, Key = id.ToString(), NewVersion = newVersion });
     }
 
     // ── code-owned UI mutations (the Code runtime, identity-addressed) ──────────
@@ -623,10 +623,13 @@ public sealed class WsHandler
         // here, at the WS layer (above the dumb store), before it persists — so no client write path ever
         // stores plaintext. An empty value writes NOTHING (= "no change", so a blank-on-load password field
         // re-submitted unchanged never clobbers the stored hash); HashLeaf returns null for that case.
-        if (HashLeaf(hit.TypeName, prop, leaf) is { } toWrite)
-            _store.WriteField(objectId, prop, toWrite);
+        // A real write reports the store's UNDER-LOCK post-write version (finding 3); the empty no-op writes
+        // nothing (no write-then-read split), so CurrentVersion is the accurate current HEAD.
+        var newVersion = HashLeaf(hit.TypeName, prop, leaf) is { } toWrite
+            ? _store.WriteField(objectId, prop, toWrite)
+            : _store.CurrentVersion;
 
-        return Serialize(new ObjectPropChangeResponse { NewVersion = _store.CurrentVersion });
+        return Serialize(new ObjectPropChangeResponse { NewVersion = newVersion });
     }
 
     // Atomic batch commit of a whole changeset staged in a ctx.commit() — field EDITS (Step A) + new objects
@@ -773,12 +776,13 @@ public sealed class WsHandler
         // baseVersion rides through to the store's ONE critical section (check + apply, never two calls —
         // see CommitBatch's doc): a stale base throws StaleBaseException, caught by ProcessMessage's
         // existing catch and returned as the ordinary `{ error }` commit-rejection reply (the client's
-        // existing rollback + global error banner — no new client-side path needed).
-        var results = createBatch.Count > 0 || mutations.Count > 0
-            ? _store.CommitBatch(createBatch, mutations, req.BaseVersion)
-            : [];
+        // existing rollback + global error banner — no new client-side path needed). CommitBatch is called
+        // even for an EMPTY batch, so `result.Version` — captured under the store's lock — is ALWAYS the
+        // reply's newVersion, never a separate CurrentVersion read a concurrent commit could over-count
+        // (finding 3); the client re-pins its ctx base to a version its own commit actually produced.
+        var result = _store.CommitBatch(createBatch, mutations, req.BaseVersion);
 
-        var idMap = results.Select(r => new CommitIdMapEntry
+        var idMap = result.Creates.Select(r => new CommitIdMapEntry
         {
             TempId = r.TempId,
             RealId = r.RealId,
@@ -786,7 +790,7 @@ public sealed class WsHandler
                 kv => kv.Key, kv => new CollectionInfo { Id = kv.Value.Id, ElementTypeName = kv.Value.ElementTypeName }),
         }).ToList();
 
-        return Serialize(new CommitResponse { IdMap = idMap.Count > 0 ? idMap : null, NewVersion = _store.CurrentVersion });
+        return Serialize(new CommitResponse { IdMap = idMap.Count > 0 ? idMap : null, NewVersion = result.Version });
     }
 
     // Parse a commit relation (atomic-commit Step B). A set relation `{ kind:"set", setId, childId }` links a
@@ -855,27 +859,28 @@ public sealed class WsHandler
         RequireWrite(floor, "edit", hit.TypeName, Code.AccessFloor.ScalarObject(hit.TypeName, objectId, hit.Fields, _desc));
 
         int? newId = null;
+        int newVersion; // the WriteReference under-lock version — the LAST store op in every branch (finding 3)
         if (req.RefId is { } refIdRaw)
         {
-            _store.WriteReference(objectId, prop, Resolve(session, refIdRaw), targetType.Name);
+            newVersion = _store.WriteReference(objectId, prop, Resolve(session, refIdRaw), targetType.Name);
         }
         else if (req.Value is { } valueEl)
         {
             RequireWrite(floor, "create", targetType.Name, CandidateFromValue(valueEl, targetType));
             // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store.
             newId = _store.CreateObject(targetType.Name, HashPasswordFields(targetType.Name, ExecObjectValue(valueEl, targetType)));
-            _store.WriteReference(objectId, prop, newId, targetType.Name);
+            newVersion = _store.WriteReference(objectId, prop, newId, targetType.Name);
         }
         else if (req.Clear is not null)
         {
-            _store.WriteReference(objectId, prop, null, targetType.Name);
+            newVersion = _store.WriteReference(objectId, prop, null, targetType.Name);
         }
         else
         {
             return Error("setReferenceField requires 'refId', 'value', or 'clear'.");
         }
 
-        return Serialize(new SetReferenceFieldResponse { NewId = newId, NewVersion = _store.CurrentVersion });
+        return Serialize(new SetReferenceFieldResponse { NewId = newId, NewVersion = newVersion });
     }
 
     // The WS's first message on open: claims the session minted at SSR (keeping it past
@@ -1106,7 +1111,9 @@ public sealed class WsHandler
 
         // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store.
         var id = _store.CreateObject(typeName, HashPasswordFields(typeName, value));
-        _store.AddToSet(setId, id);
+        // AddToSet is the LAST mutation; its under-lock version is the reply's newVersion (finding 3). The
+        // ReadById below is a pure read (no bump), so this stays the post-write version at reply time.
+        var newVersion = _store.AddToSet(setId, id);
 
         // Record the negative→real mapping so the client's follow-up ops (a field edit, a remove) that
         // still address this object by its transient id resolve to the real one — even if they arrive
@@ -1127,7 +1134,7 @@ public sealed class WsHandler
         // `newId`, not `id` — the reply's `id` slot is the request correlation id.
         // tempId is echoed only when the request carried one (omitted otherwise).
         return Serialize(new ArrayAddResponse
-            { NewId = id, Collections = collections, TempId = req.TempId, NewVersion = _store.CurrentVersion });
+            { NewId = id, Collections = collections, TempId = req.TempId, NewVersion = newVersion });
     }
 
     // The client's ack that it has applied an arrayAdd's remap (re-keyed its copy from the transient
@@ -1228,9 +1235,10 @@ public sealed class WsHandler
         if (_store.ReadById(objectId) is { } member)
             RequireWrite(Floor(req), "delete", member.TypeName,
                 Code.AccessFloor.ScalarObject(member.TypeName, objectId, member.Fields, _desc));
-        _store.RemoveFromSet(setId, objectId);
+        // Report the store's under-lock post-write version (finding 3), never a separate CurrentVersion read.
+        var newVersion = _store.RemoveFromSet(setId, objectId);
 
-        return Serialize(new ArrayRemoveResponse { NewVersion = _store.CurrentVersion });
+        return Serialize(new ArrayRemoveResponse { NewVersion = newVersion });
     }
 
     // A new object's scalar props as the client ships them ({ "props": { name: leaf } }),

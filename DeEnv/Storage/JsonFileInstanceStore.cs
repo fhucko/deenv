@@ -59,15 +59,21 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     public int CurrentVersion { get { lock (_sync) return _doc.Version; } }
 
     // Bump the store's HEAD version and (for a real object write) record it as that object's
-    // last-modified version. Called at the END of every mutating operation's already-held _sync lock —
-    // never on its own lock, so the bump is never observably separate from the write it accompanies.
+    // last-modified version; RETURN the post-write version. Called at the END of every mutating
+    // operation's already-held _sync lock — never on its own lock, so the bump is never observably
+    // separate from the write it accompanies. Its RETURN is what every mutating public method hands back
+    // (and each WS handler reports as the reply's `newVersion`): reading the version this way — captured
+    // INSIDE the same lock as the write — instead of a SECOND `CurrentVersion` acquisition closes the
+    // missed-clobber window a concurrent commit could otherwise slip into that gap, over-counting the
+    // reported version and letting the client re-pin its ctx base too high (review finding 3).
     // objectId is null for a mutation with no single "the object this changed" (Reset, a set/dict
     // structural op reached only by path — those stay ungated by baseVersion, matching today's
     // unconditional-accept live-edit behavior for everything CommitBatch does not itself route through).
-    private void BumpVersion(int? objectId = null)
+    private int BumpVersion(int? objectId = null)
     {
         _doc.Version++;
         if (objectId is { } id) _objectVersions[id] = _doc.Version;
+        return _doc.Version;
     }
 
     public JsonFileInstanceStore(string filePath, InstanceDescription desc)
@@ -257,33 +263,34 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     // ── write ─────────────────────────────────────────────────────────────────
 
-    public void WriteLeaf(NodePath path, NodeValue value)
+    public int WriteLeaf(NodePath path, NodeValue value)
     {
-        lock (_sync) WriteLeafCore(path, value);
+        lock (_sync) return WriteLeafCore(path, value);
     }
 
-    private void WriteLeafCore(NodePath path, NodeValue value)
+    private int WriteLeafCore(NodePath path, NodeValue value)
     {
         if (path.IsRoot)
         {
             _doc.Root = new StoredLeaf(value); // scalar Db root
-            BumpVersion();
+            var v = BumpVersion();
             Save();
-            return;
+            return v;
         }
         var parent = WalkToObject(ParentPath(path))
             ?? throw new InvalidOperationException($"Parent of {path} is not an object.");
         parent.Object.Fields[path.Segments[^1]] = new StoredLeaf(value);
-        BumpVersion(parent.Object.Id);
+        var ver = BumpVersion(parent.Object.Id);
         Save();
+        return ver;
     }
 
-    public void WriteObject(NodePath path, ObjectValue value)
+    public int WriteObject(NodePath path, ObjectValue value)
     {
-        lock (_sync) WriteObjectCore(path, value);
+        lock (_sync) return WriteObjectCore(path, value);
     }
 
-    private void WriteObjectCore(NodePath path, ObjectValue value)
+    private int WriteObjectCore(NodePath path, ObjectValue value)
     {
         var target = WalkToObject(path)
             ?? throw new InvalidOperationException($"Path {path} is not a writable object.");
@@ -293,19 +300,21 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 && value.Fields.TryGetValue(prop.Name, out var v))
                 target.Object.Fields[prop.Name] = new StoredLeaf(v);
 
-        BumpVersion(target.Object.Id);
+        var ver = BumpVersion(target.Object.Id);
         Save();
+        return ver;
     }
 
-    public void WriteField(int objectId, string prop, NodeValue value)
+    public int WriteField(int objectId, string prop, NodeValue value)
     {
         lock (_sync)
         {
             var entry = ExtentEntryById(objectId)
                 ?? throw new InvalidOperationException($"No object with id {objectId}.");
             entry.Fields[prop] = new StoredLeaf(value);
-            BumpVersion(objectId);
+            var ver = BumpVersion(objectId);
             Save();
+            return ver;
         }
     }
 
@@ -336,7 +345,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // SAME held _sync lock, so the check can never race a concurrent commit's apply. Runs BEFORE any
     // mutation (alongside the existing reference pre-validation), so a rejected commit leaves the store
     // fully untouched — matching the all-or-none guarantee this method already gives a malformed batch.
-    public IReadOnlyList<CommitCreateResult> CommitBatch(
+    public CommitResult CommitBatch(
         IReadOnlyList<CommitCreate> creates, IReadOnlyList<CommitMutation> mutations, int? baseVersion = null)
     {
         lock (_sync)
@@ -471,7 +480,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 }
 
             Save(); // one atomic file write for the whole changeset
-            return results;
+            // _doc.Version, read under this same lock, is the exact version this batch produced (or the
+            // unchanged HEAD for an empty batch) — the reply's newVersion, never a separate CurrentVersion
+            // read that a concurrent commit could over-count between the write and the read (finding 3).
+            return new CommitResult(results, _doc.Version);
         }
     }
 
@@ -524,6 +536,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     // ── object-graph mutations ──────────────────────────────────────────────────
 
+    // Returns the minted ID (not the version — see the interface doc): every WS create path links the new
+    // object in with a following AddToSet/WriteReference whose returned version is the one reported.
     public int CreateObject(string typeName, ObjectValue fields)
     {
         lock (_sync)
@@ -535,7 +549,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
     }
 
-    public void AddToSet(NodePath setPath, int id)
+    public int AddToSet(NodePath setPath, int id)
     {
         lock (_sync)
         {
@@ -543,26 +557,28 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 ?? throw new InvalidOperationException($"{setPath} does not resolve.");
             var set = EnsureSet(setPath);
             set.Members[id] = new StoredRef(typeName, id);
-            BumpVersion(id);
+            var ver = BumpVersion(id);
             Save();
+            return ver;
         }
     }
 
-    public void RemoveFromSet(NodePath setPath, int id)
+    public int RemoveFromSet(NodePath setPath, int id)
     {
         lock (_sync)
         {
             if (SetNodeAt(setPath) is { } set)
                 set.Members.Remove(id);
             CollectGarbage();
-            BumpVersion(id);
+            var ver = BumpVersion(id);
             Save();
+            return ver;
         }
     }
 
     // ── set ops by intrinsic id (a set is found by its own id, not a path) ──────────
 
-    public void AddToSet(int setId, int objectId)
+    public int AddToSet(int setId, int objectId)
     {
         lock (_sync)
         {
@@ -571,20 +587,22 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             var typeName = ExtentEntryById(objectId)?.TypeName
                 ?? throw new InvalidOperationException($"No object with id {objectId}.");
             set.Members[objectId] = new StoredRef(typeName, objectId);
-            BumpVersion(objectId);
+            var ver = BumpVersion(objectId);
             Save();
+            return ver;
         }
     }
 
-    public void RemoveFromSet(int setId, int objectId)
+    public int RemoveFromSet(int setId, int objectId)
     {
         lock (_sync)
         {
             if (FindSetNode(setId) is { } set)
                 set.Members.Remove(objectId);
             CollectGarbage();
-            BumpVersion(objectId);
+            var ver = BumpVersion(objectId);
             Save();
+            return ver;
         }
     }
 
@@ -617,7 +635,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         return null;
     }
 
-    public void WriteReference(int objectId, string prop, int? targetId, string targetTypeName)
+    public int WriteReference(int objectId, string prop, int? targetId, string targetTypeName)
     {
         lock (_sync)
         {
@@ -628,12 +646,13 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             else
                 entry.Fields[prop] = new StoredRef(targetTypeName, targetId.Value);
             CollectGarbage();
-            BumpVersion(objectId);
+            var ver = BumpVersion(objectId);
             Save();
+            return ver;
         }
     }
 
-    public void SetReference(NodePath fieldPath, int? id)
+    public int SetReference(NodePath fieldPath, int? id)
     {
         lock (_sync)
         {
@@ -649,8 +668,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 parent.Object.Fields[field] = new StoredRef(typeName, id.Value);
             }
             CollectGarbage();
-            BumpVersion(parent.Object.Id);
+            var ver = BumpVersion(parent.Object.Id);
             Save();
+            return ver;
         }
     }
 
@@ -903,7 +923,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // so no baseVersion check can ever target one — only the store-wide HEAD bump matters here (parallel
     // to WriteLeafCore's root-write branch), not per-object attribution.
 
-    public void CreateEntry(NodePath dictPath, NodeValue key, NodeValue value)
+    public int CreateEntry(NodePath dictPath, NodeValue key, NodeValue value)
     {
         lock (_sync)
         {
@@ -911,18 +931,20 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 throw new InvalidOperationException(
                     $"An entry with key '{KeyToString(key)}' already exists at {dictPath}.");
             WriteDictionaryEntryInto(dictPath, key, value);
-            BumpVersion();
+            var ver = BumpVersion();
             Save();
+            return ver;
         }
     }
 
-    public void WriteDictionaryEntry(NodePath path, NodeValue key, NodeValue value)
+    public int WriteDictionaryEntry(NodePath path, NodeValue key, NodeValue value)
     {
         lock (_sync)
         {
             WriteDictionaryEntryInto(path, key, value);
-            BumpVersion();
+            var ver = BumpVersion();
             Save();
+            return ver;
         }
     }
 
@@ -943,15 +965,16 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
     }
 
-    public void RemoveDictionaryEntry(NodePath path, NodeValue key)
+    public int RemoveDictionaryEntry(NodePath path, NodeValue key)
     {
         lock (_sync)
         {
             if (DictNodeAt(path) is { } dict)
                 dict.Entries.Remove(KeyToString(key));
             CollectGarbage();
-            BumpVersion();
+            var ver = BumpVersion();
             Save();
+            return ver;
         }
     }
 

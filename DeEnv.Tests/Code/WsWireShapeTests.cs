@@ -114,6 +114,37 @@ public sealed class WsWireShapeTests
             .IsEqualTo("""{"op":"setReferenceField","ok":true,"newVersion":5}""");
     }
 
+    // ── outgoing: commit — the reply the ctx re-pin hinges on (finding 2) ─────────────────
+    //
+    // `newVersion` is the store's post-commit version, captured under the store lock (finding 3), that the
+    // client re-pins the committing ctx's baseVersion to — so pinning its exact wire shape matters most.
+    // idMap OMITTED (edits-only commit) vs PRESENT (a create's negId→realId + its minted collections).
+
+    [Test]
+    public async Task Commit_serializes_newVersion_with_and_without_an_idMap()
+    {
+        // Edits-only commit: no idMap → the field is omitted (WhenWritingNull), newVersion serializes last.
+        await Assert.That(Serialize(new CommitResponse { IdMap = null, NewVersion = 5 }))
+            .IsEqualTo("""{"op":"commit","ok":true,"newVersion":5}""");
+
+        // A commit that created an object: idMap present (one remap + its minted collections), then newVersion.
+        var withMap = new CommitResponse
+        {
+            IdMap = new[]
+            {
+                new CommitIdMapEntry
+                {
+                    TempId = -1,
+                    RealId = 42,
+                    Collections = new() { ["lines"] = new CollectionInfo { Id = 43, ElementTypeName = "Line" } },
+                },
+            },
+            NewVersion = 5,
+        };
+        await Assert.That(Serialize(withMap)).IsEqualTo(
+            """{"op":"commit","ok":true,"idMap":[{"tempId":-1,"realId":42,"collections":{"lines":{"id":43,"elementTypeName":"Line"}}}],"newVersion":5}""");
+    }
+
     // ── outgoing: the simple ok responses ────────────────────────────────────────────────
     //
     // Every mutating op's reply now carries newVersion (optimistic-concurrency anti-clobber —
