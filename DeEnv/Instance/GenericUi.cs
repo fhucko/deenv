@@ -274,7 +274,7 @@ public static class GenericUi
                                             else
                                                 <span class="list-title">
                                                     sys.humanize(p.name)
-                                            <SetTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)}>
+                                            <SetTable set={sys.field(obj, p.name)} desc={sys.schema(p.element)} setPath={sys.nest(base, p.name)} linked={isGeneric}>
                                 else if p.baseType == "dictionary"
                                     <div class="field">
                                         if isGeneric
@@ -283,7 +283,7 @@ public static class GenericUi
                                         else
                                             <span class="list-title">
                                                 sys.humanize(p.name)
-                                        <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)}>
+                                        <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)} linked={isGeneric}>
                                 else
                                     <Field obj={obj} desc={p} readonly={!canEdit}>
                             if autosave != true && canEdit && hasFields
@@ -351,7 +351,7 @@ public static class GenericUi
                                 sys.field(c, labelProp)
                 return render
 
-            fn SetTable(set, desc, setPath, columns, rowActions, createForm, onCreate)
+            fn SetTable(set, desc, setPath, columns, rowActions, createForm, onCreate, linked)
                 var state = { draft: sys.new(desc), creating: false }
                 fn startCreate()
                     state.creating = true
@@ -386,8 +386,12 @@ public static class GenericUi
                                             foreach p in desc.props.where(c => c.name == name)
                                                 if p.name == desc.labelProp
                                                     <td class="row-id">
-                                                        <a class="row-link" href={sys.nest(setPath, m)}>
-                                                            sys.field(m, p.name)
+                                                        if linked != false
+                                                            <a class="row-link" href={sys.nest(setPath, m)}>
+                                                                sys.field(m, p.name)
+                                                        else
+                                                            <span class="row-link">
+                                                                sys.field(m, p.name)
                                                 else
                                                     <td>
                                                         if p.baseType == "bool"
@@ -402,8 +406,12 @@ public static class GenericUi
                                                             sys.field(m, p.name)
                                     else
                                         <td class="row-id">
-                                            <a class="row-link" href={sys.nest(setPath, m)}>
-                                                sys.field(m, desc.labelProp)
+                                            if linked != false
+                                                <a class="row-link" href={sys.nest(setPath, m)}>
+                                                    sys.field(m, desc.labelProp)
+                                            else
+                                                <span class="row-link">
+                                                    sys.field(m, desc.labelProp)
                                         foreach p in desc.props
                                             if p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "password" && p.name != desc.labelProp && p.multiline != true
                                                 <td>
@@ -439,7 +447,7 @@ public static class GenericUi
                                 sys.humanize(desc.name)
                 return render
 
-            fn DictTable(dict, desc, base)
+            fn DictTable(dict, desc, base, linked)
                 var state = { key: "", draft: sys.new(desc), error: "", creating: false }
                 fn save()
                     if state.key == ""
@@ -478,8 +486,12 @@ public static class GenericUi
                             foreach m in dict
                                 <tr class="dict-row">
                                     <td class="row-id">
-                                        <a class="row-link" href={sys.nest(base, sys.field(m, "__key"))}>
-                                            sys.field(m, "__key")
+                                        if linked != false
+                                            <a class="row-link" href={sys.nest(base, sys.field(m, "__key"))}>
+                                                sys.field(m, "__key")
+                                        else
+                                            <span class="row-link">
+                                                sys.field(m, "__key")
                                     foreach p in desc.valueProps
                                         <td>
                                             if p.baseType == "bool"

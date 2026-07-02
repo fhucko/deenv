@@ -376,6 +376,7 @@ Feature: Self-hosted generic UI (object forms)
     Given the public-library set-form app is running
     When I open "/"
     Then the "Tags" list title is not a link
+    And the "urgent" row title is not a link
 
   @milestone-11 @single-user
   Scenario: A hand-written render composes the public ObjectForm component with autosave

@@ -270,7 +270,9 @@ public class InstanceContext
             note: 2
         Note 2
             title: "First"
-            tags: []
+            tags: [3]
+        Tag 3
+            name: "urgent"
 
     ui
 

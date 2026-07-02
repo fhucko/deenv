@@ -622,6 +622,14 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await Assert.That(linkCount).IsEqualTo(0);
     }
 
+    [Then("the {string} row title is not a link")]
+    public async Task ThenRowTitleIsNotALink(string title)
+    {
+        await ctx.Page!.WaitForSelectorAsync($".row-link:text-is('{title}')");
+        var linkCount = await ctx.Page.Locator($"a.row-link:text-is('{title}')").CountAsync();
+        await Assert.That(linkCount).IsEqualTo(0);
+    }
+
     // Milestone 11: a hand-written `fn render()` composing TWO staged <ObjectForm>s over the SAME
     // object. Proves "same object, two independent editing contexts" on the EXISTING per-form overlay —
     // each form, a distinct render-tree slot, gets its own draft; a staged edit in one doesn't touch the
