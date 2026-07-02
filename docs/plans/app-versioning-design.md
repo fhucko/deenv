@@ -30,8 +30,17 @@ position → grill → verdict. Settled vs open is marked per topic; roll-up lis
 - **baseVersion** = the log seq a draft loaded at; commit carries it; server compares to head. Stale base
   ≠ conflict: disjoint interleaved commits auto-merge (no OCC retry storms; per-object last-modified seq
   makes the check O(objects touched)); only same-field collisions surface. Sustained same-field
-  contention wants commutative ops (increment/append) — named future op. Candidate to pull ahead of the
-  milestone (user's call): the bare anti-clobber check fixes a current silent-clobber bug.
+  contention wants commutative ops (increment/append) — named future op. **IMPLEMENTED 2026-07-02
+  (main `4c72a92`, suite 607+)** as the pulled-ahead detection-only slice fixing the current silent
+  two-tab clobber bug: `StoreDoc.Version` (persisted monotonic) + an in-memory per-object last-modified
+  map; the staleness check + apply + bump run in ONE `_sync` critical section (reviewed atomicity); every
+  mutating store method returns its post-write version captured under-lock and each mutating WS reply
+  reports THAT (no check-vs-report split); a rejected commit surfaces via the existing error path, draft
+  intact. NOT deployed to the box yet. Two tracked residuals (documented + deferred, NOT missed): (1) the
+  two blank-password NO-OP live-edit reply paths still read `CurrentVersion` separately (a much narrower
+  same-class window; no write occurs) — close by omitting `newVersion` on no-op replies if it ever
+  matters; (2) `_objectVersions` is in-memory, cleared on restart (a cross-restart stale base can pass) —
+  the durable fix is the M13 change-log itself. Both degrade toward main's old behavior, never worse.
 
 ## 0b. Relation to prior design memos (reconciled 2026-07-02)
 
@@ -242,7 +251,8 @@ from the log — adopted from the pillar-4 memo, §0b).
   authoring UX.
 - **Future milestone boundary (drawn, not open):** live-edit write-write contention and live-push
   rebasing = real-time milestone; cross-instance data merge = distributed future.
-- **User's explicit call:** pull the bare baseVersion anti-clobber check ahead of the milestone?
+- **User's explicit call:** pull the bare baseVersion anti-clobber check ahead of the milestone? →
+  DONE 2026-07-02 (main `4c72a92`); two narrow residuals tracked in §0. Not yet deployed to the box.
 
 ## Next
 
