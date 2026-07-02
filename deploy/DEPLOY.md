@@ -63,10 +63,17 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/apps/todo/   # 20
 An app with access rules — e.g. `devlog` (public read, admin-only write) — is deny-by-default: it needs
 a seeded admin before anyone can log in. Set `DEENV_ADMIN_PASSWORD` (and optionally `DEENV_ADMIN_USER`,
 default `admin`, and `DEENV_ADMIN_ROLE`, default `Admin`) in the service environment; on boot the kernel
-seeds that admin into every **ruled** instance once. Add it to `deenv.service`:
+seeds that admin into every **ruled** instance once. Deployed pattern (2026-07-02): a root-only env file
++ a systemd drop-in, so the secret never sits in the world-readable unit; the plaintext is also kept in
+`/root/deenv-admin-credentials.txt` (600) for the operator:
 
-```ini
-Environment=DEENV_ADMIN_PASSWORD=a-strong-password
+```bash
+PW=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)
+printf 'DEENV_ADMIN_PASSWORD=%s\n' "$PW" > /etc/deenv-admin.env && chmod 600 /etc/deenv-admin.env
+printf 'devlog admin\nusername: admin\npassword: %s\n' "$PW" > /root/deenv-admin-credentials.txt && chmod 600 /root/deenv-admin-credentials.txt
+unset PW
+mkdir -p /etc/systemd/system/deenv.service.d
+printf '[Service]\nEnvironmentFile=/etc/deenv-admin.env\n' > /etc/systemd/system/deenv.service.d/admin.conf
 ```
 
 Then `systemctl daemon-reload && systemctl restart deenv`. Notes:
@@ -106,7 +113,17 @@ acme.sh --install-cert -d deenv.org --ecc \
 ### Basic-auth gate (interim — the designer + no-auth apps have no login)
 
 Ruled apps (e.g. `devlog`) now have their own login, but the designer can create/delete instances and
-the no-auth apps (todo/crm/…) are open, so keep the subdomain set behind a gate for now. Generate an
+the no-auth apps (todo/crm/…) are open, so keep the subdomain set behind a gate for now.
+
+**Per-subdomain opt-out (deployed 2026-07-02 — devlog is public):** a `map` turns the realm into a
+variable; `off` disables the gate for that subdomain only. Add near the other maps (top-level of the
+conf file, NOT inside an existing multi-line `map` block) and use the variable in `auth_basic`:
+
+```nginx
+map $deenv_sub $deenv_realm { devlog off; default "DeEnv"; }
+# in the server block:
+auth_basic           $deenv_realm;
+``` Generate an
 htpasswd (keep the plaintext only in a root-only file):
 
 ```bash
@@ -173,6 +190,16 @@ chmod +x /opt/deenv/DeEnv
 rm -f /opt/deenv/kernel.json && rm -rf /opt/deenv/instances  # data stays in /var/lib/deenv
 systemctl start deenv
 ```
+
+**GOTCHA — framework-owned app docs version WITH the binary (hit 2026-07-02).** "Data stays" is true
+for `app-data.json`, but the **designer's** `app.deenv` (and the registry `kernel.json`) are part of
+the framework: a new binary whose designer schema evolved against a stale designer doc **crash-loops
+the whole kernel at boot** (`SyncDesignHost` → seed abort — and one bad instance takes the kernel
+down; there is no per-instance boot isolation today). When the designer schema (or the doc format —
+e.g. the 2026-06-28 `*.app` → `*.deenv` rename) has moved since the last deploy, also ship the current
+`kernel.json` + `instances/*/app.deenv` into `/var/lib/deenv`. On a box with no precious data, the
+simple path is a clean reseed (`rm /var/lib/deenv/instances/*/app-data.json`); with real data, the
+app-doc update must go through the non-destructive apply path instead (publish), not a raw file swap.
 
 ## Backup
 
