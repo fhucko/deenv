@@ -381,6 +381,16 @@ DECISIONS.md.
   identity-based diff is already designed — renames are exact because
   non-constants carry identity (Milestone 5).
 
+  **Full design landed 2026-07-02 → `docs/plans/app-versioning-design.md`** (companion grills
+  alongside; DECISIONS "App versioning — the full design"). The milestone is now **app
+  versioning**: every instance gets an append-only data log (the pillar-4 substrate — WAL
+  durability, baseVersion, time-travel later); the designer's own log carries design commits,
+  branches, and structural merge; publish bridges with forward-only migrations
+  (derived-structural + commit-attached semantic). The doc carries the settled/open roll-ups and
+  the slice spine, and supersedes this bullet's details (including the "branches deferred" line
+  below — branches/merge are designed, slice-able late). Still unscheduled; only the
+  **baseVersion anti-clobber check** was pulled ahead as an immediate bug-fix slice (2026-07-02).
+
   **MVP-critical substrate pulled forward — LANDED 2026-06-19/20.** A thin **non-destructive
   apply** — *data survives a schema change* — was built ahead of / interleaved with M11
   (an app you cannot evolve without losing data is useless). What landed (server-side C#,

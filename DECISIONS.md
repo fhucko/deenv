@@ -2191,3 +2191,55 @@ shape so M13 doesn't re-litigate it.
 Deliberately unresolved (next real design pass, not now): real merge across data-minting branches
 (needs content-addressing or an id-remap step — deferred same as pillar 3's earlier merge questions);
 UI affordance for picking a commit to view; search/indexing over history.
+
+## App versioning — the full design (M13 clump), design-only (2026-07-02)
+
+One extended design session (inventory + grills). **Authoritative record:
+`docs/plans/app-versioning-design.md`** (companions: `grill-b-vs-c-commit-storage.md`,
+`grill-versioning-session-results.md`). Concretizes M13 and renames it **app versioning**; builds on
+"Versioning — unified schema+data (north star)" (2026-06-16) and "Temporal immutability (pillar 4)"
+(2026-07-01); supersessions reconciled in the doc's §0b. Design-only — nothing scheduled.
+
+- **Two layers, one primitive.** Designs get a commit DAG + branches + merge; instances get LINEAR
+  append-only data history (never branch/merge); **publish bridges them** (migrations run there;
+  branch-on-real-data = publish to a `cloneInstance`). Underneath, ONE storage primitive: a
+  per-instance append-only changeset log (`app-log.jsonl` — post-remap real-id changesets with
+  OLD+NEW values, msgId, who/when; `genesis.json` frozen at adoption; `app-data.json` demoted to the
+  derived head checkpoint, boot path unchanged). **Authority = the log**, the only non-derivable
+  artifact (compaction promotes old commit caches to records — the named asterisk). WAL
+  crash-durability falls out; fsck = `replay(genesis→head) == app-data.json`.
+- **Self-hosted, "just data" (variant C).** A design commit = a `Commit` row marking a log seq in the
+  designer instance's OWN log (+ cached canonical text + id-map → zero-replay diff/publish); branch =
+  `Branch` row + cloned working-copy Design (origin lineage as int VALUES, not refs); DAG = parent
+  refs; the generic UI renders history; no checkout singleton (branch switch = navigation). Commits
+  are Figma-model snapshots of the SHARED working copy (no per-user staging). B′ (text +
+  commit-time-derived ops vs a per-branch shadow) documented as the standalone fallback;
+  graph-copy-per-commit rejected (memory-resident store).
+- **Migrations: derived-structural / stored-semantic, forward-only.** Structural migrations derived
+  at publish by endpoint identity-diff (renames exact via M5 identity — recorded, never detected;
+  detection only at text import, human-confirmed; publish preview shows destructive ops + RELINK
+  override). Semantic `fn migrate` lives ON the commit (a transition, not design state), runs
+  kernel-side C#-only with `old`/`oldDb` read-only + `new` writable (removed fields readable on
+  `old` — no ordering problem); publish paths collapse–step–collapse; atomic abort. Backward is
+  NEVER an inverse migration: replay own log or `cloneInstance(id, atSeq)`; no down-scripts.
+- **Conflicts.** `baseVersion` = log seq; stale base ≠ conflict (disjoint interleaved commits
+  auto-merge; per-object last-modified seq keeps the check O(objects touched); no OCC retry storms);
+  same-field residue → TRANSIENT conflict payload (never persisted) → ctx-driven UI
+  (coarse keep-mine/take-theirs first, per-field later); delete-vs-edit offers identity resurrection.
+  Design merge = lineage-keyed 3-way with per-meta-field policies (cosmetic `order` auto-resolves),
+  ctx-staged resolution, two-parent merge commit; access-section merges = mechanical union + an
+  always-surfaced review block + the effective-access diff at publish preview. Code merges are
+  NAME-grade until fns become structured data (scheduled with M12; the switch itself is a
+  designer-schema migration the machinery absorbs).
+- **Floor-over-history: TODAY'S rules govern the past** (lineage-joined; removed fields fall to
+  deny-by-default; privacy tightening protects history — "as seen then" deliberately not
+  reproducible under stricter rules). History-read capability defaults to "whoever can change the
+  current rules" (a meta-condition — no admin primitive). Per-field **non-temporal declaration**
+  adopted from the pillar-4 memo (PII/erasure + high-churn exclusion from the log).
+- **Drawn lines:** live-edit write-write contention + live-push rebasing = the real-time milestone
+  (the log IS that milestone's change-feed); cross-instance data merge = distributed future;
+  sustained same-field contention = future commutative ops (increment/append).
+- **Pulled ahead (user decision 2026-07-02):** the bare **baseVersion anti-clobber check** (reject
+  stale ctx commits) — fixes a CURRENT silent two-tab clobber bug; the staleness check and the
+  version bump share one critical section (per the pillar-4 memo). Everything else stays Future
+  work, unscheduled; slicing (milestone-planner) runs when M13 is scheduled.
