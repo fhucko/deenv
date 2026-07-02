@@ -31,11 +31,32 @@ DESIGNER." Because this session had ungated `devlog`'s public `/ws`, one anonymo
    Enforces the invariant the code already assumed. Regression test (real kernel-boot harness) +
    architecture review + redeploy + re-open devlog to follow.
 
+**Hardening pass (2026-07-02, branch `hostaction-access-rule`) — authority moved OFF schema shape.** The
+step-3 fix closed the anonymous RCE but designated the operator by schema SHAPE (`IsDesignHost`), which is
+"shape is not identity and not authorization" (the round-2 nuance below). Authority now lives in the app's
+own **access section**: a new **`sys` subject** (`sys` reserved as an access keyword — a type named `sys`
+is rejected at load), evaluated **deny-unless-granted** in `WsHandler.HandleHostAction`
+(`AccessFloor.CanHostAction`) BEFORE the seam, over the same M-auth floor + `{currentUser}` scope the type
+rules use. Two lines of defence: (1) WIRING — `HostActionsFor` hands a real `KernelHostActions` only to an
+instance whose CODE calls a host-action builtin (AST use-detection, `Code.HostActionScan`), replacing the
+`IsDesignHost` shape gate; an ordinary app that calls none gets `NoHostActions`. (2) AUTHORITY — even a
+wired instance denies unless its `sys` rule grants the caller. `IsDesignHost` SURVIVES but is demoted to a
+pure data question (the `_designHostStore` selection + boot design sync — "where does `db.instances` live"),
+never authority. This closes the round-2 nuance (self-grill #2 / follow-up #2): a designer-shaped app that
+declares no `sys` rule is now denied on its own WS even though its Code calls host actions — proven through
+real kernel wiring (`Kernel.feature`). **Residual (interim):** `instances/1` ships an UNCONDITIONAL `sys *`
+rule, not `* where currentUser.role == "Admin"` — admin-gating the live designer needs
+login-persistence-across-page-loads (login-as-state is session-scoped and doesn't survive a full page GET,
+which the designer's UX uses), the deferred deploy-login-wiring follow-up. The unconditional rule preserves
+today's posture (the designer is already unauthenticated — the strategic residual below); once login
+persists, flip it to the admin condition. Operational caveat until then: CLONING the designer (an explicit
+operator act) yields an anonymous-host-action-capable clone — the same follow-up closes it.
+
 ## Full findings
 
 | # | Cluster | Finding | Severity | Status |
 |---|---------|---------|----------|--------|
-| **V1** | floor/auth | anonymous host-action via public `/ws` deletes any instance | **CRITICAL** | **contained + fixed** |
+| **V1** | floor/auth | anonymous host-action via public `/ws` deletes any instance | **CRITICAL** | **contained + fixed + hardened** (authority = `sys` access rule; wiring = AST use, not schema shape — 2026-07-02) |
 | V2 | wire/floor | ruled **dictionary** entries skip read+write floor | LOW (latent MED) | inert in devlog (no dicts); documented constraint |
 | V3 | auth | `clientId` is an unauthenticated bearer token (in page HTML) | LOW | hardening later (bind principal to connection) |
 | V4 | auth | login **timing** side-channel — unknown-user skips PBKDF2 → username enumeration | LOW | fix = dummy-hash the miss path |
@@ -47,11 +68,14 @@ DESIGNER." Because this session had ungated `devlog`'s public `/ws`, one anonymo
 | — | client-data | wire IDOR / type-confusion / negId | REFUTED (in devlog) | every relation drives a floor check; type derived from the join, never wire-asserted |
 | — | perimeter | box IP/keys, error traces, dir listings, source maps | REFUTED | nothing sensitive leaked; errors return message-only, no traces |
 
-**The strategic residual (not a bug — the acknowledged interim posture):** the designer has NO app-level
-auth of its own; the whole gated subdomain set rides on ONE shared nginx basic-auth password. That
-htpasswd is the only thing between the internet and the designer's create/delete. The durable fix is
-wiring the designer's own login (the deferred M-auth follow-up), not the proxy gate. V1's fix removes the
-*orthogonal* hole (host actions were reachable from ordinary apps too, entirely outside the gate).
+**The strategic residual (not a bug — the acknowledged interim posture):** the designer has no app-level
+auth *in effect* — the mechanism now exists (its host actions are gated by a `sys` access rule, hardening
+pass above), but that rule is UNCONDITIONAL until login persists across page loads, so in practice the
+whole gated subdomain set still rides on ONE shared nginx basic-auth password. That htpasswd is the only
+thing between the internet and the designer's create/delete. The durable fix is login persistence +
+flipping the designer's `sys` rule to the admin condition (the deferred deploy-login-wiring follow-up), not
+the proxy gate. V1's fix (+ hardening) removed the *orthogonal* hole (host actions were reachable from
+ordinary apps too, entirely outside the gate — now closed by AST wiring AND the deny-default `sys` rule).
 
 ## Self-grill (cross-cluster, adversarial) — the seams the per-cluster agents couldn't see
 
@@ -81,8 +105,12 @@ wiring the designer's own login (the deferred M-auth follow-up), not the proxy g
 
 1. **Designer app-level auth** — the durable fix for the strategic residual (replaces the shared
    basic-auth gate). Deferred M-auth follow-up; the real answer, bigger than a slice.
-2. **Identity-based operator designation** — harden V1's fix: the kernel should know WHICH instance is
-   its operator host by identity (kernel.json), not by schema shape. Small, closes the round-2 nuance.
+2. **Identity-based operator designation** — ~~harden V1's fix: the kernel should know WHICH instance is
+   its operator host by identity, not by schema shape~~ **DONE 2026-07-02** (branch `hostaction-access-rule`):
+   authority is the app's `sys` access rule (not schema shape), and wiring is AST use-detection
+   (`HostActionScan`, not `IsDesignHost` shape). What REMAINS here is folded into #1: the designer's `sys`
+   rule is unconditional until login persists across page loads, at which point it becomes
+   `* where currentUser.role == "Admin"`.
 3. **V5 — remove committed `admin`/`admin`** from `launchSettings.json` (user's call; deliberate dev
    convenience vs public-repo optics). Move to user-secrets / gitignored local override.
 4. **V2 — dict floor** (read+write) — land the deferred gate; until then, a hard constraint: no ruled

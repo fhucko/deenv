@@ -1521,11 +1521,57 @@ orphaned since M10 removed `--mode export`) is the first consumer, restored as a
   as image Code (further consumers of the same channel); a non-root schema object (a managed SET of
   designs); schema MIGRATION on publish (it's replace+reset —
   the M4 bridge; preserving data is M13 versioning); live-RELOAD of the target after publish (its running
-  store stays stale until restart — the operator reloads); AUTH on host actions (deferred wholesale, like
-  every WS op — single-operator); uniform ids for boot instances; pinning the publish SOURCE to the
-  designer specifically (today any caller uses its own schema as the meta-schema — only meaningful from the
-  designer). Open: the client rollback path (`ws.ts`) has no browser test — a pre-existing gap, flagged as a
-  follow-up.
+  store stays stale until restart — the operator reloads); ~~AUTH on host actions (deferred wholesale)~~
+  **— NO LONGER DEFERRED, see the hardening note below**; uniform ids for boot instances; pinning the
+  publish SOURCE to the designer specifically (today any caller uses its own schema as the meta-schema —
+  only meaningful from the designer). Open: the client rollback path (`ws.ts`) has no browser test — a
+  pre-existing gap, flagged as a follow-up.
+
+**Host-action AUTHORITY — the `sys` access-section rule (hardening pass, 2026-07-02).** Host actions run
+with KERNEL authority OUTSIDE the per-type access floor, so "authority" is now the app's own **access
+section**, via a new **`sys` subject** (`sys` is a reserved access-subject keyword, `AccessFloor.SysSubject`
+— a type named `sys` is rejected at load, the same system/user separation `Db` gets). `WsHandler.HandleHostAction`
+evaluates it **deny-unless-granted** (`AccessFloor.CanHostAction`) BEFORE dispatching to the `IHostActions`
+seam, using the SAME M-auth floor + `{currentUser}` condition scope the type rules use: no access section,
+no `sys` rule, a false/erroring condition, or a null/anonymous principal ALL reject — even if the app's
+DATA rules default open, kernel authority never does. Ops granularity is **`*` (a `sys` rule grants ALL
+host actions)** — the deliberate minimal-by-default cut; per-verb granularity is a possible future layer
+if a real app needs it, not an accepted permanent limit.
+  - **Two lines of defence.** (1) WIRING: `KernelHost.HostActionsFor` hands a real `KernelHostActions` only
+    to an instance whose CODE calls a host-action builtin — detected by AST use (`Code.HostActionScan`,
+    off the authoritative op list `create/delete/cloneInstance/publish/rename/setDesign`), replacing the
+    52d60d8 `IsDesignHost` SHAPE gate (shape is not authority). Everyone else (an ordinary/public app like
+    devlog that calls none) gets `NoHostActions`. (2) AUTHORITY: even a wired instance denies unless its
+    `sys` rule grants the caller. `IsDesignHost` SURVIVES but is DEMOTED to a pure data question — the
+    `_designHostStore` selection + boot design-library sync ("where does `db.instances` live"), never
+    authority.
+  - **Closes** the 52d60d8 residual: a shape alone (a `Db { designs set of Design }` schema) no longer
+    confers host-action authority — proven through real kernel wiring (an app with that shape that CALLS a
+    host action but declares no `sys` rule is denied on its own WS). The pre-slice anonymous host-action
+    RCE on a public app's WS stays closed (such an app calls no host action → `NoHostActions`, and has no
+    `sys` rule either).
+  - **The designer (`instances/1`) ships a `sys *` (UNCONDITIONAL) rule — TEMPORARY SCAFFOLDING.** It
+    should be `* where currentUser.role == "Admin"`, but admin-gating the live designer needs
+    login-persistence-across-page-loads (a cookie/token + SSR principal resolution) — login-as-state is
+    session-scoped today and does NOT survive a full page GET, and the designer's UX navigates by full
+    GETs, so an admin-gated designer would drop to a login form on every navigation and be unusable. That
+    persistence is the deferred deploy-login-wiring follow-up; the unconditional rule PRESERVES today's
+    posture (the designer is already unauthenticated — the accepted security-review residual) while
+    establishing the mechanism. **Follow-up: once login persists across page loads, flip the designer's
+    `sys` rule to `* where currentUser.role == "Admin"`.** Operational caveat until then: CLONING the
+    designer instance (an explicit operator act — nothing automatic propagates it) yields an
+    anonymous-host-action-capable clone; the same follow-up closes that edge. The admin-gated mechanism
+    itself is fully proven at the WS seam (`HostAction.feature`: admin passes, non-admin/anonymous denied).
+  - **The `Design` type gained an `access` text field** (the fourth section, parallel to
+    `initialData`/`common`/`ui`) so a design's access rules survive the designer→`Design`→app-document
+    round-trip (`DesignerSeed`/`SchemaBridge`). This also fixes a LATENT round-trip corruption: pre-slice,
+    an `access` block in a design's source was swallowed into the PRECEDING `initialData` body by
+    `SplitSections` (it knew only four keywords), so a design carrying access rules round-tripped WRONG.
+  - **Specced by** `HostAction.feature` (5 `@milestone-auth` WS-seam scenarios: admin / non-admin /
+    anonymous / designer-shaped-no-`sys`-rule / ordinary-data-ruled-no-`sys`) + `Kernel.feature` (the
+    shape-≠-authority scenario through real kernel wiring) + `AppPrintTests` (`sys` round-trip + the
+    reserved-name rejection). C#-only (no Code-language/twin/conformance change — the subject is parsed
+    server-side and enforced at the WS seam).
 
 **The operator designer — hand-rolled, not a hidden library (slice 1 — landed 2026-06-15).** The
 create/publish COMMAND surface is image Code: `DeEnv/designer.app` gained a custom `fn render()` (the
@@ -2049,6 +2095,13 @@ on a derived `canManageUsers`), with a real-browser e2e. **Follow-ups deferred t
 (`eedad11`/`3e632c5`, suite 547) — an inline reactive `ctx.status` lifecycle ("Saving… → Saved" on the
 generic ObjectForm; a rejected save surfaces via the global error banner, one surface not two; CLIENT-only,
 no conformance case). Broader auth-component styling (incl. the Save button's primary treatment) remains.
+
+**Extended 2026-07-02 — the `sys` subject (host-action authority).** The same floor now also governs
+HOST actions: the access section gained a `sys` subject (`AccessFloor.CanHostAction`, evaluated
+deny-unless-granted in `WsHandler.HandleHostAction` over the same `{currentUser}` condition scope), so
+kernel-authority devops (create/delete/publish/…) rides the M-auth mechanism instead of a shape gate. It
+is DENY-BY-DEFAULT even for an app whose data rules default open (kernel authority is never open). Detail
++ the temporary unconditional designer rule are in the "Host-action AUTHORITY" note above.
 
 ## Client data layer — render-as-planner (the proper fix for URL-keyed refetch)
 

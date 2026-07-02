@@ -124,16 +124,16 @@ public static class DesignerSeed
     }
 
     // Split an app document into its top-level sections, keyed by section keyword (types / initialData /
-    // common / ui), each value the VERBATIM section text INCLUDING its keyword line and trailing newline
-    // (e.g. "ui\n    fn render()\n        return <main>\n"). A section runs from its column-0 keyword
-    // line through the line before the next column-0 keyword (or EOF), with trailing blank lines trimmed
-    // and a single closing newline — the exact form SchemaBridge's Design text fields carry, so the
-    // reverse → forward round-trip is faithful. Only the four known keywords start a section (an
+    // access / common / ui), each value the VERBATIM section text INCLUDING its keyword line and trailing
+    // newline (e.g. "ui\n    fn render()\n        return <main>\n"). A section runs from its column-0
+    // keyword line through the line before the next column-0 keyword (or EOF), with trailing blank lines
+    // trimmed and a single closing newline — the exact form SchemaBridge's Design text fields carry, so
+    // the reverse → forward round-trip is faithful. Only the five known keywords start a section (an
     // unindented blank line never does); every app document begins with `types`, so there is no leading
     // non-section content. Public so the kernel-seed tests can assert section boundaries directly.
     public static IReadOnlyDictionary<string, string> SplitSections(string appText)
     {
-        var keywords = new HashSet<string> { "types", "initialData", "common", "ui" };
+        var keywords = new HashSet<string> { "types", "initialData", "access", "common", "ui" };
         var lines = appText.Replace("\r\n", "\n").Split('\n');
         var sections = new Dictionary<string, string>();
 
@@ -197,8 +197,12 @@ public static class DesignerSeed
             {
                 ["label"] = label,
                 // The other sections VERBATIM (keyword + body, "" when absent) — exactly what
-                // SchemaBridge's Design text fields expect and ProjectDesignDocument reassembles.
+                // SchemaBridge's Design text fields expect and ProjectDesignDocument reassembles. `access`
+                // (the M-auth ruleset, incl. the host-action `sys` subject) is carried like the other text
+                // sections so a design round-trips its access rules (else a published design silently
+                // dropped them — the designer's own `sys` rule included).
                 ["initialData"] = sections.GetValueOrDefault("initialData", ""),
+                ["access"] = sections.GetValueOrDefault("access", ""),
                 ["common"] = sections.GetValueOrDefault("common", ""),
                 ["ui"] = sections.GetValueOrDefault("ui", ""),
                 ["types"] = IdArray(typeIds),
@@ -223,6 +227,7 @@ public static class DesignerSeed
             {
                 ["label"] = Text(design, "label"),
                 ["initialData"] = Text(design, "initialData"),
+                ["access"] = Text(design, "access"),
                 ["common"] = Text(design, "common"),
                 ["ui"] = Text(design, "ui"),
                 ["types"] = IdArray(typeIds),

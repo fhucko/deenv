@@ -211,10 +211,11 @@ Feature: Kernel host (multi-instance, path-addressed)
   # the per-instance access floor (create/delete/cloneInstance/publish/rename). Before the fix, every
   # hosted instance got a REAL KernelHostActions, so a `hostAction` frame sent over ANY instance's WS —
   # including a public, anonymous, ordinary app like devlog — could delete ANY instance (the designer
-  # included): full multi-instance compromise from one frame. KernelHost.HostActionsFor now hands out a
-  # REAL KernelHostActions only to the design host (IsDesignHost: a schema declaring `Db { designs set
-  # of Design }`); every other instance gets NoHostActions, which rejects every action. This scenario
-  # drives that gate through the REAL kernel wiring (a booted KernelHost, a real WebSocket to the
+  # included): full multi-instance compromise from one frame. KernelHost.HostActionsFor now WIRES a REAL
+  # KernelHostActions only to an instance whose CODE calls a host-action builtin (HostActionScan — wiring
+  # by AST use, not schema shape); every other instance (an ordinary app that calls none) gets
+  # NoHostActions, which rejects every action. This ordinary "plain" app calls no host action, so its WS
+  # is unwired. Driven through the REAL kernel wiring (a booted KernelHost, a real WebSocket to the
   # ordinary instance's /ws) — not a hand-picked IHostActions — because the fix lives in
   # KernelHost.HostActionsFor and a hand-wired WsHandler would bypass it and prove nothing.
   @milestone-10 @single-user
@@ -224,6 +225,21 @@ Feature: Kernel host (multi-instance, path-addressed)
     When I send a hostAction "delete" for the design host's id over the plain instance's WebSocket
     Then the host action reply over the WebSocket is an error
     And the kernel still hosts the design-host instance
+
+  # SHAPE ≠ AUTHORITY (the closed hole). An instance that HAS the designer schema shape (Db { designs set
+  # of Design }) AND whose Code calls a host action, but that declares NO `sys` access rule, must reject
+  # host actions on its OWN WebSocket — for everyone. Under the OLD shape gate this instance had full
+  # kernel authority (IsDesignHost was true); now authority is the app's `sys` rule (checked in
+  # WsHandler.HandleHostAction), so with no rule it denies. Driven through the REAL kernel wiring: the
+  # instance AST-wires to a real KernelHostActions (it calls a host action), and the access-rule gate
+  # STILL rejects — proving the second line of defence, independent of wiring.
+  @milestone-auth @single-user
+  Scenario: A designer-shaped instance that uses host actions but has no sys rule is denied on its own WS
+    Given a registry whose only instance is designer-shaped, uses host actions, and has no sys rule
+    And the kernel has started
+    When I send a hostAction "delete" for that instance's own id over its WebSocket
+    Then the host action reply over the WebSocket is an error
+    And the kernel still hosts that instance
 
   # SPA navigation under a KERNEL MOUNT (the production addressing): the kernel serves the instance at
   # /apps/<name>, so an in-app link click exercises the mount-aware branch (ui.ts stripBase/in-mount

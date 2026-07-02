@@ -51,6 +51,37 @@ public sealed class AccessFloor
     // A fast path so the common (solo-app) case pays nothing and the DbBridge can skip building a scope.
     public bool Dormant => _rules.Count == 0;
 
+    // ── host-action authorization (the `sys` subject) ────────────────────────────
+    //
+    // The kernel-authority gate. Host actions (create/delete/cloneInstance/publish/rename/setDesign) run
+    // with KERNEL authority, OUTSIDE any per-type floor, so they are governed NOT by the type ruleset but
+    // by the access section's `sys` subject — a rule whose `Type` is the reserved keyword "sys". This is
+    // DENY-BY-DEFAULT and UNCONDITIONAL, the inverse of the data floor's allow-among-unruled: a host
+    // action is granted ONLY when a `sys` rule exists AND its condition holds for the bound principal.
+    // No rules, no `sys` rule, a false/erroring condition, or a null principal (a role condition fails
+    // closed) all DENY — even if the app's DATA rules default open, kernel authority never does.
+    //
+    // Ops granularity is `*` for this slice: a `sys` rule covers ALL host actions (the verb list is
+    // reused only so a `sys` block parses like a type block — `* where …` is the canonical spelling).
+    // The specific action name is not consulted; a `sys` rule that grants at all grants every host action.
+    // WsHandler.HandleHostAction consults this BEFORE dispatching to the IHostActions seam.
+    public bool CanHostAction()
+    {
+        foreach (var rule in _rules)
+            if (rule.Type == SysSubject && (rule.When == null || EvaluateCondition(rule.When, EmptyCandidate)))
+                return true;
+        return false;
+    }
+
+    // The reserved access-subject keyword for host-action rules (not a user type name — a type named
+    // `sys` is rejected at load, so this can never collide). Pinned here as the single source of the name.
+    public const string SysSubject = "sys";
+
+    // A throwaway candidate `object` for a `sys` condition: a host action has no single target object (it
+    // acts on the kernel), so the condition scope carries an empty object — a `sys` rule reads only
+    // `currentUser` (the principal), never `object`.
+    private static readonly ExecObject EmptyCandidate = new() { Props = [], Id = 0, TypeName = SysSubject };
+
     // ── anonymousLockedOut (the auto-mode login gate signal, M-auth login UI) ────
     //
     // True when the app has `read` rules AND none of them grants ANONYMOUS access — i.e. an un-logged-in
@@ -85,7 +116,10 @@ public sealed class AccessFloor
     // conditions, so it was rejected here. Tighten only if a real app hits the edge.
     public static bool AnonymousLockedOut(IReadOnlyList<AccessRule> rules)
     {
-        var readRules = rules.Where(r => Grants(r, "read")).ToList();
+        // The `sys` subject governs HOST-ACTION authority, not data reads, so it is EXCLUDED here — a
+        // `sys *` rule (whose `*` verb list would otherwise count as a read rule) must not turn an app
+        // "locked out" for its data. The data-read lockout is a property of the DATA (type) rules alone.
+        var readRules = rules.Where(r => r.Type != SysSubject && Grants(r, "read")).ToList();
         if (readRules.Count == 0) return false; // no read rule → reads unruled → anonymous reads freely
         // Locked out iff NO read rule grants anonymous (every read rule is currentUser-gated).
         return !readRules.Any(r => r.When == null || !ReferencesCurrentUser(r.When));

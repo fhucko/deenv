@@ -188,3 +188,68 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     When the operator renames instance id 7 to "renamed" over the WS
     Then the host action reply is ok
     And the kernel was asked to rename instance id 7 to "renamed"
+
+  # ── host-action AUTHORIZATION (the access section's `sys` subject) ────────────────
+  # Host actions run with KERNEL authority, so authority is NOT "the seam was wired" — it is the app's
+  # own access rule. The access section gains a `sys` subject; a host action is accepted ONLY when the
+  # session's principal satisfies that rule. This is DENY-BY-DEFAULT and UNCONDITIONAL: no access
+  # section, no `sys` rule, a false/erroring condition, or no logged-in principal ALL reject — even
+  # though the app's DATA rules default open, kernel authority never does. The rule is evaluated with
+  # the SAME kernel-floor condition evaluation the type rules use ({ currentUser }). Driven at the
+  # WsHandler seam (the enforcement point), a real KernelHostActions wired in — so a reject proves the
+  # rule blocked the action BEFORE the seam, not that the seam was absent.
+  #
+  # The four scenarios below all carry the same real host action (delete id 7); what varies is the
+  # ruleset + the principal. The reject scenarios assert the delete never reached the kernel.
+
+  @milestone-auth @single-user
+  Scenario: An admin session may run a host action against the designer
+    Given the designer's access grants sys to the admin role
+    And a seeded admin operator
+    And the current operator is the admin
+    When the operator deletes instance id 7 over the WS
+    Then the host action reply is ok
+    And the kernel was asked to delete instance id 7
+
+  @milestone-auth @single-user
+  Scenario: A non-admin session cannot run a host action
+    Given the designer's access grants sys to the admin role
+    And a seeded admin operator and a seeded member operator
+    And the current operator is the member
+    When the operator deletes instance id 7 over the WS
+    Then the host action reply is an error
+    And the kernel was not asked to delete anything
+
+  @milestone-auth @single-user
+  Scenario: An anonymous session cannot run a host action
+    Given the designer's access grants sys to the admin role
+    And a seeded admin operator
+    And the operator session is anonymous
+    When the operator deletes instance id 7 over the WS
+    Then the host action reply is an error
+    And the kernel was not asked to delete anything
+
+  # The shape-authority hole, closed: an instance whose schema HAS the designer shape (Db { designs set
+  # of Design }) AND whose Code calls a host action, but that declares NO `sys` access rule, must reject
+  # host actions for EVERYONE — schema shape is not authorization. (Under the old shape gate this
+  # instance would have had full host-action authority.)
+  @milestone-auth @single-user
+  Scenario: A designer-shaped app with no sys rule rejects host actions for everyone
+    Given the designer meta-schema declares no access section
+    And the current operator is the admin
+    When the operator deletes instance id 7 over the WS
+    Then the host action reply is an error
+    And the kernel was not asked to delete anything
+
+  # An ordinary app (devlog-shaped: its own data rules, NO `sys` rule) rejects host actions even for its
+  # own admin — kernel authority is not granted by data rules. (In production such an app also never
+  # gets a real KernelHostActions, since its Code calls no host-action builtin; here the real seam is
+  # wired to prove the access rule ALSO rejects, the second line of defence.)
+  @milestone-auth @single-user
+  Scenario: An ordinary app with data rules but no sys rule rejects host actions
+    Given an ordinary app whose access rules gate its data but declare no sys subject
+    And a seeded admin operator
+    And the current operator is the admin
+    When the operator deletes instance id 7 over the WS
+    Then the host action reply is an error
+    And the kernel was not asked to delete anything

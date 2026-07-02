@@ -130,6 +130,67 @@ public sealed class AppPrintTests
         """);
     }
 
+    // The host-action `sys` subject in the access section round-trips: it parses as a subject like a type
+    // block (reserved keyword, not a user type), prints back grouped with the type rules in appearance
+    // order, and is a fixpoint. The fixture carries both a data (type) rule and the `sys` rule.
+    [Test]
+    public async Task A_sys_host_action_access_rule_round_trips()
+    {
+        await AssertRoundTrips("""
+        types
+            Db
+                tasks set of Task
+            Task
+                title text
+            Role enum
+                Admin
+            User
+                name text
+                role Role
+
+        access
+            Task
+                read where currentUser.role == "Admin"
+            sys
+                * where currentUser.role == "Admin"
+        """);
+    }
+
+    // A bare (unconditional) `sys` rule round-trips too — the form the designer uses for now (an open
+    // host-action grant): `*` with no `where`.
+    [Test]
+    public async Task A_bare_sys_access_rule_round_trips()
+    {
+        await AssertRoundTrips("""
+        types
+            Db
+                designs set of Design
+            Design
+                label text
+
+        access
+            sys
+                *
+        """);
+    }
+
+    // `sys` is RESERVED and cannot be a TYPE name (it is the framework namespace AND the access `sys`
+    // subject) — declaring `sys` as a type fails to load, exactly like the framework/user separation the
+    // guard enforces elsewhere. Proves the access `sys` subject can never collide with a user type.
+    [Test]
+    public async Task A_type_named_sys_is_rejected()
+    {
+        var ex = await Assert.That(() => InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    things set of sys
+                sys
+                    label text
+            """)).Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("sys");
+        await Assert.That(ex!.Message).Contains("reserved");
+    }
+
     // ── expression printing: minimal parentheses ────────────────────────────────
 
     [Test]

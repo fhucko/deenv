@@ -60,9 +60,10 @@ public sealed class KernelSteps(InstanceContext ctx)
 
     // ── security regression: the host-action operator gate ──────────────────────
     //
-    // A minimal DESIGN-HOST schema — a `Db` whose `designs` prop is a `set of Design` — the exact shape
-    // KernelHost.IsDesignHost checks (mirrors HostActionSteps.MetaSchema, the real designer's IDE
-    // shape). This instance is the one that MUST keep real host-action authority.
+    // A minimal DESIGN-HOST schema — a `Db` whose `designs` prop is a `set of Design` — the design-host
+    // SHAPE (mirrors HostActionSteps.MetaSchema). It calls NO host action, so under the AST wiring it is
+    // NOT wired a real KernelHostActions — the point being that SHAPE alone no longer confers authority.
+    // Here it is only the delete TARGET; the "plain" app's WS is the sender under test.
     private const string DesignHostApp = """
     types
         Db
@@ -86,15 +87,50 @@ public sealed class KernelSteps(InstanceContext ctx)
             order int
     """;
 
-    // An ORDINARY app — no `designs` set, so IsDesignHost is false — the shape of a public app like
-    // devlog. Its WebSocket is the attack surface: before the fix, a `hostAction` frame sent here ran
-    // with full kernel authority against ANY instance.
+    // An ORDINARY app — the shape of a public app like devlog. It calls no host action, so its WS is
+    // unwired (NoHostActions). Its WebSocket is the attack surface: before the fix, a `hostAction` frame
+    // sent here ran with full kernel authority against ANY instance.
     private const string PlainApp = """
     types
         Db
             items set of Item
         Item
             label text
+    """;
+
+    // The SHAPE-≠-AUTHORITY fixture: designer-SHAPED (Db { designs set of Design }) AND its Code CALLS a
+    // host action (a render that fires sys.delete) — so it AST-wires to a REAL KernelHostActions — but it
+    // declares NO `sys` access rule. Under the old shape gate it had full kernel authority; now the
+    // access-rule gate (WsHandler.HandleHostAction) must reject on its OWN WS, for everyone. The `ui`
+    // render is minimal but real: a button whose onClick calls sys.delete, enough for HostActionScan to
+    // wire the seam. (Anonymous session — a fresh page load — so no principal; a `sys` rule is absent
+    // anyway, so it denies regardless.)
+    private const string DesignShapedNoRuleApp = """
+    types
+        Db
+            designs set of Design
+        Design
+            label text
+            initialData text
+            common text
+            ui text
+            types set of MetaType
+        MetaType
+            name text
+            baseType text
+            order int
+            props set of MetaProp
+        MetaProp
+            name text
+            type text
+            cardinality text
+            keyType text
+            order int
+
+    ui
+        fn render()
+            return <button class="danger" onClick={() => sys.delete(1)}>
+                "Delete"
     """;
 
     // What the WS security-gate scenario recorded: the raw `hostAction` reply text (over a REAL
@@ -174,6 +210,18 @@ public sealed class KernelSteps(InstanceContext ctx)
         WriteApp(dir, 1, DesignHostApp);
         WriteApp(dir, 2, PlainApp);
         WriteRegistry(dir, ("designer", 1), ("plainapp", 2));
+        _designHostId = 1;
+    }
+
+    // The shape-≠-authority fixture: ONE instance that is designer-shaped, uses host actions (its Code
+    // calls sys.delete), and declares no `sys` rule — so it AST-wires a real seam yet the access gate
+    // must still reject on its own WS.
+    [Given("a registry whose only instance is designer-shaped, uses host actions, and has no sys rule")]
+    public void GivenDesignShapedNoRuleRegistry()
+    {
+        var dir = NewDir();
+        WriteApp(dir, 1, DesignShapedNoRuleApp);
+        WriteRegistry(dir, ("shaped", 1));
         _designHostId = 1;
     }
 
@@ -623,6 +671,34 @@ public sealed class KernelSteps(InstanceContext ctx)
         await socket.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "done", closeCts.Token);
     }
 
+    // The shape-≠-authority send: a `hostAction` frame over the SHAPED instance's OWN /ws targeting its
+    // own id. It AST-wires a real KernelHostActions (its Code calls sys.delete), so the reject can only
+    // come from the access-rule gate (no `sys` rule → deny) — the second line of defence through real
+    // kernel wiring. An anonymous socket (a fresh connection, no login).
+    [When("I send a hostAction {string} for that instance's own id over its WebSocket")]
+    public async Task WhenSendHostActionOverOwnWsAsync(string action)
+    {
+        var only = ctx.Kernel!.Instances.Single();
+        var uri = new Uri($"ws://localhost:{_assetPort}{MountPath(only.Spec.App)}/ws");
+
+        using var socket = new System.Net.WebSockets.ClientWebSocket();
+        using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await socket.ConnectAsync(uri, connectCts.Token);
+
+        var frame = $$"""{ "op": "hostAction", "action": "{{action}}", "args": [ { "type": "int", "value": {{only.Spec.Id}} } ] }""";
+        var sendBytes = System.Text.Encoding.UTF8.GetBytes(frame);
+        using var sendCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await socket.SendAsync(sendBytes, System.Net.WebSockets.WebSocketMessageType.Text, endOfMessage: true, sendCts.Token);
+
+        var buffer = new byte[8192];
+        using var receiveCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await socket.ReceiveAsync(buffer, receiveCts.Token);
+        _hostActionWsReply = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
+
+        using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await socket.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "done", closeCts.Token);
+    }
+
     [Then("the host action reply over the WebSocket is an error")]
     public async Task ThenHostActionWsReplyIsErrorAsync()
     {
@@ -635,6 +711,11 @@ public sealed class KernelSteps(InstanceContext ctx)
     // proving the delete was actually rejected, not merely that the reply happened to carry an error.
     [Then("the kernel still hosts the design-host instance")]
     public async Task ThenKernelStillHostsDesignHostAsync() =>
+        await Assert.That(ctx.Kernel!.Instances.Any(i => i.Spec.Id == _designHostId)).IsTrue();
+
+    // The shape-≠-authority teeth: the shaped instance is STILL hosted — its own host action was rejected.
+    [Then("the kernel still hosts that instance")]
+    public async Task ThenKernelStillHostsThatInstanceAsync() =>
         await Assert.That(ctx.Kernel!.Instances.Any(i => i.Spec.Id == _designHostId)).IsTrue();
 
     // ── registry validation ───────────────────────────────────────────────────────

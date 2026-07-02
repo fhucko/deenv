@@ -117,6 +117,10 @@ public static class AdminSeed
     {
         if (string.IsNullOrEmpty(password)) return null;       // operator has not enabled bootstrap
         if ((desc.Rules?.Count ?? 0) == 0) return null;        // dormant app → no admin needed
+        // A ruleset with NO User type is not a loginable app — e.g. an app whose only rule is the
+        // host-action `sys` subject (auth of a devops action, not user login). There is nothing to seed
+        // (Seed would throw "declares no 'User' type"), so skip quietly rather than log a boot warning.
+        if (desc.FindType(UserConvention.TypeName) is null) return null;
         return Seed(store, desc,
             string.IsNullOrEmpty(name) ? DefaultAdminName : name,
             password,

@@ -37,6 +37,26 @@ public sealed class DesignerVocabularyTests
     public async Task Cardinalities_match_the_cardinality_enum() =>
         await Assert.That(Vocab("cardinalities")).IsEqualTo(Expected(Enum.GetValues<Cardinality>()));
 
+    // System/user separation guard: the framework's reserved access-subject keyword `sys` (the C# source
+    // of truth, AccessFloor.SysSubject — the host-action authority subject AND the Code namespace) must be
+    // REJECTED as a user type name, symmetric with the load-time rejection in InstanceDescriptionLoader.
+    // Pinned to the C# constant so a future reserved subject added there without wiring the type-name
+    // rejection fails here — framework vocabulary can never share key-space with a user type.
+    [Test]
+    public async Task The_reserved_sys_subject_cannot_be_a_user_type_name()
+    {
+        var app = $$"""
+            types
+                Db
+                    things set of {{AccessFloor.SysSubject}}
+                {{AccessFloor.SysSubject}}
+                    label text
+            """;
+        var ex = await Assert.That(() => InstanceDescriptionLoader.Load(app)).Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains(AccessFloor.SysSubject);
+        await Assert.That(ex!.Message).Contains("reserved");
+    }
+
     // The string items of a designer `ui` var declared as an array literal (e.g. `var typeKinds = [...]`),
     // sorted + comma-joined so the comparison is order-independent with a readable failure message.
     private static string Vocab(string name)

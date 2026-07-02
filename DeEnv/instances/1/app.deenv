@@ -9,6 +9,7 @@ types
     Design
         label text
         initialData text
+        access text
         common text
         ui text
         types set of MetaType
@@ -25,6 +26,10 @@ types
         keyType text
         multiline bool
         order int
+
+access
+    sys
+        *
 
 ui
     var renameId = 0

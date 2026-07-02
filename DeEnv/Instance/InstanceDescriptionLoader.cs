@@ -45,6 +45,15 @@ public static class InstanceDescriptionLoader
         var seen = new HashSet<string>();
         foreach (var name in desc.AllTypes().Select(t => t.Name))
         {
+            // `sys` is RESERVED: it is the Code system namespace AND the access section's host-action
+            // subject (AccessFloor.SysSubject). A user type named `sys` would share key-space with that
+            // framework vocabulary — the very collision the system/user separation forbids — so it is
+            // rejected at load, exactly as `Db` is special-cased above (a framework name, not a user one).
+            if (name == Code.AccessFloor.SysSubject)
+                throw new SchemaValidationException(
+                    "'sys' is a reserved name (the framework namespace and the access `sys` subject) " +
+                    "and cannot be used as a type name.");
+
             if (!seen.Add(name))
                 throw new SchemaValidationException(
                     $"Duplicate type name '{name}': every type must have a unique name.");

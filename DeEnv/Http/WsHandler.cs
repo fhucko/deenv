@@ -960,19 +960,27 @@ public sealed class WsHandler
     // failure (unknown action, bad arg, invalid design, unknown target) throws and ProcessMessage's
     // catch returns it as `{ error }`, which the client surfaces as lastError (no journal replay).
     //
-    // AUTHORITY LIVES IN THE INJECTED SEAM, NOT HERE. This handler deliberately performs no
-    // principal/operator check — the gate is WHICH IHostActions was wired in: the kernel gives a real
-    // KernelHostActions only to the design host and NoHostActions (reject-everything) to every ordinary
-    // instance (KernelHost.HostActionsFor). So a hostAction frame on an ordinary app's WS — including a
-    // PUBLIC one like devlog — is rejected here because `_hostActions` is NoHostActions. Do NOT add a
-    // path that calls a real host-actions seam from an ungated instance, and do not assume any
-    // instance's seam is safe to call: this is the sole dispatch point, and its safety is entirely the
-    // injection's.
+    // AUTHORITY IS THE APP'S `sys` ACCESS RULE, CHECKED HERE. Host actions run with KERNEL authority
+    // (outside the per-type floor), so the gate is the access section's `sys` subject: the action is
+    // dispatched ONLY when the session's principal satisfies the `sys` rule (AccessFloor.CanHostAction —
+    // deny-by-default, evaluated with the SAME kernel-floor condition the type rules use). This holds
+    // EVEN IF the app's data rules default open — kernel authority is never open by default, so no
+    // access section / no `sys` rule / a false condition / an anonymous session all REJECT. It is
+    // BELTS-AND-BRACES with the wiring gate (KernelHost.HostActionsFor hands NoHostActions to an
+    // instance whose Code calls no host action): a wired instance still denies unless its `sys` rule
+    // grants the caller, and an unwired one denies via the seam. Do NOT remove this check on the
+    // assumption the seam is safe — the seam is the MECHANISM, this rule is the AUTHORITY.
     private string HandleHostAction(WsRequest req)
     {
         if (req.Action is not { } action)
             return Error("hostAction requires a string 'action'.");
         var args = req.Args ?? default;
+
+        // The authority gate (M-auth `sys` subject): deny unless the app's `sys` access rule grants this
+        // principal. Rejected → the `{ error }` reply (same path as the NoHostActions rejection).
+        if (!Floor(req).CanHostAction())
+            throw new InvalidOperationException(
+                $"Access denied: host action '{action}' requires an authorized operator (a `sys` access rule).");
 
         _hostActions.Run(action, args); // throws on failure → caught as { error }
 

@@ -116,14 +116,17 @@ public sealed class KernelHost(
 
     // The host-action seam for one instance. Host actions are OPERATOR devops (create/delete/clone/
     // publish/rename another instance) and run with kernel authority OUTSIDE the per-instance access
-    // floor — so they must be reachable ONLY from the design host. Every OTHER instance (an ordinary
-    // app like `devlog`, whose WS may be public) gets NoHostActions: a `hostAction` frame on its socket
-    // is rejected, never executed. Without this gate an anonymous client on any hosted app's WS could
-    // delete every instance (the designer included) — the seam checks nothing itself. This enforces the
-    // invariant the code already assumed ("sys.publish is only meaningful from the DESIGNER").
+    // floor — so an instance gets a REAL KernelHostActions only when its Code actually CALLS a host-action
+    // builtin (HostActionScan.UsesHostActions — wiring by AST USE, not by schema SHAPE). Every other
+    // instance (an ordinary app like `devlog`, whose WS may be public, and which calls no host action)
+    // gets NoHostActions: a `hostAction` frame on its socket is rejected, never executed. This is the
+    // WIRING half; the AUTHORITY half is the app's own `sys` access rule, re-checked in
+    // WsHandler.HandleHostAction before every dispatch (AccessFloor.CanHostAction) — so even a wired
+    // instance denies host actions unless its `sys` rule grants the caller. A miss here fails closed (an
+    // unwired seam errors); a false hit is gated by that rule. Parsing failures fail closed too (no seam).
     private IHostActions HostActionsFor(InstanceSpec spec) =>
-        !IsDesignHost(spec)
-            ? new NoHostActions("host actions run only from the operator's design host")
+        !UsesHostActions(spec)
+            ? new NoHostActions("this instance does not use host actions")
             : new KernelHostActions(
             spec.SchemaPath, spec.DataPath,
             id => _instances.GetValueOrDefault(id)?.Spec,
@@ -410,8 +413,24 @@ public sealed class KernelHost(
         new JsonFileInstanceStore(designHost.DataPath, description with { InitialData = merged }).Reset();
     }
 
+    // Whether an instance's Code CALLS a host-action builtin (sys.create/delete/…): the WIRING signal for
+    // HostActionsFor. Parses the instance's app document and scans ALL its Code (HostActionScan) — wiring
+    // by actual USE, not by schema shape. Fails CLOSED on a parse error (no seam) — a broken app cannot
+    // acquire kernel authority. This is a DIFFERENT question from IsDesignHost (below), which asks where
+    // db.instances lives (a data question); an app can use host actions without the design-host shape.
+    private static bool UsesHostActions(InstanceSpec spec)
+    {
+        InstanceDescription desc;
+        try { desc = InstanceDescriptionLoader.LoadFile(spec.SchemaPath); }
+        catch { return false; }
+        return Code.HostActionScan.UsesHostActions(desc);
+    }
+
     // Whether an instance is the design-host: its schema declares the meta-schema — a `Db` whose
-    // `designs` prop is a `set of Design`, where `Design` is a declared object type.
+    // `designs` prop is a `set of Design`, where `Design` is a declared object type. This answers a DATA
+    // question — "where does db.instances live" (the _designHostStore selection + the boot design-library
+    // sync) — NOT authority: host-action AUTHORITY is the `sys` access rule, and WIRING is UsesHostActions
+    // (AST use). Kept because those two data uses still need to find the single design-host store.
     private static bool IsDesignHost(InstanceSpec spec)
     {
         InstanceDescription desc;

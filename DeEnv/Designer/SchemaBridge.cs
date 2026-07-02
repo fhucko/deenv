@@ -7,14 +7,14 @@ namespace DeEnv.Designer;
 //
 // The designer designs a whole app as ordinary data. The unit it projects is a
 // `Design` node: a `types` set of MetaType (each holding a `props` set of MetaProp)
-// — the STRUCTURED part — plus three `initialData`/`common`/`ui` TEXT fields that
-// carry the other app-document sections verbatim. `Project` turns the structured
+// — the STRUCTURED part — plus four `initialData`/`access`/`common`/`ui` TEXT fields
+// that carry the other app-document sections verbatim. `Project` turns the structured
 // `types` into TypeDefinitions; `ProjectDesignDocument` assembles the whole app
 // document (printed types + the verbatim sections), validates it with the normal
 // loader, and returns it as text. A publish writes that text onto a target and
 // resets the target's data; a create hands it to the kernel to spawn a new instance.
 //
-// The three text fields hold the VERBATIM section source INCLUDING the section
+// The text fields hold the VERBATIM section source INCLUDING the section
 // keyword and its indentation — e.g. the `ui` field is "ui\n    fn render()\n…",
 // the empty string when there is no such section. That representation makes both
 // directions trivial: assembly here is "print the types section, then concatenate
@@ -49,10 +49,13 @@ public static class SchemaBridge
 
         // The other sections, each verbatim INCLUDING its keyword (empty → absent). Concatenated
         // after the types section with a blank line between (the section parsers skip blank lines
-        // before their keyword, so the spacing is cosmetic / canonical).
+        // before their keyword, so the spacing is cosmetic / canonical). ORDER MATTERS — it must match
+        // the document grammar (types, initialData, access, common, ui) so the reassembled text parses;
+        // `access` (the M-auth ruleset, incl. the host-action `sys` subject) sits between initialData and
+        // common, exactly as AppParse.Document expects.
         var sections = new List<string> { typesSection.TrimEnd('\n') };
         if (design is ObjectValue d)
-            foreach (var name in new[] { "initialData", "common", "ui" })
+            foreach (var name in new[] { "initialData", "access", "common", "ui" })
                 if (TextField(d, name) is { Length: > 0 } section)
                     sections.Add(section.TrimEnd('\n'));
 

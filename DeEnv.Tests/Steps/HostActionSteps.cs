@@ -26,15 +26,27 @@ public sealed class HostActionSteps
     // Sentinel distinguishing "written by the publish" from "left untouched" (the app document).
     private const string TargetAppSentinel = "UNCHANGED-TARGET-APP-SENTINEL";
 
-    // A test-local designer meta-schema: a Db holding a SET of Designs, where a Design is a whole app
-    // (a structured `types` set + the other app-document sections — initialData/common/ui — as text).
-    // This is the `Db { designs }` IDE shape the host action's design-resolution reads; the real
-    // designer (Designer.feature) still uses `Db { types }`, untouched by this slice.
-    private const string MetaSchema =
+    // A test-local designer meta-schema: a Db holding a SET of Designs (+ a `users` set of User and a
+    // Role enum for the host-action authorization scenarios), where a Design is a whole app (a structured
+    // `types` set + the other app-document sections — initialData/common/ui — as text). This is the
+    // `Db { designs }` IDE shape the host action's design-resolution reads.
+    //
+    // The `access` section carries the host-action `sys` subject gated to the Admin role — the mechanism
+    // under test: a host action is accepted only when the session's principal satisfies this rule. The
+    // "no sys rule" + "ordinary app" scenarios swap in the variants below; the rest run under this one
+    // (bound to a seeded admin), so the ADMIN path exercises the full success flow and the others prove
+    // the gate. (The real designer, instances/1, uses an UNCONDITIONAL `sys` rule for now — its
+    // per-page-load session cannot persist an admin login, so tightening it awaits login persistence;
+    // this test meta is where the admin-gated `sys` rule is proven end-to-end at the WS seam.)
+    private const string MetaSchema = MetaTypes + SysAdminAccess;
+
+    // The types half, shared by every meta variant (with / without an access section).
+    private const string MetaTypes =
         """
         types
             Db
                 designs set of Design
+                users set of User
             Design
                 label text
                 initialData text
@@ -52,6 +64,47 @@ public sealed class HostActionSteps
                 cardinality text
                 keyType text
                 order int
+            Role enum
+                Admin
+                Member
+            User
+                name text
+                role Role
+                password password
+        """;
+
+    // The host-action authorization rule: `sys` gated to the Admin role — deny-by-default for everyone
+    // else. A leading newline so it concatenates after MetaTypes as its own section.
+    private const string SysAdminAccess =
+        "\n\naccess\n    sys\n        * where currentUser.role == \"Admin\"\n";
+
+    // A designer-shaped meta with NO access section — the shape-authority-hole scenario: an instance that
+    // HAS the designer shape and calls host actions but declares no `sys` rule must reject for everyone.
+    private const string MetaSchemaNoAccess = MetaTypes;
+
+    // An ORDINARY app (devlog-shaped: a Milestone set + a User/Role) whose access rules gate its DATA but
+    // declare NO `sys` subject — kernel authority is not granted by data rules, so host actions reject
+    // even for its own admin. Used to prove the `sys` gate is independent of the data ruleset.
+    private const string OrdinaryAppSchema =
+        """
+        types
+            Db
+                milestones set of Milestone
+                users set of User
+            Milestone
+                name text
+            Role enum
+                Admin
+                Member
+            User
+                name text
+                role Role
+                password password
+
+        access
+            Milestone
+                read
+                * where currentUser.role == "Admin"
         """;
 
     // A custom render section authored into a design's `ui` text field — verbatim section source
@@ -71,6 +124,20 @@ public sealed class HostActionSteps
     private IInstanceStore _designer = null!;
     private string _designerDataPath = "";
     private readonly Dictionary<string, int> _typeKeys = new();
+
+    // ── host-action authorization (M-auth `sys` subject) ─────────────────────────
+    // The meta-schema TEXT the designer store + WsHandler use — the default admin-gated `sys` meta, or a
+    // variant a scenario swaps in (no access section / an ordinary data-ruled app). Set BEFORE OpenDesigner.
+    private string _metaSchema = MetaSchema;
+    // The WS session store + the principal bound on it. Host-action authorization reads the session's
+    // PrincipalUserId (exactly like the write floor), so the WsHandler is built with a real session store
+    // and the chosen principal — an admin by default (so the existing publish/create/delete/rename/clone
+    // scenarios, which now pass through the `sys` gate, are authorized), overridden by the auth scenarios.
+    private ClientSessionStore _sessions = null!;
+    private int? _principalUserId;
+    private bool _principalChosen; // whether a scenario explicitly set the principal (else default admin)
+    private int _adminUserId;
+    private int _memberUserId;
 
     // The id of the authored design (the schema object the designer passes — one member of
     // db.designs), and a non-design object's id (a MetaType) for the "not a design" reject.
@@ -346,6 +413,63 @@ public sealed class HostActionSteps
         DesignSetProp("Db", typeName.ToLowerInvariant() + "s", typeName);
     }
 
+    // ── Given: host-action authorization (the `sys` subject) ────────────────────
+
+    // The default (admin-gated `sys`) meta: open the designer store over it. The DELETE the auth
+    // scenarios fire targets a bare instance id (TargetId), so no design authoring is needed.
+    [Given("the designer's access grants sys to the admin role")]
+    public void GivenSysGrantsAdmin() => OpenDesigner();
+
+    // A designer-shaped meta with NO access section — the shape-authority-hole case.
+    [Given("the designer meta-schema declares no access section")]
+    public void GivenNoAccessSection()
+    {
+        _metaSchema = MetaSchemaNoAccess;
+        OpenDesigner();
+    }
+
+    // An ordinary (devlog-shaped) app whose access rules gate its DATA but declare no `sys` subject.
+    [Given("an ordinary app whose access rules gate its data but declare no sys subject")]
+    public void GivenOrdinaryDataRuledApp()
+    {
+        _metaSchema = OrdinaryAppSchema;
+        OpenDesigner();
+    }
+
+    // The seeded operators (OpenDesigner mints them from the User type). These assert the fixture, so the
+    // scenarios read naturally; the principal is chosen by the "current operator is …" steps below.
+    [Given("a seeded admin operator")]
+    public async Task GivenSeededAdmin() =>
+        await Assert.That(_designer.ReadById(_adminUserId)).IsNotNull();
+
+    [Given("a seeded admin operator and a seeded member operator")]
+    public async Task GivenSeededAdminAndMember()
+    {
+        await Assert.That(_designer.ReadById(_adminUserId)).IsNotNull();
+        await Assert.That(_designer.ReadById(_memberUserId)).IsNotNull();
+    }
+
+    [Given("the current operator is the admin")]
+    public void GivenOperatorAdmin()
+    {
+        _principalUserId = _adminUserId;
+        _principalChosen = true;
+    }
+
+    [Given("the current operator is the member")]
+    public void GivenOperatorMember()
+    {
+        _principalUserId = _memberUserId;
+        _principalChosen = true;
+    }
+
+    [Given("the operator session is anonymous")]
+    public void GivenOperatorAnonymous()
+    {
+        _principalUserId = null;
+        _principalChosen = true;
+    }
+
     // ── When: publish over the WS ───────────────────────────────────────────────
 
     [When("the designer publishes that design to the target's id over the WS")]
@@ -369,41 +493,46 @@ public sealed class HostActionSteps
 
     [When("the operator renames instance id {int} to {string} over the WS")]
     public void WhenRename(int id, string name) =>
-        _reply = Ws().ProcessMessage(
-            $$"""{ "op": "hostAction", "action": "rename", "args": [ { "type": "int", "value": {{id}} }, { "type": "text", "value": "{{name}}" } ] }""");
+        Send("rename", $$"""{ "type": "int", "value": {{id}} }, { "type": "text", "value": "{{name}}" }""");
 
     // delete(targetId): a bare instance id (NOT a schema object). The recording delete delegate
     // captures the id; the seam carries it through unchanged and replies ok.
     [When("the operator deletes instance id {int} over the WS")]
     public void WhenDelete(int id) =>
-        _reply = Ws().ProcessMessage(
-            $$"""{ "op": "hostAction", "action": "delete", "args": [ { "type": "int", "value": {{id}} } ] }""");
+        Send("delete", $$"""{ "type": "int", "value": {{id}} }""");
 
     // cloneInstance(sourceId): one bare int (the source id). Addressing is by PATH, so there are no
     // port args — the clone gets a mount name derived from the source. The recording clone delegate
     // captures the id; the seam carries it through unchanged and replies ok.
     [When("the operator clones instance id {int} over the WS")]
     public void WhenClone(int sourceId) =>
-        _reply = Ws().ProcessMessage(
-            $$"""{ "op": "hostAction", "action": "cloneInstance", "args": [ { "type": "int", "value": {{sourceId}} } ] }""");
+        Send("cloneInstance", $$"""{ "type": "int", "value": {{sourceId}} }""");
 
     // publish(design, targetId): arg 0 is the design object's id (resolved against the designer's
     // store), arg 1 the target id (only TargetId resolves to a spec → any other id is rejected).
     private void Publish(int designId, int targetId) =>
-        _reply = Ws().ProcessMessage(
-            $$"""{ "op": "hostAction", "action": "publish", "args": [ { "type": "int", "value": {{designId}} }, { "type": "int", "value": {{targetId}} } ] }""");
+        Send("publish", $$"""{ "type": "int", "value": {{designId}} }, { "type": "int", "value": {{targetId}} }""");
 
     private void Create(int designId, string name) =>
-        _reply = Ws().ProcessMessage(
-            $$"""{ "op": "hostAction", "action": "create", "args": [ { "type": "int", "value": {{designId}} }, { "type": "text", "value": "{{name}}" } ] }""");
+        Send("create", $$"""{ "type": "int", "value": {{designId}} }, { "type": "text", "value": "{{name}}" }""");
 
     // setDesign(design, targetId): the IDE's Apply — arg 0 the design object's id, arg 1 the target id.
     // The real KernelHostActions both records the reference (the fake recordDesign captures it) AND
     // writes the projected document onto the target (a real file write, like publish).
     [When("the operator applies that design to the target's id over the WS")]
     public void WhenApplyDesignToTarget() =>
-        _reply = Ws().ProcessMessage(
-            $$"""{ "op": "hostAction", "action": "setDesign", "args": [ { "type": "int", "value": {{_designId}} }, { "type": "int", "value": {{TargetId}} } ] }""");
+        Send("setDesign", $$"""{ "type": "int", "value": {{_designId}} }, { "type": "int", "value": {{TargetId}} }""");
+
+    // Build the WsHandler (which mints + binds the principal's session), then send ONE hostAction frame
+    // carrying that session's clientId + the given (already-serialized) args — so authorization decides
+    // over the bound principal. `Ws()` sets `_clientId`; it runs before the frame is built (the receiver
+    // is evaluated before the argument), so the id is current.
+    private void Send(string action, string argsJson)
+    {
+        var ws = Ws();
+        _reply = ws.ProcessMessage(
+            $$"""{ "op": "hostAction", "clientId": "{{_clientId}}", "action": "{{action}}", "args": [ {{argsJson}} ] }""");
+    }
 
     // The designer's WsHandler with a real KernelHostActions: it acts as the designer (its own
     // meta+data are the IDE it projects from), resolves ONLY TargetId → the target spec, and its
@@ -458,9 +587,21 @@ public sealed class HostActionSteps
                 _renameInvoked = true;
                 return Task.CompletedTask;
             });
+        // A WS session carrying the chosen principal — host-action authorization decides over it (the
+        // `sys` access rule, evaluated with the session's PrincipalUserId, exactly like the write floor).
+        // Default to the seeded admin when a scenario did not choose one, so the non-auth scenarios
+        // (publish/create/delete/rename/clone) run authorized through the `sys` gate. The clientId threads
+        // into each hostAction frame below so the handler resolves the principal.
+        var session = _sessions.Create();
+        session.PrincipalUserId = _principalChosen ? _principalUserId : _adminUserId;
+        _clientId = session.Id;
         // _designer/_meta are guaranteed set above (a Given, or the lazy OpenDesigner here).
-        return new WsHandler(_designer!, _meta, sessions: null, registry: null, hostActions: hostActions);
+        return new WsHandler(_designer!, _meta, sessions: _sessions, registry: null, hostActions: hostActions);
     }
+
+    // The clientId of the session bound in Ws() — sent on each hostAction frame so the handler resolves
+    // the principal. Set by Ws(); read by the frame builders.
+    private string _clientId = "";
 
     // ── Then ────────────────────────────────────────────────────────────────────
 
@@ -642,6 +783,12 @@ public sealed class HostActionSteps
         await Assert.That(_deletedId).IsEqualTo(id);
     }
 
+    // The authorization reject teeth: the delete delegate was NEVER invoked — the `sys` gate blocked the
+    // action BEFORE it reached the seam, so nothing was deleted (not merely that the reply carried an error).
+    [Then("the kernel was not asked to delete anything")]
+    public async Task ThenNotAskedToDelete() =>
+        await Assert.That(_deleteInvoked).IsFalse();
+
     [Then("the kernel was asked to clone source id {int}")]
     public async Task ThenAskedToClone(int sourceId)
     {
@@ -674,10 +821,33 @@ public sealed class HostActionSteps
         // Write the test-local meta-schema into the temp dir and load it as the designer's description,
         // then open the designer's data store over it. ResolveDesign re-loads this same meta path.
         _metaAppPath = Path.Combine(_dir, "designer.app");
-        File.WriteAllText(_metaAppPath, MetaSchema);
+        File.WriteAllText(_metaAppPath, _metaSchema);
         _meta = InstanceDescriptionLoader.LoadFile(_metaAppPath);
         _designerDataPath = Path.Combine(_dir, "designer-data.json");
         _designer = new JsonFileInstanceStore(_designerDataPath, _meta);
+
+        // Seed an admin + a member operator when the meta declares a User type (the `sys`-gated + ordinary
+        // metas do; a design-resolution-only scenario using a User-less meta would skip this). The session
+        // store binds the chosen principal; host-action authorization then decides over it.
+        _sessions = new ClientSessionStore();
+        if (_meta.FindType("User") is not null)
+        {
+            _adminUserId = SeedUser("admin", "Admin");
+            _memberUserId = SeedUser("bob", "Member");
+        }
+    }
+
+    // Seed one User (name + role) into the designer store, linked into the root `users` set so it is a
+    // real graph member (survives GC). Returns its id — the principal a session binds to.
+    private int SeedUser(string name, string role)
+    {
+        var id = _designer.CreateObject("User", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name),
+            ["role"] = new TextValue(role),
+        }));
+        _designer.AddToSet(NodePath.Root.Field("users"), id);
+        return id;
     }
 
     // Mint one Design into db.designs (its `types` set starts empty; DesignType/DesignProp fill it).
