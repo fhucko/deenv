@@ -924,6 +924,15 @@ public sealed class WsHandler
     // optimistic IInstanceStore ops — a host action is a devops effect outside the data model. A
     // failure (unknown action, bad arg, invalid design, unknown target) throws and ProcessMessage's
     // catch returns it as `{ error }`, which the client surfaces as lastError (no journal replay).
+    //
+    // AUTHORITY LIVES IN THE INJECTED SEAM, NOT HERE. This handler deliberately performs no
+    // principal/operator check — the gate is WHICH IHostActions was wired in: the kernel gives a real
+    // KernelHostActions only to the design host and NoHostActions (reject-everything) to every ordinary
+    // instance (KernelHost.HostActionsFor). So a hostAction frame on an ordinary app's WS — including a
+    // PUBLIC one like devlog — is rejected here because `_hostActions` is NoHostActions. Do NOT add a
+    // path that calls a real host-actions seam from an ungated instance, and do not assume any
+    // instance's seam is safe to call: this is the sole dispatch point, and its safety is entirely the
+    // injection's.
     private string HandleHostAction(WsRequest req)
     {
         if (req.Action is not { } action)
