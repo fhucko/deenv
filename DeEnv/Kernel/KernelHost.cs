@@ -91,11 +91,17 @@ public sealed class KernelHost(
 
     private IReadOnlyList<string> Names() => _instances.Values.Select(i => i.Spec.App).ToList();
 
-    // The host-action seam for one instance: it acts as the designer (its own schema+data are the
-    // meta-schema for a publish) and resolves a publish target id against the LIVE hosted set.
-    // ASSUMPTION: `sys.publish` is only meaningful from the DESIGNER (see the prior design record).
+    // The host-action seam for one instance. Host actions are OPERATOR devops (create/delete/clone/
+    // publish/rename another instance) and run with kernel authority OUTSIDE the per-instance access
+    // floor — so they must be reachable ONLY from the design host. Every OTHER instance (an ordinary
+    // app like `devlog`, whose WS may be public) gets NoHostActions: a `hostAction` frame on its socket
+    // is rejected, never executed. Without this gate an anonymous client on any hosted app's WS could
+    // delete every instance (the designer included) — the seam checks nothing itself. This enforces the
+    // invariant the code already assumed ("sys.publish is only meaningful from the DESIGNER").
     private IHostActions HostActionsFor(InstanceSpec spec) =>
-        new KernelHostActions(
+        !IsDesignHost(spec)
+            ? new NoHostActions("host actions run only from the operator's design host")
+            : new KernelHostActions(
             spec.SchemaPath, spec.DataPath,
             id => _instances.GetValueOrDefault(id)?.Spec,
             // create projects the caller's schema into a NEW instance via the kernel's own create

@@ -23,13 +23,16 @@ public interface IHostActions
     void Run(string action, JsonElement args);
 }
 
-// The default for any host WITHOUT a kernel (TestInstanceServer, a bare InstanceApp.Build): no
-// kernel ⇒ no host actions. Every action errors, so an app that calls `sys.publish(...)` on a
-// kernel-less host gets an honest reject rather than a silent no-op. The kernel supplies a real
-// implementation (KernelHostActions) for its hosted instances.
-public sealed class NoHostActions : IHostActions
+// The reject-everything seam. Two uses: (1) a host WITHOUT a kernel (TestInstanceServer, a bare
+// InstanceApp.Build) — no kernel ⇒ no host actions; (2) a kernel-hosted instance that is NOT the
+// operator/design host — host actions are operator devops (create/delete/clone/publish another
+// instance) and must run ONLY from the design host, never from an ordinary app's WS (a public app's
+// socket must not be able to delete instances). Either way every action errors with an honest reject
+// rather than a silent no-op. `reason` names why (server log + client reject); the kernel supplies a
+// real KernelHostActions only for the design host (KernelHost.HostActionsFor).
+public sealed class NoHostActions(string? reason = null) : IHostActions
 {
     public void Run(string action, JsonElement args) =>
         throw new InvalidOperationException(
-            $"Host action '{action}' is unavailable — this instance is not hosted by a kernel.");
+            $"Host action '{action}' is unavailable — {reason ?? "this instance is not hosted by a kernel"}.");
 }

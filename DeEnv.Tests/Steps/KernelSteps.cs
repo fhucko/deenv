@@ -58,6 +58,50 @@ public sealed class KernelSteps(InstanceContext ctx)
             title: "First"
     """;
 
+    // ── security regression: the host-action operator gate ──────────────────────
+    //
+    // A minimal DESIGN-HOST schema — a `Db` whose `designs` prop is a `set of Design` — the exact shape
+    // KernelHost.IsDesignHost checks (mirrors HostActionSteps.MetaSchema, the real designer's IDE
+    // shape). This instance is the one that MUST keep real host-action authority.
+    private const string DesignHostApp = """
+    types
+        Db
+            designs set of Design
+        Design
+            label text
+            initialData text
+            common text
+            ui text
+            types set of MetaType
+        MetaType
+            name text
+            baseType text
+            order int
+            props set of MetaProp
+        MetaProp
+            name text
+            type text
+            cardinality text
+            keyType text
+            order int
+    """;
+
+    // An ORDINARY app — no `designs` set, so IsDesignHost is false — the shape of a public app like
+    // devlog. Its WebSocket is the attack surface: before the fix, a `hostAction` frame sent here ran
+    // with full kernel authority against ANY instance.
+    private const string PlainApp = """
+    types
+        Db
+            items set of Item
+        Item
+            label text
+    """;
+
+    // What the WS security-gate scenario recorded: the raw `hostAction` reply text (over a REAL
+    // WebSocket to the plain instance's /ws) and the design-host's id it targeted.
+    private string _hostActionWsReply = "";
+    private int _designHostId;
+
     private HostedInstance Alpha => ctx.Kernel!.Instances[0];
     private HostedInstance Beta => ctx.Kernel!.Instances[1];
 
@@ -118,6 +162,19 @@ public sealed class KernelSteps(InstanceContext ctx)
         var dir = NewDir();
         WriteApp(dir, 1, MountApp);
         WriteRegistry(dir, (name, 1));
+    }
+
+    // The security-regression fixture: instance 1 is the design host (real host-action authority),
+    // instance 2 is an ordinary app (must get NoHostActions). Distinct ids/names, like every other
+    // registry fixture here.
+    [Given("a registry of a design-host instance and a plain instance")]
+    public void GivenDesignHostAndPlainRegistry()
+    {
+        var dir = NewDir();
+        WriteApp(dir, 1, DesignHostApp);
+        WriteApp(dir, 2, PlainApp);
+        WriteRegistry(dir, ("designer", 1), ("plainapp", 2));
+        _designHostId = 1;
     }
 
     // ── When / Given (start) ────────────────────────────────────────────────────
@@ -533,6 +590,52 @@ public sealed class KernelSteps(InstanceContext ctx)
     [Then("the page is fully ready")]
     public async Task ThenPageReadyAsync() =>
         await ctx.Page!.WaitReadyAsync();
+
+    // ── security regression: the host-action operator gate ──────────────────────
+    //
+    // Opens a REAL WebSocket (System.Net.WebSockets.ClientWebSocket, not a hand-picked WsHandler) to the
+    // PLAIN instance's /ws under the kernel's shared asset port, and sends a `hostAction` frame targeting
+    // the design host's id. This must go through the real KernelHost wiring — HostedInstance.Start wires
+    // each instance's WsHandler with KernelHost.HostActionsFor(spec), which is exactly the fix under
+    // test — so a hand-constructed WsHandler (as HostActionSteps uses for the host-action ARGUMENT-
+    // SHAPE scenarios) would bypass the gate and prove nothing.
+    [When("I send a hostAction {string} for the design host's id over the plain instance's WebSocket")]
+    public async Task WhenSendHostActionOverPlainWsAsync(string action)
+    {
+        var plain = ctx.Kernel!.Instances.Single(i => i.Spec.Id != _designHostId);
+        var uri = new Uri($"ws://localhost:{_assetPort}{MountPath(plain.Spec.App)}/ws");
+
+        using var socket = new System.Net.WebSockets.ClientWebSocket();
+        using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await socket.ConnectAsync(uri, connectCts.Token);
+
+        var frame = $$"""{ "op": "hostAction", "action": "{{action}}", "args": [ { "type": "int", "value": {{_designHostId}} } ] }""";
+        var sendBytes = System.Text.Encoding.UTF8.GetBytes(frame);
+        using var sendCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await socket.SendAsync(sendBytes, System.Net.WebSockets.WebSocketMessageType.Text, endOfMessage: true, sendCts.Token);
+
+        var buffer = new byte[8192];
+        using var receiveCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await socket.ReceiveAsync(buffer, receiveCts.Token);
+        _hostActionWsReply = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
+
+        using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await socket.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "done", closeCts.Token);
+    }
+
+    [Then("the host action reply over the WebSocket is an error")]
+    public async Task ThenHostActionWsReplyIsErrorAsync()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(_hostActionWsReply);
+        await Assert.That(doc.RootElement.TryGetProperty("error", out _)).IsTrue();
+        await Assert.That(doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean()).IsFalse();
+    }
+
+    // The real teeth: the targeted (design-host) instance is STILL LIVE in the kernel's hosted set —
+    // proving the delete was actually rejected, not merely that the reply happened to carry an error.
+    [Then("the kernel still hosts the design-host instance")]
+    public async Task ThenKernelStillHostsDesignHostAsync() =>
+        await Assert.That(ctx.Kernel!.Instances.Any(i => i.Spec.Id == _designHostId)).IsTrue();
 
     // ── registry validation ───────────────────────────────────────────────────────
 

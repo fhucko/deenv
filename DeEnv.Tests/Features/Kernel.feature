@@ -207,6 +207,24 @@ Feature: Kernel host (multi-instance, path-addressed)
     Then the original instance's store eventually has the bool set
     And the page is fully ready
 
+  # SECURITY REGRESSION (host-action operator gate). Host actions run with KERNEL authority OUTSIDE
+  # the per-instance access floor (create/delete/cloneInstance/publish/rename). Before the fix, every
+  # hosted instance got a REAL KernelHostActions, so a `hostAction` frame sent over ANY instance's WS —
+  # including a public, anonymous, ordinary app like devlog — could delete ANY instance (the designer
+  # included): full multi-instance compromise from one frame. KernelHost.HostActionsFor now hands out a
+  # REAL KernelHostActions only to the design host (IsDesignHost: a schema declaring `Db { designs set
+  # of Design }`); every other instance gets NoHostActions, which rejects every action. This scenario
+  # drives that gate through the REAL kernel wiring (a booted KernelHost, a real WebSocket to the
+  # ordinary instance's /ws) — not a hand-picked IHostActions — because the fix lives in
+  # KernelHost.HostActionsFor and a hand-wired WsHandler would bypass it and prove nothing.
+  @milestone-10 @single-user
+  Scenario: An ordinary instance's WebSocket cannot run a host action against another instance
+    Given a registry of a design-host instance and a plain instance
+    And the kernel has started
+    When I send a hostAction "delete" for the design host's id over the plain instance's WebSocket
+    Then the host action reply over the WebSocket is an error
+    And the kernel still hosts the design-host instance
+
   # SPA navigation under a KERNEL MOUNT (the production addressing): the kernel serves the instance at
   # /apps/<name>, so an in-app link click exercises the mount-aware branch (ui.ts stripBase/in-mount
   # guard) that the root-mounted SPA scenarios never reach. Clicking the generic-UI set row link
