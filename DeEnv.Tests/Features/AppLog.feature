@@ -59,3 +59,15 @@ Feature: Append-only changeset log behind the store (durable data history)
     When three separate writes are committed
     Then each new log entry's seq is one greater than the previous
     And the final entry's seq equals the store's current version
+
+  # The boot rebuild of the baseVersion guard's per-object map must restore a member's version advanced
+  # by a SET LINK, not only by a field write or create — a set op stamps the linked member's version
+  # (BumpVersion(memberId)) and the guard checks it (RequireFresh(memberRef)). If boot dropped that
+  # attribution, a stale commit rejected before a restart would be silently ACCEPTED after one — a
+  # missed clobber across restart (residual #2 the rebuild exists to prevent).
+  Scenario: A member whose version advanced only by a set link stays stale-guarded across a restart
+    Given the store is seeded with a note "n"
+    And the store version is remembered as a stale base
+    When note "n" is linked into its set by a batch
+    And a new store is opened over the same files
+    Then a commit editing note "n" at the remembered stale base is rejected as stale

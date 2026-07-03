@@ -60,10 +60,13 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // the full design (M13 clump)"). IN-MEMORY only, deliberately not persisted directly — but the
     // documented cross-restart residual this comment used to name ("a truly-stale pre-restart base can
     // pass, because a fresh boot's map starts empty") is CLOSED as of M13 slice 1: ReconcileLogOnBoot
-    // rebuilds this map from the WHOLE durable log on every boot (entry-final seq per touched object —
-    // coarser than the exact live per-write bump, but safe in the direction that matters: at worst a
-    // spurious stale-base rejection right after restart, never a missed clobber). Every mutating write
-    // records here under the SAME _sync lock the mutation itself holds — see BumpVersion.
+    // rebuilds this map from the WHOLE durable log on every boot (entry-final seq per touched object). The
+    // "touched" set must match EVERY object the live BumpVersion(objectId) path stamps: field-write and
+    // create targets AND set-link/unlink MEMBERS (a set op stamps its member's version and the baseVersion
+    // guard checks it) — see TouchedObjectIds, which restores all three. The entry-final seq is coarser
+    // than the exact live per-write bump, but safe in the direction that matters: at worst a spurious
+    // stale-base rejection right after restart, never a missed clobber. Every mutating write records here
+    // under the SAME _sync lock the mutation itself holds — see BumpVersion.
     private readonly Dictionary<int, int> _objectVersions = new();
 
     // ── the append-only changeset log (M13 slice 1) ─────────────────────────────────────────────────
@@ -206,13 +209,23 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     }
 
     // Every extent-object id a log entry's writes touched — the attribution set _objectVersions needs.
+    // SetLink/SetUnlink map to their MEMBER id: live code stamps the linked member's version on every set
+    // op (BumpVersion(memberId) in AddToSet/RemoveFromSet + CommitBatch's SetLinkMutation) and the
+    // baseVersion guard checks it (CommitBatch's RequireFresh(memberRef)), so a boot rebuild that dropped
+    // the member here would let a stale commit editing that member — rejected before a restart — be
+    // ACCEPTED after one (a missed clobber across restart, the exact failure residual #2's rebuild exists
+    // to prevent). DictSet/DictRemove/RootWrite stay null: those live-bump with NO objectId (a store-wide
+    // HEAD bump only, never a per-object attribution — see BumpVersion's objectId==null callers), so there
+    // is no member to restore for them.
     private static IEnumerable<int> TouchedObjectIds(LogEntry entry) => entry.Writes
         .Select(w => w switch
         {
             FieldWrite(var id, _, _, _) => id,
             Create(var id, _, _) => id,
             Remove(var id, _) => id,
-            SetLink or SetUnlink or DictSet or DictRemove or RootWrite => (int?)null,
+            SetLink(_, var memberId) => memberId,
+            SetUnlink(_, var memberId) => memberId,
+            DictSet or DictRemove or RootWrite => (int?)null,
             _ => null,
         })
         .Where(id => id is not null)

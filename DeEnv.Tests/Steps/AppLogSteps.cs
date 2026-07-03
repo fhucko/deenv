@@ -348,6 +348,35 @@ public sealed class AppLogSteps(InstanceContext ctx)
     public async Task ThenFinalSeqEqualsVersion() =>
         await Assert.That(ReadLogLines()[^1].GetProperty("seq").GetInt32()).IsEqualTo(ctx.Store!.CurrentVersion);
 
+    // ── cross-restart baseVersion-guard integrity for a set-link member advance ───────────────────────
+
+    private int _staleBase;
+
+    [Given("the store version is remembered as a stale base")]
+    public void GivenRememberStaleBase() => _staleBase = ctx.Store!.CurrentVersion;
+
+    [When("note {string} is linked into its set by a batch")]
+    public void WhenLinkNoteIntoSet(string alias)
+    {
+        // A pure SET LINK of the (already-member) note: advances THAT note's version via a lone SetLink
+        // log write — no FieldWrite/Create for it — so post-restart its guard version depends ENTIRELY on
+        // whether the boot rebuild attributes SetLink writes to their member (the finding under test).
+        var setId = FindDbSetId("notes");
+        ctx.Store!.CommitBatch([], [new SetLinkMutation(setId, AliasId(alias))]);
+    }
+
+    [Then("a commit editing note {string} at the remembered stale base is rejected as stale")]
+    public async Task ThenStaleEditRejected(string alias)
+    {
+        // The reopened store (opened by the shared "a new store is opened over the same files" step) is
+        // what must reject: its rebuilt map has to know the member advanced past _staleBase via the SetLink.
+        var store = _reopenedStore!;
+        await Assert.That(() =>
+            store.CommitBatch(
+                [], [new FieldWriteMutation(AliasId(alias), "title", new TextValue("Stale edit"))], _staleBase))
+            .Throws<StaleBaseException>();
+    }
+
     // ── shared JSON options for reading the log/genesis files exactly as the store writes them ─────
 
     private static readonly JsonSerializerOptions StoreOpts = new()
