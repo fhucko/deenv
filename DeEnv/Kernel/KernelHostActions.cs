@@ -30,6 +30,16 @@ namespace DeEnv.Kernel;
 //     Acts purely on the CALLER's own store (no cross-instance kernel delegate needed, unlike
 //     create/delete/clone). No write grants exist on Commit/Branch rows (the designer's own `access`
 //     section denies create/edit/delete on both), so this is the ONLY path that can ever write one.
+//   • createBranch(design, name) — clone a working copy's whole subgraph (Design + its MetaTypes +
+//     MetaProps) into a NEW Branch { name, head = source branch's head, workingCopy = the clone } (M13
+//     slice 5). The clone is linked ONLY into db.branches, never db.designs — so the app list stays main
+//     working copies while the clone's history stays GC-reachable via the branch. See CreateBranch's own
+//     doc for the origin-flattening rule that keeps N-deep branches anchored to the ORIGINAL rows.
+//   • mergeBranch(source, target, resolutions?) — a lineage-keyed three-way structural merge (DesignMerger)
+//     of `source`'s branch into `target`'s, both addressed by their CURRENT working-copy id. A clean merge
+//     applies to the target working copy and creates a two-parent merge Commit; any conflict makes NO
+//     writes and returns a MergeReport instead — re-run with `resolutions: [{id, take}]` to apply
+//     per-conflict picks. See MergeBranch's own doc for the LCA/drift/apply rules.
 // The kernel constructs one of these per instance and threads it into WsHandler, so an action acts
 // with the CALLING instance's own data as the design source (its data is the IDE holding the set of
 // Designs it edits). A publish/create RESOLVES the passed design's id → its Design subtree in the
@@ -62,6 +72,8 @@ public sealed class KernelHostActions(
         "setDesign"    => SetDesign(args),
         "rename"       => Rename(args),
         "commitDesign" => CommitDesign(args),
+        "createBranch" => CreateBranch(args),
+        "mergeBranch"  => MergeBranch(args),
         _ => throw new InvalidOperationException($"Unknown host action '{action}'."),
     };
 
@@ -342,7 +354,6 @@ public sealed class KernelHostActions(
 
         var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
         var store = new JsonFileInstanceStore(dataPath, meta);
-        var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
 
         const int maxAttempts = 5;
         DesignSnapshot snap = null!;
@@ -350,9 +361,13 @@ public sealed class KernelHostActions(
         for (var attempt = 1; ; attempt++)
         {
             var s1 = store.CurrentVersion;
-            var design = store.ReadNode(designPath)
-                ?? throw new InvalidOperationException(
-                    $"No design with id {designId} in the designer's `designs` set.");
+            // Resolve the WORKING COPY by id directly (M13 slice 5): a Design row reachable either through
+            // db.designs (a main working copy) OR only through a Branch.workingCopy (a branch clone, NOT in
+            // db.designs) — so commitDesign works unchanged on a branch. ReadById finds any Design row; the
+            // owning-branch resolution below (FindBranchByWorkingCopy) enforces that it IS a working copy of
+            // SOME branch (a bare id that no branch owns is rejected there — never a commit onto nothing).
+            if (store.ReadById(designId) is not (var tn, var design) || tn != "Design")
+                throw new InvalidOperationException($"No design with id {designId} to commit.");
             snap = SchemaBridge.Snapshot(design); // throws SchemaValidationException on an invalid design
             var s2 = store.CurrentVersion;
             if (s1 == s2) { logSeq = s1; break; }
@@ -361,8 +376,11 @@ public sealed class KernelHostActions(
                     $"commitDesign: the design kept changing while snapshotting it ({maxAttempts} attempts) — try again.");
         }
 
-        var branch = FindMainBranch(store, designId)
-            ?? throw new InvalidOperationException($"Design {designId} has no main branch to commit onto.");
+        // Advance the OWNING branch's head (M13 slice 5) — the branch whose workingCopy IS this design,
+        // whether that is "main" or a branch clone. Was FindMainBranch (main only) pre-slice-5; widened so a
+        // branch commit advances its OWN head, not main's (a commit onto a design no branch owns is rejected).
+        var branch = FindBranchByWorkingCopy(store, designId)
+            ?? throw new InvalidOperationException($"Design {designId} has no owning branch to commit onto.");
         NodeValue? headField = branch.Fields.Fields.GetValueOrDefault("head");
         int? parentHeadId = headField is ReferenceValue { TargetId: { } h } ? h : null;
 
@@ -397,6 +415,584 @@ public sealed class KernelHostActions(
 
         store.CommitBatch(creates, mutations);
         return null;
+    }
+
+    // createBranch(design, name): clone a WORKING COPY's whole subgraph (Design + its MetaTypes + its
+    // MetaProps) into a NEW Branch. `design` is a working-copy row — main's own Design row, or another
+    // branch's clone (branching off a branch is allowed) — resolved to its OWNING Branch by workingCopy
+    // match (the same idiom commitDesign's FindMainBranch uses, widened to ANY branch, not just "main").
+    //
+    // ORIGIN FLATTENING (pinned): every clone's `origin` = the source row's OWN `origin` if it is already
+    // non-zero, else the source row's id. So a branch-of-a-branch's clone anchors to the SAME lineage
+    // origin as its grandparent — N-deep branching never chains ("origin of an origin"), which is exactly
+    // what lets DesignMerger join three arbitrarily-deep branches' rows on one shared lineage key.
+    //
+    // The clone is ONE atomic CommitBatch (creates + set-links + ref-links) — the SAME atomicity discipline
+    // commitDesign uses. The new Design is linked NOWHERE except the new Branch.workingCopy — critically,
+    // NOT into db.designs (the app list stays main working copies only); its GC-reachability instead rides
+    // Branch.workingCopy, with the Branch itself linked into db.branches (a root set) — verified below by
+    // the Gherkin's "clone renders / stays alive" scenario, since GC walks the root Db's own fields
+    // (JsonFileInstanceStore.CollectGarbage marks from _doc.Root, and db.branches is one of Db's own set
+    // props) exactly the same as it walks db.designs.
+    private object? CreateBranch(JsonElement args)
+    {
+        var sourceDesignId = ArgInt(args, 0);
+        var name = ArgText(args, 1);
+
+        var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
+        var store = new JsonFileInstanceStore(dataPath, meta);
+
+        var sourceDesign = ReadDesign(store, sourceDesignId);
+        var sourceBranch = FindBranchByWorkingCopy(store, sourceDesignId)
+            ?? throw new InvalidOperationException($"Design {sourceDesignId} has no owning branch to branch from.");
+
+        // Name uniqueness among the APP's branches — resolved via lineage (the app's ORIGIN anchor), so a
+        // branch name collides with another branch of the SAME app, never a different app's branch of the
+        // same name.
+        var appLineage = LineageOf(sourceDesign, sourceDesignId);
+        foreach (var (_, branch) in store.ReadExtent("Branch"))
+        {
+            if (branch.Fields.GetValueOrDefault("name") is not TextValue { Text: var existingName } || existingName != name) continue;
+            if (branch.Fields.GetValueOrDefault("workingCopy") is not ReferenceValue { TargetId: { } wcId }) continue;
+            if (store.ReadById(wcId) is not (var wtn, var wf) || wtn != "Design") continue;
+            if (LineageOf(wf, wcId) == appLineage)
+                throw new InvalidOperationException(
+                    $"A branch named '{name}' already exists for this app — branch names must be unique per app.");
+        }
+
+        var branchesSetId = (store.ReadNode(NodePath.Root.Field("branches")) as SetValue)?.Id
+            ?? throw new InvalidOperationException("The designer's `db.branches` set is missing.");
+
+        // ── batch 1: mint the clone (Design + its MetaTypes + their MetaProps), unlinked ────────────
+        // CommitBatch has no "link a member into a set this SAME batch just minted" primitive that doesn't
+        // require knowing the set's id upfront (a set's id is assigned only AT mint time) — so the clone
+        // is TWO batches: mint everything first (reading back each create's own minted collection ids via
+        // CommitCreateResult.Collections), then a second batch links every member into its owner's
+        // freshly-known collection id + creates the Branch. Both batches are still "ordinary store writes"
+        // (no new CommitMutation shape), and each is independently atomic; a crash between them leaves an
+        // orphan Design/MetaType/MetaProp subgraph reachable from NOWHERE (not yet linked to any Branch),
+        // so it is inert dead data a future GC pass collects — never a half-wired live branch.
+        const int designTemp = -1;
+        var creates = new List<CommitCreate>
+        {
+            new CommitCreate(designTemp, "Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"]       = new TextValue(TextOf(sourceDesign, "label")),
+                ["initialData"] = new TextValue(TextOf(sourceDesign, "initialData")),
+                ["access"]      = new TextValue(TextOf(sourceDesign, "access")),
+                ["common"]      = new TextValue(TextOf(sourceDesign, "common")),
+                ["ui"]          = new TextValue(TextOf(sourceDesign, "ui")),
+                ["origin"]      = new IntValue(appLineage),
+            })),
+        };
+        // typeTempToProps[typeTemp] = the prop temp-ids owned by that type — remembered while building the
+        // create list (one pass, no re-walk needed).
+        var typeTempToProps = new List<(int TypeTemp, List<int> PropTemps)>();
+        var nextTemp = -2;
+
+        if (sourceDesign.Fields.GetValueOrDefault("types") is SetValue sourceTypesSet)
+            foreach (var (typeId, typeVal) in sourceTypesSet.Members)
+                if (typeVal is ObjectValue typeObj)
+                {
+                    var typeTemp = nextTemp--;
+                    creates.Add(new CommitCreate(typeTemp, "MetaType", new ObjectValue(new Dictionary<string, NodeValue>
+                    {
+                        ["name"]     = new TextValue(TextOf(typeObj, "name")),
+                        ["baseType"] = new TextValue(TextOf(typeObj, "baseType")),
+                        ["values"]   = new TextValue(TextOf(typeObj, "values")),
+                        ["order"]    = new IntValue(IntOf(typeObj, "order")),
+                        ["origin"]   = new IntValue(LineageOf(typeObj, typeId)),
+                    })));
+
+                    var propTemps = new List<int>();
+                    if (typeObj.Fields.GetValueOrDefault("props") is SetValue propsSet)
+                        foreach (var (propId, propVal) in propsSet.Members)
+                            if (propVal is ObjectValue propObj)
+                            {
+                                var propTemp = nextTemp--;
+                                creates.Add(new CommitCreate(propTemp, "MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
+                                {
+                                    ["name"]        = new TextValue(TextOf(propObj, "name")),
+                                    ["type"]        = new TextValue(TextOf(propObj, "type")),
+                                    ["cardinality"] = new TextValue(TextOf(propObj, "cardinality")),
+                                    ["keyType"]     = new TextValue(TextOf(propObj, "keyType")),
+                                    ["multiline"]   = new BoolValue(BoolOf(propObj, "multiline")),
+                                    ["order"]       = new IntValue(IntOf(propObj, "order")),
+                                    ["origin"]      = new IntValue(LineageOf(propObj, propId)),
+                                })));
+                                propTemps.Add(propTemp);
+                            }
+                    typeTempToProps.Add((typeTemp, propTemps));
+                }
+
+        var mintResult = store.CommitBatch(creates, []);
+        var byTemp = mintResult.Creates.ToDictionary(c => c.TempId);
+        var designRealId = byTemp[designTemp].RealId;
+        var typesSetId = byTemp[designTemp].Collections["types"].Id;
+
+        // ── batch 2: link every minted row into its owner's freshly-known collection + the new Branch ──
+        var linkMutations = new List<CommitMutation>();
+        foreach (var (typeTemp, propTemps) in typeTempToProps)
+        {
+            linkMutations.Add(new SetLinkMutation(typesSetId, byTemp[typeTemp].RealId));
+            var propsSetId = byTemp[typeTemp].Collections["props"].Id;
+            foreach (var propTemp in propTemps)
+                linkMutations.Add(new SetLinkMutation(propsSetId, byTemp[propTemp].RealId));
+        }
+
+        const int branchTemp = -1;
+        var branchCreates = new List<CommitCreate>
+        {
+            new CommitCreate(branchTemp, "Branch", new ObjectValue(new Dictionary<string, NodeValue> { ["name"] = new TextValue(name) })),
+        };
+        linkMutations.Add(new SetLinkMutation(branchesSetId, branchTemp));
+        linkMutations.Add(new RefLinkMutation(branchTemp, "workingCopy", designRealId, "Design"));
+        // The new branch STARTS at the source branch's current head (a fresh branch is a checkout of
+        // whatever the source already built) — a source branch with no commits yet leaves `head` unset,
+        // same as EnsureMainBranches leaves a design's first main branch before its baseline commit.
+        if (sourceBranch.Fields.Fields.GetValueOrDefault("head") is ReferenceValue { TargetId: { } sourceHeadId })
+            linkMutations.Add(new RefLinkMutation(branchTemp, "head", sourceHeadId, "Commit"));
+
+        store.CommitBatch(branchCreates, linkMutations);
+        return null;
+    }
+
+    // mergeBranch(source, target, resolutions?): a lineage-keyed three-way structural merge of `source`'s
+    // branch into `target`'s (M13 slice 5). `source`/`target` are WORKING-COPY ids (main's own Design row,
+    // or a branch's clone), resolved to their owning Branch by workingCopy match.
+    //
+    // DRIFT REFUSAL (pinned): if EITHER working copy's current Snapshot(wc).Text differs from its branch
+    // head's cached text, refuse — merge computes over COMMITTED heads only, never a dirty working copy.
+    //
+    // LCA (v1, pinned): walk the parent+mergeParent DAG from both heads, base = the common ancestor with
+    // the MAX logSeq. base == source.head → nothing to merge (no-op). base == target.head → the merge
+    // STILL produces a two-parent merge commit (no ref-only fast-forward — simpler, honest per the
+    // orchestrator's settled model).
+    //
+    // CLEAN path: DesignMerger.Compute over the three commits' cached {Text, IdMap}; apply the merged
+    // result to the TARGET working copy via ORDINARY store writes (a CommitBatch for creates/renames/
+    // field-writes, plain RemoveFromSet calls for existence-removals — CommitBatch has no remove case, and
+    // per the orchestrator's accepted v1 gap a crash between these writes and the merge commit below is a
+    // recoverable, documented residual, not required to be one giant atomic unit), THEN commit through the
+    // SAME atomic path commitDesign uses (parent = target's head, mergeParent = source's head).
+    //
+    // CONFLICT path: NO writes at all — returns a MergeReport whose `conflicts` list the caller re-runs
+    // against with `resolutions: [{id, take: "source"|"target"}]`; any conflict without a resolution
+    // refuses again (the remainder is reported).
+    private object? MergeBranch(JsonElement args)
+    {
+        var sourceDesignId = ArgInt(args, 0);
+        var targetDesignId = ArgInt(args, 1);
+        var resolutions = ArgResolutionsOptional(args, 2);
+
+        var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
+        var store = new JsonFileInstanceStore(dataPath, meta);
+
+        var sourceDesign = ReadDesign(store, sourceDesignId);
+        var targetDesign = ReadDesign(store, targetDesignId);
+        var sourceBranch = FindBranchByWorkingCopy(store, sourceDesignId)
+            ?? throw new InvalidOperationException($"Design {sourceDesignId} has no owning branch.");
+        var targetBranch = FindBranchByWorkingCopy(store, targetDesignId)
+            ?? throw new InvalidOperationException($"Design {targetDesignId} has no owning branch.");
+        var sourceBranchName = TextOf(sourceBranch.Fields, "name");
+        var targetBranchName = TextOf(targetBranch.Fields, "name");
+
+        var sourceAppLineage = LineageOf(sourceDesign, sourceDesignId);
+        var targetAppLineage = LineageOf(targetDesign, targetDesignId);
+        if (sourceAppLineage != targetAppLineage)
+            throw new InvalidOperationException(
+                "Cannot merge: the source and target branches belong to different apps.");
+
+        var sourceHeadRef = sourceBranch.Fields.Fields.GetValueOrDefault("head") as ReferenceValue;
+        var targetHeadRef = targetBranch.Fields.Fields.GetValueOrDefault("head") as ReferenceValue;
+        if (sourceHeadRef?.TargetId is not { } sourceHeadId)
+            throw new InvalidOperationException($"Branch '{sourceBranchName}' has no commits to merge.");
+        if (targetHeadRef?.TargetId is not { } targetHeadId)
+            throw new InvalidOperationException($"Branch '{targetBranchName}' has no commits to merge into.");
+
+        var sourceHeadFields = FindCommit(store, sourceHeadId)!;
+        var targetHeadFields = FindCommit(store, targetHeadId)!;
+
+        // Drift refusal: the working copy's CURRENT text must equal its own branch head's cached text.
+        var sourceWorking = SchemaBridge.Snapshot(sourceDesign).Text;
+        if (sourceWorking != TextOf(sourceHeadFields, "text"))
+            return new MergeReport { Merged = false, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
+                BaseCommit = 0, SourceCommit = sourceHeadId, TargetCommit = targetHeadId,
+                Conflicts = [], AccessChanges = [], DriftRefusal = "source" };
+        var targetWorking = SchemaBridge.Snapshot(targetDesign).Text;
+        if (targetWorking != TextOf(targetHeadFields, "text"))
+            return new MergeReport { Merged = false, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
+                BaseCommit = 0, SourceCommit = sourceHeadId, TargetCommit = targetHeadId,
+                Conflicts = [], AccessChanges = [], DriftRefusal = "target" };
+
+        var baseCommitId = FindLca(store, sourceHeadId, targetHeadId);
+        if (baseCommitId == sourceHeadId)
+            return new MergeReport { Merged = false, NoOp = true, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
+                BaseCommit = baseCommitId, SourceCommit = sourceHeadId, TargetCommit = targetHeadId,
+                Conflicts = [], AccessChanges = [] };
+
+        var baseFields = FindCommit(store, baseCommitId)!;
+        var baseSnapshot = new DesignSnapshot(TextOf(baseFields, "text"), IdMapOf(baseFields));
+        var sourceSnapshot = new DesignSnapshot(TextOf(sourceHeadFields, "text"), IdMapOf(sourceHeadFields));
+        var targetSnapshot = new DesignSnapshot(TextOf(targetHeadFields, "text"), IdMapOf(targetHeadFields));
+
+        int LineageOfRowId(int rowId)
+        {
+            var row = store.ReadById(rowId);
+            if (row is null) return rowId; // the row no longer exists — it can only anchor to itself
+            return LineageOf(row.Value.Fields, rowId);
+        }
+
+        // `resolutions` is threaded straight into Compute (not a post-process): a resolved conflict never
+        // becomes a MergeConflict at all — its picked side's value is spliced in AT THE EXACT POINT the
+        // conflict would otherwise be recorded (see DesignMerger.Resolve*/TryTakeSide), so everything
+        // downstream that depends on a resolved value (e.g. a type rename feeding its still-owned props)
+        // sees the resolved value, not a placeholder. Any conflict WITHOUT a matching resolution id still
+        // ends up in `computation.Conflicts` and blocks the merge.
+        var resolutionMap = resolutions.ToDictionary(r => r.Id, r => r.Take);
+        var computation = DesignMerger.Compute(baseSnapshot, sourceSnapshot, targetSnapshot, LineageOfRowId, resolutionMap);
+
+        if (computation.Conflicts.Count > 0)
+            return new MergeReport
+            {
+                Merged = false, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
+                BaseCommit = baseCommitId, SourceCommit = sourceHeadId, TargetCommit = targetHeadId,
+                Conflicts = [.. computation.Conflicts.Select(c => new ConflictItem(c.Id, c.Kind, c.Path, c.Field, c.Base, c.Source, c.Target))],
+                AccessChanges = [.. computation.AccessChanges.Select(a => new AccessChangeReportItem(a.RuleKey, a.Change, a.Condition))],
+            };
+
+        // ── clean apply: ordinary store writes onto the TARGET working copy, then the merge commit ──
+        ApplyMergeToTarget(store, targetDesignId, computation);
+
+        var mergeCommitId = CreateMergeCommit(store, targetDesignId, targetBranch.Id, targetHeadId, sourceHeadId, sourceBranchName, targetBranchName);
+
+        return new MergeReport
+        {
+            Merged = true, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
+            BaseCommit = baseCommitId, SourceCommit = sourceHeadId, TargetCommit = targetHeadId,
+            MergeCommit = mergeCommitId, Conflicts = [],
+            AccessChanges = [.. computation.AccessChanges.Select(a => new AccessChangeReportItem(a.RuleKey, a.Change, a.Condition))],
+        };
+    }
+
+    // Apply a CLEAN MergeComputation onto the TARGET working copy — "ordinary store writes" (per the
+    // orchestrator's settled model), NOT one giant atomic unit with the merge commit below (that crash
+    // window is an accepted, documented v1 gap — see MergeBranch's own doc). Three steps:
+    //   1. Types/props: per LINEAGE, update the target's EXISTING row's fields if it already has one for
+    //      that lineage, else MINT a new MetaType/MetaProp (origin = that lineage) and link it in; a
+    //      lineage the merge DROPPED (present in target's own set, absent from the merged result) is
+    //      REMOVED from that set (RemoveFromSet — CommitBatch has no remove case, so removals run as their
+    //      own small store calls, GC-collecting the dropped row afterward).
+    //   2. Order: written directly onto each row's `order` FIELD from the merged type/prop list's target-
+    //      spine position (FieldWriteMutation) — the actual renormalization, not just an in-memory order.
+    //   3. Code/access/initialData: reprint the merged Common/Ui/Rules into text (AppPrint.Print over a
+    //      types-less/initialData-less description, then DesignerSeed.SplitSections pulls just
+    //      common/ui/access) and write all four Design text fields via WriteField.
+    private static void ApplyMergeToTarget(JsonFileInstanceStore store, int targetDesignId, MergeComputation computation)
+    {
+        var targetTypesSet = store.ReadNode(NodePath.Root.Field("designs").Key(targetDesignId.ToString()).Field("types")) as SetValue
+            ?? (ReadDesign(store, targetDesignId).Fields.GetValueOrDefault("types") as SetValue)
+            ?? throw new InvalidOperationException($"Design {targetDesignId} has no `types` set.");
+        var typesSetId = targetTypesSet.Id;
+
+        // The target's OWN MetaType rows (this design's live `types` set membership), keyed by lineage —
+        // "does the target already have a row for lineage L" must be scoped to THIS design's own set (a
+        // MetaType extent is shared across every design/branch in the store).
+        var existingTypesByLineage = new Dictionary<int, int>(); // lineage -> row id
+        foreach (var memberId in targetTypesSet.Members.Keys)
+        {
+            var fields = store.ReadById(memberId)!.Value.Fields;
+            existingTypesByLineage[LineageOf(fields, memberId)] = memberId;
+        }
+        var mergedTypeLineages = computation.Types.Types.Select(t => t.Lineage).ToHashSet();
+        var toRemoveTypeIds = existingTypesByLineage
+            .Where(kv => !mergedTypeLineages.Contains(kv.Key)).Select(kv => kv.Value).ToList();
+
+        // ── pass 1: mint every NEW type in one batch (+ field-write EXISTING ones' meta-fields) ──
+        var typeCreates = new List<CommitCreate>();
+        var typeMutations = new List<CommitMutation>();
+        var typeTempByLineage = new Dictionary<int, int>();
+        var typeNextTemp = -1;
+
+        for (var i = 0; i < computation.Types.Types.Count; i++)
+        {
+            var mt = computation.Types.Types[i];
+            var order = i * 10;
+            if (existingTypesByLineage.TryGetValue(mt.Lineage, out var existingId))
+            {
+                typeMutations.Add(new FieldWriteMutation(existingId, "name", new TextValue(mt.Type.Name)));
+                typeMutations.Add(new FieldWriteMutation(existingId, "baseType", new TextValue(BaseTypeWordOf(mt.Type.BaseType))));
+                typeMutations.Add(new FieldWriteMutation(existingId, "values", new TextValue(string.Join(",", mt.Type.Values ?? []))));
+                typeMutations.Add(new FieldWriteMutation(existingId, "order", new IntValue(order)));
+            }
+            else
+            {
+                var temp = typeNextTemp--;
+                typeCreates.Add(new CommitCreate(temp, "MetaType", new ObjectValue(new Dictionary<string, NodeValue>
+                {
+                    ["name"]     = new TextValue(mt.Type.Name),
+                    ["baseType"] = new TextValue(BaseTypeWordOf(mt.Type.BaseType)),
+                    ["values"]   = new TextValue(string.Join(",", mt.Type.Values ?? [])),
+                    ["order"]    = new IntValue(order),
+                    ["origin"]   = new IntValue(mt.Lineage),
+                })));
+                typeTempByLineage[mt.Lineage] = temp;
+            }
+        }
+
+        if (typeCreates.Count > 0 || typeMutations.Count > 0)
+        {
+            var typeMintResult = store.CommitBatch(typeCreates, typeMutations);
+            var typeByTemp = typeMintResult.Creates.ToDictionary(c => c.TempId);
+            foreach (var (lineage, temp) in typeTempByLineage)
+            {
+                var realId = typeByTemp[temp].RealId;
+                store.AddToSet(typesSetId, realId);
+                existingTypesByLineage[lineage] = realId;
+            }
+        }
+        foreach (var removeId in toRemoveTypeIds)
+            store.RemoveFromSet(typesSetId, removeId); // GC then collects the row and its own props set
+
+        // ── pass 2: per SURVIVING merged type, mint/update/remove its OWN `props` set the same way ──
+        foreach (var mt in computation.Types.Types)
+        {
+            var ownerId = existingTypesByLineage[mt.Lineage];
+            var ownerFields = store.ReadById(ownerId)!.Value.Fields;
+            var propsSet = ownerFields.Fields.GetValueOrDefault("props") as SetValue
+                ?? throw new InvalidOperationException($"MetaType {ownerId} has no `props` set.");
+
+            var existingPropsByLineage = new Dictionary<int, int>();
+            foreach (var memberId in propsSet.Members.Keys)
+            {
+                var fields = store.ReadById(memberId)!.Value.Fields;
+                existingPropsByLineage[LineageOf(fields, memberId)] = memberId;
+            }
+            var mergedPropLineages = mt.Props.Select(p => p.Lineage).ToHashSet();
+            var toRemovePropIds = existingPropsByLineage
+                .Where(kv => !mergedPropLineages.Contains(kv.Key)).Select(kv => kv.Value).ToList();
+
+            var propCreates = new List<CommitCreate>();
+            var propMutations = new List<CommitMutation>();
+            var propTempByLineage = new Dictionary<int, int>();
+            var propNextTemp = -1;
+
+            for (var i = 0; i < mt.Props.Count; i++)
+            {
+                var mp = mt.Props[i];
+                var order = i * 10;
+                if (existingPropsByLineage.TryGetValue(mp.Lineage, out var existingPropId))
+                {
+                    propMutations.Add(new FieldWriteMutation(existingPropId, "name", new TextValue(mp.Prop.Name)));
+                    propMutations.Add(new FieldWriteMutation(existingPropId, "type", new TextValue(mp.Prop.Type)));
+                    propMutations.Add(new FieldWriteMutation(existingPropId, "cardinality", new TextValue(CardinalityWordOf(mp.Prop.Cardinality))));
+                    propMutations.Add(new FieldWriteMutation(existingPropId, "keyType", new TextValue(mp.Prop.KeyType ?? "")));
+                    propMutations.Add(new FieldWriteMutation(existingPropId, "multiline", new BoolValue(mp.Prop.Multiline)));
+                    propMutations.Add(new FieldWriteMutation(existingPropId, "order", new IntValue(order)));
+                }
+                else
+                {
+                    var temp = propNextTemp--;
+                    propCreates.Add(new CommitCreate(temp, "MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
+                    {
+                        ["name"]        = new TextValue(mp.Prop.Name),
+                        ["type"]        = new TextValue(mp.Prop.Type),
+                        ["cardinality"] = new TextValue(CardinalityWordOf(mp.Prop.Cardinality)),
+                        ["keyType"]     = new TextValue(mp.Prop.KeyType ?? ""),
+                        ["multiline"]   = new BoolValue(mp.Prop.Multiline),
+                        ["order"]       = new IntValue(order),
+                        ["origin"]      = new IntValue(mp.Lineage),
+                    })));
+                    propTempByLineage[mp.Lineage] = temp;
+                }
+            }
+
+            if (propCreates.Count > 0 || propMutations.Count > 0)
+            {
+                var propMintResult = store.CommitBatch(propCreates, propMutations);
+                var propByTemp = propMintResult.Creates.ToDictionary(c => c.TempId);
+                foreach (var (_, temp) in propTempByLineage)
+                    store.AddToSet(propsSet.Id, propByTemp[temp].RealId);
+            }
+            foreach (var removeId in toRemovePropIds)
+                store.RemoveFromSet(propsSet.Id, removeId);
+        }
+
+        // ── code/access/initialData: reprint the merged Common/Ui/Rules, write the four Design text fields ──
+        var mergedDesc = new InstanceDescription(
+            Types: null,
+            Ui: new InstanceUi(computation.Code.UiVars, computation.Code.UiFunctions, computation.Code.Render),
+            Common: new InstanceCommon(computation.Code.CommonFunctions),
+            InitialData: null,
+            Rules: computation.Access.Rules);
+        var printed = AppPrint.Print(mergedDesc);
+        var sections = DesignerSeed.SplitSections(printed);
+
+        store.WriteField(targetDesignId, "initialData", new TextValue(computation.InitialData));
+        store.WriteField(targetDesignId, "access", new TextValue(sections.GetValueOrDefault("access", "")));
+        store.WriteField(targetDesignId, "common", new TextValue(sections.GetValueOrDefault("common", "")));
+        store.WriteField(targetDesignId, "ui", new TextValue(sections.GetValueOrDefault("ui", "")));
+    }
+
+    // Create the TWO-PARENT merge Commit after a clean apply — the same atomic CommitBatch shape
+    // sys.commitDesign uses (Commit row + design/parent/mergeParent ref-links + db.commits link + every
+    // idMap entry + the branch-head advance, all-or-none, ONE log entry). `parent` = the TARGET's PRE-merge
+    // head (the branch this commit lands on); `mergeParent` = the SOURCE's head (the branch merged in).
+    // Re-reads the target design FRESH (the apply above wrote it through the same `store` instance, so its
+    // in-memory copy already reflects the merge — SchemaBridge.Snapshot below reads that live node).
+    private static int CreateMergeCommit(
+        IInstanceStore store, int targetDesignId, int targetBranchId, int targetPreMergeHeadId, int sourceHeadId,
+        string sourceBranchName, string targetBranchName)
+    {
+        var targetDesign = ReadDesign(store, targetDesignId);
+        var snap = SchemaBridge.Snapshot(targetDesign); // throws on an invalid design — should not happen post-apply
+
+        var commitsSetId = (store.ReadNode(NodePath.Root.Field("commits")) as SetValue)?.Id
+            ?? throw new InvalidOperationException("The designer's `db.commits` set is missing.");
+
+        const int commitTemp = -1;
+        var commitFields = new Dictionary<string, NodeValue>
+        {
+            ["message"] = new TextValue($"Merged '{sourceBranchName}' into '{targetBranchName}'"),
+            ["at"]      = new DateTimeValue(DateTimeOffset.UtcNow),
+            ["logSeq"]  = new IntValue(store.CurrentVersion),
+            ["text"]    = new TextValue(snap.Text),
+        };
+        var creates = new List<CommitCreate> { new CommitCreate(commitTemp, "Commit", new ObjectValue(commitFields)) };
+        var mutations = new List<CommitMutation>
+        {
+            new RefLinkMutation(commitTemp, "design", targetDesignId, "Design"),
+            new RefLinkMutation(commitTemp, "parent", targetPreMergeHeadId, "Commit"),
+            new RefLinkMutation(commitTemp, "mergeParent", sourceHeadId, "Commit"),
+            new SetLinkMutation(commitsSetId, commitTemp),
+        };
+        foreach (var (path, id) in snap.IdMap)
+            mutations.Add(new DictWriteMutation(commitTemp, "idMap", new TextValue(path), new IntValue(id)));
+        mutations.Add(new RefLinkMutation(targetBranchId, "head", commitTemp, "Commit"));
+
+        var result = store.CommitBatch(creates, mutations);
+        return result.Creates.First(c => c.TempId == commitTemp).RealId;
+    }
+
+    // A Design row by id (main's own row, or a branch clone) — the merge/branch actions address a
+    // WORKING COPY directly (not "a design in db.designs"), so this reads by raw id rather than requiring
+    // set membership (createBranch's sibling ResolveDesign DOES require db.designs membership, since it
+    // is the publish/create/setDesign convention of "one design out of the app list" — a working-copy
+    // clone is deliberately NOT in that list).
+    private static ObjectValue ReadDesign(IInstanceStore store, int designId) =>
+        store.ReadById(designId) is (var typeName, var fields) && typeName == "Design" ? fields
+            : throw new InvalidOperationException($"No design with id {designId}.");
+
+    // Any Branch whose `workingCopy` points at `designId` — the widened sibling of commitDesign's
+    // FindMainBranch (which only matches the "main"-named one). A branch's working copy is 1:1 (createBranch
+    // mints exactly one Branch per clone), so at most one match.
+    private static (int Id, ObjectValue Fields)? FindBranchByWorkingCopy(IInstanceStore store, int designId)
+    {
+        foreach (var (id, branch) in store.ReadExtent("Branch"))
+            if (branch.Fields.GetValueOrDefault("workingCopy") is ReferenceValue { TargetId: var t } && t == designId)
+                return (id, branch);
+        return null;
+    }
+
+    // A row's lineage anchor: its own `origin` field if non-zero, else its own id (it IS its own lineage
+    // origin — the base case every un-branched row starts as). Works for Design/MetaType/MetaProp alike
+    // (all three carry the same `origin int` field per M13 slice 5's schema addition).
+    private static int LineageOf(ObjectValue fields, int ownId) =>
+        fields.Fields.GetValueOrDefault("origin") is IntValue { Value: var o } && o != 0 ? o : ownId;
+
+    private static int IntOf(ObjectValue o, string name) =>
+        o.Fields.TryGetValue(name, out var v) && v is IntValue i ? i.Value : 0;
+
+    private static bool BoolOf(ObjectValue o, string name) =>
+        o.Fields.TryGetValue(name, out var v) && v is BoolValue b && b.Value;
+
+    // The designer's stored `baseType`/`cardinality` field WORD for a typed BaseType/Cardinality — the
+    // same mapping SchemaBridge.Project reads back (mirrors DesignMerger's own private BaseTypeWord/
+    // CardinalityWord, kept local here since this file writes the designer's raw text fields directly).
+    private static string BaseTypeWordOf(BaseType bt) => bt switch
+    {
+        BaseType.Object => "object",
+        BaseType.Enum => "enum",
+        _ => Instance.BaseTypes.NameOf(bt),
+    };
+    private static string CardinalityWordOf(Cardinality c) => c switch
+    {
+        Cardinality.Set => "set",
+        Cardinality.Dictionary => "dictionary",
+        _ => "single",
+    };
+
+    // Walk the parent+mergeParent DAG from BOTH heads and return the common ancestor with the MAX logSeq
+    // (v1's settled LCA — accepts extra conflicts on a genuine criss-cross; not built here). Every ancestor
+    // reachable from a commit (following `parent` AND `mergeParent`, since a prior merge commit has two
+    // parents) is collected into that head's ancestor set (INCLUDING the head itself — a head can be its
+    // own base when one side is a straight descendant of the other); the intersection's max-logSeq member
+    // is the LCA.
+    private static int FindLca(IInstanceStore store, int sourceHeadId, int targetHeadId)
+    {
+        var sourceAncestors = AncestorsOf(store, sourceHeadId);
+        var targetAncestors = AncestorsOf(store, targetHeadId);
+        var common = sourceAncestors.Keys.Intersect(targetAncestors.Keys).ToList();
+        if (common.Count == 0)
+            throw new InvalidOperationException("The two branches share no common commit history — cannot merge.");
+        return common.OrderByDescending(id => sourceAncestors[id]).First();
+    }
+
+    // commitId → its logSeq, for every commit reachable by walking `parent`/`mergeParent` from `headId`
+    // (inclusive of headId itself).
+    private static Dictionary<int, int> AncestorsOf(IInstanceStore store, int headId)
+    {
+        var seqs = new Dictionary<int, int>();
+        var stack = new Stack<int>();
+        stack.Push(headId);
+        while (stack.Count > 0)
+        {
+            var id = stack.Pop();
+            if (seqs.ContainsKey(id)) continue;
+            var fields = FindCommit(store, id) ?? throw new InvalidOperationException($"Commit {id} referenced by the DAG no longer exists.");
+            seqs[id] = IntOf(fields, "logSeq");
+            if (fields.Fields.GetValueOrDefault("parent") is ReferenceValue { TargetId: { } p }) stack.Push(p);
+            if (fields.Fields.GetValueOrDefault("mergeParent") is ReferenceValue { TargetId: { } mp }) stack.Push(mp);
+        }
+        return seqs;
+    }
+
+    private readonly record struct Resolution(string Id, string Take);
+
+    private static IReadOnlyList<Resolution> ArgResolutionsOptional(JsonElement args, int index)
+    {
+        if (args.ValueKind != JsonValueKind.Array || args.GetArrayLength() <= index) return [];
+        var arg = args[index];
+        // A Code array ships as { type:"array"|"set"|..., items:[...] } wrapping tagged scalars/objects,
+        // OR a bare JSON array (defensive, matching the file's existing Arg* leniency). Each item is an
+        // object literal `{ id, take }` — Code object values ship as { type:"object", props:{...} } with
+        // each prop itself a tagged scalar, so read defensively through both shapes.
+        var items = arg.ValueKind switch
+        {
+            JsonValueKind.Array => arg.EnumerateArray(),
+            JsonValueKind.Object when arg.TryGetProperty("items", out var arr) && arr.ValueKind == JsonValueKind.Array => arr.EnumerateArray(),
+            _ => Enumerable.Empty<JsonElement>(),
+        };
+        var result = new List<Resolution>();
+        foreach (var item in items)
+        {
+            var obj = item.ValueKind == JsonValueKind.Object && item.TryGetProperty("value", out var v) && v.ValueKind == JsonValueKind.Object
+                ? v : item;
+            var propsHolder = obj.TryGetProperty("props", out var props) && props.ValueKind == JsonValueKind.Object ? props : obj;
+            var id = ScalarText(propsHolder, "id");
+            var take = ScalarText(propsHolder, "take");
+            if (id.Length > 0 && take.Length > 0) result.Add(new Resolution(id, take));
+        }
+        return result;
+    }
+
+    private static string ScalarText(JsonElement obj, string prop)
+    {
+        if (!obj.TryGetProperty(prop, out var v)) return "";
+        if (v.ValueKind == JsonValueKind.String) return v.GetString() ?? "";
+        if (v.ValueKind == JsonValueKind.Object && v.TryGetProperty("value", out var inner))
+            return inner.ValueKind == JsonValueKind.String ? inner.GetString() ?? "" : "";
+        return "";
     }
 
     // The design's `main` Branch row (its `workingCopy` reference points at the design) — returned WITH

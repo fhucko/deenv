@@ -15,12 +15,14 @@ types
         common text
         ui text
         types set of MetaType
+        origin int
     MetaType
         name text
         baseType text
         values text
         order int
         props set of MetaProp
+        origin int
     MetaProp
         name text
         type text
@@ -28,11 +30,13 @@ types
         keyType text
         multiline bool
         order int
+        origin int
     Commit
         message text
         at datetime
         design Design
         parent Commit
+        mergeParent Commit
         logSeq int
         text text
         idMap dict of int by text
