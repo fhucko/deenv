@@ -29,10 +29,12 @@ namespace DeEnv.Designer;
 // designer's OWN app document carries an empty initialData (it no longer embeds the design library), so
 // reverse-projecting it yields a Design with empty initialData and there is no recursion.
 //
-// The kernel runs this on EVERY boot as a SYNC (KernelHost.SyncDesignHost): a fresh store gets `Build`
-// (all designs from the files); an existing store gets `Merge` (file-backed designs UPSERTED at their
-// designIds, UI-created designs with no backing file PRESERVED). Merge is the inverse-then-forward that
-// keeps the design library reflecting the app files without ever deleting the store.
+// The kernel runs this on EVERY boot (KernelHost.SyncDesignHost): a FRESH store gets `Build` (every
+// design seeded from its file, ONCE — this IS the adoption for a brand-new install). An EXISTING store
+// never re-seeds via InitialData again (M13 slice 3 — the authority inversion: design-data + its commit
+// history are the source of truth, an app file is a publish ARTIFACT, not authoritative input); instead
+// each file-backed design NOT YET present is adopted individually via `AdoptInto`, through ordinary live
+// store writes — never Reset, never truncating the log.
 public static class DesignerSeed
 {
     // Build the design-host's `db.designs` + `db.instances` seed from the given designs (each an
@@ -56,71 +58,95 @@ public static class DesignerSeed
         return builder.Build();
     }
 
-    // Reconcile the design-host's EXISTING designs with the current app files — the boot sync over a
-    // non-empty store. `existing` is the design-host's live `Design` extent (its objects read inline via
-    // IInstanceStore.ReadExtent, keyed by id; each `types` member is itself an inline object keyed by its
-    // MetaType id, and so on for `props`). `fileBacked` is the same (Label, DesignId, AppText) tuples as
-    // Build — one per registered instance that references a design.
+    // ── M13 slice 3: adopt ONE file-backed design directly into an ALREADY-OPEN, non-fresh store ──────
     //
-    // The merge:
-    //   • UPSERT each file-backed design at id == its designId (reverse-projected from the file — the
-    //     file is the source of truth, so an existing same-id design is overwritten, not kept).
-    //   • PRESERVE every existing design whose id is NOT a current designId (a UI-created design with no
-    //     backing instance) verbatim — its Design + its MetaTypes + their MetaProps at their existing ids.
-    //
-    // Both are emitted by ONE SeedBuilder, whose mint counter starts above every id in play (file-backed
-    // designIds AND all preserved Design/MetaType/MetaProp ids), so a freshly-minted file-backed sub-id
-    // can never collide with a preserved one. The root Db's `designs` set lists the preserved ids first,
-    // then the file-backed ids (order is incidental; ids are the identity).
-    // Reconcile the design-host's EXISTING designs + instances with the current app files — the boot
-    // sync over a non-empty store. `existingDesigns` is the design-host's live `Design` extent (its
-    // objects read inline via IInstanceStore.ReadExtent, keyed by id). `fileBacked` is the same
-    // (Label, DesignId, AppText) tuples as Build. `instances` is the live (Name, RuntimeId, DesignId)
-    // tuples — db.instances is always rebuilt from the kernel registry on every boot (all instances are
-    // file-backed; there are no UI-created instances yet).
-    public static InstanceInitialData Merge(
-        IReadOnlyDictionary<int, ObjectValue> existingDesigns,
-        IReadOnlyList<(string Label, int DesignId, string AppText)> fileBacked,
-        IReadOnlyList<(string Name, int RuntimeId, int? DesignId)> instances)
+    // The one-time-adoption half of the authority inversion: writes the design LIVE, through ordinary
+    // IInstanceStore calls (CreateObject/AddToSet — the same primitives KernelHost's db.instances mirror
+    // already uses), never through InitialData/Reset (which would re-freeze genesis and TRUNCATE the
+    // designer's own log — exactly the boot-wipe this inversion ends). Unlike Build/Merge (which mint via
+    // a JSON-pool SeedBuilder that can PIN an arbitrary caller-supplied id), a live store's CreateObject
+    // always auto-mints through its own counter — there is no id-pinning write path, and adding one would
+    // be an IInstanceStore shape change (out of scope for this slice; ask-before-structural-changes).
+    // So an adopted design's Design-row id is WHATEVER the store mints, not the kernel.json designId that
+    // named it — the caller (KernelHost.SyncDesignHost) must rewrite that registry entry's designId to
+    // match afterward, so future resolution (KernelHostActions.ResolveDesign) still finds it by that id.
+    // Returns the newly-minted Design id.
+    public static int AdoptInto(IInstanceStore store, string appText)
     {
-        var fileBackedIds = fileBacked.Select(d => d.DesignId).ToHashSet();
-        var preserved = existingDesigns
-            .Where(e => !fileBackedIds.Contains(e.Key))
-            .OrderBy(e => e.Key)
-            .ToList();
+        var desc = AppParse.Parse(appText);
+        var sections = SplitSections(appText);
 
-        // Start the mint counter above EVERY id in play so a minted sub-id never collides with a
-        // preserved Design/MetaType/MetaProp id or a file-backed designId.
-        var preservedIds = preserved.SelectMany(e => DesignSubgraphIds(e.Value).Append(e.Key));
-        var builder = new SeedBuilder(fileBackedIds.Concat(preservedIds));
+        var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["label"]       = new TextValue(""), // the label is a UI-editable field, not carried by the app doc
+            ["initialData"] = new TextValue(sections.GetValueOrDefault("initialData", "")),
+            ["access"]      = new TextValue(sections.GetValueOrDefault("access", "")),
+            ["common"]      = new TextValue(sections.GetValueOrDefault("common", "")),
+            ["ui"]          = new TextValue(sections.GetValueOrDefault("ui", "")),
+        }));
+        var typesSetId = SetIdOf(store, designId, "types");
 
-        var designIds = new List<int>();
-        foreach (var (id, design) in preserved)
-            designIds.Add(builder.AddPreservedDesign(id, design));
-        foreach (var (label, designId, appText) in fileBacked)
-            designIds.Add(builder.AddDesign(label, designId, appText));
+        var typeOrder = 1;
+        foreach (var type in desc.AllTypes())
+            store.AddToSet(typesSetId, AdoptType(store, type, typeOrder++ * 10));
 
-        var instanceIds = new List<int>();
-        foreach (var (name, runtimeId, designId) in instances)
-            instanceIds.Add(builder.AddInstance(name, runtimeId, designId));
-
-        builder.AddRootDb(designIds, instanceIds);
-        return builder.Build();
+        store.AddToSet(NodePath.Root.Field("designs"), designId);
+        return designId;
     }
 
-    // Every id inside a preserved Design's subgraph (its MetaType ids and their MetaProp ids), read off
-    // the inline `types`/`props` set members — the set member KEY is the member object's id. Used only to
-    // seed the mint counter above them.
-    private static IEnumerable<int> DesignSubgraphIds(ObjectValue design)
+    // Adopt one MetaType (+ its MetaProps) live, mirroring SeedBuilder.AddType's field shape. Returns the
+    // newly-minted MetaType id (not yet linked into any design's `types` set — the caller links it).
+    private static int AdoptType(IInstanceStore store, TypeDefinition type, int order)
     {
-        if (design.Fields.GetValueOrDefault("types") is not SetValue types) yield break;
-        foreach (var (typeId, typeNode) in types.Members)
+        var typeId = store.CreateObject("MetaType", new ObjectValue(new Dictionary<string, NodeValue>
         {
-            yield return typeId;
-            if (typeNode is ObjectValue type && type.Fields.GetValueOrDefault("props") is SetValue props)
-                foreach (var propId in props.Members.Keys)
-                    yield return propId;
-        }
+            ["name"]     = new TextValue(type.Name),
+            ["baseType"] = new TextValue(type.BaseType == BaseType.Object ? "object"
+                : type.BaseType == BaseType.Enum ? "enum"
+                : BaseTypes.NameOf(type.BaseType)),
+            ["values"]   = new TextValue(string.Join(", ", type.Values ?? [])),
+            ["order"]    = new IntValue(order),
+        }));
+        var propsSetId = SetIdOf(store, typeId, "props");
+
+        var propOrder = 1;
+        foreach (var prop in type.Props ?? [])
+            store.AddToSet(propsSetId, AdoptProp(store, prop, propOrder++ * 10));
+
+        return typeId;
+    }
+
+    // Adopt one MetaProp live, mirroring SeedBuilder.AddProp's field shape (cardinality always explicit;
+    // keyType only for a dictionary — see SeedBuilder.AddProp's own doc for why).
+    private static int AdoptProp(IInstanceStore store, PropDefinition prop, int order)
+    {
+        var fields = new Dictionary<string, NodeValue>
+        {
+            ["name"]        = new TextValue(prop.Name),
+            ["type"]        = new TextValue(prop.Type),
+            ["order"]       = new IntValue(order),
+            ["cardinality"] = new TextValue(prop.Cardinality switch
+            {
+                Cardinality.Set => "set",
+                Cardinality.Dictionary => "dictionary",
+                _ => "single",
+            }),
+            ["multiline"] = new BoolValue(prop.Multiline),
+        };
+        if (prop.Cardinality == Cardinality.Dictionary)
+            fields["keyType"] = new TextValue(prop.KeyType ?? "text");
+        return store.CreateObject("MetaProp", new ObjectValue(fields));
+    }
+
+    // The intrinsic id of a just-created object's named SET prop (every declared set prop starts as an
+    // EMPTY StoredSet with its own minted id — see JsonFileInstanceStore.BuildFields), read back through
+    // ReadById since the object is not yet linked anywhere a NodePath could reach it.
+    private static int SetIdOf(IInstanceStore store, int objectId, string setProp)
+    {
+        var hit = store.ReadById(objectId)
+            ?? throw new InvalidOperationException($"Object {objectId} vanished immediately after creation.");
+        return hit.Fields.Fields.GetValueOrDefault(setProp) is SetValue sv ? sv.Id
+            : throw new InvalidOperationException($"'{hit.TypeName}' has no set prop '{setProp}'.");
     }
 
     // Split an app document into its top-level sections, keyed by section keyword (types / initialData /
@@ -166,16 +192,16 @@ public static class DesignerSeed
     // Accumulates the flat, id-keyed initialData pools (Db / Design / MetaType / MetaProp) the design
     // seed expresses: every object is a top-level entry with a unique id, sets are arrays of member ids.
     // Design ids are caller-supplied (the load-bearing kernel.json designIds); every OTHER minted id (the
-    // root Db, file-backed MetaTypes/MetaProps) comes from a counter started ABOVE every FIXED id (the
-    // designIds, and on a merge the preserved designs' existing sub-ids), so a minted id never collides
-    // with a Design id or a preserved id. A PRESERVED design keeps its own existing sub-ids verbatim.
+    // root Db, MetaTypes/MetaProps) comes from a counter started ABOVE every FIXED (caller-supplied) id,
+    // so a minted id never collides with a Design id. Used only by `Build` — the FRESH-store, first-boot
+    // seed, where InitialData/Reset is still the right mechanism (there is no prior log to preserve).
     private sealed class SeedBuilder
     {
         private readonly Dictionary<string, Dictionary<string, JsonElement>> _pools = new();
         private int _nextId;
 
-        // `fixedIds` = every id that must NOT be re-minted: the file-backed designIds plus (on a merge)
-        // the preserved designs' existing Design/MetaType/MetaProp ids. The counter starts above them all.
+        // `fixedIds` = every id that must NOT be re-minted: the file-backed designIds. The counter
+        // starts above them all.
         public SeedBuilder(IEnumerable<int> fixedIds) =>
             _nextId = fixedIds.DefaultIfEmpty(0).Max() + 1;
 
@@ -210,84 +236,6 @@ public static class DesignerSeed
             Pool("Design")[designId.ToString()] = ToElement(fields);
             return designId;
         }
-
-        // Re-emit an EXISTING (UI-created, no backing file) design VERBATIM at its existing id, carrying
-        // its MetaTypes and their MetaProps at THEIR existing ids (read off the inline set members — the
-        // set member key is the member's id). The inverse of the store's load: scalars become JSON values,
-        // sets become id arrays. Preserving the ids keeps the design's identity stable across the boot sync.
-        public int AddPreservedDesign(int designId, ObjectValue design)
-        {
-            var typeIds = new List<int>();
-            if (design.Fields.GetValueOrDefault("types") is SetValue types)
-                foreach (var (typeId, typeNode) in types.Members)
-                    if (typeNode is ObjectValue type)
-                        typeIds.Add(AddPreservedType(typeId, type));
-
-            var fields = new JsonObject
-            {
-                ["label"] = Text(design, "label"),
-                ["initialData"] = Text(design, "initialData"),
-                ["access"] = Text(design, "access"),
-                ["common"] = Text(design, "common"),
-                ["ui"] = Text(design, "ui"),
-                ["types"] = IdArray(typeIds),
-            };
-            Pool("Design")[designId.ToString()] = ToElement(fields);
-            return designId;
-        }
-
-        private int AddPreservedType(int typeId, ObjectValue type)
-        {
-            var propIds = new List<int>();
-            if (type.Fields.GetValueOrDefault("props") is SetValue props)
-                foreach (var (propId, propNode) in props.Members)
-                    if (propNode is ObjectValue prop)
-                        propIds.Add(AddPreservedProp(propId, prop));
-
-            var fields = new JsonObject
-            {
-                ["name"] = Text(type, "name"),
-                ["baseType"] = Text(type, "baseType"),
-                ["values"] = Text(type, "values"),
-                ["order"] = Int(type, "order"),
-                ["props"] = IdArray(propIds),
-            };
-            Pool("MetaType")[typeId.ToString()] = ToElement(fields);
-            return typeId;
-        }
-
-        private int AddPreservedProp(int propId, ObjectValue prop)
-        {
-            var fields = new JsonObject
-            {
-                ["name"] = Text(prop, "name"),
-                ["type"] = Text(prop, "type"),
-                ["order"] = Int(prop, "order"),
-                ["cardinality"] = Text(prop, "cardinality"),
-                // Carry the `multiline` presentation flag forward verbatim. The live extent reads it as a
-                // BoolValue (defaulted false by BuildObject for a preserved MetaProp that predates the
-                // field), so this preserves a UI-created design's textarea toggle across the boot sync.
-                ["multiline"] = Bool(prop, "multiline"),
-            };
-            // keyType is meaningful (and stored) only for a dictionary prop — carry it when present.
-            if (prop.Fields.GetValueOrDefault("keyType") is TextValue { Text.Length: > 0 } keyType)
-                fields["keyType"] = keyType.Text;
-            Pool("MetaProp")[propId.ToString()] = ToElement(fields);
-            return propId;
-        }
-
-        // Read a scalar leaf off an inline-loaded object (the design subgraph is all text + the int
-        // `order`). A missing/empty field reads as "" / 0 — the same friendly defaults the seed uses.
-        private static string Text(ObjectValue obj, string name) =>
-            obj.Fields.GetValueOrDefault(name) is TextValue t ? t.Text : "";
-
-        private static int Int(ObjectValue obj, string name) =>
-            obj.Fields.GetValueOrDefault(name) is IntValue i ? i.Value : 0;
-
-        // A bool leaf off an inline-loaded object, defaulting false when absent (a preserved MetaProp
-        // predating the `multiline` field, though BuildObject already defaults a declared bool to false).
-        private static bool Bool(ObjectValue obj, string name) =>
-            obj.Fields.GetValueOrDefault(name) is BoolValue b && b.Value;
 
         // Mint an Instance seed entry: { name, runtimeId, design: <bare designId or absent> }. The
         // `design` field is a BARE id (a single reference in seed form — INSTANCE_DESCRIPTION_FORMAT.md

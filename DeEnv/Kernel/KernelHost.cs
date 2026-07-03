@@ -245,7 +245,7 @@ public sealed class KernelHost(
         // Non-fatal: a sync that cannot seed/merge (a stale designer doc/data after a binary update)
         // is logged loudly and skipped — the designer then fails or serves a stale library
         // PER-INSTANCE below, while every other app boots.
-        try { SyncDesignHost(specs); }
+        try { SyncDesignHost(specs, registryPath); }
         catch (Exception ex)
         {
             DesignSyncError = ex.Message;
@@ -375,11 +375,23 @@ public sealed class KernelHost(
     }
 
     // ── boot sync of the design library (the design-host's `db.designs`) ──────────────
-
-    // Reconcile the design-host's `db.designs` with the current app files on EVERY boot (see the prior
-    // design record). FRESH store → seed all file-backed designs; EXISTING store → MERGE (file-backed
-    // upserted at their designIds, UI-created preserved). Scoped to the design-host store alone.
-    private static void SyncDesignHost(IReadOnlyList<InstanceSpec> specs)
+    //
+    // M13 slice 3 — THE AUTHORITY INVERSION. Design-data + its commit history are now the source of
+    // truth; an app's `.deenv` FILE is a PUBLISH ARTIFACT (written BY publish), not authoritative input.
+    // So this is no longer a boot-time re-seed:
+    //   • A FRESH store (no data file at all — a brand-new install) still gets a full `Build` seed via
+    //     InitialData — this IS the one-time adoption for everything present, and there is no prior log
+    //     to lose (invariant 6).
+    //   • An EXISTING store is NEVER reseeded/Reset again. A file-backed design NOT YET a Design row is
+    //     ADOPTED — exactly ONCE — via ordinary LIVE store writes (DesignerSeed.AdoptInto), never
+    //     touching InitialData/Reset (which would re-freeze genesis and TRUNCATE the log — the very
+    //     boot-wipe this inversion ends). Every design already present stays untouched.
+    // `db.instances` keeps mirroring the kernel registry every boot regardless (ReconcileInstancesSet) —
+    // it is runtime state, not versioned design data, so it is split OUT of the design-adoption path and
+    // reconciled via the SAME live-write primitives the runtime host actions already mirror through.
+    // Every Design (freshly adopted or pre-existing) gets a `main` Branch if it lacks one (invariant 5,
+    // EnsureMainBranches) — idempotent, never recreated once present.
+    private void SyncDesignHost(IReadOnlyList<InstanceSpec> specs, string registryPath)
     {
         var designHost = specs.FirstOrDefault(IsDesignHost);
         if (designHost is null) return;
@@ -389,7 +401,6 @@ public sealed class KernelHost(
             .OrderBy(s => s.Id)
             .Select(s => (s.App, DesignId: s.DesignId!.Value, AppText: File.ReadAllText(s.SchemaPath)))
             .ToList();
-        if (fileBacked.Count == 0) return;
 
         // Build the instance tuples: one per hosted spec (every instance, with or without a design).
         // `App` is the display name; `Id` is the kernel runtime id; `DesignId` is the design reference
@@ -402,15 +413,143 @@ public sealed class KernelHost(
         var description = InstanceDescriptionLoader.LoadFile(designHost.SchemaPath);
         var fresh = !File.Exists(designHost.DataPath) || new FileInfo(designHost.DataPath).Length == 0;
 
+        IInstanceStore store;
         if (fresh)
         {
-            _ = new JsonFileInstanceStore(designHost.DataPath, description with { InitialData = DesignerSeed.Build(fileBacked, instanceTuples) });
-            return;
+            // The one-time full seed for a brand-new install — nothing exists yet, so InitialData/Reset
+            // costs nothing (invariant 6). Every registered design is adopted at its kernel.json designId
+            // (the JSON-pool seed CAN pin an arbitrary id — see DesignerSeed.Build's doc). Still falls
+            // through to EnsureMainBranches below (invariant 5) — DesignerSeed.Build seeds Design/MetaType/
+            // MetaProp/Instance rows only, no Branch rows, so a freshly-seeded design needs one too.
+            store = new JsonFileInstanceStore(designHost.DataPath, description with { InitialData = DesignerSeed.Build(fileBacked, instanceTuples) });
+        }
+        else
+        {
+            // An EXISTING store: open it (no Reset — this is the log-preserving path) and adopt only the
+            // designs it has never seen before.
+            store = new JsonFileInstanceStore(designHost.DataPath, description);
+            var seenDesignIds = store.ReadExtent("Design").Keys.ToHashSet();
+
+            foreach (var (_, designId, appText) in fileBacked)
+            {
+                if (!seenDesignIds.Add(designId)) continue; // already adopted this boot (or before) — never touched again
+
+                var adoptedId = DesignerSeed.AdoptInto(store, appText);
+                if (adoptedId != designId)
+                    // The store minted a different id than kernel.json named (CreateObject cannot pin an
+                    // arbitrary id on a live, already-open store — see AdoptInto's doc). Rewrite the
+                    // registry entry so future resolution (KernelHostActions.ResolveDesign, the IDE's
+                    // dropdown) finds the design at the id it actually got minted.
+                    RewriteDesignIdInRegistry(registryPath, designId, adoptedId);
+            }
+
+            ReconcileInstancesSet(store, instanceTuples);
         }
 
-        var existing = new JsonFileInstanceStore(designHost.DataPath, description).ReadExtent("Design");
-        var merged = DesignerSeed.Merge(existing, fileBacked, instanceTuples);
-        new JsonFileInstanceStore(designHost.DataPath, description with { InitialData = merged }).Reset();
+        EnsureMainBranches(store);
+    }
+
+    // Rewrite the registry entry(ies) whose designId is `oldId` to `newId` — the adoption-mismatch
+    // follow-up (SyncDesignHost). Single-operator, so a plain read-modify-write like every other
+    // registry mutation (RegistryWriter's own doc); at most one entry should ever match (each hosted
+    // instance names its OWN designId), but every match is corrected defensively.
+    private static void RewriteDesignIdInRegistry(string registryPath, int oldId, int newId)
+    {
+        var stored = RegistryReader.Read(registryPath);
+        RegistryWriter.Write(registryPath, new Registry(
+            [.. stored.Instances.Select(e => e.DesignId == oldId ? e with { DesignId = newId } : e)]));
+    }
+
+    // Reconcile `db.instances` to EXACTLY match the given (App, RuntimeId, DesignId) tuples — the
+    // runtime-state mirror that runs every boot regardless of design adoption (invariant 4, split OUT of
+    // the design-data path). Insert a missing Instance row, update a changed name/design reference on an
+    // existing one, and remove a row whose runtimeId no longer names a hosted instance — all via the SAME
+    // live-write primitives (CreateObject/AddToSet/WriteField/WriteReference/RemoveFromSet) the runtime
+    // mirror methods (MirrorInstanceInsert et al.) use for a single change; this is their boot-time,
+    // whole-set counterpart.
+    private static void ReconcileInstancesSet(IInstanceStore store, IReadOnlyList<(string App, int RuntimeId, int? DesignId)> instances)
+    {
+        if (store.ReadNode(NodePath.Root.Field("instances")) is not SetValue instancesSet) return;
+        var byRuntimeId = store.ReadExtent("Instance")
+            .Where(e => e.Value.Fields.GetValueOrDefault("runtimeId") is IntValue)
+            .ToDictionary(e => ((IntValue)e.Value.Fields["runtimeId"]).Value, e => e.Key);
+
+        var wanted = instances.Select(i => i.RuntimeId).ToHashSet();
+
+        // Remove any Instance row whose runtimeId is no longer among the live specs (an instance the
+        // kernel no longer hosts — e.g. deleted between boots by hand-editing the registry).
+        foreach (var (runtimeId, objId) in byRuntimeId)
+            if (!wanted.Contains(runtimeId))
+                store.RemoveFromSet(instancesSet.Id, objId);
+
+        foreach (var (name, runtimeId, designId) in instances)
+        {
+            if (byRuntimeId.TryGetValue(runtimeId, out var objId))
+            {
+                // Existing row: update its name/design reference if they drifted (a rename/setDesign that
+                // happened between boots via a hand-edited registry, or the first sync ever to see a
+                // preexisting hosted instance land its design reference). ReadById's Fields is an
+                // ObjectValue whose OWN .Fields dictionary holds the public NodeValue model (a single
+                // reference reads back as ReferenceValue), never the store's internal representation.
+                if (store.ReadById(objId) is { } hit)
+                {
+                    if (hit.Fields.Fields.GetValueOrDefault("name") is not TextValue { Text: var n } || n != name)
+                        store.WriteField(objId, "name", new TextValue(name));
+
+                    var currentDesignId = hit.Fields.Fields.GetValueOrDefault("design") is ReferenceValue { TargetId: { } t } ? t : (int?)null;
+                    if (currentDesignId != designId)
+                        store.WriteReference(objId, "design", designId, "Design");
+                }
+                continue;
+            }
+
+            // Missing row: insert it (mirrors MirrorInstanceInsert — link into the set BEFORE the
+            // reference write, since WriteReference triggers GC and an unlinked fresh object would be
+            // collected as unreachable).
+            var fields = new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue(name),
+                ["runtimeId"] = new IntValue(runtimeId),
+            };
+            var newId = store.CreateObject("Instance", new ObjectValue(fields));
+            store.AddToSet(instancesSet.Id, newId);
+            if (designId.HasValue)
+                store.WriteReference(newId, "design", designId, "Design");
+        }
+    }
+
+    // Ensure every Design (in `db.designs`) has a `main` Branch (invariant 5, M13 slice 3) — create-if-
+    // missing, idempotent: a Design that already has ANY Branch named "main" is left untouched (never
+    // recreated/reset). `head` starts EMPTY (null) — no adoption commit mints in this slice (a design
+    // freshly adopted from a file has no commit history yet; slice 4 decides whether adoption itself
+    // should mint a baseline commit). `workingCopy` points at the Design itself (this slice's lean shape —
+    // see docs/plans/versioning-slices.md slice 3: "at this slice the working copy IS the design row").
+    private static void EnsureMainBranches(IInstanceStore store)
+    {
+        if (store.ReadNode(NodePath.Root.Field("branches")) is not SetValue branchesSet) return; // pre-slice-3 meta (a test fixture) — nothing to ensure
+        var designs = store.ReadExtent("Design");
+        var existingBranches = store.ReadExtent("Branch");
+
+        var designIdsWithMainBranch = existingBranches.Values
+            .Where(b => b.Fields.GetValueOrDefault("name") is TextValue { Text: "main" })
+            .Select(b => b.Fields.GetValueOrDefault("workingCopy") is ReferenceValue { TargetId: { } t } ? t : (int?)null)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .ToHashSet();
+
+        foreach (var designId in designs.Keys)
+        {
+            if (designIdsWithMainBranch.Contains(designId)) continue;
+
+            var fields = new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("main"),
+            };
+            var branchId = store.CreateObject("Branch", new ObjectValue(fields));
+            store.AddToSet(branchesSet.Id, branchId);
+            store.WriteReference(branchId, "workingCopy", designId, "Design");
+            // `head` stays unset (empty) — no commit exists yet for a freshly-adopted or pre-slice-3 design.
+        }
     }
 
     // Whether an instance's Code CALLS a host-action builtin (sys.create/delete/…): the WIRING signal for

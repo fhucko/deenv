@@ -1,4 +1,5 @@
-﻿using DeEnv.Http;
+﻿using DeEnv.Designer;
+using DeEnv.Http;
 using DeEnv.Instance;
 using DeEnv.Kernel;
 using DeEnv.Storage;
@@ -40,13 +41,17 @@ public sealed class HostActionSteps
     // this test meta is where the admin-gated `sys` rule is proven end-to-end at the WS seam.)
     private const string MetaSchema = MetaTypes + SysAdminAccess;
 
-    // The types half, shared by every meta variant (with / without an access section).
+    // The types half, shared by every meta variant (with / without an access section). Includes the M13
+    // slice-3 Commit/Branch types (the real instances/1/app.deenv shape) so a commitDesign scenario runs
+    // against the SAME meta every other host-action scenario does — no separate designer fixture needed.
     private const string MetaTypes =
         """
         types
             Db
                 designs set of Design
                 users set of User
+                commits set of Commit
+                branches set of Branch
             Design
                 label text
                 initialData text
@@ -71,12 +76,29 @@ public sealed class HostActionSteps
                 name text
                 role Role
                 password password
+            Commit
+                message text
+                at datetime
+                design Design
+                parent Commit
+                logSeq int
+                text text
+                idMap dict of int by text
+            Branch
+                name text
+                head Commit
+                workingCopy Design
         """;
 
     // The host-action authorization rule: `sys` gated to the Admin role — deny-by-default for everyone
-    // else. A leading newline so it concatenates after MetaTypes as its own section.
+    // else. Plus the M13 slice-3 write-floor immutability guard on Commit/Branch: no rule grants create/
+    // edit/delete on either (an always-false condition), so a client write is denied floor-side while
+    // sys.commitDesign — writing through the store seam directly — is the only path that can ever create
+    // or move one. A leading newline so it concatenates after MetaTypes as its own section.
     private const string SysAdminAccess =
-        "\n\naccess\n    sys\n        * where currentUser.role == \"Admin\"\n";
+        "\n\naccess\n    sys\n        * where currentUser.role == \"Admin\"\n" +
+        "    Commit\n        create edit delete where false\n" +
+        "    Branch\n        create edit delete where false\n";
 
     // A designer-shaped meta with NO access section — the shape-authority-hole scenario: an instance that
     // HAS the designer shape and calls host actions but declares no `sys` rule must reject for everyone.
@@ -523,6 +545,33 @@ public sealed class HostActionSteps
     public void WhenApplyDesignToTarget() =>
         Send("setDesign", $$"""{ "type": "int", "value": {{_designId}} }, { "type": "int", "value": {{TargetId}} }""");
 
+    // ── When: commitDesign over the WS (M13 slice 3) ────────────────────────────
+
+    // commitDesign(design, message): arg 0 the design's id, arg 1 the commit message text. Every commit
+    // tracks the message it just committed — the "that commit" Then-steps below always read the MOST
+    // RECENT one, so a two-commit scenario's later assertions automatically read the second commit.
+    private string _lastCommitMessage = "";
+    private int _versionBeforeLastCommit;
+
+    [When("the designer commits that design with message {string} over the WS")]
+    public void WhenCommitDesign(string message) => Commit(_designId, message);
+
+    [When("the operator commits design id {int} with message {string} over the WS")]
+    public void WhenOperatorCommitsDesignId(int designId, string message) => Commit(designId, message);
+
+    [Given("the designer already committed that design with message {string}")]
+    public void GivenAlreadyCommitted(string message) => Commit(_designId, message);
+
+    private void Commit(int designId, string message)
+    {
+        _lastCommitMessage = message;
+        // _designer is the SAME store instance Ws() builds the WsHandler over — CurrentVersion here IS
+        // the "before the commit's own writes" baseline the new commit's logSeq must equal.
+        _versionBeforeLastCommit = _designer.CurrentVersion;
+        Send("commitDesign",
+            $$"""{ "type": "int", "value": {{designId}} }, { "type": "text", "value": "{{message}}" }""");
+    }
+
     // Build the WsHandler (which mints + binds the principal's session), then send ONE hostAction frame
     // carrying that session's clientId + the given (already-serialized) args — so authorization decides
     // over the bound principal. `Ws()` sets `_clientId`; it runs before the frame is built (the receiver
@@ -543,6 +592,16 @@ public sealed class HostActionSteps
         // action just routes ids to the kernel), so open a bare designer instance lazily to give the
         // WsHandler a valid store + description. The publish/create scenarios already opened one.
         if (_designer == null) OpenDesigner();
+
+        // Re-open fresh over the SAME data file (M13 slice 3): KernelHostActions.CommitDesign resolves
+        // its OWN store instance internally (the established convention every host action already uses —
+        // see ResolveDesign's doc), so a PRECEDING commitDesign call's writes land on disk but never
+        // reach `_designer`'s already-loaded in-memory copy. Re-reading here before building the WsHandler
+        // means a scenario chaining "commit, then write to the commit" (or a second commit) always acts
+        // on ground truth — exactly what a real single long-lived HostedInstance.Store never needs,
+        // because production has only ONE store instance per hosted instance, never two independent ones
+        // over the same file.
+        _designer = new JsonFileInstanceStore(_designerDataPath, _meta);
 
         var hostActions = new KernelHostActions(
             _metaAppPath, _designerDataPath,
@@ -804,6 +863,200 @@ public sealed class HostActionSteps
         await Assert.That(_recordedDesignId).IsEqualTo(_designId);
     }
 
+    // ── Then: db.commits / db.branches assertions (M13 slice 3) ─────────────────
+    //
+    // Every lookup below returns its INTRINSIC ID alongside its fields (never bare ObjectValue ==
+    // comparisons — ObjectValue is a record whose auto-generated equality falls back to the backing
+    // Dictionary's REFERENCE equality, so two structurally-identical-but-freshly-read ObjectValues from
+    // separate ReadNode calls are never equal). The id is what a caller needing to WRITE (objectPropChange/
+    // setReferenceField, both id-addressed) or cross-reference (a ReferenceValue's TargetId) actually needs.
+    //
+    // Read via a FRESH store over the SAME data file (mirroring ThenTargetStillHolds's pattern), not the
+    // `_designer` field's cached in-memory copy: KernelHostActions.CommitDesign opens its OWN store
+    // instance internally (same file, real KernelHostActions convention — see ResolveDesign's doc), so its
+    // writes land on disk but never update `_designer`'s already-loaded copy. A fresh re-open always
+    // observes ground truth, matching how a real second process/session would see it too.
+    private IInstanceStore FreshDesigner() => new JsonFileInstanceStore(_designerDataPath, _meta);
+
+    private SetValue CommitsSet() => (SetValue)FreshDesigner().ReadNode(NodePath.Root.Field("commits"))!;
+    private SetValue BranchesSet() => (SetValue)FreshDesigner().ReadNode(NodePath.Root.Field("branches"))!;
+
+    private (int Id, ObjectValue Fields) CommitByMessage(string message) =>
+        CommitsSet().Members
+            .Where(m => m.Value is ObjectValue)
+            .Select(m => (m.Key, Fields: (ObjectValue)m.Value))
+            .First(c => c.Fields.Fields.GetValueOrDefault("message") is TextValue t && t.Text == message);
+
+    private (int Id, ObjectValue Fields) MainBranch() =>
+        BranchesSet().Members
+            .Where(m => m.Value is ObjectValue)
+            .Select(m => (m.Key, Fields: (ObjectValue)m.Value))
+            .First(b => b.Fields.Fields.GetValueOrDefault("name") is TextValue { Text: "main" });
+
+    // The authorization reject teeth for commitDesign: the store's db.commits stayed empty — the `sys`
+    // gate blocked the action BEFORE it ever reached KernelHostActions.Run (mirrors ThenNotAskedToDelete).
+    [Then("the kernel was not asked to commit anything")]
+    public async Task ThenNotAskedToCommit() =>
+        await Assert.That(CommitsSet().Members.Count).IsEqualTo(0);
+
+    [Then("db.commits holds a commit with message {string}")]
+    public async Task ThenCommitsHoldsMessage(string message) =>
+        await Assert.That(CommitsSet().Members.Values.OfType<ObjectValue>()
+            .Any(c => c.Fields.GetValueOrDefault("message") is TextValue t && t.Text == message)).IsTrue();
+
+    [Then("that commit has a timestamp")]
+    public async Task ThenCommitHasTimestamp()
+    {
+        var commit = CommitByMessage(_lastCommitMessage);
+        await Assert.That(commit.Fields.Fields.GetValueOrDefault("at")).IsTypeOf<DateTimeValue>();
+    }
+
+    [Then("that commit's design reference is the committed design")]
+    public async Task ThenCommitDesignRefMatches()
+    {
+        var commit = CommitByMessage(_lastCommitMessage);
+        var refVal = commit.Fields.Fields.GetValueOrDefault("design") as ReferenceValue;
+        await Assert.That(refVal?.TargetId).IsEqualTo(_designId);
+    }
+
+    [Then("that commit's parent is empty")]
+    public async Task ThenCommitParentEmpty()
+    {
+        var commit = CommitByMessage(_lastCommitMessage);
+        var parent = commit.Fields.Fields.GetValueOrDefault("parent");
+        var targetId = parent is ReferenceValue r ? r.TargetId : null;
+        await Assert.That(targetId).IsNull();
+    }
+
+    [Then("that commit's logSeq equals the head version before the commit's own writes")]
+    public async Task ThenLogSeqMatchesPreCommitVersion()
+    {
+        var commit = CommitByMessage(_lastCommitMessage);
+        var logSeq = ((IntValue)commit.Fields.Fields["logSeq"]).Value;
+        await Assert.That(logSeq).IsEqualTo(_versionBeforeLastCommit);
+    }
+
+    [Then("that commit's text is the design's canonical printed document")]
+    public async Task ThenCommitTextIsCanonical()
+    {
+        var commit = CommitByMessage(_lastCommitMessage);
+        var text = ((TextValue)commit.Fields.Fields["text"]).Text;
+        var design = _designer.ReadNode(NodePath.Root.Field("designs").Key(_designId.ToString()))!;
+        var expected = SchemaBridge.ProjectDesignDocument(design);
+        await Assert.That(text).IsEqualTo(expected);
+    }
+
+    [Then("that commit's idMap covers every type and prop in the design")]
+    public async Task ThenIdMapCoversTypesAndProps()
+    {
+        var commit = CommitByMessage(_lastCommitMessage);
+        var idMap = (DictionaryValue)commit.Fields.Fields["idMap"];
+        var design = _designer.ReadNode(NodePath.Root.Field("designs").Key(_designId.ToString()))!;
+        var expected = SchemaBridge.Snapshot(design).IdMap;
+        await Assert.That(idMap.Entries.Count).IsEqualTo(expected.Count);
+        foreach (var (path, id) in expected)
+        {
+            var key = new TextValue(path);
+            await Assert.That(idMap.Entries.ContainsKey(key)).IsTrue();
+            await Assert.That(((IntValue)idMap.Entries[key]).Value).IsEqualTo(id);
+        }
+    }
+
+    [Then("the design's main branch head points at that commit")]
+    public async Task ThenMainBranchHeadPointsAtCommit()
+    {
+        var (expectedId, _) = CommitByMessage(_lastCommitMessage);
+        var (_, branchFields) = MainBranch();
+        var head = branchFields.Fields.GetValueOrDefault("head") as ReferenceValue;
+        await Assert.That(head?.TargetId).IsEqualTo(expectedId);
+    }
+
+    [Then("that commit's parent is the {string} commit")]
+    public async Task ThenCommitParentIs(string parentMessage)
+    {
+        var (parentId, _) = CommitByMessage(parentMessage);
+        var (_, secondFields) = CommitByMessage(_lastCommitMessage);
+        var parentRef = secondFields.Fields.GetValueOrDefault("parent") as ReferenceValue;
+        await Assert.That(parentRef?.TargetId).IsEqualTo(parentId);
+    }
+
+    [Then("that commit's logSeq is strictly greater than the {string} commit's logSeq")]
+    public async Task ThenLogSeqStrictlyGreater(string earlierMessage)
+    {
+        var earlier = CommitByMessage(earlierMessage);
+        var earlierSeq = ((IntValue)earlier.Fields.Fields["logSeq"]).Value;
+        var later = CommitByMessage(_lastCommitMessage);
+        var laterSeq = ((IntValue)later.Fields.Fields["logSeq"]).Value;
+        await Assert.That(laterSeq).IsGreaterThan(earlierSeq);
+    }
+
+    [Then("db.commits is empty")]
+    public async Task ThenCommitsEmpty() =>
+        await Assert.That(CommitsSet().Members.Count).IsEqualTo(0);
+
+    [Then("the design's main branch head is unset")]
+    public async Task ThenMainBranchHeadUnset()
+    {
+        // No Branch exists yet either (nothing has been adopted/ensured over this bare test store), or a
+        // branch exists with no head — either way there is no committed head to observe.
+        var branches = BranchesSet().Members.Values.OfType<ObjectValue>().ToList();
+        if (branches.Count == 0) return;
+        var main = branches.FirstOrDefault(b => b.Fields.GetValueOrDefault("name") is TextValue { Text: "main" });
+        var head = main?.Fields.GetValueOrDefault("head") as ReferenceValue;
+        await Assert.That(head?.TargetId).IsNull();
+    }
+
+    // ── the write-floor immutability scenario ────────────────────────────────────
+
+    private string _messageBeforeWrite = "";
+    private string _headBeforeWrite = "";
+
+    [When("a client-path write to the commit's message field is attempted")]
+    public void WhenClientWritesCommitMessage()
+    {
+        var (commitId, fields) = CommitByMessage(_lastCommitMessage);
+        _messageBeforeWrite = ((TextValue)fields.Fields["message"]).Text;
+        var ws = Ws();
+        _reply = ws.ProcessMessage(
+            $$"""{ "op": "objectPropChange", "clientId": "{{_clientId}}", "objectId": {{commitId}}, "prop": "message", "value": { "type": "text", "value": "HACKED" } }""");
+    }
+
+    [Then("the commit's message is unchanged")]
+    public async Task ThenCommitMessageUnchanged()
+    {
+        var commit = CommitByMessage(_lastCommitMessage);
+        await Assert.That(((TextValue)commit.Fields.Fields["message"]).Text).IsEqualTo(_messageBeforeWrite);
+    }
+
+    [When("a client-path write to the branch's head field is attempted")]
+    public void WhenClientWritesBranchHead()
+    {
+        var (branchId, fields) = MainBranch();
+        var head = fields.Fields.GetValueOrDefault("head") as ReferenceValue;
+        _headBeforeWrite = head?.TargetId?.ToString() ?? "";
+        var ws = Ws();
+        _reply = ws.ProcessMessage(
+            $$"""{ "op": "setReferenceField", "clientId": "{{_clientId}}", "objectId": {{branchId}}, "prop": "head", "clear": true }""");
+    }
+
+    [Then("the branch's head is unchanged")]
+    public async Task ThenBranchHeadUnchanged()
+    {
+        var (_, fields) = MainBranch();
+        var head = fields.Fields.GetValueOrDefault("head") as ReferenceValue;
+        await Assert.That(head?.TargetId?.ToString() ?? "").IsEqualTo(_headBeforeWrite);
+    }
+
+    // The write-floor's `{ error }` reject — same wire shape as a host-action reject (ThenReplyError), but
+    // this phrasing covers a DIFFERENT op (objectPropChange/setReferenceField, not hostAction), so it is
+    // its own step rather than overloading ThenReplyError's Gherkin text.
+    [Then("the write is denied")]
+    public async Task ThenWriteDenied()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(_reply);
+        await Assert.That(doc.RootElement.TryGetProperty("error", out _)).IsTrue();
+    }
+
     // ── teardown ────────────────────────────────────────────────────────────────
 
     [AfterScenario]
@@ -851,7 +1104,9 @@ public sealed class HostActionSteps
     }
 
     // Mint one Design into db.designs (its `types` set starts empty; DesignType/DesignProp fill it).
-    // The three section texts are authored verbatim; an empty ui section means the generic UI.
+    // The three section texts are authored verbatim; an empty ui section means the generic UI. Also
+    // ensures the design's `main` Branch (the same idempotent shape KernelHost.EnsureMainBranches creates
+    // at boot — M13 slice 3) so a commitDesign scenario has something to chain onto; head starts UNSET.
     private void AddDesign(string uiSection)
     {
         _designId = _designer.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
@@ -862,6 +1117,13 @@ public sealed class HostActionSteps
             ["ui"]          = new TextValue(uiSection),
         }));
         _designer.AddToSet(NodePath.Root.Field("designs"), _designId);
+
+        var branchId = _designer.CreateObject("Branch", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue("main"),
+        }));
+        _designer.AddToSet(NodePath.Root.Field("branches"), branchId);
+        _designer.WriteReference(branchId, "workingCopy", _designId, "Design");
     }
 
     private NodePath DesignTypesPath => NodePath.Root.Field("designs").Key(_designId.ToString()).Field("types");

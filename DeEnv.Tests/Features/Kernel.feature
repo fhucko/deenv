@@ -323,12 +323,18 @@ Feature: Kernel host (multi-instance, path-addressed)
     And the seeded design 13 has a type named "TodoItem"
     And the no-design app contributes no design
 
-  @milestone-10 @single-user
-  Scenario: An edited app document is reflected in its design after restart
+  # M13 slice 3 — THE AUTHORITY INVERSION superseded the old "file wins on reboot" behavior this
+  # scenario used to assert: design-data + its commit history are now the source of truth, and an app's
+  # `.deenv` FILE is a PUBLISH ARTIFACT (written BY publish), never re-read into an already-adopted
+  # design. So editing the file BY HAND (never through publish) and restarting must NOT silently
+  # overwrite the live design — the opposite of the milestone-10 behavior, and the whole point of the
+  # inversion (it is what lets a designer session's own edits/commits survive a restart untouched).
+  @milestone-13 @single-user
+  Scenario: An app file edited by hand does not overwrite its already-adopted design
     Given a kernel booted from the committed designer, todo and crm apps plus a no-design app
     And the todo app's document gains a new type "Tag"
     When the kernel restarts from its persisted registry
-    Then the design-host's design 13 has a type named "Tag"
+    Then the design-host's design 13 does not have a type named "Tag"
 
   @milestone-10 @single-user
   Scenario: A UI-created design without a backing instance survives a restart
@@ -338,8 +344,16 @@ Feature: Kernel host (multi-instance, path-addressed)
     Then the design-host holds a design labelled "scratch"
     And the design-host still holds a design with id 13 labelled "todo"
 
-  @milestone-10 @single-user
-  Scenario: A newly-linked app's design appears after restart
+  # RENAMED under M13 slice 3 (was "A newly-linked app's design appears after restart" — that
+  # description matched the OLD re-seed-on-every-boot behavior this design supersedes). What this
+  # actually proves now: unlinking design 13 from db.designs (the SET) does not make it unreachable —
+  # the todo INSTANCE's own `design` reference still points at it (Instance rows carry that reference —
+  # see ReconcileInstancesSet) — so it survives GC and is never mistaken for "not yet adopted" (the
+  # adoption check scans the Design EXTENT, not designs-set membership) across a restart. Adopt-once
+  # itself (a genuinely NEW file never seen before) is proven directly by
+  # DesignCommit.feature's "A new app file is adopted exactly once".
+  @milestone-13 @single-user
+  Scenario: Unlinking a design from db.designs does not make it unreachable across a restart
     Given a kernel booted from the committed designer, todo and crm apps plus a no-design app
     And the design-host's design 13 is removed from its store
     When the kernel restarts from its persisted registry

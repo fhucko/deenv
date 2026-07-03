@@ -2,6 +2,8 @@ types
     Db
         designs set of Design
         instances set of Instance
+        commits set of Commit
+        branches set of Branch
     Instance
         name text
         runtimeId int
@@ -26,10 +28,26 @@ types
         keyType text
         multiline bool
         order int
+    Commit
+        message text
+        at datetime
+        design Design
+        parent Commit
+        logSeq int
+        text text
+        idMap dict of int by text
+    Branch
+        name text
+        head Commit
+        workingCopy Design
 
 access
     sys
         *
+    Commit
+        create edit delete where false
+    Branch
+        create edit delete where false
 
 ui
     var renameId = 0

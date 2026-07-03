@@ -21,6 +21,11 @@ namespace DeEnv.Kernel;
 //     passed design, AND deploy it onto the target — the IDE's "Apply" (remember-then-publish). It is
 //     publish + the registry write: the registry write half (via the kernel recordDesign delegate)
 //     makes the reference explicit so the dropdown can pre-select it later.
+//   • commitDesign(design, message) — snapshot the design at its CURRENT log position into an
+//     immutable Commit row chained onto its main Branch (M13 slice 3 — DECISIONS "App versioning").
+//     Acts purely on the CALLER's own store (no cross-instance kernel delegate needed, unlike
+//     create/delete/clone). No write grants exist on Commit/Branch rows (the designer's own `access`
+//     section denies create/edit/delete on both), so this is the ONLY path that can ever write one.
 // The kernel constructs one of these per instance and threads it into WsHandler, so an action acts
 // with the CALLING instance's own data as the design source (its data is the IDE holding the set of
 // Designs it edits). A publish/create RESOLVES the passed design's id → its Design subtree in the
@@ -49,6 +54,7 @@ public sealed class KernelHostActions(
             case "delete": Delete(args); break;
             case "setDesign": SetDesign(args); break;
             case "rename": Rename(args); break;
+            case "commitDesign": CommitDesign(args); break;
             default:
                 throw new InvalidOperationException($"Unknown host action '{action}'.");
         }
@@ -151,6 +157,108 @@ public sealed class KernelHostActions(
         return store.ReadNode(designPath) as ObjectValue
             ?? throw new InvalidOperationException(
                 $"No design with id {designId} in the designer's `designs` set.");
+    }
+
+    // commitDesign(design, message): snapshot the SHARED working copy (Figma model — no per-user
+    // staging) at a marked log position and record it as an immutable Commit row, chaining onto the
+    // design's main Branch. arg 0 the design's id (a member of the caller's `db.designs`), arg 1 the
+    // commit message text.
+    //
+    // Consistency discipline (docs/plans/app-versioning-design.md §0 "commits are Figma-model
+    // snapshots"): the store interface has no multi-read transaction, so text/logSeq is captured via an
+    // OPTIMISTIC retry loop — read the head version, read + snapshot the design, re-read the head
+    // version; if it moved, someone edited the design mid-read (a genuinely concurrent designer session,
+    // near-zero on a solo operator) — retry. A bounded few attempts, then fail loudly (never silently
+    // commit a torn text/logSeq pair). An interleaved edit landing AFTER the final re-check is fine — it
+    // lands after this commit's mark, and the NEXT commit picks it up.
+    //
+    // Atomicity: the Commit row (message/at/design/parent/logSeq/text) + its link into `db.commits` land
+    // in ONE CommitBatch (mint + set-link + the `parent`/`design` ref-links, all-or-none). idMap is a
+    // DICTIONARY field — not reachable through CommitBatch (no dict-entry CommitMutation exists; see
+    // JsonFileInstanceStore's own "dictionary mutation is not yet reachable through ctx.commit()" note) —
+    // so its entries are written as a FOLLOW-UP pass, BEFORE the branch head advances. The branch's head
+    // reference is written LAST: that is the commit's linearization point (before it, the new Commit row
+    // exists and is linked into db.commits, but no branch calls it current yet — after it, the commit is
+    // "the" head). A crash between the batch and the head-advance leaves an orphaned-but-harmless Commit
+    // row (visible in db.commits, not yet anyone's head) rather than a half-written one.
+    private void CommitDesign(JsonElement args)
+    {
+        var designId = ArgInt(args, 0);
+        var message = ArgText(args, 1);
+
+        var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
+        var store = new JsonFileInstanceStore(dataPath, meta);
+        var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+
+        const int maxAttempts = 5;
+        DesignSnapshot snap = null!;
+        int logSeq = 0;
+        for (var attempt = 1; ; attempt++)
+        {
+            var s1 = store.CurrentVersion;
+            var design = store.ReadNode(designPath)
+                ?? throw new InvalidOperationException(
+                    $"No design with id {designId} in the designer's `designs` set.");
+            snap = SchemaBridge.Snapshot(design); // throws SchemaValidationException on an invalid design
+            var s2 = store.CurrentVersion;
+            if (s1 == s2) { logSeq = s1; break; }
+            if (attempt >= maxAttempts)
+                throw new InvalidOperationException(
+                    $"commitDesign: the design kept changing while snapshotting it ({maxAttempts} attempts) — try again.");
+        }
+
+        var branch = FindMainBranch(store, designId)
+            ?? throw new InvalidOperationException($"Design {designId} has no main branch to commit onto.");
+        NodeValue? headField = branch.Fields.Fields.GetValueOrDefault("head");
+        int? parentHeadId = headField is ReferenceValue { TargetId: { } h } ? h : null;
+
+        const int commitTemp = -1;
+        var commitFields = new Dictionary<string, NodeValue>
+        {
+            ["message"] = new TextValue(message),
+            ["at"]      = new DateTimeValue(DateTimeOffset.UtcNow),
+            ["logSeq"]  = new IntValue(logSeq),
+            ["text"]    = new TextValue(snap.Text),
+        };
+        var creates = new List<CommitCreate>
+        {
+            new CommitCreate(commitTemp, "Commit", new ObjectValue(commitFields)),
+        };
+        var mutations = new List<CommitMutation>
+        {
+            new RefLinkMutation(commitTemp, "design", designId, "Design"),
+        };
+        if (parentHeadId.HasValue)
+            mutations.Add(new RefLinkMutation(commitTemp, "parent", parentHeadId, "Commit"));
+
+        var commitsSetId = (store.ReadNode(NodePath.Root.Field("commits")) as SetValue)?.Id
+            ?? throw new InvalidOperationException("The designer's `db.commits` set is missing.");
+        mutations.Add(new SetLinkMutation(commitsSetId, commitTemp));
+
+        var result = store.CommitBatch(creates, mutations);
+        var commitId = result.Creates.Single(c => c.TempId == commitTemp).RealId;
+
+        // idMap entries: a follow-up pass (dict mutation cannot ride CommitBatch — see the doc above),
+        // written BEFORE the head advances so the commit is never observably "current" with a partial map.
+        var idMapPath = NodePath.Root.Field("commits").Key(commitId.ToString()).Field("idMap");
+        foreach (var (path, id) in snap.IdMap)
+            store.WriteDictionaryEntry(idMapPath, new TextValue(path), new IntValue(id));
+
+        // The linearization point: advance the main branch's head to the new commit — the LAST write of
+        // this action, so a crash before it leaves an orphaned-but-harmless Commit row (in db.commits,
+        // not yet anyone's head) rather than a half-written commit.
+        store.WriteReference(branch.Id, "head", commitId, "Commit");
+    }
+
+    // The design's `main` Branch row (its `workingCopy` reference points at the design) — returned WITH
+    // its own intrinsic id (ReadExtent keys the extent by id) so the caller can advance its `head` by id.
+    private static (int Id, ObjectValue Fields)? FindMainBranch(IInstanceStore store, int designId)
+    {
+        foreach (var (id, branch) in store.ReadExtent("Branch"))
+            if (branch.Fields.GetValueOrDefault("name") is TextValue { Text: "main" }
+                && branch.Fields.GetValueOrDefault("workingCopy") is ReferenceValue { TargetId: var t } && t == designId)
+                return (id, branch);
+        return null;
     }
 
     // rename(id, name): update an instance's display label in the registry. arg 0 is the instance id,

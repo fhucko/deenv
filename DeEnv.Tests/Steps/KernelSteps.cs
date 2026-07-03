@@ -875,13 +875,27 @@ public sealed class KernelSteps(InstanceContext ctx)
     [Then("the design-host's design {int} has a type named {string}")]
     public async Task ThenSeededDesignHasTypeAsync(int id, string typeName)
     {
+        var names = SeededDesignTypeNames(id);
+        await Assert.That(names).Contains(typeName);
+    }
+
+    // M13 slice 3 — the authority-inversion regression guard (the sibling of ThenSeededDesignHasTypeAsync):
+    // a hand-edited app file must NOT retroactively appear in an already-adopted design after a restart.
+    [Then("the design-host's design {int} does not have a type named {string}")]
+    public async Task ThenSeededDesignDoesNotHaveTypeAsync(int id, string typeName)
+    {
+        var names = SeededDesignTypeNames(id);
+        await Assert.That(names).DoesNotContain(typeName);
+    }
+
+    private List<string> SeededDesignTypeNames(int id)
+    {
         var design = SeededDesigns()[id];
         var types = (SetValue)design.Fields["types"];
-        var names = types.Members.Values
+        return types.Members.Values
             .OfType<ObjectValue>()
             .Select(t => t.Fields.TryGetValue("name", out var v) && v is TextValue n ? n.Text : "")
             .ToList();
-        await Assert.That(names).Contains(typeName);
     }
 
     [Given("the todo app's document gains a new type {string}")]
@@ -936,8 +950,136 @@ public sealed class KernelSteps(InstanceContext ctx)
     public async Task ThenDesignHostHoldsLabelAsync(string label) =>
         await Assert.That(SeededDesigns().Values.Select(LabelOf)).Contains(label);
 
+    [Then("the design-host holds exactly one design labelled {string}")]
+    public async Task ThenDesignHostHoldsExactlyOneLabelAsync(string label) =>
+        await Assert.That(SeededDesigns().Values.Select(LabelOf).Count(l => l == label)).IsEqualTo(1);
+
     private static string LabelOf(ObjectValue design) =>
         design.Fields.TryGetValue("label", out var v) && v is TextValue t ? t.Text : "";
+
+    // ── M13 slice 3: adoption-once + the log-preserving boundary (DesignCommit.feature) ──────────
+
+    private int _logLinesBeforeCommit;
+
+    // Rename ONE PROP (never a whole type — TodoItem/TodoList/User are all cross-referenced by name from
+    // sibling MetaProp.type fields AND the todo app's own Code, so a TYPE rename here would leave the
+    // design's REST invalid — "Prop 'items' on type 'TodoList' references unknown type 'TodoItem'." A
+    // prop is referenced only by its OWNING type's Code, which the commit's structural validation never
+    // inspects, so this is a clean, isolated, real edit) DIRECTLY on the design-host's LIVE store (the
+    // same HostedInstance.Store the kernel's own WsHandler operates over — a real production write, not
+    // a hand-built harness). Walks db.designs[13].types[typeName].props looking for the named prop.
+    [Given("the todo design's {string} prop {string} is renamed to {string} through the designer store")]
+    public void GivenTodoDesignPropRenamed(string typeName, string oldPropName, string newPropName)
+    {
+        var store = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store;
+        var todoDesignId = SeededDesigns().Single(d => LabelOf(d.Value) == "todo").Key;
+        var typesPath = NodePath.Root.Field("designs").Key(todoDesignId.ToString()).Field("types");
+        var typesSet = (SetValue)store.ReadNode(typesPath)!;
+        var typeId = typesSet.Members
+            .Where(m => m.Value is ObjectValue)
+            .Single(m => ((ObjectValue)m.Value).Fields.GetValueOrDefault("name") is TextValue t && t.Text == typeName)
+            .Key;
+        var propsSet = (SetValue)store.ReadNode(typesPath.Key(typeId.ToString()).Field("props"))!;
+        var propId = propsSet.Members
+            .Where(m => m.Value is ObjectValue)
+            .Single(m => ((ObjectValue)m.Value).Fields.GetValueOrDefault("name") is TextValue t && t.Text == oldPropName)
+            .Key;
+        store.WriteField(propId, "name", new TextValue(newPropName));
+    }
+
+    // The designer's own on-disk changeset log line count (M13 slice 1's append-only log), captured
+    // BEFORE a commitDesign call — the baseline "the designer's log was not truncated by the restart"
+    // compares against. A boot-time InitialData/Reset (the OLD upsert-on-every-boot behavior) deletes
+    // this file entirely (0 lines after); the new adopt-once/no-Reset invariant must leave it growing.
+    [Given("the designer's own log line count is remembered before committing")]
+    public void GivenLogLineCountRemembered()
+    {
+        var logPath = AppPaths.LogPathForId(ctx.KernelDir!, 1);
+        _logLinesBeforeCommit = File.Exists(logPath) ? File.ReadAllLines(logPath).Length : 0;
+    }
+
+    // sys.commitDesign(design, message) over a REAL WebSocket to the designer's OWN /ws — the kernel-
+    // wired path (HostedInstance.Start → KernelHost.HostActionsFor), not a hand-built WsHandler, so this
+    // proves the FULL boot→adopt→commit→restart path end-to-end. The designer's `access` section grants
+    // `sys` unconditionally (instances/1/app.deenv), so no login is needed.
+    [When("the designer commits the todo design with message {string} over its own WS")]
+    public async Task WhenDesignerCommitsTodoDesignAsync(string message)
+    {
+        var designer = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1);
+        var todoDesignId = SeededDesigns().Single(d => LabelOf(d.Value) == "todo").Key;
+        var uri = new Uri($"ws://localhost:{_assetPort}{MountPath(designer.Spec.App)}/ws");
+
+        using var socket = new System.Net.WebSockets.ClientWebSocket();
+        using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await socket.ConnectAsync(uri, connectCts.Token);
+
+        var frame = $$"""
+            { "op": "hostAction", "action": "commitDesign", "args": [
+                { "type": "int", "value": {{todoDesignId}} }, { "type": "text", "value": "{{message}}" }
+            ] }
+            """;
+        var sendBytes = System.Text.Encoding.UTF8.GetBytes(frame);
+        using var sendCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await socket.SendAsync(sendBytes, System.Net.WebSockets.WebSocketMessageType.Text, endOfMessage: true, sendCts.Token);
+
+        var buffer = new byte[8192];
+        using var receiveCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await socket.ReceiveAsync(buffer, receiveCts.Token);
+        _hostActionWsReply = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
+
+        using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await socket.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "done", closeCts.Token);
+
+        using var doc = System.Text.Json.JsonDocument.Parse(_hostActionWsReply);
+        if (!doc.RootElement.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
+            throw new InvalidOperationException($"commitDesign over the WS failed: {_hostActionWsReply}");
+    }
+
+    [Then("the design-host's todo design's {string} has a prop named {string}")]
+    public async Task ThenTodoDesignTypeHasPropAsync(string typeName, string propName)
+    {
+        var todoDesign = SeededDesigns().Single(d => LabelOf(d.Value) == "todo").Value;
+        var types = (SetValue)todoDesign.Fields["types"];
+        var type = types.Members.Values.OfType<ObjectValue>()
+            .Single(t => t.Fields.GetValueOrDefault("name") is TextValue n && n.Text == typeName);
+        var props = (SetValue)type.Fields["props"];
+        var propNames = props.Members.Values.OfType<ObjectValue>()
+            .Select(p => p.Fields.TryGetValue("name", out var v) && v is TextValue n ? n.Text : "")
+            .ToList();
+        await Assert.That(propNames).Contains(propName);
+    }
+
+    [Then("the design-host still holds the {string} commit")]
+    public async Task ThenDesignHostHoldsCommitAsync(string message)
+    {
+        var store = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store;
+        var commits = store.ReadExtent("Commit");
+        await Assert.That(commits.Values.Any(c =>
+            c.Fields.GetValueOrDefault("message") is TextValue t && t.Text == message)).IsTrue();
+    }
+
+    [Then("the designer's log was not truncated by the restart")]
+    public async Task ThenDesignerLogNotTruncatedAsync()
+    {
+        var logPath = AppPaths.LogPathForId(ctx.KernelDir!, 1);
+        await Assert.That(File.Exists(logPath)).IsTrue();
+        var linesAfter = File.ReadAllLines(logPath).Length;
+        // The commit + the restart together must have GROWN the log (the commitDesign write itself adds
+        // entries), never shrunk/reset it to zero — a Reset() truncation is exactly 0 lines afterward.
+        await Assert.That(linesAfter).IsGreaterThan(_logLinesBeforeCommit);
+    }
+
+    [Then("the design-host's db.instances lists every hosted instance by name")]
+    public async Task ThenDbInstancesListsEveryHostedInstanceAsync()
+    {
+        var store = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store;
+        var instances = store.ReadExtent("Instance").Values
+            .Select(i => i.Fields.GetValueOrDefault("name") is TextValue t ? t.Text : "")
+            .ToList();
+        var hostedNames = ctx.Kernel.Instances.Select(i => i.Spec.App).ToList();
+        foreach (var name in hostedNames)
+            await Assert.That(instances).Contains(name);
+    }
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
