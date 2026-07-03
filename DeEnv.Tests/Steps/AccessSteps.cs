@@ -56,6 +56,26 @@ public sealed class AccessSteps(InstanceContext ctx)
             .IsTrue();
     }
 
+    // `locked` REPLACES every other Milestone rule (it must be the subject's ONLY rule — a loader
+    // error otherwise, see AppParse.AccessTypeEntry), unlike GivenAccessRule's ADDITIVE accumulation
+    // (built for combining independent verb-only grants like `edit where…` + `create where…`). This
+    // step is dedicated: it CLEARS ctx.AccessRuleLines (dropping the Background's `read where
+    // currentUser.role == "Admin"`) before installing `locked` alone, so the rebuilt fixture carries
+    // EXACTLY the one rule the scenario needs — no read grant (proving Milestone stays unruled-for-
+    // read ⇒ open, per the "write-locked, not secret" requirement), no accumulated leftovers.
+    [Given("the only access rule for Milestone is {string}")]
+    public async Task GivenOnlyAccessRuleIsLocked(string rule)
+    {
+        ctx.AccessRuleLines.Clear();
+        ctx.AccessRuleLines.Add(rule);
+        ctx.Description = InstanceContext.AccessFixtureWithRules(
+            ctx.AccessRuleLines.ToArray(), ctx.UserAccessRuleLines.ToArray());
+        ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
+
+        await Assert.That(ctx.Description!.Rules).IsNotNull();
+        await Assert.That(ctx.Description!.Rules!.Count(r => r.Type == "Milestone")).IsEqualTo(1);
+    }
+
     // The admin (Ada) and member (Bob) are seeded by the fixture's initialData; assert both are present.
     [Given("a seeded admin user and a seeded member user")]
     public async Task GivenSeededUsers()

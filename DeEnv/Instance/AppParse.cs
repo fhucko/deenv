@@ -143,8 +143,11 @@ public static class AppParse
     //           read            where currentUser.role == "Admin"
     //           read create     where currentUser.role == "Member"
     //           *
+    //       Commit
+    //           locked
     //
-    // A rule line is a verb list (read | create | edit | delete, or `*` = all) and an OPTIONAL
+    // A rule line is EITHER `locked` — sugar for "every write denied, reads unaffected" (see
+    // below) — OR a verb list (read | create | edit | delete, or `*` = all) and an OPTIONAL
     // `where <expr>` condition — REUSING the existing CodeParse expression parser, not a new
     // condition grammar. Absent ⇒ the rule always applies. The condition AST is stored verbatim
     // on the rule and evaluated by the existing interpreter at the floor (over { currentUser,
@@ -154,22 +157,75 @@ public static class AppParse
 
     private static Parser<string> Verb => OneOf(VerbNames.Append("*").Select(Text).ToArray());
 
-    // A rule line: a space-separated verb list (`*` is a lone verb), an optional `where <expr>`,
-    // then end-of-line. Produces the (verbs, condition) pair; the enclosing type-block stamps the
-    // type name on each to build the AccessRule.
-    private static Parser<(string[] Verbs, ICodeValue? When)> Rule =>
+    // `locked` (M13 slice — the framework-history immutability idiom) desugars to EXACTLY what
+    // `create edit delete where false` already means under AccessFloor.Can: RULED for every write
+    // verb, with a condition that never holds — so every create/edit/delete is denied and reads
+    // stay whatever they otherwise are (unruled ⇒ open, exactly as `where false` leaves them
+    // today). It is spelling sugar, not a new floor concept — AccessFloor needs no change; the
+    // printer recognizes this exact shape (WriteVerbs + WhenAlwaysFalse) and prints `locked` back
+    // (AppPrint.PrintAccess). `WhenAlwaysFalse` is a single canonical CodeBool instance so the
+    // printer's shape check is a reference-independent VALUE comparison (see IsLockedShape).
+    public static readonly string[] WriteVerbs = ["create", "edit", "delete"];
+    private static readonly ICodeValue WhenAlwaysFalse = new CodeBool { Value = false };
+
+    // Does this exact (verbs, when) shape mean "locked"? Same verb SET as WriteVerbs (order-
+    // independent — a hand-written `delete edit create where false` is the identical rule) and a
+    // condition that is the literal `false` (structurally, not by reference — a freshly re-parsed
+    // `where false` line is an equal-but-distinct CodeBool instance). Shared by the printer
+    // (canonicalize `where false` back to `locked`) and by anyone needing "is this a locked rule".
+    public static bool IsLockedShape(IReadOnlyList<string> verbs, ICodeValue? when) =>
+        when is CodeBool { Value: false } && verbs.ToHashSet().SetEquals(WriteVerbs);
+
+    // A rule line is `locked` (no verbs, no condition — the shape below is synthesized) or an
+    // ordinary verb-list line. `IsLocked` is consulted ONLY by the enclosing type-block, to
+    // validate `locked` is the subject's sole line and never appears under `sys` — it never
+    // reaches AccessRule (the synthesized Verbs/When are indistinguishable from hand-written
+    // `create edit delete where false` from that point on, which is the point: pure sugar).
+    private static Parser<(bool IsLocked, string[] Verbs, ICodeValue? When)> LockedRuleLine =>
+        Seq(Text("locked"), NlOrEnd, (_, _) => (true, WriteVerbs, (ICodeValue?)WhenAlwaysFalse));
+
+    private static Parser<(bool IsLocked, string[] Verbs, ICodeValue? When)> GrantRuleLine =>
         Seq(Many1Separated(Verb, Ws1),
             Optional(Seq(Ws1, Text("where"), Ws1, CodeParse.Value, (_, _, _, expr) => expr)),
             NlOrEnd,
-            (verbs, when, _) => (verbs, when));
+            (verbs, when, _) => (false, verbs, when));
+
+    // A rule line: `locked`, or a space-separated verb list (`*` is a lone verb) with an optional
+    // `where <expr>`, then end-of-line. `locked` is tried FIRST — it is a fixed keyword at this
+    // grammar position (never a verb name), so there is no ambiguity to backtrack through.
+    private static Parser<(bool IsLocked, string[] Verbs, ICodeValue? When)> Rule =>
+        OneOf(LockedRuleLine, GrantRuleLine);
 
     // One type's rule block: the type name on its own line, then its indented rule lines, each
     // mapped to an AccessRule carrying that type. (Sits at the `access` section's item indent.)
+    // `locked` validation happens HERE, where the subject name and the full set of the block's
+    // raw lines are both in scope, before they flatten into AccessRule[] (which no longer
+    // distinguishes `locked` from a hand-written equivalent — see IsLockedShape):
+    //   - `locked` must be the ONLY line for its subject (locked + any grant is ambiguous —
+    //     which one governs? — so it is rejected, not silently combined).
+    //   - `locked` is meaningless under the `sys` subject (sys is host-action grants; there is no
+    //     write floor to lock there), so it is rejected there too.
     private static IndentedParser<AccessRule[]> AccessTypeEntry => indent =>
         Seq(Name, NlOrEnd,
             IndentLookahead(indent, Ws1, ruleIndent =>
                 Many1(Seq(Text(ruleIndent), Rule, (_, r) => r).SkipEmptyLinesBefore())),
-            (type, _, rules) => rules.Select(r => new AccessRule(type, r.Verbs, r.When)).ToArray());
+            (type, _, rules) =>
+            {
+                if (rules.Any(r => r.IsLocked))
+                {
+                    if (rules.Length > 1)
+                        throw new SchemaValidationException(
+                            $"Access subject '{type}' uses 'locked', which must be its ONLY rule " +
+                            $"(found {rules.Length} rule lines). 'locked' already denies every write; " +
+                            $"add no other grants alongside it.");
+                    if (type == Code.AccessFloor.SysSubject)
+                        throw new SchemaValidationException(
+                            $"'{Code.AccessFloor.SysSubject}' cannot use 'locked': it governs host-action " +
+                            $"authority (create/delete/publish/…), not a data type's write floor, so " +
+                            $"'locked' has no meaning there.");
+                }
+                return rules.Select(r => new AccessRule(type, r.Verbs, r.When)).ToArray();
+            });
 
     private static Parser<AccessRule[]> AccessSection =>
         Seq(Text("access"), NlOrEnd,

@@ -116,14 +116,27 @@ public static class AppPrint
     // Print the ruleset as the `access` section — the inverse of AppParse.AccessSection. Rules are
     // GROUPED by their type into one block each, IN FIRST-APPEARANCE ORDER (the canonical form), so
     // parse∘print is the identity on the Rules list and print∘parse is a fixpoint. Each rule line is
-    // its verbs space-joined, then an optional `where <expr>` (the condition printed by CodePrint).
+    // its verbs space-joined, then an optional `where <expr>` (the condition printed by CodePrint) —
+    // UNLESS the type's rule list is exactly the `locked` shape (AppParse.IsLockedShape: a single rule
+    // granting create/edit/delete with an always-false condition — what `locked` desugars to, and
+    // also what a hand-written `create edit delete where false` means), in which case the canonical
+    // form is `locked` — the sugar the parser accepts, printed back so round-tripping a `locked`
+    // block reproduces `locked`, never the older `where false` spelling. A MULTI-rule block that
+    // happens to include such a line is printed literally (the parser only ever produces the
+    // single-rule shape from `locked`, so collapsing here stays lossless).
     private static void PrintAccess(StringBuilder sb, IReadOnlyList<AccessRule> rules)
     {
         sb.Append("\naccess\n");
         foreach (var type in rules.Select(r => r.Type).Distinct())
         {
             sb.Append("    ").Append(type).Append('\n');
-            foreach (var rule in rules.Where(r => r.Type == type))
+            var typeRules = rules.Where(r => r.Type == type).ToList();
+            if (typeRules is [{ } sole] && AppParse.IsLockedShape(sole.Verbs, sole.When))
+            {
+                sb.Append("        locked\n");
+                continue;
+            }
+            foreach (var rule in typeRules)
             {
                 sb.Append("        ").Append(string.Join(' ', rule.Verbs));
                 if (rule.When is { } when) sb.Append(" where ").Append(CodePrint.Value(when));

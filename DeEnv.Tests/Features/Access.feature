@@ -82,6 +82,32 @@ Feature: The access floor (read enforcement by principal)
     Then the mutation is rejected
     And the milestones set still contains "Milestone" 2
 
+  # ── locked (M13 sugar for `create edit delete where false`) ──────────────────
+  # `locked` is a spelling upgrade over the write-denial idiom the designer already uses to make
+  # Commit/Branch immutable (`create edit delete where false`) — same floor decision, same
+  # AccessFloor, no new mechanism. Unlike the admin-gated rules above, `locked` has NO condition to
+  # satisfy at all — even the admin (who passes every OTHER rule in this file) is denied every
+  # write, because the rule's condition is unconditionally false, not role-conditioned. Reads are
+  # UNTOUCHED (no `read` rule is installed, so Milestone stays unruled-for-read ⇒ open), matching
+  # the task's "write-locked, not secret" requirement — the history SetTable stays visible. Uses a
+  # dedicated step (not "the access rule") because `locked` must be the subject's ONLY rule —
+  # replacing, not joining, the Background's `Milestone read where currentUser.role == "Admin"`.
+  @milestone-13
+  Scenario: A locked type rejects every client write while staying readable
+    Given the only access rule for Milestone is "locked"
+    And the current user is the admin
+    When the page state is rendered for "/"
+    Then the shipped data includes a "Milestone" titled "Gate #3"
+    When the current user adds a "Milestone" titled "Sneaky" to the milestones set
+    Then the mutation is rejected
+    And the milestones set contains no "Milestone" titled "Sneaky"
+    When the admin edits the "Milestone" titled "Gate #3" to set "title" to "Hacked"
+    Then the mutation is rejected
+    And the stored "Milestone" 2 has "title" equal to "Gate #3"
+    When the current user removes "Milestone" 2 from the milestones set
+    Then the mutation is rejected
+    And the milestones set still contains "Milestone" 2
+
   # ── password login (the session→principal bind over the WS) ─────────────────
   # Login is a STATE bound over the EXISTING WS connection (no reserved route): a `login`
   # action looks up the User by name, verifies the plaintext against the stored PBKDF2 hash,

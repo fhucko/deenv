@@ -57,6 +57,31 @@ public sealed class DesignerVocabularyTests
         await Assert.That(ex!.Message).Contains("reserved");
     }
 
+    // Guard: every FRAMEWORK-OWNED history type must carry `locked` in the designer's own access section
+    // (DeEnv/instances/1/app.deenv). `Commit`/`Branch` (M13's design-history rows) are writable ONLY through
+    // `sys.commitDesign` — a host action that writes through the store seam BELOW the client write floor —
+    // so their client-facing write floor must deny every create/edit/delete (see DECISIONS.md "Design
+    // commits" / DesignCommit.feature "A client cannot edit a commit or move a branch head"). This list is
+    // the C# SOURCE OF TRUTH: add a future framework history type here the moment it exists, so forgetting
+    // its `locked` rule fails THIS BUILD — a red test, not a silent security gap found later. (Read via
+    // AppParse.IsLockedShape, the SAME shape recognition AppPrint uses to canonicalize `where false` →
+    // `locked` — so this checks the type carries the rule in EFFECT, not merely the literal word `locked`
+    // in the source text.)
+    private static readonly string[] FrameworkHistoryTypes = ["Commit", "Branch"]; // add here when a new one lands
+
+    [Test]
+    public async Task Every_framework_history_type_is_locked_in_the_designer_document()
+    {
+        var desc = AppParse.Parse(File.ReadAllText(DesignerApp));
+        var rules = desc.Rules ?? [];
+        foreach (var typeName in FrameworkHistoryTypes)
+        {
+            var typeRules = rules.Where(r => r.Type == typeName).ToList();
+            await Assert.That(typeRules.Count == 1 && AppParse.IsLockedShape(typeRules[0].Verbs, typeRules[0].When))
+                .IsTrue();
+        }
+    }
+
     // The string items of a designer `ui` var declared as an array literal (e.g. `var typeKinds = [...]`),
     // sorted + comma-joined so the comparison is order-independent with a readable failure message.
     private static string Vocab(string name)

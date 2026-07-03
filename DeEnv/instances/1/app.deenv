@@ -45,9 +45,9 @@ access
     sys
         *
     Commit
-        create edit delete where false
+        locked
     Branch
-        create edit delete where false
+        locked
 
 ui
     var renameId = 0

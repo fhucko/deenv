@@ -191,6 +191,110 @@ public sealed class AppPrintTests
         await Assert.That(ex!.Message).Contains("reserved");
     }
 
+    // ── locked (M13 sugar for `create edit delete where false`) ────────────────
+
+    // `locked` round-trips: it parses to EXACTLY the rule `create edit delete where false` already
+    // means (proving it is pure sugar, not a new AccessRule shape — no new field, no flag), and the
+    // printer canonicalizes back to `locked` (not the older `where false` spelling), a fixpoint on
+    // reprint. AssertRoundTrips already checks parse∘print is the identity AND print∘parse is a
+    // fixpoint; this additionally asserts the SEMANTIC content (the exact verbs+condition a
+    // hand-written `where false` line would produce) so a future refactor can't silently change what
+    // `locked` denies without failing here.
+    [Test]
+    public async Task A_locked_type_round_trips_to_the_where_false_shape_and_prints_as_locked()
+    {
+        const string app = """
+        types
+            Db
+                things set of Thing
+            Thing
+                title text
+
+        access
+            Thing
+                locked
+        """;
+        await AssertRoundTrips(app);
+
+        var desc = AppParse.Parse(app);
+        var rule = desc.Rules!.Single(r => r.Type == "Thing");
+        await Assert.That(rule.Verbs.ToHashSet().SetEquals(AppParse.WriteVerbs)).IsTrue();
+        await Assert.That(rule.When).IsTypeOf<CodeBool>();
+        await Assert.That(((CodeBool)rule.When!).Value).IsFalse();
+
+        // The printed form spells it `locked`, not `create edit delete where false` — the canonical
+        // upgrade this slice makes (AppPrint.PrintAccess collapses the recognized shape).
+        var printed = AppPrint.Print(desc);
+        await Assert.That(printed).Contains("locked");
+        await Assert.That(printed).DoesNotContain("where false");
+    }
+
+    // A hand-written `create edit delete where false` line — the OLDER spelling `locked` replaces —
+    // still parses and is byte-for-byte CANONICALIZED to `locked` on print: an app committed before
+    // this slice keeps working, and re-printing it (e.g. the designer bridge publishing over it)
+    // upgrades the spelling automatically. Proves `locked` is additive sugar, not a breaking parse
+    // change.
+    [Test]
+    public async Task An_old_where_false_idiom_prints_as_locked()
+    {
+        var desc = AppParse.Parse("""
+        types
+            Db
+                things set of Thing
+            Thing
+                title text
+
+        access
+            Thing
+                create edit delete where false
+        """);
+        var printed = AppPrint.Print(desc);
+        await Assert.That(printed).Contains("        locked\n");
+        await Assert.That(printed).DoesNotContain("where false");
+    }
+
+    // `locked` must be the ONLY rule under its subject: pairing it with another grant on the SAME
+    // type is a loader error (ambiguous — which one governs?), not silently merged.
+    [Test]
+    public async Task Locked_plus_another_grant_on_the_same_subject_is_rejected()
+    {
+        var ex = await Assert.That(() => InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    things set of Thing
+                Thing
+                    title text
+
+            access
+                Thing
+                    locked
+                    read
+            """)).Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("Thing");
+        await Assert.That(ex!.Message).Contains("locked");
+        await Assert.That(ex!.Message).Contains("ONLY");
+    }
+
+    // `locked` under the `sys` subject is meaningless (sys governs host-action authority, not a data
+    // type's write floor) and is rejected at load with a clear message.
+    [Test]
+    public async Task Locked_under_the_sys_subject_is_rejected()
+    {
+        var ex = await Assert.That(() => InstanceDescriptionLoader.Load($$"""
+            types
+                Db
+                    designs set of Design
+                Design
+                    label text
+
+            access
+                {{AccessFloor.SysSubject}}
+                    locked
+            """)).Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains(AccessFloor.SysSubject);
+        await Assert.That(ex!.Message).Contains("locked");
+    }
+
     // ── expression printing: minimal parentheses ────────────────────────────────
 
     [Test]
