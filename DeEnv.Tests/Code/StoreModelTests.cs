@@ -165,7 +165,7 @@ public sealed class StoreModelTests
             var itemPool = onDisk["extents"]!["Item"]!.AsObject();
             await Assert.That(itemPool.Count).IsEqualTo(0); // both 5 and 7 swept; no exception
         }
-        finally { File.Delete(path); }
+        finally { CleanupDataFile(path); }
     }
 
     // GC keeps an object still reachable through a "type"-named field's neighbour: removing
@@ -220,7 +220,7 @@ public sealed class StoreModelTests
             await Assert.That(itemPool.ContainsKey("6")).IsTrue();
             await Assert.That(itemPool["6"]!["fields"]!["type"]!["value"]!.GetValue<string>()).IsEqualTo("widget");
         }
-        finally { File.Delete(path); }
+        finally { CleanupDataFile(path); }
     }
 
     // ── sample data + helpers ─────────────────────────────────────────────────────
@@ -265,4 +265,16 @@ public sealed class StoreModelTests
 
     private static string TempPath() =>
         Path.Combine(Path.GetTempPath(), "deenv-storemodel-" + Guid.NewGuid().ToString("N") + ".json");
+
+    // The M13 append-only log + genesis snapshot ride BESIDE the data file (AppPaths) — a test that opens
+    // a store over `path` and mutates it (RemoveFromSet, here) creates them, so they must be cleaned up
+    // WITH the data file, matching this test's existing (GUID-named, no-collision-risk) hygiene intent.
+    private static void CleanupDataFile(string path)
+    {
+        File.Delete(path);
+        var logPath = AppPaths.LogPathForDataPath(path);
+        var genesisPath = AppPaths.GenesisPathForDataPath(path);
+        if (File.Exists(logPath)) File.Delete(logPath);
+        if (File.Exists(genesisPath)) File.Delete(genesisPath);
+    }
 }

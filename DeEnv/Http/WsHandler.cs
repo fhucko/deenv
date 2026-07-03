@@ -373,6 +373,14 @@ public sealed class WsHandler
             var pathStr = req.Path ?? "/";
             var path = ParsePath(pathStr);
 
+            // Ambient "who is writing" for the append-only changeset log (M13 slice 1 — StoreWriteContext):
+            // the bound principal (null for an unauthenticated/DORMANT session) + this request's own
+            // correlation id, so any store write this dispatch causes is attributed without threading a
+            // who/msgId parameter through every IInstanceStore method. Scoped to exactly this dispatch
+            // (disposed in the `finally` below) so it can never leak into an unrelated request reusing the
+            // same thread-pool thread.
+            using var _ = StoreWriteContext.Scope(Session(req)?.PrincipalUserId, req.Id);
+
             var result = op switch
             {
                 "write"             => HandleWrite(path, pathStr, req),

@@ -1,3 +1,4 @@
+using DeEnv.Storage;
 using Microsoft.Playwright;
 using Reqnroll;
 
@@ -21,7 +22,23 @@ public sealed class Hooks(InstanceContext ctx)
         try { if (ctx.KernelDir != null && Directory.Exists(ctx.KernelDir)) Directory.Delete(ctx.KernelDir, recursive: true); }
         catch { /* best-effort */ }
 
+        // The M13 append-only log + genesis snapshot ride BESIDE the data file (AppPaths.LogPathForDataPath
+        // / GenesisPathForDataPath) — a scenario that opened a store over DataFilePath may have created
+        // them, and they must be cleaned up WITH it. Without this, Path.GetTempFileName()'s limited name
+        // space can eventually recycle a deleted scenario's ".tmp" name for an unrelated later scenario,
+        // which would then find that earlier scenario's STALE log/genesis still on disk beside its own
+        // fresh (different-content) data file — a real version mismatch the store correctly refuses to
+        // silently trust (JsonFileInstanceStore.ReconcileLogOnBoot's "AHEAD" guard), surfacing as a
+        // flaky, seemingly-unrelated test failure. Deleting all three together closes that gap at the root.
         try { if (File.Exists(ctx.DataFilePath)) File.Delete(ctx.DataFilePath); }
+        catch { /* best-effort */ }
+        try
+        {
+            var logPath = AppPaths.LogPathForDataPath(ctx.DataFilePath);
+            var genesisPath = AppPaths.GenesisPathForDataPath(ctx.DataFilePath);
+            if (File.Exists(logPath)) File.Delete(logPath);
+            if (File.Exists(genesisPath)) File.Delete(genesisPath);
+        }
         catch { /* best-effort */ }
     }
 }

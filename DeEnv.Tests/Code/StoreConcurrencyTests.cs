@@ -46,7 +46,15 @@ public sealed class StoreConcurrencyTests
         }
         finally
         {
+            // The M13 append-only log + genesis snapshot ride BESIDE the data file (AppPaths) — this test's
+            // WriteField call creates them, so they must be cleaned up WITH it (this test's GUID-based
+            // filename can never COLLIDE across runs the way Hooks.cs's fix addresses, but leaving orphans
+            // in %TEMP% on every run is still worth avoiding).
             if (File.Exists(dataFile)) File.Delete(dataFile);
+            var logPath = AppPaths.LogPathForDataPath(dataFile);
+            var genesisPath = AppPaths.GenesisPathForDataPath(dataFile);
+            if (File.Exists(logPath)) File.Delete(logPath);
+            if (File.Exists(genesisPath)) File.Delete(genesisPath);
         }
     }
 }

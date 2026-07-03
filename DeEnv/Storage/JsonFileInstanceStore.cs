@@ -34,7 +34,17 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // typeName/id/fields). Dictionary keys (Extents = type names, Fields = user field
         // names) are NOT renamed — DictionaryKeyPolicy is deliberately unset.
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        Converters = { new StoredValueConverter() },
+        Converters = { new StoredValueConverter(), new LogWriteConverter() },
+    };
+
+    // A ONE-LINE-per-entry variant of Opts (same naming policy + converters, WriteIndented off) for the
+    // JSONL log: an indented (multi-line) LogEntry would break the one-object-per-line format every other
+    // part of this file assumes (LoadLog reads File.ReadAllLines; the torn-tail repair truncates by line).
+    private static readonly JsonSerializerOptions LogLineOpts = new()
+    {
+        WriteIndented = false,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new StoredValueConverter(), new LogWriteConverter() },
     };
 
     // The document is loaded into memory ONCE at construction and kept as the
@@ -47,14 +57,51 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private StoreDoc _doc;
 
     // Per-object last-modified version (optimistic-concurrency guard — DECISIONS.md "App versioning —
-    // the full design (M13 clump)"). IN-MEMORY only, deliberately not persisted: a missing entry means
-    // "unchanged since this process booted" — correct because nothing can have raced against a version
-    // this same boot minted (the only versions a live client can hold a baseVersion for are ones this
-    // process has shipped), and the rare case of a truly-stale pre-restart base is out of scope for this
-    // slice (no durable per-object history yet — that is the future M13 log; a bare in-memory map is the
-    // documented v0 approximation, not silently swept under a comment). Every mutating write records
-    // here under the SAME _sync lock the mutation itself holds — see BumpVersion.
+    // the full design (M13 clump)"). IN-MEMORY only, deliberately not persisted directly — but the
+    // documented cross-restart residual this comment used to name ("a truly-stale pre-restart base can
+    // pass, because a fresh boot's map starts empty") is CLOSED as of M13 slice 1: ReconcileLogOnBoot
+    // rebuilds this map from the WHOLE durable log on every boot (entry-final seq per touched object —
+    // coarser than the exact live per-write bump, but safe in the direction that matters: at worst a
+    // spurious stale-base rejection right after restart, never a missed clobber). Every mutating write
+    // records here under the SAME _sync lock the mutation itself holds — see BumpVersion.
     private readonly Dictionary<int, int> _objectVersions = new();
+
+    // ── the append-only changeset log (M13 slice 1) ─────────────────────────────────────────────────
+    //
+    // Sibling paths derived by suffix from _filePath (AppPaths.LogPathForDataPath/GenesisPathForDataPath —
+    // one rule, works for a production id-dir path and a bare test temp file alike). _pending accumulates
+    // this operation's LogWrites; every public mutating method calls BeginMutation() as its first
+    // statement (freezes genesis, clears _pending, and — the correctness-critical part — captures the
+    // version this operation STARTED at), each write site appends to _pending BEFORE overwriting the value
+    // it captures as Old, and Save() (the store's one commit chokepoint — see its doc) turns it into one
+    // appended LogEntry before the snapshot rewrite (WAL order: append THEN snapshot). _genesisWritten
+    // caches the "genesis file already exists" check so a hot mutation path doesn't File.Exists every call.
+    private readonly string _logPath;
+    private readonly string _genesisPath;
+    private readonly List<LogWrite> _pending = new();
+    private bool _genesisWritten;
+
+    // The store's version when the CURRENT operation began (set by BeginMutation, read by Save). Whether
+    // to log an entry is decided by comparing Version to THIS, not by "is _pending non-empty": a
+    // no-op removal (RemoveDictionaryEntry on an absent key; RemoveFromSet when the id was never a member)
+    // still calls BumpVersion() unconditionally today — genuinely advancing the store's HEAD — while
+    // recording ZERO LogWrites (there is nothing to describe; nothing was removed). Gating on _pending
+    // alone would silently skip logging that version bump, breaking the very invariant this whole log
+    // exists to hold ("the log's seq and the store's version are the same monotonic number" — every
+    // version this store ever reaches has exactly one log entry whose seq is that version, possibly
+    // carrying an EMPTY Writes list for a bump with nothing to describe).
+    private int _versionAtOpStart;
+
+    // Every public mutating method's first statement: freeze genesis, clear any stale writes from a
+    // previous call (belt-and-braces — Save() already clears _pending, but a method that returns early
+    // without reaching Save() must never leave one for the NEXT call to append), and record the version
+    // this operation is starting from.
+    private void BeginMutation()
+    {
+        EnsureGenesis();
+        _pending.Clear();
+        _versionAtOpStart = _doc.Version;
+    }
 
     public int CurrentVersion { get { lock (_sync) return _doc.Version; } }
 
@@ -81,11 +128,17 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         _filePath = filePath;
         _desc = desc;
         _resolver = new TypeResolver(desc);
+        _logPath = AppPaths.LogPathForDataPath(filePath);
+        _genesisPath = AppPaths.GenesisPathForDataPath(filePath);
 
         if (!File.Exists(filePath) || new FileInfo(filePath).Length == 0)
         {
-            // Seed from the app's initialData (or an empty root) and persist it.
+            // Seed from the app's initialData (or an empty root) and persist it. No genesis exists yet
+            // for a brand-new store (freezes on the FIRST real mutation afterward — see EnsureGenesis).
+            // _versionAtOpStart pinned to match the fresh doc's OWN version (not left at the field's
+            // default) so this seed Save() reads as a no-op on its own terms, not by coincidence.
             _doc = BuildInitialDoc();
+            _versionAtOpStart = _doc.Version;
             Save();
         }
         else
@@ -95,8 +148,76 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             // types — fail loudly here rather than half-work over stale data.
             StoredDataValidator.Validate(doc, desc, filePath);
             _doc = Normalize(doc);
+            _genesisWritten = File.Exists(_genesisPath);
+            // Pin BEFORE reconciliation may replay+bump _doc.Version — ReconcileLogOnBoot's own catch-up
+            // checkpoint re-pins it again right before its Save() (see that method), so this assignment
+            // only matters for the (overwhelmingly common) case where nothing needs replaying at all.
+            _versionAtOpStart = _doc.Version;
+            ReconcileLogOnBoot();
         }
     }
+
+    // ── boot reconciliation: repair a torn tail, replay a lagging snapshot, rebuild _objectVersions ──
+    //
+    // Runs once, after load+validate+Normalize, before the store serves anything. A crash can only ever
+    // leave the snapshot BEHIND the log (WAL order is append-then-snapshot — see Save()), never ahead of
+    // it; a torn FINAL line (the process died mid-append) is tolerated and repaired by truncating the file
+    // to its last complete line, since the append that produced it never got far enough to be the entry
+    // whose snapshot Save() would have written next. Any OTHER unparseable line is a corrupted log, not a
+    // crash artifact — loud failure, same remedy style as StoredDataValidator.
+    private void ReconcileLogOnBoot()
+    {
+        var entries = LoadLog();
+        if (entries.Count == 0) return;
+
+        var last = entries[^1];
+        if (last.Seq > _doc.Version)
+        {
+            // The snapshot lagged the log — replay every entry the snapshot hasn't absorbed yet, then
+            // checkpoint: pin _versionAtOpStart to the CAUGHT-UP version BEFORE calling Save(), so its
+            // "did Version change during this operation" gate reads "no" and appends nothing — this Save()
+            // must only rewrite the snapshot to match the log it is already fully described by, never
+            // create a SECOND entry duplicating a seq the log already has.
+            foreach (var entry in entries.Where(e => e.Seq > _doc.Version))
+                _doc = AppLogReplay.Apply(_doc, entry);
+            _versionAtOpStart = _doc.Version;
+            Save();
+        }
+        else if (last.Seq < _doc.Version)
+        {
+            // Impossible under the WAL order (the log always leads or matches) unless the files were
+            // hand-edited or the snapshot was replaced independently of the log — loud failure rather than
+            // silently trusting either side.
+            throw new StoredDataException(
+                $"Data file '{_filePath}' (version {_doc.Version}) is AHEAD of its own log " +
+                $"'{_logPath}' (last seq {last.Seq}). The log and snapshot have gone out of sync — " +
+                "restore a consistent pair from backup, or delete both to reseed.");
+        }
+
+        // Rebuild the in-memory per-object last-modified map from the WHOLE log (closes the documented
+        // cross-restart residual on _objectVersions — see that field's doc). Entry-final seq for every
+        // object a write in that entry touched: a batch entry stamps all its objects at the entry's ONE
+        // seq rather than each write's own intra-batch bump, which is coarser than live BumpVersion but
+        // SAFE in the direction that matters — at worst a spurious stale-base rejection right after
+        // restart (never a missed clobber), because the recorded version can only be >= the true one.
+        foreach (var entry in entries)
+            foreach (var id in TouchedObjectIds(entry))
+                _objectVersions[id] = entry.Seq;
+    }
+
+    // Every extent-object id a log entry's writes touched — the attribution set _objectVersions needs.
+    private static IEnumerable<int> TouchedObjectIds(LogEntry entry) => entry.Writes
+        .Select(w => w switch
+        {
+            FieldWrite(var id, _, _, _) => id,
+            Create(var id, _, _) => id,
+            Remove(var id, _) => id,
+            SetLink or SetUnlink or DictSet or DictRemove or RootWrite => (int?)null,
+            _ => null,
+        })
+        .Where(id => id is not null)
+        .Select(id => id!.Value)
+        .Distinct();
 
     // Deserialize the file to the typed model. A malformed / garbage file (not a readable
     // document) becomes a StoredDataException — same remedy message as before.
@@ -262,6 +383,16 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     }
 
     // ── write ─────────────────────────────────────────────────────────────────
+    //
+    // Every write site below follows the same pattern: BeginMutation() first (freeze genesis the very
+    // first time, clear _pending, capture the starting version — see its own doc), then
+    // RecordFieldWrite/RecordCreate/etc. capture Old BEFORE the mutation overwrites it.
+
+    // Capture a field write into _pending: reads the CURRENT value as Old before the caller overwrites it.
+    // The single chokepoint every scalar-field write (leaf write, object-form save, ref set/clear) funnels
+    // through, so the log's FieldWrite shape is defined in exactly one place.
+    private void RecordFieldWrite(StoredObject obj, string prop, StoredValue? @new) =>
+        _pending.Add(new FieldWrite(obj.Id, prop, obj.Fields.GetValueOrDefault(prop), @new));
 
     public int WriteLeaf(NodePath path, NodeValue value)
     {
@@ -270,8 +401,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     private int WriteLeafCore(NodePath path, NodeValue value)
     {
+        BeginMutation();
         if (path.IsRoot)
         {
+            _pending.Add(new RootWrite(_doc.Root, new StoredLeaf(value)));
             _doc.Root = new StoredLeaf(value); // scalar Db root
             var v = BumpVersion();
             Save();
@@ -279,6 +412,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
         var parent = WalkToObject(ParentPath(path))
             ?? throw new InvalidOperationException($"Parent of {path} is not an object.");
+        RecordFieldWrite(parent.Object, path.Segments[^1], new StoredLeaf(value));
         parent.Object.Fields[path.Segments[^1]] = new StoredLeaf(value);
         var ver = BumpVersion(parent.Object.Id);
         Save();
@@ -292,13 +426,17 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     private int WriteObjectCore(NodePath path, ObjectValue value)
     {
+        BeginMutation();
         var target = WalkToObject(path)
             ?? throw new InvalidOperationException($"Path {path} is not a writable object.");
 
         foreach (var prop in target.Type.Props ?? [])
             if (prop.Cardinality == Cardinality.Single && !_desc.IsObjectType(prop.Type)
                 && value.Fields.TryGetValue(prop.Name, out var v))
+            {
+                RecordFieldWrite(target.Object, prop.Name, new StoredLeaf(v));
                 target.Object.Fields[prop.Name] = new StoredLeaf(v);
+            }
 
         var ver = BumpVersion(target.Object.Id);
         Save();
@@ -309,8 +447,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
             var entry = ExtentEntryById(objectId)
                 ?? throw new InvalidOperationException($"No object with id {objectId}.");
+            RecordFieldWrite(entry, prop, new StoredLeaf(value));
             entry.Fields[prop] = new StoredLeaf(value);
             var ver = BumpVersion(objectId);
             Save();
@@ -322,10 +462,12 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
             foreach (var (objectId, prop, value) in edits)
             {
                 var entry = ExtentEntryById(objectId)
                     ?? throw new InvalidOperationException($"No object with id {objectId}.");
+                RecordFieldWrite(entry, prop, new StoredLeaf(value));
                 entry.Fields[prop] = new StoredLeaf(value);
                 BumpVersion(objectId);
             }
@@ -350,6 +492,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
+
             // PRE-VALIDATE every object reference resolves BEFORE mutating anything — a negative tempId must
             // name a create in THIS batch, a positive id must exist — so a malformed batch throws with the
             // store UNTOUCHED (no half-minted in-memory state served to the next read). This is the store's
@@ -457,6 +601,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         var typeName = ExtentEntryById(memberId)?.TypeName
                             ?? throw new InvalidOperationException($"No object with id {memberId}.");
                         set.Members[memberId] = new StoredRef(typeName, memberId);
+                        _pending.Add(new SetLink(setId, memberId));
                         BumpVersion(memberId);
                         break;
                     }
@@ -464,8 +609,16 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     {
                         var entry = ExtentEntryById(ResolveRefId(ownerRef))
                             ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
-                        if (targetRef is { } t) entry.Fields[prop] = new StoredRef(targetType, ResolveRefId(t));
-                        else entry.Fields.Remove(prop);
+                        if (targetRef is { } t)
+                        {
+                            RecordFieldWrite(entry, prop, new StoredRef(targetType, ResolveRefId(t)));
+                            entry.Fields[prop] = new StoredRef(targetType, ResolveRefId(t));
+                        }
+                        else
+                        {
+                            RecordFieldWrite(entry, prop, null);
+                            entry.Fields.Remove(prop);
+                        }
                         BumpVersion(ResolveRefId(ownerRef));
                         break;
                     }
@@ -473,6 +626,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     {
                         var entry = ExtentEntryById(ResolveRefId(objectRef))
                             ?? throw new InvalidOperationException($"No object with id {objectRef}.");
+                        RecordFieldWrite(entry, prop, new StoredLeaf(value));
                         entry.Fields[prop] = new StoredLeaf(value);
                         BumpVersion(ResolveRefId(objectRef));
                         break;
@@ -542,6 +696,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
             var id = MintObject(typeName, fields);
             BumpVersion(id);
             Save();
@@ -553,10 +708,12 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
             var typeName = _resolver.ResolveType(setPath)?.Type.Name
                 ?? throw new InvalidOperationException($"{setPath} does not resolve.");
             var set = EnsureSet(setPath);
             set.Members[id] = new StoredRef(typeName, id);
+            _pending.Add(new SetLink(set.Id, id));
             var ver = BumpVersion(id);
             Save();
             return ver;
@@ -567,8 +724,12 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
             if (SetNodeAt(setPath) is { } set)
+            {
+                _pending.Add(new SetUnlink(set.Id, id));
                 set.Members.Remove(id);
+            }
             CollectGarbage();
             var ver = BumpVersion(id);
             Save();
@@ -582,11 +743,13 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
             var set = FindSetNode(setId)
                 ?? throw new InvalidOperationException($"No set with id {setId}.");
             var typeName = ExtentEntryById(objectId)?.TypeName
                 ?? throw new InvalidOperationException($"No object with id {objectId}.");
             set.Members[objectId] = new StoredRef(typeName, objectId);
+            _pending.Add(new SetLink(setId, objectId));
             var ver = BumpVersion(objectId);
             Save();
             return ver;
@@ -597,8 +760,12 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
             if (FindSetNode(setId) is { } set)
+            {
+                _pending.Add(new SetUnlink(setId, objectId));
                 set.Members.Remove(objectId);
+            }
             CollectGarbage();
             var ver = BumpVersion(objectId);
             Save();
@@ -639,12 +806,19 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
             var entry = ExtentEntryById(objectId)
                 ?? throw new InvalidOperationException($"No object with id {objectId}.");
             if (targetId is null)
+            {
+                RecordFieldWrite(entry, prop, null);
                 entry.Fields.Remove(prop);
+            }
             else
+            {
+                RecordFieldWrite(entry, prop, new StoredRef(targetTypeName, targetId.Value));
                 entry.Fields[prop] = new StoredRef(targetTypeName, targetId.Value);
+            }
             CollectGarbage();
             var ver = BumpVersion(objectId);
             Save();
@@ -656,15 +830,20 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
             var parent = WalkToObject(ParentPath(fieldPath))
                 ?? throw new InvalidOperationException($"Parent of {fieldPath} is not an object.");
             var field = fieldPath.Segments[^1];
             if (id is null)
+            {
+                RecordFieldWrite(parent.Object, field, null);
                 parent.Object.Fields.Remove(field);
+            }
             else
             {
                 var typeName = _resolver.ResolveType(fieldPath)?.Type.Name
                     ?? throw new InvalidOperationException($"{fieldPath} does not resolve.");
+                RecordFieldWrite(parent.Object, field, new StoredRef(typeName, id.Value));
                 parent.Object.Fields[field] = new StoredRef(typeName, id.Value);
             }
             CollectGarbage();
@@ -765,7 +944,21 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 }
         }
 
-        if (changed) SaveRaw(dataPath, doc);
+        // ponytail: a rewritten data file re-baselines its history — history resets at schema apply until
+        // slice 4's publish boundary entry (a proper migration marker in the log, replacing this delete).
+        // A migrated file's PAST writes described objects under the OLD schema; nothing here can express
+        // that transition as replayable LogWrites, so the safe move is to drop the log+genesis and let the
+        // next real mutation re-freeze genesis from the just-migrated doc — never leave history that
+        // claims to replay to a document under a schema this store no longer has. `changed == false`
+        // leaves an untouched data file's siblings untouched too (nothing to re-baseline).
+        if (changed)
+        {
+            SaveRaw(dataPath, doc);
+            var logPath = AppPaths.LogPathForDataPath(dataPath);
+            var genesisPath = AppPaths.GenesisPathForDataPath(dataPath);
+            if (File.Exists(logPath)) File.Delete(logPath);
+            if (File.Exists(genesisPath)) File.Delete(genesisPath);
+        }
         return unconvertible;
     }
 
@@ -910,8 +1103,21 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            // "A brand-new document, not a continuation" (the field's own words, above) extends to its
+            // history: delete the log + genesis BEFORE this reset's Save() (nothing to log for the reset
+            // itself — see the _versionAtOpStart = 0 line below), so the NEXT real mutation re-freezes
+            // genesis from the reset doc rather than leaving history that describes a document this one
+            // has replaced.
+            if (File.Exists(_logPath)) File.Delete(_logPath);
+            if (File.Exists(_genesisPath)) File.Delete(_genesisPath);
+            _genesisWritten = false;
+            _pending.Clear();
             _doc = BuildInitialDoc();
             _objectVersions.Clear();
+            // BuildInitialDoc's fresh StoreDoc.Version is 0 — pin _versionAtOpStart to match it (NOT the
+            // stale value a PRIOR mutation on the old doc left behind), so Save()'s "did Version change
+            // during this operation" check correctly reads "no" for a reset (0 == 0) and appends nothing.
+            _versionAtOpStart = _doc.Version;
             Save();
         }
     }
@@ -927,6 +1133,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
             if (DictNodeAt(dictPath) is { } existing && existing.Entries.ContainsKey(KeyToString(key)))
                 throw new InvalidOperationException(
                     $"An entry with key '{KeyToString(key)}' already exists at {dictPath}.");
@@ -941,6 +1148,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
             WriteDictionaryEntryInto(path, key, value);
             var ver = BumpVersion();
             Save();
@@ -953,15 +1161,23 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         var typeInfo = _resolver.ResolveType(path)
             ?? throw new InvalidOperationException($"{path} does not resolve.");
         var dict = EnsureDict(path);
+        var keyStr = KeyToString(key);
+        var old = dict.Entries.GetValueOrDefault(keyStr);
 
         if (value is ObjectValue obj && typeInfo.Type.BaseType == BaseType.Object)
         {
+            // MintObject records its OWN Create write (the choke point) — appended to _pending BEFORE the
+            // DictSet below, so replay applies the Create first and the DictSet's New ref then resolves.
             var id = MintObject(typeInfo.Type.Name, obj);
-            dict.Entries[KeyToString(key)] = new StoredRef(typeInfo.Type.Name, id);
+            var newRef = new StoredRef(typeInfo.Type.Name, id);
+            _pending.Add(new DictSet(dict.Id, keyStr, old, newRef));
+            dict.Entries[keyStr] = newRef;
         }
         else
         {
-            dict.Entries[KeyToString(key)] = new StoredLeaf(value);
+            var newLeaf = new StoredLeaf(value);
+            _pending.Add(new DictSet(dict.Id, keyStr, old, newLeaf));
+            dict.Entries[keyStr] = newLeaf;
         }
     }
 
@@ -969,8 +1185,14 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     {
         lock (_sync)
         {
+            BeginMutation();
             if (DictNodeAt(path) is { } dict)
-                dict.Entries.Remove(KeyToString(key));
+            {
+                var keyStr = KeyToString(key);
+                if (dict.Entries.TryGetValue(keyStr, out var old))
+                    _pending.Add(new DictRemove(dict.Id, keyStr, old));
+                dict.Entries.Remove(keyStr);
+            }
             CollectGarbage();
             var ver = BumpVersion();
             Save();
@@ -988,8 +1210,132 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         return doc;
     }
 
-    // Write-temp-then-move: a reader never sees a half-written file.
-    private void Save() => SaveRaw(_filePath, _doc);
+    // The store's ONE commit chokepoint — called exactly where it always was, by every mutating method,
+    // caller already holding _sync. Now also the WAL commit step (M13 slice 1): if the store's Version
+    // ADVANCED during this operation (compared to _versionAtOpStart, captured by BeginMutation), append
+    // ONE LogEntry to the log BEFORE the snapshot rewrite (the fixed crash order — a crash between the two
+    // leaves the snapshot behind, repaired by ReconcileLogOnBoot; a crash before the append leaves NEITHER
+    // updated, which is correct — the operation never committed).
+    //
+    // Gated on the VERSION delta, not on "_pending is non-empty": a no-op removal (RemoveDictionaryEntry
+    // on an absent key; RemoveFromSet when the id was never a member) still calls BumpVersion()
+    // unconditionally — genuinely advancing HEAD — while recording ZERO LogWrites (nothing was removed,
+    // so there is nothing to describe). Gating on _pending alone would silently DROP that version's log
+    // entry, breaking "every version this store reaches has exactly one log entry whose seq is that
+    // version" — so such a bump still gets its own entry, just with an EMPTY Writes list (replay applies
+    // no field mutation for it, only advances doc.Version/NextId to match — exactly what happened live).
+    // An unchanged Version (an empty CommitBatch; the ctor seed; Reset — see its own _versionAtOpStart
+    // pin; a boot catch-up checkpoint) appends nothing. _pending is always cleared here, whether or not it
+    // was appended, so a later no-op Save() (there is always at least one more before the next real
+    // mutation) never re-appends stale writes.
+    private void Save()
+    {
+        if (_doc.Version != _versionAtOpStart)
+        {
+            var (who, msgId) = StoreWriteContext.Get();
+            var entry = new LogEntry(_doc.Version, DateTimeOffset.UtcNow, who, msgId, _doc.NextId, [.._pending]);
+            AppendLogEntry(_logPath, entry);
+        }
+        _pending.Clear();
+        SaveRaw(_filePath, _doc);
+    }
+
+    // Freeze genesis from the CURRENT (pre-mutation) doc, once, the first time any public mutating method
+    // runs — called by BeginMutation() (every mutating method's first statement), under _sync, BEFORE the
+    // method mutates _doc. Cheap after the first call (the cached bool skips the File.Exists this method
+    // would otherwise need).
+    private void EnsureGenesis()
+    {
+        if (_genesisWritten) return;
+        var genesis = new GenesisFile(_doc.Version, CloneDoc(_doc));
+        Directory.CreateDirectory(Path.GetDirectoryName(_genesisPath)!);
+        var tmp = _genesisPath + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(genesis, Opts));
+        File.Move(tmp, _genesisPath, overwrite: true);
+        _genesisWritten = true;
+    }
+
+    // A snapshot of doc, independent of the live _doc reference (genesis must not silently track later
+    // mutations — it round-trips through the same Opts the rest of the store already uses, so this is
+    // exactly what a fresh LoadRaw of the just-serialized bytes would produce).
+    private static StoreDoc CloneDoc(StoreDoc doc) =>
+        JsonSerializer.Deserialize<StoreDoc>(JsonSerializer.Serialize(doc, Opts), Opts)!;
+
+    // Append one JSONL line (UTF-8, no BOM, trailing '\n') to the log file — the durable half of the WAL
+    // commit. Creates the directory/file on first use (mirrors SaveRaw's Directory.CreateDirectory — a
+    // freshly-created instance may not have its data dir yet).
+    private static void AppendLogEntry(string logPath, LogEntry entry)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+        var line = JsonSerializer.Serialize(entry, LogLineOpts) + "\n";
+        File.AppendAllText(logPath, line, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    // Load every entry from the log file, repairing a torn FINAL line (the process crashed mid-append —
+    // the ONLY way a line can be malformed under the WAL discipline, since every append is a single
+    // File.AppendAllText call and every entry before the last was itself completed by a PRIOR successful
+    // boot). Any OTHER unparseable line — one that isn't the last, or a last line that parses as valid
+    // JSON but not a LogEntry — is a corrupted log, not a crash artifact: loud StoredDataException.
+    private List<LogEntry> LoadLog()
+    {
+        if (!File.Exists(_logPath)) return [];
+        var lines = File.ReadAllLines(_logPath).Where(l => l.Length > 0).ToList();
+        var entries = new List<LogEntry>();
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var isLast = i == lines.Count - 1;
+            try
+            {
+                entries.Add(JsonSerializer.Deserialize<LogEntry>(lines[i], Opts)
+                    ?? throw new JsonException("null entry"));
+            }
+            catch (JsonException) when (isLast)
+            {
+                // Torn tail: truncate the file to the last COMPLETE line and stop — the incomplete append
+                // never committed (its snapshot write, if any, never ran either — WAL order), so dropping
+                // it is exactly undoing the interrupted operation, not losing committed data.
+                RewriteLogWithoutLastLine(lines.Take(i));
+                break;
+            }
+            catch (JsonException ex)
+            {
+                throw new StoredDataException(
+                    $"Log file '{_logPath}' line {i + 1} is not a readable changeset entry: {ex.Message} " +
+                    "The log is corrupted (not a crash artifact — a torn line is only tolerated as the " +
+                    "LAST line). Restore it from backup, or delete the log + its genesis file " +
+                    $"('{_genesisPath}') to reseed history from the current snapshot.");
+            }
+        }
+        return entries;
+    }
+
+    private void RewriteLogWithoutLastLine(IEnumerable<string> keepLines)
+    {
+        var kept = keepLines.ToList();
+        var tmp = _logPath + ".tmp";
+        File.WriteAllText(tmp, kept.Count == 0 ? "" : string.Join("\n", kept) + "\n",
+            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        File.Move(tmp, _logPath, overwrite: true);
+    }
+
+    // Replay genesis→head and compare against the live snapshot — the fsck invariant this whole clump sits
+    // on. True iff every appended entry, applied in order to the frozen genesis doc, reproduces EXACTLY
+    // the current in-memory document — a genuine structural compare (AppLogReplay.Equivalent), not a
+    // serialized-text one: two docs holding identical data can enumerate their Dictionary<,> fields in
+    // different orders, which would make a naive text-compare spuriously FAIL a correct replay. A store
+    // with no genesis yet (nothing has ever mutated) trivially passes: genesis-less means log-less, so
+    // "replay" is a no-op and the live doc — never touched — must already equal itself.
+    public bool Fsck()
+    {
+        lock (_sync)
+        {
+            if (!File.Exists(_genesisPath)) return true;
+            var genesis = JsonSerializer.Deserialize<GenesisFile>(File.ReadAllText(_genesisPath), Opts)
+                ?? throw new StoredDataException($"Genesis file '{_genesisPath}' is not readable.");
+            var replayed = LoadLog().Aggregate(genesis.Doc, AppLogReplay.Apply);
+            return AppLogReplay.Equivalent(replayed, _doc);
+        }
+    }
 
     // Serialize a doc to a file atomically (temp-then-move). Shared by the instance save and the
     // static migrate pass.
@@ -1032,6 +1378,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         return null;
     }
 
+    // The ONE choke point every extent insert mints through (CommitBatch creates, a dict-value mint inside
+    // WriteDictionaryEntryInto, CreateObject) — so a Create LogWrite is recorded here, once, rather than at
+    // each of its callers separately.
     private int MintObject(string typeName, ObjectValue fields)
     {
         if (!_doc.Extents.TryGetValue(typeName, out var pool))
@@ -1039,8 +1388,31 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         var id = MintId();
         var type = _desc.FindType(typeName)
             ?? throw new InvalidOperationException($"Unknown type '{typeName}'.");
-        pool[id] = new StoredObject(typeName, id, BuildFields(type, fields));
+        var built = BuildFields(type, fields);
+        pool[id] = new StoredObject(typeName, id, built);
+        // A DEEP copy for the logged Create, not a shallow Dictionary(built) — built's own collection-
+        // typed values (StoredSet/StoredDict) are MUTABLE reference types; a later write in the SAME
+        // batch/entry that happens to touch one of THIS object's own freshly-minted collections would
+        // otherwise mutate the very instance the log's Create snapshot also points at, corrupting the
+        // logged mint-time state into whatever it looks like by the time Save() serializes it.
+        _pending.Add(new Create(id, typeName, DeepCloneFields(built)));
         return id;
+    }
+
+    // A field map with every StoredSet/StoredDict value cloned (fresh Members/Entries dictionaries) —
+    // StoredLeaf/StoredRef are immutable records, safe to share. Used ONLY for the log's Create snapshot
+    // (see MintObject) so it can never alias a value the live extent entry goes on to mutate.
+    private static Dictionary<string, StoredValue> DeepCloneFields(Dictionary<string, StoredValue> fields)
+    {
+        var clone = new Dictionary<string, StoredValue>(fields.Count);
+        foreach (var (k, v) in fields)
+            clone[k] = v switch
+            {
+                StoredSet s => new StoredSet(s.Id, new Dictionary<int, StoredValue>(s.Members)),
+                StoredDict d => new StoredDict(d.Id, new Dictionary<string, StoredValue>(d.Entries)),
+                _ => v, // StoredLeaf / StoredRef: immutable, safe to share
+            };
+        return clone;
     }
 
     // New object's stored fields: provided scalars, empty collections (each with its
@@ -1063,7 +1435,12 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         return fields;
     }
 
-    // The set node at path, creating it (with a fresh intrinsic id) if absent.
+    // The set node at path, creating it (with a fresh intrinsic id) if absent. Every object minted through
+    // MintObject/SeededFields already carries an empty StoredSet for each declared set prop (BuildFields),
+    // so this "create if missing" branch is reachable only for a LEGACY field a migration introduced onto
+    // an object that predates it. When it DOES mint, that structural change must be logged (a FieldWrite
+    // introducing the field) — genesis freezes the doc BEFORE this call runs, so without recording it
+    // replay would apply a later SetLink against a set id genesis never established, and throw.
     private StoredSet EnsureSet(NodePath path)
     {
         var parent = WalkToObject(ParentPath(path))
@@ -1072,12 +1449,14 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         if (parent.Object.Fields.GetValueOrDefault(field) is not StoredSet set)
         {
             set = new StoredSet(MintId(), new());
+            RecordFieldWrite(parent.Object, field, set);
             parent.Object.Fields[field] = set;
         }
         return set;
     }
 
-    // The dictionary node at path, creating it (with a fresh intrinsic id) if absent.
+    // The dictionary node at path, creating it (with a fresh intrinsic id) if absent. Same legacy-field
+    // rationale and logging need as EnsureSet, above.
     private StoredDict EnsureDict(NodePath path)
     {
         var parent = WalkToObject(ParentPath(path))
@@ -1086,6 +1465,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         if (parent.Object.Fields.GetValueOrDefault(field) is not StoredDict dict)
         {
             dict = new StoredDict(MintId(), new());
+            RecordFieldWrite(parent.Object, field, dict);
             parent.Object.Fields[field] = dict;
         }
         return dict;
@@ -1150,10 +1530,17 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
         Mark(_doc.Root);
 
+        // A swept object is recorded as a Remove LogWrite BEFORE it is dropped (materialized with its
+        // FULL prior fields — feeds future history-resurrection, and lets replay drop it without itself
+        // running GC: a durable log must not depend on future GC code behaving identically to today's).
         foreach (var pool in _doc.Extents.Values)
             foreach (var id in pool.Keys.ToList())
                 if (!visited.Contains(id))
+                {
+                    var entry = pool[id];
+                    _pending.Add(new Remove(id, entry with { Fields = new Dictionary<string, StoredValue>(entry.Fields) }));
                     pool.Remove(id);
+                }
     }
 
     // ── helpers: values ─────────────────────────────────────────────────────────

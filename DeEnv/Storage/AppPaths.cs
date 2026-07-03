@@ -25,4 +25,26 @@ public static class AppPaths
     // app document in the same id-dir. Derived from the id alone — never from the `app` name.
     public static string DataPathForId(string baseDir, int id) =>
         Path.Combine(IdDirFor(baseDir, id), "app-data.json");
+
+    // The append-only changeset log and frozen genesis snapshot that ride BESIDE a data file (M13 slice 1
+    // — DECISIONS.md "App versioning — the full design (M13 clump)", variant C). Derived by SUFFIX from
+    // the data file's own path (one rule, no id/dir special-casing) so a bare temp-file store used
+    // directly by a test (never routed through DataPathForId) still gets siblings that cannot collide with
+    // another store in the same directory: "<dir>\<name>.json" → "<dir>\<name>.log.jsonl" +
+    // "<dir>\<name>.genesis.json". Production: "instances/<id>/app-data.json" →
+    // "instances/<id>/app-data.log.jsonl" + "instances/<id>/app-data.genesis.json".
+    public static string LogPathForDataPath(string dataPath) => WithSuffix(dataPath, ".log.jsonl");
+    public static string GenesisPathForDataPath(string dataPath) => WithSuffix(dataPath, ".genesis.json");
+
+    public static string LogPathForId(string baseDir, int id) => LogPathForDataPath(DataPathForId(baseDir, id));
+    public static string GenesisPathForId(string baseDir, int id) => GenesisPathForDataPath(DataPathForId(baseDir, id));
+
+    // Strip the data file's own extension (usually ".json") and append the sibling's, so
+    // "app-data.json" → "app-data" + suffix, not "app-data.json" + suffix.
+    private static string WithSuffix(string dataPath, string suffix)
+    {
+        var dir = Path.GetDirectoryName(dataPath) ?? "";
+        var stem = Path.GetFileNameWithoutExtension(dataPath);
+        return Path.Combine(dir, stem + suffix);
+    }
 }
