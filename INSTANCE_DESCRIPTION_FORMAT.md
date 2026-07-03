@@ -14,6 +14,7 @@ form, and `parse(print(description))` is the identity.
 ```
 types           ← required
 initialData     ← optional: first-run seed
+access          ← optional: deny-by-default rules (M-auth)
 common          ← optional: shared functions
 ui              ← optional: vars + functions + fn render()
 ```
@@ -76,6 +77,49 @@ initialData
   of member ids; a **single reference** is a bare id. Omitted scalars default;
   omitted references stay unset. Exactly one `Db` entry — the root.
 - The id counter starts above the highest authored id.
+
+## access
+
+A deny-by-default ruleset, keyed by type name:
+
+```
+access
+    Milestone
+        read            where currentUser.role == "Admin"
+        read create     where currentUser.role == "Member"
+    Slice
+        *
+    sys
+        * where currentUser.role == "Admin"
+```
+
+- A rule line is a space-separated verb list (`read` / `create` / `edit` /
+  `delete`, or `*` for all four) and an optional `where <expr>` condition —
+  reusing the ordinary Code expression grammar, evaluated over a scope
+  `{ currentUser, object }`. Condition absent ⇒ the rule always applies.
+- **The section is entirely optional, and its absence means allow-all** — a
+  dormant app has no rules and every type loads freely (today's default). Once
+  the section exists, it governs only the types it NAMES: a type with no block
+  of its own stays unruled (open), so adding one type's rules does not
+  retroactively lock down the rest of the schema.
+- An unmet condition (including "no rule grants anonymous access") fails
+  **closed** — `currentUser` is `null` for an anonymous request, and a null
+  property read (`currentUser.role`) evaluates to `null`, never a throw, so an
+  unauthenticated visitor simply fails every role check.
+- **`sys` is a reserved subject, not a type** — it is rejected as a declared
+  type name. A `sys` rule governs kernel host actions (`create` /
+  `cloneInstance` / `delete` / `publish` / `rename` / `setDesign` — the
+  operator/designer's own instance-management calls), and unlike ordinary type
+  rules it is **deny-by-default even when the app has no `access` section at
+  all** — host-action authority is never open by default. Only apps whose own
+  Code actually calls a host action (in practice: the designer) need it.
+- **Known gap:** dictionary entries (`dict of X`) are not yet gated on read or
+  write — don't rely on `access` to protect a dict-valued field yet.
+- A `User` type is just an ordinary object type; role-based conditions
+  (`currentUser.role == "..."`) assume one exists with a `role` enum prop and
+  that principals log in via the built-in password/session mechanism (see
+  `DeEnv/instances/5/app.deenv`, the devlog app, for a complete worked
+  example — `User`/`Milestone`/`Slice` with per-type rules).
 
 ## common and ui — code
 
