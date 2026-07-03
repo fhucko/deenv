@@ -18,8 +18,11 @@ namespace DeEnv.Kernel;
 // the working copy (design doc §4).
 //
 // `Renames`/`Adds`/`Removes`/`Conversions`/`Cardinality`: the identity diff's ops, one list entry per op.
-// Destructive items (`Removes`, an unconvertible cell inside `Conversions`) are unambiguous in shape —
-// never folded into a generic "changes" list — so a report reader can flag them without inspecting text.
+// Destructive items are unambiguous in shape — never folded into a generic "changes" list — so a report
+// reader can flag them without inspecting text: a `Removes` entry (a dropped field), an unconvertible cell
+// inside a `Conversions` entry (`Unconvertible` non-empty), and a `Cardinality` entry that could not be
+// carried (`Unsupported` true, which ALWAYS means `Dropped` true — an un-carriable reshape drops the old
+// value to the new shape's default so the instance still loads; the old value survives in the log).
 //
 // `FallbackNameMatched`: true when the target had no prior stamp (a pre-versioning instance) and this
 // publish ran the EXISTING by-name apply (SchemaBridge.WriteDocument) instead of the identity diff — the
@@ -42,4 +45,7 @@ public sealed record PublishReport
 public sealed record RenameReportItem(string From, string To);
 public sealed record RemoveReportItem(string Path);
 public sealed record ConversionReportItem(string Path, string From, string To, IReadOnlyList<string> Unconvertible);
-public sealed record CardinalityReportItem(string Path, string From, string To, bool Unsupported);
+// `Unsupported` = this slice cannot carry the reshape's data; `Dropped` = the old value was dropped to the
+// new shape's default so the instance still loads (recoverable from the log). An unsupported reshape ALWAYS
+// drops (they move together), but both are surfaced so a report reader never has to infer the destruction.
+public sealed record CardinalityReportItem(string Path, string From, string To, bool Unsupported, bool Dropped);

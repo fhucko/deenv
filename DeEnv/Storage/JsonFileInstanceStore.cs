@@ -147,28 +147,39 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
         else
         {
-            var doc = LoadDocFromFile();
-            // The startup guard: an existing data file must match the running app's
-            // types — fail loudly here rather than half-work over stale data.
-            StoredDataValidator.Validate(doc, desc, filePath);
-            _doc = Normalize(doc);
+            _doc = Normalize(LoadDocFromFile());
             _genesisWritten = File.Exists(_genesisPath);
             // Pin BEFORE reconciliation may replay+bump _doc.Version — ReconcileLogOnBoot's own catch-up
             // checkpoint re-pins it again right before its Save() (see that method), so this assignment
             // only matters for the (overwhelmingly common) case where nothing needs replaying at all.
             _versionAtOpStart = _doc.Version;
+
+            // Reconcile (replay a lagging snapshot forward) BEFORE the strict startup guard, so the guard
+            // checks the CAUGHT-UP document, not a snapshot that a crash left BEHIND a schema boundary. A
+            // versioned publish's boundary entry (M13 slice 4) carries the new schema's shape (renames et
+            // al.); if a crash landed the entry on the log but not yet in the snapshot, the on-disk snapshot
+            // is still the OLD shape — validating THAT against the now-new app document would falsely reject
+            // a perfectly recoverable store (e.g. "field 'label' the app does not declare" when the boundary
+            // renamed label→title). Replaying first brings the doc to the new-schema head; then the guard
+            // validates that. A within-schema crash (slice 1's own scenario) is unaffected — its rolled-back
+            // snapshot already matched the unchanged schema, and the caught-up doc still does.
             ReconcileLogOnBoot();
+
+            // The startup guard: the (now caught-up) data must match the running app's types — fail loudly
+            // here rather than half-work over stale data.
+            StoredDataValidator.Validate(_doc, desc, filePath);
         }
     }
 
     // ── boot reconciliation: repair a torn tail, replay a lagging snapshot, rebuild _objectVersions ──
     //
-    // Runs once, after load+validate+Normalize, before the store serves anything. A crash can only ever
-    // leave the snapshot BEHIND the log (WAL order is append-then-snapshot — see Save()), never ahead of
-    // it; a torn FINAL line (the process died mid-append) is tolerated and repaired by truncating the file
-    // to its last complete line, since the append that produced it never got far enough to be the entry
-    // whose snapshot Save() would have written next. Any OTHER unparseable line is a corrupted log, not a
-    // crash artifact — loud failure, same remedy style as StoredDataValidator.
+    // Runs once, after load+Normalize and BEFORE the strict startup guard (so the guard validates the
+    // CAUGHT-UP doc, not a snapshot a crash left behind a schema boundary — see the ctor's own note). A
+    // crash can only ever leave the snapshot BEHIND the log (WAL order is append-then-snapshot — see
+    // Save()), never ahead of it; a torn FINAL line (the process died mid-append) is tolerated and repaired
+    // by truncating the file to its last complete line, since the append that produced it never got far
+    // enough to be the entry whose snapshot Save() would have written next. Any OTHER unparseable line is a
+    // corrupted log, not a crash artifact — loud failure, same remedy style as StoredDataValidator.
     private void ReconcileLogOnBoot()
     {
         var entries = LoadLog();
@@ -1108,6 +1119,15 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
 
         // ── cardinality reshapes (identity-matched, same-carried semantics as MigrateTowardSchema's) ──
+        // single object ref -> set is carried losslessly (wrap the one ref into a one-member set); ANY
+        // OTHER reshape (set -> single, a dictionary combo) has no data-carry this slice — but it must NOT
+        // leave the OLD-shaped value in place, because the new schema now declares the new shape and
+        // StoredDataValidator would then throw on remount (a stored StoredRef where the schema says `set`,
+        // etc.) — a 503, reported to the operator as `applied: true`. DECIDED contract (design doc's own
+        // remove semantics): DROP the old value to the NEW shape's default so the store always LOADS, and
+        // report it LOUDLY as a destructive drop (unsupportedReshapes → the report's cardinality item keeps
+        // `unsupported: true`; the old value stays recoverable from THIS boundary entry's own old-value log
+        // write — that is what history is for). Refusing would strand the operator (no relink tooling yet).
         var unsupportedReshapes = new List<string>();
         foreach (var card in diff.CardinalityChanges)
         {
@@ -1122,8 +1142,16 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     writes.Add(new FieldWrite(obj.Id, card.PropName, objRef, newSet));
                     obj.Fields[card.PropName] = newSet;
                 }
-                else if (obj.Fields.ContainsKey(card.PropName))
+                else if (obj.Fields.TryGetValue(card.PropName, out var oldValue))
                 {
+                    // Drop the old-shaped value to the NEW shape's default (matching BuildFields: an empty
+                    // Set/Dict with a fresh id, an unset single object ref = absent, a scalar single's
+                    // default leaf), so the remount's startup guard passes. Logged as a FieldWrite carrying
+                    // the OLD value (recoverable), and flagged as a destructive drop.
+                    var newDefault = NewShapeDefault(card.PropName, card.ToCardinality, card.TypeName, targetDesc, doc);
+                    writes.Add(new FieldWrite(obj.Id, card.PropName, oldValue, newDefault));
+                    if (newDefault is null) obj.Fields.Remove(card.PropName);
+                    else obj.Fields[card.PropName] = newDefault;
                     unsupportedReshapes.Add($"{card.TypeName}/{obj.Id}.{card.PropName}");
                 }
             }
@@ -1203,14 +1231,35 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // all, but staying a no-op here keeps the method honest either way.
         if (writes.Count == 0 || dryRun) return new BoundaryApplyResult(writes.Count > 0, unconvertibleCells, unsupportedReshapes);
 
+        // WAL ORDER (the slice-1 law): append the log entry FIRST, THEN rewrite the snapshot — the SAME
+        // fixed order the live Save() uses (append THEN SaveRaw), never the inverse. A crash BETWEEN the two
+        // must leave the snapshot BEHIND the log (so ReconcileLogOnBoot replays the tail forward and serves
+        // the post-publish state), never AHEAD of it (which ReconcileLogOnBoot rejects with a loud
+        // StoredDataException — "snapshot is AHEAD of its own log" — bricking the published instance). So
+        // the entry has to be on disk before the snapshot that describes the same version is.
         doc.Version = startVersion + 1;
-        SaveRaw(dataPath, doc);
-
         var (who, msgId) = StoreWriteContext.Get();
         var entry = new LogEntry(doc.Version, DateTimeOffset.UtcNow, who, msgId, doc.NextId, writes, boundary);
         AppendLogEntry(AppPaths.LogPathForDataPath(dataPath), entry);
+        SaveRaw(dataPath, doc);
 
         return new BoundaryApplyResult(true, unconvertibleCells, unsupportedReshapes);
+    }
+
+    // The value a freshly-created object would carry for `propName` under its NEW cardinality (mirrors
+    // BuildFields exactly): an empty StoredSet/StoredDict (each with a fresh minted id), null for an unset
+    // single OBJECT reference (the caller REMOVES the key — an unset single ref is absent), or the scalar
+    // default leaf for a single scalar. Used when a boundary apply must drop an un-carriable reshape's
+    // old value to the new shape so the remount's startup guard passes (fix 2).
+    private static StoredValue? NewShapeDefault(
+        string propName, Cardinality toCardinality, string typeName, InstanceDescription targetDesc, StoreDoc doc)
+    {
+        if (toCardinality == Cardinality.Set) return new StoredSet(MintCollectionId(doc), new());
+        if (toCardinality == Cardinality.Dictionary) return new StoredDict(MintCollectionId(doc), new());
+        // Single: an object ref is absent (null → the caller removes the key); a scalar gets its default.
+        var propType = targetDesc.FindType(typeName)?.Props?.FirstOrDefault(p => p.Name == propName)?.Type;
+        if (propType is null || targetDesc.IsObjectType(propType)) return null;
+        return new StoredLeaf(DefaultBase(LeafBase(propType, targetDesc)));
     }
 
     private static int MaxExtentId(StoreDoc doc)

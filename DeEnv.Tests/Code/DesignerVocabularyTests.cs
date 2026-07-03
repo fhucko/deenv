@@ -82,6 +82,34 @@ public sealed class DesignerVocabularyTests
         }
     }
 
+    // Guard (M13 slice-4 review hardening): EVERY committed instance app document loads through the FULL
+    // loader (parse + semantic validation), not just AppParse. A committed doc that fails to load — because
+    // a grammar/keyword change (e.g. the `locked` access keyword) landed on one branch while a doc using the
+    // old spelling sat on another, or any hand-edit that no longer parses — is a RED BUILD here, on WHICHEVER
+    // branch or spelling introduced it, rather than a defect discovered only when a kernel tries to boot that
+    // instance (or when a reviewer's probe runs a stale parser against a fresh doc — the exact skew this
+    // closes). Enumerates the copied-to-output instances (the same AppContext.BaseDirectory path
+    // DesignerVocabularyTests already reads the designer doc from) so it tracks the committed set automatically.
+    [Test]
+    public async Task Every_committed_instance_document_loads_through_the_full_loader()
+    {
+        var instancesDir = Path.Combine(AppContext.BaseDirectory, "instances");
+        var docs = Directory.EnumerateFiles(instancesDir, "app.deenv", SearchOption.AllDirectories).ToList();
+        // There ARE committed instances (guards against a silently-empty enumeration passing vacuously —
+        // e.g. if the output-copy of instances/ ever stopped happening).
+        await Assert.That(docs.Count).IsGreaterThan(0);
+        foreach (var doc in docs)
+        {
+            // Load = AppParse + the semantic validation pipeline; a parse or validation failure throws
+            // SchemaValidationException, failing this test with the offending file's path in the message.
+            try { InstanceDescriptionLoader.LoadFile(doc); }
+            catch (Exception ex)
+            {
+                throw new Exception($"Committed instance document '{doc}' failed to load: {ex.Message}", ex);
+            }
+        }
+    }
+
     // The string items of a designer `ui` var declared as an array literal (e.g. `var typeKinds = [...]`),
     // sorted + comma-joined so the comparison is order-independent with a readable failure message.
     private static string Vocab(string name)

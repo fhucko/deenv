@@ -47,6 +47,57 @@ Feature: Structural identity-diff + rename-safe forward publish
     And the target's log fsck holds
     And replaying the target's log from genesis to head reproduces the post-publish snapshot
 
+  # ── WAL law: a crash between the boundary entry append and the snapshot rewrite recovers ─────────
+  # The boundary apply must append the log entry BEFORE rewriting the snapshot (the slice-1 WAL law,
+  # same as the live Save). Proven BOTH DIRECTIONS: (a) the CORRECT-order crash — the entry is on the log
+  # but the snapshot died at its pre-publish version — a fresh store REPLAYS the entry forward and serves
+  # the post-publish (renamed) state; (b) the INVERSE (what the pre-fix append-after-snapshot order would
+  # leave) — snapshot AHEAD of the log head — is REJECTED loudly by boot reconciliation, never silently
+  # trusted. So a mid-publish crash can only ever recover-forward or fail loud, never brick or lie.
+  Scenario: A crash between the boundary entry and the snapshot recovers the post-publish state
+    Given the target holds an "Item" labelled "Keep me"
+    And the design's "Item" prop "label" is renamed to "title"
+    And the design is committed with message "rename before crash"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    When the target's snapshot is rolled back to before the publish while the log keeps the boundary entry
+    And a fresh store is opened over the target's files
+    Then the reopened target reads its "Item" "title" as "Keep me"
+    And the reopened target's log fsck holds
+    When the target's log has its boundary entry removed while the snapshot stays at the post-publish version
+    Then opening a store over the target's files is rejected as snapshot-ahead-of-log
+
+  # ── unsupported cardinality reshape: drop-and-report, never brick the remount ────────────────────
+  # A reshape this slice cannot carry (set -> single) must NOT leave the old-shaped value in place — the
+  # new schema declares the new shape, so the remount's startup guard would 503 while the report claimed
+  # success. Decided contract: drop the old value to the new shape's default so the store ALWAYS loads,
+  # and flag the drop LOUDLY (unsupported + dropped). The dropped value survives in the boundary entry's
+  # old-value log write (recoverable). Built on the SAME design identity as the Background (add a "leads"
+  # set to Db, publish, seed a member, THEN reshape set -> single) so the reshape is a genuine same-id op.
+  Scenario: An unsupported cardinality reshape drops the old value, still loads, and is flagged
+    Given the design's Db gains a "leads" set of "Person"
+    And the design is committed with message "add leads set"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the target's Db "leads" set is seeded with a "Person" named "Ada"
+    And the design's Db "leads" prop is reshaped to a single reference
+    And the design is committed with message "leads as a single"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the publish report flags the "leads" reshape as unsupported and dropped
+    And a fresh store opens over the target's files without error
+    And the target's Db "leads" reads as an unset reference
+
+  Scenario: An unsupported reshape over an empty field applies cleanly with nothing to drop
+    Given the design's Db gains a "leads" set of "Person"
+    And the design is committed with message "add empty leads set"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the design's Db "leads" prop is reshaped to a single reference
+    And the design is committed with message "empty leads as a single"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And a fresh store opens over the target's files without error
+    And the target's Db "leads" reads as an unset reference
+
   # ── parity with the existing non-destructive apply (adds / removes / conversions / reshape) ──────
   # A same-id, NON-renamed add/remove is ALSO an identity-diffed op (Renames aside, the diff reports it in
   # Adds/Removes exactly the same way) — so this proves the versioned path still carries what the earlier

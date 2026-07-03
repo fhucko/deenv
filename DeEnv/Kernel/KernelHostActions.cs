@@ -148,6 +148,14 @@ public sealed class KernelHostActions(
         }
 
         // ── the versioned path: diff the STAMPED commit against the HEAD commit by identity ──
+        // DEFERRED (design doc §4, NOT implemented here — inherited from the pre-slice concurrency model,
+        // not introduced by this slice): §4's "take the store lock → briefly reject incoming commits with
+        // 'updating' → … → bump the schema epoch" queueing step. The offline boundary rewrite acts on the
+        // target's files directly while its instance is unmounted (single-operator: no concurrent publisher);
+        // an in-flight draft that DOES race is caught after the fact by the existing baseVersion guard (the
+        // boundary entry bumps the touched objects' versions — see ApplyPublishBoundary's own note), which is
+        // the same "app was updated — reload" outcome §4's epoch bump would give. Publish-queueing / a hard
+        // reject-window lands with the real-time milestone; it is inherited-as-deferred here, not built.
         var baseSnapshot = new DesignSnapshot(TextOf(stampedFields, "text"), IdMapOf(stampedFields));
         var diff = DesignDiffer.Compute(baseSnapshot, headSnapshot);
         var targetDesc = InstanceDescriptionLoader.Load(headText);
@@ -203,9 +211,14 @@ public sealed class KernelHostActions(
         })],
         Cardinality = [.. diff.CardinalityChanges.Select(c =>
         {
+            // An un-carriable reshape is BOTH unsupported (no data-carry) AND dropped (old value dropped to
+            // the new shape's default so the instance still loads) — they move together (see
+            // JsonFileInstanceStore.ApplyPublishBoundary's cardinality block), surfaced separately so a
+            // report reader never infers the destruction.
             var unsupported = boundaryResult.UnsupportedReshapes.Any(cell => CellMatches(cell, c.TypeName, c.PropName));
             return new CardinalityReportItem(
-                $"{c.TypeName}.{c.PropName}", c.FromCardinality.ToString(), c.ToCardinality.ToString(), unsupported);
+                $"{c.TypeName}.{c.PropName}", c.FromCardinality.ToString(), c.ToCardinality.ToString(),
+                Unsupported: unsupported, Dropped: unsupported);
         })],
         FallbackNameMatched = fallbackNameMatched,
     };

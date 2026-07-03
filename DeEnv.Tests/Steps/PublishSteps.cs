@@ -194,6 +194,20 @@ public sealed class PublishSteps
         store.WriteField(id, field, new TextValue(value));
     }
 
+    // Seed a member into the target's Db SET prop (against the CURRENT published schema, which already
+    // declares it a set) — a real stored StoredRef member the later set -> single reshape must drop.
+    [Given("the target's Db {string} set is seeded with a {string} named {string}")]
+    public void GivenTargetDbSetSeeded(string setProp, string elemType, string name)
+    {
+        var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
+        var store = new JsonFileInstanceStore(_targetDataPath, published);
+        var memberId = store.CreateObject(elemType, new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name),
+        }));
+        store.AddToSet(NodePath.Root.Field(setProp), memberId);
+    }
+
     [Given("the target's own log line count is remembered")]
     public void GivenTargetLogLinesRemembered()
     {
@@ -260,6 +274,24 @@ public sealed class PublishSteps
     {
         var propId = _propIds[(typeName, field)];
         _designer.WriteField(propId, "type", new TextValue(toType));
+    }
+
+    // Adds a new object type + a Db SET prop referencing it (the "leads set of Person" reshape fixtures).
+    [Given("the design's Db gains a {string} set of {string}")]
+    public void GivenDbGainsSetProp(string setProp, string elemType)
+    {
+        AddType(elemType, "object");
+        AddProp(elemType, "name", "text");
+        AddSetProp("Db", setProp, elemType);
+    }
+
+    // Reshape a Db SET prop to a SINGLE reference (same MetaProp id — identity preserved), the reshape this
+    // slice cannot carry: flip its cardinality field from "set" to "single".
+    [Given("the design's Db {string} prop is reshaped to a single reference")]
+    public void GivenDbPropReshapedToSingle(string setProp)
+    {
+        var propId = _propIds[("Db", setProp)];
+        _designer.WriteField(propId, "cardinality", new TextValue("single"));
     }
 
     // ── committing + publishing ──────────────────────────────────────────────────────────────────────
@@ -558,6 +590,103 @@ public sealed class PublishSteps
         var replayed = entries.Aggregate(genesis.Doc, AppLogReplay.Apply);
         var live = JsonSerializer.Deserialize<StoreDoc>(File.ReadAllText(_targetDataPath), StoreOpts)!;
         await Assert.That(AppLogReplay.Equivalent(replayed, live)).IsTrue();
+    }
+
+    // ── the WAL crash-window scenario (fix 1) ──────────────────────────────────────────────────────
+    //
+    // Simulates the CORRECT-order crash: the boundary entry is on the log, but the snapshot died at its
+    // pre-publish version. Roll the snapshot back to genesis-replayed-through-every-entry-except-the-last
+    // (the same technique as AppLog.feature's "snapshot left behind a crash") — the log is left untouched.
+    // A fresh store must then REPLAY the tail forward and serve the post-publish (renamed) state.
+    private JsonFileInstanceStore? _reopenedTarget;
+
+    [When("the target's snapshot is rolled back to before the publish while the log keeps the boundary entry")]
+    public void WhenTargetSnapshotRolledBack()
+    {
+        var genesis = JsonSerializer.Deserialize<GenesisFile>(File.ReadAllText(_targetGenesisPath), StoreOpts)!;
+        var entries = File.ReadAllLines(_targetLogPath)
+            .Select(l => JsonSerializer.Deserialize<LogEntry>(l, StoreOpts)!).ToList();
+        // Reconstruct the doc as it stood BEFORE the last (boundary) entry, and write THAT over the
+        // caught-up snapshot — exactly a crash that appended the entry but died before SaveRaw.
+        var rolledBack = entries.Take(entries.Count - 1).Aggregate(genesis.Doc, AppLogReplay.Apply);
+        File.WriteAllText(_targetDataPath, JsonSerializer.Serialize(rolledBack, StoreOpts));
+    }
+
+    [When("a fresh store is opened over the target's files")]
+    public void WhenFreshTargetStoreOpened()
+    {
+        var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
+        _reopenedTarget = new JsonFileInstanceStore(_targetDataPath, published);
+    }
+
+    [Then("the reopened target reads its {string} {string} as {string}")]
+    public async Task ThenReopenedTargetFieldReads(string typeName, string field, string expected)
+    {
+        var member = _reopenedTarget!.ReadExtent(typeName).Values.First();
+        await Assert.That(ScalarText(member.Fields.GetValueOrDefault(field))).IsEqualTo(expected);
+    }
+
+    [Then("the reopened target's log fsck holds")]
+    public async Task ThenReopenedTargetFsckHolds() =>
+        await Assert.That(_reopenedTarget!.Fsck()).IsTrue();
+
+    // The INVERSE: what the pre-fix append-AFTER-snapshot order would leave — the snapshot at the
+    // post-publish version but the log MISSING the boundary entry (removed here). Boot reconciliation
+    // must REJECT it loudly ("snapshot AHEAD of its own log") — never silently trust the snapshot.
+    // (The prior fresh-open step already replayed the rolled-back snapshot forward, so the on-disk
+    // snapshot is now at the post-publish version and consistent with the log; dropping the last log
+    // line makes the snapshot exceed the log head.)
+    [When("the target's log has its boundary entry removed while the snapshot stays at the post-publish version")]
+    public void WhenTargetBoundaryEntryRemoved()
+    {
+        var lines = File.ReadAllLines(_targetLogPath).Where(l => l.Length > 0).ToList();
+        File.WriteAllText(_targetLogPath, lines.Count > 1 ? string.Join("\n", lines.Take(lines.Count - 1)) + "\n" : "");
+    }
+
+    private Exception? _reopenError;
+
+    [Then("opening a store over the target's files is rejected as snapshot-ahead-of-log")]
+    public async Task ThenOpenRejectedSnapshotAhead()
+    {
+        var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
+        try { _ = new JsonFileInstanceStore(_targetDataPath, published); _reopenError = null; }
+        catch (StoredDataException ex) { _reopenError = ex; }
+        await Assert.That(_reopenError).IsNotNull();
+        await Assert.That(_reopenError!.Message.ToLowerInvariant()).Contains("ahead");
+    }
+
+    // ── the unsupported-reshape scenario (fix 2) ───────────────────────────────────────────────────
+
+    [Then("the publish report flags the {string} reshape as unsupported and dropped")]
+    public async Task ThenReshapeFlaggedUnsupportedDropped(string prop)
+    {
+        var cardinality = _report.GetProperty("cardinality").EnumerateArray().ToList();
+        var hit = cardinality.FirstOrDefault(c => c.GetProperty("path").GetString()!.EndsWith("." + prop));
+        await Assert.That(hit.ValueKind).IsEqualTo(JsonValueKind.Object);
+        await Assert.That(hit.GetProperty("unsupported").GetBoolean()).IsTrue();
+        await Assert.That(hit.GetProperty("dropped").GetBoolean()).IsTrue();
+    }
+
+    [Then("a fresh store opens over the target's files without error")]
+    public async Task ThenFreshStoreOpensClean()
+    {
+        var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
+        // Construction runs the STRICT startup guard — a stored old-shaped value the new schema no longer
+        // allows would throw here, so a clean open IS the proof the reshape dropped-to-default correctly.
+        Exception? error = null;
+        try { _ = new JsonFileInstanceStore(_targetDataPath, published); } catch (Exception ex) { error = ex; }
+        await Assert.That(error).IsNull();
+    }
+
+    [Then("the target's Db {string} reads as an unset reference")]
+    public async Task ThenDbPropUnsetReference(string prop)
+    {
+        var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
+        var store = new JsonFileInstanceStore(_targetDataPath, published);
+        var node = store.ReadNode(NodePath.Root.Field(prop));
+        // A single object-typed prop reads as a ReferenceValue; an unset one has a null TargetId.
+        await Assert.That(node).IsTypeOf<ReferenceValue>();
+        await Assert.That(((ReferenceValue)node!).TargetId).IsNull();
     }
 
     // ── the adoption baseline-commit scenario: a REAL kernel boot over the REAL designer meta-schema ──
