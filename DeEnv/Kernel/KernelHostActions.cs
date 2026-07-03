@@ -355,6 +355,40 @@ public sealed class KernelHostActions(
         var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
         var store = new JsonFileInstanceStore(dataPath, meta);
 
+        // Advance the OWNING branch's head (M13 slice 5) — the branch whose workingCopy IS this design,
+        // whether that is "main" or a branch clone. Was FindMainBranch (main only) pre-slice-5; widened so a
+        // branch commit advances its OWN head, not main's (a commit onto a design no branch owns is rejected).
+        var branch = FindBranchByWorkingCopy(store, designId)
+            ?? throw new InvalidOperationException($"Design {designId} has no owning branch to commit onto.");
+        NodeValue? headField = branch.Fields.Fields.GetValueOrDefault("head");
+        int? parentHeadId = headField is ReferenceValue { TargetId: { } h } ? h : null;
+
+        CaptureAndCommit(store, designId, message, parentHeadId, mergeParentHeadId: null, branch.Id);
+        return null;
+    }
+
+    // The shared capture-and-commit core behind BOTH sys.commitDesign and the merge commit
+    // (KernelHostActions.MergeBranch) — factored out (review fix, M13 slice 5) so a merge commit rides the
+    // SAME optimistic capture bracket an ordinary commit always has, rather than a second, unguarded
+    // read-snapshot-stamp sequence. Docs/plans/app-versioning-design.md §0 "commits are Figma-model
+    // snapshots": the store interface has no multi-read transaction, so text/logSeq is captured via an
+    // OPTIMISTIC retry loop — read the head version (s1), read + snapshot the design, re-read the head
+    // version (s2); if it moved, someone edited the design mid-read (a genuinely concurrent designer
+    // session, near-zero on a solo operator, and no rarer for a merge than an ordinary commit) — retry. A
+    // bounded few attempts, then fail loudly (never silently commit a torn text/logSeq pair). This is
+    // CONSISTENCY BY CONSTRUCTION, not a scenario to prove: sharing one helper means a merge commit CANNOT
+    // observe a design mid-edit any more than an ordinary commit can — the race class this bracket
+    // eliminates needs no dedicated regression test, only that both call sites route through it (which the
+    // existing DesignCommit.feature + DesignMerge.feature suites already exercise on the happy path).
+    //
+    // Atomicity: the WHOLE commit is ONE CommitBatch (slice-3 review fix 3, carried forward here) — the
+    // Commit row create + its `design`/`parent`/optional `mergeParent` ref-links + its link into
+    // `db.commits` + EVERY idMap dict entry + the branch-head advance, all-or-none under the store's single
+    // lock and ONE log entry. Returns the minted commit's own intrinsic id (the merge caller reports it on
+    // the MergeReport; an ordinary commit has no caller that needs it).
+    private static int CaptureAndCommit(
+        IInstanceStore store, int designId, string message, int? parentHeadId, int? mergeParentHeadId, int branchId)
+    {
         const int maxAttempts = 5;
         DesignSnapshot snap = null!;
         int logSeq = 0;
@@ -363,9 +397,8 @@ public sealed class KernelHostActions(
             var s1 = store.CurrentVersion;
             // Resolve the WORKING COPY by id directly (M13 slice 5): a Design row reachable either through
             // db.designs (a main working copy) OR only through a Branch.workingCopy (a branch clone, NOT in
-            // db.designs) — so commitDesign works unchanged on a branch. ReadById finds any Design row; the
-            // owning-branch resolution below (FindBranchByWorkingCopy) enforces that it IS a working copy of
-            // SOME branch (a bare id that no branch owns is rejected there — never a commit onto nothing).
+            // db.designs) — so this works unchanged on a branch (ReadById finds any Design row; the caller's
+            // own FindBranchByWorkingCopy already enforced it IS a working copy of some branch).
             if (store.ReadById(designId) is not (var tn, var design) || tn != "Design")
                 throw new InvalidOperationException($"No design with id {designId} to commit.");
             snap = SchemaBridge.Snapshot(design); // throws SchemaValidationException on an invalid design
@@ -373,16 +406,8 @@ public sealed class KernelHostActions(
             if (s1 == s2) { logSeq = s1; break; }
             if (attempt >= maxAttempts)
                 throw new InvalidOperationException(
-                    $"commitDesign: the design kept changing while snapshotting it ({maxAttempts} attempts) — try again.");
+                    $"commit: the design kept changing while snapshotting it ({maxAttempts} attempts) — try again.");
         }
-
-        // Advance the OWNING branch's head (M13 slice 5) — the branch whose workingCopy IS this design,
-        // whether that is "main" or a branch clone. Was FindMainBranch (main only) pre-slice-5; widened so a
-        // branch commit advances its OWN head, not main's (a commit onto a design no branch owns is rejected).
-        var branch = FindBranchByWorkingCopy(store, designId)
-            ?? throw new InvalidOperationException($"Design {designId} has no owning branch to commit onto.");
-        NodeValue? headField = branch.Fields.Fields.GetValueOrDefault("head");
-        int? parentHeadId = headField is ReferenceValue { TargetId: { } h } ? h : null;
 
         var commitsSetId = (store.ReadNode(NodePath.Root.Field("commits")) as SetValue)?.Id
             ?? throw new InvalidOperationException("The designer's `db.commits` set is missing.");
@@ -400,21 +425,24 @@ public sealed class KernelHostActions(
             new CommitCreate(commitTemp, "Commit", new ObjectValue(commitFields)),
         };
         // The whole changeset, referencing the not-yet-minted commit by its tempId (the store resolves it
-        // after minting): design + parent refs, the db.commits link, one dict write per idMap entry, and
-        // the branch-head advance — issued as ONE batch so the commit is never observable half-written.
+        // after minting): design + parent (+ optional mergeParent) refs, the db.commits link, one dict
+        // write per idMap entry, and the branch-head advance — issued as ONE batch so the commit is never
+        // observable half-written.
         var mutations = new List<CommitMutation>
         {
             new RefLinkMutation(commitTemp, "design", designId, "Design"),
         };
         if (parentHeadId.HasValue)
             mutations.Add(new RefLinkMutation(commitTemp, "parent", parentHeadId, "Commit"));
+        if (mergeParentHeadId.HasValue)
+            mutations.Add(new RefLinkMutation(commitTemp, "mergeParent", mergeParentHeadId, "Commit"));
         mutations.Add(new SetLinkMutation(commitsSetId, commitTemp));
         foreach (var (path, id) in snap.IdMap)
             mutations.Add(new DictWriteMutation(commitTemp, "idMap", new TextValue(path), new IntValue(id)));
-        mutations.Add(new RefLinkMutation(branch.Id, "head", commitTemp, "Commit"));
+        mutations.Add(new RefLinkMutation(branchId, "head", commitTemp, "Commit"));
 
-        store.CommitBatch(creates, mutations);
-        return null;
+        var result = store.CommitBatch(creates, mutations);
+        return result.Creates.First(c => c.TempId == commitTemp).RealId;
     }
 
     // createBranch(design, name): clone a WORKING COPY's whole subgraph (Design + its MetaTypes + its
@@ -575,6 +603,11 @@ public sealed class KernelHostActions(
     // per the orchestrator's accepted v1 gap a crash between these writes and the merge commit below is a
     // recoverable, documented residual, not required to be one giant atomic unit), THEN commit through the
     // SAME atomic path commitDesign uses (parent = target's head, mergeParent = source's head).
+    //
+    // The code/access sections are REPRINTED (AppPrint.Print over the merged Common/Ui/Rules), which
+    // canonicalizes the target's own section formatting on this first merge — harmless, since the Code
+    // language has no comments to lose and the printer is already canonical, so every merge AFTER this one
+    // reprints byte-stable (nothing left to canonicalize a second time).
     //
     // CONFLICT path: NO writes at all — returns a MergeReport whose `conflicts` list the caller re-runs
     // against with `resolutions: [{id, take: "source"|"target"}]`; any conflict without a resolution
@@ -834,45 +867,18 @@ public sealed class KernelHostActions(
         store.WriteField(targetDesignId, "ui", new TextValue(sections.GetValueOrDefault("ui", "")));
     }
 
-    // Create the TWO-PARENT merge Commit after a clean apply — the same atomic CommitBatch shape
-    // sys.commitDesign uses (Commit row + design/parent/mergeParent ref-links + db.commits link + every
-    // idMap entry + the branch-head advance, all-or-none, ONE log entry). `parent` = the TARGET's PRE-merge
-    // head (the branch this commit lands on); `mergeParent` = the SOURCE's head (the branch merged in).
-    // Re-reads the target design FRESH (the apply above wrote it through the same `store` instance, so its
-    // in-memory copy already reflects the merge — SchemaBridge.Snapshot below reads that live node).
+    // Create the TWO-PARENT merge Commit after a clean apply, via the SAME CaptureAndCommit core
+    // sys.commitDesign uses (review fix — a merge commit no longer stamps logSeq/snapshots the design with
+    // no s1/s2 optimistic-capture bracket; see CaptureAndCommit's own doc). `parent` = the TARGET's
+    // PRE-merge head (the branch this commit lands on); `mergeParent` = the SOURCE's head (the branch
+    // merged in). CaptureAndCommit re-reads the target design fresh under the bracket — the apply above
+    // already wrote it through this SAME `store` instance, so its in-memory copy reflects the merge.
     private static int CreateMergeCommit(
         IInstanceStore store, int targetDesignId, int targetBranchId, int targetPreMergeHeadId, int sourceHeadId,
-        string sourceBranchName, string targetBranchName)
-    {
-        var targetDesign = ReadDesign(store, targetDesignId);
-        var snap = SchemaBridge.Snapshot(targetDesign); // throws on an invalid design — should not happen post-apply
-
-        var commitsSetId = (store.ReadNode(NodePath.Root.Field("commits")) as SetValue)?.Id
-            ?? throw new InvalidOperationException("The designer's `db.commits` set is missing.");
-
-        const int commitTemp = -1;
-        var commitFields = new Dictionary<string, NodeValue>
-        {
-            ["message"] = new TextValue($"Merged '{sourceBranchName}' into '{targetBranchName}'"),
-            ["at"]      = new DateTimeValue(DateTimeOffset.UtcNow),
-            ["logSeq"]  = new IntValue(store.CurrentVersion),
-            ["text"]    = new TextValue(snap.Text),
-        };
-        var creates = new List<CommitCreate> { new CommitCreate(commitTemp, "Commit", new ObjectValue(commitFields)) };
-        var mutations = new List<CommitMutation>
-        {
-            new RefLinkMutation(commitTemp, "design", targetDesignId, "Design"),
-            new RefLinkMutation(commitTemp, "parent", targetPreMergeHeadId, "Commit"),
-            new RefLinkMutation(commitTemp, "mergeParent", sourceHeadId, "Commit"),
-            new SetLinkMutation(commitsSetId, commitTemp),
-        };
-        foreach (var (path, id) in snap.IdMap)
-            mutations.Add(new DictWriteMutation(commitTemp, "idMap", new TextValue(path), new IntValue(id)));
-        mutations.Add(new RefLinkMutation(targetBranchId, "head", commitTemp, "Commit"));
-
-        var result = store.CommitBatch(creates, mutations);
-        return result.Creates.First(c => c.TempId == commitTemp).RealId;
-    }
+        string sourceBranchName, string targetBranchName) =>
+        CaptureAndCommit(
+            store, targetDesignId, $"Merged '{sourceBranchName}' into '{targetBranchName}'",
+            parentHeadId: targetPreMergeHeadId, mergeParentHeadId: sourceHeadId, targetBranchId);
 
     // A Design row by id (main's own row, or a branch clone) — the merge/branch actions address a
     // WORKING COPY directly (not "a design in db.designs"), so this reads by raw id rather than requiring
