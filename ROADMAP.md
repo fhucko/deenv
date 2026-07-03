@@ -402,8 +402,9 @@ DECISIONS.md.
   branches, and structural merge; publish bridges with forward-only migrations
   (derived-structural + commit-attached semantic). The doc carries the settled/open roll-ups and
   the slice spine, and supersedes this bullet's details (including the "branches deferred" line
-  below — branches/merge are designed, slice-able late). Still unscheduled; only the
-  **baseVersion anti-clobber check** was pulled ahead as an immediate bug-fix slice (2026-07-02).
+  below — branches/merge are designed, slice-able late). **Sliced + building since 2026-07-03 → `docs/plans/versioning-slices.md`** (slice 0 =
+  the baseVersion anti-clobber check, landed 2026-07-02; slice 1 = the append-only store log, in
+  progress).
 
   **MVP-critical substrate pulled forward — LANDED 2026-06-19/20.** A thin **non-destructive
   apply** — *data survives a schema change* — was built ahead of / interleaved with M11
