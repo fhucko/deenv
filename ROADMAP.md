@@ -405,9 +405,11 @@ DECISIONS.md.
   below — branches/merge are designed, slice-able late). **Sliced + building since 2026-07-03 → `docs/plans/versioning-slices.md`** (slice 0 =
   the baseVersion anti-clobber check, landed 2026-07-02; slice 1 = the append-only store log
   with WAL + genesis + boot replay + fsck, landed 2026-07-03, suite 628; slice 2 = the design
-  snapshot builder — canonical text + name-path→id map, landed 2026-07-03, suite 634; next =
-  slice 3, Commit/Branch rows + `sys.commitDesign` + the authority inversion, both
-  user-approved).
+  snapshot builder — canonical text + name-path→id map, landed 2026-07-03, suite 634; slice 3 =
+  Commit/Branch rows + `sys.commitDesign` + the AUTHORITY INVERSION (design-data is truth,
+  boot = one-time adoption, atomic single-entry commits), landed 2026-07-03, suite 645; next =
+  slice 4, structural diff + rename-safe publish — the MVP-visible payoff; mind the recorded
+  sequencing note: boundary-entry apply lands BEFORE `Commit.migration` is added).
 
   **MVP-critical substrate pulled forward — LANDED 2026-06-19/20.** A thin **non-destructive
   apply** — *data survives a schema change* — was built ahead of / interleaved with M11

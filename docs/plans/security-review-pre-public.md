@@ -113,8 +113,12 @@ ordinary apps too, entirely outside the gate — now closed by AST wiring AND th
    `* where currentUser.role == "Admin"`.
 3. **V5 — remove committed `admin`/`admin`** from `launchSettings.json` (user's call; deliberate dev
    convenience vs public-repo optics). Move to user-secrets / gitignored local override.
-4. **V2 — dict floor** (read+write) — land the deferred gate; until then, a hard constraint: no ruled
-   dictionary in a public app.
+4. **V2 — dict floor** — **WRITE half SEALED 2026-07-03** (M13 slice 3, main `3b23e05`):
+   `WsHandler.RequireDictWrite` gates `addEntry`/`removeEntry`/dict-entry `write` as an `edit` of
+   the owning set member for ALL ruled types (forced by `Commit.idMap` — a floor-immutable row
+   carrying a dict; the Opus review proved client injection before the fix). READ half still
+   deferred; the residual constraint narrows to: no ruled dictionary whose *reads* are sensitive
+   in a public app. Root-level dicts (owner = un-ruled Db root) also stay write-deferred.
 5. **V4 — login timing** — verify unknown-user against a fixed dummy hash so both branches run PBKDF2.
 6. **PathRouter defense-in-depth** — reject `..`/`.`/empty path segments before resolving (closes the
    traversal class permanently regardless of proxy-config drift; not needed today).

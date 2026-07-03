@@ -18,6 +18,9 @@ position → grill → verdict. Settled vs open is marked per topic; roll-up lis
   mutation; `app-data.json` = derived head materialization (boot unchanged, tail-replayed after a
   crash). The log is the only non-derivable artifact (with the compaction asterisk, §6). A design commit = a `Commit` row marking a log seq in the
   designer instance's own log; branch = `Branch` row; DAG via parent refs; refs are data.
+  **IMPLEMENTED 2026-07-03 as slice 3** (with the authority inversion: boot = one-time adoption,
+  design-data is truth, the designer log survives boots; one `sys.commitDesign` = one atomic
+  log entry).
 - **Caches per commit:** canonical printed text + id-map (name-path→id) → diff/publish run with zero
   replay; replay = cache-rebuild, fsck (`replay(genesis→head) == app-data.json`), data time-travel.
   **Builder IMPLEMENTED 2026-07-03 as slice 2** (`SchemaBridge.Snapshot` → `{Text, IdMap}`; the map

@@ -47,8 +47,30 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    stores both fields on the Commit row. Rename-keeps-identity and delete+re-add-differs are
    directly scenario-tested against store-minted ids. Depends on 1. ✔
 
-3. **`Commit`/`Branch` rows + `sys.commitDesign`.** Design history as ordinary data in the
-   designer instance; host action captures head seq under the store lock, advances the branch tip.
+3. **`Commit`/`Branch` rows + `sys.commitDesign` + the authority inversion — DONE 2026-07-03**
+   (main `96fb793` + review fixes `3b23e05`; suite 645/645; Opus review — escalated per the tier
+   policy's security carve-out — SHIP-WITH-FIXES, all three findings fixed + both-directions
+   verified). What landed: the approved meta-types + `db.commits`/`db.branches` root sets in the
+   designer's app doc, with `create edit delete where false` deny rules (the floor is
+   allow-when-unruled — the "deny-by-default" shorthand below was wrong, explicit rules are the
+   mechanism); `sys.commitDesign(design, message)` = optimistic capture loop (version bracketed
+   around the snapshot read, bounded retry) + ONE atomic `CommitBatch` (the `CommitMutation` union
+   gained a server-side-only `DictWriteMutation` case — user-approved interface extension — so
+   commit row + refs + db.commits link + idMap entries + head advance are a single WAL write: one
+   `sys.commitDesign` = exactly one log entry, scenario-proven); the AUTHORITY INVERSION per the
+   six invariants (no boot `Reset`, adopt-once via `DesignerSeed.AdoptInto` live writes with a
+   design-id remap into the instances mirror, `db.instances` reconciled every boot,
+   `EnsureMainBranches` idempotent on both paths, fresh install unchanged; `DesignerSeed.Merge`
+   deleted as dead). Review findings fixed: (1) client dict-WRITES now floor-gated
+   (`RequireDictWrite` — sealed the WRITE half of the security review's open dict-floor gap for
+   ALL ruled types; read side stays deferred); (2) post-adopt registry id remap (a stale
+   `Instance.design` ref would 503 the designer on next boot — now impossible, scenario-proven);
+   (3) the single-batch atomicity above. Scope line flagged for the future Commit-button slice:
+   `sys.commitDesign` is WS-op-only — wiring it into HostActionScan/CodeExecutor/codeExec.ts must
+   happen in lockstep across all of them. Named residual (crash-durability class, deferred): a
+   crash between `AdoptInto` and the registry rewrite re-adopts the file as a duplicate on next
+   boot. Adopted designs get NO baseline commit (head empty until first commit) — slice 4 decides
+   if it wants one.
    **GATE RESOLVED — user approved the FULL authority inversion 2026-07-03:** design-data + its
    commit history become the source of truth; `app.deenv` becomes a publish artifact (written BY
    publish); boot-sync (`KernelHost.SyncDesignHost` / `DesignerSeed.Merge`) is demoted to one-time
@@ -61,7 +83,9 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    text text (cache: canonical printed doc), idMap dictionary of int (cache: name-path → lineage
    id) }`. `Branch { name text, head Commit, workingCopy Design }` — "main" seeded per design at
    adoption; at slice 3 workingCopy IS the design row. Created only via
-   `sys.commitDesign(design, message)` under the store lock; no write grants = floor-immutable.
+   `sys.commitDesign(design, message)` under the store lock; immutability = explicit
+   `create edit delete where false` rules (the floor is allow-when-unruled, so "no grants" alone
+   would NOT deny — corrected at build time).
    Deliberately deferred to their slices (normal additive apply): `mergeParent` + `origin int` on
    MetaType/MetaProp (slice 5), `migration` (slice 4), author `by` (rides the login-persistence
    flip; the slice-1 log already records who). Slice-5 revisit flagged: app-identity vs
