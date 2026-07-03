@@ -99,19 +99,26 @@ access
   `delete`, or `*` for all four) and an optional `where <expr>` condition —
   reusing the ordinary Code expression grammar, evaluated over a scope
   `{ currentUser, object }`. Condition absent ⇒ the rule always applies.
+- **A subject (type name, or `sys`) may appear at most once** — its rules all
+  go in one block. A repeated subject is a load error. This is not just tidiness:
+  the floor ORs every rule for a subject together, so a second block granting a
+  verb would silently widen (even un-do a `locked`) a rule in the first — so
+  duplicate blocks are rejected, and each block holds the subject's complete,
+  self-contained policy.
 - **`locked`** is sugar for a subject that is **ruled with zero grants**:
   every client `create`/`edit`/`delete` on that type is denied, unconditionally
   (no role, no exception) — **reads are unaffected** (a type with no separate
   `read` rule stays unruled for read, so it loads exactly as it would without
   `locked`; this is write-immutability, not secrecy). It must be the
-  subject's **only** rule (pairing it with any other grant on the same type is
-  a load error — ambiguous, so rejected rather than silently combined) and has
-  no meaning under the `sys` subject (host-action authority, not a data type's
-  write floor) — both are load errors. Semantically identical to `create edit
-  delete where false` (the idiom it replaces); the printer canonicalizes any
-  such rule back to `locked`. Used for framework-owned history rows
-  (`Commit`/`Branch`) that may only be written by a host action, never by a
-  client mutation.
+  subject's **only** rule (pairing it with any other grant is a load error —
+  ambiguous, so rejected rather than silently combined; and since a subject
+  appears in only one block, there is no second block that could re-grant a
+  write around it) and has no meaning under the `sys` subject (host-action
+  authority, not a data type's write floor) — both are load errors. Semantically
+  identical to `create edit delete where false` (the idiom it replaces); the
+  printer canonicalizes any such rule back to `locked`. Used for framework-owned
+  history rows (`Commit`/`Branch`) that may only be written by a host action,
+  never by a client mutation.
 - **The section is entirely optional, and its absence means allow-all** — a
   dormant app has no rules and every type loads freely (today's default). Once
   the section exists, it governs only the types it NAMES: a type with no block

@@ -295,6 +295,76 @@ public sealed class AppPrintTests
         await Assert.That(ex!.Message).Contains("locked");
     }
 
+    // A subject may appear AT MOST ONCE in the access section. This is the cross-block guarantee the
+    // per-block sole-rule check ALONE cannot give: `Thing / locked` in one block and `Thing / create
+    // where true` in another would BOTH land in the flat desc.Rules, and AccessFloor.Can ORs across
+    // every rule for a subject — so the grant would silently un-do the lock (CanWrite("create","Thing")
+    // → true), the exact bypass the lock exists to prevent. Rejecting duplicate subject blocks closes
+    // it AND makes the sole-rule check complete by construction (one subject = one block). This is the
+    // review-BLOCK probe verbatim: without the check it loads clean and the floor allows the write.
+    [Test]
+    public async Task A_locked_subject_repeated_in_a_second_block_with_a_grant_is_rejected()
+    {
+        var ex = await Assert.That(() => InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    things set of Thing
+                Thing
+                    title text
+
+            access
+                Thing
+                    locked
+                Thing
+                    create where true
+            """)).Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("Thing");
+    }
+
+    // The same rule for the PLAIN case (two ordinary grant blocks for one subject) — duplicate subject
+    // blocks were always ambiguous noise, now they are a bypass vector, so both directions are rejected
+    // by the one general rule (not a locked-only special case).
+    [Test]
+    public async Task A_subject_repeated_across_two_grant_blocks_is_rejected()
+    {
+        var ex = await Assert.That(() => InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    things set of Thing
+                Thing
+                    title text
+
+            access
+                Thing
+                    read
+                Thing
+                    create where currentUser != null
+            """)).Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("Thing");
+    }
+
+    // The check fires at the PARSE layer (AccessSection mapping), not only in the loader — so it holds
+    // for every entry point (AppParse.Parse, used by the round-trip/printer paths, as well as
+    // InstanceDescriptionLoader.Load). Pinning the layer keeps the guarantee from silently narrowing to
+    // "only when fully loaded".
+    [Test]
+    public async Task Duplicate_access_subjects_are_rejected_at_the_parse_layer()
+    {
+        await Assert.That(() => AppParse.Parse("""
+            types
+                Db
+                    things set of Thing
+                Thing
+                    title text
+
+            access
+                Thing
+                    read
+                Thing
+                    create
+            """)).Throws<SchemaValidationException>();
+    }
+
     // ── expression printing: minimal parentheses ────────────────────────────────
 
     [Test]

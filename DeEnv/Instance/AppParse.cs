@@ -227,12 +227,31 @@ public static class AppParse
                 return rules.Select(r => new AccessRule(type, r.Verbs, r.When)).ToArray();
             });
 
+    // The access section: a header then one block per subject. A subject may appear AT MOST ONCE
+    // (each block's rules all share one Type — AccessTypeEntry stamps it). The duplicate-subject
+    // rejection lives HERE, where block boundaries are still visible (`blocks` is one AccessRule[]
+    // per block) — they are LOST by the SelectMany flatten into the single desc.Rules list that the
+    // rest of the system (AccessFloor, AppPrint) sees. This matters for correctness, not just tidiness:
+    // AccessFloor.Can ORs across EVERY rule for a subject, so a second block granting a write would
+    // silently un-do a `locked` (or any deny) in the first — a real bypass, not merely ambiguous noise.
+    // Enforcing one-block-per-subject at this parse layer also makes AccessTypeEntry's per-block
+    // sole-rule check COMPLETE BY CONSTRUCTION (one subject = one block ⇒ block-local == global), and
+    // catches every load path since all of them parse text through here.
     private static Parser<AccessRule[]> AccessSection =>
         Seq(Text("access"), NlOrEnd,
             IndentLookahead("", Ws1, indent =>
                 Many1(Seq(Text(indent), AccessTypeEntry(indent), (_, t) => t).SkipEmptyLinesBefore()))
                 .SkipEmptyLinesBefore(),
-            (_, _, blocks) => blocks.SelectMany(b => b).ToArray())
+            (_, _, blocks) =>
+            {
+                var seen = new HashSet<string>();
+                foreach (var block in blocks)
+                    if (block.Length > 0 && !seen.Add(block[0].Type))
+                        throw new SchemaValidationException(
+                            $"Duplicate access subject '{block[0].Type}': every subject may appear at " +
+                            $"most once in the access section (combine its rules into one block).");
+                return blocks.SelectMany(b => b).ToArray();
+            })
         .SkipEmptyLinesBefore();
 
     // ── the document ─────────────────────────────────────────────────────────────
