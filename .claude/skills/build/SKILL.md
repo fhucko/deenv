@@ -37,9 +37,13 @@ See memory `env_agent_worktree_base`, `feedback_isolate_concurrent_sessions`.
 
 Point it at the worktree. **Spawn it on `model: "sonnet"`** — the design lives in
 the brief and the suite + reviewers are a hard gate, so the builder's job is mechanical
-execution. Escalate to `opus` only when the change lands in subtle zones (twin memo cache,
-client reconcile, negative-id remap) where a plausible-but-wrong diff costs more
-round-trips than the tier saves.
+execution. That is exactly Sonnet 5's niche: cheap bulk work at **low/medium effort**.
+Never run sonnet at high/xhigh effort — per Anthropic's own effort/cost curve, at that
+price Opus 4.8 is both cheaper and better, and Sonnet 5's tokenizer emits ~30% more
+tokens for the same text, eating the sticker discount. If a task needs high effort,
+it's an opus task. Escalate the builder to `opus` when the change lands in subtle zones
+(twin memo cache, client reconcile, negative-id remap) where a plausible-but-wrong diff
+costs more round-trips than the tier saves.
 
 The brief must pin:
 
@@ -72,14 +76,15 @@ Trivial mechanical edits skip review. Otherwise:
 - Interpreter/parser/storage/object-model/wire change → **`architecture-reviewer`**.
 - Rendered-UI change → **`ui-architecture-reviewer` + `ux-reviewer`** together.
 
-Reviewers default to `sonnet` (Sonnet 5 — near-Opus review quality at a fraction of the
-cost; user decision 2026-07-03). Adversarial review is judgment and a shallow reviewer is
-worse than none, so GRADE each sonnet review against the bar the 2026-07-03 Opus slice-1
-review set: it built and ran empirical probes, proved a cross-restart bug, and killed a
-doc over-claim. Escalate to `opus` for the highest-subtlety gates (publish/migration
-atomicity, merge engine, security) or when a sonnet review comes back shallow (no probing,
-ungrounded verdicts). Reconcile reviewer flags against decisions already settled in the
-conversation before relaying — don't re-litigate closed decisions.
+Reviewers run on **`opus`** (user decision 2026-07-03, reversing the same-day sonnet
+default once the effort/cost data landed: adversarial review is high-effort judgment, and
+Sonnet 5 at high/xhigh costs the same as Opus 4.8 at low/medium while performing worse —
+plus the ~30% tokenizer overhead). Sonnet is acceptable only for a routine, low-stakes
+review at medium effort. Hold every review to the bar the 2026-07-03 M13 slice-1 review
+set: built and ran empirical probes, proved a cross-restart bug, killed a doc over-claim —
+a review with no probing and ungrounded verdicts is worse than none; send it back.
+Reconcile reviewer flags against decisions already settled in the conversation before
+relaying — don't re-litigate closed decisions.
 **Pin the reviewer's diff to the branch's merge-base commit** (`git diff <base>..HEAD`, base
 recorded at spawn time) or rebase before review — main can move during long builds, and a
 `diff main..HEAD` against moved main makes the reviewer refute skew as if it were the change

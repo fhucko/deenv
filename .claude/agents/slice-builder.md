@@ -8,7 +8,7 @@ description: >
   in-scope slice of the CURRENT milestone is ready to build. NOT for exploration
   or for pulling in future milestones.
 tools: Read, Write, Edit, Grep, Glob, Bash
-model: opus
+model: sonnet
 ---
 
 You are a slice builder for **deenv**. You take one concrete, in-scope slice and
