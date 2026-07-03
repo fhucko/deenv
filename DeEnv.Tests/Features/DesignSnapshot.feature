@@ -34,6 +34,14 @@ Feature: Design snapshot — canonical text + identity map (the per-commit cache
     And a snapshot of the design is built
     Then the id under "Note.title" in the new snapshot's id map differs from the id under "Note.title" in the old snapshot's id map
 
+  Scenario: An enum type contributes no prop entries even with leftover props
+    Given a standalone object type "Priority" with a prop "weight" in the design
+    When the Priority type is retyped to an enum with values "low, high" leaving its props in the store
+    And a snapshot of the design is built
+    Then the id map has an entry for "Priority"
+    And the id map has no entry for "Priority.weight"
+    And the snapshot text round-trips through the printer
+
   Scenario: An invalid design yields no snapshot
     Given the Note type's name is blanked in the designer store
     Then building a snapshot fails with a schema validation error

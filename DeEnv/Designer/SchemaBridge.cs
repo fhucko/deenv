@@ -31,11 +31,13 @@ namespace DeEnv.Designer;
 // map over its types and props. Text alone is names-only (insufficient for rename-aware diff); the id
 // map re-attaches the M5 identity a by-name projection otherwise drops. IdMap keys are "TypeName" (the
 // type's MetaType row id) and "TypeName.propName" (the prop's MetaProp row id) — dotted name-paths,
-// unambiguous because ProjectDesignDocument's own validation already requires unique names. An enum
-// type contributes only its own type entry (no props — its `values` live in a single text field with no
-// per-value identity; a value rename/reorder is a textual diff, not an identity one). Derived and
-// rebuildable from the design at any time — never itself authoritative (slice 3 persists it on the
-// Commit row; nothing here writes storage).
+// unambiguous because ProjectDesignDocument's own validation already requires unique names. The map keys
+// EXACTLY what the projected document shows, nothing more — so an enum type contributes only its own type
+// entry and NO prop entries, even if leftover MetaProp members linger in its `props` set after an
+// object→enum base-type flip (Project's enum branch hardcodes Props: null; its values live in a single
+// text field with no per-value identity, so a value rename/reorder is a textual diff, not an identity
+// one). Derived and rebuildable from the design at any time — never itself authoritative (slice 3
+// persists it on the Commit row; nothing here writes storage).
 public sealed record DesignSnapshot(string Text, IReadOnlyDictionary<string, int> IdMap);
 
 public static class SchemaBridge
@@ -59,7 +61,14 @@ public static class SchemaBridge
                 var typeName = TextField(type, "name");
                 idMap[typeName] = typeId;
 
-                if (type.Fields.TryGetValue("props", out var propsNode))
+                // Emit prop entries ONLY when the projection actually prints props for this type. Project's
+                // ENUM branch hardcodes Props: null (an enum carries a value list, no props), so an enum's
+                // props NEVER reach the document — even if leftover MetaProp members linger in its set after
+                // a base-type flip (object → enum). Mirror that exclusion here so the map keys EXACTLY what
+                // the printed doc shows: a phantom "EnumType.leftoverProp" entry would make a slice-4 diff
+                // misclassify a prop the document has no trace of. Every other base (object, and the scalar
+                // BaseTypes.IsName aliases) carries its props through the projection — keep walking those.
+                if (TextField(type, "baseType") != "enum" && type.Fields.TryGetValue("props", out var propsNode))
                     foreach (var (propId, prop) in OrderedMembers(propsNode))
                         idMap[$"{typeName}.{TextField(prop, "name")}"] = propId;
             }

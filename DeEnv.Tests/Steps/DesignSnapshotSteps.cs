@@ -56,6 +56,7 @@ public sealed class DesignSnapshotSteps
     private int _notesPropId;
     private int _titlePropId;
     private int _countPropId;
+    private int _standaloneTypeId; // a type not referenced by any set (so retyping it to enum stays valid)
 
     private DesignSnapshot? _snapshot;
     private DesignSnapshot? _oldSnapshot;
@@ -148,6 +149,14 @@ public sealed class DesignSnapshotSteps
         await Assert.That(_snapshot.IdMap["Note.count"]).IsEqualTo(_countPropId);
     }
 
+    [Then("the id map has an entry for {string}")]
+    public async Task ThenIdMapHasEntry(string key) =>
+        await Assert.That(_snapshot!.IdMap.ContainsKey(key)).IsTrue();
+
+    [Then("the id map has no entry for {string}")]
+    public async Task ThenIdMapHasNoEntry(string key) =>
+        await Assert.That(_snapshot!.IdMap.ContainsKey(key)).IsFalse();
+
     // ── When: mutate the design through the store seam ───────────────────────────────────────────────
 
     [When("the Note type's title prop is renamed to {string} in the designer store")]
@@ -160,6 +169,29 @@ public sealed class DesignSnapshotSteps
             .Field("types").Key(_noteTypeId.ToString()).Field("props");
         _designer.RemoveFromSet(propsPath, _titlePropId);
         _titlePropId = AddProp(_noteTypeId, sameName, "text"); // a FRESH mint — a different id, same name
+    }
+
+    // A standalone object type (NOT referenced by any set, so retyping it to enum leaves the whole
+    // document valid — unlike Note, which Db.notes points at) carrying one prop. This is the type the
+    // enum-leftover-props probe flips: after the flip its prop lingers in the store but vanishes from the
+    // projected doc.
+    [Given("a standalone object type {string} with a prop {string} in the design")]
+    public void GivenStandaloneType(string typeName, string propName)
+    {
+        _standaloneTypeId = AddType(typeName, "object");
+        AddProp(_standaloneTypeId, propName, "text");
+    }
+
+    // Flip the standalone type's base type to enum WITHOUT touching its `props` set — the reachable designer
+    // state (the base-type <select> is unguarded) where leftover MetaProp members linger on a now-enum type.
+    // The enum needs a non-empty `values` field or the projection rejects it ("no values"); Project's enum
+    // branch then hardcodes Props: null, so the leftover props vanish from the printed doc — the exact
+    // condition that would leave a phantom "Type.<prop>" in an unguarded map walk.
+    [When("the {word} type is retyped to an enum with values {string} leaving its props in the store")]
+    public void WhenRetypedToEnum(string typeName, string values)
+    {
+        _designer.WriteField(_standaloneTypeId, "baseType", new TextValue("enum"));
+        _designer.WriteField(_standaloneTypeId, "values", new TextValue(values));
     }
 
     [Given("the Note type's name is blanked in the designer store")]
