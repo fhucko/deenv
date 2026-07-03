@@ -113,8 +113,13 @@ steps, when reached, use Playwright.)
 usable-MVP plan): gate #1 non-destructive apply ✅ · gate #2 minimal real
 deploy ✅ (a self-contained build as a systemd service behind nginx; login
 wiring + TLS are the follow-on) · gate #3 dogfood one real app — **in
-progress** (`instances/5`, `devlog`). **M12 (visual component designer) stays
-deferred until after the MVP.** M-auth follow-ups (deploy login wiring,
+progress** (`instances/5`, `devlog`). **M13 app versioning is BUILDING in
+parallel** (user's call, 2026-07-03): design settled in
+`docs/plans/app-versioning-design.md`, slices in
+`docs/plans/versioning-slices.md` — slice 1 (append-only store log, WAL +
+genesis + boot replay + fsck) landed 2026-07-03; slice 4 (rename-safe publish)
+is the MVP-visible payoff. **M12 (visual component designer) stays deferred
+until after the MVP.** M-auth follow-ups (deploy login wiring,
 remove-user / inline role-edit, broader auth styling) live in ROADMAP.md
 "Near-future".
 

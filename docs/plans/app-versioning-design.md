@@ -11,10 +11,12 @@ position → grill → verdict. Settled vs open is marked per topic; roll-up lis
 - **Two layers.** Designs (schema+code) get git-like history: commit DAG + branches + merge. Instances
   (design version + live data) have linear append-only data history; never branch, never merge.
   **Publish** bridges them (migrations run there). Branch-on-real-data = publish to a `cloneInstance`.
-- **Self-hosted, variant C.** Every instance gets an append-only changeset log (`app-log.jsonl`,
-  post-remap real-id changesets, appended under the store lock; `genesis.json` frozen at adoption;
-  `app-data.json` = derived head materialization — boot unchanged). The log is the only non-derivable
-  artifact (with the compaction asterisk, §6). A design commit = a `Commit` row marking a log seq in the
+- **Self-hosted, variant C.** Every instance gets an append-only changeset log — **IMPLEMENTED
+  2026-07-03 as slice 1** (`docs/plans/versioning-slices.md`; filenames landed suffix-derived from
+  the data file: `app-data.log.jsonl` + `app-data.genesis.json`, so bare-file test stores can't
+  collide) — post-remap real-id changesets appended under the store lock; genesis frozen at first
+  mutation; `app-data.json` = derived head materialization (boot unchanged, tail-replayed after a
+  crash). The log is the only non-derivable artifact (with the compaction asterisk, §6). A design commit = a `Commit` row marking a log seq in the
   designer instance's own log; branch = `Branch` row; DAG via parent refs; refs are data.
 - **Caches per commit:** canonical printed text + id-map (name-path→id) → diff/publish run with zero
   replay; replay = cache-rebuild, fsck (`replay(genesis→head) == app-data.json`), data time-travel.
@@ -36,11 +38,12 @@ position → grill → verdict. Settled vs open is marked per topic; roll-up lis
   map; the staleness check + apply + bump run in ONE `_sync` critical section (reviewed atomicity); every
   mutating store method returns its post-write version captured under-lock and each mutating WS reply
   reports THAT (no check-vs-report split); a rejected commit surfaces via the existing error path, draft
-  intact. NOT deployed to the box yet. Two tracked residuals (documented + deferred, NOT missed): (1) the
-  two blank-password NO-OP live-edit reply paths still read `CurrentVersion` separately (a much narrower
-  same-class window; no write occurs) — close by omitting `newVersion` on no-op replies if it ever
-  matters; (2) `_objectVersions` is in-memory, cleared on restart (a cross-restart stale base can pass) —
-  the durable fix is the M13 change-log itself. Both degrade toward main's old behavior, never worse.
+  intact. NOT deployed to the box yet. Residuals: (1) the two blank-password NO-OP live-edit reply
+  paths still read `CurrentVersion` separately (a much narrower same-class window; no write occurs) —
+  close by omitting `newVersion` on no-op replies if it ever matters; (2) "`_objectVersions` is
+  in-memory, cleared on restart" — **CLOSED by slice 1 (2026-07-03)**: the boot rebuild restores
+  per-object versions from the durable log, including set-link/unlink member advances (the slice's
+  architecture review caught that gap; fixed + regression-tested both directions).
 
 ## 0b. Relation to prior design memos (reconciled 2026-07-02)
 

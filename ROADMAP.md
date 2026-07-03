@@ -403,8 +403,10 @@ DECISIONS.md.
   (derived-structural + commit-attached semantic). The doc carries the settled/open roll-ups and
   the slice spine, and supersedes this bullet's details (including the "branches deferred" line
   below — branches/merge are designed, slice-able late). **Sliced + building since 2026-07-03 → `docs/plans/versioning-slices.md`** (slice 0 =
-  the baseVersion anti-clobber check, landed 2026-07-02; slice 1 = the append-only store log, in
-  progress).
+  the baseVersion anti-clobber check, landed 2026-07-02; slice 1 = the append-only store log
+  with WAL + genesis + boot replay + fsck, LANDED 2026-07-03, suite 628; next = slice 2
+  per-commit caches; the authority inversion + Commit/Branch shapes are user-approved, so
+  slice 3 is unblocked).
 
   **MVP-critical substrate pulled forward — LANDED 2026-06-19/20.** A thin **non-destructive
   apply** — *data survives a schema change* — was built ahead of / interleaved with M11

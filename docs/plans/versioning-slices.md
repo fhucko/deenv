@@ -11,18 +11,28 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
 0. **baseVersion anti-clobber guard — DONE** (main `4c72a92`; design doc §0). Pulled ahead of the
    milestone as a bug fix.
 
-1. **Append-only log behind the store (invisible) — IN PROGRESS 2026-07-03.** Every
-   `JsonFileInstanceStore` mutation appends one changeset entry (post-remap real ids, old+new per
-   field write, msgId, who, when, seq) to `instances/<id>/app-log.jsonl` under the same `_sync`
-   lock, fixed crash order append→snapshot; `genesis.json` frozen at first mutation; boot replays a
-   lagging snapshot tail; fsck invariant `replay(genesis→head) == app-data.json`. Also rebuilds the
-   guard's in-memory `_objectVersions` from the log tail on boot (closes §0 residual 2). Server-only
-   C# — no wire, no TS twin, no UI. Defers: checkpoints/compaction, non-temporal field flag, any
-   reader of the log.
+1. **Append-only log behind the store (invisible) — DONE 2026-07-03** (main `1961d10` +
+   review fix `403868a`; suite 628/628; architecture review SHIP-WITH-FIXES, the one fix-soon
+   finding fixed + regression-tested both directions). Every `JsonFileInstanceStore` mutation
+   appends one changeset entry (post-remap real ids, old+new per field write, msgId, who, when,
+   seq, nextId) to `instances/<id>/app-data.log.jsonl` under the same `_sync` lock, fixed crash
+   order append→snapshot; `app-data.genesis.json` frozen at first mutation; boot replays a
+   lagging snapshot tail (torn final line repaired); fsck invariant
+   `replay(genesis→head) == app-data.json` via order-independent structural compare. Also rebuilds
+   the guard's in-memory `_objectVersions` from the log on boot — closes §0 residual 2, INCLUDING
+   set-link/unlink member advances (the review finding: a member whose last change was a set link
+   could be stale-clobbered across a restart). Server-only C# — no wire, no TS twin, no UI.
+   Defers: checkpoints/compaction, non-temporal field flag, any reader of the log.
    Decisions taken: genesis freezes at first mutation (not ctor — read-only boot never writes);
    who/msgId reach the store via an `AsyncLocal` ambient set at the WS message boundary (no
    `IInstanceStore` signature change; bare set-then-call would race across sessions); ONE log entry
-   per store commit/Save (per-field entries would break the 1:1 append↔snapshot WAL invariant).
+   per store commit gated on version-change not pending-writes (no-op removals bump the version —
+   they log an empty-writes entry so seq==version stays exact); GC-swept extent removals + dict
+   mints MATERIALIZED into entries (replay is literal — no GC/mint/resolve at replay, so old logs
+   replay identically under future code); filenames derived by suffix from the data file (bare
+   temp-file stores can't collide); Reset()/a rewriting MigrateTowardSchema pass re-baseline
+   (delete log+genesis — history resets at schema apply until slice 4's boundary entries, the
+   ponytail'd ceiling).
 
 2. **Per-commit caches: canonical printed text + name-path→id map.** Built per marked log seq on
    the designer instance so slice-4 diff/publish read two cached artifacts with zero replay. May

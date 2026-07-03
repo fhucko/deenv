@@ -69,11 +69,16 @@ The brief must pin:
 ## 4. Review
 
 Trivial mechanical edits skip review. Otherwise:
-- Interpreter/parser/storage/object-model/wire change → **`architecture-reviewer`** on `opus`.
-- Rendered-UI change → **`ui-architecture-reviewer` + `ux-reviewer`** both on `opus`.
+- Interpreter/parser/storage/object-model/wire change → **`architecture-reviewer`**.
+- Rendered-UI change → **`ui-architecture-reviewer` + `ux-reviewer`** together.
 
-Keep reviewers on `opus` — adversarial review is judgment; a shallow reviewer gives
-false confidence. Reconcile reviewer flags against decisions already settled in the
+Reviewers default to `sonnet` (Sonnet 5 — near-Opus review quality at a fraction of the
+cost; user decision 2026-07-03). Adversarial review is judgment and a shallow reviewer is
+worse than none, so GRADE each sonnet review against the bar the 2026-07-03 Opus slice-1
+review set: it built and ran empirical probes, proved a cross-restart bug, and killed a
+doc over-claim. Escalate to `opus` for the highest-subtlety gates (publish/migration
+atomicity, merge engine, security) or when a sonnet review comes back shallow (no probing,
+ungrounded verdicts). Reconcile reviewer flags against decisions already settled in the
 conversation before relaying — don't re-litigate closed decisions.
 (memory `feedback_auto_review_after_slices`, `feedback_agent_tier_by_role`)
 
