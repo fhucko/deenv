@@ -26,8 +26,47 @@ namespace DeEnv.Designer;
 //
 // This lives beside the instance runtime, not inside it — it never touches the
 // renderer, the websocket handler, or the storage engine.
+
+// The per-commit caches (M13 slice 2): the canonical printed app document + a name-path → intrinsic-id
+// map over its types and props. Text alone is names-only (insufficient for rename-aware diff); the id
+// map re-attaches the M5 identity a by-name projection otherwise drops. IdMap keys are "TypeName" (the
+// type's MetaType row id) and "TypeName.propName" (the prop's MetaProp row id) — dotted name-paths,
+// unambiguous because ProjectDesignDocument's own validation already requires unique names. An enum
+// type contributes only its own type entry (no props — its `values` live in a single text field with no
+// per-value identity; a value rename/reorder is a textual diff, not an identity one). Derived and
+// rebuildable from the design at any time — never itself authoritative (slice 3 persists it on the
+// Commit row; nothing here writes storage).
+public sealed record DesignSnapshot(string Text, IReadOnlyDictionary<string, int> IdMap);
+
 public static class SchemaBridge
 {
+    // Build a design's per-commit snapshot: the canonical printed app document, then a name-path→id map
+    // walked over the SAME structure ProjectDesignDocument prints (types, each type's props), keeping the
+    // member ids OrderedObjects/Project discard. Text is computed FIRST — ProjectDesignDocument validates
+    // (types, then the whole assembled document) and THROWS SchemaValidationException on an invalid
+    // design — so an invalid design yields no snapshot at all, not a partial id map. (Snapshot inherits
+    // that validate-or-throw behavior; how a future sys.commitDesign surfaces "can't commit an invalid
+    // design" to the caller is that slice's decision, not this one's.) Same design state → byte-identical
+    // Text on every call: the printer is canonical and the verbatim sections are passed through unchanged.
+    public static DesignSnapshot Snapshot(NodeValue design)
+    {
+        var text = ProjectDesignDocument(design); // throws on an invalid design — before the map is built
+        var idMap = new Dictionary<string, int>();
+
+        if (design is ObjectValue d && d.Fields.TryGetValue("types", out var typesNode))
+            foreach (var (typeId, type) in OrderedMembers(typesNode))
+            {
+                var typeName = TextField(type, "name");
+                idMap[typeName] = typeId;
+
+                if (type.Fields.TryGetValue("props", out var propsNode))
+                    foreach (var (propId, prop) in OrderedMembers(propsNode))
+                        idMap[$"{typeName}.{TextField(prop, "name")}"] = propId;
+            }
+
+        return new DesignSnapshot(text, idMap);
+    }
+
     // Project a Design node (structured types + the three verbatim section texts) into a
     // complete, validated app document (text) — the whole app, not just its types, so a
     // published/created instance keeps its custom UI (`fn render()`), seed data, and shared
@@ -225,16 +264,21 @@ public static class SchemaBridge
 
     // Member objects of a set node, sorted by the `order` field then by identity
     // (identity as a stable tiebreak / fallback when order is absent or equal).
-    private static IEnumerable<ObjectValue> OrderedObjects(NodeValue? set)
+    private static IEnumerable<ObjectValue> OrderedObjects(NodeValue? set) =>
+        OrderedMembers(set).Select(m => m.Obj);
+
+    // Same ordering as OrderedObjects (by `order` then by identity), but keeping each member's intrinsic
+    // set-key id alongside its object — what Snapshot's id-map walk needs and OrderedObjects discards.
+    private static IEnumerable<(int Id, ObjectValue Obj)> OrderedMembers(NodeValue? set)
     {
         if (set is not SetValue sv)
             return [];
 
         return sv.Members
             .Where(e => e.Value is ObjectValue)
-            .Select(e => (obj: (ObjectValue)e.Value, order: IntField((ObjectValue)e.Value, "order"), id: e.Key))
-            .OrderBy(x => x.order).ThenBy(x => x.id)
-            .Select(x => x.obj);
+            .Select(e => (Id: e.Key, Obj: (ObjectValue)e.Value, order: IntField((ObjectValue)e.Value, "order")))
+            .OrderBy(x => x.order).ThenBy(x => x.Id)
+            .Select(x => (x.Id, x.Obj));
     }
 
     private static string TextField(ObjectValue o, string name) =>
