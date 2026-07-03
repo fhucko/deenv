@@ -35,10 +35,24 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    publish); boot-sync (`KernelHost.SyncDesignHost` / `DesignerSeed.Merge`) is demoted to one-time
    adoption and stops overwriting the `Design` row thereafter. (Side effect: the designer's data
    log stops being truncated at every boot — slice 1's Reset-on-boot-sync caveat ends here.)
-   **Remaining sign-off at build time:** the concrete `Commit`/`Branch` meta-type shapes (a
-   meta-schema change — propose before building). Depends on 1.
+   **Shapes APPROVED (user 2026-07-03, lean-per-slice + caches-on-row):**
+   `Db` gains root sets `commits set of Commit` + `branches set of Branch` (GC-pins history incl.
+   abandoned tips; history UI = free SetTable filtered by design, ordered by logSeq).
+   `Commit { message text, at dateTime, design Design, parent Commit (empty = root), logSeq int,
+   text text (cache: canonical printed doc), idMap dictionary of int (cache: name-path → lineage
+   id) }`. `Branch { name text, head Commit, workingCopy Design }` — "main" seeded per design at
+   adoption; at slice 3 workingCopy IS the design row. Created only via
+   `sys.commitDesign(design, message)` under the store lock; no write grants = floor-immutable.
+   Deliberately deferred to their slices (normal additive apply): `mergeParent` + `origin int` on
+   MetaType/MetaProp (slice 5), `migration` (slice 4), author `by` (rides the login-persistence
+   flip; the slice-1 log already records who). Slice-5 revisit flagged: app-identity vs
+   working-copy anchoring once branches clone Design rows. Depends on 1.
 
-4. **Structural diff + forward publish (the MVP payoff: rename-safe deploy).** Endpoint
+4. **Structural diff + forward publish (the MVP payoff: rename-safe deploy).**
+   SEQUENCING NOTE (from the shape decision): adding `Commit.migration` to the designer's own
+   schema is itself a `changed` apply, which under slice-1 rules truncates the designer's log —
+   slice 4 must land the log-preserving boundary-entry apply BEFORE its own designer-schema
+   addition, or slice-3 commits get wiped by the slice that was meant to preserve them. Endpoint
    identity-diff between design commits (rename = same id → data carries; the gap
    `MigrateTowardSchema` can't close today because the by-name projection drops identity); publish =
    lock → migrate in-memory copy → ONE log entry (boundary marker + materialized changeset) →
