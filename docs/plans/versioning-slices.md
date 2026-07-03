@@ -116,10 +116,28 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    entries exist, so the later `Commit.migration` designer-schema addition is safe. Semantic
    `fn migrate` = a later slice. ✔
 
-5. **Branches + three-way structural merge (ctx-staged).** Lineage-keyed 3-way, per-meta-field
-   policies (`order` auto-resolves; `name`/`type`/`cardinality` surface), merge rides ctx,
-   two-parent merge commit. Access-rule union + must-see block already settled (design doc §1).
-   Depends on 3+4.
+5. **Branches + origin-keyed three-way merge — DONE 2026-07-03** (main `4aed141` + review fix
+   `7c93b6f`; suite 678 → landed at 682 with the parallel XSS-guard tests). V1 contract
+   (user-approved): report + resolve-by-args — clean merges auto-commit a two-parent merge
+   commit; conflicts = NO writes + a structured `MergeReport` (content-derived stable conflict
+   ids); re-run with `resolutions: [{id, take: source|target}]`; the interactive ctx-staged UI
+   comes with the conflict-UI work. Shipped: `sys.createBranch` (clone-with-FLATTENED-origins —
+   clone.origin = source.origin ?? source.id, so N-deep branches anchor to original rows; clones
+   join `db.branches` only, never `db.designs`); `sys.mergeBranch` (max-logSeq LCA over
+   parent+mergeParent; lineage-keyed 3-way per meta-field with the settled policies — `order`
+   renormalizes on the target spine, never conflicts; existence rules incl. delete+modify;
+   whole-fn code merge by name; initialData whole-section; access rule-granular union with the
+   ALWAYS-surfaced accessChanges block; drift refusal — merge computes over committed heads;
+   cross-app refusal); resolutions thread INTO the compute (resolved values feed downstream
+   decisions). `commitDesign` widened to commit on any branch's working copy (was main-only —
+   a slice-3 coherence gap the builder caught). Review (orchestrator-run in-context — the
+   reviewer classifier was down; verdict SHIP-WITH-FIXES): `CreateMergeCommit` lacked the s1/s2
+   capture bracket → both commit paths now share ONE `CaptureAndCommit` helper
+   (consistency-by-construction); accepted+documented: the two-batch clone GC window (forced —
+   a fresh Design's set ids don't exist pre-batch; failure = clean refusal + inert orphans) and
+   first-merge section-text canonicalization (the Code language has no comments to lose; printer
+   canonical → byte-stable thereafter). Meta-schema additions: `origin int` ×3 + `mergeParent`.
+   Deferred as settled: branch deletion, rebase/cherry-pick, recursive LCA, fn identity. ✔
 
 6. **Data conflict payload + coarse UI.** Stale-overlapping commit returns `{base,mine,theirs}`
    (base read from the log) instead of a flat reject; generic form + `<ConflictBar>` render it;

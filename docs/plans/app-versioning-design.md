@@ -115,6 +115,10 @@ field,verbs) rule with differing conditions = conflict.
 **Verdict.** Settled shape: lineage-keyed 3-way, per-meta-field policies, ctx-staged resolution,
 two-parent merge commit. Open: access-rule union (security review), criss-cross beyond v1, fn identity
 (needs code-as-data — future).
+**IMPLEMENTED 2026-07-03 as slice 5** — with one v1 substitution: resolution = report +
+resolve-by-args on `sys.mergeBranch` (user-approved; the ctx-staged interactive surface rides the
+conflict-UI work). Origin links landed FLATTENED (clone.origin anchors to the original row, so
+lineage matching never chains).
 
 ## 2. Data conflicts (session-3 topic)
 

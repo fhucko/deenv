@@ -116,13 +116,14 @@ wiring + TLS are the follow-on) · gate #3 dogfood one real app — **in
 progress** (`instances/5`, `devlog`). **M13 app versioning is BUILDING in
 parallel** (user's call, 2026-07-03): design settled in
 `docs/plans/app-versioning-design.md`, slices in
-`docs/plans/versioning-slices.md` — slices 1–4 landed 2026-07-03 (the
+`docs/plans/versioning-slices.md` — slices 1–5 landed 2026-07-03 (the
 append-only store log with WAL+fsck; the design-snapshot caches; Commit/Branch
 rows + `sys.commitDesign` + the authority inversion — design-data is truth,
 boot = one-time adoption; structural diff + rename-safe publish with boundary
 log entries — **renames now carry data through a deploy**, the MVP-visible
-payoff). The `locked` access keyword landed alongside. Next: slice 5
-(branches + merge) and the Commit-button UX slice. **M12 (visual component designer) stays deferred
+payoff; branches + origin-keyed three-way merge with report/resolve-by-args).
+The `locked` access keyword landed alongside. Next: slice 6 (conflict payload
++ coarse UI), slice 7 (time-travel), and the Commit-button UX slice. **M12 (visual component designer) stays deferred
 until after the MVP.** M-auth follow-ups (deploy login wiring,
 remove-user / inline role-edit, broader auth styling) live in ROADMAP.md
 "Near-future".

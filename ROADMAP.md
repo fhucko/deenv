@@ -410,8 +410,10 @@ DECISIONS.md.
   boot = one-time adoption, atomic single-entry commits), landed 2026-07-03, suite 645; the
   `locked` access keyword + duplicate-subject rejection landed alongside; **slice 4 = structural
   diff + rename-safe publish with boundary log entries — THE MVP-VISIBLE PAYOFF — landed
-  2026-07-03, suite 668**; next = slice 5, branches + three-way structural merge; the
-  Commit-button UX slice (lockstep interpreter wiring) is also now unblocked).
+  2026-07-03, suite 668**; slice 5 = branches + origin-keyed three-way merge (sys.createBranch /
+  sys.mergeBranch, report + resolve-by-args), landed 2026-07-03, suite 682; next = slice 6
+  (conflict payload + coarse UI — approved wire shape), slice 7 (time-travel), and the
+  Commit-button UX slice (lockstep interpreter wiring)).
 
   **MVP-critical substrate pulled forward — LANDED 2026-06-19/20.** A thin **non-destructive
   apply** — *data survives a schema change* — was built ahead of / interleaved with M11
