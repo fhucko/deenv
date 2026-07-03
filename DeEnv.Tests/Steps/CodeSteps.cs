@@ -37,6 +37,16 @@ public sealed class CodeSteps(InstanceContext ctx)
         ctx.Store = new JsonFileInstanceStore(ctx.DataFilePath, ctx.Description);
     }
 
+    // Same as above, but boots the in-process server + a REAL browser page against it — used for the
+    // client-twin XSS guard scenarios (refreshAttributes), which must prove the attribute is actually
+    // ABSENT from the hydrated DOM, not merely absent from the C# SSR string.
+    [Given("the code instance is served in a browser:")]
+    public async Task GivenCodeInstanceInBrowser(string appText)
+    {
+        ctx.Description = InstanceDescriptionLoader.Load(appText);
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
     [Given("a generic instance with no code")]
     public void GivenGenericInstance()
     {

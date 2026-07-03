@@ -37,4 +37,14 @@ public sealed class CommonUiSteps(InstanceContext ctx)
     [Then("the page shows {string}")]
     public async Task ThenShowsSelector(string selector) =>
         await ctx.Page!.WaitForSelectorAsync(selector);
+
+    // The client-twin half of the XSS attribute guards (refreshAttributes in ui.ts): proves the named
+    // attribute is genuinely ABSENT from the hydrated DOM, not merely absent from the SSR string.
+    [Then("the element {string} has no {string} attribute")]
+    public async Task ThenElementHasNoAttribute(string selector, string attribute)
+    {
+        var el = ctx.Page!.Locator(selector).First;
+        await el.WaitForAsync();
+        await Assert.That(await el.GetAttributeAsync(attribute)).IsNull();
+    }
 }

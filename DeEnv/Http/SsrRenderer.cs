@@ -896,12 +896,27 @@ public sealed class SsrRenderer
     // mount `base` HERE, at the edge — so app Code keeps writing `/notes/2` (mount-unaware) and the
     // emitted link is mount-correct (`/apps/todo/notes/2`). The client reconciler (ui.ts) applies
     // the same prefix, so SSR and hydrate agree. With base "/" this is an identity (behavior-preserving).
+    //
+    // Two XSS guards live here, at the single chokepoint every attribute routes through (the client
+    // twin is ui.ts's refreshAttributes):
+    //  - An `on*` event-attribute name (onclick, onmouseover, …) with a SCALAR value is dropped
+    //    entirely — a real handler is always a `fn` value (never reaches this method's switch; an
+    //    ExecFunction falls through and already emits nothing), so a scalar there can only be an
+    //    injection (`<div onclick={db.evil}>`). Checked before the type switch so it applies to every
+    //    scalar kind (text/int/bool), not just the text case.
+    //  - A url attribute (href/src) is scheme-checked AFTER MountUrl: a mount-prefixed root-relative
+    //    path never carries a scheme, so only a raw app-supplied absolute value (`javascript:…`) can
+    //    trip it. HtmlEncode does not neutralize a dangerous scheme (no special characters to escape),
+    //    so the attribute is dropped outright rather than encoded — a link with no href is inert.
     private static void AppendCodeAttribute(StringBuilder sb, string name, IExecValue value, string @base)
     {
+        if (IsEventAttribute(name)) return;
+
         switch (value)
         {
             case ExecText t:
                 var text = IsUrlAttribute(name) ? MountUrl(@base, t.Value) : t.Value;
+                if (IsUrlAttribute(name) && HasDangerousScheme(text)) return;
                 sb.Append(' ').Append(name).Append("=\"").Append(Escape(text)).Append('"');
                 break;
             case ExecInt i:
@@ -977,6 +992,9 @@ public sealed class SsrRenderer
     // LABELED trail: the root is the instance display name humanized (the app's identity, not the
     // internal root-type name "Db"); each segment is its `trail` label (a humanized prop name or a
     // member's labelProp value). `trail` is one label per URL segment, in order.
+    // Breadcrumb hrefs are exempt from the AppendCodeAttribute scheme guard by construction: every
+    // url here is built as "/" + path segments (root-relative), so it can never carry a scheme — not
+    // a missed sink. (Client twin: ui.ts refreshBreadcrumbs.)
     private string Breadcrumbs(NodePath path, IReadOnlyList<string> trail, string @base)
     {
         var sb = new StringBuilder($"<nav class=\"breadcrumbs\"><a href=\"{Escape(MountUrl(@base, "/"))}\">{Escape(RootLabel())}</a>");
@@ -1014,8 +1032,36 @@ public sealed class SsrRenderer
     // applied ONLY here, at the edges (SSR link/breadcrumb/script emission), and mirrored on the
     // client (ui.ts/init.ts). These two helpers are the whole seam in C#.
 
-    // Navigational URL attribute names — the ones whose root-relative value the mount base prefixes.
+    // Navigational URL attribute names — the ones whose root-relative value the mount base prefixes,
+    // and the ones the dangerous-scheme guard applies to.
     private static bool IsUrlAttribute(string name) => name is "href" or "src";
+
+    // An inline event-handler attribute name (onclick, onmouseover, onload, …). Only ever legitimate
+    // as a `fn` value (wired client-side; a fn never reaches AppendCodeAttribute's scalar switch) — a
+    // SCALAR value for one of these names is dropped by the caller regardless of type. `on` alone
+    // (length 2) is not an event name, so the length floor avoids over-matching a coincidental "on".
+    private static bool IsEventAttribute(string name) =>
+        name.Length >= 3 && name.StartsWith("on", StringComparison.OrdinalIgnoreCase);
+
+    // A URL whose scheme is one an attacker can use to run script from a clicked/loaded link
+    // (`javascript:`, `data:` — e.g. `data:text/html,<script>…`, `vbscript:`). Browsers strip
+    // embedded TAB/CR/LF anywhere in a URL before scheme-sniffing (the classic "java\tscript:" /
+    // "java\nscript:" bypass), and ignore leading ASCII whitespace/control characters, so both are
+    // stripped/trimmed here before the case-insensitive scheme match — matching what a browser would
+    // actually resolve the URL to, not just the literal authored text.
+    private static readonly string[] DangerousSchemes = ["javascript:", "data:", "vbscript:"];
+
+    private static bool HasDangerousScheme(string url)
+    {
+        var stripped = url.Replace("\t", "").Replace("\r", "").Replace("\n", "");
+        var start = 0;
+        while (start < stripped.Length && stripped[start] <= ' ') start++;
+        var trimmed = stripped[start..];
+        foreach (var scheme in DangerousSchemes)
+            if (trimmed.StartsWith(scheme, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
 
     // Prefix a ROOT-RELATIVE url with the mount base. Identity when base is "/" (root-mounted) or the
     // url is not root-relative (an absolute "http(s)://…", a protocol-relative "//host", a fragment

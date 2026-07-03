@@ -178,6 +178,8 @@ function syncBreadcrumbs(): void {
     desired.forEach((d, i) => {
         if (i > 0) nav.appendChild(document.createTextNode(" / "));
         const a = document.createElement("a");
+        // Root-relative by construction (built as "/" + segments), so scheme-guard-exempt — the twin
+        // of SsrRenderer.Breadcrumbs; not a missed refreshAttributes sink.
         a.setAttribute("href", mountUrl(d.href));
         a.textContent = d.text;
         nav.appendChild(a);
@@ -410,6 +412,27 @@ function mountUrl(url: string): string {
     return url === "/" ? b : b + url;
 }
 
+// An inline event-handler attribute name (onclick, onmouseover, onload, …) — the client twin of
+// SsrRenderer.IsEventAttribute. Only ever legitimate as a `fn` value (refreshAttributes already skips
+// those above), so a scalar value under this name is dropped by the caller regardless of type.
+function isEventAttribute(name: string): boolean {
+    return name.length >= 3 && name.slice(0, 2).toLowerCase() === "on";
+}
+
+// A URL whose scheme lets an attacker run script from a clicked/loaded link — the client twin of
+// SsrRenderer.HasDangerousScheme. Browsers strip embedded TAB/CR/LF anywhere in a URL before
+// scheme-sniffing (the "java\tscript:" bypass) and ignore leading ASCII whitespace/control
+// characters, so both are stripped/trimmed here before the case-insensitive scheme match.
+const DANGEROUS_SCHEMES = ["javascript:", "data:", "vbscript:"];
+
+function hasDangerousScheme(url: string): boolean {
+    const stripped = url.replace(/[\t\r\n]/g, "");
+    let start = 0;
+    while (start < stripped.length && stripped.charCodeAt(start) <= 0x20) start++;
+    const trimmed = stripped.slice(start).toLowerCase();
+    return DANGEROUS_SCHEMES.some(scheme => trimmed.startsWith(scheme));
+}
+
 // Strip the mount base off a FULL browser path to recover the app's root-relative `path` var (the
 // inverse of mountUrl; the client twin of SsrRenderer.StripBase). "/apps/todo/notes/2" with base
 // "/apps/todo" → "/notes/2"; "/apps/todo" → "/". Identity when root-mounted, or when the path does
@@ -523,11 +546,20 @@ function applyNode(node: ChildNode, child: ExecValue): void {
 
 // Scalar attributes become DOM attributes; checkbox/value get special handling so the
 // live input reflects the model. data-key is managed by applyNode, never wiped here.
+//
+// Two XSS guards live here, the client twin of SsrRenderer.AppendCodeAttribute (the SSR edge; that
+// scenario file is the spec, this mirrors it):
+//  - An `on*` event-attribute name with a SCALAR value is dropped — a real handler is always a `fn`
+//    (the `v.type === "fn"` skip above already excludes it), so a scalar there can only be an
+//    injection (`<div onclick={db.evil}>`).
+//  - href/src is scheme-checked AFTER mountUrl (same reasoning as the SSR edge: a mount-prefixed
+//    root-relative path never carries a scheme, so only a raw absolute value can trip it).
 function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
     const want = new Set<string>();
     for (const [name, result] of Object.entries(tag.attributes)) {
         const v = result.value;
         if (v.type === "fn" || v.type === "sysFn" || v.type === "object" || v.type === "array") continue;
+        if (isEventAttribute(name)) { el.removeAttribute(name); continue; }
         const raw = v.type === "null" ? null : (v as ExecInt | ExecBool | ExecText).value;
 
         if (tag.name === "input" && name === "checked") {
@@ -553,7 +585,9 @@ function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
         // A navigational URL attribute (href/src) whose value is root-relative is mount-prefixed — the
         // client twin of SsrRenderer's edge prefixing, so the hydrated link matches the SSR one (the app
         // wrote `/notes/2`, both edges emit `/apps/todo/notes/2`). Identity when root-mounted.
-        const out = raw === true ? "" : (name === "href" || name === "src") ? mountUrl(String(raw)) : String(raw);
+        const isUrlAttr = name === "href" || name === "src";
+        const out = raw === true ? "" : isUrlAttr ? mountUrl(String(raw)) : String(raw);
+        if (isUrlAttr && hasDangerousScheme(out)) { el.removeAttribute(name); continue; }
         el.setAttribute(name, out);
         want.add(name);
     }

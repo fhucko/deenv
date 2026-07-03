@@ -182,3 +182,100 @@
     And the rendered HTML does not contain '<option value="r" selected>'
     And the rendered HTML does not contain '<select class="pick" value='
 
+  # Two XSS sinks at the attribute-emit chokepoint (AppendCodeAttribute): a `javascript:`-scheme
+  # href/src is a clickable script URL even though HtmlEncode has no special characters to escape
+  # there, and a STRING value on an `on*` attribute renders an inline handler no legitimate binding
+  # would ever produce (real handlers are `fn` values, wired client-side, never scalars here). Both
+  # values are seeded via initialData so they flow through the real Code→attribute path, not a
+  # template literal — proving the guard fires on real data, not just a hardcoded string.
+  @milestone-code @single-user
+  Scenario: A javascript: href is neutralized
+    Given the code instance:
+      """
+      types
+          Db
+              link text
+              safeLink text
+
+      initialData
+          Db 1
+              link: "javascript:alert(1)"
+              safeLink: "/notes/2"
+
+      ui
+          fn render()
+              return <div>
+                  <a href={db.link}>
+                      "Click me"
+                  <a href={db.safeLink}>
+                      "Safe link"
+      """
+    When the page at "/" is rendered
+    Then the rendered HTML does not contain "javascript:alert(1)"
+    And the rendered HTML contains '<a href="/notes/2">Safe link</a>'
+    And the rendered HTML contains '<a>Click me</a>'
+
+  @milestone-code @single-user
+  Scenario: A string onclick attribute is dropped
+    Given the code instance:
+      """
+      types
+          Db
+              evil text
+
+      initialData
+          Db 1
+              evil: "alert(1)"
+
+      ui
+          fn render()
+              return <div onclick={db.evil}>
+                  "hi"
+      """
+    When the page at "/" is rendered
+    Then the rendered HTML does not contain "onclick"
+
+  # The client-twin proof (refreshAttributes in ui.ts): the SSR scenario above proves the string
+  # never leaves the server; this proves the HYDRATED DOM (post client-side reconcile) never carries
+  # it either — a real browser, not just the C# SSR string, so a guard applied only on the SSR edge
+  # and silently missing on the client twin would still show green on the SSR scenario but fail here.
+  @milestone-code @single-user
+  Scenario: A javascript: href is neutralized in the hydrated DOM
+    Given the code instance is served in a browser:
+      """
+      types
+          Db
+              link text
+
+      initialData
+          Db 1
+              link: "javascript:alert(1)"
+
+      ui
+          fn render()
+              return <a class="evil-link" href={db.link}>
+                  "Click me"
+      """
+    When I open "/"
+    Then the element ".evil-link" has no "href" attribute
+
+  @milestone-code @single-user
+  Scenario: A string onclick attribute is dropped in the hydrated DOM
+    Given the code instance is served in a browser:
+      """
+      types
+          Db
+              evil text
+
+      initialData
+          Db 1
+              evil: "alert(1)"
+
+      ui
+          fn render()
+              return <div class="evil-div" onclick={db.evil}>
+                  "hi"
+      """
+    When I open "/"
+    Then the element ".evil-div" has no "onclick" attribute
+
