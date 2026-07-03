@@ -1,0 +1,165 @@
+@milestone-13
+Feature: Structural identity-diff + rename-safe forward publish
+  Publish now diffs the target's STAMPED commit against the design's HEAD commit by endpoint IDENTITY
+  (the M13 slice-2 idMap caches), not by name: a rename reads as a rename, so a renamed prop/type carries
+  its data through a deploy instead of reseeding it under the new name (the pre-slice behaviour). The
+  target's log gets exactly ONE new entry — a boundary-marked, materialized changeset — so its history is
+  PRESERVED across the publish (not truncated/re-baselined, unlike the unversioned migrate path). See
+  DECISIONS.md "App versioning — the full design (M13 clump)" §3-4 and docs/plans/versioning-slices.md
+  slice 4.
+
+  Background:
+    Given a versioned designer instance holding a design with a type "Item" and a custom render
+    And a target instance addressed by an id, stamped to the design's baseline commit
+
+  # ── the headline: a rename carries data ──────────────────────────────────────────────────────────
+  Scenario: Renaming a prop in the designer carries the target's data through a publish
+    Given the target holds an "Item" labelled "Keep me"
+    And the design's "Item" prop "label" is renamed to "title"
+    And the design is committed with message "rename label to title"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the target's published "Item" reads "title" as "text" "Keep me"
+    And the target's "Item" has no stored "label" value
+    # proves identity, not coincidence: an unrelated fresh reseed would show the DEFAULT, not the kept value
+    And the kept value is not the schema's default for "title"
+
+  Scenario: Renaming a type carries its extent and every reference to it
+    Given the target holds an "Item" labelled "Keep me"
+    And the design's type "Item" is renamed to "Product"
+    And the design is committed with message "rename Item to Product"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the target's "Product" extent holds an object labelled "Keep me"
+    And every reference to the renamed type in the target now points at "Product"
+
+  # ── the boundary entry: exactly one, history preserved, replay reproduces head ───────────────────
+  Scenario: Publish appends exactly one boundary-marked entry and replay reproduces the post-publish head
+    Given the target holds an "Item" labelled "Keep me"
+    And the target's own log line count is remembered
+    And the design's "Item" prop "label" is renamed to "title"
+    And the design is committed with message "rename for boundary proof"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the target's log grew by exactly one entry
+    And the target's newest log entry carries a boundary marker for that commit
+    And the target's genesis is unchanged by the publish
+    And the target's log fsck holds
+    And replaying the target's log from genesis to head reproduces the post-publish snapshot
+
+  # ── parity with the existing non-destructive apply (adds / removes / conversions / reshape) ──────
+  # A same-id, NON-renamed add/remove is ALSO an identity-diffed op (Renames aside, the diff reports it in
+  # Adds/Removes exactly the same way) — so this proves the versioned path still carries what the earlier
+  # non-destructive-apply slices already proved, not just renames. The design first COMMITS a "note" field
+  # (matching a value the target already holds, seeded directly under that intermediate schema), THEN
+  # drops "note" and adds "motto" in a second commit — the removal/addition the publish under test carries.
+  Scenario: A published add and a removed field both still carry/default data through the versioned path
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds a "note" field to "Item"
+    And the design is committed with message "add note"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the target's "Item" has "note" set to "scratch"
+    And the design adds a "motto" field to "Item"
+    And the design's "Item" field "note" is removed
+    And the design is committed with message "drop note, add motto"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the target's published "Item" reads "motto" defaulted to ""
+    And the target's "Item" has no stored "note" value
+    And the target's "Item" still reads "label" as "text" "Keep me"
+
+  # ── destructive ops are flagged loudly, but still applied ────────────────────────────────────────
+  # Mirrors the add/remove parity scenario's shape: the design first COMMITS a "qty" field typed text
+  # (matching a genuinely unconvertible value seeded directly under that schema), THEN retypes it to int
+  # AND removes "label" in a second commit — the same-id conversion/removal the publish under test carries.
+  Scenario: A removed prop and an unconvertible cell are flagged as destructive in the report
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds a "qty" field to "Item"
+    And the design is committed with message "add qty as text"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the target's "Item" has "qty" set to "abc-not-a-number"
+    And the design's "Item" field "qty" is retyped to "int"
+    And the design's "Item" field "label" is removed
+    And the design is committed with message "destructive changes"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the publish report flags "label" as a removed field
+    And the publish report flags the "qty" cell as unconvertible
+    And the target's published "Item" reads "qty" as "int" "0"
+
+  # ── dry-run changes nothing ───────────────────────────────────────────────────────────────────────
+  Scenario: Dry-run reports the same plan and changes nothing
+    Given the target holds an "Item" labelled "Keep me"
+    And the target's own log line count is remembered
+    And the design's "Item" prop "label" is renamed to "title"
+    And the design is committed with message "dry run rename"
+    When the designer dry-runs a publish of the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the dry-run reply reports a rename from "label" to "title"
+    And the target app document was never republished
+    And the target's log did not grow
+    And the target's "Item" still reads "label" as "text" "Keep me"
+    And the target was not stamped by the dry run
+    And the target instance was not restarted
+
+  # ── uncommitted drift is reported, and never itself part of what gets published ──────────────────
+  # Publish always deploys the design's COMMITTED head, never its live working copy — so an uncommitted
+  # edit is, by construction, never published. This proves the operator is TOLD about it (a report field),
+  # not left to assume the publish silently included their unsaved change: here the design was committed
+  # once (carrying an already-published rename), then edited again WITHOUT a second commit — publishing
+  # deploys the FIRST commit's content (a no-op relative to the target, already published) while flagging
+  # that the live working copy has drifted past it.
+  Scenario: Uncommitted working-copy drift is reported alongside a normal publish of the committed head
+    Given the target holds an "Item" labelled "Keep me"
+    And the design's "Item" prop "label" is renamed to "title"
+    And the design is committed with message "carries the rename"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the design's "Item" prop "title" is renamed to "heading" but left uncommitted
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the publish report flags uncommitted drift
+    And the publish report shows no renames
+    And the target's "Item" still reads "title" as "text" "Keep me"
+
+  # ── unstamped (pre-versioning) instance: name-match fallback once, then stamped ───────────────────
+  # First publish is a NAME MATCH (the design's field is still called "label", matching the target's
+  # already-deployed field of the same name) — the fallback's by-name apply is lossless HERE because the
+  # names agree; it stamps the target to that commit. THEN the design renames the field — the SECOND
+  # publish is now identity-diffed against the fresh stamp, so it must carry "Keep me" through the rename
+  # with no loss (the fallback itself is never rename-safe by construction — it is the ONE-TIME bridge
+  # into the identity-diffed steady state, proven correct precisely because it never has to survive one).
+  Scenario: An unstamped instance publishes via name-match fallback once, then is rename-safe on the next publish
+    Given a target instance addressed by an id, holding an "Item" labelled "Keep me", never stamped
+    And the design is committed with message "first publish after fallback"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the publish report used the name-match fallback
+    And the target was stamped to the design's head commit
+    And the target's published "Item" reads "label" as "text" "Keep me"
+    Given the design's "Item" prop "label" is renamed to "title"
+    And the design is committed with message "second publish is rename-safe"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the publish report did not use the name-match fallback
+    And the target's published "Item" reads "title" as "text" "Keep me"
+
+  # ── adoption mints a baseline commit; a matching instance is stamped to it ────────────────────────
+  # Adoption reads a hosted instance's OWN app.deenv to build the Design (M13 slice 3); once adopted, that
+  # SAME instance's app document canonically equals the design's freshly-minted baseline commit text — so
+  # it is the natural, minimal "matching instance" the stamping half targets, with no extra fixture needed.
+  Scenario: Adoption mints a baseline commit and stamps the instance it was adopted from
+    Given a kernel booted from the committed designer and the committed todo app
+    Then the todo design was adopted with a baseline commit whose parent is empty
+    And the todo instance's registry entry is stamped to that baseline commit
+
+  # ── a draft staged before a publish is rejected afterward ────────────────────────────────────────
+  Scenario: A draft staged before a publish is rejected afterward with a clear reload message
+    Given the target holds an "Item" labelled "Keep me"
+    And a client loaded the target's "Item" and staged an edit at that base version
+    And the design's "Item" prop "label" is renamed to "title"
+    And the design is committed with message "publish while a draft is open"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    When the stale client commits its staged edit to the target
+    Then the target instance rejects the stale commit with a message mentioning "reload"
+    And the target's published "Item" reads "title" as "text" "Keep me"

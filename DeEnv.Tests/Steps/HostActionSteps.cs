@@ -205,6 +205,11 @@ public sealed class HostActionSteps
     private int _recordedDesignId;
     private bool _recordInvoked;
 
+    // M13 slice 4 — a bare in-memory versioning stamp (targetId → the publish's stamped commitId). Every
+    // scenario in THIS file targets an unstamped instance (none commits before publishing), so this stays
+    // empty for them; Publish.feature exercises the real registry-persisted stamp.
+    private readonly Dictionary<int, int> _publishedCommitIds = new();
+
     private string _reply = "";
 
     // ── Given: a designer instance holding a design ─────────────────────────────
@@ -644,6 +649,16 @@ public sealed class HostActionSteps
                 _renamedId = id;
                 _renamedName = name;
                 _renameInvoked = true;
+                return Task.CompletedTask;
+            },
+            // M13 slice 4: every scenario here targets an UNSTAMPED instance (none of these scenarios
+            // author a commit before publishing), so publish always takes the fallback path — a bare
+            // in-memory stamp that starts empty is sufficient (Publish.feature drives the real
+            // read/write-through-the-registry path where stamping persistence actually matters).
+            readPublishedCommitId: id => _publishedCommitIds.GetValueOrDefault(id),
+            stampPublishedCommit: (id, commitId) =>
+            {
+                _publishedCommitIds[id] = commitId;
                 return Task.CompletedTask;
             });
         // A WS session carrying the chosen principal — host-action authorization decides over it (the

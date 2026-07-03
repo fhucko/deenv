@@ -19,8 +19,13 @@ public interface IHostActions
     // Run the named host action with its raw arguments (the Code call's evaluated args, as a
     // JSON array on the wire). Throws on any failure — an unknown action, a bad argument, or
     // the action's own rejection (e.g. an invalid design) — and WsHandler surfaces the message
-    // to the client as a reject. Returns normally on success.
-    void Run(string action, JsonElement args);
+    // to the client as a reject.
+    //
+    // Returns a structured REPORT object for an action that produces one (M13 slice 4 — `publish`'s
+    // identity-diff plan/outcome: applied/dryRun/renames/adds/removes/conversions/…), serialized onto
+    // the hostAction reply's `report` field; null (every OTHER action) means the plain `{ ok:true }`
+    // reply, unchanged. This is the ONE approved wire widening for this slice — nothing else changes.
+    object? Run(string action, JsonElement args);
 }
 
 // The reject-everything seam. Two uses: (1) a host WITHOUT a kernel (TestInstanceServer, a bare
@@ -32,7 +37,7 @@ public interface IHostActions
 // real KernelHostActions only for the design host (KernelHost.HostActionsFor).
 public sealed class NoHostActions(string? reason = null) : IHostActions
 {
-    public void Run(string action, JsonElement args) =>
+    public object? Run(string action, JsonElement args) =>
         throw new InvalidOperationException(
             $"Host action '{action}' is unavailable — {reason ?? "this instance is not hosted by a kernel"}.");
 }

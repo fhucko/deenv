@@ -144,7 +144,11 @@ public sealed class KernelHost(
             recordDesign: (targetId, designId) => SetDesignAsyncById(targetId, designId, registryPath),
             // restart re-reads the updated schema+data from disk and hot-swaps the hosted instance.
             restartInstance: id => RestartAsync(id),
-            renameInstance: (id, name) => RenameAsync(id, name, registryPath));
+            renameInstance: (id, name) => RenameAsync(id, name, registryPath),
+            // M13 slice 4 — the versioning stamp: read the target's current PublishedCommitId (null =
+            // unstamped) and persist a NEW one after a successful versioned publish.
+            readPublishedCommitId: id => ReadPublishedCommitId(id, registryPath),
+            stampPublishedCommit: (id, commitId) => StampPublishedCommitAsync(id, commitId, registryPath));
 
     // Resolve an instance id → the live hosted instance and delete it. An id matching no instance is a
     // clear reject before any work. Every instance is deletable now.
@@ -188,6 +192,26 @@ public sealed class KernelHost(
                 e.Id == instance.Spec.Id ? e with { DesignId = designId } : e)]));
 
         MirrorInstanceSetDesign(instance.Spec.Id, designId);
+    }
+
+    // The instance's CURRENT versioning stamp (M13 slice 4 — RegistryEntry.PublishedCommitId): null =
+    // unstamped (a pre-versioning instance, or one whose entry no longer exists — defensive). Read fresh
+    // from kernel.json (not the in-memory spec, which carries no stamp) — the same read-the-file pattern
+    // every registry-consulting host action already uses.
+    public static int? ReadPublishedCommitId(int instanceId, string registryPath) =>
+        RegistryReader.Read(registryPath).Instances
+            .FirstOrDefault(e => e.Id == instanceId)?.PublishedCommitId;
+
+    // Persist the instance's NEW versioning stamp after a successful versioned publish — a plain
+    // read-modify-write of kernel.json (single-operator, like every other registry mutation here). No
+    // in-memory spec field to update (PublishedCommitId is registry-only bookkeeping, read fresh by
+    // ReadPublishedCommitId whenever a publish needs it — unlike DesignId, nothing else consults it).
+    public static Task StampPublishedCommitAsync(int instanceId, int commitId, string registryPath)
+    {
+        var stored = RegistryReader.Read(registryPath);
+        RegistryWriter.Write(registryPath, new Registry(
+            [.. stored.Instances.Select(e => e.Id == instanceId ? e with { PublishedCommitId = commitId } : e)]));
+        return Task.CompletedTask;
     }
 
     // Resolve each registry entry to a hosting spec: the schema/data paths are derived PURELY from the
@@ -461,7 +485,7 @@ public sealed class KernelHost(
             ReconcileInstancesSet(store, InstanceTuples(designIdRemap));
         }
 
-        EnsureMainBranches(store);
+        EnsureMainBranches(store, specs, registryPath);
     }
 
     private static readonly IReadOnlyDictionary<int, int> EmptyRemap = new Dictionary<int, int>();
@@ -535,15 +559,25 @@ public sealed class KernelHost(
         }
     }
 
-    // Ensure every Design (in `db.designs`) has a `main` Branch (invariant 5, M13 slice 3) — create-if-
-    // missing, idempotent: a Design that already has ANY Branch named "main" is left untouched (never
-    // recreated/reset). `head` starts EMPTY (null) — no adoption commit mints in this slice (a design
-    // freshly adopted from a file has no commit history yet; slice 4 decides whether adoption itself
-    // should mint a baseline commit). `workingCopy` points at the Design itself (this slice's lean shape —
-    // see docs/plans/versioning-slices.md slice 3: "at this slice the working copy IS the design row").
-    private static void EnsureMainBranches(IInstanceStore store)
+    // Ensure every Design (in `db.designs`) has a `main` Branch WITH a head — invariant 5 (M13 slice 3),
+    // extended by slice 4's ADOPTION BASELINE COMMIT: create-if-missing, idempotent (a Design that already
+    // has a `main` Branch — WITH or WITHOUT a head — is left untouched; a branch's head, once set, is never
+    // overwritten here). A design that gets a FRESH branch also gets a BASELINE Commit (message "Adopted",
+    // no parent) — the diff anchor slice 4's publish needs (a target can only be diffed against a
+    // PREVIOUSLY-COMMITTED state; without a baseline, every adopted design's first publish would have
+    // nothing to diff from). `workingCopy` points at the Design itself (this slice's lean shape — see
+    // docs/plans/versioning-slices.md slice 3: "at this slice the working copy IS the design row").
+    //
+    // Stamping (slice 4's second half): an instance whose OWN app.deenv canonically equals the baseline's
+    // printed text (parse+reprint BOTH sides — never a raw-byte compare, since whitespace/section-order
+    // artifacts from a hand-edited file must not defeat the match) is stamped to that baseline commit in
+    // the registry — so its FIRST real publish after this boot is already identity-diffed, not a fallback.
+    // An instance whose text does NOT match (a design edited since that instance last ran, or one with no
+    // matching instance at all) is left unstamped; its first publish uses the one-time name-match fallback.
+    private static void EnsureMainBranches(IInstanceStore store, IReadOnlyList<InstanceSpec> specs, string registryPath)
     {
         if (store.ReadNode(NodePath.Root.Field("branches")) is not SetValue branchesSet) return; // pre-slice-3 meta (a test fixture) — nothing to ensure
+        var commitsSetId = (store.ReadNode(NodePath.Root.Field("commits")) as SetValue)?.Id;
         var designs = store.ReadExtent("Design");
         var existingBranches = store.ReadExtent("Branch");
 
@@ -558,14 +592,76 @@ public sealed class KernelHost(
         {
             if (designIdsWithMainBranch.Contains(designId)) continue;
 
-            var fields = new Dictionary<string, NodeValue>
+            var branchId = store.CreateObject("Branch", new ObjectValue(new Dictionary<string, NodeValue>
             {
                 ["name"] = new TextValue("main"),
-            };
-            var branchId = store.CreateObject("Branch", new ObjectValue(fields));
+            }));
             store.AddToSet(branchesSet.Id, branchId);
             store.WriteReference(branchId, "workingCopy", designId, "Design");
-            // `head` stays unset (empty) — no commit exists yet for a freshly-adopted or pre-slice-3 design.
+
+            // No `db.commits` set at all (a pre-slice-3 test meta) → no baseline to mint; head stays unset,
+            // matching the original pre-baseline behavior for such a fixture.
+            if (commitsSetId is not { } setId) continue;
+
+            var design = store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()));
+            if (design is null) continue; // defensive — designs came from ReadExtent moments ago
+            DesignSnapshot snapshot;
+            try { snapshot = SchemaBridge.Snapshot(design); }
+            catch (SchemaValidationException) { continue; } // an invalid design mints no baseline (nothing to commit)
+
+            // ONE atomic changeset — the Commit row + its design ref + the db.commits link + every idMap
+            // entry + the branch-head advance — mirroring sys.commitDesign's own atomicity (KernelHostActions
+            // .CommitDesign) exactly, so an adoption baseline is never observable half-written either.
+            const int commitTemp = -1;
+            var creates = new List<CommitCreate>
+            {
+                new(commitTemp, "Commit", new ObjectValue(new Dictionary<string, NodeValue>
+                {
+                    ["message"] = new TextValue("Adopted"),
+                    ["at"]      = new DateTimeValue(DateTimeOffset.UtcNow),
+                    ["logSeq"]  = new IntValue(store.CurrentVersion),
+                    ["text"]    = new TextValue(snapshot.Text),
+                })),
+            };
+            var mutations = new List<CommitMutation>
+            {
+                new RefLinkMutation(commitTemp, "design", designId, "Design"),
+                new SetLinkMutation(setId, commitTemp),
+            };
+            foreach (var (path, id) in snapshot.IdMap)
+                mutations.Add(new DictWriteMutation(commitTemp, "idMap", new TextValue(path), new IntValue(id)));
+            mutations.Add(new RefLinkMutation(branchId, "head", commitTemp, "Commit"));
+            // `parent` stays unset — a baseline commit is the root of its design's history.
+
+            var result = store.CommitBatch(creates, mutations);
+            var commitId = result.Creates.Single().RealId;
+
+            StampMatchingInstance(snapshot.Text, commitId, specs, registryPath);
+        }
+    }
+
+    // Stamp any hosted instance whose app.deenv CANONICALLY equals the baseline's printed text to the
+    // baseline commit — comparing CANONICAL forms (parse THEN reprint both sides, via the SAME
+    // AppPrint/InstanceDescriptionLoader pipeline every publish already goes through), never raw bytes, so
+    // a hand-edited file with different whitespace/section order still matches. An unreadable/unparseable
+    // instance file is skipped (never stamped) — a broken file cannot be canonicalized, and boot-time
+    // per-instance failure handling (StartAsync's own try/catch) is where that gets reported loudly.
+    private static void StampMatchingInstance(
+        string baselineText, int commitId, IReadOnlyList<InstanceSpec> specs, string registryPath)
+    {
+        string? baselineCanonical = null;
+        foreach (var spec in specs)
+        {
+            if (!File.Exists(spec.SchemaPath)) continue;
+            string canonical;
+            try { canonical = AppPrint.Print(InstanceDescriptionLoader.LoadFile(spec.SchemaPath)); }
+            catch { continue; } // unreadable instance file — never stamped, reported (loudly) elsewhere at boot
+            baselineCanonical ??= AppPrint.Print(InstanceDescriptionLoader.Load(baselineText));
+            if (canonical != baselineCanonical) continue;
+
+            var stored = RegistryReader.Read(registryPath);
+            RegistryWriter.Write(registryPath, new Registry(
+                [.. stored.Instances.Select(e => e.Id == spec.Id ? e with { PublishedCommitId = commitId } : e)]));
         }
     }
 

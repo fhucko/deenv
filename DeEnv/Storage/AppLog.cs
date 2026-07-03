@@ -22,13 +22,34 @@ namespace DeEnv.Storage;
 // guard already stamps) — so the log's seq and the store's version are the same counter by construction; a
 // batch that bumps Version by more than one still emits exactly one entry (its final seq), which is why
 // entry seqs are monotonic but may have GAPS relative to a naive per-write count.
+//
+// `Boundary` (M13 slice 4, additive — absent on every ordinary entry) marks a VERSIONED PUBLISH: the one
+// log entry that materializes a whole schema-boundary changeset (an identity-diff apply — renames, adds,
+// removes, conversions, reshapes — see DesignDiff/JsonFileInstanceStore.ApplyPublishBoundary). Replay does
+// not interpret it (a boundary entry's Writes are ordinary LogWrites, applied exactly like any other
+// entry's — no new replay semantics); it exists purely so a reader (fsck's caller, a future history UI)
+// can POINT AT the moment a schema changed without guessing from the writes' shape.
 public sealed record LogEntry(
     int Seq,
     DateTimeOffset At,
     int? Who,
     int? MsgId,
     int NextId,
-    List<LogWrite> Writes);
+    List<LogWrite> Writes,
+    BoundaryMarker? Boundary = null);
+
+// Which design commit a boundary entry's changeset was materialized from — the (design, commit) pair a
+// history UI would use to explain "the schema changed here, to this commit."
+public sealed record BoundaryMarker(int DesignId, int CommitId);
+
+// The outcome of JsonFileInstanceStore.ApplyPublishBoundary: whether it wrote anything (an empty diff is a
+// legitimate no-op — nothing to carry), plus the destructive fallout a caller must surface loudly —
+// "TypeName/id.prop" cells that could not be converted (defaulted instead) and "TypeName/id.prop" cells
+// whose cardinality reshape this slice does not support (left as-is; same fallback the non-boundary apply
+// has). Never itself a failure — a boundary apply always SUCCEEDS at carrying what it can; these lists are
+// what the publish report calls out as loud, not blocking.
+public sealed record BoundaryApplyResult(
+    bool Applied, IReadOnlyList<string> UnconvertibleCells, IReadOnlyList<string> UnsupportedReshapes);
 
 // The genesis snapshot: the document as it stood BEFORE the first logged entry, written once (frozen) the
 // first time any mutating store method runs. GenesisSeq is the store version genesis was taken at (0 for a

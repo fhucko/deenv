@@ -192,10 +192,15 @@ public sealed record RefetchResponse
     public required JsonNode State { get; init; }
 }
 
+// `Report` (M13 slice 4, additive — the ONE approved wire widening this slice makes) carries a structured
+// plan/outcome object for an action that produces one (today: `publish`'s identity-diff report); omitted
+// (null) for every other action, so the reply is byte-identical to before for create/delete/clone/rename/
+// setDesign/commitDesign. IHostActions.Run's return value flows straight through — see its own doc.
 public sealed record HostActionResponse
 {
     public string Op => "hostAction";
     public bool Ok => true;
+    public object? Report { get; init; }
 }
 
 public sealed record AckRemapResponse
@@ -1029,9 +1034,9 @@ public sealed class WsHandler
             throw new InvalidOperationException(
                 $"Access denied: host action '{action}' requires an authorized operator (a `sys` access rule).");
 
-        _hostActions.Run(action, args); // throws on failure → caught as { error }
+        var report = _hostActions.Run(action, args); // throws on failure → caught as { error }
 
-        return Serialize(new HostActionResponse());
+        return Serialize(new HostActionResponse { Report = report });
     }
 
     // Index every persisted object in a loaded graph by its intrinsic id (for resolving

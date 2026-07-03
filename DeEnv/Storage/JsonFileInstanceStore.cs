@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using DeEnv.Designer;
 using DeEnv.Instance;
 
 namespace DeEnv.Storage;
@@ -1003,6 +1004,213 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         var basis = doc.NextId != 0 ? doc.NextId : MaxExtentId(doc);
         doc.NextId = basis + 1;
         return doc.NextId;
+    }
+
+    // ── the versioned publish boundary entry (M13 slice 4) ───────────────────────────
+    //
+    // Apply a Designer.DesignDiff's identity-diff ops DIRECTLY to the target's CURRENT (pre-publish) data
+    // file, then append ONE new LogEntry (boundary-marked) to the target's EXISTING log — genesis
+    // untouched, prior history preserved (replacing slice-1's delete-log-on-migrate re-baseline for this
+    // VERSIONED path only; the unversioned hand-edit boot path — an unstamped instance's one-time
+    // name-match fallback, or the M4 designer/export bridge — keeps its current WriteDocument/
+    // MigrateTowardSchema re-baseline behavior). This is the ONLY apply the versioned publish path runs —
+    // deliberately NOT layered on top of a separate by-name WriteDocument pass: the diff is computed BY
+    // IDENTITY between the two commits, so it already covers every add/remove/convert/reshape whose id was
+    // present in both commits, renamed or not (a same-id, same-name prop with a changed type/cardinality is
+    // reported in Conversions/CardinalityChanges exactly like a renamed one is in Renames) — running a
+    // by-name pass FIRST would be actively WRONG here: MigrateTowardSchema matches by the NEW schema's
+    // names, so it would see a renamed prop's OLD name as "removed" and DROP its value before this method
+    // ever got a chance to carry it across to the new name.
+    //
+    // OFFLINE — the instance is unmounted for the duration (its store is not live), so this loads/rewrites
+    // the target's data file directly, exactly like MigrateTowardSchema. Every write is recorded as a
+    // LogWrite in the SAME closed union the live store uses, so replay needs no new semantics: a prop
+    // rename is a per-object drop-old-key (FieldWrite …→null) + set-new-key (FieldWrite null→…) pair; a
+    // type rename is a per-object Remove+Create AT THE SAME ID into the re-keyed extent (replay's Create
+    // inserts literally, at the id it names) followed by refreshing every StoredRef that pointed at the old
+    // type name — a field/root ref directly (FieldWrite/RootWrite to the same id under the new type name)
+    // and a SET MEMBER indirectly (SetUnlink+SetLink — replay's SetLink recomputes a member's StoredRef
+    // TypeName off the CURRENT extent at apply time, so relinking after the rename's Remove+Create already
+    // yields the new name with no new replay case). Order inside the entry matters and is fixed here: type
+    // renames' Remove+Create pairs come FIRST, so every ref-refresh op that follows sees the re-keyed extent.
+    //
+    // A draft staged against an object this changeset touches is naturally caught by the EXISTING
+    // baseVersion guard on its NEXT commit (CommitBatch.RequireFresh — one store-wide version bump covers
+    // every object this boundary entry wrote), so no new staleness mechanism is needed for the "reload"
+    // behavior — the existing "Someone else changed this — reload…" rejection already fires.
+    //
+    // `targetDesc` is the TARGET commit's parsed description — the schema a conversion's `ToType` resolves
+    // against (an enum/password/leaf type name), via the SAME ConvertScalar/LeafTag/LeafBase helpers
+    // MigrateTowardSchema already uses. The base commit's description is not needed here: every op in
+    // `diff` already carries its OWN old/new declared names as plain strings.
+    //
+    // `dryRun` (M13 slice 4 publish preview): computes the EXACT same plan (every conversion attempted,
+    // every unconvertible/unsupported cell identified) but skips the two disk-touching side effects
+    // (SaveRaw + AppendLogEntry) — so a dry run changes NOTHING while still returning the real report,
+    // one code path for both (no second, drifting "preview" implementation of the same conversion rules).
+    internal static BoundaryApplyResult ApplyPublishBoundary(
+        string dataPath, DesignDiff diff, InstanceDescription targetDesc, BoundaryMarker boundary, bool dryRun = false)
+    {
+        var doc = LoadRaw(dataPath);
+        var writes = new List<LogWrite>();
+        var startVersion = doc.Version;
+
+        // ── type renames first (so every ref-refresh below sees the re-keyed extent) ──
+        foreach (var rename in diff.TypeRenames)
+        {
+            if (!doc.Extents.TryGetValue(rename.FromName, out var pool)) continue; // no data of this type — nothing to carry
+            var newPool = doc.Extents.TryGetValue(rename.ToName, out var existing) ? existing : new Dictionary<int, StoredObject>();
+            foreach (var (id, obj) in pool.ToList())
+            {
+                writes.Add(new Remove(id, obj));
+                var renamed = obj with { TypeName = rename.ToName };
+                writes.Add(new Create(id, rename.ToName, new Dictionary<string, StoredValue>(renamed.Fields)));
+                newPool[id] = renamed;
+            }
+            doc.Extents.Remove(rename.FromName);
+            doc.Extents[rename.ToName] = newPool;
+        }
+
+        // ── prop renames: per object of the (possibly just-renamed) owning type, drop the old key + set
+        //    the new one, carrying the SAME stored value across (identity — the whole point of this slice).
+        foreach (var rename in diff.PropRenames)
+        {
+            if (!doc.Extents.TryGetValue(rename.TypeName, out var pool)) continue;
+            foreach (var obj in pool.Values)
+            {
+                if (!obj.Fields.TryGetValue(rename.FromProp, out var value)) continue; // nothing stored under the old name
+                writes.Add(new FieldWrite(obj.Id, rename.FromProp, value, null));
+                writes.Add(new FieldWrite(obj.Id, rename.ToProp, null, value));
+                obj.Fields.Remove(rename.FromProp);
+                obj.Fields[rename.ToProp] = value;
+            }
+        }
+
+        // ── scalar conversions (identity-matched — a renamed-and-retyped prop lands here under its NEW
+        //    name, already relocated by the rename pass above) — same widening/narrowing rules
+        //    MigrateTowardSchema uses (ConvertScalar/LeafTag/LeafBase), resolved against the TARGET's
+        //    description (conv.ToType is one of ITS declared type names — enum/password/leaf alike) ──
+        var unconvertibleCells = new List<string>();
+        foreach (var conv in diff.Conversions)
+        {
+            if (!doc.Extents.TryGetValue(conv.TypeName, out var pool)) continue;
+            foreach (var obj in pool.Values)
+            {
+                if (obj.Fields.GetValueOrDefault(conv.PropName) is not StoredLeaf leaf) continue;
+                if (ScalarTag(leaf.Scalar) == LeafTag(conv.ToType, targetDesc)) continue; // already the new tag
+                if (IsUnsetOptionalLeaf(leaf.Scalar, conv.ToType, targetDesc)) continue; // unset stays unset
+                var converted = ConvertScalar(leaf.Scalar, conv.ToType, targetDesc);
+                var newLeaf = new StoredLeaf(converted ?? DefaultBase(LeafBase(conv.ToType, targetDesc)));
+                if (converted is null) unconvertibleCells.Add($"{conv.TypeName}/{obj.Id}.{conv.PropName}");
+                writes.Add(new FieldWrite(obj.Id, conv.PropName, leaf, newLeaf));
+                obj.Fields[conv.PropName] = newLeaf;
+            }
+        }
+
+        // ── cardinality reshapes (identity-matched, same-carried semantics as MigrateTowardSchema's) ──
+        var unsupportedReshapes = new List<string>();
+        foreach (var card in diff.CardinalityChanges)
+        {
+            if (!doc.Extents.TryGetValue(card.TypeName, out var pool)) continue;
+            foreach (var obj in pool.Values)
+            {
+                if (card.FromCardinality == Cardinality.Single && card.ToCardinality == Cardinality.Set
+                    && obj.Fields.GetValueOrDefault(card.PropName) is StoredRef objRef)
+                {
+                    var setId = MintCollectionId(doc);
+                    var newSet = new StoredSet(setId, new Dictionary<int, StoredValue> { [objRef.Id] = objRef });
+                    writes.Add(new FieldWrite(obj.Id, card.PropName, objRef, newSet));
+                    obj.Fields[card.PropName] = newSet;
+                }
+                else if (obj.Fields.ContainsKey(card.PropName))
+                {
+                    unsupportedReshapes.Add($"{card.TypeName}/{obj.Id}.{card.PropName}");
+                }
+            }
+        }
+
+        // ── removed props / types: drop the stored value (destructive — reported, still applied loudly) ──
+        foreach (var rem in diff.Removes)
+        {
+            if (!doc.Extents.TryGetValue(rem.TypeName, out var pool)) continue;
+            foreach (var obj in pool.Values)
+            {
+                if (!obj.Fields.TryGetValue(rem.PropName, out var old)) continue;
+                writes.Add(new FieldWrite(obj.Id, rem.PropName, old, null));
+                obj.Fields.Remove(rem.PropName);
+            }
+        }
+        foreach (var typeRem in diff.TypeRemoves)
+        {
+            if (!doc.Extents.TryGetValue(typeRem.TypeName, out var pool)) continue;
+            foreach (var (id, obj) in pool.ToList())
+                writes.Add(new Remove(id, obj));
+            doc.Extents.Remove(typeRem.TypeName);
+        }
+
+        // ── refresh every StoredRef.TypeName that pointed at a renamed type — root/field refs directly,
+        //    set members via SetUnlink+SetLink (replay recomputes TypeName off the NOW-re-keyed extent) ──
+        var renameMap = diff.TypeRenames.ToDictionary(r => r.FromName, r => r.ToName);
+        if (renameMap.Count > 0)
+        {
+            if (doc.Root is StoredRef rootRef && renameMap.TryGetValue(rootRef.TypeName, out var newRootType))
+            {
+                var newRoot = rootRef with { TypeName = newRootType };
+                writes.Add(new RootWrite(rootRef, newRoot));
+                doc.Root = newRoot;
+            }
+
+            foreach (var pool in doc.Extents.Values)
+                foreach (var obj in pool.Values)
+                    foreach (var name in obj.Fields.Keys.ToList())
+                        switch (obj.Fields[name])
+                        {
+                            case StoredRef fieldRef when renameMap.TryGetValue(fieldRef.TypeName, out var newType):
+                            {
+                                var newRef = fieldRef with { TypeName = newType };
+                                writes.Add(new FieldWrite(obj.Id, name, fieldRef, newRef));
+                                obj.Fields[name] = newRef;
+                                break;
+                            }
+                            case StoredSet set:
+                                foreach (var memberId in set.Members.Keys.ToList())
+                                    if (set.Members[memberId] is StoredRef memberRef
+                                        && renameMap.ContainsKey(memberRef.TypeName))
+                                    {
+                                        writes.Add(new SetUnlink(set.Id, memberId));
+                                        writes.Add(new SetLink(set.Id, memberId));
+                                        // The live in-memory value is refreshed directly (replay derives it
+                                        // from the extent — this keeps the in-memory doc consistent with
+                                        // what replay would independently reconstruct).
+                                        set.Members[memberId] = memberRef with { TypeName = renameMap[memberRef.TypeName] };
+                                    }
+                                break;
+                            case StoredDict dict:
+                                foreach (var key in dict.Entries.Keys.ToList())
+                                    if (dict.Entries[key] is StoredRef entryRef
+                                        && renameMap.TryGetValue(entryRef.TypeName, out var newEntryType))
+                                    {
+                                        var newEntryRef = entryRef with { TypeName = newEntryType };
+                                        writes.Add(new DictSet(dict.Id, key, entryRef, newEntryRef));
+                                        dict.Entries[key] = newEntryRef;
+                                    }
+                                break;
+                        }
+        }
+
+        // Nothing to carry (an empty diff, or every op found no data to touch) — leave the target's files
+        // and history completely untouched. A caller with a genuinely empty diff should not call this at
+        // all, but staying a no-op here keeps the method honest either way.
+        if (writes.Count == 0 || dryRun) return new BoundaryApplyResult(writes.Count > 0, unconvertibleCells, unsupportedReshapes);
+
+        doc.Version = startVersion + 1;
+        SaveRaw(dataPath, doc);
+
+        var (who, msgId) = StoreWriteContext.Get();
+        var entry = new LogEntry(doc.Version, DateTimeOffset.UtcNow, who, msgId, doc.NextId, writes, boundary);
+        AppendLogEntry(AppPaths.LogPathForDataPath(dataPath), entry);
+
+        return new BoundaryApplyResult(true, unconvertibleCells, unsupportedReshapes);
     }
 
     private static int MaxExtentId(StoreDoc doc)

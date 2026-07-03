@@ -28,7 +28,15 @@ namespace DeEnv.Kernel;
 // set) this instance currently runs — recorded by the IDE's Apply action (sys.setDesign) and read
 // back to pre-select the design dropdown. null means "no design chosen", and is omitted from
 // kernel.json (see RegistryJson.Options — WhenWritingNull).
-public sealed record RegistryEntry(int Id, string App, int? DesignId = null);
+//
+// `PublishedCommitId` (M13 slice 4) is the instance's VERSIONING STAMP — the design Commit its data was
+// last published FROM, the identity-diff's base endpoint for the NEXT publish. Absent (null, omitted from
+// kernel.json like DesignId) means UNSTAMPED — a pre-versioning instance (created before this slice, or a
+// hand-authored one never published through the versioned path). An unstamped instance's first VERSIONED
+// publish falls back to the existing by-NAME apply (SchemaBridge.WriteDocument) once, then stamps itself to
+// the commit it just published — every publish after that is rename-safe. The loader (RegistryReader) is
+// tolerant of its absence (an older kernel.json still reads).
+public sealed record RegistryEntry(int Id, string App, int? DesignId = null, int? PublishedCommitId = null);
 
 // The whole registry: the kernel-level shared ports (the app port + the asset port — addressing is by
 // path, so these are kernel-wide, not per-instance) plus the instances. `AppPort`/`AssetPort` default
