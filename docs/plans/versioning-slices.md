@@ -30,12 +30,13 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
 
 3. **`Commit`/`Branch` rows + `sys.commitDesign`.** Design history as ordinary data in the
    designer instance; host action captures head seq under the store lock, advances the branch tip.
-   **GATE (user sign-off before build): authority inversion** — `KernelHost.SyncDesignHost`
-   currently overwrites the `Design` row from `app.deenv` every boot; a committed design would be
-   clobbered. Options at that point: full inversion (boot = one-time adoption; app.deenv written by
-   publish) / non-clobbering merge-by-identity transition / gate behind the login-persistence flip.
-   **Plus:** the concrete `Commit`/`Branch` meta-type shapes are a meta-schema change → same
-   sign-off moment. Depends on 1.
+   **GATE RESOLVED — user approved the FULL authority inversion 2026-07-03:** design-data + its
+   commit history become the source of truth; `app.deenv` becomes a publish artifact (written BY
+   publish); boot-sync (`KernelHost.SyncDesignHost` / `DesignerSeed.Merge`) is demoted to one-time
+   adoption and stops overwriting the `Design` row thereafter. (Side effect: the designer's data
+   log stops being truncated at every boot — slice 1's Reset-on-boot-sync caveat ends here.)
+   **Remaining sign-off at build time:** the concrete `Commit`/`Branch` meta-type shapes (a
+   meta-schema change — propose before building). Depends on 1.
 
 4. **Structural diff + forward publish (the MVP payoff: rename-safe deploy).** Endpoint
    identity-diff between design commits (rename = same id → data carries; the gap
