@@ -80,6 +80,10 @@ doc over-claim. Escalate to `opus` for the highest-subtlety gates (publish/migra
 atomicity, merge engine, security) or when a sonnet review comes back shallow (no probing,
 ungrounded verdicts). Reconcile reviewer flags against decisions already settled in the
 conversation before relaying — don't re-litigate closed decisions.
+**Pin the reviewer's diff to the branch's merge-base commit** (`git diff <base>..HEAD`, base
+recorded at spawn time) or rebase before review — main can move during long builds, and a
+`diff main..HEAD` against moved main makes the reviewer refute skew as if it were the change
+(cost a full artifact-finding once, 2026-07-03).
 (memory `feedback_auto_review_after_slices`, `feedback_agent_tier_by_role`)
 
 ## 5. Land it

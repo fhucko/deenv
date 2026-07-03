@@ -91,16 +91,30 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    flip; the slice-1 log already records who). Slice-5 revisit flagged: app-identity vs
    working-copy anchoring once branches clone Design rows. Depends on 1.
 
-4. **Structural diff + forward publish (the MVP payoff: rename-safe deploy).**
-   SEQUENCING NOTE (from the shape decision): adding `Commit.migration` to the designer's own
-   schema is itself a `changed` apply, which under slice-1 rules truncates the designer's log —
-   slice 4 must land the log-preserving boundary-entry apply BEFORE its own designer-schema
-   addition, or slice-3 commits get wiped by the slice that was meant to preserve them. Endpoint
-   identity-diff between design commits (rename = same id → data carries; the gap
-   `MigrateTowardSchema` can't close today because the by-name projection drops identity); publish =
-   lock → migrate in-memory copy → ONE log entry (boundary marker + materialized changeset) →
-   epoch bump → remount. GATE: publish-preview wire shape, if any ships to the client. Depends on
-   2+3.
+4. **Structural diff + forward publish — DONE 2026-07-03** (main `e5c2566` + review fixes
+   `7b7afbd`; suite 668/668; Opus review BLOCK → all findings fixed, both-directions verified).
+   THE MVP PAYOFF LANDED: a rename carries data through a deploy. Shipped: `DesignDiff`
+   (endpoint identity-join over two commits' {text, idMap}; rename vs remove+add told apart by
+   id; honest double-report for renamed+retyped props); `ApplyPublishBoundary` — offline apply
+   appending ONE boundary-marked entry (`LogEntry.Boundary{designId, commitId}`, materialized
+   literal writes; type rename = same-id Remove+Create + ref refresh; genesis preserved; fsck +
+   cross-boundary replay proven); baseline commits at adoption + instance stamps via registry
+   `publishedCommitId` (canonical-match; one-time name-match fallback for unstamped instances);
+   publish = the design's HEAD commit only, drift reported; structured `PublishReport` +
+   `dryRun` on the hostAction reply (the approved wire gate); stale drafts reject via the
+   existing baseVersion guard. Review findings fixed: (1) WAL INVERSION — the apply wrote
+   snapshot-before-log (a deploy-time crash would brick the instance at boot); swapped, and the
+   new crash-window scenario forced out a coupled ctor flaw (boot validated the snapshot against
+   the NEW schema before tail-replay — now reconcile-then-validate, so publish-crash recovery
+   works across schema boundaries); (2) unsupported cardinality reshapes now DROP-to-new-shape-
+   default + report `unsupported`+`dropped` (was: unloadable store reported as applied; the old
+   value stays recoverable from the log); (3) a parse-every-committed-app-doc guard test (closes
+   the parallel-branch skew class a review artifact exposed). Residuals recorded: design-doc §4's
+   lock/reject-commits/queueing step DEFERRED (inherited single-operator concurrency; comment at
+   the call site); publish-crash-before-stamp re-derives an inert re-diff (guarded; explicit
+   idempotence test when crash-recovery hardens). The sequencing note is SATISFIED: boundary
+   entries exist, so the later `Commit.migration` designer-schema addition is safe. Semantic
+   `fn migrate` = a later slice. ✔
 
 5. **Branches + three-way structural merge (ctx-staged).** Lineage-keyed 3-way, per-meta-field
    policies (`order` auto-resolves; `name`/`type`/`cardinality` surface), merge rides ctx,

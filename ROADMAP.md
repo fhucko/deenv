@@ -407,9 +407,11 @@ DECISIONS.md.
   with WAL + genesis + boot replay + fsck, landed 2026-07-03, suite 628; slice 2 = the design
   snapshot builder — canonical text + name-path→id map, landed 2026-07-03, suite 634; slice 3 =
   Commit/Branch rows + `sys.commitDesign` + the AUTHORITY INVERSION (design-data is truth,
-  boot = one-time adoption, atomic single-entry commits), landed 2026-07-03, suite 645; next =
-  slice 4, structural diff + rename-safe publish — the MVP-visible payoff; mind the recorded
-  sequencing note: boundary-entry apply lands BEFORE `Commit.migration` is added).
+  boot = one-time adoption, atomic single-entry commits), landed 2026-07-03, suite 645; the
+  `locked` access keyword + duplicate-subject rejection landed alongside; **slice 4 = structural
+  diff + rename-safe publish with boundary log entries — THE MVP-VISIBLE PAYOFF — landed
+  2026-07-03, suite 668**; next = slice 5, branches + three-way structural merge; the
+  Commit-button UX slice (lockstep interpreter wiring) is also now unblocked).
 
   **MVP-critical substrate pulled forward — LANDED 2026-06-19/20.** A thin **non-destructive
   apply** — *data survives a schema change* — was built ahead of / interleaved with M11
@@ -417,11 +419,11 @@ DECISIONS.md.
   `SchemaBridge.WriteDocument` + `JsonFileInstanceStore.MigrateTowardSchema`): an apply PRESERVES
   data that still fits the new schema and carries it forward — additive (new field → default),
   removed-field (dropped), scalar **value conversion** on a type change (int↔text↔decimal, …;
-  unconvertible → default + reported), and **single→set** cardinality reshape. Only a **rename**
-  (a name change) still reseeds: detecting it needs to match props by INTRINSIC IDENTITY, which the
-  name-keyed schema does not carry — so rename rides **this milestone's structural diff** (match a
-  version against its parent by identity), not the thin substrate. This is *migration* (the
-  substrate), thinner than the full versioning below. See DECISIONS ("Data must survive schema changes").
+  unconvertible → default + reported), and **single→set** cardinality reshape. The rename gap this
+  paragraph parked is now CLOSED: as of M13 slice 4 (2026-07-03), a **versioned publish carries
+  renames by intrinsic identity** (the commit id-map supplies what the name-keyed schema drops);
+  the name-matching substrate remains only as the one-time fallback for instances that predate
+  their design's first commit. See DECISIONS ("Data must survive schema changes").
 
   **First slice:** in the self-hosted designer, *commit* the current schema-as-
   data as an immutable version (parent pointer → linear history) and *diff* a

@@ -32,6 +32,9 @@ position → grill → verdict. Settled vs open is marked per topic; roll-up lis
 - **Migrations forward-only.** Structural migrations derived at publish by endpoint identity-diff (never
   stored). Semantic `fn migrate` is the only stored migration. Backward = replay own log or
   `cloneInstance(id, atSeq)`; no down-scripts. Testing = fork disposable instances per candidate commit.
+  **Structural half IMPLEMENTED 2026-07-03 as slice 4** (DesignDiff + boundary-entry publish +
+  registry commit stamps; renames carry data; §4's lock/reject-commits step deferred — see the
+  slices doc). Semantic `fn migrate` still unimplemented.
 - **Commits are Figma-model snapshots** of the shared working copy (no per-user staging — say it loudly).
 - **Recovery.** Revert commit restores subtrees WITH identity; published data losses recover from the
   instance log (clone-at-seq now; "resurrection fills from history" later). Loss horizon = retention.
