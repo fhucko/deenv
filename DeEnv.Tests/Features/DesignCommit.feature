@@ -38,6 +38,16 @@ Feature: Design commits — Commit/Branch rows, sys.commitDesign, the authority 
     And the design's main branch head points at that commit
     And that commit's logSeq is strictly greater than the "first cut" commit's logSeq
 
+  # Review fix 3: the whole commit — Commit row + design/parent refs + db.commits link + every idMap
+  # dict entry + the branch-head advance — is ONE atomic CommitBatch, so the designer's append-only
+  # data log (slice 1) grows by EXACTLY ONE entry, and fsck/replay still holds (genesis→head == snapshot).
+  Scenario: A design commit is a single atomic changeset in the data log
+    Given the designer's own log line count is remembered before committing over the WS
+    When the designer commits that design with message "atomic cut" over the WS
+    Then the host action reply is ok
+    And the designer's log grew by exactly one entry
+    And the designer's log replays from genesis to the live snapshot
+
   Scenario: A client cannot edit a commit or move a branch head
     Given the designer already committed that design with message "first cut"
     When a client-path write to the commit's message field is attempted
@@ -46,6 +56,14 @@ Feature: Design commits — Commit/Branch rows, sys.commitDesign, the authority 
     When a client-path write to the branch's head field is attempted
     Then the write is denied
     And the branch's head is unchanged
+    # Review fix 3: the dict-write floor. A client addEntry / path-write into the immutable Commit's
+    # idMap dictionary is ALSO denied (the deferred dict-write gap let this through before the fix).
+    When a client addEntry into the commit's idMap is attempted
+    Then the write is denied
+    And the commit's idMap is unchanged
+    When a client-path write into the commit's idMap is attempted
+    Then the write is denied
+    And the commit's idMap is unchanged
 
   Scenario: Committing an invalid design fails cleanly
     Given a designer instance holding a design whose root is an object type with no props
@@ -79,6 +97,18 @@ Feature: Design commits — Commit/Branch rows, sys.commitDesign, the authority 
     When the kernel restarts from its persisted registry
     Then the design-host holds exactly one design labelled "todo"
     And the design-host still holds a design with id 13 labelled "todo"
+
+  # Review fix 2: adopting a genuinely-new app file into an EXISTING designer store whose mint counter
+  # has advanced past the file's kernel.json designId. AdoptInto mints a DIFFERENT id (it cannot pin one
+  # on a live store), so SyncDesignHost rewrites the registry AND remaps the Instance.design reference to
+  # the minted id — otherwise the instance's design would dangle at the stale kernel.json id.
+  @multi-user
+  Scenario: Adopting a new app whose designId is below the mint counter remaps the instance reference
+    Given a kernel booted from the committed designer, todo and crm apps plus a no-design app
+    And a new app instance is registered with a designId below the mint counter
+    When the kernel restarts from its persisted registry
+    Then the design-host adopted the new app's design at a minted id, not its stale designId
+    And the new app instance's stored design reference resolves to the adopted design
 
   @multi-user
   Scenario: Instances keep mirroring the registry across boots

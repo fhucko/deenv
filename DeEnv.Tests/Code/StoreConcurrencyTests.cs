@@ -57,4 +57,65 @@ public sealed class StoreConcurrencyTests
             if (File.Exists(genesisPath)) File.Delete(genesisPath);
         }
     }
+
+    // M13 slice 3 review fix 3: a CommitBatch carrying a DictWriteMutation (the server-side vocabulary
+    // sys.commitDesign uses to fold a Commit's idMap into the SAME atomic batch as the Commit's creation)
+    // applies ALL-OR-NONE and logs as EXACTLY ONE entry. Proven at the store level, independent of the
+    // designer wiring: create an object with a dict prop + upsert two dict entries on it in one batch, and
+    // assert (a) both entries persisted, (b) the append-only log grew by exactly one entry, (c) fsck holds
+    // (replay(genesis→head) == snapshot — so the create + both dict writes are one consistent changeset).
+    [Test]
+    public async Task A_commit_batch_with_dict_writes_applies_atomically_and_logs_one_entry()
+    {
+        var dataFile = Path.Combine(Path.GetTempPath(), "deenv-dictbatch-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var desc = InstanceDescriptionLoader.Load("""
+                types
+                    Db
+                        boxes set of Box
+                    Box
+                        tags dict of int by text
+                """);
+            var store = new JsonFileInstanceStore(dataFile, desc);
+            var logPath = AppPaths.LogPathForDataPath(dataFile);
+            var boxesSetId = ((SetValue)store.ReadNode(NodePath.Root.Field("boxes"))!).Id;
+
+            var linesBefore = File.Exists(logPath) ? File.ReadAllLines(logPath).Length : 0;
+
+            // ONE batch: mint a Box (tempId -1), link it into db.boxes, and upsert two `tags` dict entries
+            // ON THAT FRESH CREATE (addressed by its tempId — the owner isn't reachable by any path yet).
+            const int boxTemp = -1;
+            store.CommitBatch(
+                [new CommitCreate(boxTemp, "Box", new ObjectValue(new Dictionary<string, NodeValue>()))],
+                [
+                    new SetLinkMutation(boxesSetId, boxTemp),
+                    new DictWriteMutation(boxTemp, "tags", new TextValue("a"), new IntValue(11)),
+                    new DictWriteMutation(boxTemp, "tags", new TextValue("b"), new IntValue(22)),
+                ]);
+
+            // (a) both dict entries persisted on the created Box.
+            var box = store.ReadExtent("Box").Values.Single();
+            var tags = (DictionaryValue)box.Fields["tags"];
+            await Assert.That(tags.Entries.Count).IsEqualTo(2);
+            await Assert.That(((IntValue)tags.Entries[new TextValue("a")]).Value).IsEqualTo(11);
+            await Assert.That(((IntValue)tags.Entries[new TextValue("b")]).Value).IsEqualTo(22);
+
+            // (b) the whole batch is ONE log entry.
+            await Assert.That(File.ReadAllLines(logPath).Length).IsEqualTo(linesBefore + 1);
+
+            // (c) fsck: replay(genesis→head) reproduces the snapshot — the create + both dict writes form one
+            // internally-consistent changeset (a fresh store over the same files re-checks it too).
+            await Assert.That(((JsonFileInstanceStore)store).Fsck()).IsTrue();
+            await Assert.That(new JsonFileInstanceStore(dataFile, desc).Fsck()).IsTrue();
+        }
+        finally
+        {
+            if (File.Exists(dataFile)) File.Delete(dataFile);
+            var logPath = AppPaths.LogPathForDataPath(dataFile);
+            var genesisPath = AppPaths.GenesisPathForDataPath(dataFile);
+            if (File.Exists(logPath)) File.Delete(logPath);
+            if (File.Exists(genesisPath)) File.Delete(genesisPath);
+        }
+    }
 }

@@ -405,10 +405,12 @@ public sealed class KernelHost(
         // Build the instance tuples: one per hosted spec (every instance, with or without a design).
         // `App` is the display name; `Id` is the kernel runtime id; `DesignId` is the design reference
         // (0 = not-yet-hosted, carried as null here so the reference is omitted from the seed).
-        var instanceTuples = specs
-            .OrderBy(s => s.Id)
-            .Select(s => (s.App, RuntimeId: s.Id, DesignId: s.DesignId))
-            .ToList();
+        (string App, int RuntimeId, int? DesignId)[] InstanceTuples(IReadOnlyDictionary<int, int> designIdRemap) =>
+            specs
+                .OrderBy(s => s.Id)
+                .Select(s => (s.App, RuntimeId: s.Id,
+                    DesignId: s.DesignId is { } d && designIdRemap.TryGetValue(d, out var actual) ? actual : s.DesignId))
+                .ToArray();
 
         var description = InstanceDescriptionLoader.LoadFile(designHost.SchemaPath);
         var fresh = !File.Exists(designHost.DataPath) || new FileInfo(designHost.DataPath).Length == 0;
@@ -418,10 +420,11 @@ public sealed class KernelHost(
         {
             // The one-time full seed for a brand-new install — nothing exists yet, so InitialData/Reset
             // costs nothing (invariant 6). Every registered design is adopted at its kernel.json designId
-            // (the JSON-pool seed CAN pin an arbitrary id — see DesignerSeed.Build's doc). Still falls
-            // through to EnsureMainBranches below (invariant 5) — DesignerSeed.Build seeds Design/MetaType/
-            // MetaProp/Instance rows only, no Branch rows, so a freshly-seeded design needs one too.
-            store = new JsonFileInstanceStore(designHost.DataPath, description with { InitialData = DesignerSeed.Build(fileBacked, instanceTuples) });
+            // (the JSON-pool seed CAN pin an arbitrary id — see DesignerSeed.Build's doc), so no remap is
+            // needed here. Still falls through to EnsureMainBranches below (invariant 5) —
+            // DesignerSeed.Build seeds Design/MetaType/MetaProp/Instance rows only, no Branch rows, so a
+            // freshly-seeded design needs one too.
+            store = new JsonFileInstanceStore(designHost.DataPath, description with { InitialData = DesignerSeed.Build(fileBacked, InstanceTuples(EmptyRemap)) });
         }
         else
         {
@@ -430,24 +433,38 @@ public sealed class KernelHost(
             store = new JsonFileInstanceStore(designHost.DataPath, description);
             var seenDesignIds = store.ReadExtent("Design").Keys.ToHashSet();
 
+            // oldDesignId → the id the store ACTUALLY minted for the adopted design (only when they differ).
+            // Instance.design references must point at the minted id, not the kernel.json one — so the
+            // instances reconcile below reads its tuples' DesignId THROUGH this remap. (A crash between the
+            // AdoptInto store write and RewriteDesignIdInRegistry below re-adopts the file as a DUPLICATE on
+            // the next boot — the known crash-durability class, deferred deliberately, same as every other
+            // "store write then registry write" pair in the kernel.)
+            var designIdRemap = new Dictionary<int, int>();
+
             foreach (var (_, designId, appText) in fileBacked)
             {
                 if (!seenDesignIds.Add(designId)) continue; // already adopted this boot (or before) — never touched again
 
                 var adoptedId = DesignerSeed.AdoptInto(store, appText);
                 if (adoptedId != designId)
+                {
                     // The store minted a different id than kernel.json named (CreateObject cannot pin an
                     // arbitrary id on a live, already-open store — see AdoptInto's doc). Rewrite the
-                    // registry entry so future resolution (KernelHostActions.ResolveDesign, the IDE's
-                    // dropdown) finds the design at the id it actually got minted.
+                    // registry entry AND remap this designId so the Instance.design reference resolves to
+                    // the id it actually got minted, not the stale kernel.json one (which no longer names
+                    // any Design — a dangling reference).
                     RewriteDesignIdInRegistry(registryPath, designId, adoptedId);
+                    designIdRemap[designId] = adoptedId;
+                }
             }
 
-            ReconcileInstancesSet(store, instanceTuples);
+            ReconcileInstancesSet(store, InstanceTuples(designIdRemap));
         }
 
         EnsureMainBranches(store);
     }
+
+    private static readonly IReadOnlyDictionary<int, int> EmptyRemap = new Dictionary<int, int>();
 
     // Rewrite the registry entry(ies) whose designId is `oldId` to `newId` — the adoption-mismatch
     // follow-up (SyncDesignHost). Single-operator, so a plain read-modify-write like every other

@@ -1047,6 +1047,89 @@ public sealed class HostActionSteps
         await Assert.That(head?.TargetId?.ToString() ?? "").IsEqualTo(_headBeforeWrite);
     }
 
+    // ── the dict-write floor immutability legs (review fix 3) ────────────────────
+
+    // The idMap contents of the last-committed Commit, read fresh (key → int), for the before/after
+    // comparison. A commit's idMap is never empty (a design always has ≥1 type), so it has a real key.
+    private Dictionary<string, int> CommitIdMap()
+    {
+        var (_, fields) = CommitByMessage(_lastCommitMessage);
+        var dict = (DictionaryValue)fields.Fields["idMap"];
+        return dict.Entries.ToDictionary(
+            e => ((TextValue)e.Key).Text, e => ((IntValue)e.Value).Value);
+    }
+
+    private Dictionary<string, int> _idMapBeforeWrite = new();
+
+    [When("a client addEntry into the commit's idMap is attempted")]
+    public void WhenClientAddEntryIntoIdMap()
+    {
+        var (commitId, _) = CommitByMessage(_lastCommitMessage);
+        _idMapBeforeWrite = CommitIdMap();
+        // addEntry's value is a BARE scalar at the top level (a `dict of int` entry is a raw int — see
+        // ws.ts entryAdd), NOT the tagged { type, value } form the id-addressed ops use.
+        var ws = Ws();
+        _reply = ws.ProcessMessage(
+            $$"""{ "op": "addEntry", "clientId": "{{_clientId}}", "path": "/commits/{{commitId}}/idMap", "key": "Injected", "value": 777 }""");
+    }
+
+    [When("a client-path write into the commit's idMap is attempted")]
+    public void WhenClientWriteIntoIdMap()
+    {
+        var (commitId, _) = CommitByMessage(_lastCommitMessage);
+        _idMapBeforeWrite = CommitIdMap();
+        // Overwrite an EXISTING lineage id (the first key in the map) with a bogus value — the review's
+        // exact probe (a path-write clobbering a seeded lineage id must be denied). `write`'s value is a
+        // BARE scalar too (see ws.ts).
+        var existingKey = _idMapBeforeWrite.Keys.First();
+        var ws = Ws();
+        _reply = ws.ProcessMessage(
+            $$"""{ "op": "write", "clientId": "{{_clientId}}", "path": "/commits/{{commitId}}/idMap/{{existingKey}}", "value": 999 }""");
+    }
+
+    [Then("the commit's idMap is unchanged")]
+    public async Task ThenCommitIdMapUnchanged()
+    {
+        var after = CommitIdMap();
+        await Assert.That(after.Count).IsEqualTo(_idMapBeforeWrite.Count);
+        foreach (var (key, value) in _idMapBeforeWrite)
+        {
+            await Assert.That(after.ContainsKey(key)).IsTrue();
+            await Assert.That(after[key]).IsEqualTo(value);
+        }
+    }
+
+    // ── the single-atomic-changeset log proof (review fix 3) ─────────────────────
+
+    private int _logLinesBeforeCommit;
+
+    [Given("the designer's own log line count is remembered before committing over the WS")]
+    public void GivenLogLinesRememberedWs()
+    {
+        // The designer store's data file exists after OpenDesigner (a construction Save + AddDesign
+        // writes), so its append-only log sibling exists too. Count its lines before the commit.
+        var logPath = AppPaths.LogPathForDataPath(_designerDataPath);
+        _logLinesBeforeCommit = File.Exists(logPath) ? File.ReadAllLines(logPath).Length : 0;
+    }
+
+    [Then("the designer's log grew by exactly one entry")]
+    public async Task ThenLogGrewByOne()
+    {
+        var logPath = AppPaths.LogPathForDataPath(_designerDataPath);
+        var after = File.ReadAllLines(logPath).Length;
+        await Assert.That(after).IsEqualTo(_logLinesBeforeCommit + 1);
+    }
+
+    [Then("the designer's log replays from genesis to the live snapshot")]
+    public async Task ThenLogReplaysToSnapshot()
+    {
+        // The store's OWN fsck over the SAME live files: replay(genesis→head) must reproduce the snapshot
+        // (the slice-1 invariant), proving the whole commit — creates + refs + set link + dict writes +
+        // head advance — landed as one internally-consistent changeset.
+        var store = new JsonFileInstanceStore(_designerDataPath, _meta);
+        await Assert.That(store.Fsck()).IsTrue();
+    }
+
     // The write-floor's `{ error }` reject — same wire shape as a host-action reject (ThenReplyError), but
     // this phrasing covers a DIFFERENT op (objectPropChange/setReferenceField, not hostAction), so it is
     // its own step rather than overloading ThenReplyError's Gherkin text.

@@ -1081,6 +1081,72 @@ public sealed class KernelSteps(InstanceContext ctx)
             await Assert.That(instances).Contains(name);
     }
 
+    // ── review fix 2: adoption id-rewrite remaps the Instance.design reference ────
+
+    // The kernel.json designId a new app is registered with — deliberately BELOW the designer store's
+    // post-seed mint counter (the seeds go up to id 60+), so AdoptInto is forced to mint a DIFFERENT id
+    // and the rewrite+remap path fires. Its instance id (5) and mount name are fixed for the assertions.
+    private const int NewAppInstanceId = 5;
+    private const int NewAppLowDesignId = 3; // < every seeded id → AdoptInto can never pin it
+    private const string NewAppName = "widgets";
+
+    // Register a genuinely-new app (its own app.deenv + a kernel.json entry) whose designId is below the
+    // mint counter, so the NEXT boot (an EXISTING store — SyncDesignHost's log-preserving adopt path)
+    // mints a fresh id for it and must rewrite the registry + remap the Instance.design reference.
+    [Given("a new app instance is registered with a designId below the mint counter")]
+    public void GivenNewAppRegisteredWithLowDesignId()
+    {
+        const string widgetApp = """
+        types
+            Db
+                widgets set of Widget
+            Widget
+                label text
+        """;
+        WriteApp(ctx.KernelDir!, NewAppInstanceId, widgetApp);
+
+        // Append the new entry to the EXISTING registry (keep the four already there), so the restart
+        // reads all five. The new entry references its own design by the low id.
+        var kernelJson = Path.Combine(ctx.KernelDir!, "kernel.json");
+        var stored = RegistryReader.Read(kernelJson);
+        RegistryWriter.Write(kernelJson, new Registry(
+            [.. stored.Instances, new RegistryEntry(NewAppInstanceId, NewAppName, NewAppLowDesignId)],
+            stored.AppPort, stored.AssetPort));
+    }
+
+    [Then("the design-host adopted the new app's design at a minted id, not its stale designId")]
+    public async Task ThenNewAppAdoptedAtMintedIdAsync()
+    {
+        var designs = SeededDesigns();
+        // The new app's design has a "Widget" type (its label is "" — AdoptInto doesn't set one), so find
+        // it by that type name; its id must be a freshly-minted one (> the low kernel.json designId), and
+        // NOTHING should exist at the stale low id.
+        var adopted = designs.Single(d => DesignHasType(d.Value, "Widget"));
+        await Assert.That(adopted.Key).IsGreaterThan(NewAppLowDesignId);
+        await Assert.That(designs.ContainsKey(NewAppLowDesignId)).IsFalse();
+        _adoptedNewDesignId = adopted.Key;
+    }
+
+    private int _adoptedNewDesignId;
+
+    [Then("the new app instance's stored design reference resolves to the adopted design")]
+    public async Task ThenNewInstanceDesignResolvesAsync()
+    {
+        var store = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store;
+        var instance = store.ReadExtent("Instance").Values
+            .Single(i => i.Fields.GetValueOrDefault("name") is TextValue { Text: NewAppName });
+        // The Instance.design reference must point at the MINTED design id (the remap), never the stale
+        // kernel.json one — and that id must actually resolve to a real Design row.
+        var designRef = instance.Fields.GetValueOrDefault("design") as ReferenceValue;
+        await Assert.That(designRef?.TargetId).IsEqualTo(_adoptedNewDesignId);
+        await Assert.That(SeededDesigns().ContainsKey(_adoptedNewDesignId)).IsTrue();
+    }
+
+    private static bool DesignHasType(ObjectValue design, string typeName) =>
+        design.Fields.GetValueOrDefault("types") is SetValue types
+        && types.Members.Values.OfType<ObjectValue>()
+            .Any(t => t.Fields.GetValueOrDefault("name") is TextValue n && n.Text == typeName);
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     // A fresh temp dir for a scenario's fixtures + registry, and the two shared kernel ports.

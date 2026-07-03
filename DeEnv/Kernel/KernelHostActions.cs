@@ -172,15 +172,13 @@ public sealed class KernelHostActions(
     // commit a torn text/logSeq pair). An interleaved edit landing AFTER the final re-check is fine — it
     // lands after this commit's mark, and the NEXT commit picks it up.
     //
-    // Atomicity: the Commit row (message/at/design/parent/logSeq/text) + its link into `db.commits` land
-    // in ONE CommitBatch (mint + set-link + the `parent`/`design` ref-links, all-or-none). idMap is a
-    // DICTIONARY field — not reachable through CommitBatch (no dict-entry CommitMutation exists; see
-    // JsonFileInstanceStore's own "dictionary mutation is not yet reachable through ctx.commit()" note) —
-    // so its entries are written as a FOLLOW-UP pass, BEFORE the branch head advances. The branch's head
-    // reference is written LAST: that is the commit's linearization point (before it, the new Commit row
-    // exists and is linked into db.commits, but no branch calls it current yet — after it, the commit is
-    // "the" head). A crash between the batch and the head-advance leaves an orphaned-but-harmless Commit
-    // row (visible in db.commits, not yet anyone's head) rather than a half-written one.
+    // Atomicity: the WHOLE commit is ONE CommitBatch (review fix 3) — the Commit row create + its
+    // `design`/`parent` ref-links + its link into `db.commits` + EVERY idMap dict entry + the branch-head
+    // advance, all-or-none under the store's single lock and ONE log entry (a design commit IS a single
+    // atomic changeset in the data log). The idMap rides the batch via DictWriteMutation (server-side-only
+    // vocabulary — see its doc); there is no longer a follow-up write phase and thus no crash window where
+    // a commit is observable in db.commits with a partial idMap or no head. The batch's own all-or-none
+    // guarantee (throws untouched-on-failure) is the linearization point — atomicity is structural now.
     private void CommitDesign(JsonElement args)
     {
         var designId = ArgInt(args, 0);
@@ -212,6 +210,9 @@ public sealed class KernelHostActions(
         NodeValue? headField = branch.Fields.Fields.GetValueOrDefault("head");
         int? parentHeadId = headField is ReferenceValue { TargetId: { } h } ? h : null;
 
+        var commitsSetId = (store.ReadNode(NodePath.Root.Field("commits")) as SetValue)?.Id
+            ?? throw new InvalidOperationException("The designer's `db.commits` set is missing.");
+
         const int commitTemp = -1;
         var commitFields = new Dictionary<string, NodeValue>
         {
@@ -224,30 +225,21 @@ public sealed class KernelHostActions(
         {
             new CommitCreate(commitTemp, "Commit", new ObjectValue(commitFields)),
         };
+        // The whole changeset, referencing the not-yet-minted commit by its tempId (the store resolves it
+        // after minting): design + parent refs, the db.commits link, one dict write per idMap entry, and
+        // the branch-head advance — issued as ONE batch so the commit is never observable half-written.
         var mutations = new List<CommitMutation>
         {
             new RefLinkMutation(commitTemp, "design", designId, "Design"),
         };
         if (parentHeadId.HasValue)
             mutations.Add(new RefLinkMutation(commitTemp, "parent", parentHeadId, "Commit"));
-
-        var commitsSetId = (store.ReadNode(NodePath.Root.Field("commits")) as SetValue)?.Id
-            ?? throw new InvalidOperationException("The designer's `db.commits` set is missing.");
         mutations.Add(new SetLinkMutation(commitsSetId, commitTemp));
-
-        var result = store.CommitBatch(creates, mutations);
-        var commitId = result.Creates.Single(c => c.TempId == commitTemp).RealId;
-
-        // idMap entries: a follow-up pass (dict mutation cannot ride CommitBatch — see the doc above),
-        // written BEFORE the head advances so the commit is never observably "current" with a partial map.
-        var idMapPath = NodePath.Root.Field("commits").Key(commitId.ToString()).Field("idMap");
         foreach (var (path, id) in snap.IdMap)
-            store.WriteDictionaryEntry(idMapPath, new TextValue(path), new IntValue(id));
+            mutations.Add(new DictWriteMutation(commitTemp, "idMap", new TextValue(path), new IntValue(id)));
+        mutations.Add(new RefLinkMutation(branch.Id, "head", commitTemp, "Commit"));
 
-        // The linearization point: advance the main branch's head to the new commit — the LAST write of
-        // this action, so a crash before it leaves an orphaned-but-harmless Commit row (in db.commits,
-        // not yet anyone's head) rather than a half-written commit.
-        store.WriteReference(branch.Id, "head", commitId, "Commit");
+        store.CommitBatch(creates, mutations);
     }
 
     // The design's `main` Branch row (its `workingCopy` reference points at the design) — returned WITH

@@ -290,14 +290,16 @@ public sealed class WsHandler
     // (ClientSession.PrincipalUserId — harness-set this slice; the password-login slice binds it on the WS).
     //
     // The OBJECT-graph write seams are ALL gated: set-member create/delete (arrayAdd/arrayRemove +
-    // removeEntry on a set), object-field + reference edit (objectPropChange/setReferenceField), AND the
+    // removeEntry on a set), object-field + reference edit (objectPropChange/setReferenceField), the
     // path-addressed `write` onto a set member's scalar field (HandleWrite — the SAME mutation
-    // objectPropChange performs, so it is gated identically). That is exactly the surface the read floor
-    // (DbBridge graph + sys.extent listing) gates.
-    // ponytail: the ONE ungated write surface is DICTIONARY entries — addEntry/removeEntry on a dict, and
-    // the path-addressed `write` onto a dict-entry value. They stay deferred IN LOCKSTEP with the dict READ
-    // gap (DbBridge does not gate dict members either), so the read+write dict gates land together. Per-field
-    // rules and richer condition inputs (now/client/cross-row) are later slices too.
+    // objectPropChange performs, so it is gated identically), AND (review fix 3) a client DICT write whose
+    // owner is a set member — addEntry/removeEntry on a dict and a path-`write` onto a dict entry are gated
+    // as an `edit` of the owning set member (RequireDictWrite), so an immutable Commit/Branch idMap cannot
+    // be mutated from a client. That is the surface the read floor (DbBridge graph + sys.extent listing) gates.
+    // ponytail: the dict READ floor is still deferred (DbBridge does not gate dict members), and a dict
+    // whose owner is NOT a set member (a root-level dict like `/settings`) stays write-deferred too — only
+    // the set-member dict WRITE is gated now, which is exactly what the Commit/Branch immutability needs.
+    // Per-field rules and richer condition inputs (now/client/cross-row) are later slices too.
     private Code.AccessFloor Floor(WsRequest req) =>
         new(_desc.Rules ?? [], Code.AccessFloor.LoadPrincipal(_store, _desc, Session(req)?.PrincipalUserId));
 
@@ -438,9 +440,9 @@ public sealed class WsHandler
         // parent path; its intrinsic id IS the parent's last segment (a set's members are keyed by id), so
         // the candidate is built by-id over its CURRENT scalar fields, exactly as the objectPropChange edit
         // floor builds it. Rejected → the `{ error }` reply (client rollback); the store is never touched.
-        // ponytail: a DICTIONARY-entry write (a scalar entry caught below, or an object-entry field
-        // `/customers/42/name`) is NOT gated yet — it stays deferred with the dict READ gap (gated when
-        // dict reads are), so the read+write dict gates land together.
+        // A scalar dict-entry write on a set-member-owned dict IS gated below (review fix 3, RequireDictWrite);
+        // an OBJECT-entry field path (`/customers/42/name`) has an object parent and writes through the
+        // set-member gate right here; a root-level dict stays write-deferred with the still-deferred dict READ gap.
         var parentPath = path.IsRoot ? null : NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1));
         if (parentPath != null && SetMemberOwnerId(parentPath) is { } ownerId
             && _store.ReadById(ownerId) is { } owner)
@@ -464,10 +466,20 @@ public sealed class WsHandler
         // — WriteLeaf can't walk into a dict, so upsert the entry. (An OBJECT entry's field
         // path, e.g. /customers/42/name, has an object parent and writes through WriteLeaf.)
         // Report the version the store returns UNDER ITS LOCK (finding 3) — never a separate read.
-        var newVersion = parentPath != null
-            && _resolver.ResolveType(parentPath) is { Cardinality: Cardinality.Dictionary } parentInfo
-            ? _store.WriteDictionaryEntry(parentPath, ParseKey(path.Segments[^1], parentInfo.KeyTypeName ?? "text"), value)
-            : _store.WriteLeaf(path, value);
+        int newVersion;
+        if (parentPath != null
+            && _resolver.ResolveType(parentPath) is { Cardinality: Cardinality.Dictionary } parentInfo)
+        {
+            // The DICT write floor (review fix 3): a path-`write` onto a dict entry whose owning object is a
+            // set member is an `edit` of that owner — so a client cannot overwrite a Commit's idMap lineage
+            // id here any more than through addEntry. Rejected → the `{ error }` reply; store untouched.
+            RequireDictWrite(req, parentPath);
+            newVersion = _store.WriteDictionaryEntry(parentPath, ParseKey(path.Segments[^1], parentInfo.KeyTypeName ?? "text"), value);
+        }
+        else
+        {
+            newVersion = _store.WriteLeaf(path, value);
+        }
 
         return Serialize(new WriteResponse { Path = pathStr, NewVersion = newVersion });
     }
@@ -490,6 +502,25 @@ public sealed class WsHandler
         return int.TryParse(memberPath.Segments[^1], out var id) ? id : null;
     }
 
+    // The DICTIONARY write floor (M-auth, review fix 3): gate a client write to a dict ENTRY as an `edit`
+    // of the object that OWNS the dict, when that owner is a set member (`/<set>/<id>/<dict>`) — the
+    // security-critical case (a `Commit`/`Branch` idMap lives on a `db.commits`/`db.branches` set member,
+    // so `create edit delete where false` on those types now blocks a client addEntry/removeEntry/path-
+    // write, not only objectPropChange). `dictPath` is the DICT node's own path; its owner is the object
+    // one segment up, whose id IS that segment (a set keys members by id). Throws (the `{ error }` reply)
+    // when the owner's `edit` is denied; a no-op when the dict is NOT on a set member (a root-level dict
+    // like `/settings` keeps the deferred behavior — its owner is the un-ruled Db root, and the dict READ
+    // floor is still deferred there too). Mirrors the set-member gate, not the read floor: write-side only.
+    private void RequireDictWrite(WsRequest req, NodePath dictPath)
+    {
+        if (dictPath.IsRoot) return;
+        var ownerPath = NodePath.FromSegments(dictPath.Segments.Take(dictPath.Segments.Count - 1));
+        if (SetMemberOwnerId(ownerPath) is not { } ownerId || _store.ReadById(ownerId) is not { } owner)
+            return; // owner is not a set member (root/nested-object dict) — deferred, as before
+        RequireWrite(Floor(req), "edit", owner.TypeName,
+            Code.AccessFloor.ScalarObject(owner.TypeName, ownerId, owner.Fields, _desc));
+    }
+
     // ── addEntry (create on the create-form Save) ──────────────────────────────
 
     private string HandleAddEntry(NodePath path, string pathStr, WsRequest req)
@@ -508,6 +539,11 @@ public sealed class WsHandler
             return Error("Missing 'value' in addEntry message.");
         if (req.Key is not { } keyStr || keyStr.Length == 0)
             return Error("A dictionary entry requires a non-empty 'key'.");
+
+        // The DICT write floor (review fix 3): adding a dict entry whose owner is a set member is an `edit`
+        // of that owner — the fix's core case (a client cannot inject an idMap entry into an immutable
+        // Commit). Rejected → the `{ error }` reply; the store is never touched (the checks below are pure).
+        RequireDictWrite(req, path);
 
         var value = DeserializeValue(valueEl, typeInfo.Type);
         // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store. An
@@ -546,8 +582,11 @@ public sealed class WsHandler
         }
         else if (typeInfo.Cardinality == Cardinality.Dictionary)
         {
-            // ponytail: dictionary-entry delete is NOT gated yet — the read floor doesn't gate dict reads
-            // either, so the write floor matches that staging (gated when dict reads are).
+            // The DICT write floor (review fix 3): removing a dict entry whose owner is a set member is an
+            // `edit` of that owner — so a client cannot delete a Commit's idMap entry either. Rejected →
+            // the `{ error }` reply; store untouched. (A dict on a non-set-member owner stays deferred, as
+            // before, in lockstep with the still-deferred dict READ floor there.)
+            RequireDictWrite(req, path);
             newVersion = _store.RemoveDictionaryEntry(path, ParseKey(keyStr, typeInfo.KeyTypeName ?? "text"));
         }
         else

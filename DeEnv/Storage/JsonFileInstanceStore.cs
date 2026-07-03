@@ -537,6 +537,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     case FieldWriteMutation(var objectRef, _, _):
                         RequireResolvable(objectRef);
                         break;
+                    case DictWriteMutation(var ownerRef, _, _, _):
+                        RequireResolvable(ownerRef);
+                        break;
                 }
 
             // The staleness check: iff baseVersion is supplied, every EXISTING object this batch EDITS must
@@ -574,6 +577,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                             break;
                         case FieldWriteMutation(var objectRef, _, _):
                             RequireFresh(objectRef);
+                            break;
+                        case DictWriteMutation(var ownerRef, _, _, _):
+                            RequireFresh(ownerRef);
                             break;
                     }
             }
@@ -642,6 +648,21 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         RecordFieldWrite(entry, prop, new StoredLeaf(value));
                         entry.Fields[prop] = new StoredLeaf(value);
                         BumpVersion(ResolveRefId(objectRef));
+                        break;
+                    }
+                    case DictWriteMutation(var ownerRef, var prop, var key, var value):
+                    {
+                        // Upsert a SCALAR dict entry on the owner's `prop` dictionary field, by id (the owner
+                        // may be a fresh create just minted above, unreachable by any NodePath yet). Same
+                        // DictSet log-write + owner-version bump the standalone WriteDictionaryEntry emits, so
+                        // fsck/replay stay total; the value is a scalar leaf (idMap holds ints).
+                        var ownerId = ResolveRefId(ownerRef);
+                        var dict = EnsureDictOnEntry(ownerId, prop);
+                        var keyStr = KeyToString(key);
+                        var newLeaf = new StoredLeaf(value);
+                        _pending.Add(new DictSet(dict.Id, keyStr, dict.Entries.GetValueOrDefault(keyStr), newLeaf));
+                        dict.Entries[keyStr] = newLeaf;
+                        BumpVersion(ownerId);
                         break;
                     }
                 }
@@ -1480,6 +1501,25 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             dict = new StoredDict(MintId(), new());
             RecordFieldWrite(parent.Object, field, dict);
             parent.Object.Fields[field] = dict;
+        }
+        return dict;
+    }
+
+    // The dictionary node on an extent entry addressed BY ID + prop name (the id-addressed sibling of
+    // EnsureDict, for CommitBatch's DictWriteMutation — the owner may be a fresh create no NodePath can
+    // reach yet). Every object minted through MintObject already carries an empty StoredDict for each
+    // declared dict prop (BuildFields), so the create-if-missing branch only fires for a legacy field a
+    // migration introduced; when it DOES mint, that structural change is logged (a FieldWrite introducing
+    // the field) — same rationale as EnsureDict/EnsureSet.
+    private StoredDict EnsureDictOnEntry(int objectId, string prop)
+    {
+        var entry = ExtentEntryById(objectId)
+            ?? throw new InvalidOperationException($"No object with id {objectId}.");
+        if (entry.Fields.GetValueOrDefault(prop) is not StoredDict dict)
+        {
+            dict = new StoredDict(MintId(), new());
+            RecordFieldWrite(entry, prop, dict);
+            entry.Fields[prop] = dict;
         }
         return dict;
     }

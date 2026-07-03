@@ -149,6 +149,17 @@ public sealed record SetLinkMutation(int SetId, int MemberRef) : CommitMutation;
 public sealed record RefLinkMutation(int OwnerRef, string Prop, int? TargetRef, string TargetType) : CommitMutation;
 // Write a single scalar leaf field on the object with intrinsic id ObjectRef.
 public sealed record FieldWriteMutation(int ObjectRef, string Prop, NodeValue Value) : CommitMutation;
+// Upsert a SCALAR dictionary entry (Key → Value) into the `Prop` dictionary field of the object with
+// intrinsic id OwnerRef. SERVER-SIDE VOCABULARY ONLY (M13 slice 3, review fix 3): this exists so
+// sys.commitDesign can carry a Commit's `idMap` entries in the SAME atomic CommitBatch as the Commit's
+// creation, closing the crash window a separate post-batch WriteDictionaryEntry loop opened. The WIRE
+// `commit` op does NOT accept dict mutations from clients — WsHandler.HandleCommit constructs no
+// DictWriteMutation from a wire message; ctx.commit dict support stays a later slice. Value is a scalar
+// leaf (the idMap values are ints); object-valued dict entries are not a commit-batch case (the standalone
+// WriteDictionaryEntry keeps that path). Batch semantics mirror FieldWriteMutation: the owner must resolve
+// (pre-validated), staleness + version attribution key on OwnerRef, and it logs the same DictSet the
+// standalone WriteDictionaryEntry emits (so fsck/replay stay total).
+public sealed record DictWriteMutation(int OwnerRef, string Prop, NodeValue Key, NodeValue Value) : CommitMutation;
 
 // The result of minting one create in a commit batch: the tempId→realId mapping plus the minted object's
 // nested COLLECTION props (their own intrinsic ids + element types), so the caller re-keys the client's
