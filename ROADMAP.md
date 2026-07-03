@@ -338,15 +338,12 @@ DECISIONS.md.
 - **M-auth follow-ups.** Small, non-blocking; do as wanted:
   - **Wire login on the deenv.org deploy** — set `DEENV_ADMIN_PASSWORD` on the box and drop the
     basic-auth gate for `devlog` (gate #2 follow-on). Operator ops action; steps in `deploy/DEPLOY.md`.
-  - **Login persistence across page loads + re-gate the designer's `sys` rule.** Login-as-state is
-    session-scoped today (a fresh page GET renders anonymous — no cookie/token), so an admin-gated designer
-    (whose UX navigates by full GETs) would drop to a login form on every navigation. The host-action
-    authority slice (2026-07-02) therefore left `instances/1`'s `sys` rule **unconditional** (temporary,
-    posture-preserving — see DECISIONS "Host-action AUTHORITY"). This follow-up adds login persistence (a
-    cookie/token + SSR principal resolution so login survives a full page load), then flips the designer's
-    `sys` rule to `* where currentUser.role == "Admin"` — closing the strategic residual (designer has no
-    app-level auth in effect) AND the clone-of-designer edge. Couples with the deploy-login-wiring line
-    above.
+  - **Login persistence across page loads — DONE 2026-07-04.** Login-as-state still flips live over the
+    existing WS, and a stateless HttpOnly cookie now carries the principal across fresh GETs/reconnects
+    (`docs/plans/login-persistence.md`, mechanism slice; suite 685). **Next:** re-gate the designer with
+    real access rules (`sys * where currentUser.role == "Admin"` plus data rules + its custom login gate),
+    closing the strategic residual and the clone-of-designer edge. Then wire the deploy login and drop the
+    basic-auth gate.
   - **remove-user + inline role-edit** on the generic `/users` list / `/users/<id>` page (remove-user = a Remove control on the `/users` set table; role-edit already works on `/users/<id>` — inline-on-the-list is the convenience).
   - **Users-twice dedup — DONE (`b06b532`).** Solved by deleting the client-toggled `<UserAdmin>` popup and moving set-password onto the generic `/users/<id>` page; the menu now links to `/users`. (Not via the round-trip — a real route was the clean fix.)
   - **set-password feedback — DONE.** Reframed 2026-06-26 to a `password`-type field on User (set like

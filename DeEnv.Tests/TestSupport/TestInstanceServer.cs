@@ -32,7 +32,8 @@ public sealed class TestInstanceServer : IAsyncDisposable
         // authority host:port). The kernel-hosted path-mounted case is exercised by Kernel.feature.
         var appPort = GetFreePort();
         var assetPort = GetFreePort();
-        var (appApp, assetApp) = InstanceApp.Build(Store, description, mountBase: "/", assetPort: assetPort);
+        var (appApp, assetApp) = InstanceApp.Build(Store, description, mountBase: "/", assetPort: assetPort,
+            instanceId: 0, auth: TokenAuth.ForDataHome(Path.GetDirectoryName(dataFilePath)!));
 
         // Bind loopback-only (127.0.0.1), not all interfaces: tests are driven by Playwright over
         // localhost, and an all-interfaces listener trips the Windows Defender Firewall prompt — which

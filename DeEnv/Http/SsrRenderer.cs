@@ -122,7 +122,7 @@ public sealed class SsrRenderer
             // Mint a session and ship its clientId, so the WS can claim it (hello) and a
             // later milestone can hang per-client push on it. The id is all the client
             // needs; a refetch re-renders over a fresh store load. See ClientSession.
-            var clientId = _sessions?.Create().Id ?? "";
+            var clientId = _sessions?.Create(principalUserId).Id ?? "";
 
             // First-paint state: only what the client-run render accessed (access-scoped,
             // sensitive fields denied) + the client-facing AST. Server-only functions and

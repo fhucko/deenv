@@ -60,7 +60,11 @@ public sealed class HostedInstance
         AdminSeed.SeedFromEnv(store, description);
 
         var mountBase = MountBaseFor(spec.App);
-        var (appApp, assetApp) = InstanceApp.Build(store, description, mountBase, assetPort, registry, hostActions, spec.App);
+        var idDir = Directory.GetParent(spec.DataPath)!;
+        var instancesDir = idDir.Parent!;
+        var dataHome = instancesDir.Parent!.FullName;
+        var (appApp, assetApp) = InstanceApp.Build(store, description, mountBase, assetPort, registry, hostActions, spec.App,
+            spec.Id, TokenAuth.ForDataHome(dataHome));
         return new HostedInstance(spec, store, appApp.Build(), assetApp.Build());
     }
 

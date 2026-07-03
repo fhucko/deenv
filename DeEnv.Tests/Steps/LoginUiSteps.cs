@@ -96,6 +96,14 @@ public sealed class LoginUiSteps(InstanceContext ctx)
         await ctx.Page.GotoReadyAsync(path);
     }
 
+    [When("the visitor opens a fresh page at {string}")]
+    public async Task WhenOpensFreshPage(string path)
+    {
+        var context = ctx.Page!.Context;
+        ctx.Page = await context.NewPageAsync();
+        await ctx.Page.GotoReadyAsync(ctx.BaseUrl + path);
+    }
+
     // The gate renders the login form for an anonymous visitor (anonymousLockedOut && currentUser == null),
     // and the ruled data is NOT present (the read floor denied it). Both halves prove the gate is in play:
     // the form is shown INSTEAD of an empty page, and the denied "Gate #3" is absent everywhere.

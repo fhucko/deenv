@@ -61,9 +61,11 @@ public static class InstanceApp
 {
     public static (IHandlerBuilder App, IHandlerBuilder Asset) Build(
         IInstanceStore store, InstanceDescription description, string mountBase, int assetPort,
-        LiveRegistry? registry = null, IHostActions? hostActions = null, string appName = "")
+        LiveRegistry? registry = null, IHostActions? hostActions = null, string appName = "",
+        int instanceId = 0, TokenAuth? auth = null)
     {
         var sessions = new ClientSessionStore();
+        auth ??= TokenAuth.Ephemeral();
         var ws = new WsHandler(store, description, sessions, registry ?? new LiveRegistry(),
             hostActions ?? new NoHostActions(), mountBase);
 
@@ -79,11 +81,12 @@ public static class InstanceApp
             });
 
         var app = Layout.Create()
-            .Add(new ContentHandlerBuilder(store, description, sessions, mountBase, assetPort, registry ?? new LiveRegistry(), appName));
+            .Add(new ContentHandlerBuilder(store, description, sessions, mountBase, assetPort, registry ?? new LiveRegistry(), appName, instanceId, auth));
 
         var asset = Layout.Create()
             .Add("ws", websocket)
-            .Add("js", new BundleHandlerBuilder());
+            .Add("js", new BundleHandlerBuilder())
+            .Add("session", new SessionHandler(store, description, instanceId, auth));
 
         return (app, asset);
     }

@@ -84,9 +84,9 @@ public sealed class ClientSessionStore
         _idleTtl = idleTtl ?? DefaultIdleTtl;
     }
 
-    public ClientSession Create()
+    public ClientSession Create(int? principalUserId = null)
     {
-        var session = new ClientSession { Id = Guid.NewGuid().ToString("N") };
+        var session = new ClientSession { Id = Guid.NewGuid().ToString("N"), PrincipalUserId = principalUserId };
         _sessions[session.Id] = session;
         _order.Enqueue(session.Id);
         SweepExpired();

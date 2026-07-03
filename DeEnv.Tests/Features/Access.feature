@@ -153,6 +153,23 @@ Feature: The access floor (read enforcement by principal)
     Then the logout succeeds
     And the session principal is anonymous
 
+  Scenario: Login persists across a fresh page load
+    Given the access-fixture app is served with the admin password "hunter2"
+    And an anonymous visitor opens "/"
+    When the visitor logs in through the form as "Ada" with password "hunter2"
+    Then "Gate #3" eventually appears
+    When the visitor opens a fresh page at "/"
+    Then "Gate #3" eventually appears
+
+  Scenario: Logout clears the persisted login
+    Given the access-fixture app is served with the admin password "hunter2"
+    And an anonymous visitor opens "/"
+    When the visitor logs in through the form as "Ada" with password "hunter2"
+    Then "Gate #3" eventually appears
+    When the visitor logs out through the user menu
+    And the visitor opens a fresh page at "/"
+    Then the login form is shown and "Gate #3" is not
+
   # ── privacy (now testable with a real, login-bound principal) ────────────────
   # The two assertions the floor slice deferred because they needed a real principal:
   # (a) passwordHash NEVER enters the shipped graph — RULE-INDEPENDENT (asserted under the

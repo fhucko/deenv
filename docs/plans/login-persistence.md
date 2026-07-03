@@ -2,8 +2,9 @@
 
 **Status:** design **ACCEPTED 2026-07-03** — grilled once (fresh-opus adversarial pass, verdict
 **SHIP-WITH-AMENDMENTS**, all folded below) and all four decision points settled by the user (see
-"Decisions" near the end). **Ready to slice — not yet scheduled** (hand §9 slice 1 to
-milestone-planner/`/build` when the user gives the go). Triggered by the user picking this as the next design session: it is the convergence
+"Decisions" near the end). **Mechanism slice DONE 2026-07-04** (stateless HttpOnly cookie,
+`/session` cookie endpoint, GET-side principal stamp; suite 685/685). Next: §9 slice 2, the
+designer access-rule flip. Triggered by the user picking this as the next design session: it is the convergence
 point of every recorded flag outside versioning — the designer's `sys *` rule flips to admin-gated
 (closing the security review's strategic residual, `docs/plans/security-review-pre-public.md`), the
 clone-the-designer caveat closes, the dict READ floor decision unblocks, versioning's deferred
@@ -161,8 +162,8 @@ that matters now.
 
 ### 8. Login-as-state survives unchanged *(settled)*
 
-`currentUser == null` stays the reactive gate; LoginForm/SignInBar UX unchanged (submit → reload
-is the one visible shift); no reserved app URL; `accessActive`/`anonymousLockedOut` untouched
+`currentUser == null` stays the reactive gate; LoginForm/SignInBar UX unchanged (submit flips live
+over the existing WS; the cookie only affects future page loads); no reserved app URL; `accessActive`/`anonymousLockedOut` untouched
 (`SsrRenderer.cs:262-304`). The cookie is the state's **browser-durable materialization**. The
 principal becomes browser-scoped while view-state stays per-tab: "sessions are users" evolves to
 **"sessions are tabs; the browser is the user."** Multi-tab: tab B picks the principal up on its
@@ -172,14 +173,11 @@ safe: scenarios run in isolated Playwright browser contexts (`SharedBrowser.cs:8
 
 ### 9. The payoff sequence *(slice map — hand to milestone-planner/build)*
 
-1. **Mechanism slice** (this doc §§2–7): `TokenAuth` + secret file, `/session` on the asset tree
-   (+ CORS + OPTIONS), ContentHandler read + mint-stamp, ws.ts transport swap + reload, WS
-   login/logout ops deleted, claim-miss reload guard. Gherkin: login → cold GET → still
-   authenticated; logout → GET → anonymous; garbage/expired/foreign-instance cookie → anonymous;
-   password change → old token dead; two instances, two cookies, no bleed. **Test budget is
-   real (grill P5):** every login browser scenario swaps transport; `AccessSteps` +
-   `AdminSeedSteps.cs:123` (raw `login` WS frame) + the in-process test server (`/session`,
-   kernel-test CORS) update in lockstep.
+1. **Mechanism slice — DONE 2026-07-04**: `TokenAuth` + secret file, `/session` on the asset tree
+   (+ CORS + OPTIONS), ContentHandler read + mint-stamp, ws.ts persists the cookie while the existing
+   WS login/logout ops keep the live no-reload flip, and claim-miss reloads once. Proven: login →
+   fresh page → still authenticated; logout → fresh page → anonymous; token tamper/expiry/
+   foreign-instance/password-change → anonymous. Suite 685/685.
 2. **Designer flip slice**: the designer app doc gains a `User` type (+ role enum — **confirmed
    absent today**, no `User`/`currentUser` anywhere in `instances/1/app.deenv`), access rules on
    its data types (floor is allow-when-unruled — `sys` alone would leave anonymous data-edit

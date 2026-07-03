@@ -368,6 +368,7 @@ let wsRetryDelay = 1000;
 // readiness is the minimal correct guard. Remove this marker (and the test waits on it) when
 // mutations become connection-state-independent.
 let helloAcked = false;
+const deadSessionReloadKey = "deenv.deadSessionReloaded";
 
 function setReady(ready: boolean): void {
     if (ready) document.documentElement.setAttribute("data-ready", "1");
@@ -380,6 +381,26 @@ function setReady(ready: boolean): void {
 // reply can only arrive after init() ran connectWs + the first render.)
 function markReadyIfSettled(): void {
     setReady(helloAcked && !refetchInFlight);
+}
+
+function assetUrl(path: string): string {
+    const b = basePrefix();
+    return initAssetAuthority
+        ? `${location.protocol}//${initAssetAuthority}${b}${path}`
+        : `${b}${path}`;
+}
+
+async function persistLogin(name: unknown, password: unknown): Promise<void> {
+    await fetch(assetUrl("/session"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, password })
+    });
+}
+
+async function persistLogout(): Promise<void> {
+    await fetch(assetUrl("/session"), { method: "DELETE", credentials: "include" });
 }
 
 function connectWs(): void {
@@ -552,8 +573,9 @@ function connectWs(): void {
         // on success so the page re-renders as the bound principal. No correlation id is needed — the
         // reply is recognized by its `op` ("login"), and a failed login is a normal negative reply.
         login: (name, password) => {
-            wsSend({ op: "login", clientId: uiStatic.clientId,
-                name: bareScalar(name), password: bareScalar(password) });
+            const n = bareScalar(name), p = bareScalar(password);
+            persistLogin(n, p).finally(() =>
+                wsSend({ op: "login", clientId: uiStatic.clientId, name: n, password: p }));
         },
         // The MIRROR of login (sys.logout, M-auth login UI 1e-2). Clears the session's principal back to
         // anonymous over the WS — no credentials, just the clientId (the server's `logout` op is idempotent
@@ -561,7 +583,8 @@ function connectWs(): void {
         // (handled in onWsMessage) refetches so the page swaps the root view back to the anonymous gate at
         // the SAME URL. No correlation id — the reply is recognized by its `op` ("logout").
         logout: () => {
-            wsSend({ op: "logout", clientId: uiStatic.clientId });
+            persistLogout().finally(() =>
+                wsSend({ op: "logout", clientId: uiStatic.clientId }));
         },
         // Form-Save feedback + atomic-commit batch: open the commit bracket so the propChange hook buffers
         // edits (Step A) and the commitCreate hook buffers creates (Step B) instead of firing individual
@@ -644,6 +667,7 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
                             collections?: { [prop: string]: { id: number; elementTypeName?: string } };
                             idMap?: { tempId: number; realId: number; collections?: { [prop: string]: { id: number; elementTypeName?: string } } }[];
                             newVersion?: number;
+                            sessionAlive?: boolean;
                             state?: ServerDtState; error?: string }): void {
     // Correlated accept/reject first: an error rolls the journal back, an ok commits.
     if (typeof msg.id === "number") {
@@ -694,6 +718,12 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // The session-claim is acknowledged: the connection is established. Readiness flips on
         // once any connect-time refetch has also returned. (INTERIM — see the data-ready note.)
         helloAcked = true;
+        if (msg.sessionAlive === false && sessionStorage.getItem(deadSessionReloadKey) !== "1") {
+            sessionStorage.setItem(deadSessionReloadKey, "1");
+            location.reload();
+            return;
+        }
+        if (msg.sessionAlive !== false) sessionStorage.removeItem(deadSessionReloadKey);
         markReadyIfSettled();
     } else if (msg.op === "login") {
         // The session→principal bind reply (M-auth login UI). On success the WS session is now bound
