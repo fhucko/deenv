@@ -110,12 +110,13 @@ framework URL space (the app port stays clean; same precedent that put `/ws` the
   `codeExec.ts:1295-1296`, `CodeValidator.cs:80` — "a client-only host effect"), so **conformance
   is untouched** (grill-verified).
 - **HttpOnly is load-bearing, not optional** — the grill's XSS probe (P1) found the SSR escape
-  chokepoint (`SsrRenderer.cs:1049-1050` + no innerHTML client-side) is **incomplete**: no
-  `javascript:`-scheme guard on `href`/`src` (`SsrRenderer.cs:1024 MountUrl`, `ui.ts:407`) and
-  string-valued `on*` attributes render as inline handlers. An app binding user data there yields
-  script execution that could read a non-HttpOnly cookie. So the `document.cookie` variant
-  (zero endpoints, zero CORS) is **rejected on evidence**, and the XSS gap itself is a separate
-  follow-up (below), not this slice's scope.
+  chokepoint (`SsrRenderer.cs:1049-1050` + no innerHTML client-side) was **incomplete**: no
+  `javascript:`-scheme guard on `href`/`src` and string-valued `on*` attributes rendered as inline
+  handlers. An app binding user data there yields script execution that could read a non-HttpOnly
+  cookie. So the `document.cookie` variant (zero endpoints, zero CORS) is **rejected on evidence**.
+  The gap itself is now **CLOSED** (`0aceb0a`, 2026-07-03): both render twins drop dangerous-scheme
+  `href`/`src` and scalar `on*` attributes at the attribute-emit chokepoint. HttpOnly stays anyway —
+  the guard is defense-in-depth, not a reason to revisit the cookie choice.
 - **CORS:** local dev is genuinely cross-origin (app port → asset port; two ports confirmed in
   the kernel + test harness). The endpoint hand-emits exact-origin echo + allow-credentials +
   OPTIONS preflight (no GenHTTP CORS module exists in use — grill-verified; a few `.Header(...)`
@@ -226,7 +227,7 @@ P8 designer-gate work item surfaced. Overall: **SHIP-WITH-AMENDMENTS** — all f
 
 Cross-tab live principal push (real-time milestone) · reading cookies at WS upgrade (unneeded;
 unverified GenHTTP surface) · per-verb `sys` granularity (existing deliberate cut) · tokenVersion
-/ logout-everywhere · sliding re-issue · single-use session claim (V3's full fix) · the
-`javascript:`/`on*` XSS guard (own follow-up — flagged, not smuggled into this slice) · any
+/ logout-everywhere · sliding re-issue · single-use session claim (V3's full fix) · any
 schema/`Session`-type addition (sessions deliberately do NOT enter the object model or the M13
-log).
+log). *(The `javascript:`/`on*` XSS guard that was flagged here as a follow-up is now DONE —
+`0aceb0a` — see the HttpOnly bullet above.)*
