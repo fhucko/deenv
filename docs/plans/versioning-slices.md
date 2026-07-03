@@ -34,9 +34,18 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    (delete log+genesis — history resets at schema apply until slice 4's boundary entries, the
    ponytail'd ceiling).
 
-2. **Per-commit caches: canonical printed text + name-path→id map.** Built per marked log seq on
-   the designer instance so slice-4 diff/publish read two cached artifacts with zero replay. May
-   fold into slice 3 if small. Depends on 1.
+2. **Per-commit caches: canonical printed text + name-path→id map — DONE 2026-07-03** (main
+   `5f9cfbc` + review fix `92d3777`; suite 634/634; first Sonnet-5 architecture review under the
+   new tier policy — SHIP-WITH-FIXES, graded at the Opus bar and PASSED). `SchemaBridge.Snapshot(design)`
+   → `DesignSnapshot { Text, IdMap }`: Text = the existing validated `ProjectDesignDocument`
+   (computed first — an invalid design throws before any map exists); IdMap = the same
+   types/props walk keeping each set-member's intrinsic id (`"Type"` / `"Type.prop"` → row id).
+   Review finding fixed: the map now emits prop entries only for non-enum bases, mirroring the
+   projection's enum branch — an object type flipped to enum keeps leftover `props` members in
+   the store that vanish from the printed doc, and the map must key exactly what the document
+   shows (regression scenario both-directions verified). Pure builder, no persistence — slice 3
+   stores both fields on the Commit row. Rename-keeps-identity and delete+re-add-differs are
+   directly scenario-tested against store-minted ids. Depends on 1. ✔
 
 3. **`Commit`/`Branch` rows + `sys.commitDesign`.** Design history as ordinary data in the
    designer instance; host action captures head seq under the store lock, advances the branch tip.

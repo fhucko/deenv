@@ -20,6 +20,9 @@ position → grill → verdict. Settled vs open is marked per topic; roll-up lis
   designer instance's own log; branch = `Branch` row; DAG via parent refs; refs are data.
 - **Caches per commit:** canonical printed text + id-map (name-path→id) → diff/publish run with zero
   replay; replay = cache-rebuild, fsck (`replay(genesis→head) == app-data.json`), data time-travel.
+  **Builder IMPLEMENTED 2026-07-03 as slice 2** (`SchemaBridge.Snapshot` → `{Text, IdMap}`; the map
+  keys exactly what the printed document shows — enum leftover props excluded per its review);
+  slice 3 stores both on the Commit row.
 - **Identity.** Rename vs delete+add is recorded (same id vs new id), never detected — except at
   hand-written text import (name-match vs parent, human-confirmed). Publish preview shows identity-level
   destructive ops loudly + **relink** override. `origin` lineage = plain int values, not object refs.
