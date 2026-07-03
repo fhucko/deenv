@@ -2041,6 +2041,21 @@ signal; that signal only works if the tagging is honest.
 
 **DONE 2026-06-25 (core delivered; decided 2026-06-24). Full spec: `docs/plans/m-auth.md`.**
 
+**Addendum 2026-07-03 — `locked` + duplicate-subject rejection (landed with M13 slice 3's history
+types).** The floor is allow-when-unruled, and a grants-only language had no way to say "never
+writable" except the `create edit delete where false` idiom. `locked` is ONE keyword of sugar — a
+subject rule meaning **ruled with zero grants** (write-immutable; reads unaffected; must be the
+subject's only rule; meaningless under `sys`). It desugars at parse time to the exact where-false
+rule shape, so the floor itself is untouched and a general `deny` verb (with its precedence/merge
+tarpit) is deliberately NOT introduced — rule union stays well-defined for the M13 merge design.
+Two guards landed with it: **duplicate access subjects are rejected at parse** (a second block for
+the same subject would OR-in grants and silently un-do a `locked` — found by adversarial review,
+proven, closed generally), and a **framework-history guard test** (every framework history type —
+Commit, Branch, listed in C# — must be `locked` in the designer doc, so the next history type can't
+ship unguarded). Automatic "system types are protected" was rejected: no truthful predicate exists
+(Design/MetaType are framework types AND client-editable; provenance fails too — adopted designs
+are host-action-created and editable), so immutability stays a per-type declaration.
+
 deenv gets users + access control as a **deny-by-default ruleset over the object model**, per-**type**
 and per-**field**: a rule is `{type, field?, verbs (read/create/edit/delete), condition}`. Designed in
 a long interview; the key decisions and *why*:
