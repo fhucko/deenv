@@ -1,8 +1,9 @@
 # Plan: Login persistence — sessions that survive page loads
 
-**Status:** design draft, 2026-07-03 — grilled once (fresh-opus adversarial pass, verdict
-**SHIP-WITH-AMENDMENTS**; all amendments folded below), **awaiting user acceptance, nothing
-scheduled**. Triggered by the user picking this as the next design session: it is the convergence
+**Status:** design **ACCEPTED 2026-07-03** — grilled once (fresh-opus adversarial pass, verdict
+**SHIP-WITH-AMENDMENTS**, all folded below) and all four decision points settled by the user (see
+"Decisions" near the end). **Ready to slice — not yet scheduled** (hand §9 slice 1 to
+milestone-planner/`/build` when the user gives the go). Triggered by the user picking this as the next design session: it is the convergence
 point of every recorded flag outside versioning — the designer's `sys *` rule flips to admin-gated
 (closing the security review's strategic residual, `docs/plans/security-review-pre-public.md`), the
 clone-the-designer caveat closes, the dict READ floor decision unblocks, versioning's deferred
@@ -85,30 +86,37 @@ holds for logged-out traffic).
 
 ### 5. One `/session` endpoint on the asset tree; the endpoint touches NO session *(settled; fixation redesign from grill)*
 
-Login/logout move from WS ops to a single framework endpoint beside `/ws` + `/js` — the sanctioned
-framework URL space (the app port stays clean; same precedent that put `/ws` there,
-`m-auth.md` "custom UI reserves nothing in URL space").
+A new framework endpoint beside `/ws` + `/js` (the sanctioned framework URL space; the app port
+stays clean, `m-auth.md` "custom UI reserves nothing in URL space") is added **solely to set/clear
+the persistent cookie**. It does NOT replace WS login — deenv is a warm-channel app, so the live
+login flip stays over the socket, in place, no reload (user decision 2026-07-03). **Three clean
+roles, one for each timescale:**
 
-- **POST `/session` `{name, password}`** → the same verify path `HandleLogin` uses
-  (`FindUserByName` + `AuthCrypto.Verify`) → on success, raw `Set-Cookie` (above) + `{ok:true}`;
-  on failure `{ok:false}` (feeds the existing form-error display contract). **No clientId in the
-  body; the endpoint never mutates `ClientSessionStore`.**
-- **Logout leg** (`DELETE /session` or `{op:"logout"}`) → `Set-Cookie` expired + `{ok}`.
-- **Grill P4 forced this shape:** the draft had the POST also flipping the live WS session via a
-  body-carried clientId — that is a **session-fixation sink** (an attacker who plants their
-  clientId in a victim's page could bind their own credentials to the victim's live session; the
-  same authority-confusion shape as the V1 RCE). Redesigned: **the cookie is the only principal
-  home; authority flows one way** — cookie → GET → SSR mint → hello claim. The endpoint just
-  mints/clears the cookie for the posting browser.
-- **Consequence — login/logout reload the page.** `sys.login`'s ws.ts hook becomes
-  `fetch(assetAuthority + '/session')`; on `{ok:true}` the client does `location.reload()` — the
-  reload GET carries the fresh cookie and comes back authenticated (same URL, standard web login
-  shape). Same for logout. Login happens on gate/anonymous screens, so no meaningful draft state
-  is lost. The WS `login`/`logout` ops and `HandleLogin`/`HandleLogout` are **deleted** — one
-  path, minimal-by-default. The Code surface `sys.login(name, password)` / `sys.logout()` is
-  **unchanged**, and both twins already treat them as client-only no-ops (`CodeExecutor.cs:1050`,
-  `codeExec.ts:1295-1296`, `CodeValidator.cs:80` — "a client-only host effect"), so **conformance
-  is untouched** (grill-verified).
+- **HTTP `/session` = cookie I/O only, never touches a session.** POST `{name, password}` → the
+  same verify path (`FindUserByName` + `AuthCrypto.Verify`) → on success, raw `Set-Cookie` (above)
+  + `{ok:true}`; on failure `{ok:false}`. `DELETE /session` → expired `Set-Cookie`. **No clientId
+  in the body; the endpoint never reads or mutates `ClientSessionStore`.** This is what keeps the
+  grill's P4 fixation edge from ever arising: that edge was an HTTP endpoint binding a
+  *body-supplied clientId's* live session across origins (an attacker plants their clientId in a
+  victim's page, binds their own creds to the victim's session — the V1 authority-confusion shape).
+  A pure cookie-setter binds no session, so there is nothing to fix.
+- **WS `login`/`logout` = the live in-place flip, UNCHANGED from today.** The existing ops still
+  set `session.PrincipalUserId` on the caller's **own socket** → `currentUser` flips → reactive
+  re-render, no reload. Fixation-safe because the socket IS the authenticated channel (an attacker
+  can't post onto the victim's socket) — today's accepted posture, not widened. The Code surface
+  `sys.login`/`sys.logout` and the twin no-ops (`CodeExecutor.cs:1050`, `codeExec.ts:1295-1296`)
+  are untouched → **conformance untouched**.
+- **GET mint-stamp (§6) = cross-load persistence.** The cookie only matters on the NEXT cold GET
+  (new tab, F5, return visit): the GET reads it and stamps the principal on the freshly-minted
+  session. The live flip handles the current page; the cookie handles every future page.
+- **Login click fires both, from the in-hand form creds:** the WS `login` op (live flip) and the
+  `/session` POST (persist). Credentials are therefore verified **twice** server-side — one extra
+  PBKDF2 on a rare path, the deliberate cost of keeping the endpoint a pure cookie-setter with zero
+  session authority. *(Single-verify alternative, NOT chosen: `/session` sets the cookie, the client
+  reconnects the WS, the server reads the cookie at the upgrade to bind the socket — elegant, but
+  needs the GenHTTP upgrade-cookie capability the grill left UNVERIFIED plus a reconnect blip;
+  not worth trading a free second PBKDF2 for an unverified dependency. Spike only if the double
+  call ever bothers us.)*
 - **HttpOnly is load-bearing, not optional** — the grill's XSS probe (P1) found the SSR escape
   chokepoint (`SsrRenderer.cs:1049-1050` + no innerHTML client-side) was **incomplete**: no
   `javascript:`-scheme guard on `href`/`src` and string-valued `on*` attributes rendered as inline
@@ -210,18 +218,29 @@ section while slice 5/7 add type meta-fields — trivial rebase · P7 lazier-hun
 pwStamp kept (stated requirement), per-instance names justified, HMAC-not-PBKDF2 right-sized ·
 P8 designer-gate work item surfaced. Overall: **SHIP-WITH-AMENDMENTS** — all folded above.
 
-## Decision points for the user (the wire/interface-shape ask)
+## Decisions (all settled by the user, 2026-07-03)
 
-1. **Login/logout become an asset-tree `/session` fetch + page reload** (WS ops deleted; live
-   no-reload flip sacrificed to kill the fixation edge). The visible UX change: submit → reload →
-   signed in.
-2. **HttpOnly-via-endpoint over `document.cookie`** — decided by the XSS-probe evidence, not
-   preference; confirm you accept the extra framework endpoint on the asset tree.
-3. **Fixed 30-day lifetime** (no sliding) + **pwStamp kept** — the two knobs the grill haggled;
-   either is a one-line change of heart.
-4. **Flip scope**: full designer gating (data rules + gate + `sys` condition) then htpasswd drop —
-   vs. `sys`-only minimal flip (host actions gated, data still open behind htpasswd). The doc
-   assumes **full** — it's what "closes the strategic residual" actually means.
+1. **SETTLED (user, 2026-07-03): live WS flip stays, no reload.** The `/session` endpoint is added
+   *only* to set/clear the persistent cookie and touches no session; the existing WS `login`/`logout`
+   ops keep doing the in-place reactive flip. Fixation edge is closed by the endpoint having zero
+   session authority (not by deleting the live flip). Cost: creds verified twice on login (one extra
+   PBKDF2 — accepted). deenv is a warm-channel app, so login flips in place; it does NOT reload.
+2. **SETTLED: HttpOnly cookie accepted.** It's the textbook secure-session recipe (HttpOnly +
+   Secure + SameSite=Lax + HMAC-signed) and beats the JS-readable alternatives. Security does NOT
+   rest on HttpOnly alone — it defeats token *theft* via XSS, but XSS-on-an-authenticated-page can
+   still *act* in-session; the real boundary is the access floor + the landed XSS guard, with
+   HttpOnly as defense-in-depth. Named residuals (all deliberate, MVP-appropriate): no instant
+   server-side revocation — a stolen token is replayable until 30-day expiry or password change
+   (pwStamp); the tradeoff vs. a server-side session store was taken to survive restarts and stay
+   off the M13 log; per-user tokenVersion ("log out everywhere") is the ceiling. **Secure/TLS is
+   mandatory in prod** (nginx), relaxed only on localhost.
+3. **SETTLED: 30-day fixed default now, configurable later** (user). No sliding, pwStamp kept for
+   MVP; the lifetime constant becomes an operator/kernel config knob in a later pass (named future,
+   not MVP).
+4. **SETTLED: full flip — add the access rules** (user: "no-brainer"). The flip slice gates the
+   designer's data types (Design/Instance/User/Commit/Branch) AND adds the hand-rolled login gate to
+   its custom render AND flips `sys` to the admin condition — then the nginx htpasswd drops. This is
+   what actually closes the strategic residual; `sys`-only was the rejected half-measure.
 
 ## Explicitly out
 
