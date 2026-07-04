@@ -996,6 +996,182 @@ public sealed class DesignerSteps(InstanceContext ctx)
                 o.Fields.TryGetValue("text", out var v) && v is DeEnv.Storage.TextValue t && t.Text == text);
         }, timeoutMs: 45000);
 
+    // ── B4 — branches + merge from the design editor ─────────────────────────────
+
+    // Create a branch: type the name into the Branches-section input, click "+ Branch" (sys.createBranch —
+    // a host action), then wait for the branch link to appear via the ack's refetch (the new Branch row is
+    // GC-reachable via db.branches, and branchSection lists branches whose workingCopy shares the app's
+    // lineage). Poll the DOM for the link — the refetch is async.
+    [When("I create a branch named {string}")]
+    public async Task WhenCreateBranch(string name)
+    {
+        await ctx.Page!.Locator(".branch-section input.branch-name").FillAsync(name);
+        await ctx.Page.Locator(".branch-section button.create-branch").ClickAsync();
+        await BranchLinkFor(name).WaitForAsync(new Microsoft.Playwright.LocatorWaitForOptions { Timeout = 15000 });
+    }
+
+    [Then("the Branches section lists a branch link {string}")]
+    public async Task ThenBranchesListsLink(string name) =>
+        await BranchLinkFor(name).WaitForAsync();
+
+    // Switch to a branch's editor. A branch working copy is a Design row at its OWN URL (/designs/<wcId>) —
+    // "switching branches" is navigation, the settled model. The Branches section renders the branch as a
+    // real <a href="/designs/<wcId>"> link (asserted by the "lists a branch link" scenario); here we OPEN
+    // that URL directly (a fresh SSR load — a direct visit / reload is navigation too), which gives a clean
+    // data-hydrated barrier. This avoids the editor→editor client-side-nav sync problem: both the source and
+    // branch editors share `.design-editor`/`.type-card` markup with the same label, so a link CLICK alone
+    // cannot be reliably awaited from an already-open editor (the old DOM lingers until the refetch swaps it).
+    [When("I open the branch {string} from the Branches section")]
+    public async Task WhenOpenBranch(string name)
+    {
+        var wcId = BranchWorkingCopyId(name);
+        var page = ctx.Page!;
+        await page.GotoReadyAsync(ctx.DesignerUrl($"/designs/{wcId}"));
+        await page.WaitForSelectorAsync("main.ide-design-edit .design-editor .type-card");
+        await page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+    }
+
+    // Add a field to a named type: click that type-card's "+ Field", then name the just-added (empty-name)
+    // prop. Waits for the client edit AND the autosave to the designer's store (a later commit snapshots it).
+    [When("I add a field {string} to the type {string}")]
+    public async Task WhenAddField(string propName, string typeName)
+    {
+        var card = ctx.Page!.Locator($".design-editor .type-card:has(input.type-name[value={CssString(typeName)}])");
+        await card.Locator("button.add-prop").ClickAsync();
+        var newRow = card.Locator(".prop-row:has(input.prop-name[value=\"\"])").First;
+        await newRow.Locator("input.prop-name").FillAsync(propName);
+        await ctx.Page.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.prop-row input.prop-name')].some(e => e.value === {JsString(propName)})");
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
+            .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == propName));
+    }
+
+    // Rename a prop on a named type via its bound name input; wait for the client edit + the autosave, so a
+    // later commit snapshots the renamed prop (the commit reads the store fresh).
+    [When("I rename the prop {string} to {string} on the type {string}")]
+    public async Task WhenRenameProp(string from, string to, string typeName)
+    {
+        var input = ctx.Page!.Locator(
+            $".design-editor .type-card:has(input.type-name[value={CssString(typeName)}]) " +
+            $".prop-row input.prop-name[value={CssString(from)}]");
+        await input.FillAsync(to);
+        await ctx.Page.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.prop-row input.prop-name')].some(e => e.value === {JsString(to)})");
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
+            .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == to));
+    }
+
+    // Grant a read rule on a type for the branch (reusing the slice-5 store-level access mutation): append an
+    // access rule onto the branch working copy's Design record in the designer's own store BEFORE the branch
+    // is committed via the UI, so sys.commitDesign snapshots it into the branch head. A store write on the ONE
+    // live store (never a second store over the file — the single-store invariant).
+    [When("I grant read on {string} to everyone on the branch {string}")]
+    public async Task WhenGrantReadOnBranch(string typeName, string branchName)
+    {
+        var wcId = BranchWorkingCopyId(branchName);
+        var current = (_designer.Store.ReadById(wcId)!.Value.Fields.Fields.GetValueOrDefault("access") as DeEnv.Storage.TextValue)?.Text ?? "";
+        var body = (current.Length == 0 ? "access\n" : current) + $"    {typeName}\n        read\n";
+        _designer.Store.WriteField(wcId, "access", new DeEnv.Storage.TextValue(body));
+        await Task.CompletedTask;
+    }
+
+    // Open the toggle-gated merge Preview for a branch: click its "Preview merge", then wait for the report
+    // (server-backed read → shipped via the memo cache, so it populates after the toggle-driven refetch).
+    [When("I preview the merge of branch {string}")]
+    public async Task WhenPreviewMerge(string name)
+    {
+        await MergeRowFor(name).Locator("button.preview-merge").ClickAsync();
+        await MergeRowFor(name).Locator(".merge-preview .merge-report").WaitForAsync(
+            new Microsoft.Playwright.LocatorWaitForOptions { Timeout = 15000 });
+    }
+
+    [Then("the merge preview reports a clean merge")]
+    public async Task ThenMergePreviewClean() =>
+        await ctx.Page!.Locator(".merge-preview .merge-clean").WaitForAsync();
+
+    // The conflict's source row is labeled with the SOURCE BRANCH's real name (review fix — "source:"/
+    // "target:" named the internal marker, not a branch, so the UI now reads "<branchName>: <value>" /
+    // "this design: <value>"); the branch under test is always "feature" here.
+    [Then("the merge preview shows a conflict with source {string} and target {string}")]
+    public async Task ThenMergeConflictSourceTarget(string source, string target)
+    {
+        await ctx.Page!.Locator($".merge-conflict:has(.merge-conflict-source:text-is({CssString("feature: " + source)})) " +
+            $".merge-conflict-target:text-is({CssString("this design: " + target)})").WaitForAsync();
+    }
+
+    // Apply is gated until every conflict is resolved: with an unresolved conflict, no .merge-apply button
+    // renders (a "resolve every conflict" hint shows instead).
+    [Then("the merge preview shows no Merge button")]
+    public async Task ThenNoMergeButton() =>
+        await Assert.That(await ctx.Page!.Locator(".merge-preview button.merge-apply").CountAsync()).IsEqualTo(0);
+
+    // Pick "source" for the first (only) conflict — clicks its Take source button, which accumulates the pick
+    // in the merge component's client state; the Apply button then appears (all conflicts resolved).
+    [When("I take source for the first conflict")]
+    public async Task WhenTakeSourceFirstConflict()
+    {
+        await ctx.Page!.Locator(".merge-conflict button.take-source").First.ClickAsync();
+        await ctx.Page.Locator(".merge-preview button.merge-apply").WaitForAsync();
+    }
+
+    // Apply the previewed merge: click the row's Merge button (sys.mergeBranch with the assembled
+    // resolutions). On the ack's refetch the merge commit lands and the target working copy carries the merge.
+    [When("I apply the merge of branch {string}")]
+    public async Task WhenApplyMerge(string name) =>
+        await MergeRowFor(name).Locator(".merge-preview button.merge-apply").ClickAsync();
+
+    [Then("the merge preview's access block mentions {string}")]
+    public async Task ThenMergeAccessMentions(string phrase) =>
+        await ctx.Page!.Locator($".merge-preview .merge-access .merge-access-row:has-text({CssString(phrase)})").WaitForAsync();
+
+    // A prop by name is stored on a named type of the design in db.designs (the MAIN working copy, NOT a
+    // branch clone — a clone shares the label, so scope to the design reachable from db.designs).
+    [Then("the design {string} eventually has a stored prop named {string} on {string}")]
+    public async Task ThenDesignHasStoredPropOnType(string designLabel, string propName, string typeName) =>
+        await EventuallyAsync(() =>
+        {
+            var designsSet = _designer.Store.ReadNode(DeEnv.Storage.NodePath.Root.Field("designs")) as DeEnv.Storage.SetValue;
+            if (designsSet is null) return false;
+            var metaTypes = _designer.Store.ReadExtent("MetaType");
+            var metaProps = _designer.Store.ReadExtent("MetaProp");
+            foreach (var designId in designsSet.Members.Keys)
+            {
+                var design = _designer.Store.ReadById(designId);
+                if (design is null || design.Value.TypeName != "Design") continue;
+                if (design.Value.Fields.Fields.GetValueOrDefault("label") is not DeEnv.Storage.TextValue { Text: var lbl } || lbl != designLabel) continue;
+                if (design.Value.Fields.Fields.GetValueOrDefault("types") is not DeEnv.Storage.SetValue typesSet) continue;
+                foreach (var typeId in typesSet.Members.Keys)
+                {
+                    if (!metaTypes.TryGetValue(typeId, out var mt)) continue;
+                    if (mt.Fields.GetValueOrDefault("name") is not DeEnv.Storage.TextValue { Text: var tn } || tn != typeName) continue;
+                    if (mt.Fields.GetValueOrDefault("props") is not DeEnv.Storage.SetValue propsSet) continue;
+                    if (propsSet.Members.Keys.Any(pid => metaProps.TryGetValue(pid, out var mp)
+                        && mp.Fields.GetValueOrDefault("name") is DeEnv.Storage.TextValue { Text: var pn } && pn == propName))
+                        return true;
+                }
+            }
+            return false;
+        }, timeoutMs: 30000);
+
+    // The branch working copy's Design id, resolved from the designer's store: a Branch named `name` whose
+    // workingCopy reference names a Design row.
+    private int BranchWorkingCopyId(string name)
+    {
+        foreach (var (_, branch) in _designer.Store.ReadExtent("Branch"))
+            if (branch.Fields.GetValueOrDefault("name") is DeEnv.Storage.TextValue { Text: var bn } && bn == name
+                && branch.Fields.GetValueOrDefault("workingCopy") is DeEnv.Storage.ReferenceValue { TargetId: { } wcId })
+                return wcId;
+        throw new InvalidOperationException($"No branch named '{name}' with a working copy in the designer store.");
+    }
+
+    // The Branches-section link for a branch (its <a class="branch-link"> naming the branch).
+    private Microsoft.Playwright.ILocator BranchLinkFor(string name) =>
+        ctx.Page!.Locator($".branch-section .branch-list a.branch-link:text-is({CssString(name)})");
+
+    // The merge row for a branch in the Branches section (its head shows Merge "<name>").
+    private Microsoft.Playwright.ILocator MergeRowFor(string name) =>
+        ctx.Page!.Locator($".branch-section .branch-row:has(.branch-link:has-text({CssString("Merge \"" + name + "\"")}))");
+
     // The design editor's Publish-section row for an instance, located by its target name.
     private Microsoft.Playwright.ILocator PublishRowFor(string label) =>
         ctx.Page!.Locator($".publish-section .publish-row:has(.publish-target:text-is({CssString(label)}))");

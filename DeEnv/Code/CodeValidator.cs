@@ -79,6 +79,7 @@ public static class CodeValidator
         ["canRead"] = [1],  // (typeName) — server-resolved read capability (hide unreadable collections/routes)
         ["diffCommits"] = [2], // (from, to) — server-computed rename-aware structural diff, shipped like schema/canRead
         ["publishPreview"] = [2], // (design, targetId) — server-computed dry-run PublishReport, shipped like diffCommits
+        ["mergePreview"] = [2], // (source, target) — server-computed no-write MergeReport, shipped like publishPreview
         ["setRef"] = [3],
         // (design, targetId) OR (design, targetId, expectedHeadCommit, expectedTargetVersion) — the
         // preview→apply consistency guard token (M13 Track-B B3 addendum). The trailing pair is
@@ -92,6 +93,8 @@ public static class CodeValidator
         ["rename"] = [2],  // (id, name)
         ["setDesign"] = [2], // (schema, targetId)
         ["commitDesign"] = [2], // (design, message)
+        ["createBranch"] = [2], // (design, name) — clone a working copy's subgraph into a new Branch
+        ["mergeBranch"] = [2, 3], // (source, target) OR (source, target, resolutions) — resolutions optional
         ["login"] = [2],   // (name, password) — a client-only host effect (the session→principal bind)
         ["logout"] = [0],  // () — the mirror of login: a client-only host effect (clear the principal)
         ["nest"] = [2],

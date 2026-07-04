@@ -780,3 +780,103 @@ Feature: The operator IDE (designs library + instance design selector)
     When I apply the publish for the instance "todo"
     Then the "todo" instance's app document describes the type "Task"
     And the "todo" instance eventually holds a "Task" with text "guarded apply keeps me"
+
+  # ── B4 — Branch UI + createBranch/mergeBranch from the designer ───────────────────────────────
+  #
+  # The design editor grows a Branches section: create a branch (sys.createBranch — a host action), see
+  # the design's branches as links to their own /designs/<id> editors (a branch working copy is a Design
+  # row at its own URL — switching branches is navigation), and merge a branch back in via a toggle-gated
+  # sys.mergePreview (a server-backed READ shipped via the memo cache like sys.publishPreview, NOT a host
+  # action, changing NOTHING) then an Apply (sys.mergeBranch — the host action). The merge machinery itself
+  # (three-way merge, conflicts, resolutions, access-change surfacing) is exhaustively proven at the WS-op
+  # level in DesignMerge.feature; these scenarios prove the UI drives it end-to-end.
+
+  # 1) Create a branch: commit a baseline (so the branch has a head to clone), then create a branch named
+  # "feature". It appears in the Branches section as a branch link (a Design row at its own URL).
+  @milestone-13 @single-user
+  Scenario: Creating a branch from the editor lists it as a branch link
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I type "baseline for branching" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "baseline for branching"
+    When I create a branch named "feature"
+    Then the Branches section lists a branch link "feature"
+
+  # 2) A clean merge carries a disjoint change. Commit a baseline, branch, add a field on the branch and
+  # commit it there, then merge the branch back into the main design — a clean merge (disjoint edit), and
+  # the main design's type now carries the branch's new field. Proves the whole preview→apply UI path.
+  @milestone-13 @single-user
+  Scenario: Merging a branch cleanly carries its change into the target design
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I type "baseline for merge" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "baseline for merge"
+    When I create a branch named "feature"
+    And I open the branch "feature" from the Branches section
+    And I add a field "priority" to the type "TodoItem"
+    And I type "add priority on branch" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "add priority on branch"
+    When I open the designs list
+    And I edit the design "todo"
+    And I preview the merge of branch "feature"
+    Then the merge preview reports a clean merge
+    When I apply the merge of branch "feature"
+    Then the design "todo" eventually has a stored prop named "priority" on "TodoItem"
+
+  # 3) A conflict is shown, resolved by a per-conflict pick, then applied. Rename the same prop differently
+  # on the branch and on main; the merge preview surfaces the conflict with its base/source/target values,
+  # Apply stays gated until the conflict is resolved, and picking a side unlocks the merge.
+  @milestone-13 @single-user
+  Scenario: A merge conflict renders, is resolved by a pick, and then merges
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I type "baseline for conflict" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "baseline for conflict"
+    When I create a branch named "feature"
+    And I open the branch "feature" from the Branches section
+    And I rename the prop "text" to "heading" on the type "TodoItem"
+    And I type "rename to heading on branch" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "rename to heading on branch"
+    When I open the designs list
+    And I edit the design "todo"
+    And I rename the prop "text" to "caption" on the type "TodoItem"
+    And I type "rename to caption on main" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "rename to caption on main"
+    When I preview the merge of branch "feature"
+    Then the merge preview shows a conflict with source "heading" and target "caption"
+    And the merge preview shows no Merge button
+    When I take source for the first conflict
+    And I apply the merge of branch "feature"
+    Then the design "todo" eventually has a stored prop named "heading" on "TodoItem"
+
+  # 4) The access-change must-see block. A merge that introduces an access-rule difference ALWAYS surfaces
+  # it (never silently folded in — the settled security rule), even on an otherwise-clean merge. Grant a
+  # read rule on the branch (reusing the slice-5 store-level access mutation), commit it there, then the
+  # merge preview on main renders the loud AccessChanges block naming the rule.
+  @milestone-13 @single-user
+  Scenario: A merge that changes an access rule surfaces the must-see access block
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I type "baseline for access" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "baseline for access"
+    When I create a branch named "feature"
+    And I grant read on "TodoItem" to everyone on the branch "feature"
+    And I open the branch "feature" from the Branches section
+    And I type "grant read on branch" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "grant read on branch"
+    When I open the designs list
+    And I edit the design "todo"
+    And I preview the merge of branch "feature"
+    Then the merge preview's access block mentions "TodoItem"

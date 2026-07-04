@@ -76,6 +76,9 @@ ui
     var renameId = 0
     var renameName = ""
     var commitMessage = ""
+    var branchName = ""
+    var previewingBranch = 0
+    var mergePicks = []
     var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime", "password"]
     var typeKinds = ["object", "enum"]
     var cardinalities = ["single", "set", "dictionary"]
@@ -195,6 +198,7 @@ ui
                         <button class="add-prop" onClick={() => addProp(type)}>
                             "+ Field"
             publishSection(design)
+            branchSection(design)
             <details class="code-areas">
                 <summary class="code-summary">
                     "Advanced (code)"
@@ -310,6 +314,179 @@ ui
                 <p class="publish-empty">
                     "No instances running this design yet."
 
+    fn appLineage(d)
+        if d.origin != 0
+            return d.origin
+        return sys.id(d)
+
+    fn branchesForApp(design)
+        return db.branches.where(b => b.workingCopy != null && appLineage(b.workingCopy) == appLineage(design))
+
+    fn otherBranchesForApp(design)
+        return branchesForApp(design).where(b => sys.id(b.workingCopy) != sys.id(design))
+
+    fn doCreateBranch(design)
+        sys.createBranch(design, branchName)
+        branchName = ""
+
+    fn branchRow(design, branch)
+        return <div class="branch-row">
+            <div class="branch-row-head">
+                <a class="branch-link" href={sys.nest("/designs", sys.id(branch.workingCopy))}>
+                    branch.name
+                if sys.id(branch.workingCopy) == sys.id(design)
+                    <span class="branch-current">
+                        "current"
+
+    fn pickIsSource(c)
+        var p = mergePicks.single(x => x.id == c.id)
+        if p == null
+            return false
+        return p.take == "source"
+
+    fn pickIsTarget(c)
+        var p = mergePicks.single(x => x.id == c.id)
+        if p == null
+            return false
+        return p.take == "target"
+
+    fn setPick(c, take)
+        var existing = mergePicks.single(x => x.id == c.id)
+        if existing != null
+            mergePicks.remove(existing)
+        mergePicks.add({ id: c.id, take: take })
+
+    fn openMergePreview(branch)
+        mergePicks = []
+        previewingBranch = sys.id(branch.workingCopy)
+
+    fn closeMergePreview()
+        previewingBranch = 0
+
+    fn conflictBaseText(c)
+        if c.base == null
+            return "base: (none)"
+        return "base: " + c.base
+
+    fn conflictKindLabel(kind)
+        if kind == "meta"
+            return "Field/type change"
+        if kind == "existence"
+            return "Added vs removed"
+        if kind == "fn"
+            return "Code"
+        if kind == "access"
+            return "Access rule"
+        if kind == "initialData"
+            return "Seed data"
+        return kind
+
+    fn conflictHeaderText(c)
+        if c.field != null
+            return conflictKindLabel(c.kind) + " · " + c.field
+        return conflictKindLabel(c.kind) + " · " + c.path
+
+    fn mergeConflict(report, c)
+        return <div class="merge-conflict">
+            <div class="merge-conflict-head">
+                conflictHeaderText(c)
+            <div class="merge-conflict-vals">
+                <div class="merge-conflict-base">
+                    conflictBaseText(c)
+                <div class="merge-conflict-source">
+                    report.sourceBranch + ": " + c.source
+                <div class="merge-conflict-target">
+                    "this design: " + c.target
+            <div class="merge-conflict-picks">
+                <button class={pickIsSource(c) ? "take-source is-picked" : "take-source"} onClick={() => setPick(c, "source")}>
+                    "Take \"" + report.sourceBranch + "\""
+                <button class={pickIsTarget(c) ? "take-target is-picked" : "take-target"} onClick={() => setPick(c, "target")}>
+                    "Keep this design"
+
+    fn accessChangeRow(a)
+        return <div class="merge-access-row">
+            a.ruleKey + ": " + a.change
+
+    fn driftMessage(report)
+        if report.driftRefusal == "target"
+            return "Commit this design first — it has uncommitted changes the merge can't see."
+        return "Commit branch \"" + report.sourceBranch + "\" first — it has uncommitted changes."
+
+    fn mergeReportView(report)
+        return <div class="merge-report">
+            if report.driftRefusal != null
+                <p class="merge-drift">
+                    driftMessage(report)
+            if report.noOp
+                <p class="merge-uptodate">
+                    "Already up to date."
+            opGroup("Access changes (review)", "merge-access", "merge-access-label", report.accessChanges, accessChangeRow)
+            if report.conflicts.any(x => true)
+                <div class="merge-conflicts">
+                    foreach c in report.conflicts
+                        mergeConflict(report, c)
+            if report.driftRefusal == null && report.noOp == false && report.conflicts.any(x => true) == false
+                <p class="merge-clean">
+                    "Clean merge — no conflicts."
+
+    fn unresolvedConflicts(report)
+        return report.conflicts.where(c => pickIsSource(c) == false && pickIsTarget(c) == false)
+
+    fn mergePreviewBody(design, branch)
+        var report = sys.mergePreview(branch.workingCopy, design)
+        fn doMerge()
+            sys.mergeBranch(branch.workingCopy, design, mergePicks)
+        return <div class="merge-preview">
+            mergeReportView(report)
+            if report.driftRefusal == null && report.noOp == false
+                if unresolvedConflicts(report).any(c => true)
+                    <p class="merge-blocked">
+                        "Resolve every conflict to merge."
+                else
+                    <button class="merge-apply" onClick={doMerge}>
+                        "Merge into this design"
+
+    fn mergeRow(design, branch)
+        return <div class="branch-row">
+            <div class="branch-row-head">
+                <span class="branch-link">
+                    "Merge \"" + branch.name + "\""
+                if previewingBranch == sys.id(branch.workingCopy)
+                    <button class="merge-hide" onClick={() => closeMergePreview()}>
+                        "Hide"
+                else
+                    <button class="preview-merge" onClick={() => openMergePreview(branch)}>
+                        "Preview merge"
+            if previewingBranch == sys.id(branch.workingCopy)
+                mergePreviewBody(design, branch)
+
+    fn branchSection(design)
+        var branches = branchesForApp(design)
+        var others = otherBranchesForApp(design)
+        return <section class="branch-section">
+            <h2 class="branch-heading">
+                "Branches"
+            <p class="branch-caption">
+                "Branch this design to work in isolation, then merge a branch back in. Switching branches opens that branch's own editor."
+            <div class="branch-create">
+                <input class="branch-name" value={branchName}>
+                <button class="create-branch" onClick={() => doCreateBranch(design)}>
+                    "+ Branch"
+            if branches.any(b => true)
+                <div class="branch-list">
+                    foreach b in branches
+                        branchRow(design, b)
+            else
+                <p class="branch-empty">
+                    "No branches yet."
+            if others.any(b => true)
+                <div class="branch-list">
+                    foreach b in others
+                        mergeRow(design, b)
+
+    fn branchWorkingCopies()
+        return db.branches.where(b => b.workingCopy != null)
+
     fn designEditorPage()
         var routeId = sys.toInt(sys.segment(path, 2))
         return <main class="ide-design-edit">
@@ -322,8 +499,13 @@ ui
                     if sys.id(d) == routeId
                         designEditor(d)
             else
-                <p class="not-found">
-                    "Design not found."
+                if branchWorkingCopies().any(b => sys.id(b.workingCopy) == routeId)
+                    foreach b in branchWorkingCopies()
+                        if sys.id(b.workingCopy) == routeId
+                            designEditor(b.workingCopy)
+                else
+                    <p class="not-found">
+                        "Design not found."
 
     fn instanceActions(inst, showOpen, showRename)
         var state = { open: false }

@@ -650,13 +650,50 @@ public sealed class KernelHostActions(
     {
         var sourceDesignId = ArgInt(args, 0);
         var targetDesignId = ArgInt(args, 1);
-        var resolutions = ArgResolutionsOptional(args, 2);
+        var resolutions = ArgResolutionsOptional(args, 2).ToDictionary(r => r.Id, r => r.Take);
 
         // The caller's ONE live store (the single writer). Concretely a JsonFileInstanceStore — the clean
         // apply (ApplyMergeToTarget) needs the concrete type for its batch/remove writes; every kernel-hosted
         // store IS one, so the cast never fails.
         var store = (JsonFileInstanceStore)resolveStore();
 
+        // The SHARED compute (drift/no-op/conflict decision + the clean MergeComputation), IDENTICAL to what
+        // sys.mergePreview reads — so preview and apply can never diverge (M13 Track-B B4). A plan that is
+        // not clean-appliable (drift, no-op, or unresolved conflicts) already carries its final MergeReport
+        // and made NO writes; only a CLEAN plan reaches the apply below.
+        var plan = ComputeMergePlan(store, sourceDesignId, targetDesignId, resolutions);
+        if (!plan.CleanAppliable)
+            return plan.Report;
+
+        // ── clean apply: ordinary store writes onto the TARGET working copy, then the merge commit ──
+        ApplyMergeToTarget(store, targetDesignId, plan.Computation!);
+
+        var mergeCommitId = CreateMergeCommit(store, targetDesignId, plan.TargetBranchId, plan.TargetCommit, plan.SourceCommit,
+            plan.Report.SourceBranch, plan.Report.TargetBranch);
+
+        return plan.Report with { Merged = true, MergeCommit = mergeCommitId };
+    }
+
+    // The result of the shared three-way merge COMPUTE (M13 Track-B B4): the MergeReport an operator sees
+    // PLUS the extra state a clean apply needs. `CleanAppliable` is true iff the merge would apply with NO
+    // conflicts (not drift, not a no-op, no unresolved conflicts) — the ONLY case where `Computation` is
+    // non-null and the caller may write. In every other case `Report` is the final answer and NO write may
+    // happen. `sys.mergePreview` returns `Report` verbatim; `sys.mergeBranch` applies `Computation` when
+    // `CleanAppliable`, then stamps `Report.Merged = true` with the new merge commit.
+    internal sealed record MergePlan(
+        MergeReport Report, bool CleanAppliable, MergeComputation? Computation,
+        int TargetBranchId, int TargetCommit, int SourceCommit);
+
+    // Compute the three-way merge of `source` into `target` WITHOUT writing — the shared core behind both
+    // sys.mergeBranch (apply) and sys.mergePreview (read). Everything through the conflict/clean decision is
+    // here; the ONLY thing MergeBranch adds is the actual write (ApplyMergeToTarget + CreateMergeCommit). A
+    // clean plan carries its Computation so the apply path reuses the EXACT merged result the preview showed
+    // — preview and apply cannot drift because they run the identical compute over the identical committed
+    // heads. `internal static` so the SsrRenderer-built preview delegate (same assembly) reaches it directly
+    // WITHOUT a KernelHostActions instance, like the Publish path shares the static PublishReportComputer.
+    internal static MergePlan ComputeMergePlan(
+        JsonFileInstanceStore store, int sourceDesignId, int targetDesignId, IReadOnlyDictionary<string, string> resolutions)
+    {
         var sourceDesign = ReadDesign(store, sourceDesignId);
         var targetDesign = ReadDesign(store, targetDesignId);
         var sourceBranch = FindOrCreateMainBranchByWorkingCopy(store, sourceDesignId)
@@ -665,6 +702,8 @@ public sealed class KernelHostActions(
             ?? throw new InvalidOperationException($"Design {targetDesignId} has no owning branch.");
         var sourceBranchName = TextOf(sourceBranch.Fields, "name");
         var targetBranchName = TextOf(targetBranch.Fields, "name");
+
+        MergePlan Refused(MergeReport report) => new(report, false, null, 0, 0, 0);
 
         var sourceAppLineage = LineageOf(sourceDesign, sourceDesignId);
         var targetAppLineage = LineageOf(targetDesign, targetDesignId);
@@ -685,20 +724,20 @@ public sealed class KernelHostActions(
         // Drift refusal: the working copy's CURRENT text must equal its own branch head's cached text.
         var sourceWorking = SchemaBridge.Snapshot(sourceDesign).Text;
         if (sourceWorking != TextOf(sourceHeadFields, "text"))
-            return new MergeReport { Merged = false, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
+            return Refused(new MergeReport { Merged = false, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
                 BaseCommit = 0, SourceCommit = sourceHeadId, TargetCommit = targetHeadId,
-                Conflicts = [], AccessChanges = [], DriftRefusal = "source" };
+                Conflicts = [], AccessChanges = [], DriftRefusal = "source" });
         var targetWorking = SchemaBridge.Snapshot(targetDesign).Text;
         if (targetWorking != TextOf(targetHeadFields, "text"))
-            return new MergeReport { Merged = false, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
+            return Refused(new MergeReport { Merged = false, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
                 BaseCommit = 0, SourceCommit = sourceHeadId, TargetCommit = targetHeadId,
-                Conflicts = [], AccessChanges = [], DriftRefusal = "target" };
+                Conflicts = [], AccessChanges = [], DriftRefusal = "target" });
 
         var baseCommitId = FindLca(store, sourceHeadId, targetHeadId);
         if (baseCommitId == sourceHeadId)
-            return new MergeReport { Merged = false, NoOp = true, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
+            return Refused(new MergeReport { Merged = false, NoOp = true, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
                 BaseCommit = baseCommitId, SourceCommit = sourceHeadId, TargetCommit = targetHeadId,
-                Conflicts = [], AccessChanges = [] };
+                Conflicts = [], AccessChanges = [] });
 
         var baseFields = FindCommit(store, baseCommitId)!;
         var baseSnapshot = new DesignSnapshot(TextOf(baseFields, "text"), IdMapOf(baseFields));
@@ -718,30 +757,27 @@ public sealed class KernelHostActions(
         // downstream that depends on a resolved value (e.g. a type rename feeding its still-owned props)
         // sees the resolved value, not a placeholder. Any conflict WITHOUT a matching resolution id still
         // ends up in `computation.Conflicts` and blocks the merge.
-        var resolutionMap = resolutions.ToDictionary(r => r.Id, r => r.Take);
-        var computation = DesignMerger.Compute(baseSnapshot, sourceSnapshot, targetSnapshot, LineageOfRowId, resolutionMap);
+        var computation = DesignMerger.Compute(baseSnapshot, sourceSnapshot, targetSnapshot, LineageOfRowId, resolutions);
 
         if (computation.Conflicts.Count > 0)
-            return new MergeReport
+            return Refused(new MergeReport
             {
                 Merged = false, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
                 BaseCommit = baseCommitId, SourceCommit = sourceHeadId, TargetCommit = targetHeadId,
                 Conflicts = [.. computation.Conflicts.Select(c => new ConflictItem(c.Id, c.Kind, c.Path, c.Field, c.Base, c.Source, c.Target))],
                 AccessChanges = [.. computation.AccessChanges.Select(a => new AccessChangeReportItem(a.RuleKey, a.Change, a.Condition))],
-            };
+            });
 
-        // ── clean apply: ordinary store writes onto the TARGET working copy, then the merge commit ──
-        ApplyMergeToTarget(store, targetDesignId, computation);
-
-        var mergeCommitId = CreateMergeCommit(store, targetDesignId, targetBranch.Id, targetHeadId, sourceHeadId, sourceBranchName, targetBranchName);
-
-        return new MergeReport
+        // CLEAN: no conflicts, not drift, not a no-op. The report is `Merged = false` here (nothing has been
+        // written yet — this is exactly what the PREVIEW shows: "ready to merge, N access changes"); the apply
+        // path stamps `Merged = true` + the merge commit id after ApplyMergeToTarget/CreateMergeCommit succeed.
+        var cleanReport = new MergeReport
         {
-            Merged = true, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
-            BaseCommit = baseCommitId, SourceCommit = sourceHeadId, TargetCommit = targetHeadId,
-            MergeCommit = mergeCommitId, Conflicts = [],
+            Merged = false, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
+            BaseCommit = baseCommitId, SourceCommit = sourceHeadId, TargetCommit = targetHeadId, Conflicts = [],
             AccessChanges = [.. computation.AccessChanges.Select(a => new AccessChangeReportItem(a.RuleKey, a.Change, a.Condition))],
         };
+        return new MergePlan(cleanReport, true, computation, targetBranch.Id, targetHeadId, sourceHeadId);
     }
 
     // Apply a CLEAN MergeComputation onto the TARGET working copy — "ordinary store writes" (per the

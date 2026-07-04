@@ -21,11 +21,12 @@ public static class HostActionScan
     // list). A `sys.<name>(...)` call with `name` in this set is a host-action call. Kept here beside the
     // scan; the arity list (CodeValidator.BuiltinArities) is the other place these names appear.
     //
-    // `createBranch`/`mergeBranch` (M13 slice 5) are DELIBERATELY absent — they stay WS-op-only until
-    // their UI lands (the same "wire lockstep, all at once" rule the Commit-button slice's commitDesign
-    // addition follows, narrower scope: see docs/plans/versioning-slices.md slice 3's scope line).
+    // `createBranch`/`mergeBranch` (M13 slice 5) join the set with M13 Track-B B4 — their Branch UI landed,
+    // so they are wired into Code lockstep (the same "wire lockstep, all at once" rule the Commit-button
+    // slice's commitDesign addition follows: HostActionScan + CodeValidator arities + both interpreters +
+    // the UI, all in one slice).
     private static readonly HashSet<string> HostActionBuiltins =
-        ["create", "delete", "cloneInstance", "publish", "rename", "setDesign", "commitDesign"];
+        ["create", "delete", "cloneInstance", "publish", "rename", "setDesign", "commitDesign", "createBranch", "mergeBranch"];
 
     // True when any Code in `desc` (ui vars/functions/render + common functions) calls a host-action
     // builtin. Used by KernelHost.HostActionsFor to wire the real seam only for a host-action-using app.

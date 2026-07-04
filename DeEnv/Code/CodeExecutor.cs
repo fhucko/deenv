@@ -62,9 +62,22 @@ public sealed class CodeExecutor
     // non-kernel test instance) ⇒ `sys.publishPreview` throws, as it needs the designer host.
     private readonly Func<ExecObject, int, ExecContext, IExecValue>? _publishPreview;
 
+    // The merge-preview computer (M13 Track-B B4), injected by the renderer so `sys.mergePreview(source,
+    // target)` can compute what merging one design branch into another WOULD do — the structured MergeReport
+    // (conflicts with base/source/target + the always-shown access changes) computed WITHOUT any write. Like
+    // _commitDiff it is a DELEGATE, not a direct DesignMerger call, because the compute reaches DesignMerger
+    // (DeEnv.Designer) which this Code layer never references. UNLIKE _publishPreview it is SELF-CONTAINED on
+    // the DESIGNER's own store (both branches are Design rows there — no cross-instance/kernel data), so its
+    // impl is built in SsrRenderer (which has the designer store), not by the kernel. The delegate traffics
+    // ONLY Code-layer types (the two design ExecObjects + the render context for minting transient ids, an
+    // IExecValue report out). Null for a bare executor (conformance, a condition evaluator, the client twin) ⇒
+    // `sys.mergePreview` throws, as it needs the designer host.
+    private readonly Func<ExecObject, ExecObject, ExecContext, IExecValue>? _mergePreview;
+
     public CodeExecutor(IInstanceStore? store = null, IReadOnlyDictionary<string, CodeObject>? descriptors = null,
         TypeResolver? resolver = null, AccessFloor? floor = null, Func<ExecObject, ExecObject, ExecContext, IExecValue>? commitDiff = null,
-        Func<ExecObject, int, ExecContext, IExecValue>? publishPreview = null)
+        Func<ExecObject, int, ExecContext, IExecValue>? publishPreview = null,
+        Func<ExecObject, ExecObject, ExecContext, IExecValue>? mergePreview = null)
     {
         _store = store;
         _descriptors = descriptors ?? new Dictionary<string, CodeObject>();
@@ -72,6 +85,7 @@ public sealed class CodeExecutor
         _floor = floor;
         _commitDiff = commitDiff;
         _publishPreview = publishPreview;
+        _mergePreview = mergePreview;
     }
 
     // ── statements ──────────────────────────────────────────────────────────────
@@ -614,6 +628,38 @@ public sealed class CodeExecutor
         return report;
     }
 
+    // mergePreview(source, target): the MergeReport a `sys.mergeBranch(source, target)` WOULD produce — the
+    // conflicts (each with base/source/target) + the always-surfaced access changes + any drift/no-op signal,
+    // computed WITHOUT any write (M13 Track-B B4). A SERVER-BACKED READ, modeled EXACTLY on diffCommits/
+    // publishPreview: the server computes it (the injected _mergePreview delegate, SELF-BUILT in SsrRenderer
+    // over the designer's OWN store — both branches are Design rows there, no kernel/cross-instance data) and
+    // the cache entry ships to the client, so the editor's Merge section renders it on SSR and reuses it on a
+    // client-side refetch (a miss → "Value not available" → refetch). NOT a host action (no async reply, no
+    // HostActionScan) — and it changes NOTHING (the delegate runs the shared merge-compute MINUS the apply
+    // write). `sys.mergeBranch` (the confirmed Apply) is the host action, unchanged. Keyed by the two designs'
+    // ids so both twins produce the SAME key (the client reuses the shipped result under it). No delegate ⇒ no
+    // designer host ⇒ throw.
+    //
+    // Cached DIRECTLY (an empty-deps CacheEntry), exactly like diffCommits/publishPreview and for the same
+    // reason: the report is a freshly-minted transient (negative-id) object tree, which Memoize's factory guard
+    // refuses to cache. The report is pure structural metadata (type/prop/fn/rule names + old/new values, no
+    // row data) — caching it is correct, and the cache entry is what ships it to the client.
+    private IExecValue ExecuteMergePreview(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 2)
+            throw new CodeRuntimeException("mergePreview(source, target) takes two arguments.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject source)
+            throw new CodeRuntimeException("mergePreview() expects a design object as its first argument.");
+        if (ExecuteValue(call.Params[1], scope, context) is not ExecObject target)
+            throw new CodeRuntimeException("mergePreview() expects a design object as its second argument.");
+        var key = $"mergePreview:{source.Id}:{target.Id}";
+        if (context.Memo.TryGetValue(key, out var cached)) return cached.Result;
+        var report = _mergePreview?.Invoke(source, target, context)
+            ?? throw new CodeRuntimeException("mergePreview() requires a designer host context.");
+        context.Memo[key] = new CacheEntry { Key = key, Result = report, Deps = new Deps() };
+        return report;
+    }
+
     // schema(typeName): a type's descriptor — { name, labelProp, props } — the reflective
     // shape the self-hosted generic UI walks (objectForm/refEditor/setTable). The replacement for
     // the old `__descs` registry global: the descriptor is computed from the schema (the literal
@@ -1122,6 +1168,7 @@ public sealed class CodeExecutor
         "canRead" => ExecuteCanRead(call, scope, context),
         "diffCommits" => ExecuteDiffCommits(call, scope, context),
         "publishPreview" => ExecutePublishPreview(call, scope, context),
+        "mergePreview" => ExecuteMergePreview(call, scope, context),
         "nest" => ExecuteNest(call, scope, context),
         "segment" => ExecuteSegment(call, scope, context),
         "toInt" => ExecuteToInt(call, scope, context),
@@ -1132,12 +1179,15 @@ public sealed class CodeExecutor
         // (SSR / refetch) never runs the click handler, so it no-ops.
         "setRef" => new ExecNothing(),
         // publish(schema, targetId), create(schema, name), cloneInstance(sourceId), delete(targetId),
-        // setDesign(schema, targetId), rename(id, name) and commitDesign(design, message) are
-        // SERVER-ONLY host actions (the host-action channel). They run only when the client fires the
-        // event hook → the `hostAction` WS op; the SSR/refetch renderer never runs them, so here they
-        // no-op (exactly like setRef). No conformance case: a host effect returns nothing and is
-        // outside the conformance contract — so create/clone dropping their port args (path
-        // addressing) is a server-only-plumbing change, not a reactive-semantics one.
+        // setDesign(schema, targetId), rename(id, name), commitDesign(design, message),
+        // createBranch(design, name) and mergeBranch(source, target, resolutions?) are SERVER-ONLY host
+        // actions (the host-action channel). They run only when the client fires the event hook → the
+        // `hostAction` WS op; the SSR/refetch renderer never runs them, so here they no-op (exactly like
+        // setRef). No conformance case: a host effect returns nothing and is outside the conformance
+        // contract — so create/clone dropping their port args (path addressing) is a server-only-plumbing
+        // change, not a reactive-semantics one. mergeBranch's structured `resolutions` arg crosses natively
+        // via the client's scalarOf array/object serialization (ws.ts) and the server's existing
+        // ArgResolutionsOptional — a wire-only change, not evaluation semantics.
         "publish" => new ExecNothing(),
         "create" => new ExecNothing(),
         "cloneInstance" => new ExecNothing(),
@@ -1145,6 +1195,8 @@ public sealed class CodeExecutor
         "setDesign" => new ExecNothing(),
         "rename" => new ExecNothing(),
         "commitDesign" => new ExecNothing(),
+        "createBranch" => new ExecNothing(),
+        "mergeBranch" => new ExecNothing(),
         // login(name, password) is a CLIENT-only host effect (M-auth login UI): the client fires the
         // event hook → a `login` WS op (whose reply drives a refetch); the SSR/refetch renderer never
         // runs it, so here it no-ops like the host actions. A host effect returns NOTHING and is OUTSIDE

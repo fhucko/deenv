@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using DeEnv.Code;
 using DeEnv.Designer;
 using DeEnv.Instance;
+using DeEnv.Kernel;
 using DeEnv.Storage;
 
 namespace DeEnv.Http;
@@ -242,7 +243,7 @@ public sealed class SsrRenderer
         var currentUser = LoadPrincipal(principalUserId);
         var floor = new AccessFloor(_desc.Rules ?? [], currentUser);
 
-        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor, BuildCommitDiffReport, _publishPreview);
+        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor, BuildCommitDiffReport, _publishPreview, BuildMergePreviewReport);
         // Ship EVERY schema descriptor on first paint (not lazily on first use), so a component
         // composing sys.schema(...) over a row that appears only after a client-side add still finds
         // its descriptor in the cache instead of missing. Descriptors are static, user-data-free.
@@ -811,6 +812,43 @@ public sealed class SsrRenderer
         .publish-preview .delete-confirm { color: var(--danger); }
         .publish-preview button.delete-yes { color: var(--danger); border-color: var(--danger); }
 
+        /* Branches + merge (M13 Track-B B4). The design editor's Branches section: a create-branch box,
+           the branch links (each a navigation to that branch's own /designs/<id> URL), then a toggle-gated
+           merge preview reusing the publish-report shapes. */
+        .branch-section { margin: 1.6rem 0 0.4rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
+        .branch-heading { margin: 0 0 0.3rem; font-size: 1.1rem; }
+        .branch-caption { margin: 0 0 0.8rem; color: var(--muted); font-size: 0.9rem; }
+        .branch-create { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.9rem; }
+        .branch-create input.branch-name { max-width: 220px; }
+        .branch-list { display: flex; flex-direction: column; gap: 0.4rem; }
+        .branch-empty { margin: 0; color: var(--muted); }
+        .branch-row { border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem;
+          display: flex; flex-direction: column; gap: 0.5rem; }
+        .branch-row-head { display: flex; align-items: center; gap: 0.7rem; }
+        .branch-link { font-weight: 600; margin-right: auto; }
+        .branch-current { color: var(--muted); font-size: 0.85rem; }
+
+        .merge-preview { margin-top: 0.5rem; }
+        .merge-report { display: flex; flex-direction: column; gap: 0.7rem; }
+        .merge-clean { margin: 0; color: var(--muted); }
+        .merge-uptodate { margin: 0; color: var(--muted); }
+        /* Drift is loud (the merge cannot proceed until the side is committed). */
+        .merge-drift { margin: 0; color: var(--warn); font-size: 0.9rem; }
+        /* Access changes are a MUST-SEE security surface — always shown, loud like a destructive publish. */
+        .merge-access { border: 1px solid var(--warn); border-radius: 8px; padding: 0.5rem 0.7rem; }
+        .merge-access-label { color: var(--warn); font-weight: 600; font-size: 0.85rem; }
+        .merge-access-row { color: var(--warn); font-family: var(--mono, monospace); font-size: 0.85rem; }
+        .merge-conflicts { display: flex; flex-direction: column; gap: 0.6rem; }
+        .merge-conflict { border: 1px solid var(--danger); border-radius: 8px; padding: 0.5rem 0.7rem;
+          display: flex; flex-direction: column; gap: 0.3rem; }
+        .merge-conflict-head { color: var(--danger); font-weight: 600; font-size: 0.9rem; }
+        .merge-conflict-vals { display: flex; flex-direction: column; gap: 0.1rem;
+          font-family: var(--mono, monospace); font-size: 0.85rem; }
+        .merge-conflict-picks { display: flex; gap: 0.5rem; margin-top: 0.2rem; }
+        .merge-conflict-picks button.is-picked { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .merge-apply { margin-top: 0.3rem; }
+        .merge-apply:disabled { opacity: 0.5; cursor: not-allowed; }
+
         /* Todo showcase (the committed default app — a custom fn render composing the library).
            These rules are the todo's own LAYOUT only (cards, grid, row arrangement, widths); the
            components' visual appearance lives in the component rules above, never re-skinned here. */
@@ -1139,6 +1177,32 @@ public sealed class SsrRenderer
                     && entry.Props.TryGetValue("value", out var v) && v is ExecInt id)
                     idMap[key.Value] = id.Value;
         return new DesignSnapshot(text, idMap);
+    }
+
+    // The compute the CodeExecutor's `sys.mergePreview(source, target)` delegates to (threaded in above), the
+    // read-side sibling of `sys.mergeBranch` (M13 Track-B B4). SELF-BUILT here (unlike B3's kernel-wired
+    // publish preview) because a merge is entirely between two DESIGN rows in the designer's OWN store — the
+    // same store this renderer already holds — with NO cross-instance/kernel data. Lives HERE, not in the Code
+    // layer, because it bridges to KernelHostActions.ComputeMergePlan (the shared merge core, in DeEnv.Kernel,
+    // which the interpreter core never references). Traffics only Code-layer types: the two design ExecObjects
+    // + the render context (to mint the report's transient ids), a Code report value out. The executor caches
+    // the returned report DIRECTLY under `mergePreview:{source}:{target}` (like diffCommits — Memoize's
+    // factory guard would refuse a fresh negative-id object), and that cache entry ships it to the client whole.
+    //
+    // Runs the SAME ComputeMergePlan sys.mergeBranch runs (drift/no-op/conflict decision + the clean
+    // computation), MINUS the apply write — so the preview an operator approves is byte-identical to what the
+    // apply would do. resolutions default EMPTY: the first preview shows every conflict; the editor accumulates
+    // the operator's per-conflict picks client-side and passes them to sys.mergeBranch on Apply (it does NOT
+    // re-preview with them — the picks ARE the resolution). MergeReportCode renders it as a Constant,
+    // distinct-negative-id tree so ClientState ships the whole structure.
+    private IExecValue BuildMergePreviewReport(ExecObject source, ExecObject target, ExecContext context)
+    {
+        // Both branches are Design rows in the designer's own store; the clean apply's writer type is
+        // JsonFileInstanceStore, which every kernel-hosted store IS (the same cast MergeBranch does).
+        if (_store is not JsonFileInstanceStore store)
+            throw new CodeRuntimeException("mergePreview() requires the designer's file-backed store.");
+        var plan = KernelHostActions.ComputeMergePlan(store, source.Id, target.Id, DesignMerger.NoResolutions);
+        return MergeReportCode.Build(plan.Report, context);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

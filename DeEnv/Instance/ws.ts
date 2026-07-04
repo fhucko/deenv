@@ -956,16 +956,19 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // sufficed only while the list read sys.instances, re-built per-render from the live registry and
         // never memoized as a set.) Client-only orchestration: no twin, no conformance.
         //
-        // ALSO drop any `publishPreview:` server-backed read (M13 Track-B B3): a publish host action changes
-        // exactly the cross-instance state that read reflects (the target's data file + its published-commit
-        // stamp), and those entries are cached with EMPTY deps (like diffCommits/schema — see codeExec.ts), so
-        // no store-mutation invalidation ever staled them. Without this drop, re-opening the preview after an
-        // Apply would reuse the pre-publish report (still showing the just-applied changes) instead of the
-        // fresh "up to date". Cheap + precise: keyed by prefix, normally a handful of entries. (Any host
-        // action can move a target — create/delete/rename change the instance set previews list over — so
-        // this is unconditional on hostAction, not publish-only.)
+        // ALSO drop any `publishPreview:`/`mergePreview:` server-backed read (M13 Track-B B3/B4): a publish or
+        // mergeBranch host action changes exactly the state those reads reflect (the target's data file + its
+        // published-commit stamp; a branch's head after a merge commit), and those entries are cached with
+        // EMPTY deps (like diffCommits/schema — see codeExec.ts), so no store-mutation invalidation ever
+        // staled them. Without this drop, re-opening the preview after an Apply would reuse the pre-apply
+        // report (still showing the just-applied changes, or a merge conflict/Merge button that already
+        // landed) instead of the fresh "up to date"/"already merged" state. Cheap + precise: keyed by prefix,
+        // normally a handful of entries. `diffCommits:` is deliberately NOT dropped — a merge or publish never
+        // rewrites committed history, so a commit-to-commit diff stays valid. (Any host action can move a
+        // target — create/delete/rename change the instance set previews list over — so this is unconditional
+        // on hostAction, not publish/merge-only.)
         for (const key of Array.from(uiStatic.cache.keys()))
-            if (key.startsWith("publishPreview:")) uiStatic.cache.delete(key);
+            if (key.startsWith("publishPreview:") || key.startsWith("mergePreview:")) uiStatic.cache.delete(key);
         resetViewState();
         maybeRefetch();
     } else if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
@@ -1319,10 +1322,23 @@ function wsSendText(text: string): void {
     else codeWsOutbox.push(text);
 }
 
-// A scalar ExecValue as the wire { type, value } the server expects.
+// A scalar (or shallow structured) ExecValue as the wire { type, value } the server expects. Scalars ship as
+// { type, value }; an ARRAY ships as { type:"array", items:[...] } and an OBJECT as { type:"object",
+// props:{ name: … } }, recursing so a Code array-of-objects-of-scalars crosses NATIVELY (M13 Track-B B4 — the
+// FIRST structured host-action arg, sys.mergeBranch's `resolutions: [{ id, take }]`). This is exactly the
+// shape the server's existing ArgResolutionsOptional already parses ({type:"array",items} → each
+// {type:"object",props} → each prop a tagged scalar), so it is a client-only wire addition, no server change.
+// Anything not int/bool/text/array/object (a function, a tag, a null) still serializes to null — the arg is
+// dropped, the conservative behavior every current host-action arg already relies on.
 function scalarOf(value: ExecValue): object {
     switch (value.type) {
         case "int": case "bool": case "text": return { type: value.type, value: value.value };
+        case "array": return { type: "array", items: value.items.map(i => scalarOf(i.value)) };
+        case "object": {
+            const props: { [name: string]: object } = {};
+            for (const [name, v] of Object.entries(value.props)) props[name] = scalarOf(v);
+            return { type: "object", props };
+        }
         default: return { type: "null" };
     }
 }

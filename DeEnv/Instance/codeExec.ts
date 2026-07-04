@@ -989,6 +989,26 @@ function execPublishPreview(codeCall: CodeCall, scope: ExecScope, context: ExecC
     return r;
 }
 
+// mergePreview(source, target): the MergeReport a mergeBranch(source, target) would produce — conflicts (each
+// with base/source/target) + the always-surfaced access changes + any drift/no-op signal (M13 Track-B B4) —
+// the twin of execPublishPreview/execDiffCommits. The server COMPUTES the report (the SELF-BUILT preview
+// delegate in SsrRenderer, over the designer's own store — both branches are Design rows there) and ships it
+// via the memo cache; the client never computes — it only REUSES the shipped result under the same key, keyed
+// by the two designs' ids (source.id:target.id) so both twins address the same entry. A cache miss throws
+// "Value not available", which the memoize wrapper turns into a refetch. No store/DesignMerger on the client.
+function execMergePreview(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const source = executeValue(codeCall.params[0], scope, context).value;
+    if (source.type !== "object") throw new Error("mergePreview() expects a design object as its first argument.");
+    const target = executeValue(codeCall.params[1], scope, context).value;
+    if (target.type !== "object") throw new Error("mergePreview() expects a design object as its second argument.");
+    // As in execPublishPreview: a MISS makes memoize return an empty `nothing`; the report is always read as an
+    // object (`.merged`/`.conflicts`/…), so re-throw the VNA rather than let a `nothing` leak into a value
+    // position. The nearest memoize boundary swallows it → refetch.
+    const r = memoize("mergePreview:" + source.id + ":" + target.id, context, () => { throw new Error("Value not available"); });
+    if (r.type === "nothing") throw new Error("Value not available"); // a miss (never shipped)
+    return r;
+}
+
 // setRef(obj, prop, value): set/clear an object REFERENCE prop and persist it. value is an
 // existing candidate (id>0 → refId), a fresh draft (id<0 → its scalar props), or null
 // (clear). Stages in memory (UI reflects it), then sends the id-addressed WS op.
@@ -1109,6 +1129,37 @@ function execCommitDesign(codeCall: CodeCall, scope: ExecScope, context: ExecCon
     const design = executeValue(codeCall.params[0], scope, context).value;
     const message = executeValue(codeCall.params[1], scope, context).value;
     sendHostAction("commitDesign", [schemaIdArg(design), message]);
+    return { type: "nothing" };
+}
+
+// sys.createBranch(design, name): a SERVER-ONLY host action (M13 slice 5, wired in Track-B B4) — clone the
+// design's working-copy subgraph (Design + its MetaTypes + MetaProps) into a NEW Branch named `name`, linked
+// into db.branches (never db.designs). The design crosses as its id (schemaIdArg, like commitDesign); the
+// name is a plain text arg. Stages NOTHING; only fires the hostAction send-hook. Returns nothing; SSR/refetch
+// no-ops it (CodeExecutor's `createBranch` host-action case). The ack's refetch surfaces the new branch.
+function execCreateBranch(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const design = executeValue(codeCall.params[0], scope, context).value;
+    const name = executeValue(codeCall.params[1], scope, context).value;
+    sendHostAction("createBranch", [schemaIdArg(design), name]);
+    return { type: "nothing" };
+}
+
+// sys.mergeBranch(source, target, resolutions?): a SERVER-ONLY host action (M13 slice 5, wired in Track-B B4)
+// — a lineage-keyed three-way structural merge of `source`'s branch into `target`'s. Both designs cross as
+// their ids (schemaIdArg). `resolutions` (OPTIONAL) is the operator's per-conflict picks — a Code array of
+// { id, take:"source"|"target" } objects; it crosses NATIVELY because the hostAction send-hook's scalarOf now
+// serializes arrays + objects-of-scalars recursively (ws.ts), which the server's existing
+// ArgResolutionsOptional already parses. Omitted (a clean/preview-only merge) sends no third arg. Stages
+// NOTHING; only fires the send-hook. Returns nothing; SSR/refetch no-ops it (CodeExecutor's `mergeBranch`
+// case). A clean merge lands a two-parent commit; a conflict/drift merge writes nothing and its rejection
+// surfaces via the global error banner.
+function execMergeBranch(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const source = executeValue(codeCall.params[0], scope, context).value;
+    const target = executeValue(codeCall.params[1], scope, context).value;
+    const args: ExecValue[] = [schemaIdArg(source), schemaIdArg(target)];
+    if (codeCall.params.length > 2)
+        args.push(executeValue(codeCall.params[2], scope, context).value);
+    sendHostAction("mergeBranch", args);
     return { type: "nothing" };
 }
 
@@ -1374,6 +1425,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "canRead": return execCanRead(codeCall, scope, context);
         case "diffCommits": return execDiffCommits(codeCall, scope, context);
         case "publishPreview": return execPublishPreview(codeCall, scope, context);
+        case "mergePreview": return execMergePreview(codeCall, scope, context);
         case "setRef": return execSetRef(codeCall, scope, context);
         case "publish": return execPublish(codeCall, scope, context);
         case "create": return execCreate(codeCall, scope, context);
@@ -1382,6 +1434,8 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "rename": return execRename(codeCall, scope, context);
         case "setDesign": return execSetDesign(codeCall, scope, context);
         case "commitDesign": return execCommitDesign(codeCall, scope, context);
+        case "createBranch": return execCreateBranch(codeCall, scope, context);
+        case "mergeBranch": return execMergeBranch(codeCall, scope, context);
         case "login": return execLogin(codeCall, scope, context);
         case "logout": return execLogout(codeCall, scope, context);
         case "nest": return execNest(codeCall, scope, context);
