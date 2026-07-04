@@ -355,14 +355,56 @@ public sealed class DataConflictSteps(InstanceContext ctx)
     public async Task ThenS2BannerGone() =>
         await ctx.Page2!.Locator(".conflict-bar").WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Detached, Timeout = 10000 });
 
+    // Three-lens review fix 1: the GLOBAL banner (#__error) is a separate DOM element from the coarse
+    // .conflict-bar (ThenS2BannerGone above) — both must clear on resolution, or the rejection notice
+    // ("your edits were NOT saved… reload") outlives the state it described (actively wrong after Keep
+    // mine forces the overwrite). Asserted as its OWN step so a regression that clears only one is caught.
+    [Then("conflict session 2's global error banner is gone")]
+    public async Task ThenS2GlobalErrorBannerGone() =>
+        await ctx.Page2!.Locator("#__error").WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Detached, Timeout = 10000 });
+
+    // Three-lens review fix 4b: Take theirs' transient confirmation (symmetric to Keep-mine's implicit
+    // "Saved" via the commit-ack lifecycle), surfaced through the SAME save-status span as ctx.status.
+    [Then("conflict session 2 sees the {string} confirmation")]
+    public async Task ThenS2SeesConfirmation(string text) =>
+        await ctx.Page2!.Locator(".save-status", new PageLocatorOptions { HasTextString = text })
+            .WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
+
+    // Three-lens review fix 2: while ctx.conflicts is non-empty the form-actions Save/Discard row (which
+    // includes button.save) must not render at all — the bar's two buttons ARE the complete decision set,
+    // so a plain Save can never become a hidden force-overwrite of theirs. Asserted via the DOM count
+    // (0 = truly absent, not just visually hidden) rather than a visibility check.
+    [Then("conflict session 2's Save button is hidden while the bar shows")]
+    public async Task ThenS2SaveButtonHidden()
+    {
+        await Assert.That(await ctx.Page2!.Locator(".conflict-bar").CountAsync()).IsGreaterThan(0); // the bar IS up
+        await Assert.That(await ctx.Page2.Locator(".object-form button.save").CountAsync()).IsEqualTo(0);
+    }
+
+    [Then("conflict session 2's Save button is visible again")]
+    public async Task ThenS2SaveButtonVisible() =>
+        await ctx.Page2!.Locator(".object-form button.save").WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
+
     // Capture a screenshot of session 2's page for the UI-verification artifact — gated on DEENV_SHOTS so it
-    // is OFF in normal runs (no cost/files) and ON only for the mandatory screenshot capture pass.
+    // is OFF in normal runs (no cost/files) and ON only for the mandatory screenshot capture pass. Two
+    // scenarios (3 and 4) share the SAME "banner" name (both assert the banner appears via ThenS2SeesBanner)
+    // and TUnit runs them in parallel, so a brief write-write race on the same path is expected under the
+    // capture pass — retried like the store's own SaveRaw transient-conflict rides (a rare µs-scale window,
+    // never a real test failure since this is screenshot tooling only, never an assertion).
     private async Task Shot(string name)
     {
         var dir = Environment.GetEnvironmentVariable("DEENV_SHOTS");
         if (string.IsNullOrEmpty(dir)) return;
         Directory.CreateDirectory(dir);
-        await ctx.Page2!.ScreenshotAsync(new PageScreenshotOptions { Path = Path.Combine(dir, name + ".png") });
+        var path = Path.Combine(dir, name + ".png");
+        for (var attempt = 0; ; attempt++)
+        {
+            try { await ctx.Page2!.ScreenshotAsync(new PageScreenshotOptions { Path = path }); return; }
+            catch (IOException) when (attempt < 10)
+            {
+                await Task.Delay(100);
+            }
+        }
     }
 
     [Then("conflict session 2 shows the {string} error banner")]
@@ -371,5 +413,17 @@ public sealed class DataConflictSteps(InstanceContext ctx)
         await ctx.Page2!.Locator("#__error").WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
         var text = await ctx.Page2.Locator("#__error").InnerTextAsync();
         await Assert.That(text.Contains(expectedSubstring)).IsTrue();
+    }
+
+    // Three-lens review fix 3: the message is ONE branch-free, action-first sentence honest for a custom
+    // render that has no "resolve" door — it names what happened (NOT saved), where the edit still is
+    // (the form), and the one action every surface supports (reload). Never asserts "resolve" is absent
+    // (a negative assertion is brittle); asserts the POSITIVE honest content is present instead.
+    [Then("conflict session 2's error banner says the edits were not saved and to reload")]
+    public async Task ThenS2BannerSaysNotSavedAndReload()
+    {
+        var text = await ctx.Page2!.Locator("#__error").InnerTextAsync();
+        await Assert.That(text.Contains("NOT saved")).IsTrue();
+        await Assert.That(text.Contains("reload")).IsTrue();
     }
 }

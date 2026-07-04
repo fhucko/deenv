@@ -547,15 +547,20 @@ public sealed class SsrRenderer
         a.list-title { display: inline-block; font-weight: 600; font-size: 0.95rem; }
 
         /* Data-conflict coarse banner (M13 slice 6): a loud tinted bar at the top of the object form when a
-           same-field collision was rejected. Names the conflicted fields and offers Keep mine / Take theirs. */
+           same-field collision was rejected. Names the conflicted fields and offers Keep mine / Take theirs.
+           Button emphasis (three-lens review fix 4a — ux call, DECIDED, user can override): Take theirs is
+           the SAFE action (discard-and-refresh, never touches another session's data) — it gets the SOLID/
+           primary treatment. Keep mine is the LOUD one (a deliberate force-overwrite of a colleague's change)
+           — it gets the outlined/danger treatment, so the visually heaviest button is never the one that
+           overwrites someone else's work. Same green token the Save button direction already uses. */
         .conflict-bar { border: 1px solid var(--danger); background: #fff0f0; color: var(--danger);
           border-radius: 8px; padding: 0.7rem 0.9rem; margin: 0 0 1rem; }
         .conflict-message { display: block; font-weight: 600; }
         .conflict-field { font-weight: 700; }
         .conflict-field:not(:last-of-type)::after { content: ", "; font-weight: 400; }
         .conflict-actions { display: flex; gap: 0.5rem; margin-top: 0.6rem; }
-        .conflict-keep { border-color: var(--danger); color: #fff; background: var(--danger); }
-        .conflict-take { border-color: var(--danger); color: var(--danger); background: var(--surface); }
+        .conflict-take { border-color: var(--green); color: #fff; background: var(--green); }
+        .conflict-keep { border-color: var(--danger); color: var(--danger); background: var(--surface); }
 
         .set-table table, .dict-table table { border-collapse: collapse; width: 100%; margin: 0.3rem 0 0.7rem;
           background: var(--surface); border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }

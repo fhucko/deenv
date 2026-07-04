@@ -303,7 +303,7 @@ public static class GenericUi
                                         <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)} linked={isGeneric}>
                                 else
                                     <Field obj={obj} desc={p} readonly={!canEdit}>
-                            if autosave != true && canEdit && hasFields
+                            if autosave != true && canEdit && hasFields && !ctx.conflicts.any(c => true)
                                 <div class="form-actions">
                                     <button class="save" onClick={save}>
                                         "Save"
@@ -315,6 +315,8 @@ public static class GenericUi
                                                 "Saving…"
                                             else if ctx.status == "saved"
                                                 "Saved"
+                                            else if ctx.status == "updated"
+                                                "Updated to latest"
                 return render
 
             fn RefEditor(parent, prop, target)

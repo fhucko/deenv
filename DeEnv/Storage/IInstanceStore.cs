@@ -144,11 +144,13 @@ public interface IInstanceStore
 // custom `fn render()` that ignores conflicts still shows something loud — no silent clobber) AND the
 // structured `conflicts` payload the generic form's coarse banner renders.
 //
-// Subclass of StaleBaseException so the two existing `catch (StaleBaseException)` call sites (the publish
-// boundary + the cross-restart guard tests) keep catching it, and its Message still mentions "reload" — a
-// same-field collision IS a specific kind of stale-base rejection (the kind the design surfaces; the
-// disjoint kind now auto-merges and throws nothing at all). Conflicts are TRANSIENT (§2): this list is
-// wire/ctx state built at reject time from the log + the live store, never a persisted row.
+// Subclass of StaleBaseException: the ONE real `catch (StaleBaseException)` call site (PublishSteps.cs's
+// stale-publish-boundary scenario) keeps catching it, and the cross-restart guard tests (AppLogSteps.cs),
+// which assert via `.Throws<ConflictException>()` rather than a catch block, keep matching the now-more-
+// specific type. Its Message still mentions "reload" for both — a same-field collision IS a specific kind
+// of stale-base rejection (the kind the design surfaces; the disjoint kind now auto-merges and throws
+// nothing at all). Conflicts are TRANSIENT (§2): this list is wire/ctx state built at reject time from the
+// log + the live store, never a persisted row.
 public sealed class ConflictException(string message, IReadOnlyList<ConflictField> conflicts)
     : StaleBaseException(message)
 {

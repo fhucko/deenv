@@ -97,6 +97,13 @@ interface ConflictResolution {
 const conflictByMsgId = new Map<number, ConflictResolution>();
 const conflictByCtx = new WeakMap<ExecCtx, ConflictResolution>();
 
+// Three-lens review fix 4b: ctxs showing the transient "updated" status (take-theirs's confirmation,
+// symmetric to keep-mine's commit-ack "saved") awaiting the refetch that follows to LAND, so the reply
+// handler (onWsMessage's refetch branch) can settle each back to "idle" once the authoritative merge is
+// in — a Set, not a WeakMap: iterated wholesale on every refetch reply (rare, small), and a ctx that
+// unmounts before its refetch lands is simply dropped without ever needing to be looked up by identity.
+const pendingUpdatedCtxs = new Set<ExecCtx>();
+
 // One conflicted field as it arrives on the wire (M13 slice 6 — WsHandler.ConflictFieldWire). Base/mine/
 // theirs are bare JSON scalars (a text string, a number, a bool, an ISO date, a ref id) or null.
 type WireScalar = string | number | boolean | null;
@@ -781,6 +788,12 @@ function connectWs(): void {
             if (res == null) return;
             conflictByCtx.delete(ctx);
             setCtxConflicts(ctx, []); // leave conflict mode; the resend's own reply drives the next outcome
+            // Three-lens review fix 1: the global banner is a REJECTION notice ("your edits were NOT saved…
+            // reload"). Choosing Keep mine is the resolution — clearing it here (not at handleConflictReply's
+            // SET, which stays unconditional/load-bearing for no-silent-clobber) means the banner never
+            // outlives the state it described; leaving the OLD "reload" text up here would be actively WRONG
+            // (the just-forced commit has NOT reloaded and the draft is about to be re-sent, not stale).
+            uiStatic.lastError = null;
             res.resend();
         },
         takeTheirs: ctx => {
@@ -795,7 +808,19 @@ function connectWs(): void {
                 if (theirs !== undefined) { eo.obj.props[eo.prop] = theirs; invalidateProp(eo.obj.id, eo.prop); }
             }
             setCtxConflicts(ctx, []);
+            // Three-lens review fix 1: same as keepMine — the rejection banner no longer describes reality
+            // once the user has resolved by taking theirs (the draft is gone, values are now authoritative).
+            uiStatic.lastError = null;
             needsServerData = true; // refresh authoritative state (theirs) for anything beyond the edited fields
+            // Three-lens review fix 4b: a transient confirmation symmetric to Keep-mine's "Saved" — surfaced
+            // through the SAME client-only ctx.status mechanism (setCtxStatus). "updated" is CLIENT-only,
+            // like ctx.conflicts/ctx.status themselves (documented on ExecCtx.status's declaration; no twin
+            // case — the C# side already returns the constant "idle" for ANY status read). Registered in
+            // pendingUpdatedCtxs so the NEXT refetch reply (the one this take-theirs triggers) settles it
+            // back to "idle" once the authoritative merge lands — mirrors how a commit ack settles "saving"
+            // to "saved" via ctx.pending, just without a correlated msgId (a refetch reply is uncorrelated).
+            setCtxStatus(ctx, "updated");
+            pendingUpdatedCtxs.add(ctx);
             renderUi();
             maybeRefetch();
         },
@@ -831,6 +856,16 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
             return;
         }
         const committedCtx = commitJournal(msg.id);
+        // Three-lens review fix 1: ANY successful mutating ack proves forward progress, which makes a prior
+        // rejection notice (uiStatic.lastError — a REJECTION banner, "your edits were NOT saved… reload")
+        // stale REGARDLESS of which ctx it came from — it is single shared page state, not per-ctx, so a
+        // plain-Save on ctx B must not leave ctx A's earlier conflict banner up describing a state that no
+        // longer holds. This is the "plain-Save-resolution path" the coarse bar's own buttons already cover
+        // via their own explicit clears (keepMine/takeTheirs) — this is the fallback for every OTHER ack.
+        // renderUi() ONLY when it actually changed (commitJournal itself renders on a ctx settling to
+        // "saved", but a LIVE-edit ack — autosave, no ctx — does not; without this the DOM banner would go
+        // stale until some unrelated later render happened to run).
+        if (uiStatic.lastError != null) { uiStatic.lastError = null; renderUi(); }
         // An atomic-commit (Step B) `commit` ack: batch-remap every created object's transient id to the real
         // one the server minted (negId→realId + the minted nested-collection ids). Done AFTER commitJournal
         // retires the entry, so the optimistic rows now address their real ids. (A commit with only edits
@@ -994,6 +1029,14 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
             const action = pendingAction;
             pendingAction = null;
             runHandlerTransaction(action.reinvoke);
+        }
+        // Three-lens review fix 4b: this refetch's merge is the authoritative state a take-theirs asked
+        // for — settle every ctx still showing "updated" back to "idle" (the confirmation has done its
+        // job; the merged data speaks for itself now) and invalidate their status var deps so a rendered
+        // indicator drops it. Cheap: the set is normally empty (populated only by takeTheirs).
+        if (pendingUpdatedCtxs.size > 0) {
+            for (const c of pendingUpdatedCtxs) if (c.status === "updated") setCtxStatus(c, "idle");
+            pendingUpdatedCtxs.clear();
         }
         renderUi();
         // A navigation that fired DURING this refetch found refetchInFlight set and self-serialized

@@ -619,12 +619,18 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     }
                     if (conflicts.Count > 0)
                         // The Message reaches the client verbatim as the `{ error }` (WsHandler surfaces it for
-                        // the global banner — the custom-render no-silent-clobber fallback) AND is the server
-                        // log line; keep it user-facing (the fields carry the detail). "reload" is retained so
-                        // the existing publish-boundary reload assertion + tone still hold. Store UNTOUCHED —
-                        // this throws BEFORE any mutation, so the reject is all-or-none like a malformed batch.
+                        // the global banner) AND is the server log line — kept ONE branch-free sentence, honest
+                        // for BOTH surfaces (three-lens review, fix 3): the generic form's coarse bar carries the
+                        // resolution affordances (Keep mine / Take theirs), but a CUSTOM render that never reads
+                        // ctx.conflicts has no such door — telling it to "resolve the conflict" would point at
+                        // nothing. Action-first instead: state what happened, that nothing was lost (the draft is
+                        // still in the form — true on both surfaces), and the one action every surface supports
+                        // (reload). "Someone else changed this" + lowercase "reload" are exact substrings the
+                        // existing Concurrency.feature / Publish.feature assertions pin — preserved verbatim.
+                        // Store UNTOUCHED — this throws BEFORE any mutation, all-or-none like a malformed batch.
                         throw new ConflictException(
-                            "Someone else changed this — reload to see the latest, or resolve the conflict.",
+                            "Someone else changed this — your edits were NOT saved (they're still in the form); " +
+                            "reload to see the latest.",
                             conflicts);
                     // else: every stale object's edits are DISJOINT from what changed → fall through and apply
                     // (auto-merge). No retry, no reject.

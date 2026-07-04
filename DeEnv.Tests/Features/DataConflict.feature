@@ -89,8 +89,12 @@ Feature: Data conflicts — field-level overlap, disjoint auto-merge, and the co
   # ── (3) the generic form's coarse banner: Take theirs drops the draft, then a fresh edit commits ──────
   # Two real browser sessions on the SAME note. Session 1 changes the title and saves (lands). Session 2,
   # holding the pre-change data, changes the title to something else and saves → the coarse conflict banner
-  # appears naming the field. Take theirs drops session 2's draft and shows session 1's value; a fresh edit
-  # then commits cleanly (its base is now the post-conflict fresh version).
+  # appears naming the field; the Save/Discard row is HIDDEN while the bar is up (fix 2 — the bar's two
+  # buttons are the complete decision set, so a plain Save can never become a hidden force-overwrite). Take
+  # theirs drops session 2's draft and shows session 1's value, clears BOTH banners (fix 1 — the global
+  # banner must not go on telling the user to "reload" once resolved) and its OWN transient confirmation
+  # (fix 4b); the Save row reappears; a fresh edit then commits cleanly (its base is now the post-conflict
+  # fresh version).
   @multi-user
   Scenario: The coarse banner appears; Take theirs drops the draft and a fresh edit then commits
     Given the conflict fixture app is served
@@ -100,15 +104,20 @@ Feature: Data conflicts — field-level overlap, disjoint auto-merge, and the co
     Then conflict session 1's save lands in the store
     When conflict session 2 saves the title "Session 2 tried"
     Then conflict session 2 sees the conflict banner naming "title"
+    And conflict session 2's Save button is hidden while the bar shows
     When conflict session 2 clicks Take theirs
     Then conflict session 2's title field shows "Session 1 wins"
     And conflict session 2's conflict banner is gone
+    And conflict session 2's global error banner is gone
+    And conflict session 2 sees the "Updated to latest" confirmation
+    And conflict session 2's Save button is visible again
     When conflict session 2 saves the title "Session 2 finally"
     Then conflict note 2's stored title is "Session 2 finally"
 
   # ── (4) the generic form's coarse banner: Keep mine force-commits over theirs ─────────────────────────
   # Same setup. Session 2 chooses Keep mine → its value is force-committed at the current base, overwriting
-  # session 1's value (chosen consent); the store then holds session 2's value and the banner clears.
+  # session 1's value (chosen consent); the store then holds session 2's value and BOTH banners clear (fix
+  # 1 — after a forced overwrite the "reload" advice would be actively wrong).
   @multi-user
   Scenario: Keep mine force-commits the draft over the other session's value
     Given the conflict fixture app is served
@@ -118,13 +127,19 @@ Feature: Data conflicts — field-level overlap, disjoint auto-merge, and the co
     Then conflict session 1's save lands in the store
     When conflict session 2 saves the title "Session 2 forces"
     Then conflict session 2 sees the conflict banner naming "title"
+    And conflict session 2's Save button is hidden while the bar shows
     When conflict session 2 clicks Keep mine
     Then conflict note 2's stored title is "Session 2 forces"
     And conflict session 2's conflict banner is gone
+    And conflict session 2's global error banner is gone
+    And conflict session 2's Save button is visible again
 
   # ── (7) a CUSTOM render that ignores ctx.conflicts still shows the global error banner (no clobber) ────
   # A fully-custom fn render() app that never reads ctx.conflicts must still fail loudly on a conflict —
-  # the global error banner fires (the no-silent-clobber guarantee), and nothing crashes.
+  # the global error banner fires (the no-silent-clobber guarantee), and nothing crashes. The message is
+  # ONE branch-free, action-first sentence honest for BOTH surfaces (three-lens review fix 3): it never
+  # tells a custom render to "resolve the conflict" — a door it doesn't have — only that the edit was NOT
+  # saved (still in the form) and to reload.
   @multi-user
   Scenario: A custom render that ignores conflicts still surfaces the global error banner
     Given the custom-render conflict fixture app is served
@@ -134,3 +149,4 @@ Feature: Data conflicts — field-level overlap, disjoint auto-merge, and the co
     Then conflict session 1's custom save lands in the store
     When conflict session 2 saves the custom title "Custom two"
     Then conflict session 2 shows the "Someone else changed this" error banner
+    And conflict session 2's error banner says the edits were not saved and to reload
