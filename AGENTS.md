@@ -126,9 +126,13 @@ log entries — **renames now carry data through a deploy**, the MVP-visible
 payoff; branches + origin-keyed three-way merge with report/resolve-by-args;
 field-level conflicts — **disjoint edits auto-merge, same-field collisions get
 the keep-mine/take-theirs banner**, the fine per-field UI's obligations
-ledgered in the slices doc). The `locked` access keyword landed alongside.
-Next: slice 7 (time-travel + `cloneInstance(atSeq)`) and the Commit-button UX
-slice. **M12 (visual component designer) stays deferred
+ledgered in the slices doc; time-travel clones — `cloneInstance(id, atSeq)`
+with exact era-schema resolution via boundary base-commit stamps; plus the
+single-store-per-file kernel fix killing a proven commit-clobber/WAL-collision
+class). The `locked` access keyword landed alongside. ALL SEVEN CORE SLICES
+ARE DONE — the milestone's last piece is the Commit-button UX slice (the
+lockstep `sys.commitDesign` interpreter wiring + the designer's versioning
+surface). **M12 (visual component designer) stays deferred
 until after the MVP.** Login persistence + the committed-designer auth flip landed
 2026-07-04; remaining M-auth follow-ups (deploy login wiring, remove-user /
 inline role-edit, broader auth styling) live in ROADMAP.md

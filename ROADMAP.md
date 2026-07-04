@@ -410,8 +410,12 @@ DECISIONS.md.
   2026-07-03, suite 668**; slice 5 = branches + origin-keyed three-way merge (sys.createBranch /
   sys.mergeBranch, report + resolve-by-args), landed 2026-07-03, suite 682; slice 6 = field-level
   conflicts (disjoint auto-merge + {base,mine,theirs} payload + the coarse keep-mine/take-theirs
-  banner), landed 2026-07-04, suite 694; next = slice 7 (time-travel + cloneInstance(atSeq))
-  and the Commit-button UX slice (lockstep interpreter wiring)).
+  banner), landed 2026-07-04, suite 694; slice 7 = time-travel
+  clones — cloneInstance(id, atSeq) with exact era-schema resolution, landed 2026-07-04,
+  suite 704; + the single-store-per-file kernel fix (a proven commit-clobber/WAL-collision
+  class, killed structurally), landed 2026-07-04, suite 708. ALL SEVEN CORE SLICES DONE;
+  the milestone's remaining piece = the Commit-button UX slice (lockstep interpreter
+  wiring)).
 
   **MVP-critical substrate pulled forward — LANDED 2026-06-19/20.** A thin **non-destructive
   apply** — *data survives a schema change* — was built ahead of / interleaved with M11

@@ -191,13 +191,21 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    design-host store (the boot-cached staleness class), and it DISCOVERED (not fixed) the
    severe pre-existing mirror-clobber bug below. ✔
 
-   **URGENT STANDALONE FIX (discovered during slice 7; pre-existing since slice 3's
-   inversion):** `KernelHost._designHostStore` is cached at boot and is a WRITE path — every
-   `MirrorInstance*` call (after create/clone/delete/rename host actions) persists the
-   boot-time snapshot of the designer's data file, CLOBBERING any commits/branches/designs
-   written by fresh stores since boot. Repro: boot → commitDesign → clone twice → the second
-   clone's mirror write silently deletes the commits. Data-loss severity in the
-   design-data-is-truth world; lands BEFORE the Commit-button slice.
+   **THE MULTI-STORE CLASS — FIXED 2026-07-04** (main `938b678` + `6cd9f74`; suite 708/708;
+   Opus review SHIP). Discovered during slice 7; pre-existing since the inversion. The class:
+   multiple `JsonFileInstanceStore` instances over ONE file (boot-cached mirror store, live
+   hosted store, fresh per-call host-action stores) — each with its own lock/version/`_doc`.
+   BOTH members proven: the mirror-clobber (boot → commitDesign → clone×2 silently deletes the
+   commits) AND the sibling (commitDesign → any live designer edit → the commit is clobbered
+   off disk; would also mint colliding WAL seqs). Fix: **one store per data file in the
+   kernel** — the design host's live `HostedInstance.Store` is THE store (KernelHostActions
+   takes a `resolveStore` Func; the boot path is a sequential dead-hand-off, verified safe by
+   construction; `FreshDesignHostStore` deleted; era/clone reads share the live store). Bonus
+   guard from the review's open question: **the design host can never be its own publish
+   target** (a raw publish(design, 1) would have rewritten the designer's own schema —
+   scenario-pinned). Named residuals: cross-call read atomicity on a live source during clone
+   = the deferred concurrency class (comment honest now); `SchemaBridge.Export` looks dead —
+   simplification-pass candidate.
 
 ## Slice-1 spec pointers
 
