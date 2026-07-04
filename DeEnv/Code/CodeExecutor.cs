@@ -300,6 +300,13 @@ public sealed class CodeExecutor
                 m.Ctx.Creates.Clear();
                 return new ExecNothing();
             }
+            // Conflict resolution (M13 slice 6): keep-mine (force re-commit at the fresh base) / take-theirs
+            // (drop mine + refresh to theirs). CLIENT-only effects driven by a WS reply (codeExec.ts/ws.ts) —
+            // the C# twin renders once and never witnesses a conflict, so these are server no-ops (present
+            // for twin parity, so an SSR render that references them never throws "Unknown context method").
+            case "keepMine":
+            case "takeTheirs":
+                return new ExecNothing();
             default: throw new CodeRuntimeException($"Unknown context method '{m.Method}'.");
         }
     }
@@ -329,11 +336,13 @@ public sealed class CodeExecutor
             if (target is ExecArray coll && CollectionMethods.Contains(member.Name))
                 return new ExecSysFunction { Target = coll, Method = member.Name };
 
-            // A data context: `ctx.dirty` (a bool), `ctx.status` (the form-Save lifecycle), or a bound
-            // method (`ctx.new`/`commit`/`discard`). `ctx.status` is twin-PARITY only: the server renders
-            // once, so it is always "idle" here — the "saving/saved" lifecycle is a CLIENT behavior
-            // (across WS acks, in codeExec.ts), so there is no conformance case, only this read so SSR
-            // does not crash when a form renders the indicator.
+            // A data context: `ctx.dirty` (a bool), `ctx.status` (the form-Save lifecycle), `ctx.conflicts`
+            // (the same-field collision list — M13 slice 6), or a bound method (`ctx.new`/`commit`/`discard`/
+            // `keepMine`/`takeTheirs`). `ctx.status` and `ctx.conflicts` are twin-PARITY only: the server
+            // renders ONCE from a fresh store load, so a commit conflict is a CLIENT phenomenon (it lands on
+            // a WS reply, in codeExec.ts/ws.ts) that the server never witnesses — so status is always "idle"
+            // and conflicts is always the EMPTY list here, with no conformance case, only this read so SSR
+            // does not crash when a form renders the indicator / the (never-shown-server-side) banner.
             if (target is ExecCtx ctx)
                 return member.Name switch
                 {
@@ -341,6 +350,10 @@ public sealed class CodeExecutor
                     // staged create still has unsaved work. Twin of codeExec.ts's ctx.dirty read.
                     "dirty" => new ExecBool { Value = ctx.Staged.Count > 0 || ctx.Creates.Count > 0 },
                     "status" => new ExecText { Value = "idle" },
+                    // conflicts: always EMPTY server-side (a conflict is a client-only WS-reply state). An
+                    // empty list so `ctx.conflicts.any(...)` is false and `foreach c in ctx.conflicts` is a
+                    // no-op — the coarse banner never renders on the SSR paint. Twin of codeExec.ts's read.
+                    "conflicts" => new ExecArray { Items = [], Id = --context.LastId.Value, Kind = ArrayKind.List },
                     _ => new ExecCtxMethod { Ctx = ctx, Method = member.Name },
                 };
 

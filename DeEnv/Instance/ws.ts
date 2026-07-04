@@ -79,6 +79,94 @@ let nextWsMsgId = 1;
 interface PendingCommitCreate { join: CreateJoin; obj: ExecObject }
 const pendingCommitCreates = new Map<number, PendingCommitCreate>();
 
+// ── data-conflict resolution state (M13 slice 6) ────────────────────────────────────────────────────
+//
+// A same-field COLLISION reply (`conflicts` present) is NOT the plain rollback: the draft is KEPT (mine
+// stays in obj.props — the just-committed optimistic values are already there and we do NOT undo them), the
+// generic form's coarse banner is driven by `ctx.conflicts`, and the user chooses. Per committing ctx we
+// remember (a) how to RE-SEND its rejected commit (keep-mine = force at the now-fresh base) and (b) how to
+// DROP mine back to the server's values (take-theirs, using the reply's per-field `theirs`). Keyed by the
+// committing ctx (a WeakMap → drops with the ctx on unmount/navigation, no manual cleanup). The failed
+// commit's msgId maps to its ctx so the reply can find it (the journal entry also carries `entry.ctx`, but
+// a conflict-recovered entry is spliced without the ctx-status settle, so keep the direct link).
+interface ConflictResolution {
+    ctx: ExecCtx;
+    resend(): void;                                 // re-fire this exact commit (keep-mine) at the fresh base
+    editObjs: { obj: ExecObject; prop: string }[];  // the edits' targets — to overwrite with `theirs`
+}
+const conflictByMsgId = new Map<number, ConflictResolution>();
+const conflictByCtx = new WeakMap<ExecCtx, ConflictResolution>();
+
+// One conflicted field as it arrives on the wire (M13 slice 6 — WsHandler.ConflictFieldWire). Base/mine/
+// theirs are bare JSON scalars (a text string, a number, a bool, an ISO date, a ref id) or null.
+type WireScalar = string | number | boolean | null;
+interface WireConflict { object: number; typeName: string; field: string; base: WireScalar; mine: WireScalar; theirs: WireScalar; }
+
+// The server's `theirs` value per (ctx, object, field), captured from a conflict reply so take-theirs can
+// overwrite the edited field with it WITHOUT a round-trip. Keyed by ctx (WeakMap → drops with the ctx); the
+// inner key is "object:field". Cleared implicitly when the ctx's conflict is resolved (a fresh reply
+// rebuilds it). `undefined` from the lookup = no recorded theirs for that field (it wasn't the collision).
+const takeTheirsValues = new WeakMap<ExecCtx, Map<string, WireScalar>>();
+function takeTheirsValue(ctx: ExecCtx, objectId: number, prop: string): ExecValue | undefined {
+    const raw = takeTheirsValues.get(ctx)?.get(objectId + ":" + prop);
+    return raw === undefined ? undefined : wireScalarToExec(raw);
+}
+
+// A bare wire scalar (from a conflict payload) as an ExecValue for writing back into obj.props on take-mine's
+// inverse (take-theirs). null → the tagged null; a number → int (the store's conflictable numeric fields are
+// int/decimal — decimal round-trips through int only losslessly for whole values, but a conflict field's
+// theirs is re-fetched authoritatively right after, so this write is a momentary display value the refetch
+// corrects); a bool/text as-is. Refs (an id number) also land as int, which is the shape a ref prop's
+// display already tolerates until the refetch replaces it.
+function wireScalarToExec(v: WireScalar): ExecValue {
+    if (v === null) return { type: "null" };
+    if (typeof v === "boolean") return { type: "bool", value: v };
+    if (typeof v === "number") return { type: "int", value: v };
+    return { type: "text", value: v };
+}
+
+// A conflict reply for a journaled commit (M13 slice 6). Finds the commit's registered resolution (by
+// msgId), retires the journal entry WITHOUT undoing it (mine stays in obj.props — the whole point), records
+// the per-field `theirs` for take-theirs, builds the ctx's `ctx.conflicts` list (each `{ field }`) so the
+// coarse banner renders, re-pins the ctx's base to the fresh version (so keep-mine forces), settles the
+// Save status, ALSO surfaces the global error banner (the no-silent-clobber fallback for a custom render
+// that ignores ctx.conflicts), and re-renders. Returns false when no registered commit matches (a conflict
+// reply for a non-form/uncorrelated send — the caller falls back to the ordinary error path).
+function handleConflictReply(msgId: number, error: string, conflicts: WireConflict[], newVersion?: number): boolean {
+    const res = conflictByMsgId.get(msgId);
+    conflictByMsgId.delete(msgId);
+    if (res == null) return false; // not a registered form commit — let the plain-error path handle it
+    const ctx = res.ctx;
+    // Retire the failed commit's journal entry but do NOT undo it — mine stays. (rollbackJournal would undo,
+    // reverting the form to base; the conflict path deliberately keeps the draft.) onReject clears the
+    // create-remap bookkeeping just as a rollback would, without touching the optimistic values.
+    const idx = journal.findIndex(e => e.msgId === msgId);
+    if (idx >= 0) {
+        const [failed] = journal.splice(idx, 1);
+        failed.onReject?.();
+        if (failed.ctx != null) { failed.ctx.pending = 0; setCtxStatus(failed.ctx, "idle"); }
+    }
+    // Record theirs per edited field, for take-theirs.
+    const theirsMap = new Map<string, WireScalar>();
+    for (const c of conflicts) theirsMap.set(c.object + ":" + c.field, c.theirs);
+    takeTheirsValues.set(ctx, theirsMap);
+    // Build the Code-visible conflict list: one `{ field }` object per collision, so the banner can name the
+    // fields (`foreach c in ctx.conflicts` → `c.field`). Transient objects (id 0 — display-only, never keyed).
+    const items: ExecValue[] = conflicts.map(c =>
+        ({ type: "object", id: 0, props: { field: { type: "text", value: c.field } } as { [name: string]: ExecValue } }));
+    setCtxConflicts(ctx, items);
+    // Re-pin the ctx's base to the CURRENT version (the reply's newVersion) so a keep-mine re-commit forces
+    // at a fresh base and the guard passes it. Never regress.
+    if (typeof newVersion === "number") ctxBaseVersion.set(ctx, Math.max(ctxBaseVersion.get(ctx) ?? 0, newVersion));
+    // The no-silent-clobber fallback: a CUSTOM `fn render()` that never reads ctx.conflicts still shows the
+    // GLOBAL error banner (uiStatic.lastError, rendered by ui.ts). The generic form shows BOTH — its coarse
+    // banner AND the global banner — which is honest (the global one names no fields; the coarse one does).
+    uiStatic.lastError = error;
+    console.error("Commit rejected — conflicting changes:", error);
+    renderUi();
+    return true;
+}
+
 // ── optimistic-concurrency anti-clobber (baseVersion) ───────────────────────────────────────────────
 //
 // DECISIONS.md "App versioning — the full design (M13 clump)" (§0's baseVersion bullet) + the pulled-
@@ -615,13 +703,13 @@ function connectWs(): void {
             const creates = commitCreates ?? [];
             commitEdits = null; commitCreates = null; // close the buffers — later mutations go the live path
             if (edits.length === 0 && creates.length === 0) { committingCtx = null; return; } // nothing staged
-            const msgId = nextWsMsgId++;
             // Edits: the per-edit (obj, prop, before/value) captured by propChange at the moment each write
             // landed (Step A). Creates: each draft's transient id correlated for the ack's batch remap, plus
             // the wire create (its scalar props) and relation (set/ref). ONE journal entry → ONE ack commits
             // all (remapping every created id), ONE reject rolls all back atomically (edits reverted AND
             // created rows dropped). Roots = every edited object + every created object (kept alive for undo).
             const editSnapshots = edits.map(e => ({ obj: e.obj, prop: e.prop, before: e.before, after: e.value }));
+            const wireEdits = edits.map(e => e.wire);
             const wireCreates: object[] = [];
             const wireRelations: object[] = [];
             for (const c of creates) {
@@ -634,31 +722,82 @@ function connectWs(): void {
                 else
                     wireRelations.push({ kind: "ref", parentId: c.join.parent.id, prop: c.join.prop, childId: c.draft.id });
             }
-            // recordMutation reads committingCtx to tag this entry with the form's ctx for the
-            // "Saving… → Saved" lifecycle — call it WHILE committingCtx is still set, then clear.
-            recordMutation({
-                msgId,
-                undo: () => {
-                    for (const s of editSnapshots) { s.obj.props[s.prop] = s.before; invalidateProp(s.obj.id, s.prop); }
-                    for (const c of creates) dropStagedCreate(c);
-                },
-                redo: () => {
-                    for (const s of editSnapshots) { s.obj.props[s.prop] = s.after; invalidateProp(s.obj.id, s.prop); }
-                    for (const c of creates) restageCreate(c);
-                },
-                // The created objects are reachable through their join's set/parent (listed below), but a ref
-                // create's object sits in a field, so list each draft explicitly too — the reachability GC
-                // marks it alive until this entry retires (it must survive for the undo to drop it).
-                onReject: () => { for (const c of creates) pendingCommitCreates.delete(c.draft.id); },
-                roots: [...edits.map(e => e.obj), ...creates.map(c => c.draft),
-                        ...creates.map(c => c.join.kind === "set" ? c.join.set : c.join.parent)],
-            });
-            // Anti-clobber: this ctx's pinned base (set at its FIRST beginCommit — see there). Read it
-            // BEFORE clearing committingCtx below (the only reference to which ctx this bracket belongs to).
-            const baseVersion = committingCtx != null ? ctxBaseVersion.get(committingCtx) : undefined;
-            committingCtx = null; // close the bracket after recordMutation has read it
-            wsSend({ op: "commit", id: msgId, clientId: uiStatic.clientId, baseVersion,
-                edits: edits.map(e => e.wire), creates: wireCreates, relations: wireRelations });
+            // The committing ctx (form-Save lifecycle + M13 slice 6 conflict resolution). Read BEFORE clearing
+            // committingCtx (the only reference to which ctx this bracket belongs to).
+            const ctx = committingCtx;
+            // sendCommit fires the SAME batch at a supplied base — reused for keep-mine's FORCE re-commit at
+            // the now-fresh base (M13 slice 6). Each call allocates a fresh msgId + journal entry (so the
+            // re-commit is journaled/ack'd/rejected like any commit); on a conflict reply it re-registers the
+            // resolution keyed by the NEW msgId. committingCtx must be set while recordMutation runs (it tags
+            // entry.ctx for the Save lifecycle), so sendCommit brackets it.
+            function sendCommit(baseVersion: number | undefined): void {
+                const msgId = nextWsMsgId++;
+                const prevCommitting = committingCtx;
+                committingCtx = ctx; // recordMutation reads this to tag entry.ctx (Save lifecycle)
+                recordMutation({
+                    msgId,
+                    undo: () => {
+                        for (const s of editSnapshots) { s.obj.props[s.prop] = s.before; invalidateProp(s.obj.id, s.prop); }
+                        for (const c of creates) dropStagedCreate(c);
+                    },
+                    redo: () => {
+                        for (const s of editSnapshots) { s.obj.props[s.prop] = s.after; invalidateProp(s.obj.id, s.prop); }
+                        for (const c of creates) restageCreate(c);
+                    },
+                    // The created objects are reachable through their join's set/parent (listed below), but a ref
+                    // create's object sits in a field, so list each draft explicitly too — the reachability GC
+                    // marks it alive until this entry retires (it must survive for the undo to drop it).
+                    onReject: () => { for (const c of creates) pendingCommitCreates.delete(c.draft.id); },
+                    roots: [...edits.map(e => e.obj), ...creates.map(c => c.draft),
+                            ...creates.map(c => c.join.kind === "set" ? c.join.set : c.join.parent)],
+                });
+                committingCtx = prevCommitting;
+                // Register how to resolve a conflict on THIS send (M13 slice 6): keep-mine re-fires at the
+                // fresh base the reply re-pinned; take-theirs overwrites the edits' targets with the reply's
+                // `theirs`. Keyed by msgId (the reply carries it) and by ctx (the banner's buttons address it).
+                if (ctx != null) {
+                    const res: ConflictResolution = {
+                        ctx,
+                        resend: () => sendCommit(ctxBaseVersion.get(ctx)),
+                        editObjs: editSnapshots.map(s => ({ obj: s.obj, prop: s.prop })),
+                    };
+                    conflictByMsgId.set(msgId, res);
+                    conflictByCtx.set(ctx, res);
+                }
+                wsSend({ op: "commit", id: msgId, clientId: uiStatic.clientId, baseVersion,
+                    edits: wireEdits, creates: wireCreates, relations: wireRelations });
+            }
+            const baseVersion = ctx != null ? ctxBaseVersion.get(ctx) : undefined;
+            committingCtx = null; // close the bracket; sendCommit re-sets it around recordMutation
+            sendCommit(baseVersion);
+        },
+        // Conflict resolution (M13 slice 6) — the coarse banner's buttons (via codeExec's ctx.keepMine /
+        // ctx.takeTheirs). keepMine re-fires the rejected commit at the ctx's now-fresh base (a deliberate
+        // FORCE overwrite of theirs — chosen consent is the whole point). takeTheirs drops mine: overwrite
+        // each edited field with the server's value (recorded on the conflict reply) + a refetch, and clear
+        // the conflict. Both clear ctx.conflicts (the banner disappears).
+        keepMine: ctx => {
+            const res = conflictByCtx.get(ctx);
+            if (res == null) return;
+            conflictByCtx.delete(ctx);
+            setCtxConflicts(ctx, []); // leave conflict mode; the resend's own reply drives the next outcome
+            res.resend();
+        },
+        takeTheirs: ctx => {
+            const res = conflictByCtx.get(ctx);
+            if (res == null) return;
+            conflictByCtx.delete(ctx);
+            // Drop mine: restore each edited field to the server's current value (captured on the conflict
+            // reply, keyed by object+field). A field with no recorded `theirs` (edited but not itself the
+            // collision) is left as mine — take-theirs resolves the COLLISION; the refetch reconciles the rest.
+            for (const eo of res.editObjs) {
+                const theirs = takeTheirsValue(ctx, eo.obj.id, eo.prop);
+                if (theirs !== undefined) { eo.obj.props[eo.prop] = theirs; invalidateProp(eo.obj.id, eo.prop); }
+            }
+            setCtxConflicts(ctx, []);
+            needsServerData = true; // refresh authoritative state (theirs) for anything beyond the edited fields
+            renderUi();
+            maybeRefetch();
         },
     });
 }
@@ -668,9 +807,19 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
                             idMap?: { tempId: number; realId: number; collections?: { [prop: string]: { id: number; elementTypeName?: string } } }[];
                             newVersion?: number;
                             sessionAlive?: boolean;
+                            conflicts?: WireConflict[];
                             state?: ServerDtState; error?: string }): void {
     // Correlated accept/reject first: an error rolls the journal back, an ok commits.
     if (typeof msg.id === "number") {
+        // A same-field COLLISION reply (M13 slice 6): `conflicts` present alongside `error`. Handle it BEFORE
+        // the plain-error branch — that branch runs the journal UNDO (reverting the form to its base), which
+        // would discard MINE. A conflict KEEPS mine (the just-committed optimistic values stay in obj.props)
+        // and drives the coarse banner; see handleConflictReply.
+        if (msg.conflicts != null && msg.error != null && handleConflictReply(msg.id, msg.error, msg.conflicts, msg.newVersion))
+            return;
+        // Not a conflict: this commit's send resolved (ok or a plain reject), so drop its conflict-resolution
+        // registration (a form commit registers one per send — see sendCommit; without this it would leak).
+        conflictByMsgId.delete(msg.id);
         if (msg.error != null) {
             // A non-journaled send (a host action stages nothing): no journal entry matches, so
             // surface the error and re-render WITHOUT a journal replay.

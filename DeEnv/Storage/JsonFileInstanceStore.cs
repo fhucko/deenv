@@ -554,46 +554,81 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         break;
                 }
 
-            // The staleness check: iff baseVersion is supplied, every EXISTING object this batch EDITS must
-            // be unchanged since baseVersion. "Edits" = an existing (non-negative) id targeted by a mutation
-            // — a SetLinkMutation's positive MemberRef (linking an EXISTING member in), a RefLinkMutation's
-            // OwnerRef (always existing — the field's owner) and positive TargetRef, or a FieldWriteMutation's
-            // ObjectRef. A fresh create (negative tempId) is exempt — it has no prior version to be stale
-            // against. Object-granular: a batch touching only objects at-or-before baseVersion applies even
-            // when OTHER objects in the store advanced past it (disjoint interleaved commits auto-merge —
-            // no whole-store rejection, no OCC retry storm). A missing _objectVersions entry means unchanged
-            // since this process booted (see the field's doc) — never itself a staleness cause.
+            // The FIELD-LEVEL overlap check (M13 slice 6 — DECISIONS.md / app-versioning-design.md §2 + §0's
+            // baseVersion bullet). Iff baseVersion is supplied, a mutation targeting an EXISTING object that
+            // has advanced past baseVersion is NOT rejected outright: we look at WHICH FIELDS this batch
+            // writes vs which fields the interleaved commits (log entries with seq > baseVersion) wrote to
+            // the SAME object. No field overlap → AUTO-MERGE (the disjoint edits survive on both sides — the
+            // design's "disjoint interleaved commits auto-merge, no OCC retry storms"). A field overlap →
+            // REJECT the WHOLE batch (all-or-none) with a per-field {base, mine, theirs} payload. Set
+            // add/remove COMMUTE (a set link writes no field — never a conflict; different members never
+            // collide, same-member add+remove interleave, all apply). Creates never conflict (fresh id).
+            // baseVersion == null (the commitDesign/merge/clone server paths, a version-less test harness)
+            // → unchanged, no check.
             if (baseVersion is { } bv)
             {
-                // The message IS what reaches the client (WsHandler's catch surfaces ex.Message verbatim as
-                // the commit-rejection `{ error }`, which the existing rollback path shows in the global
-                // error banner — see WsHandler.cs's ProcessMessage) AND what the server logs alongside it, so
-                // it stays user-facing rather than a raw id/version dump; the technical detail (which id, the
-                // two versions) still rides along for whoever reads the server log.
-                void RequireFresh(int idRef)
+                // My field writes per existing object (field → the value I'm writing, for the `mine` cell). A
+                // FieldWriteMutation and a RefLinkMutation each write ONE named field; a SetLinkMutation writes
+                // no field (commutes — excluded); a DictWriteMutation can't reach here from a wire commit
+                // (HandleCommit builds none) and dict conflicts would be per-(prop,key), so it is left
+                // unanalyzed — commitDesign, its only source, passes no baseVersion anyway.
+                var myFields = new Dictionary<int, Dictionary<string, StoredValue?>>();
+                void MyWrite(int idRef, string prop, StoredValue? value)
                 {
-                    if (idRef >= 0 && _objectVersions.TryGetValue(idRef, out var lastModified) && lastModified > bv)
-                        throw new StaleBaseException(
-                            "Someone else changed this — reload to see the latest. " +
-                            $"(object {idRef}, version {lastModified} > base {bv})");
+                    if (idRef < 0) return; // a fresh create has no prior version to be stale against
+                    (myFields.TryGetValue(idRef, out var fs) ? fs : myFields[idRef] = new())[prop] = value;
                 }
                 foreach (var mutation in mutations)
                     switch (mutation)
                     {
-                        case SetLinkMutation(_, var memberRef):
-                            RequireFresh(memberRef);
+                        case RefLinkMutation(var ownerRef, var prop, var targetRef, var targetType):
+                            MyWrite(ownerRef, prop, targetRef is { } t ? new StoredRef(targetType, t) : null);
                             break;
-                        case RefLinkMutation(var ownerRef, _, var targetRef, _):
-                            RequireFresh(ownerRef);
-                            if (targetRef is { } t) RequireFresh(t);
-                            break;
-                        case FieldWriteMutation(var objectRef, _, _):
-                            RequireFresh(objectRef);
-                            break;
-                        case DictWriteMutation(var ownerRef, _, _, _):
-                            RequireFresh(ownerRef);
+                        case FieldWriteMutation(var objectRef, var prop, var value):
+                            MyWrite(objectRef, prop, new StoredLeaf(value));
                             break;
                     }
+
+                // Only objects that ACTUALLY advanced past the base need the (log-reading) overlap analysis —
+                // a fresh-based object cannot collide. A missing _objectVersions entry = unchanged since boot
+                // (see the field's doc) → not stale. This keeps the log read on the RARE stale path only.
+                var staleObjects = myFields.Keys
+                    .Where(id => _objectVersions.TryGetValue(id, out var v) && v > bv)
+                    .ToHashSet();
+
+                if (staleObjects.Count > 0)
+                {
+                    // The interleaved field writes per stale object, read from the durable LOG (base values
+                    // live there — §7's old+new logging exists for exactly this). Cost: reading the whole log
+                    // file once, filtered to seq > bv — O(log size), acceptable because this runs ONLY when an
+                    // edited object is genuinely stale (rare); an in-memory tail is a future optimization if a
+                    // stale commit under a huge log ever becomes hot. For each interleaved field we keep the
+                    // FIRST write's Old (= what the draft saw at its base) and the object's TypeName.
+                    var interleaved = InterleavedFieldWrites(bv, staleObjects);
+                    var conflicts = new List<ConflictField>();
+                    foreach (var (objectId, fields) in myFields)
+                    {
+                        if (!interleaved.TryGetValue(objectId, out var changed)) continue; // not stale, or no logged field write
+                        var typeName = ExtentEntryById(objectId)?.TypeName ?? "";
+                        foreach (var (prop, mine) in fields)
+                            if (changed.TryGetValue(prop, out var baseVal)) // SAME field written on both sides = collision
+                                conflicts.Add(new ConflictField(objectId, typeName, prop,
+                                    LeafOrRef(baseVal),
+                                    LeafOrRef(mine),
+                                    LeafOrRef(ExtentEntryById(objectId)?.Fields.GetValueOrDefault(prop))));
+                    }
+                    if (conflicts.Count > 0)
+                        // The Message reaches the client verbatim as the `{ error }` (WsHandler surfaces it for
+                        // the global banner — the custom-render no-silent-clobber fallback) AND is the server
+                        // log line; keep it user-facing (the fields carry the detail). "reload" is retained so
+                        // the existing publish-boundary reload assertion + tone still hold. Store UNTOUCHED —
+                        // this throws BEFORE any mutation, so the reject is all-or-none like a malformed batch.
+                        throw new ConflictException(
+                            "Someone else changed this — reload to see the latest, or resolve the conflict.",
+                            conflicts);
+                    // else: every stale object's edits are DISJOINT from what changed → fall through and apply
+                    // (auto-merge). No retry, no reject.
+                }
             }
 
             var idMap = new Dictionary<int, int>();
@@ -686,6 +721,45 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             return new CommitResult(results, _doc.Version);
         }
     }
+
+    // ── field-level conflict analysis (M13 slice 6) ──────────────────────────────────
+    //
+    // The interleaved field writes to `objectIds` from every log entry with seq > baseVersion (the commits
+    // that landed AFTER the committing draft loaded). Result: object id → (field → the value the draft SAW at
+    // its base). The base is the FIRST interleaved write's Old for that field — the value in the store at the
+    // moment the draft's base was captured (the second+ interleaved write's Old is an intermediate the draft
+    // never saw). Only FieldWrites count (a set link/unlink writes no field — set ops COMMUTE, never a
+    // field collision; a DictSet targets a dict id, and dict conflicts don't arise from a wire commit).
+    // Reads the whole log once (LoadLog) — called ONLY on the rare stale path (CommitBatch pre-filters to
+    // objects that actually advanced), so the O(log size) cost is paid only when a real collision is possible.
+    private Dictionary<int, Dictionary<string, StoredValue?>> InterleavedFieldWrites(int baseVersion, HashSet<int> objectIds)
+    {
+        var result = new Dictionary<int, Dictionary<string, StoredValue?>>();
+        foreach (var entry in LoadLog())
+        {
+            if (entry.Seq <= baseVersion) continue; // at or before the draft's base — the draft saw it
+            foreach (var write in entry.Writes)
+                if (write is FieldWrite(var id, var prop, var old, _) && objectIds.Contains(id))
+                {
+                    var fields = result.TryGetValue(id, out var fs) ? fs : result[id] = new();
+                    // FIRST interleaved write for this field wins as the base (what the draft saw); a later
+                    // one's Old is an intermediate value the draft never observed.
+                    if (!fields.ContainsKey(prop)) fields[prop] = old;
+                }
+        }
+        return result;
+    }
+
+    // A stored value as the scalar NodeValue the conflict payload carries: a leaf → its scalar; a ref → the
+    // target id as an int (the client displays/keeps it as an id, the shape the store already holds a single
+    // reference in); null (absent field) → null. A set/dict value never reaches here (a wire commit writes
+    // neither as a conflictable field).
+    private static NodeValue? LeafOrRef(StoredValue? v) => v switch
+    {
+        StoredLeaf leaf => leaf.Scalar,
+        StoredRef r => new IntValue(r.Id),
+        _ => null,
+    };
 
     // Walk to the object a path lands on (following set/dict/refs).
     private (StoredObject Object, TypeDefinition Type)? WalkToObject(NodePath path)

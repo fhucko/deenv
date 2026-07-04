@@ -60,14 +60,29 @@ Feature: Append-only changeset log behind the store (durable data history)
     Then each new log entry's seq is one greater than the previous
     And the final entry's seq equals the store's current version
 
-  # The boot rebuild of the baseVersion guard's per-object map must restore a member's version advanced
-  # by a SET LINK, not only by a field write or create — a set op stamps the linked member's version
-  # (BumpVersion(memberId)) and the guard checks it (RequireFresh(memberRef)). If boot dropped that
-  # attribution, a stale commit rejected before a restart would be silently ACCEPTED after one — a
-  # missed clobber across restart (residual #2 the rebuild exists to prevent).
-  Scenario: A member whose version advanced only by a set link stays stale-guarded across a restart
+  # The boot rebuild of the baseVersion guard's per-object map must restore a member's version advanced by
+  # an interleaved FIELD write across a restart — so a stale SAME-FIELD commit after the restart is still
+  # caught. Under M13 slice 6's field-level analysis, a same-field collision is rejected as a CONFLICT
+  # (the {base,mine,theirs}-carrying ConflictException, a subclass of StaleBaseException) — the reject the
+  # boot rebuild must preserve across a restart, or a missed clobber slips through. (The former set-link
+  # variant of this scenario auto-merges now — see "A member changed only by a set link auto-merges"
+  # below: a set-link membership change is DISJOINT from a field edit, so it never conflicts; the design's
+  # commute rule. So the durable per-object attribution the rebuild proves is exercised via a field write,
+  # the case that actually still rejects.)
+  Scenario: A member whose version advanced by a field write stays conflict-guarded across a restart
+    Given the store is seeded with a note "n"
+    And the store version is remembered as a stale base
+    When note "n" title is changed by a batch
+    And a new store is opened over the same files
+    Then a commit editing note "n" title at the remembered stale base is rejected as a conflict
+
+  # The design's commute rule (§0 / §2), post-restart: a member whose only interleaved change was a SET
+  # LINK (a membership change, DISJOINT from any field) does NOT conflict with a later field edit — it
+  # AUTO-MERGES (applies). The former "stays stale-guarded" outcome is superseded by field-level analysis:
+  # set add/remove commute, so a set-link never collides with a field write.
+  Scenario: A member changed only by a set link auto-merges a later field edit across a restart
     Given the store is seeded with a note "n"
     And the store version is remembered as a stale base
     When note "n" is linked into its set by a batch
     And a new store is opened over the same files
-    Then a commit editing note "n" at the remembered stale base is rejected as stale
+    Then a commit editing note "n" title at the remembered stale base is accepted

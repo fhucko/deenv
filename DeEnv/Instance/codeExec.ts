@@ -75,7 +75,12 @@ interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
 // unique handle so a `ctx.status` READ records a reactive var dep (`ctxStatus:<id>`) and a status
 // WRITE invalidates it — that is what makes the rendered indicator re-render on the WS ack (the
 // memoized component view is otherwise served from cache, since ctx is not a tracked object).
-interface ExecCtx { type: "ctx"; id: number; staged: Map<ExecObject, Map<string, ExecValue>>; creates: StagedCreate[]; parent: ExecCtx | null; live: boolean; status: string; pending: number; }
+// `conflicts` (M13 slice 6): the same-field collisions from the LAST rejected commit of this ctx — CLIENT-
+// only (a conflict lands on a WS reply; the C# twin renders once and returns the EMPTY list). Each entry is
+// a `{ field: text }` ExecObject the generic form's coarse banner iterates; empty = no conflict (the common
+// case). Read via `ctx.conflicts` (records a `ctxConflicts:<id>` var dep so the banner re-renders when a
+// reply populates it), written by setCtxConflicts from ws.ts on a conflict reply / a resolution.
+interface ExecCtx { type: "ctx"; id: number; staged: Map<ExecObject, Map<string, ExecValue>>; creates: StagedCreate[]; parent: ExecCtx | null; live: boolean; status: string; pending: number; conflicts: ExecValue[]; }
 // A staged create (atomic-commit Step B): a transient (id<0) draft `set.add`/`setRef`'d under a staging
 // ctx. The draft is held BY REFERENCE — its fields are read at commit time, never snapshotted, so a later
 // `draft.x = …` (an edit landing on the draft's own live props, since id<0 bypasses staging) is included.
@@ -96,6 +101,16 @@ function ctxStatusDep(ctxId: number): string { return "ctxStatus:" + ctxId; }
 function setCtxStatus(ctx: ExecCtx, status: string): void {
     ctx.status = status;
     invalidateVar(ctxStatusDep(ctx.id));
+}
+// The reactive var dep a `ctx.conflicts` READ records (M13 slice 6) — namespaced by ctx id like the status
+// dep, so a conflict reply that sets/clears conflicts re-renders the memoized component view that reads it.
+function ctxConflictsDep(ctxId: number): string { return "ctxConflicts:" + ctxId; }
+// Set a ctx's same-field conflicts and invalidate the var dep so the coarse banner (which reads
+// `ctx.conflicts`) re-renders. The single write path — called from ws.ts on a conflict reply (populate) and
+// on a keep-mine/take-theirs resolution (clear to []). Mirrors setCtxStatus exactly.
+function setCtxConflicts(ctx: ExecCtx, conflicts: ExecValue[]): void {
+    ctx.conflicts = conflicts;
+    invalidateVar(ctxConflictsDep(ctx.id));
 }
 interface ExecCtxMethod { type: "ctxMethod"; ctx: ExecCtx; method: string; }
 interface ExecTag { type: "tag"; name: string; attributes: { [name: string]: ExecResult }; children: ExecTagChild[]; key?: number; }
@@ -480,6 +495,14 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
         // Record a reactive var dep so the enclosing (memoized) component view re-renders when a status
         // WRITE invalidates it — otherwise the cached view would never reflect the WS ack.
         if (right.name === "status") { recordVar(ctxStatusDep(left.id)); return { value: { type: "text", value: left.status } }; }
+        // ctx.conflicts: the same-field collisions from the last rejected commit (M13 slice 6) as a LIST the
+        // banner iterates (`ctx.conflicts.any(...)` / `foreach c in ctx.conflicts`). CLIENT-only — empty on
+        // the C# twin. Record the conflicts var dep so a conflict reply (setCtxConflicts) re-renders the
+        // memoized form. A fresh list wrapper each read so the reconciler treats it as its own value.
+        if (right.name === "conflicts") {
+            recordVar(ctxConflictsDep(left.id));
+            return { value: { type: "array", kind: "list", items: left.conflicts.map((v, i) => ({ key: i, value: v })), id: --context.lastId.value } };
+        }
         return { value: { type: "ctxMethod", ctx: left, method: right.name } };
     }
 
@@ -1106,7 +1129,7 @@ function runBody(fn: ExecFunction, callScope: ExecScope, context: ExecContext): 
 // The live root data context provided by the framework as ambient `ctx` (writes persist; a form
 // opens a staging child via ctx.new()). Fresh per render — the root is a stateless live sentinel.
 function rootAmbient(): AmbientFrame {
-    return { name: "ctx", value: { type: "ctx", id: nextCtxId++, staged: new Map(), creates: [], parent: null, live: true, status: "idle", pending: 0 }, parent: null };
+    return { name: "ctx", value: { type: "ctx", id: nextCtxId++, staged: new Map(), creates: [], parent: null, live: true, status: "idle", pending: 0, conflicts: [] }, parent: null };
 }
 
 function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext): void {
@@ -1593,7 +1616,7 @@ function nearestStagedValue(obj: ExecObject, prop: string, context: ExecContext)
 function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
     switch (m.method) {
         // ctx.new(autosave): autosave=true → the live parent (writes persist); else a staging child.
-        case "new": return args.length > 0 && args[0].type === "bool" && args[0].value ? m.ctx : { type: "ctx", id: nextCtxId++, staged: new Map(), creates: [], parent: m.ctx, live: false, status: "idle", pending: 0 };
+        case "new": return args.length > 0 && args[0].type === "bool" && args[0].value ? m.ctx : { type: "ctx", id: nextCtxId++, staged: new Map(), creates: [], parent: m.ctx, live: false, status: "idle", pending: 0, conflicts: [] };
         case "discard":
             for (const [obj, fields] of m.ctx.staged)
                 for (const prop of fields.keys()) invalidateProp(obj.id, prop);   // re-render the reverted fields
@@ -1646,6 +1669,13 @@ function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
             if (m.ctx.pending === 0) setCtxStatus(m.ctx, "idle");
             m.ctx.staged.clear();
             return { type: "nothing" };
+        // Conflict resolution (M13 slice 6) — the coarse banner's two buttons. CLIENT-only effects handed to
+        // the WS layer (ws.ts owns the failed-commit re-send / the theirs-values), which is where the conflict
+        // state was recorded on the reply. keep-mine = force re-commit at the fresh base; take-theirs = drop
+        // mine, refresh to theirs. Both clear ctx.conflicts (the banner disappears) — the resolution is the
+        // exit from conflict mode. The C# twin no-ops these (server renders once, never witnesses a conflict).
+        case "keepMine": sendKeepMine(m.ctx); return { type: "nothing" };
+        case "takeTheirs": sendTakeTheirs(m.ctx); return { type: "nothing" };
         default: throw new Error(`Unknown context method '${m.method}'.`);
     }
 }
@@ -1686,6 +1716,12 @@ interface WsHooks {
     // it into the ONE `commit` op's creates+relations. The server resolves the create's TYPE from the join
     // (set element type / ref prop type) — the wire carries no client-asserted type. CLIENT-only.
     commitCreate(draft: ExecObject, join: CreateJoin): void;
+    // Conflict resolution (M13 slice 6) — the coarse banner's buttons. keepMine re-sends the ctx's LAST
+    // rejected commit's edits at the now-fresh base (a deliberate force overwrite). takeTheirs drops mine and
+    // refreshes the conflicted fields to the server's values (from the reply's payload). Both clear the ctx's
+    // conflicts. CLIENT-only — the failed-commit edits + theirs values live in ws.ts (recorded on the reply).
+    keepMine(ctx: ExecCtx): void;
+    takeTheirs(ctx: ExecCtx): void;
 }
 let wsHooks: WsHooks | null = null;
 function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
@@ -1728,6 +1764,12 @@ function sendCommitCreate(draft: ExecObject, join: CreateJoin): void {
 }
 function sendEndCommit(): void {
     wsHooks?.endCommit();
+}
+function sendKeepMine(ctx: ExecCtx): void {
+    wsHooks?.keepMine(ctx);
+}
+function sendTakeTheirs(ctx: ExecCtx): void {
+    wsHooks?.takeTheirs(ctx);
 }
 
 // ── conformance entry point ───────────────────────────────────────────────────────

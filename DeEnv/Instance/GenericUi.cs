@@ -234,6 +234,10 @@ public static class GenericUi
                         onCancel()
                     else
                         ctx.discard()
+                fn keepMine()
+                    ctx.keepMine()
+                fn takeTheirs()
+                    ctx.takeTheirs()
                 fn render()
                     var canEdit = sys.canWrite(meta.name, "edit")
                     var hasFields = meta.props.any(p => p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary")
@@ -258,6 +262,19 @@ public static class GenericUi
                         return <div class="object-form">
                             <h2>
                                 meta.name
+                            if ctx.conflicts.any(c => true)
+                                <div class="conflict-bar">
+                                    <span class="conflict-message">
+                                        "Someone else changed "
+                                        foreach c in ctx.conflicts
+                                            <span class="conflict-field">
+                                                sys.humanize(c.field)
+                                        " — your draft still holds your values."
+                                    <div class="conflict-actions">
+                                        <button class="conflict-keep" onClick={keepMine}>
+                                            "Keep mine"
+                                        <button class="conflict-take" onClick={takeTheirs}>
+                                            "Take theirs"
                             foreach p in meta.props
                                 if p.baseType == "object"
                                     if sys.canRead(p.target)

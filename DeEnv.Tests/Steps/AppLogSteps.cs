@@ -359,22 +359,43 @@ public sealed class AppLogSteps(InstanceContext ctx)
     public void WhenLinkNoteIntoSet(string alias)
     {
         // A pure SET LINK of the (already-member) note: advances THAT note's version via a lone SetLink
-        // log write — no FieldWrite/Create for it — so post-restart its guard version depends ENTIRELY on
-        // whether the boot rebuild attributes SetLink writes to their member (the finding under test).
+        // log write — no FieldWrite/Create for it. Post-restart this member advance is DISJOINT from a field
+        // edit (set ops commute), so a later same-object title edit AUTO-MERGES (the auto-merge scenario).
         var setId = FindDbSetId("notes");
         ctx.Store!.CommitBatch([], [new SetLinkMutation(setId, AliasId(alias))]);
     }
 
-    [Then("a commit editing note {string} at the remembered stale base is rejected as stale")]
-    public async Task ThenStaleEditRejected(string alias)
+    [When("note {string} title is changed by a batch")]
+    public void WhenChangeNoteTitle(string alias)
     {
-        // The reopened store (opened by the shared "a new store is opened over the same files" step) is
-        // what must reject: its rebuilt map has to know the member advanced past _staleBase via the SetLink.
+        // A FIELD write on the note: advances THAT note's title version via a FieldWrite log entry — the
+        // durable attribution the boot rebuild must restore so a later stale SAME-FIELD edit is caught.
+        ctx.Store!.CommitBatch([], [new FieldWriteMutation(AliasId(alias), "title", new TextValue("Interleaved edit"))]);
+    }
+
+    [Then("a commit editing note {string} title at the remembered stale base is rejected as a conflict")]
+    public async Task ThenStaleTitleEditConflicts(string alias)
+    {
+        // The reopened store (the shared "a new store is opened over the same files" step) must reject: its
+        // rebuilt map has to know the member's title advanced past _staleBase via the FieldWrite, so a stale
+        // same-field commit is a same-field COLLISION — a ConflictException (a StaleBaseException subclass).
         var store = _reopenedStore!;
         await Assert.That(() =>
             store.CommitBatch(
                 [], [new FieldWriteMutation(AliasId(alias), "title", new TextValue("Stale edit"))], _staleBase))
-            .Throws<StaleBaseException>();
+            .Throws<ConflictException>();
+    }
+
+    [Then("a commit editing note {string} title at the remembered stale base is accepted")]
+    public async Task ThenStaleTitleEditAutoMerges(string alias)
+    {
+        // A field edit after a pure SET LINK of the same object AUTO-MERGES across a restart: the set-link
+        // membership change is disjoint from the title field, so no conflict — the commit applies.
+        var store = _reopenedStore!;
+        store.CommitBatch(
+            [], [new FieldWriteMutation(AliasId(alias), "title", new TextValue("Merged edit"))], _staleBase);
+        await Assert.That(store.ReadById(AliasId(alias))!.Value.Fields.Fields["title"])
+            .IsEqualTo((NodeValue)new TextValue("Merged edit"));
     }
 
     // ── shared JSON options for reading the log/genesis files exactly as the store writes them ─────

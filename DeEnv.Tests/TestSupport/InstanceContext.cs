@@ -139,6 +139,41 @@ public class InstanceContext
             count: 0
     """;
 
+    // DataConflict.feature scenario 7 (M13 slice 6): a CUSTOM `fn render()` note page — a hand-rolled
+    // wrapper that composes the library <ObjectForm> for the note. It proves the no-silent-clobber GLOBAL
+    // fallback: a same-field collision fires the global error banner (#__error) even in a custom render (the
+    // banner is set UNCONDITIONALLY on any conflict reply — handleConflictReply's uiStatic.lastError — so a
+    // custom render that never wires conflict UI still fails LOUDLY). The custom title <input> lives OUTSIDE
+    // the form (class custom-title) so the test edits/saves through a route the generic fixture's selectors
+    // don't reach. NB: a fully hand-rolled STAGING form (its own ambient ctx + Save) is not expressible in
+    // user Code today — `ambient` is a library-only statement (CodeValidator rejects it in app code) — so
+    // the custom-render fallback is exercised through a custom render that composes the library form; the
+    // guarantee itself is structural (the global banner fires on ANY conflict reply, independent of render).
+    public static InstanceDescription CustomRenderConflictDb() =>
+        InstanceDescriptionLoader.Load(CustomRenderConflictApp);
+
+    private const string CustomRenderConflictApp = """
+    types
+        Db
+            note Note
+        Note
+            title text
+
+    initialData
+        Db 1
+            note: 2
+        Note 2
+            title: "Custom seed"
+
+    ui
+
+        fn render()
+            return <main class="custom-note">
+                <h1>
+                    "Custom note editor"
+                <ObjectForm obj={db.note} meta={sys.schema("Note")} base="/">
+    """;
+
     // Atomic-commit Step B: an OBJECT that holds a SET, reachable as an object PAGE. The Db's `orders` set
     // holds an Order (a scalar `title` + a nested `lines` set of Line). Navigating to /orders/2 renders the
     // Order's ObjectForm — a scalar field (so it HAS a Save) + an inline `lines` SetTable. Adding a Line

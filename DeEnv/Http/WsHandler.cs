@@ -232,6 +232,34 @@ public sealed record ErrorResponse
     public required string Error { get; init; }
 }
 
+// A commit REJECTED by a same-field collision (M13 slice 6 — the ONE approved wire widening this slice
+// makes). It carries BOTH the ordinary `error` string (so a custom `fn render()` that ignores conflicts
+// still shows the global error banner — no app can silently clobber) AND the structured `conflicts`
+// payload the generic form's coarse banner renders. `newVersion` is the store's CURRENT version — the
+// client re-pins the committing ctx's base to it so a "Keep mine" re-commit forces at a now-fresh base.
+// A commit rejected for any OTHER reason (a malformed batch, a floor denial) stays the plain `{ error }`
+// reply — `conflicts` is present ONLY on a genuine same-field collision, so every non-conflict reply is
+// byte-identical to before.
+public sealed record ConflictResponse
+{
+    public required string Error { get; init; }
+    public required IReadOnlyList<ConflictFieldWire> Conflicts { get; init; }
+    public required int NewVersion { get; init; }
+}
+
+// One conflicted field on the wire (M13 slice 6): the object id + a cheap type label, the field name, and
+// the per-field {base, mine, theirs} as bare wire scalars (scalarOf/refId shape). The coarse banner
+// surfaces only `field`; base/mine/theirs ride along so the later fine per-field UI needs no wire change.
+public sealed record ConflictFieldWire
+{
+    public required int Object { get; init; }
+    public required string TypeName { get; init; }
+    public required string Field { get; init; }
+    public object? Base { get; init; }
+    public object? Mine { get; init; }
+    public object? Theirs { get; init; }
+}
+
 // ── parsed commit relations (atomic-commit Step B) ──────────────────────────────────────────────
 // A relation linking a (possibly just-created) object into the graph. ChildRef is the linked object's id —
 // a transient create's NEGATIVE tempId, or a resolved positive real id. ChildType is the link-derived
@@ -826,13 +854,34 @@ public sealed class WsHandler
 
         // ── apply: everything validated — mint + link + write the whole changeset in one lock + one Save().
         // baseVersion rides through to the store's ONE critical section (check + apply, never two calls —
-        // see CommitBatch's doc): a stale base throws StaleBaseException, caught by ProcessMessage's
-        // existing catch and returned as the ordinary `{ error }` commit-rejection reply (the client's
-        // existing rollback + global error banner — no new client-side path needed). CommitBatch is called
-        // even for an EMPTY batch, so `result.Version` — captured under the store's lock — is ALWAYS the
-        // reply's newVersion, never a separate CurrentVersion read a concurrent commit could over-count
+        // see CommitBatch's doc). A same-field COLLISION throws ConflictException (M13 slice 6): caught HERE
+        // (not by ProcessMessage's generic catch) so the reply carries the structured `conflicts` payload
+        // ALONGSIDE the plain `error` — the generic form renders the coarse banner, a custom `fn render()`
+        // that ignores conflicts still shows the global error banner (no silent clobber). A DISJOINT stale
+        // base does NOT throw — it auto-merges (applies). Any OTHER reject (malformed batch, floor denial)
+        // propagates to ProcessMessage's `{ error }` catch, unchanged. CommitBatch is called even for an
+        // EMPTY batch, so `result.Version` (captured under the store's lock) is ALWAYS the reply's newVersion
         // (finding 3); the client re-pins its ctx base to a version its own commit actually produced.
-        var result = _store.CommitBatch(createBatch, mutations, req.BaseVersion);
+        CommitResult result;
+        try
+        {
+            result = _store.CommitBatch(createBatch, mutations, req.BaseVersion);
+        }
+        catch (ConflictException ex)
+        {
+            // newVersion = the store's CURRENT version (the conflict left it untouched, so this is the head an
+            // interleaved commit reached) — the client re-pins the committing ctx's base to it, so a "Keep
+            // mine" re-commit forces at a now-fresh base and the guard then passes it.
+            var wire = ex.Conflicts.Select(c => new ConflictFieldWire
+            {
+                Object = c.Object, TypeName = c.TypeName, Field = c.Field,
+                Base = WireScalar(c.Base), Mine = WireScalar(c.Mine), Theirs = WireScalar(c.Theirs),
+            }).ToList();
+            return Serialize(new ConflictResponse
+            {
+                Error = ex.Message, Conflicts = wire, NewVersion = _store.CurrentVersion,
+            });
+        }
 
         var idMap = result.Creates.Select(r => new CommitIdMapEntry
         {
@@ -844,6 +893,22 @@ public sealed class WsHandler
 
         return Serialize(new CommitResponse { IdMap = idMap.Count > 0 ? idMap : null, NewVersion = result.Version });
     }
+
+    // A scalar NodeValue as a BARE wire value for the conflict payload (M13 slice 6) — the JSON-native form
+    // the client displays (a text as a string, an int/decimal as a number, a bool as a bool, a date/datetime
+    // as its ISO string, a ref as its target id). Null (an absent field) stays null. Mirrors the bare shape
+    // DeserializeLeaf reads on the way IN; only scalars reach here (a wire commit conflicts on scalar fields
+    // and single refs, never a set/dict value).
+    private static object? WireScalar(NodeValue? v) => v switch
+    {
+        BoolValue b => b.Value,
+        IntValue i => i.Value,
+        DecimalValue d => d.Value,
+        TextValue t => t.Text,
+        DateValue d => d.Value.ToString("yyyy-MM-dd"),
+        DateTimeValue dt => dt.Value.ToString("O"),
+        _ => null,
+    };
 
     // Parse a commit relation (atomic-commit Step B). A set relation `{ kind:"set", setId, childId }` links a
     // member into a set; a ref relation `{ kind:"ref", parentId, prop, childId }` points a single reference at

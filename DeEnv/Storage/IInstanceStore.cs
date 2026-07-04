@@ -49,12 +49,19 @@ public interface IInstanceStore
     // nullable for compatibility, not a permanent opt-out: every real WS commit supplies it). When
     // present, the check and the apply run in ONE critical section (this method's existing `_sync` lock)
     // — the staleness check must never be a separate call from the apply, or two concurrent commits from
-    // the same stale base could both pass the check before either applies. Rejects (StaleBaseException,
-    // store untouched — no partial apply) iff any EXISTING object this batch EDITS (a FieldWriteMutation's
-    // ObjectRef, a RefLinkMutation's OwnerRef/positive TargetRef, or a SetLinkMutation's positive
-    // MemberRef — never a fresh create, which cannot be stale) has a last-modified version > baseVersion.
-    // Object-granular, not whole-store: a commit touching only objects unchanged since baseVersion applies
-    // even when OTHER objects advanced in the meantime (disjoint interleaved commits auto-merge).
+    // the same stale base could both pass the check before either applies.
+    //
+    // FIELD-LEVEL (M13 slice 6): a stale base is NOT rejected outright. For each EXISTING object this batch
+    // WRITES A FIELD OF (a FieldWriteMutation's ObjectRef, a RefLinkMutation's OwnerRef — a SetLinkMutation
+    // writes no field, so set add/remove COMMUTE and never conflict; a fresh create is exempt) whose
+    // last-modified version > baseVersion, the batch's written fields are compared against the fields the
+    // interleaved commits (log entries with seq > baseVersion) wrote to that SAME object:
+    //   • no field overlap → AUTO-MERGE: apply (both sides' disjoint edits survive — no reject, no retry);
+    //   • any field overlap → REJECT the WHOLE batch (ConflictException, store untouched — all-or-none)
+    //     with a per-field {base (from the log), mine, theirs (current)} payload the generic form renders.
+    // Object-granular pre-filter, field-granular decision: a commit touching only objects/fields unchanged
+    // since baseVersion applies even when OTHER objects/fields advanced (disjoint interleaved commits
+    // auto-merge). The old whole-object reject is gone — the disjoint case that used to reject now merges.
     //
     // Returns the created-object remaps AND the post-commit store version (captured under the same lock —
     // review finding 3), which the handler reports as CommitResponse.newVersion so the client re-pins the
@@ -127,11 +134,47 @@ public interface IInstanceStore
     void Reset();
 }
 
+// Thrown by CommitBatch when the caller's baseVersion is stale AND the batch's fields OVERLAP interleaved
+// changes to the SAME field(s) — a genuine same-field collision (M13 slice 6). NOT thrown for a stale base
+// whose fields are DISJOINT from what changed meanwhile: those AUTO-MERGE (apply, no reject — the design's
+// "disjoint interleaved commits auto-merge, no OCC retry storms"; set add/remove commute; creates never
+// conflict). An optimistic-concurrency reject, not a validation error — the batch was well-formed, just
+// based on data someone else has since changed the same field of. WsHandler maps this to a commit-rejection
+// reply that carries BOTH the user-facing `{ error }` (the existing rollback/global-error-banner path, so a
+// custom `fn render()` that ignores conflicts still shows something loud — no silent clobber) AND the
+// structured `conflicts` payload the generic form's coarse banner renders.
+//
+// Subclass of StaleBaseException so the two existing `catch (StaleBaseException)` call sites (the publish
+// boundary + the cross-restart guard tests) keep catching it, and its Message still mentions "reload" — a
+// same-field collision IS a specific kind of stale-base rejection (the kind the design surfaces; the
+// disjoint kind now auto-merges and throws nothing at all). Conflicts are TRANSIENT (§2): this list is
+// wire/ctx state built at reject time from the log + the live store, never a persisted row.
+public sealed class ConflictException(string message, IReadOnlyList<ConflictField> conflicts)
+    : StaleBaseException(message)
+{
+    public IReadOnlyList<ConflictField> Conflicts { get; } = conflicts;
+}
+
+// One conflicted field in a rejected commit (M13 slice 6 — DECISIONS.md / app-versioning-design.md §2's
+// per-field `{base, mine, theirs}`). Object = the extent id the collision is on (+ TypeName as a cheap human
+// anchor); Field = the prop name (dict conflicts, which never arise from a WIRE commit, would key on
+// prop+key — not surfaced here). Base = the value the committing draft SAW at its base — read straight from
+// the LOG (§7's old-value logging exists for exactly this: the FIRST interleaved write's `old` for that
+// field). Mine = the value this commit tried to write. Theirs = the CURRENT stored value (what an
+// interleaved commit left). All three are scalar leaves (a wire commit only writes scalar fields + single
+// refs); a ref-field conflict carries the ref-id-as-int shape the store holds. Nullable: an absent field
+// (never previously set, or cleared) is a legitimate null on any of the three.
+public sealed record ConflictField(
+    int Object, string TypeName, string Field, NodeValue? Base, NodeValue? Mine, NodeValue? Theirs);
+
 // Thrown by CommitBatch when the caller's baseVersion is stale for an object the batch EDITS (an
 // optimistic-concurrency reject, not a validation error — the batch was well-formed, just based on data
 // someone else has since changed). WsHandler maps this to the ordinary `{ error }` commit-rejection reply
-// (the existing rollback/global-error-banner path); the message is user-facing.
-public sealed class StaleBaseException(string message) : Exception(message);
+// (the existing rollback/global-error-banner path); the message is user-facing. As of M13 slice 6 the
+// field-level analysis in CommitBatch throws the ConflictException subclass (above) on a same-field
+// collision and AUTO-MERGES a disjoint stale base — so a bare StaleBaseException is no longer thrown by the
+// commit path itself, but the type is retained as the base class the two catch sites target.
+public class StaleBaseException(string message) : Exception(message);
 
 // ── atomic-commit batch (Step B) — a model-term changeset (CLAUDE rule 6) ──────────────────────
 
