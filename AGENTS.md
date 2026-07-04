@@ -93,6 +93,26 @@ where developers design data visually and use it as objects. Full mission in
     the permanent surface. See EXPECTATIONS.md ("Design principle — minimal by
     default"); it is judged criterion 5 for a slice.
 
+12. **Server data reaches Code by RETURNING from a `sys.` call.** When app Code
+    needs data the server computes — a schema descriptor, an access capability, a
+    structural diff, a publish preview — deliver it as a value-**returning** `sys.`
+    builtin: a *server-backed read* computed during render, memoized, shipped in
+    the client state, and reused by the client (a cache miss throws "Value not
+    available" → refetch). This is the `sys.schema` / `sys.canRead` /
+    `sys.diffCommits` / `sys.publishPreview` shape — the fn returns the data and
+    the render uses it inline. Do NOT surface server-computed data through a
+    mutable `ui var`, an ambient/global the framework writes behind Code's back, or
+    an async host-action-reply holder. If it *looks* like it needs a holder because
+    the value is produced asynchronously (a host action's reply), first check
+    whether it can instead be computed at **render time** and returned — even when
+    the data is cross-instance, by wiring the compute into the render path (that is
+    exactly how `sys.publishPreview` reaches another instance's committed data
+    through a kernel-supplied delegate). Reserve a client-only holder (the
+    `ctx.status` / `ctx.conflicts` shape — client-only, C# twin returns the empty
+    constant, no conformance case) ONLY for state that is genuinely push/async and
+    cannot be a render-time return. Host actions (`sys.publish`, `sys.commitDesign`,
+    …) remain fire-and-effect and return nothing; reads return values.
+
 ## Testing approach
 
 Behavior is specced in Gherkin `.feature` files in `DeEnv.Tests\Features`.
