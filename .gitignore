@@ -14,6 +14,9 @@ DeEnv/Instance/*.js
 .idea/
 *.user
 
+## Local AI tool settings
+.claude/settings.local.json
+
 ## NuGet
 *.nupkg
 
