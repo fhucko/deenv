@@ -351,6 +351,12 @@ function recordProp(objId: number, prop: string): void {
 function recordMember(arrId: number): void {
     if (depStack.length > 0) depStack[depStack.length - 1].members.push(arrId);
 }
+// Which ctxs had their `conflicts` READ during the current render — i.e. a resolver "door" (the generic
+// <ConflictBar>, or a custom render's own resolver) surfaced the conflict. Cleared at the start of every
+// render (buildRenderTree); marked at the `ctx.conflicts` read below. handleConflictReply consults it to
+// decide the no-silent-clobber fallback banner: it fires ONLY for a ctx whose conflict NO render surfaced
+// (an app that ignores ctx.conflicts) — where the "reload" advice is the only door. Global-script scope.
+const conflictSurfacedThisRender = new Set<number>();
 function recordVar(name: string): void {
     if (depStack.length > 0) depStack[depStack.length - 1].vars.push(name);
 }
@@ -501,6 +507,7 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
         // memoized form. A fresh list wrapper each read so the reconciler treats it as its own value.
         if (right.name === "conflicts") {
             recordVar(ctxConflictsDep(left.id));
+            conflictSurfacedThisRender.add(left.id); // this render surfaced the conflict → the app owns it (no fallback banner)
             return { value: { type: "array", kind: "list", items: left.conflicts.map((v, i) => ({ key: i, value: v })), id: --context.lastId.value } };
         }
         return { value: { type: "ctxMethod", ctx: left, method: right.name } };

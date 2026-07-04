@@ -37,6 +37,7 @@ function renderUi(): void {
 function buildRenderTree(speculative: boolean = false): ExecValue | null {
     const context: ExecContext = { lastId: uiStatic.lastId, ambient: rootAmbient() };
     resetSlotPath(); // a fresh render tree starts at the root slot (defensive; push/pop is balanced)
+    conflictSurfacedThisRender.clear(); // this render re-decides which conflicts a resolver "door" surfaces
     try {
         return callFunction(uiStatic.renderFn, context, []);
     } catch (e) {

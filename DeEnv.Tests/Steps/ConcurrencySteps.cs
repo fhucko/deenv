@@ -89,19 +89,29 @@ public sealed class ConcurrencySteps(InstanceContext ctx)
                 && v is TextValue { Text: var t } && t.StartsWith("From session 1"),
             "session 1's save to land in the store");
 
-    // Session 2's save is REJECTED: poll for the global error banner (ui.ts refreshErrorBanner) to
-    // appear on session 2's OWN page — proof the client-side reject path (rollbackJournal → the banner)
-    // fired, not just that the store happens to still hold session 1's value.
+    // Session 2's save is REJECTED: poll for the in-form conflict bar (the generic ObjectForm's
+    // <ConflictBar>) to appear on session 2's OWN page — proof the client-side reject path fired (the
+    // reply surfaced the field-level conflict), not just that the store happens to still hold session 1's
+    // value. (Pre-B5-fast-follow this polled the global #__error banner; the fix suppresses that banner
+    // once a resolver surfaces the conflict, so the ConflictBar is now the client-side reject surface.)
     [Then("session 2's save is rejected")]
     public async Task ThenSession2Rejected() =>
-        await ctx.Page2!.Locator("#__error").WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
+        await ctx.Page2!.Locator(".conflict-bar").WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
 
-    [Then("session 2 shows the {string} error banner")]
-    public async Task ThenSession2ShowsBanner(string expectedSubstring)
+    [Then("session 2 sees the in-form conflict bar naming {string}")]
+    public async Task ThenSession2SeesConflictBar(string field)
     {
-        var text = await ctx.Page2!.Locator("#__error").InnerTextAsync();
-        await Assert.That(text.Contains(expectedSubstring)).IsTrue();
+        await ctx.Page2!.Locator(".conflict-bar").WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
+        var text = await ctx.Page2.Locator(".conflict-bar").InnerTextAsync();
+        await Assert.That(text.Contains(field, StringComparison.OrdinalIgnoreCase)).IsTrue();
     }
+
+    // The B5 fast-follow: the generic ObjectForm surfaces the conflict via <ConflictBar>, so the redundant
+    // global "reload" banner is suppressed (it would contradict the in-form resolver). #__error stays absent.
+    [Then("session 2 shows no global error banner")]
+    public async Task ThenSession2NoGlobalBanner() =>
+        await ctx.Page2!.Locator("#__error").WaitForAsync(
+            new LocatorWaitForOptions { State = WaitForSelectorState.Detached, Timeout = 10000 });
 
     // ── (b)/(c) WsHandler-level, two (or one, twice) sessions ───────────────────
 

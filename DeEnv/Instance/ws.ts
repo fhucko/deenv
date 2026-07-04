@@ -219,12 +219,21 @@ function handleConflictReply(msgId: number, error: string, conflicts: WireConfli
     // Re-pin the ctx's base to the CURRENT version (the reply's newVersion) so a keep-mine re-commit forces
     // at a fresh base and the guard passes it. Never regress.
     if (typeof newVersion === "number") ctxBaseVersion.set(ctx, Math.max(ctxBaseVersion.get(ctx) ?? 0, newVersion));
-    // The no-silent-clobber fallback: a CUSTOM `fn render()` that never reads ctx.conflicts still shows the
-    // GLOBAL error banner (uiStatic.lastError, rendered by ui.ts). The generic form shows BOTH — its coarse
-    // banner AND the global banner — which is honest (the global one names no fields; the coarse one does).
-    uiStatic.lastError = error;
     console.error("Commit rejected — conflicting changes:", error);
+    // The global error banner (uiStatic.lastError, rendered by ui.ts) is the NO-SILENT-CLOBBER FALLBACK: an
+    // app that never surfaces the conflict itself must still learn its edits weren't saved (the "reload"
+    // advice is the only door there). But an app that DOES surface it — the generic <ConflictBar>, or a
+    // custom render's own resolver reading ctx.conflicts — has a real door, and the global "reload = discard
+    // your draft" banner would be redundant AND contradictory next to it. So: render once, then raise the
+    // fallback banner ONLY if that render surfaced NO door for this ctx (conflictSurfacedThisRender). Keyed
+    // on "did a resolver read ctx.conflicts", not on app type — a custom app opts out simply by handling the
+    // conflict. Decided AFTER the render (refreshErrorBanner runs at commit); never a side-effect in render.
+    // Today only ObjectForm opens a conflict-carrying staging ctx and it always renders <ConflictBar>, so the
+    // fallback is a defensive net — its one clearly-reachable trigger is a navigate-away between Save and this
+    // reply (the form gone → no door → the operator still learns the save failed on whatever page they're on).
+    uiStatic.lastError = null; // this conflict supersedes any prior error; the fallback (if any) is set below
     renderUi();
+    if (!conflictSurfacedThisRender.has(ctx.id)) { uiStatic.lastError = error; renderUi(); }
     return true;
 }
 

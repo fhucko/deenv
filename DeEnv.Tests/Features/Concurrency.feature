@@ -5,9 +5,12 @@ Feature: Optimistic-concurrency anti-clobber (baseVersion)
   change is gone. This is DECISIONS.md "App versioning — the full design (M13 clump)" (§0's baseVersion
   bullet) pulled ahead of the milestone because the bare anti-clobber check fixes a current bug.
 
-  DETECTION ONLY (per the design doc): a stale commit is REJECTED whole (the existing rejected-save
-  path — the global error banner, the client draft kept intact) — no conflict UI, no field-level merge,
-  no change log. The check is OBJECT-granular, not whole-store: a commit touching only objects unchanged
+  DETECTION ONLY (per the design doc): a stale commit is REJECTED whole (the rejected-save path — the
+  client draft kept intact). This baseVersion check is the MECHANISM; the CLIENT surface then evolved —
+  slice 6 layered the field-level conflict UI (ctx.conflicts → the in-form <ConflictBar>) over this same
+  generic path, and its B5 fast-follow suppresses the now-redundant global "reload" banner whenever a
+  resolver surfaces the conflict (which the generic ObjectForm always does). So the observable here is the
+  in-form conflict bar, not the global banner. The check is OBJECT-granular, not whole-store: a commit touching only objects unchanged
   since its base applies even while OTHER objects in the store have moved on (disjoint interleaved
   commits auto-merge — no whole-store rejection, no retry storm).
 
@@ -15,8 +18,9 @@ Feature: Optimistic-concurrency anti-clobber (baseVersion)
   # Two tabs load the SAME Note. Both are editing FROM THE SAME starting data. Session 1 saves first —
   # it applies (nothing was stale under it yet). Session 2, still holding the pre-session-1 data, saves
   # second — its ctx's baseVersion predates session 1's change to the SAME object, so it is REJECTED:
-  # the global error banner appears in session 2, and the store still holds SESSION 1's value (not
-  # session 2's) — the clobber that happens on main today does not happen here.
+  # session 2 sees the in-form conflict bar (the generic ObjectForm surfaces the field-level conflict,
+  # slice 6) and NO redundant global "reload" banner (B5 fast-follow), and the store still holds SESSION
+  # 1's value (not session 2's) — the clobber that happens on main today does not happen here.
   @milestone-13 @multi-user
   Scenario: A stale save to an object another session just changed is rejected, not silently applied
     Given the concurrency fixture app is served
@@ -26,7 +30,8 @@ Feature: Optimistic-concurrency anti-clobber (baseVersion)
     Then session 1's save is accepted
     When session 2 changes the title to "From session 2" and saves
     Then session 2's save is rejected
-    And session 2 shows the "Someone else changed this" error banner
+    And session 2 sees the in-form conflict bar naming "title"
+    And session 2 shows no global error banner
     And the stored note 2 title is "From session 1"
 
   # ── (b) disjoint objects: both sessions loaded the SAME version, but edit DIFFERENT objects ────────

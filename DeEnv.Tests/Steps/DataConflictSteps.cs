@@ -465,23 +465,8 @@ public sealed class DataConflictSteps(InstanceContext ctx)
         }
     }
 
-    [Then("conflict session 2 shows the {string} error banner")]
-    public async Task ThenS2ShowsErrorBanner(string expectedSubstring)
-    {
-        await ctx.Page2!.Locator("#__error").WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
-        var text = await ctx.Page2.Locator("#__error").InnerTextAsync();
-        await Assert.That(text.Contains(expectedSubstring)).IsTrue();
-    }
-
-    // Three-lens review fix 3: the message is ONE branch-free, action-first sentence honest for a custom
-    // render that has no "resolve" door — it names what happened (NOT saved), where the edit still is
-    // (the form), and the one action every surface supports (reload). Never asserts "resolve" is absent
-    // (a negative assertion is brittle); asserts the POSITIVE honest content is present instead.
-    [Then("conflict session 2's error banner says the edits were not saved and to reload")]
-    public async Task ThenS2BannerSaysNotSavedAndReload()
-    {
-        var text = await ctx.Page2!.Locator("#__error").InnerTextAsync();
-        await Assert.That(text.Contains("NOT saved")).IsTrue();
-        await Assert.That(text.Contains("reload")).IsTrue();
-    }
+    // (The old "conflict session 2 shows the {string} error banner" + "...says the edits were not saved and
+    // to reload" steps were removed with the B5 banner fast-follow: a conflict now surfaces the in-form
+    // <ConflictBar> instead of the global reload banner. If the no-render FALLBACK branch ever gets a
+    // deterministic test, it wants fresh assertions on #__error — see versioning-slices.md slice 13(a).)
 }

@@ -331,13 +331,28 @@ Commit button, 2026-07-03/04, suite 628→715).**
    (arch-verified byte-identical for every non-conflict commit). Coarse whole-ctx buttons + the global
    no-silent-clobber banner both preserved. **§6 FINE-SLICE OBLIGATIONS: MET** (show-theirs-pre-choice,
    widened items, per-field resolve, object disambiguation, refresh-leave-guard). Residuals/flags: (a)
-   **ux finding DEFERRED for user decision** — the global "reload to see the latest" banner still fires
-   alongside the in-form fine bar (slice-6's DELIBERATE double-banner), and with the richer resolver it
-   now reads as contradictory (loud banner says reload=discard; form says resolve). Recommended fix:
-   suppress the global banner for the generic UI (the `isGeneric` flag — ObjectForm always renders
-   ConflictBar), keep it only as the custom-render fallback. Reverses a settled decision → user's call.
+   **the double-banner ux finding — FIXED 2026-07-04 (user-approved fast-follow):** the global "reload to
+   see the latest" banner no longer fires when a render ALREADY SURFACED the conflict (it contradicted the
+   in-form resolver — reload=discard vs the bar's safe resolution). Keyed on the ACTUAL condition, not app
+   type: a global `conflictSurfacedThisRender` Set (codeExec.ts) is `.add(ctx.id)`-ed at the `ctx.conflicts`
+   READ (the point a resolver — the generic `<ConflictBar>`, or a custom render's own — reads it) and
+   `.clear()`-ed at the start of every `buildRenderTree` (ui.ts). `handleConflictReply` (ws.ts) sets
+   `lastError=null`, renders once, then `if (!conflictSurfacedThisRender.has(ctx.id)) { lastError=error;
+   renderUi() }` — the global banner is the no-silent-clobber FALLBACK ONLY for a conflict surfaced by NO
+   render. (An earlier `isGeneric` proxy was REJECTED — a custom app composing `<ConflictBar>` deserves the
+   same opt-out; keying on the read handles it by construction.) Client-only, no conformance (ctx.status
+   precedent), no render side-effects (decided after the render, in the same pass — refreshErrorBanner runs
+   at commit). Pinned: DataConflict scenario 3 (generic) + scenario 7 (custom composing ObjectForm) both
+   assert the in-form bar shows + NO global banner; Concurrency's stale-save scenario reframed the same way
+   (the ConflictBar is now the client-side reject surface). The fallback branch's ONLY clearly-reachable
+   trigger is navigate-away-mid-reply (form gone when the reply lands) — racy to browser-test; the reachable
+   no-silent-clobber guarantee (a conflict ALWAYS surfaces the ConflictBar when the form is present) IS
+   tested. FALLBACK-BRANCH TEST DEFERRED (both reviewers flagged; needs a hand-rolled staging fixture or a
+   deterministic navigate-away hook). Deeper truth: a same-field conflict only arises through `ObjectForm`
+   TODAY (only ObjectForm opens a conflict-carrying staging `ctx.new`), which always renders `<ConflictBar>`,
+   so the global conflict banner is effectively a dead defensive net.
    (b) a genuine TWO-OBJECT same-ctx conflict is NOT producible through user-authorable Code today
-   (only ObjectForm opens a staging ctx, binds ONE object; app-level `ambient` is validator-rejected) —
+   (only ObjectForm opens a conflict-carrying staging ctx, and it binds ONE object) —
    the grouping/disambiguation is implemented + live-when-reachable but browser-tested only at the
    two-FIELD level; (c) ref/decimal conflict values display as raw id / int-lossy (fixture is
    text+int); (d) per-field keep-mine has no intermediate confirmation (row just vanishes); (e)
@@ -374,9 +389,9 @@ the designer.**
   access changes end-to-end; (d) the merge UI hardcodes "this design" for the target side (correct
   while target is always the currently-open design; a future merge-two-arbitrary-branches view would
   need the real target name).
-- Fine per-field conflict UI obligations — DONE (B5, slice 13; §6 obligations MET). Open ux decision
-  ledgered in slice 13: the global "reload" banner vs the in-form fine bar (settled-deliberate
-  double-banner — recommended suppress-for-generic-UI fix awaits user's call).
+- Fine per-field conflict UI obligations — DONE (B5, slice 13; §6 obligations MET). The double-banner ux
+  finding (global "reload" banner vs the in-form fine bar) is FIXED — the generic UI no longer raises the
+  global banner during a conflict (custom-render fallback preserved); see slice 13 (a).
 - Semantic migrations (`fn migrate` + `Commit.migration` — boundary entries exist, the
   addition is safe per the slice-4 note); compaction (`sys.compact`, §6); non-temporal field
   flag (§0b); per-verb sys granularity.

@@ -139,16 +139,16 @@ public class InstanceContext
             count: 0
     """;
 
-    // DataConflict.feature scenario 7 (M13 slice 6): a CUSTOM `fn render()` note page — a hand-rolled
-    // wrapper that composes the library <ObjectForm> for the note. It proves the no-silent-clobber GLOBAL
-    // fallback: a same-field collision fires the global error banner (#__error) even in a custom render (the
-    // banner is set UNCONDITIONALLY on any conflict reply — handleConflictReply's uiStatic.lastError — so a
-    // custom render that never wires conflict UI still fails LOUDLY). The custom title <input> lives OUTSIDE
-    // the form (class custom-title) so the test edits/saves through a route the generic fixture's selectors
-    // don't reach. NB: a fully hand-rolled STAGING form (its own ambient ctx + Save) is not expressible in
-    // user Code today — `ambient` is a library-only statement (CodeValidator rejects it in app code) — so
-    // the custom-render fallback is exercised through a custom render that composes the library form; the
-    // guarantee itself is structural (the global banner fires on ANY conflict reply, independent of render).
+    // DataConflict.feature scenario 7 (M13 slice 6 + B5 banner fast-follow): a CUSTOM `fn render()` note page
+    // — a hand-rolled wrapper that composes the library <ObjectForm> for the note. Post-fast-follow it proves
+    // the CUSTOM-APP OPT-OUT: because the custom render SURFACES the conflict (ObjectForm renders <ConflictBar>,
+    // which reads ctx.conflicts), the redundant global "reload" banner is SUPPRESSED — the operator is not
+    // silently clobbered (the in-form bar names the field) and gets no contradictory reload advice. The
+    // custom title <input> lives OUTSIDE the form (class custom-title) so the test edits/saves through a route
+    // the generic fixture's selectors don't reach. NB: only ObjectForm opens a conflict-carrying staging ctx
+    // today (a fully hand-rolled staging form via `ambient ctx = ctx.new` + Save isn't wired to carry
+    // conflicts), so ObjectForm is the only door and it always surfaces — the global banner's no-render
+    // FALLBACK branch is a defensive net, reachable only via navigate-away-mid-reply.
     public static InstanceDescription CustomRenderConflictDb() =>
         InstanceDescriptionLoader.Load(CustomRenderConflictApp);
 
