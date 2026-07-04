@@ -244,6 +244,12 @@ public sealed class TimeTravelSteps
         _propIds[to] = propId;
     }
 
+    // Adds a new scalar field to the named type — the multi-commit-gap scenario's C2 (a commit that is
+    // never published alone, so its own schema must never leak into an era resolution that skips it).
+    [Given("the design adds a {string} field to {string} for time travel")]
+    public void GivenDesignFieldAdded(string field, string typeName) =>
+        AddProp(DesignerStore(), typeName == "Item" ? _itemTypeId : _dbTypeId, field, "text", cardinality: "");
+
     [Given("the time-travel design is committed with message {string}")]
     public void GivenDesignCommitted(string message) =>
         HostActions().Run("commitDesign", ArgsOf(
@@ -385,6 +391,27 @@ public sealed class TimeTravelSteps
     [Given("the target's own log line count is remembered for time travel")]
     public void GivenTargetLogLinesRemembered() => _targetLogLinesBefore = TargetLogLineCount();
 
+    // Rewrites the TARGET's log's LAST line (a boundary-marked publish entry — the Background/prior steps
+    // must have already published) so its `boundary.commitId` points at an id no Commit row will ever have
+    // — a raw text substitution (never through the typed LogEntry/BoundaryMarker model), so this simulates
+    // exactly the observable shape a torn/corrupted design-host store would leave: a boundary that NAMES a
+    // commit, but that commit will not resolve. Proves review fix 2 — this must fail loudly, never fall
+    // through to "no boundary at all" (case (a), current app.deenv).
+    [Given("the target's newest boundary marker is corrupted to point at a nonexistent commit")]
+    public void GivenBoundaryCorrupted()
+    {
+        var path = AppPaths.LogPathForId(_kernelDir, TargetId);
+        var lines = File.ReadAllLines(path);
+        var last = lines[^1];
+        if (!last.Contains("\"boundary\":{"))
+            throw new InvalidOperationException(
+                "The target's newest log entry carries no boundary marker — a prior publish step is missing.");
+        var corrupted = System.Text.RegularExpressions.Regex.Replace(
+            last, "\"commitId\":\\d+", "\"commitId\":999999");
+        lines[^1] = corrupted;
+        File.WriteAllText(path, string.Join("\n", lines) + "\n");
+    }
+
     private int TargetLogLineCount()
     {
         var path = AppPaths.LogPathForId(_kernelDir, TargetId);
@@ -459,6 +486,29 @@ public sealed class TimeTravelSteps
 
     [Then("the clone attempt fails")]
     public async Task ThenCloneAttemptFails() => await Assert.That(_cloneError).IsNotNull();
+
+    // The id a NEXT clone/create would mint (mirrors KernelHost's own private NextInstanceId: max over the
+    // live hosted set AND on-disk instances/<id>/ dirs, +1 — replicated here read-only since the real method
+    // is private) — remembered so a failed clone attempt can be proven to have created NOT EVEN THE
+    // DIRECTORY for that id (review fix 3's no-orphan-dir invariant).
+    private int _nextIdBefore;
+
+    [Given("the next instance id is remembered")]
+    public void GivenNextIdRemembered()
+    {
+        var maxLive = _kernel!.Instances.Select(i => i.Spec.Id).DefaultIfEmpty(0).Max();
+        var instancesDir = AppPaths.InstancesDir(_kernelDir);
+        var maxDir = Directory.Exists(instancesDir)
+            ? Directory.EnumerateDirectories(instancesDir)
+                .Select(d => int.TryParse(Path.GetFileName(d), out var n) ? n : 0)
+                .DefaultIfEmpty(0).Max()
+            : 0;
+        _nextIdBefore = Math.Max(maxLive, maxDir) + 1;
+    }
+
+    [Then("no new instance directory was created")]
+    public async Task ThenNoNewInstanceDirCreated() =>
+        await Assert.That(Directory.Exists(AppPaths.IdDirFor(_kernelDir, _nextIdBefore))).IsFalse();
 
     [Then("the target's own log fsck holds for time travel")]
     public async Task ThenTargetLogFsckHolds() =>

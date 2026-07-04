@@ -39,8 +39,14 @@ public sealed record LogEntry(
     BoundaryMarker? Boundary = null);
 
 // Which design commit a boundary entry's changeset was materialized from — the (design, commit) pair a
-// history UI would use to explain "the schema changed here, to this commit."
-public sealed record BoundaryMarker(int DesignId, int CommitId);
+// history UI would use to explain "the schema changed here, to this commit." `BaseCommitId` (M13 slice 7,
+// additive — nullable, absent on an entry written before this field existed) is the commit the publish
+// DIFFED FROM (the target's pre-publish stamp) — recorded because publish diffs the stamped base against
+// the head across an ARBITRARY commit distance (KernelHostActions.Publish), so a reader cannot recover
+// "which commit was live immediately before this boundary" by walking `CommitId`'s own `parent` — that
+// walks the design's ONE-STEP-AT-A-TIME DAG, not the actual (possibly multi-commit) span this publish
+// crossed. Time-travel era resolution (KernelHost.ResolveEraDoc) reads this directly instead of guessing.
+public sealed record BoundaryMarker(int DesignId, int CommitId, int? BaseCommitId = null);
 
 // The outcome of JsonFileInstanceStore.ApplyPublishBoundary: whether it wrote anything (an empty diff is a
 // legitimate no-op — nothing to carry), plus the destructive fallout a caller must surface loudly —

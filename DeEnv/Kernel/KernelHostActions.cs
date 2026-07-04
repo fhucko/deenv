@@ -183,7 +183,8 @@ public sealed class KernelHostActions(
         var boundaryResult = diff.IsEmpty
             ? new BoundaryApplyResult(false, [], [])
             : JsonFileInstanceStore.ApplyPublishBoundary(
-                target.DataPath, diff, targetDesc, new BoundaryMarker(designId, headCommitId), dryRun);
+                target.DataPath, diff, targetDesc,
+                new BoundaryMarker(designId, headCommitId, BaseCommitId: stampedCommitId), dryRun);
 
         var report = BuildReport(diff, boundaryResult, applied: !dryRun, dryRun, stampedCommitId, headCommitId,
             uncommittedDrift, fallbackNameMatched: false);

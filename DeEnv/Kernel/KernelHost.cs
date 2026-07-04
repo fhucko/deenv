@@ -757,13 +757,16 @@ public sealed class KernelHost(
         var id = NextInstanceId(baseDir);
         var schemaPath = AppPaths.SchemaPathForId(baseDir, id);
         var dataPath = AppPaths.DataPathForId(baseDir, id);
-        Directory.CreateDirectory(AppPaths.IdDirFor(baseDir, id));
 
         int? eraCommitId = null;
         if (atSeq is { } seq)
         {
             // Materialize the source's OWN store at `seq` (validates seq bounds — throws loudly, nothing
-            // written yet, on an invalid one) and resolve which schema was in force then.
+            // written yet, on an invalid one) and resolve which schema was in force then. Deliberately
+            // BEFORE the id-dir is created (review fix — "nothing was cloned" must be LITERALLY true on any
+            // throw here, not just "the registry was untouched": no orphan instances/<id>/ directory left
+            // behind either). Every step through Validate can throw; nothing below creates a file or
+            // directory until all of them have succeeded.
             var sourceDesc = InstanceDescriptionLoader.LoadFile(source.Spec.SchemaPath);
             var sourceStore = new JsonFileInstanceStore(source.Spec.DataPath, sourceDesc);
             var materialized = sourceStore.MaterializeAtSeq(seq); // throws on an out-of-range/pre-genesis seq
@@ -777,6 +780,8 @@ public sealed class KernelHost(
             // run it explicitly here so the failure names the remedy before any file exists.
             StoredDataValidator.Validate(materialized, eraDesc, source.Spec.DataPath);
 
+            // Every check above passed — now, and only now, does anything touch the filesystem.
+            Directory.CreateDirectory(AppPaths.IdDirFor(baseDir, id));
             File.WriteAllText(schemaPath, eraDocText);
             JsonFileInstanceStore.SaveRaw(dataPath, materialized);
             // Deliberately NOT copying the source's log/genesis — a time-travel clone is a FRESH fork with
@@ -786,7 +791,11 @@ public sealed class KernelHost(
         else
         {
             // Copy the source's files: the app doc always, and the data file when it exists (a brand-new
-            // source may not have persisted yet). This copied data is the clone's whole point.
+            // source may not have persisted yet). This copied data is the clone's whole point. Nothing
+            // above this point can throw on the atSeq-less path, so creating the dir right before copying
+            // (rather than up front) changes nothing observable here — kept in the same place for both
+            // branches' symmetry.
+            Directory.CreateDirectory(AppPaths.IdDirFor(baseDir, id));
             File.Copy(source.Spec.SchemaPath, schemaPath);
             if (File.Exists(source.Spec.DataPath))
                 File.Copy(source.Spec.DataPath, dataPath);
@@ -843,32 +852,60 @@ public sealed class KernelHost(
     //   (a) the instance has NEVER been published, ever (EarliestBoundary() is also null) — it has run the
     //       SAME schema its whole life, so "current app.deenv" trivially IS the era doc (covers
     //       pre-first-publish history and a never-published instance alike).
-    //   (b) a LATER publish exists (EarliestBoundary() finds one), just not at-or-before atSeq — the era
-    //       doc is the schema that publish MIGRATED FROM, i.e. that earliest boundary commit's OWN
-    //       `parent` commit's cached text (a root commit with no parent falls back to (a)'s current-doc
-    //       case — the design's adoption-baseline floor, before which no commit/text exists to read).
+    //   (b) a LATER publish exists (EarliestBoundary() finds one), just not at-or-before atSeq — the era doc
+    //       is the schema that publish DIFFED FROM, read DIRECTLY off that boundary's OWN `BaseCommitId`
+    //       (the pre-publish stamped commit KernelHostActions.Publish recorded at boundary-write time — see
+    //       BoundaryMarker's own doc). REVIEW FIX (blocks-landing): this is an EXACT lookup, never a
+    //       `CommitId.parent` DAG walk — publish diffs the stamped base against the head across an
+    //       ARBITRARY commit distance (Publish's own comment on the versioned path), so with a deployed
+    //       chain C1 (stamped) ← C2 ← C3 (published), the boundary names C3 and `C3.parent` is C2, NOT the
+    //       C1 the instance actually ran — a parent-walk would silently serve C2's schema for a clone that
+    //       predates the ENTIRE publish. `BaseCommitId` sidesteps the DAG question entirely: it names C1
+    //       directly, because that is literally what the diff's base argument was.
     //
     // Returns (docText, parsedDesc, resolvedCommitId-or-null) — the commit id feeds the clone's
-    // PublishedCommitId stamp (case (b)'s parent commit genuinely IS that era's design version, so it
-    // stamps exactly like case (a)'s direct hit does; only the truly-never-published (a) leaves it null).
+    // PublishedCommitId stamp (case (b)'s base commit genuinely IS that era's design version, so it stamps
+    // exactly like case (a)'s direct hit does; only the truly-never-published (a) leaves it null).
+    //
+    // UNRESOLVABLE (review fix, fail-soon → applied here): a boundary that NAMES a commit which will not
+    // resolve (a missing/wrong-type row, empty cached text, or — case (b) specifically — a null
+    // `BaseCommitId`, meaning the boundary predates this field and cannot be exactly resolved) is a
+    // DIFFERENT state from "no boundary exists at all" (case (a), legitimate) — it must fail LOUDLY, never
+    // silently fall through to "current app.deenv" (which would serve a schema the caller never asked for,
+    // indistinguishable from a correct resolution). Compaction (design doc §6, not yet built): once
+    // promoted per-commit checkpoints exist, a pre-horizon boundary whose commit has been compacted away
+    // becomes resolvable again through the checkpoint instead of the live Commit row — this unresolvable
+    // path is the recorded residual until then, not a permanent ceiling.
     private (string Text, InstanceDescription Desc, int? CommitId) ResolveEraDoc(
         JsonFileInstanceStore sourceStore, InstanceDescription currentDesc, string currentSchemaPath, int atSeq)
     {
         var designHostStore = FreshDesignHostStore();
 
-        if (sourceStore.LatestBoundaryAtOrBefore(atSeq) is { } boundary
-            && TryReadCommitText(designHostStore, boundary.CommitId) is { } hit)
-            return (hit.Text, InstanceDescriptionLoader.Load(hit.Text), boundary.CommitId);
+        if (sourceStore.LatestBoundaryAtOrBefore(atSeq) is { } boundary)
+        {
+            var text = TryReadCommitText(designHostStore, boundary.CommitId)
+                ?? throw new InvalidOperationException(
+                    $"Cannot resolve the era schema at seq {atSeq}: publish boundary commit {boundary.CommitId} " +
+                    "no longer resolves (missing, wrong type, or empty cached text) — nothing was cloned.");
+            return (text, InstanceDescriptionLoader.Load(text), boundary.CommitId);
+        }
 
-        if (sourceStore.EarliestBoundary() is { } earliest
-            && TryReadCommitText(designHostStore, earliest.CommitId) is { } earliestHit
-            && earliestHit.ParentId is { } parentId
-            && TryReadCommitText(designHostStore, parentId) is { } parentHit)
-            return (parentHit.Text, InstanceDescriptionLoader.Load(parentHit.Text), parentId);
+        if (sourceStore.EarliestBoundary() is { } earliest)
+        {
+            var baseCommitId = earliest.BaseCommitId
+                ?? throw new InvalidOperationException(
+                    $"Cannot resolve the era schema at seq {atSeq}: the earliest publish boundary (commit " +
+                    $"{earliest.CommitId}) carries no recorded base commit (it predates M13 slice 7) — the " +
+                    "pre-publish schema cannot be exactly determined — nothing was cloned.");
+            var baseText = TryReadCommitText(designHostStore, baseCommitId)
+                ?? throw new InvalidOperationException(
+                    $"Cannot resolve the era schema at seq {atSeq}: the publish boundary's base commit " +
+                    $"{baseCommitId} no longer resolves (missing, wrong type, or empty cached text) — " +
+                    "nothing was cloned.");
+            return (baseText, InstanceDescriptionLoader.Load(baseText), baseCommitId);
+        }
 
-        // Case (a): no publish anywhere in the log (or the design host/commit is unexpectedly missing, or
-        // the earliest boundary's commit is a ROOT with no parent to walk to — defensive either way): the
-        // current app document IS the era doc.
+        // Case (a): no publish anywhere in the log — the current app document IS the era doc.
         return (File.ReadAllText(currentSchemaPath), currentDesc, null);
     }
 
@@ -883,15 +920,17 @@ public sealed class KernelHost(
         return new JsonFileInstanceStore(spec.DataPath, InstanceDescriptionLoader.LoadFile(spec.SchemaPath));
     }
 
-    // A Commit row's cached `text` + its `parent` commit id (null = a root commit), read off the given
-    // design-host store. Null when the store is absent or the id does not resolve to a Commit row (defensive).
-    private static (string Text, int? ParentId)? TryReadCommitText(IInstanceStore? designHostStore, int commitId)
+    // A Commit row's cached `text`, read off the given design-host store by its own intrinsic id. Null
+    // when the store is absent, the id does not resolve to a Commit row, or its cached text is empty —
+    // every one of these is a genuine "cannot resolve" the caller must fail loudly on (see ResolveEraDoc),
+    // never silently substitute for. No longer returns a `parent` id (M13 slice 7 review fix — era
+    // resolution reads BoundaryMarker.BaseCommitId directly now, never walks the design DAG).
+    private static string? TryReadCommitText(IInstanceStore? designHostStore, int commitId)
     {
         if (designHostStore is null) return null;
         if (designHostStore.ReadById(commitId) is not (var typeName, var fields) || typeName != "Commit") return null;
-        if (fields.Fields.GetValueOrDefault("text") is not TextValue { Text: var text }) return null;
-        var parentId = fields.Fields.GetValueOrDefault("parent") is ReferenceValue { TargetId: { } p } ? p : (int?)null;
-        return (text, parentId);
+        return fields.Fields.GetValueOrDefault("text") is TextValue { Text.Length: > 0 } textValue
+            ? textValue.Text : null;
     }
 
     // A mount name not currently in use: `desired`, else `desired-2`, `desired-3`, … The mount path
