@@ -641,6 +641,7 @@ public sealed class DesignMergeSteps
             // The SAME live designer store WsHandler serves from (one store instance per data file) — was a
             // second `new JsonFileInstanceStore` opened inside KernelHostActions over the same file.
             () => _designer,
+            callerId: 1, // the designer (instances/1 by convention)
             resolveTarget: _ => null,
             createInstance: (_, _, _) => throw new InvalidOperationException("create not exercised by DesignMerge.feature"),
             deleteInstance: _ => throw new InvalidOperationException("delete not exercised by DesignMerge.feature"),

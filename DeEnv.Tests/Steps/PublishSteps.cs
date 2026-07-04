@@ -336,6 +336,25 @@ public sealed class PublishSteps
     [When("the designer dry-runs a publish of the design's head commit to the target's id over the WS")]
     public void WhenDryRunPublish() => Publish(dryRun: true);
 
+    // The single-writer guard: the design host (callerId 1 in this harness) must never be its own publish
+    // target — publishing onto the caller would rewrite the designer's own schema under its live store.
+    [When("the designer attempts to publish the design onto the design host itself over the WS")]
+    public void WhenPublishOntoSelf()
+    {
+        var ws = Ws();
+        var reply = ws.ProcessMessage(
+            $$"""{ "op": "hostAction", "clientId": "{{_clientId}}", "action": "publish", "args": [ { "type": "int", "value": {{_designId}} }, { "type": "int", "value": 1 } ] }""");
+        using var doc = JsonDocument.Parse(reply);
+        _replyRoot = doc.RootElement.Clone();
+    }
+
+    [Then("the publish reply is an error saying the design host cannot be its own publish target")]
+    public async Task ThenSelfPublishRejected()
+    {
+        await Assert.That(_replyRoot.TryGetProperty("error", out var err)).IsTrue();
+        await Assert.That(err.GetString()!).Contains("cannot be its own publish target");
+    }
+
     private void Publish(bool dryRun)
     {
         var ws = Ws();
@@ -365,6 +384,7 @@ public sealed class PublishSteps
             // The SAME live designer store WsHandler serves from (one store instance per data file) — was a
             // second `new JsonFileInstanceStore` opened inside KernelHostActions over the same file.
             () => _designer,
+            callerId: 1, // the designer (instances/1 by convention); never equals TargetId
             id => id == TargetId ? new InstanceSpec(TargetId, "target", _targetAppPath, _targetDataPath) : null,
             createInstance: (_, _, _) => throw new InvalidOperationException("create not exercised by Publish.feature"),
             deleteInstance: _ => throw new InvalidOperationException("delete not exercised by Publish.feature"),

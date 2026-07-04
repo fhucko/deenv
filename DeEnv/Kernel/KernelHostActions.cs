@@ -63,6 +63,14 @@ public sealed class KernelHostActions(
     // are the single authority again. Resolved via a Func (not a field) because the HostedInstance — and
     // thus its Store — is built AFTER this seam is constructed (see KernelHost.HostActionsFor).
     Func<IInstanceStore> resolveStore,
+    // The CALLING instance's own id (the design host — HostActionsFor wires real actions only there).
+    // Exists for ONE guard: the design host must never be its own publish TARGET. The single-writer
+    // model publish rests on (offline-rewrite the target's files, then restart the TARGET) assumes the
+    // caller and target are different instances; publishing onto the caller would rewrite the designer's
+    // own schema out from under its live store — and destroy the IDE. Structurally nothing else prevents
+    // it (resolveTarget serves every registered instance, including this one), so the guard is load-bearing
+    // against operator error, not decoration.
+    int callerId,
     Func<int, InstanceSpec?> resolveTarget,
     Func<string, string, int?, Task> createInstance,
     Func<int, Task> deleteInstance,
@@ -111,6 +119,9 @@ public sealed class KernelHostActions(
         var design = ResolveDesign(designId);
         var targetId = ArgInt(args, 1);
         var dryRun = ArgBoolOptional(args, 2, defaultValue: false);
+        if (targetId == callerId)
+            throw new InvalidOperationException(
+                "The design host cannot be its own publish target — publish deploys a design onto an app instance.");
         var target = resolveTarget(targetId)
             ?? throw new InvalidOperationException(
                 $"No instance with id {targetId} to publish to.");

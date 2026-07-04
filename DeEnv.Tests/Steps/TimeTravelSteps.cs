@@ -312,6 +312,7 @@ public sealed class TimeTravelSteps
             // kernel hosts the designer on, the mirror writes use, and era resolution reads. Was a second
             // `new JsonFileInstanceStore(designerSpec.DataPath, ...)` opened inside KernelHostActions.
             () => _kernel!.Instances.Single(i => i.Spec.Id == DesignerId).Store,
+            callerId: DesignerId,
             id => id == TargetId ? _kernel!.Instances.Single(i => i.Spec.Id == TargetId).Spec : null,
             createInstance: (_, _, _) => throw new InvalidOperationException("create not exercised by TimeTravel.feature"),
             deleteInstance: _ => throw new InvalidOperationException("delete not exercised by TimeTravel.feature"),

@@ -609,6 +609,7 @@ public sealed class HostActionSteps
 
         var hostActions = new KernelHostActions(
             () => _designer,
+            callerId: 1, // the designer (instances/1 by convention); never equals TargetId
             id => id == TargetId ? new InstanceSpec(TargetId, "target", _targetAppPath, _targetDataPath) : null,
             createInstance: (appDoc, name, designId) =>
             {

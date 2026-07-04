@@ -201,6 +201,7 @@ public sealed class SingleStorePerFileSteps
         return new KernelHostActions(
             // The design host's ONE LIVE store — the same instance the mirror writes + live WS session use.
             () => _kernel!.Instances.Single(i => i.Spec.Id == DesignerId).Store,
+            callerId: DesignerId,
             id => id == TargetId ? _kernel!.Instances.Single(i => i.Spec.Id == TargetId).Spec : null,
             createInstance: (_, _, _) => throw new InvalidOperationException("create not exercised here"),
             deleteInstance: _ => throw new InvalidOperationException("delete not exercised here"),

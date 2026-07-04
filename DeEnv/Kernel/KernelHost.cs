@@ -147,6 +147,7 @@ public sealed class KernelHost(
             // isn't registered at call time (defensive — never on the real dispatch path).
             () => _instances.GetValueOrDefault(spec.Id)?.Store
                   ?? new JsonFileInstanceStore(spec.DataPath, InstanceDescriptionLoader.LoadFile(spec.SchemaPath)),
+            callerId: spec.Id,
             id => _instances.GetValueOrDefault(id)?.Spec,
             // create projects the caller's schema into a NEW instance via the kernel's own create
             // mechanism, fed the kernel's boot baseDir/registryPath. The new instance is addressed by
@@ -783,9 +784,11 @@ public sealed class KernelHost(
             // directory until all of them have succeeded.
             //
             // Reads the source's LIVE hosted store (source.Store — mirror-clobber fix: one store instance per
-            // data file), NOT a second `new JsonFileInstanceStore` over the same live file. Materialize/
-            // boundary reads are read-only under the store's own `_sync`, so they see a consistent head; a
-            // fresh reader would be a second in-memory copy over a file the live store is the single writer of.
+            // data file), NOT a second `new JsonFileInstanceStore` over the same live file. EACH read
+            // (MaterializeAtSeq, the boundary scan) is individually locked under the store's `_sync`; the
+            // SEQUENCE of reads is not one lock, so a write landing between them could shift the head —
+            // benign single-operator (nothing races a clone), part of the deferred concurrency class, and
+            // no worse than the fresh-store read it replaced. Do not read this as cross-call atomicity.
             var sourceDesc = InstanceDescriptionLoader.LoadFile(source.Spec.SchemaPath);
             var sourceStore = (JsonFileInstanceStore)source.Store;
             var materialized = sourceStore.MaterializeAtSeq(seq); // throws on an out-of-range/pre-genesis seq

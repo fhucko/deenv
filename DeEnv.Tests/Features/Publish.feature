@@ -24,6 +24,13 @@ Feature: Structural identity-diff + rename-safe forward publish
     # proves identity, not coincidence: an unrelated fresh reseed would show the DEFAULT, not the kept value
     And the kept value is not the schema's default for "title"
 
+  # ── the design host is never its own publish target (single-writer guard) ────────────────────────
+  Scenario: Publishing onto the design host itself is rejected
+    Given the design's "Item" prop "label" is renamed to "title"
+    And the design is committed with message "self-publish guard"
+    When the designer attempts to publish the design onto the design host itself over the WS
+    Then the publish reply is an error saying the design host cannot be its own publish target
+
   Scenario: Renaming a type carries its extent and every reference to it
     Given the target holds an "Item" labelled "Keep me"
     And the design's type "Item" is renamed to "Product"
