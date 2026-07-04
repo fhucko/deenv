@@ -23,11 +23,31 @@ public static class AuthCrypto
     private const string Algorithm = "pbkdf2";
     private const string Prf = "sha256";          // the PBKDF2 pseudo-random function (HMAC-SHA256)
     private const int SaltBytes = 16;
-    private const int Iterations = 210_000;
+    // Iteration count = the OWASP PBKDF2-SHA256 floor (210k) in production. Overridable ONCE via the
+    // DEENV_PBKDF2_ITERATIONS env var so the TEST host can run a trivial count: nearly every test logs in
+    // and PBKDF2 is deliberately CPU-heavy, so 210k across a parallel suite of login-doing tests saturates
+    // the cores and slows the whole browser run enough to intermittently blow the view-swap waits (the
+    // LoginViewSwap/LogoutViewSwap flake). Production never sets the var → the floor stands. Safe to mix
+    // counts across environments: the hash is self-describing, so every hash verifies against ITS OWN
+    // stored iteration count regardless of this value.
+    private static readonly int Iterations =
+        int.TryParse(Environment.GetEnvironmentVariable("DEENV_PBKDF2_ITERATIONS"), out var n) && n > 0
+            ? n : 210_000;
     private const int KeyBytes = 32;
     private static readonly HashAlgorithmName HashName = HashAlgorithmName.SHA256;
-    public const string DummyHash =
-        "pbkdf2$sha256$210000$AAECAwQFBgcICQoLDA0ODw==$sdsE9K7HfW+xM6B0tekgPcwyiFmjCHdorkKtrNfHD4k=";
+    // A valid-format hash NO real password verifies against — verified on the login MISS branch so an
+    // unknown username costs the same PBKDF2 as a known one (no username-enumeration timing signal). Computed
+    // from the CURRENT Iterations (fixed salt) so the miss path matches the hit path's cost in EVERY
+    // environment, including the test host's lowered count. The bytes are irrelevant — it exists only to be
+    // hashed-against and fail.
+    public static readonly string DummyHash = BuildDummyHash();
+
+    private static string BuildDummyHash()
+    {
+        var salt = new byte[SaltBytes]; // fixed all-zero salt — a dummy that must never verify
+        var key = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes("\0"), salt, Iterations, HashName, KeyBytes);
+        return string.Join('$', Algorithm, Prf, Iterations, Convert.ToBase64String(salt), Convert.ToBase64String(key));
+    }
 
     // Hash a plaintext password into the self-describing storage string (fresh random salt each call).
     public static string Hash(string password)
