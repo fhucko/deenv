@@ -362,7 +362,9 @@ public sealed class PublishSteps
         _designer = FreshDesigner();
 
         var hostActions = new KernelHostActions(
-            _metaAppPath, _designerDataPath,
+            // The SAME live designer store WsHandler serves from (one store instance per data file) — was a
+            // second `new JsonFileInstanceStore` opened inside KernelHostActions over the same file.
+            () => _designer,
             id => id == TargetId ? new InstanceSpec(TargetId, "target", _targetAppPath, _targetDataPath) : null,
             createInstance: (_, _, _) => throw new InvalidOperationException("create not exercised by Publish.feature"),
             deleteInstance: _ => throw new InvalidOperationException("delete not exercised by Publish.feature"),

@@ -182,19 +182,14 @@ public sealed class TimeTravelSteps
 
     private string RegistryPath => Path.Combine(_kernelDir, "kernel.json");
 
-    // A FRESH store over the design host's OWN files, re-read from disk every call — never the live
-    // kernel-hosted instance's cached in-memory Store object. KernelHostActions' own internals (CommitDesign/
-    // Publish/ResolveDesign) ALSO always open a fresh `new JsonFileInstanceStore(metaAppPath, dataPath)`
-    // per call (see KernelHostActions.cs) rather than reusing one long-lived instance — nothing here ever
-    // restarts the DESIGN HOST itself (only `publish`'s restartInstance touches the TARGET), so its
-    // HostedInstance.Store reference would otherwise go stale the moment any KernelHostActions write lands
-    // on the same file through a DIFFERENT in-memory JsonFileInstanceStore object. Re-opening fresh here
-    // keeps every read looking at ground truth, exactly the convention PublishSteps.FreshDesigner() uses.
-    private IInstanceStore DesignerStore()
-    {
-        var spec = _kernel!.Instances.Single(i => i.Spec.Id == DesignerId).Spec;
-        return new JsonFileInstanceStore(spec.DataPath, InstanceDescriptionLoader.LoadFile(spec.SchemaPath));
-    }
+    // The design host's ONE LIVE store (mirror-clobber fix — one store instance per data file). Every
+    // authoring write here and every KernelHostActions call (CommitDesign/Publish/ResolveDesign) now go
+    // through this SAME live instance, so a design authored here is immediately visible to a commit, and a
+    // commit's writes are visible to a later authoring read — no fresh re-open needed (the old
+    // fresh-per-call convention existed ONLY because KernelHostActions used to open its own second store,
+    // which this fix removes).
+    private IInstanceStore DesignerStore() =>
+        _kernel!.Instances.Single(i => i.Spec.Id == DesignerId).Store;
 
     private IInstanceStore TargetStore() => _kernel!.Instances.Single(i => i.Spec.Id == TargetId).Store;
 
@@ -313,7 +308,10 @@ public sealed class TimeTravelSteps
     {
         var designerSpec = _kernel!.Instances.Single(i => i.Spec.Id == DesignerId).Spec;
         return new KernelHostActions(
-            designerSpec.SchemaPath, designerSpec.DataPath,
+            // The design host's ONE LIVE store (one store instance per data file) — the same instance the
+            // kernel hosts the designer on, the mirror writes use, and era resolution reads. Was a second
+            // `new JsonFileInstanceStore(designerSpec.DataPath, ...)` opened inside KernelHostActions.
+            () => _kernel!.Instances.Single(i => i.Spec.Id == DesignerId).Store,
             id => id == TargetId ? _kernel!.Instances.Single(i => i.Spec.Id == TargetId).Spec : null,
             createInstance: (_, _, _) => throw new InvalidOperationException("create not exercised by TimeTravel.feature"),
             deleteInstance: _ => throw new InvalidOperationException("delete not exercised by TimeTravel.feature"),

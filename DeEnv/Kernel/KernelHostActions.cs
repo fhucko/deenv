@@ -53,7 +53,16 @@ namespace DeEnv.Kernel;
 // delete / clone delegates are type-distinct (Func<int,Task> vs Func<int,int,int,Task>) so positional
 // mix-ups are compile errors; same-typed delegates (deleteInstance / restartInstance) use named args.
 public sealed class KernelHostActions(
-    string metaAppPath, string dataPath,
+    // The CALLING instance's OWN live store, resolved lazily at call time (M13 mirror-clobber fix — one
+    // store instance per data file within a kernel process). Every action here acts on the caller's own
+    // data (the designer's `db.designs`/`db.commits`/`db.branches`); before the fix each opened its OWN
+    // fresh `new JsonFileInstanceStore` per call over the same file — safe ONLY because nothing else wrote
+    // between open and use, which the design host constantly violated (a fresh-store commit followed by the
+    // boot-cached store's mirror write clobbered the snapshot AND collided WAL seqs). Now all five actions
+    // share the ONE live store the kernel already hosts this instance on, so its `_sync`/`_doc`/version/WAL
+    // are the single authority again. Resolved via a Func (not a field) because the HostedInstance — and
+    // thus its Store — is built AFTER this seam is constructed (see KernelHost.HostActionsFor).
+    Func<IInstanceStore> resolveStore,
     Func<int, InstanceSpec?> resolveTarget,
     Func<string, string, int?, Task> createInstance,
     Func<int, Task> deleteInstance,
@@ -106,8 +115,7 @@ public sealed class KernelHostActions(
             ?? throw new InvalidOperationException(
                 $"No instance with id {targetId} to publish to.");
 
-        var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
-        var store = new JsonFileInstanceStore(dataPath, meta);
+        var store = resolveStore();
         var head = FindHeadCommit(store, designId);
 
         if (head is null)
@@ -197,6 +205,17 @@ public sealed class KernelHostActions(
         File.WriteAllText(target.SchemaPath, headText);
 
         stampPublishedCommit(targetId, headCommitId).GetAwaiter().GetResult();
+
+        // ONE-STORE-PER-FILE invariant for the TARGET (mirror-clobber fix): ApplyPublishBoundary just
+        // rewrote target.DataPath OFFLINE — directly on the file, NOT through the target's live hosted
+        // store, whose in-memory `_doc` is now stale relative to that file. This is safe because
+        // (a) publish is one SYNCHRONOUS host-action step: nothing writes through the target's live store
+        // between the offline rewrite and the restart below (single-operator — no concurrent writer to the
+        // target), and (b) restartInstance re-OPENS the target's store fresh from the rewritten file and
+        // hot-swaps it in (KernelHost.RestartAsync), discarding the now-stale one. So the offline writer and
+        // a live store never both write the file — the stale store is replaced, never saved back over the
+        // rewrite. (This is the pre-existing publish model, unchanged here; the restart is what upholds the
+        // single-writer invariant for the target, exactly as the shared live store does for the designer.)
         _ = restartInstance(targetId);
 
         return report;
@@ -324,13 +343,11 @@ public sealed class KernelHostActions(
     // Resolve the passed design's id → its `Design` subtree in the CALLER's store (the IDE holds a
     // `db.designs` set of Designs). Reads through IInstanceStore (the model's terms — never a raw file
     // call): a design is `db.designs[id]`, so an id that is not a member of `designs` resolves to no
-    // node and is rejected here, before any projection or write. Opening a fresh store over the
-    // caller's own meta+data is fine — it is the same single-process data the caller renders from
-    // (this action only READS it).
+    // node and is rejected here, before any projection or write. Reads the caller's ONE live store (the
+    // single writer to that file — see the ctor's `resolveStore` doc); this action only READS it.
     private ObjectValue ResolveDesign(int designId)
     {
-        var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
-        var store = new JsonFileInstanceStore(dataPath, meta);
+        var store = resolveStore();
         var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
         return store.ReadNode(designPath) as ObjectValue
             ?? throw new InvalidOperationException(
@@ -362,8 +379,7 @@ public sealed class KernelHostActions(
         var designId = ArgInt(args, 0);
         var message = ArgText(args, 1);
 
-        var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
-        var store = new JsonFileInstanceStore(dataPath, meta);
+        var store = resolveStore();
 
         // Advance the OWNING branch's head (M13 slice 5) — the branch whose workingCopy IS this design,
         // whether that is "main" or a branch clone. Was FindMainBranch (main only) pre-slice-5; widened so a
@@ -477,8 +493,7 @@ public sealed class KernelHostActions(
         var sourceDesignId = ArgInt(args, 0);
         var name = ArgText(args, 1);
 
-        var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
-        var store = new JsonFileInstanceStore(dataPath, meta);
+        var store = resolveStore();
 
         var sourceDesign = ReadDesign(store, sourceDesignId);
         var sourceBranch = FindBranchByWorkingCopy(store, sourceDesignId)
@@ -628,8 +643,10 @@ public sealed class KernelHostActions(
         var targetDesignId = ArgInt(args, 1);
         var resolutions = ArgResolutionsOptional(args, 2);
 
-        var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
-        var store = new JsonFileInstanceStore(dataPath, meta);
+        // The caller's ONE live store (the single writer). Concretely a JsonFileInstanceStore — the clean
+        // apply (ApplyMergeToTarget) needs the concrete type for its batch/remove writes; every kernel-hosted
+        // store IS one, so the cast never fails.
+        var store = (JsonFileInstanceStore)resolveStore();
 
         var sourceDesign = ReadDesign(store, sourceDesignId);
         var targetDesign = ReadDesign(store, targetDesignId);

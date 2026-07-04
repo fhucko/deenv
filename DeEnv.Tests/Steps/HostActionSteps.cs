@@ -600,18 +600,15 @@ public sealed class HostActionSteps
         // WsHandler a valid store + description. The publish/create scenarios already opened one.
         if (_designer == null) OpenDesigner();
 
-        // Re-open fresh over the SAME data file (M13 slice 3): KernelHostActions.CommitDesign resolves
-        // its OWN store instance internally (the established convention every host action already uses —
-        // see ResolveDesign's doc), so a PRECEDING commitDesign call's writes land on disk but never
-        // reach `_designer`'s already-loaded in-memory copy. Re-reading here before building the WsHandler
-        // means a scenario chaining "commit, then write to the commit" (or a second commit) always acts
-        // on ground truth — exactly what a real single long-lived HostedInstance.Store never needs,
-        // because production has only ONE store instance per hosted instance, never two independent ones
-        // over the same file.
+        // Re-open fresh over the SAME data file at the START of each Ws() build so a NEW scenario step's
+        // handler reads ground truth after any prior on-disk writes. Post the mirror-clobber fix, KernelHostActions
+        // shares THIS store (resolveStore below) rather than opening its own second instance, so within one
+        // Ws() lifetime the host actions and the WsHandler are the SAME single store over the file — the
+        // production shape (one store instance per hosted instance), no longer two independent copies.
         _designer = new JsonFileInstanceStore(_designerDataPath, _meta);
 
         var hostActions = new KernelHostActions(
-            _metaAppPath, _designerDataPath,
+            () => _designer,
             id => id == TargetId ? new InstanceSpec(TargetId, "target", _targetAppPath, _targetDataPath) : null,
             createInstance: (appDoc, name, designId) =>
             {

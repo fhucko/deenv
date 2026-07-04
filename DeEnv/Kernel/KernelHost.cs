@@ -84,10 +84,18 @@ public sealed class KernelHost(
     // render on ANY instance reads the LIVE list — no frozen per-instance snapshot.
     private readonly LiveRegistry _registry = new();
 
-    // The design-host's store: cached at boot so mutating host actions (create/delete/rename/clone/
-    // setDesign) can mirror their kernel-registry writes into db.instances in one paired call without
-    // re-scanning or re-opening a store. Null when no design-host is present (rare in practice).
-    private IInstanceStore? _designHostStore;
+    // The design-host's LIVE store — resolved on demand from the hosted set (mirror-clobber fix — one store
+    // instance per data file). Every mirror write (create/delete/rename/clone/setDesign keeping db.instances
+    // in lockstep) and the boot design-library sync go through THIS one live store, the SAME instance
+    // KernelHostActions now uses (via HostActionsFor's resolveStore) and the live WS session serves from — so
+    // a commit through a host action and a mirror write can never be two different in-memory `_doc`s racing
+    // one file. Was a field cached ONCE at boot: that copy went stale the moment any post-boot commit landed
+    // through a (then-fresh) host-action store, and its next mirror `Save()` rewrote the snapshot from the
+    // stale `_doc` — silently deleting the commit AND colliding WAL seqs. Re-resolving live each call (a
+    // cheap dictionary lookup) removes the staleness by construction, and stays correct across a design-host
+    // restart (which swaps in a re-opened store). Null when no design-host is present (rare in practice).
+    private IInstanceStore? DesignHostStore =>
+        _instances.Values.FirstOrDefault(i => IsDesignHost(i.Spec))?.Store;
 
     // Track a newly-started instance, then re-project the registry so every instance's next render
     // sees it. The PathRouter resolves by name over `_instances`, so a tracked instance is routable
@@ -128,7 +136,17 @@ public sealed class KernelHost(
         !UsesHostActions(spec)
             ? new NoHostActions("this instance does not use host actions")
             : new KernelHostActions(
-            spec.SchemaPath, spec.DataPath,
+            // The caller's ONE live store, resolved at ACTION time (mirror-clobber fix — one store instance
+            // per data file). Was `new JsonFileInstanceStore(spec.SchemaPath, spec.DataPath)` per call inside
+            // KernelHostActions; now every action shares the SAME live store the kernel hosts this instance
+            // on — so a commit and the db.instances mirror write (below) can no longer be two different
+            // in-memory `_doc`s racing one file. Lazy because the HostedInstance is registered AFTER this
+            // seam is built (boot/create/clone all call HostActionsFor before Register); by action time it is
+            // live. The store instance is re-resolved each action, so a rename/restart that swaps the hosted
+            // instance's store hands back the CURRENT one. Fresh-store fallback only if the instance somehow
+            // isn't registered at call time (defensive — never on the real dispatch path).
+            () => _instances.GetValueOrDefault(spec.Id)?.Store
+                  ?? new JsonFileInstanceStore(spec.DataPath, InstanceDescriptionLoader.LoadFile(spec.SchemaPath)),
             id => _instances.GetValueOrDefault(id)?.Spec,
             // create projects the caller's schema into a NEW instance via the kernel's own create
             // mechanism, fed the kernel's boot baseDir/registryPath. The new instance is addressed by
@@ -316,10 +334,6 @@ public sealed class KernelHost(
                         $"corrected document) and restart the kernel. {ex}");
                 }
             }
-
-            // Cache the design-host's store now that all instances are live, so mutating host actions
-            // can mirror writes into db.instances without re-scanning.
-            _designHostStore = _instances.Values.FirstOrDefault(i => IsDesignHost(i.Spec))?.Store;
         }
         catch
         {
@@ -338,16 +352,16 @@ public sealed class KernelHost(
 
     // ── db.instances mirror — keep the design-host's db.instances in lockstep with kernel actions ──
 
-    // The intrinsic id of the db.instances set — read once per call through the root path.
-    // Null when the design-host store is absent or the set isn't there yet.
-    private int? InstancesSetId() =>
-        _designHostStore?.ReadNode(NodePath.Root.Field("instances")) is SetValue sv ? sv.Id : null;
+    // The intrinsic id of the db.instances set on the given (live) design-host store, through the root path.
+    // Null when the set isn't there yet. Takes the store so one mirror op resolves DesignHostStore ONCE and
+    // every read/write below shares that exact live instance.
+    private static int? InstancesSetId(IInstanceStore store) =>
+        store.ReadNode(NodePath.Root.Field("instances")) is SetValue sv ? sv.Id : null;
 
-    // Find the Instance object whose runtimeId matches the given kernel id.
-    private int? FindInstanceObjectId(int runtimeId)
+    // Find the Instance object whose runtimeId matches the given kernel id, on the given (live) store.
+    private static int? FindInstanceObjectId(IInstanceStore store, int runtimeId)
     {
-        if (_designHostStore is null) return null;
-        foreach (var (id, obj) in _designHostStore.ReadExtent("Instance"))
+        foreach (var (id, obj) in store.ReadExtent("Instance"))
             if (obj.Fields.TryGetValue("runtimeId", out var v) && v is IntValue iv && iv.Value == runtimeId)
                 return id;
         return null;
@@ -356,46 +370,46 @@ public sealed class KernelHost(
     // INSERT a new Instance row into db.instances (after a create or clone kernel action).
     private void MirrorInstanceInsert(int runtimeId, string name, int? designId)
     {
-        if (_designHostStore is null) return;
+        if (DesignHostStore is not { } store) return;
         var fields = new Dictionary<string, NodeValue>
         {
             ["name"] = new TextValue(name),
             ["runtimeId"] = new IntValue(runtimeId),
         };
-        var objId = _designHostStore.CreateObject("Instance", new ObjectValue(fields));
+        var objId = store.CreateObject("Instance", new ObjectValue(fields));
         // Add to the set BEFORE writing the design reference: WriteReference triggers GC, and a
         // freshly minted object that has not yet been linked to a set would be collected as unreachable.
-        if (InstancesSetId() is { } setId)
-            _designHostStore.AddToSet(setId, objId);
+        if (InstancesSetId(store) is { } setId)
+            store.AddToSet(setId, objId);
         // BuildFields ignores provided reference fields (single-object props start unset), so set the
         // design reference as a separate write after the object is safely reachable via the set.
         if (designId.HasValue)
-            _designHostStore.WriteReference(objId, "design", designId, "Design");
+            store.WriteReference(objId, "design", designId, "Design");
     }
 
     // REMOVE the Instance row matching runtimeId from db.instances (after a delete kernel action).
     private void MirrorInstanceDelete(int runtimeId)
     {
-        if (_designHostStore is null) return;
-        if (FindInstanceObjectId(runtimeId) is not { } objId) return;
-        if (InstancesSetId() is { } setId)
-            _designHostStore.RemoveFromSet(setId, objId);
+        if (DesignHostStore is not { } store) return;
+        if (FindInstanceObjectId(store, runtimeId) is not { } objId) return;
+        if (InstancesSetId(store) is { } setId)
+            store.RemoveFromSet(setId, objId);
     }
 
     // UPDATE the name on the Instance row matching runtimeId (after a rename kernel action).
     private void MirrorInstanceRename(int runtimeId, string newName)
     {
-        if (_designHostStore is null) return;
-        if (FindInstanceObjectId(runtimeId) is not { } objId) return;
-        _designHostStore.WriteField(objId, "name", new TextValue(newName));
+        if (DesignHostStore is not { } store) return;
+        if (FindInstanceObjectId(store, runtimeId) is not { } objId) return;
+        store.WriteField(objId, "name", new TextValue(newName));
     }
 
     // UPDATE the design ref on the Instance row matching runtimeId (after setDesign kernel action).
     private void MirrorInstanceSetDesign(int runtimeId, int? designId)
     {
-        if (_designHostStore is null) return;
-        if (FindInstanceObjectId(runtimeId) is not { } objId) return;
-        _designHostStore.WriteReference(objId, "design", designId, "Design");
+        if (DesignHostStore is not { } store) return;
+        if (FindInstanceObjectId(store, runtimeId) is not { } objId) return;
+        store.WriteReference(objId, "design", designId, "Design");
     }
 
     // ── boot sync of the design library (the design-host's `db.designs`) ──────────────
@@ -767,8 +781,13 @@ public sealed class KernelHost(
             // throw here, not just "the registry was untouched": no orphan instances/<id>/ directory left
             // behind either). Every step through Validate can throw; nothing below creates a file or
             // directory until all of them have succeeded.
+            //
+            // Reads the source's LIVE hosted store (source.Store — mirror-clobber fix: one store instance per
+            // data file), NOT a second `new JsonFileInstanceStore` over the same live file. Materialize/
+            // boundary reads are read-only under the store's own `_sync`, so they see a consistent head; a
+            // fresh reader would be a second in-memory copy over a file the live store is the single writer of.
             var sourceDesc = InstanceDescriptionLoader.LoadFile(source.Spec.SchemaPath);
-            var sourceStore = new JsonFileInstanceStore(source.Spec.DataPath, sourceDesc);
+            var sourceStore = (JsonFileInstanceStore)source.Store;
             var materialized = sourceStore.MaterializeAtSeq(seq); // throws on an out-of-range/pre-genesis seq
 
             var (eraDocText, eraDesc, resolvedCommitId) = ResolveEraDoc(sourceStore, sourceDesc, source.Spec.SchemaPath, seq);
@@ -835,15 +854,13 @@ public sealed class KernelHost(
     // (BoundaryMarker.CommitId, resolved against the DESIGN HOST's store) — its cached `text` field IS that
     // era's canonical app document (M13 slice 2's per-commit cache).
     //
-    // Reads the design host's Commit rows through a FRESH `new JsonFileInstanceStore` opened right here,
-    // deliberately NOT the cached `_designHostStore` field: that field is set ONCE at boot and never
-    // refreshed, while `KernelHostActions.CommitDesign`/`Publish`/`MergeBranch` each open their OWN fresh
-    // store per call and write through THAT — so `_designHostStore`'s in-memory copy goes stale the moment
-    // any commit lands after boot (which, for a design host, is constantly — the whole point of the
-    // designer). A cloneInstance run any time after the FIRST post-boot commit would otherwise silently
-    // miss it. Every OTHER KernelHostActions-adjacent read in this file already follows this same
-    // fresh-store convention (ResolveDesign, CommitDesign, etc. — see KernelHostActions.cs); this is that
-    // same discipline applied to the one NEW reader this slice adds.
+    // Reads the design host's Commit rows through the LIVE design-host store (DesignHostStore) — the SAME
+    // single store KernelHostActions.CommitDesign/Publish/MergeBranch now write through (mirror-clobber fix:
+    // one store instance per data file). Before that fix, this read a FRESH `new JsonFileInstanceStore` per
+    // call specifically because those actions used their OWN fresh stores and the boot-cached field went
+    // stale the moment any post-boot commit landed — that whole staleness class is now gone (the live store
+    // always reflects every committed row by construction), so a plain read off the shared live store is
+    // correct AND current, and the extra fresh open per clone is deleted.
     //
     // NO boundary at or before atSeq splits into TWO genuinely different cases (collapsing them into one
     // "use current app.deenv" fallback is correct for the first but WRONG for the second — a clone of a
@@ -879,7 +896,7 @@ public sealed class KernelHost(
     private (string Text, InstanceDescription Desc, int? CommitId) ResolveEraDoc(
         JsonFileInstanceStore sourceStore, InstanceDescription currentDesc, string currentSchemaPath, int atSeq)
     {
-        var designHostStore = FreshDesignHostStore();
+        var designHostStore = DesignHostStore;
 
         if (sourceStore.LatestBoundaryAtOrBefore(atSeq) is { } boundary)
         {
@@ -907,17 +924,6 @@ public sealed class KernelHost(
 
         // Case (a): no publish anywhere in the log — the current app document IS the era doc.
         return (File.ReadAllText(currentSchemaPath), currentDesc, null);
-    }
-
-    // A fresh store over the CURRENT design host's files, re-resolved by IsDesignHost every call (never
-    // the boot-cached _designHostStore reference — see ResolveEraDoc's own doc). Null when no instance is
-    // design-shaped (a kernel with no designer at all — cloneInstance/atSeq still works, era resolution
-    // just always falls to case (a) then).
-    private IInstanceStore? FreshDesignHostStore()
-    {
-        var spec = _instances.Values.Select(i => i.Spec).FirstOrDefault(IsDesignHost);
-        if (spec is null) return null;
-        return new JsonFileInstanceStore(spec.DataPath, InstanceDescriptionLoader.LoadFile(spec.SchemaPath));
     }
 
     // A Commit row's cached `text`, read off the given design-host store by its own intrinsic id. Null
