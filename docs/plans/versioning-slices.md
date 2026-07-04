@@ -284,7 +284,33 @@ Commit button, 2026-07-03/04, suite 628→715).**
    `ConfirmButton` + danger-colored confirm on a destructive apply, a section caption. FAST-FOLLOWS
    (ledgered below): post-apply success signal; drift-only-Apply relabel; "Cardinality" humanize. ✔
 
-**B1–B3 all landed 2026-07-04.**
+12. **B4 — Branches + merge from the designer — DONE 2026-07-04** (Track B; suite 718/718;
+   architecture + ui-arch + ux reviews all SHIP after fixes). The design editor's Branches
+   section: create a branch (`sys.createBranch`), branch links (branches are Design rows at their
+   own `/designs/<id>` URLs — switching = navigation), and MERGE. **`sys.mergePreview(source,
+   target)`** = a server-backed READ builtin returning the existing `MergeReport` (like B2's
+   `sys.diffCommits` — SELF-CONTAINED on the designer store, self-built `SsrRenderer` delegate, NO
+   kernel wiring). `KernelHostActions.ComputeMergePlan` extracted as the shared merge-compute
+   (preview + apply can't drift — DesignMerge 10/10 proves byte-identical); `MergeReportCode` builds
+   the report Code-value in the kernel. `sys.createBranch`/`sys.mergeBranch` wired into Code
+   lockstep (commitDesign 5-site precedent). **One additive wire touch:** `scalarOf` (ws.ts) now
+   recursively serializes array/object-of-scalar host-action args, so `mergeBranch`'s
+   `resolutions:[{id,take}]` crosses natively (server + existing tests unchanged; other host-action
+   arg sites reject non-scalars via LeafForType, so no leak). UI: toggle-gated preview
+   (drift/no-op/clean/conflicts with base + source/target values named by branch), an always-shown
+   AccessChanges must-see block, Apply gated until every conflict resolved. Coarse take-source/
+   take-target v1 (fine per-field UI = B5). Reviews caught + fixed: the `mergePreview:` cache not
+   dropped on apply (the B3 publishPreview bug class); drift/pick-button/conflict-header string
+   clarity; branch-name input clear. **FRAMEWORK CONSTRAINT (load-bearing, ledgered):** merge picks
+   live in module-level `ui var`s (`previewingBranch`, `mergePicks`), NOT reactive component
+   `state` — the client-data-layer refetch CANNOT round-trip client-only collections (slotState
+   THROWS on an array in component state / drops nested draft arrays; `sessionVars` doesn't ship
+   arrays either). Module vars in the render-fn scope are the framework-sanctioned home for
+   client-only collection input; picks stay client-authoritative and re-key off fresh report ids.
+   (rule-12-clean: picks are operator INPUT, not server data.) One-preview-at-a-time (scalar
+   `previewingBranch`) is intentional. ✔
+
+**B1–B4 all landed 2026-07-04. B5 (fine per-field conflict UI) is the last Track-B slice.**
 
 ## Versioning-UX + follow-up ledger (deferred deliberately; do not lose)
 
@@ -296,14 +322,24 @@ Commit button, 2026-07-03/04, suite 628→715).**
   a refetch reply can stomp text the user is typing in ANY bound input. Test harness
   works around it; the app hazard is real.
 - Commit-detail page (`/commits/<id>`) — DONE (B1, slice 9). Diff view between commits — DONE
-  (B2, slice 10). Publish + dry-run from the designer — DONE (B3, slice 11). Still deferred: branch UI
-  (createBranch/mergeBranch surfaces + their lockstep wiring) (B4); fine per-field conflict UI (B5).
+  (B2, slice 10). Publish + dry-run from the designer — DONE (B3, slice 11). Branches + merge — DONE
+  (B4, slice 12). Still deferred: fine per-field conflict UI (B5) — the LAST Track-B slice.
   B2 residual: a brand-new type is invisible in the diff (DesignDiff's migration lens — no TypeAdd);
   revisit with B3's publish UI (same vocabulary) if a "what changed" (vs "what migrates") view is wanted.
 - B3 fast-follows: post-apply success signal (a "Last published: … · time" line, like the commit-bar);
   drift-only preview offers a no-op-looking Apply (relabel/suppress when only drift is non-empty);
   "Cardinality" label + `Single → Set` values are schema jargon on the publish + diff surfaces (a
   global humanize pass — deferred with the same on B2's diff view, kept for now for consistency).
+- B4 fast-follows / notes: (a) post-merge "Merged X into this design" confirmation line — needs an
+  apply-success signal Code can't cheaply read (same class as B3's deferred success line; the
+  cache-drop's "up to date" re-preview is the interim signal); (b) NO regression scenario re-opens
+  the merge preview after apply to pin the `mergePreview:` cache-drop (the fix is verified by the
+  green flow + mirrors B3's tested publishPreview drop — add a guard scenario when convenient);
+  (c) the `access` section has NO editor UI in the designer — B4's AccessChanges scenario seeds the
+  rule via the store; an access-section editor is a separate small slice if operators should author
+  access changes end-to-end; (d) the merge UI hardcodes "this design" for the target side (correct
+  while target is always the currently-open design; a future merge-two-arbitrary-branches view would
+  need the real target name).
 - Fine per-field conflict UI obligations — see slice 6's ledger above.
 - Semantic migrations (`fn migrate` + `Commit.migration` — boundary entries exist, the
   addition is safe per the slice-4 note); compaction (`sys.compact`, §6); non-temporal field

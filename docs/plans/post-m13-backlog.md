@@ -121,7 +121,7 @@ nothing; confirmed publish applies and the report renders; a rename publish carr
 (reuses slice-4 fixtures).
 **Conflicts:** `KernelHostActions.cs` (A1 first), app.deenv.
 
-### B4 — Branch UI + lockstep wiring  [L; builder sonnet; reviews ui-arch + ux + architecture]
+### B4 — Branch UI + lockstep wiring  [DONE 2026-07-04 — sys.mergePreview READ builtin (self-built) + createBranch/mergeBranch wired lockstep + additive scalarOf structured-arg extension; suite 718/718; arch + ui-arch + ux SHIP; slice 12 in versioning-slices.md]
 `sys.createBranch` / `sys.mergeBranch` exist (slice 5) WS-op-only — the recorded rule: wire
 each into HostActionScan/CodeValidator/CodeExecutor/codeExec.ts TOGETHER with its UI (the
 commitDesign precedent, all five sites). **Build:** minimal branch surface — create branch
