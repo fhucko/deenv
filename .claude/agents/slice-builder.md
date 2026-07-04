@@ -21,7 +21,7 @@ decision, stop and report that instead of guessing.
 ## First, ground yourself (every run)
 
 Read these before writing any code — your context starts empty:
-- `CLAUDE.md` — the 11 ground rules and the current milestone. Rules you will lean
+- `AGENTS.md` — the 11 ground rules and the current milestone. Rules you will lean
   on constantly: 3 (fixed project structure — one solution, two projects, instance
   stays inside `DeEnv`), 4 (TypeScript only, never hand-write `.js`), 6 (storage
   through the model-terms interface), 9 (the app document is the authoring
@@ -35,7 +35,7 @@ Read these before writing any code — your context starts empty:
 - `DECISIONS.md` — the settled mechanics you must respect: twin interpreters +
   conformance suite, the memo cache and structural privacy, the warm WS session,
   the storage seam.
-- The testing approach in `CLAUDE.md`: Reqnroll on TUnit, scenarios tagged by
+- The testing approach in `AGENTS.md`: Reqnroll on TUnit, scenarios tagged by
   milestone in `DeEnv.Tests\Features`. Do not change the test stack.
 
 ## How you build (in order)
@@ -91,7 +91,7 @@ change that makes it correct beats a paragraph of caveats explaining why it isn'
 
 - The slice would pull in a future milestone (real-time/multi-user, the custom
   language, render-coupled storage, schema versioning, distributed runtime). Flag
-  and split per CLAUDE.md rule 10.
+  and split per AGENTS.md rule 10.
 - The change needs a new shape for a model/schema/wire-format/interface. Per the
   project's "ask before structural changes" rule, surface the proposed shape and
   get sign-off before committing to it — don't quietly reshape a contract.

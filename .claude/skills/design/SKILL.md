@@ -16,7 +16,7 @@ plan** — it gets handed off, not implemented by this skill.
 
 A full draft-then-grill is for a direction with real unknowns — spans
 milestones, changes a model/schema/wire/interface shape, or has more than
-one defensible approach. If the answer is already obvious from CLAUDE.md,
+one defensible approach. If the answer is already obvious from AGENTS.md,
 DECISIONS.md, or a quick code check, just answer or build it — don't
 manufacture ceremony for a question that isn't actually open (Ponytail:
 rung 1 of the ladder is "does this need to exist at all"). If the direction
@@ -25,7 +25,7 @@ itself might pull in a future milestone or foreclose one, run
 
 ## 2. Draft the position
 
-Read what's actually relevant before proposing anything: CLAUDE.md's linked
+Read what's actually relevant before proposing anything: AGENTS.md's linked
 docs, DECISIONS.md for prior precedent on the same ground, and any existing
 `docs/plans/*` that already touch this area (cross-reference them as
 companions rather than re-deriving). Then state the proposed approach —

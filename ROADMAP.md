@@ -18,7 +18,7 @@ completed, move its entry above the divider.
 (2) a minimal real deploy (a self-contained build as a systemd service behind nginx) ✅
 done; (3) dogfood one real app — in progress (`instances/5`, `devlog`). The visual
 designer is deferred until after the MVP; M13 (schema versioning) sits on instance
-management. See CLAUDE.md "Current focus" for detail. **M-auth (access control) — DONE 2026-06-25**: the access
+management. See AGENTS.md "Current focus" for detail. **M-auth (access control) — DONE 2026-06-25**: the access
 engine, self-hosted login/logout, the `devlog` dogfood, first-admin bootstrap, and multi-user
 management all landed (spec `docs/plans/m-auth.md`, decision in DECISIONS.md). **The client data layer
 (render-as-planner) — DONE 2026-06-26** (6 slices, suite 537; its entry is below). The M-auth follow-ups

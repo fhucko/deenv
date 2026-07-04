@@ -45,7 +45,7 @@ actually gets, in this order:
    pretend to settle them.
 
 Ground yourself first in `INSTANCE_MODEL.md` (one-form-per-type, URL-as-
-navigation, breadcrumbs, dictionary-as-boundary), `CLAUDE.md` (current focus),
+navigation, breadcrumbs, dictionary-as-boundary), `AGENTS.md` (current focus),
 and the relevant `SelfHostedUi.feature` scenarios.
 
 ## What to judge (deenv usability heuristics)

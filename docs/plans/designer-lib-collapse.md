@@ -129,7 +129,7 @@ injection style.
 
 - **Full kernel-as-image** (registry as a writable multi-kernel set, distributed ops)
   — Slice A presents the registry **as read data with a descriptor**, nothing more.
-  The write ops stay host builtins (the floor). CLAUDE.md ground rule 1.
+  The write ops stay host builtins (the floor). AGENTS.md ground rule 1.
 - **A publish button** — doesn't exist yet; when added it's a host op (custom) and may
   be M13/versioning territory — confirm intent before it drives anything.
 - **M12 visual component designer** — deferred until after the MVP.

@@ -25,7 +25,7 @@ has been made (or you say it hasn't and route back).
   slices. The "First slice:" notes on M5/M6 are your model for slice shape.
 - `STAGES.md` — the product-stage lens; Stage 1 = single-operator MVP. Know which
   stage the direction belongs to, and keep the slice inside the current one.
-- `CLAUDE.md` — the ground rules (esp. 2, 3, 10, 11) and the current milestone
+- `AGENTS.md` — the ground rules (esp. 2, 3, 10, 11) and the current milestone
   state. If no milestone is in progress, part of your job is proposing the next.
 - `EXPECTATIONS.md` — the five criteria the eventual slice is judged on; plan to
   pass criterion 3 (the functional bar) and 5 (minimal by default), not just

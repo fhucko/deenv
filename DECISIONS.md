@@ -11,7 +11,7 @@ lightweight embeddable web server written in pure C# with no ASP.NET Core
 dependency. Reason: ASP.NET Core was judged too heavy for what the instance
 needs — three routes and a WebSocket.
 
-This is a conscious deviation from CLAUDE.md ground rule 5 (which named
+This is a conscious deviation from AGENTS.md ground rule 5 (which named
 `HttpListener` or minimal-API `WebApplication`). GenHTTP was chosen over raw
 `HttpListener` because it gives a real handler/routing/content API while
 staying light, and its **native WebSocket module** (not the legacy Fleck one)
@@ -1166,7 +1166,7 @@ Consolidates a forward-looking architecture thread (2026-06-14). It is the
 **terminus of the self-hosting path** (M4 designer-as-instance, M9 self-hosted UI)
 and the concrete shape VISION pillar 9 (IDE-grade environment) takes. **This is
 north star, not current scope** — most of it is Stage 3+ (see STAGES.md), and
-CLAUDE.md rules 2/10 still hold. It extends "C# is the kernel — app logic belongs
+AGENTS.md rules 2/10 still hold. It extends "C# is the kernel — app logic belongs
 in the app" above. Recorded now because the *seams* it implies are cheap to honor
 early and expensive to retrofit.
 
@@ -1858,7 +1858,7 @@ generic form/table/button/reference editor rendered as RAW browser-default HTML.
 Captures a design discussion (2026-06-16) on the full storage endgame: the
 **render-coupled, strongly-consistent, distributed, versioned, change-tracked**
 store that pillars 3/4/5/7 + real-time converge into. **North star, not current
-scope** — Stage 4/5; CLAUDE.md rules 1/2/10 hold. It deepens "Storage: plain JSON
+scope** — Stage 4/5; AGENTS.md rules 1/2/10 hold. It deepens "Storage: plain JSON
 file now, real engine later…", and leans on "Conflict handling: two different
 problems", "Multi-device is architecture…", and "The self-hosted image…" above
 rather than restating them.

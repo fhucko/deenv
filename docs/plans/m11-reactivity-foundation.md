@@ -282,7 +282,7 @@ Made with the user, via the React/Solid comparison. (Topic-labeled, not numbered
 
 ## 5. Risks / seams to honor
 - **Twin lockstep is the whole game** — the new lifecycle has zero conformance coverage today; the
-  re-render conformance case is load-bearing, not optional (else C#/TS drift). (CLAUDE.md rule 9.)
+  re-render conformance case is load-bearing, not optional (else C#/TS drift). (AGENTS.md rule 9.)
 - **Privacy must not regress** — route *only component calls* off the arg-keyed memo; leave
   `where`/`orderBy`/value-fns (and their leaf-promotion) intact. Existing memo/privacy scenarios
   stay green.

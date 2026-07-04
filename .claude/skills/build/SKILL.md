@@ -101,7 +101,7 @@ git -C <worktree> commit -m "..."
 git merge --ff-only <branch-name>           # from the main worktree
 ```
 
-Sync docs in the same landing (CLAUDE.md current-focus, ROADMAP, DECISIONS, memory) —
+Sync docs in the same landing (AGENTS.md current-focus, ROADMAP, DECISIONS, memory) —
 a DONE marker must never coexist with an in-flight body.
 (memory `feedback_keep_docs_in_sync`)
 

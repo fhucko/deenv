@@ -27,7 +27,7 @@ cross-cutting milestone/scope concerns.
 ## First, ground yourself (every run)
 
 Read these before forming any opinion — your context starts empty:
-- `CLAUDE.md` — the 11 ground rules, the current milestone focus, the
+- `AGENTS.md` — the 11 ground rules, the current milestone focus, the
   hidden-scope warning. Rules 4 (TS only, no hand-JS), 6 (storage through a
   model-terms interface), 9 (the app document is the authoring surface), and 11
   (minimal by default) are the ones most often at stake here.

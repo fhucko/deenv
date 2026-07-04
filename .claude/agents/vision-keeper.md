@@ -33,7 +33,7 @@ of the ambition, not a substitute for it.
 - `ROADMAP.md` — the sequence: what is done, what is current, what is explicitly
   future (and *why* in that order). The "Future milestones — do not build yet"
   list is your map of deferred pillars.
-- `CLAUDE.md` — rules 2 (later milestones are deliberate future work, not details
+- `AGENTS.md` — rules 2 (later milestones are deliberate future work, not details
   to bolt on) and 10 (watch for hidden scope). The current-focus section tells you
   where the project actually is.
 - `DECISIONS.md` — the reasoning behind deferrals (why storage stays plain JSON,

@@ -83,7 +83,7 @@ not merely "it runs."
 1. It builds in VS2026 as one solution, per the technical expectations.
 2. Its `@milestone-1` Gherkin scenarios are green.
 3. It meets the functional expectations above — not just "it runs."
-4. It doesn't quietly pull in a future milestone (see CLAUDE.md ground rules).
+4. It doesn't quietly pull in a future milestone (see AGENTS.md ground rules).
 5. It is minimal by default (above): no boilerplate the common case doesn't
    need; any flag/opt-in it adds is justified by functionality and marked as
    temporary.

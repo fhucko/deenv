@@ -22,7 +22,7 @@ so and cite both.
 
 Skim these so your map matches the project's intent — but verify claims against
 the code, since docs describe intent and can lag:
-- `CLAUDE.md` — current milestone state and the big-picture "what just landed"
+- `AGENTS.md` — current milestone state and the big-picture "what just landed"
   paragraphs (M6 Code, M7 the app document, M8/M9 the self-hosted UI). This is the
   fastest map of where major subsystems live.
 - `ROADMAP.md` / `VISION.md` / `STAGES.md` — only to frame *why* something exists

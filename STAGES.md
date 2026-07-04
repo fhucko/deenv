@@ -55,7 +55,7 @@ These map to VISION.md operator situations 1, 2, 3, 5.
 **Explicitly out of Stage 1** (so scope stays honest): concurrent/multi-user,
 operator self-service schema editing, git-style versioning, live preview / test
 instances, crash durability. These are Stage 2+ and are real future milestones —
-not details to bolt on (CLAUDE.md rules 2 + 10).
+not details to bolt on (AGENTS.md rules 2 + 10).
 
 ---
 

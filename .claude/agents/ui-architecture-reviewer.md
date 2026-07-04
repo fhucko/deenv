@@ -21,7 +21,7 @@ below — lead with the principles, not with taste.
 ## First, ground yourself (every run)
 
 Read these before forming any opinion. Do not skip — your context starts empty:
-- `CLAUDE.md` — ground rules, current milestone focus, the hidden-scope warning.
+- `AGENTS.md` — ground rules, current milestone focus, the hidden-scope warning.
 - `EXPECTATIONS.md` — the five criteria a slice is judged on. Internalize
   criterion 5 (minimal by default) and the "temporary scaffolding" rule for flags.
 - `INSTANCE_MODEL.md` — one-form-per-type, URL-as-navigation, dictionary-as-only-
