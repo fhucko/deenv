@@ -723,26 +723,52 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     // ── When/Then: the Commit-button UX slice (M13's last piece) ─────────────────
 
+    // Waits out any refetch already in flight (e.g. a fresh design's editor render hits a VNA reading
+    // db.branches for the Last-commit line, firing an implicit refetch on open) before typing. Otherwise
+    // that refetch's reply lands AFTER the fill and mergeState (dt.ts) unconditionally overwrites a plain
+    // scalar `ui var` — like commitMessage — with its (pre-typing) echoed value, a general existing hazard
+    // this step just needs to not race into (test-harness-only wait; no app change).
     [When("I type {string} into the commit message")]
-    public async Task WhenTypeCommitMessage(string message) =>
-        await ctx.Page!.Locator(".design-editor input.commit-message").FillAsync(message);
-
-    // The commit message var clears IMMEDIATELY on click (a local assignment, not gated on the WS
-    // reply — sys.commitDesign only fires the send-hook), so waiting for the input to empty proves the
-    // click ran but NOT that the commit landed. Poll the store for a new Commit row too, so a later
-    // "open the commit history" navigation always finds it (no fixed sleep — the real async completion).
-    [When("I click Commit")]
-    public async Task WhenClickCommit()
+    public async Task WhenTypeCommitMessage(string message)
     {
-        var before = _designer.Store.ReadExtent("Commit").Count;
-        await ctx.Page!.Locator(".design-editor button.commit-design").ClickAsync();
-        await EventuallyAsync(() => _designer.Store.ReadExtent("Commit").Count > before);
+        await ctx.Page!.WaitForFunctionAsync("() => typeof refetchInFlight !== 'undefined' && !refetchInFlight");
+        await ctx.Page.Locator(".design-editor input.commit-message").FillAsync(message);
     }
 
-    [Then("the commit message input is empty")]
-    public async Task ThenCommitMessageInputEmpty() =>
-        await ctx.Page!.WaitForFunctionAsync(
-            "() => { const e = document.querySelector('.design-editor input.commit-message'); return e != null && e.value === ''; }");
+    // Just clicks — the commit message is NEVER cleared client-side (a UX review fix: a synchronous
+    // clear both faked "done" before the server ack and destroyed the typed message on a rejected
+    // commit), so this step makes no assumption about success. The positive confirmation is the
+    // "Last commit:" line (updates on the success ack's refetch); a rejection surfaces as the global
+    // error banner with the input untouched. Callers assert whichever leg they are testing.
+    [When("I click Commit")]
+    public async Task WhenClickCommit() =>
+        await ctx.Page!.Locator(".design-editor button.commit-design").ClickAsync();
+
+    // The positive confirmation: the design editor's "Last commit:" line is pure Code reading the
+    // design's main branch head, so it updates only once the success ack's refetch lands (ws.ts:947) —
+    // poll, no fixed sleep.
+    [Then("the last-commit line eventually shows message {string}")]
+    public async Task ThenLastCommitLineShowsMessage(string message) =>
+        await ctx.Page!.Locator($".design-editor p.last-commit:has-text({CssString("\"" + message + "\"")})").WaitForAsync();
+
+    // The bare-text variant (no quote-wrapping) — used for the "(no message)" placeholder, which the
+    // Code renders WITHOUT the quote marks (only a real message gets wrapped in quotes).
+    [Then("the last-commit line eventually shows {string}")]
+    public async Task ThenLastCommitLineShowsText(string text) =>
+        await ctx.Page!.Locator($".design-editor p.last-commit:has-text({CssString(text)})").WaitForAsync();
+
+    [Then("the global error banner is shown mentioning {string}")]
+    public async Task ThenGlobalErrorBannerMentioning(string phrase)
+    {
+        var banner = ctx.Page!.Locator("#__error");
+        await banner.WaitForAsync(new Microsoft.Playwright.LocatorWaitForOptions { Timeout = 10000 });
+        await Assert.That(await banner.InnerTextAsync()).Contains(phrase);
+    }
+
+    [Then("the commit message input still holds {string}")]
+    public async Task ThenCommitMessageInputStillHolds(string message) =>
+        await Assert.That(await ctx.Page!.Locator(".design-editor input.commit-message").InputValueAsync())
+            .IsEqualTo(message);
 
     [When("I open the commit history")]
     public async Task WhenOpenCommitHistory()
@@ -764,6 +790,20 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task ThenCommitHistoryShowsEmptyMessage() =>
         await EventuallyAsync(() => _designer.Store.ReadExtent("Commit").Values
             .Any(o => o.Fields.TryGetValue("message", out var v) && v is DeEnv.Storage.TextValue { Text: "" }));
+
+    // UX review FIX 2 (newest-first): the FIRST row in the table (the generic SetTable's iteration
+    // order, now driven by commitsPage's orderBy descending on logSeq) carries the given message.
+    [Then("the commit history's first row has message {string}")]
+    public async Task ThenCommitHistoryFirstRowHasMessage(string message) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const r = document.querySelector('main.ide-commits .set-row'); return r != null && r.textContent.includes({JsString(message)}); }}");
+
+    // UX review FIX 3 (no dead self-link): the commits table was given linked={false}, so its label
+    // column (message) renders a plain span, never an <a> — proven by the ABSENCE of any row-link
+    // anchor anywhere in the table (not just on the just-committed row).
+    [Then("the commit history shows no row links")]
+    public async Task ThenCommitHistoryShowsNoRowLinks() =>
+        await Assert.That(await ctx.Page!.Locator("main.ide-commits a.row-link").CountAsync()).IsEqualTo(0);
 
     [Then("the design {string} has a stored type named {string}")]
     public async Task ThenDesignHasStoredType(string designLabel, string typeName)

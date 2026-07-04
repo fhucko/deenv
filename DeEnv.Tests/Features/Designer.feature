@@ -509,20 +509,41 @@ Feature: The operator IDE (designs library + instance design selector)
   #
   # sys.commitDesign(design, message) is now wired lockstep into the AST scan / validator / both
   # interpreters (mirroring sys.publish's existing wiring exactly), and the design editor grows its
-  # first versioning surface: a message input + a Commit button. Committing snapshots the design's
-  # CURRENT working copy into an immutable Commit chained onto its branch's head (DesignCommit.feature
-  # is the full spec of that mechanism; this scenario is the UI's end-to-end proof it is reachable from
-  # the editor, not a re-test of the mechanism itself).
+  # first versioning surface: a message input + a Commit button + a "Last commit:" confirmation line
+  # (DesignCommit.feature is the full spec of the commit mechanism; this scenario is the UI's
+  # end-to-end proof it is reachable from the editor, not a re-test of the mechanism itself).
+  #
+  # UX REVIEW FIX: the message input does NOT clear on click (a synchronous clear both faked "done"
+  # before the server ack and destroyed the typed message on a rejected commit). Instead, the positive
+  # confirmation is the "Last commit:" line — pure Code reading the design's main branch head — which
+  # updates to the just-committed message once the success ack's refetch lands (ws.ts:947). The input
+  # is left holding what was typed (retained by construction — nothing clears it either way).
   @milestone-13 @single-user
-  Scenario: Committing a design from the editor records history and clears the message
+  Scenario: Committing a design from the editor shows the new commit as the confirmation line
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
     And I edit the design "todo"
     And I type "first snapshot" into the commit message
     And I click Commit
-    Then the commit message input is empty
+    Then the last-commit line eventually shows message "first snapshot"
     When I open the commit history
     Then the commit history shows a commit with message "first snapshot"
+
+  # The failure leg: committing a design with NO owning branch (a freshly-created design via the
+  # generic New — a branch is minted at boot's EnsureMainBranches / on first commit/createBranch, not
+  # on plain creation, so a same-session commit on a brand-new design genuinely has nothing to chain
+  # onto) rejects with the global error banner, and the typed message is STILL in the input for retry —
+  # proven by construction (nothing ever clears it), not by a special-cased recovery path.
+  @milestone-13 @single-user
+  Scenario: Committing an invalid design shows the global error banner and keeps the typed message
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "blank"
+    And I edit the design "blank"
+    And I type "won't land" into the commit message
+    And I click Commit
+    Then the global error banner is shown mentioning "owning branch"
+    And the commit message input still holds "won't land"
 
   # The AST wiring guard: an app whose Code calls sys.commitDesign is detected by
   # HostActionScan.UsesHostActions exactly like the existing sys.publish/sys.delete detection
@@ -569,5 +590,33 @@ Feature: The operator IDE (designs library + instance design selector)
     When I open the designs list
     And I edit the design "todo"
     And I click Commit
+    Then the last-commit line eventually shows "(no message)"
     When I open the commit history
     Then the commit history shows a commit with an empty message
+
+  # UX REVIEW FIX 2: the history is newest-first (orderBy descending on logSeq, the honest total
+  # order) — a daily glance finds the latest commit on top instead of buried under the boot-time
+  # Adopted baselines.
+  @milestone-13 @single-user
+  Scenario: The commit history lists newest commits first
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I type "newest one" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "newest one"
+    When I open the commit history
+    Then the commit history's first row has message "newest one"
+
+  # UX REVIEW FIX 3: no commit-detail page exists yet, so the history rows must NOT link anywhere —
+  # clicking through re-rendered the same list (a dead self-link), and an empty-message commit rendered
+  # a phantom empty <a>. Plain cells until the commit-detail page exists (ledgered future UX).
+  @milestone-13 @single-user
+  Scenario: The commit history rows are plain cells with no dead self-link
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I click Commit
+    Then the last-commit line eventually shows "(no message)"
+    When I open the commit history
+    Then the commit history shows no row links

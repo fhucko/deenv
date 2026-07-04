@@ -103,7 +103,12 @@ ui
 
     fn doCommit(design)
         sys.commitDesign(design, commitMessage)
-        commitMessage = ""
+
+    fn lastCommitFor(design)
+        var branch = db.branches.single(b => sys.id(b.workingCopy) == sys.id(design))
+        if branch == null
+            return null
+        return branch.head
 
     fn navBar(active)
         return <nav class="ide-nav">
@@ -126,6 +131,7 @@ ui
             <SetTable set={db.designs} desc={sys.schema("Design")} setPath="/designs" columns={["label"]} rowActions={designActions} createForm={createDesignForm}>
 
     fn designEditor(design)
+        var lastCommit = lastCommitFor(design)
         return <section class="design-editor">
             <input class="design-label" value={design.label}>
             <div class="commit-bar">
@@ -134,6 +140,12 @@ ui
                     "Commit"
                 <a class="view-history" href="/commits">
                     "History"
+                if lastCommit != null
+                    <p class="last-commit">
+                        "Last commit: "
+                        lastCommit.message == "" ? "(no message)" : "\"" + lastCommit.message + "\""
+                        " · "
+                        lastCommit.at
             <button class="add-type" onClick={() => addType(design)}>
                 "+ Type"
             foreach type in design.types
@@ -273,12 +285,13 @@ ui
         return render
 
     fn commitsPage()
+        var newestFirst = db.commits.orderBy(c => 0 - c.logSeq)
         return <main class="ide-commits">
             <h1>
                 "Commit history"
             <a class="back" href="/designs">
                 "Back"
-            <SetTable set={db.commits} desc={sys.schema("Commit")} setPath="/commits" columns={["message", "at", "design"]}>
+            <SetTable set={newestFirst} desc={sys.schema("Commit")} setPath="/commits" columns={["message", "at", "design"]} linked={false}>
 
     fn instanceSelectorPage()
         var routeId = sys.toInt(sys.segment(path, 2))
