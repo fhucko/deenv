@@ -10,7 +10,8 @@ first where behavior changes; full suite `dotnet test DeEnv.Tests -c Release` fr
 with output captured to a file; review per the tier policy (builders sonnet at low/medium,
 opus for subtle zones; reviewers opus, diff PINNED to the branch's merge-base); ff-merge;
 docs+memory sync in the same landing. Never kill chrome by name (testhost / `*ms-playwright*`
-only). Known flake: LogoutViewSwapTests under parallel load — verify isolated + rerun, report.
+only). (The LoginViewSwap/LogoutViewSwapTests parallel-load flake was root-caused + fixed
+2026-07-04 — PBKDF2 CPU contention; the test host runs `DEENV_PBKDF2_ITERATIONS=1`.)
 Two-tab browser scenarios are ParallelLimiter-capped (`TwoTabScenarioLimit`) — don't add
 two-tab scenarios without joining that limiter.
 
@@ -105,7 +106,7 @@ is approved, but a NEW host action is a surface addition).
 **Accept:** browser scenario — a rename between two commits renders as a rename (not
 remove+add) in the detail view.
 
-### B3 — Publish + dry-run from the designer  [M; builder sonnet; reviews ui-arch + ux]
+### B3 — Publish + dry-run from the designer  [DONE 2026-07-04 — sys.publishPreview READ builtin returns the report (kernel-wired) + preview→apply consistency guard; suite 713/713; arch + ui-arch + ux SHIP; slice 11 in versioning-slices.md]
 `sys.publish` is already AST-wired and returns the structured `PublishReport` (+ `dryRun`
 arg) — there is NO UI. **Build:** on the design editor (or B1's detail page — builder judges
 placement with the ux idioms): a Publish affordance targeting the design's instance(s)

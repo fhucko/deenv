@@ -261,6 +261,31 @@ Commit button, 2026-07-03/04, suite 628→715).**
    catch-all, logged not swallowed) — defensible: the cache is built from an already-validated
    design at commit time. ✔
 
+11. **B3 — Publish + dry-run from the designer, with a preview→apply consistency guard — DONE
+   2026-07-04** (Track B; suite 713/713; architecture + ui-arch + ux reviews all SHIP after fixes).
+   The design editor's Publish surface: per instance running the design, a toggle-gated Preview of
+   the dry-run report (destructive ops LOUD) → Apply. **`sys.publishPreview(design, targetId)`** is a
+   server-backed READ builtin that RETURNS the `PublishReport` (like B2's `sys.diffCommits`, NOT a
+   host action — the user pushed for "the fn returns the data" over an async holder). Its delegate is
+   KERNEL-wired (the preview needs the target instance's DataPath/stamp/live store, which the
+   designer's render can't reach) and threaded `KernelHost.PublishPreviewFor` → `HostedInstance.Start`
+   → `InstanceApp` → `ContentHandler`/`WsHandler` → `SsrRenderer` → `CodeExecutor`. The dry-run compute
+   is EXTRACTED into `PublishReportComputer`, shared with `sys.publish` (apply) so preview/apply can't
+   drift; `PublishReportCode` builds the report Code-value in the kernel (avoids an Http→Kernel cycle).
+   No conformance case (server computes, client reuses). **Preview→apply consistency GUARD** (closes
+   the TOCTOU the preview/apply split opens): the report carries `{targetCommit=design head,
+   targetVersion=target store version}`; Apply = `sys.publish(design, targetId, expectedHeadCommit,
+   expectedTargetVersion)` (optional guard args — 2-or-4 arity, disambiguated from the legacy 3-arg
+   `dryRun` by arg COUNT; `CodeValidator` arity map generalized to `int[]`). The server refuses a stale
+   apply ("changed since the preview") — a review caught the guard running AFTER the destructive
+   boundary write (`Compute(dryRun:false)` materializes as a side effect); FIXED to check BEFORE any
+   materialization + regression-tested (a rejected apply appends ZERO log entries). UI: per-instance
+   reactive preview component, destructive report reusing B2's groups via a shared `opGroup` helper,
+   `ConfirmButton` + danger-colored confirm on a destructive apply, a section caption. FAST-FOLLOWS
+   (ledgered below): post-apply success signal; drift-only-Apply relabel; "Cardinality" humanize. ✔
+
+**B1–B3 all landed 2026-07-04.**
+
 ## Versioning-UX + follow-up ledger (deferred deliberately; do not lose)
 
 - **Fast-follow (small, real):** a design created at RUNTIME has no `main` Branch until the
@@ -271,10 +296,14 @@ Commit button, 2026-07-03/04, suite 628→715).**
   a refetch reply can stomp text the user is typing in ANY bound input. Test harness
   works around it; the app hazard is real.
 - Commit-detail page (`/commits/<id>`) — DONE (B1, slice 9). Diff view between commits — DONE
-  (B2, slice 10). Still deferred: publish-from-history + dry-run report rendering (B3); branch UI
+  (B2, slice 10). Publish + dry-run from the designer — DONE (B3, slice 11). Still deferred: branch UI
   (createBranch/mergeBranch surfaces + their lockstep wiring) (B4); fine per-field conflict UI (B5).
   B2 residual: a brand-new type is invisible in the diff (DesignDiff's migration lens — no TypeAdd);
   revisit with B3's publish UI (same vocabulary) if a "what changed" (vs "what migrates") view is wanted.
+- B3 fast-follows: post-apply success signal (a "Last published: … · time" line, like the commit-bar);
+  drift-only preview offers a no-op-looking Apply (relabel/suppress when only drift is non-empty);
+  "Cardinality" label + `Single → Set` values are schema jargon on the publish + diff surfaces (a
+  global humanize pass — deferred with the same on B2's diff view, kept for now for consistency).
 - Fine per-field conflict UI obligations — see slice 6's ledger above.
 - Semantic migrations (`fn migrate` + `Commit.migration` — boundary entries exist, the
   addition is safe per the slice-4 note); compaction (`sys.compact`, §6); non-temporal field
