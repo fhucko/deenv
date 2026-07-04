@@ -130,6 +130,7 @@ Feature: The access floor (read enforcement by principal)
     When the session logs in as "Ada" with password "wrong"
     Then the login fails
     And the session principal is anonymous
+    And the password verifier ran once
 
   Scenario: An unknown user leaves the session anonymous (same reply as a wrong password)
     Given the admin user has the password "hunter2"
@@ -137,6 +138,7 @@ Feature: The access floor (read enforcement by principal)
     When the session logs in as "Nobody" with password "hunter2"
     Then the login fails
     And the session principal is anonymous
+    And the password verifier ran once
 
   Scenario: After logging in, a render shows the bound admin can read the ruled type
     Given the admin user has the password "hunter2"

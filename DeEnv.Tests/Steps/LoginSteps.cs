@@ -28,6 +28,7 @@ public sealed class LoginSteps(InstanceContext ctx)
     private string _reply = "";
     private string _seededHash = "";
     private string _setPasswordReply = "";
+    private int _verifyCalls;
 
     // ── seed ────────────────────────────────────────────────────────────────────
 
@@ -183,7 +184,12 @@ public sealed class LoginSteps(InstanceContext ctx)
     [Given("the session logs in as {string} with password {string}")]
     public void WhenLogsIn(string name, string password)
     {
-        var ws = new WsHandler(ctx.Store!, ctx.Description!, _sessions);
+        _verifyCalls = 0;
+        var ws = new WsHandler(ctx.Store!, ctx.Description!, _sessions, verifyPassword: (plain, hash) =>
+        {
+            _verifyCalls++;
+            return AuthCrypto.Verify(plain, hash);
+        });
         _reply = ws.ProcessMessage(
             $$"""{ "op": "login", "clientId": "{{_session!.Id}}", "name": "{{name}}", "password": "{{password}}" }""");
     }
@@ -240,6 +246,10 @@ public sealed class LoginSteps(InstanceContext ctx)
     [Then("the session principal is anonymous")]
     public async Task ThenSessionPrincipalAnonymous() =>
         await Assert.That(_session!.PrincipalUserId).IsNull();
+
+    [Then("the password verifier ran once")]
+    public async Task ThenPasswordVerifierRanOnce() =>
+        await Assert.That(_verifyCalls).IsEqualTo(1);
 
     // ── render as the logged-in session ──────────────────────────────────────────
 

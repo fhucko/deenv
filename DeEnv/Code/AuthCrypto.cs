@@ -26,6 +26,8 @@ public static class AuthCrypto
     private const int Iterations = 210_000;
     private const int KeyBytes = 32;
     private static readonly HashAlgorithmName HashName = HashAlgorithmName.SHA256;
+    public const string DummyHash =
+        "pbkdf2$sha256$210000$AAECAwQFBgcICQoLDA0ODw==$sdsE9K7HfW+xM6B0tekgPcwyiFmjCHdorkKtrNfHD4k=";
 
     // Hash a plaintext password into the self-describing storage string (fresh random salt each call).
     public static string Hash(string password)

@@ -59,7 +59,7 @@ operator act) yields an anonymous-host-action-capable clone — the same follow-
 | **V1** | floor/auth | anonymous host-action via public `/ws` deletes any instance | **CRITICAL** | **contained + fixed + hardened** (authority = `sys` access rule; wiring = AST use, not schema shape — 2026-07-02) |
 | V2 | wire/floor | ruled **dictionary** entries skip read+write floor | LOW (latent MED) | inert in devlog (no dicts); documented constraint |
 | V3 | auth | `clientId` is an unauthenticated bearer token (in page HTML) | LOW | hardening later (bind principal to connection) |
-| V4 | auth | login **timing** side-channel — unknown-user skips PBKDF2 → username enumeration | LOW | fix = dummy-hash the miss path |
+| V4 | auth | login **timing** side-channel — unknown-user skips PBKDF2 → username enumeration | LOW | **fixed 2026-07-04** — miss path verifies a fixed dummy hash |
 | V5 | perimeter | committed `DEENV_ADMIN_PASSWORD: "admin"` in `DeEnv/Properties/launchSettings.json:8` (public repo) | LOW (dev-only) | **user decided 2026-07-02: LEAVE** — accepted dev-only default (prod unaffected; VS-launch/localhost only) |
 | — | perimeter | cross-instance path traversal past the gate | REFUTED | structural (instance bound at path segment 2; nginx forwards raw `$request_uri`; GenHTTP doesn't normalize but can't cross) |
 | — | perimeter | WS cross-instance targeting | REFUTED | socket→instance binding is structural, not message-driven |
@@ -119,7 +119,7 @@ ordinary apps too, entirely outside the gate — now closed by AST wiring AND th
    carrying a dict; the Opus review proved client injection before the fix). READ half still
    deferred; the residual constraint narrows to: no ruled dictionary whose *reads* are sensitive
    in a public app. Root-level dicts (owner = un-ruled Db root) also stay write-deferred.
-5. **V4 — login timing** — verify unknown-user against a fixed dummy hash so both branches run PBKDF2.
+5. **V4 — login timing — DONE 2026-07-04.** Unknown-user/no-hash login verifies a fixed dummy hash so both branches run PBKDF2.
 6. **PathRouter defense-in-depth** — reject `..`/`.`/empty path segments before resolving (closes the
    traversal class permanently regardless of proxy-config drift; not needed today).
 7. **V3 — clientId** — bind the principal to the connection rather than a replayable id.

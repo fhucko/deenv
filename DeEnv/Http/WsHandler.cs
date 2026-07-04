@@ -280,6 +280,7 @@ public sealed class WsHandler
     private readonly ClientSessionStore? _sessions;
     private readonly LiveRegistry _registry;
     private readonly IHostActions _hostActions;
+    private readonly Func<string, string, bool> _verifyPassword;
     // The instance's mount prefix ("/" root-mounted, "/apps/<name>" path-mounted). The client sends
     // FULL paths (location.pathname, which carries the mount) for write/refetch ops; the handler
     // strips the mount before resolving against the schema, so the instance stays mount-unaware (its
@@ -293,7 +294,8 @@ public sealed class WsHandler
     };
 
     public WsHandler(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
-        LiveRegistry? registry = null, IHostActions? hostActions = null, string mountBase = "/")
+        LiveRegistry? registry = null, IHostActions? hostActions = null, string mountBase = "/",
+        Func<string, string, bool>? verifyPassword = null)
     {
         _store = store;
         _desc = desc;
@@ -302,6 +304,7 @@ public sealed class WsHandler
         _registry = registry ?? new LiveRegistry();
         _hostActions = hostActions ?? new NoHostActions();
         _mountBase = mountBase;
+        _verifyPassword = verifyPassword ?? Code.AuthCrypto.Verify;
     }
 
     // The warm per-client session a code-UI message addresses (clientId minted at SSR).
@@ -1288,10 +1291,6 @@ public sealed class WsHandler
     // negative reply ({ ok:false }, no userId), so the wire reveals no user-enumeration signal. A failed
     // login is a NORMAL result (not an exception), so it does NOT go through the `{ error }` rollback path.
     //
-    // ponytail: the REPLY is enumeration-safe, but the LATENCY is not constant-time across the known-user
-    // (runs PBKDF2) vs unknown-user (skips it) paths — a timing side-channel. Closing it (verify against a
-    // dummy hash for an unknown user) is a hardening layer beyond this slice; the locked scope only
-    // required the identical negative reply, which holds.
     private string HandleLogin(WsRequest req)
     {
         if (Session(req) is not { } session)
@@ -1302,19 +1301,23 @@ public sealed class WsHandler
         // The User's credential field — the `password`-typed prop. No password field declared ⇒ login is
         // impossible (the negative reply), exactly like a missing user.
         if (Code.UserConvention.PasswordFieldName(_desc) is not { } passwordField)
+        {
+            _verifyPassword(password, Code.AuthCrypto.DummyHash);
             return Serialize(new LoginResponse { Ok = false });
+        }
 
         // Resolve the principal by name through the store seam (the model's terms — an extent read), then
         // verify. A missing user, a user with no/blank hash, or a wrong password ALL fall to the same
         // negative reply. (FindUserByName reads the raw stored fields — the password value is blanked only
         // in the SHIPPED graph, never in this kernel-side lookup, so the real hash is here to verify.)
-        if (FindUserByName(name) is (int userId, ObjectValue userFields)
-            && userFields.Fields.GetValueOrDefault(passwordField) is TextValue { Text: var hash }
-            && hash.Length > 0
-            && Code.AuthCrypto.Verify(password, hash))
+        (int? UserId, string Hash) realHash = FindUserByName(name) is (int userId, ObjectValue userFields)
+            && userFields.Fields.GetValueOrDefault(passwordField) is TextValue { Text.Length: > 0 } h
+            ? (UserId: userId, Hash: h.Text)
+            : (UserId: null, Hash: Code.AuthCrypto.DummyHash);
+        if (_verifyPassword(password, realHash.Hash) && realHash.UserId is { } verifiedUserId)
         {
-            session.PrincipalUserId = userId;
-            return Serialize(new LoginResponse { Ok = true, UserId = userId });
+            session.PrincipalUserId = verifiedUserId;
+            return Serialize(new LoginResponse { Ok = true, UserId = verifiedUserId });
         }
 
         return Serialize(new LoginResponse { Ok = false });

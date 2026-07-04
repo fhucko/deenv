@@ -57,7 +57,7 @@ evaluation behavior changes (likely client-only, ctx.status precedent).
 **Accept:** a regression scenario — typing during an in-flight refetch survives the reply.
 **Conflicts:** `dt.ts`/`ws.ts` — do not run concurrently with B5.
 
-### A3 — V4 login-timing side channel  [S; builder sonnet; review architecture (security)]
+### A3 — V4 login-timing side channel — DONE 2026-07-04  [S; builder sonnet; review architecture (security)]
 From `docs/plans/security-review-pre-public.md` follow-up #5: unknown-username login skips
 PBKDF2 → response-time username enumeration. **Fix:** verify a fixed dummy hash on the
 unknown-user branch so both branches cost the same. Find the login verification in the auth
