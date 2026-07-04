@@ -161,7 +161,7 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    (`TwoTabScenarioLimit`), NOT a ws.ts race; the builder initially misdiagnosed it as
    environmental — falsified by a settled-machine rerun. Three-lens review (arch SHIP /
    ui-arch SHIP / ux SHIP-WITH-FIXES, all findings fixed + both-directions verified).
-   **FINE-SLICE OBLIGATIONS LEDGER (the deferred per-field UI must):** show `theirs` inline
+   **FINE-SLICE OBLIGATIONS LEDGER — ALL MET in B5 (slice 13, 2026-07-04):** show `theirs` inline
    before choosing (today the operator chooses blind — the payload carries it, the client drops
    it before Code: widen `ctx.conflicts` items with base/mine/theirs + per-field resolve when
    `<ConflictBar>` lands); disambiguate multi-object conflicts by object (today two `title`s
@@ -310,7 +310,41 @@ Commit button, 2026-07-03/04, suite 628→715).**
    (rule-12-clean: picks are operator INPUT, not server data.) One-preview-at-a-time (scalar
    `previewingBranch`) is intentional. ✔
 
-**B1–B4 all landed 2026-07-04. B5 (fine per-field conflict UI) is the last Track-B slice.**
+13. **B5 — Fine per-field DATA-conflict UI — DONE 2026-07-04** (Track B, the LAST slice; suite
+   720/720; architecture + ui-arch reviews SHIP, ux SHIP-with-one-deferred-finding). The slice-6
+   coarse conflict banner (named fields, whole-ctx keep-mine/take-theirs, operator chose BLIND)
+   becomes the fine per-field UI. **`ctx.conflicts` items WIDENED** to `{object, typeName, field,
+   base, mine, theirs}` — the wire (`WireConflict`) already carried them (slice 6); the client just
+   stopped dropping them (`conflictItem` in ws.ts, via `wireScalarToExec`). **`<ConflictBar>`** stdlib
+   lib component (composable by custom renders like SetTable): groups conflicts by object (`TYPE #id`
+   — always-correct vs resolving a label an object may not have in readable extent), shows MINE vs
+   THEIRS INLINE per field (the headline — no more blind choosing), per-field Keep-mine/Take-theirs
+   (`ctx.resolveField(object, field, take)`) + whole-bar "Keep all"/"Take all" shortcuts. **Per-field
+   resolution SHRINKS `ctx.conflicts`** (take-theirs writes theirs to obj.props + removes the item;
+   keep-mine removes it; empty → `resend()` at the fresh base — take-theirs fields no-op, keep-mine
+   fields force) — deliberately avoids a client-only picks COLLECTION (the B4 slotState constraint).
+   `beforeunload` guard (one idempotent listener while conflicts outstanding) so an F5 no longer
+   silently loses the kept draft. Client-only, NO conformance (ctx.status precedent — `resolveField`
+   is a C# `ExecNothing()` twin like keepMine/takeTheirs; wire unchanged). **`sendCommit` fix** found
+   in review: it reused a stale `wireEdits` snapshot from MINE's values, so a per-field take-theirs
+   resend would have wrongly forced mine — rebuilt to read CURRENT `obj.props` at send time
+   (arch-verified byte-identical for every non-conflict commit). Coarse whole-ctx buttons + the global
+   no-silent-clobber banner both preserved. **§6 FINE-SLICE OBLIGATIONS: MET** (show-theirs-pre-choice,
+   widened items, per-field resolve, object disambiguation, refresh-leave-guard). Residuals/flags: (a)
+   **ux finding DEFERRED for user decision** — the global "reload to see the latest" banner still fires
+   alongside the in-form fine bar (slice-6's DELIBERATE double-banner), and with the richer resolver it
+   now reads as contradictory (loud banner says reload=discard; form says resolve). Recommended fix:
+   suppress the global banner for the generic UI (the `isGeneric` flag — ObjectForm always renders
+   ConflictBar), keep it only as the custom-render fallback. Reverses a settled decision → user's call.
+   (b) a genuine TWO-OBJECT same-ctx conflict is NOT producible through user-authorable Code today
+   (only ObjectForm opens a staging ctx, binds ONE object; app-level `ambient` is validator-rejected) —
+   the grouping/disambiguation is implemented + live-when-reachable but browser-tested only at the
+   two-FIELD level; (c) ref/decimal conflict values display as raw id / int-lossy (fixture is
+   text+int); (d) per-field keep-mine has no intermediate confirmation (row just vanishes); (e)
+   beforeunload shows the browser's generic dialog, not a conflict-specific message. ✔
+
+**TRACK B COMPLETE — B1–B5 all landed 2026-07-04 (slices 9–13). M13 versioning is fully surfaced in
+the designer.**
 
 ## Versioning-UX + follow-up ledger (deferred deliberately; do not lose)
 
@@ -323,7 +357,7 @@ Commit button, 2026-07-03/04, suite 628→715).**
   works around it; the app hazard is real.
 - Commit-detail page (`/commits/<id>`) — DONE (B1, slice 9). Diff view between commits — DONE
   (B2, slice 10). Publish + dry-run from the designer — DONE (B3, slice 11). Branches + merge — DONE
-  (B4, slice 12). Still deferred: fine per-field conflict UI (B5) — the LAST Track-B slice.
+  (B4, slice 12). Fine per-field conflict UI — DONE (B5, slice 13). **All of Track B (B1–B5) DONE.**
   B2 residual: a brand-new type is invisible in the diff (DesignDiff's migration lens — no TypeAdd);
   revisit with B3's publish UI (same vocabulary) if a "what changed" (vs "what migrates") view is wanted.
 - B3 fast-follows: post-apply success signal (a "Last published: … · time" line, like the commit-bar);
@@ -340,7 +374,9 @@ Commit button, 2026-07-03/04, suite 628→715).**
   access changes end-to-end; (d) the merge UI hardcodes "this design" for the target side (correct
   while target is always the currently-open design; a future merge-two-arbitrary-branches view would
   need the real target name).
-- Fine per-field conflict UI obligations — see slice 6's ledger above.
+- Fine per-field conflict UI obligations — DONE (B5, slice 13; §6 obligations MET). Open ux decision
+  ledgered in slice 13: the global "reload" banner vs the in-form fine bar (settled-deliberate
+  double-banner — recommended suppress-for-generic-UI fix awaits user's call).
 - Semantic migrations (`fn migrate` + `Commit.migration` — boundary entries exist, the
   addition is safe per the slice-4 note); compaction (`sys.compact`, §6); non-temporal field
   flag (§0b); per-verb sys granularity.

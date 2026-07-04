@@ -134,7 +134,7 @@ per conflict) as the v1 resolution UI over the existing report contract.
 conflict → report renders → resolve → merged. Suite green.
 **Conflicts:** app.deenv + KernelHostActions + interpreters — run alone.
 
-### B5 — Fine per-field conflict UI  [L; builder opus (client-reconcile); reviews all three lenses]
+### B5 — Fine per-field conflict UI  [DONE 2026-07-04 — ctx.conflicts widened base/mine/theirs + <ConflictBar> per-field resolve + beforeunload guard; suite 720/720; arch + ui-arch SHIP, ux SHIP-with-1-deferred (the double-banner, user's call); slice 13 in versioning-slices.md. **TRACK B COMPLETE (B1–B5).**]
 The slice-6 ledger (versioning-slices.md §6): widen `ctx.conflicts` items with
 base/mine/theirs (the wire already carries them; the client drops them before Code — the
 recorded surface-widening) + per-field take-mine/take-theirs; show THEIRS inline before
