@@ -10,9 +10,20 @@ public sealed class Hooks(InstanceContext ctx)
     [AfterScenario]
     public async Task TeardownAsync()
     {
-        // Close the scenario's browser context (and its page with it) — the browser + driver are
-        // shared across the run and torn down once at the end (see SharedBrowser).
+        // Close the scenario's browser context(s) (and their pages with them) — the browser + driver are
+        // shared across the run and torn down once at the end (see SharedBrowser). Page2 (a SECOND real
+        // browser session — Concurrency.feature / DataConflict.feature's two-tab scenarios) MUST be closed
+        // here too, same as Page: SharedBrowser.NewPageAsync holds a PageGate permit per context, released
+        // ONLY on that context's Close event. Leaving Page2 unclosed leaked its permit for the REST of the
+        // process's life (a genuine bug on its own — found alongside, and fixed alongside, the M13 slice 6
+        // root-cause below). NOTE this fix alone is NOT what resolves the two-tab-scenario deadlock across
+        // the full parallel suite (see TwoTabParallelism.cs for the actual mechanism): a hold-and-wait
+        // deadlock happens even with perfect cleanup, from CONCURRENT two-tab scenarios each holding one
+        // PageGate permit while blocked wanting a second. Confirmed both ways: with ONLY this fix (no
+        // limiter) the full suite still hung ~31min; with the limiter (alongside this fix) it runs green
+        // in ~2min, matching every browser feature's normal duration.
         if (ctx.Page != null) await ctx.Page.Context.CloseAsync();
+        if (ctx.Page2 != null) await ctx.Page2.Context.CloseAsync();
 
         if (ctx.Server != null) await ctx.Server.DisposeAsync();
 
