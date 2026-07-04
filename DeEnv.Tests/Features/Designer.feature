@@ -13,6 +13,12 @@ Feature: The operator IDE (designs library + instance design selector)
   the kernel runs (todo, crm, shop). Driven against a REAL kernel host (the
   designer needs a non-empty `sys.instances`), through a browser. Milestone 10.
 
+  @milestone-auth @single-user
+  Scenario: The committed designer gates anonymous visitors with its own login form
+    Given the anonymous operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designer designs route
+    Then the committed designer login gate is shown
+
   @milestone-10 @single-user
   Scenario: The designs route lists the design library
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"

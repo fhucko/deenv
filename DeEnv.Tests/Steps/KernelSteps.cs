@@ -1,5 +1,6 @@
 ﻿using DeEnv.Kernel;
 using DeEnv.Storage;
+using DeEnv.Instance;
 using DeEnv.Tests.TestSupport;
 using Reqnroll;
 using TUnit.Assertions;
@@ -957,6 +958,17 @@ public sealed class KernelSteps(InstanceContext ctx)
     private static string LabelOf(ObjectValue design) =>
         design.Fields.TryGetValue("label", out var v) && v is TextValue t ? t.Text : "";
 
+    private static string ExtractInitClientId(string html)
+    {
+        const string marker = "window.initClientId=\"";
+        var start = html.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0) throw new InvalidOperationException("Rendered page did not include initClientId.");
+        start += marker.Length;
+        var end = html.IndexOf('"', start);
+        if (end < 0) throw new InvalidOperationException("Rendered page had a malformed initClientId.");
+        return html[start..end];
+    }
+
     // ── M13 slice 3: adoption-once + the log-preserving boundary (DesignCommit.feature) ──────────
 
     private int _logLinesBeforeCommit;
@@ -1000,12 +1012,26 @@ public sealed class KernelSteps(InstanceContext ctx)
 
     // sys.commitDesign(design, message) over a REAL WebSocket to the designer's OWN /ws — the kernel-
     // wired path (HostedInstance.Start → KernelHost.HostActionsFor), not a hand-built WsHandler, so this
-    // proves the FULL boot→adopt→commit→restart path end-to-end. The designer's `access` section grants
-    // `sys` unconditionally (instances/1/app.deenv), so no login is needed.
+    // proves the FULL boot→adopt→commit→restart path end-to-end. The committed designer gates `sys` to an
+    // Admin principal, so this logs in through /session, then uses the authenticated SSR's clientId.
     [When("the designer commits the todo design with message {string} over its own WS")]
     public async Task WhenDesignerCommitsTodoDesignAsync(string message)
     {
         var designer = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1);
+        var desc = InstanceDescriptionLoader.LoadFile(designer.Spec.SchemaPath);
+        AdminSeed.Seed(designer.Store, desc, "admin", "hunter2", "Admin");
+
+        var cookies = new System.Net.CookieContainer();
+        using var http = new HttpClient(new HttpClientHandler { CookieContainer = cookies });
+        var login = new StringContent(
+            """{"name":"admin","password":"hunter2"}""",
+            System.Text.Encoding.UTF8,
+            "application/json");
+        var loginResp = await http.PostAsync($"http://localhost:{_assetPort}{MountPath(designer.Spec.App)}/session", login);
+        loginResp.EnsureSuccessStatusCode();
+
+        var html = await http.GetStringAsync(Url($"{MountPath(designer.Spec.App)}/designs"));
+        var clientId = ExtractInitClientId(html);
         var todoDesignId = SeededDesigns().Single(d => LabelOf(d.Value) == "todo").Key;
         var uri = new Uri($"ws://localhost:{_assetPort}{MountPath(designer.Spec.App)}/ws");
 
@@ -1014,7 +1040,7 @@ public sealed class KernelSteps(InstanceContext ctx)
         await socket.ConnectAsync(uri, connectCts.Token);
 
         var frame = $$"""
-            { "op": "hostAction", "action": "commitDesign", "args": [
+            { "op": "hostAction", "clientId": "{{clientId}}", "action": "commitDesign", "args": [
                 { "type": "int", "value": {{todoDesignId}} }, { "type": "text", "value": "{{message}}" }
             ] }
             """;

@@ -178,15 +178,15 @@ safe: scenarios run in isolated Playwright browser contexts (`SharedBrowser.cs:8
    WS login/logout ops keep the live no-reload flip, and claim-miss reloads once. Proven: login →
    fresh page → still authenticated; logout → fresh page → anonymous; token tamper/expiry/
    foreign-instance/password-change → anonymous. Suite 685/685.
-2. **Designer flip slice**: the designer app doc gains a `User` type (+ role enum — **confirmed
-   absent today**, no `User`/`currentUser` anywhere in `instances/1/app.deenv`), access rules on
+2. **Designer flip slice — DONE 2026-07-04**: the designer app doc gains a `User` type (+ role enum), access rules on
    its data types (floor is allow-when-unruled — `sys` alone would leave anonymous data-edit
    open), **a hand-rolled login gate in its custom `fn render()`** (grill P8: the generic
    `anonymousLockedOut → LoginForm` auto-gate applies only to the generic render; without the
    hand-rolled branch, anonymous would see *empty tables*, not a login prompt), then the flip:
-   `sys *` → `sys * where currentUser.role == "Admin"`. `AdminSeed` then seeds it (requires
-   rules + User type — satisfiable, `AdminSeed.cs:116-123`). Closes the strategic residual AND
-   the clone-the-designer caveat (the clone carries the conditional rule).
+   `sys *` → `sys * where currentUser.role == "Admin"`. Commit/Branch stay client-write-locked
+   via explicit `create edit delete where false` so their reads can also be admin-gated. `AdminSeed`
+   then seeds it (requires rules + User type — satisfiable, `AdminSeed.cs:116-123`). Closes the
+   strategic residual AND the clone-the-designer caveat (the clone carries the conditional rule).
 3. **Deploy wiring**: `DEENV_ADMIN_PASSWORD` already on the box; nginx `location = /session`;
    deploy; live-verify login on the designer subdomain; **then drop the designer htpasswd**
    (keep it briefly as belt-and-braces if preferred — operator's call).

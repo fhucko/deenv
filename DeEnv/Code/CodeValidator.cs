@@ -33,6 +33,10 @@ public static class CodeValidator
         // scope: they read these by walking up but never collide (a user var simply shadows).
         var system = new Scope(null);
         system.Declare("db", writable: false);
+        system.Declare("currentUser", writable: false);
+        system.Declare("anonymousLockedOut", writable: false);
+        system.Declare("accessActive", writable: false);
+        system.Declare("canManageUsers", writable: false);
         system.Declare("path", writable: true);
         system.Declare("status", writable: true);
         system.Declare("sys", writable: false); // the framework namespace (instances + the builtins)

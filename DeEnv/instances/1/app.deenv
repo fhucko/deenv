@@ -4,6 +4,7 @@ types
         instances set of Instance
         commits set of Commit
         branches set of Branch
+        users set of User
     Instance
         name text
         runtimeId int
@@ -44,14 +45,32 @@ types
         name text
         head Commit
         workingCopy Design
+    Role enum
+        Admin
+    User
+        name text
+        role Role
+        password password
 
 access
     sys
-        *
+        * where currentUser.role == "Admin"
+    Design
+        * where currentUser.role == "Admin"
+    Instance
+        * where currentUser.role == "Admin"
+    MetaType
+        * where currentUser.role == "Admin"
+    MetaProp
+        * where currentUser.role == "Admin"
+    User
+        * where currentUser.role == "Admin"
     Commit
-        locked
+        read where currentUser.role == "Admin"
+        create edit delete where false
     Branch
-        locked
+        read where currentUser.role == "Admin"
+        create edit delete where false
 
 ui
     var renameId = 0
@@ -269,6 +288,8 @@ ui
                     "Instance not found."
 
     fn render()
+        if currentUser == null
+            return <LoginForm>
         var page
         var active = "instances"
         var section = sys.segment(path, 1)

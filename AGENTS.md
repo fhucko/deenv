@@ -129,8 +129,9 @@ the keep-mine/take-theirs banner**, the fine per-field UI's obligations
 ledgered in the slices doc). The `locked` access keyword landed alongside.
 Next: slice 7 (time-travel + `cloneInstance(atSeq)`) and the Commit-button UX
 slice. **M12 (visual component designer) stays deferred
-until after the MVP.** M-auth follow-ups (deploy login wiring,
-remove-user / inline role-edit, broader auth styling) live in ROADMAP.md
+until after the MVP.** Login persistence + the committed-designer auth flip landed
+2026-07-04; remaining M-auth follow-ups (deploy login wiring, remove-user /
+inline role-edit, broader auth styling) live in ROADMAP.md
 "Near-future".
 
 Everything below is **DONE** — the sequenced record is ROADMAP.md, the

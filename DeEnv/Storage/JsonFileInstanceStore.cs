@@ -1727,12 +1727,13 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // user's edit back (the "persist/action" test flake under parallel load — and a real, if rare,
         // production data-loss path). The whole point of write-temp-then-move is a durable, reader-safe
         // commit; a transient replace conflict must not defeat that.
-        for (var attempt = 0; ; attempt++)
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        for (;;)
         {
             try { File.Move(tmp, path, overwrite: true); return; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < 50)
+            catch (Exception ex) when ((ex is IOException or UnauthorizedAccessException) && DateTime.UtcNow < deadline)
             {
-                Thread.Sleep(10); // ~microsecond conflict window; up to ~500ms of retries dwarfs it
+                Thread.Sleep(10); // transient replace conflict; up to 5s covers loaded test/process stalls
             }
         }
     }

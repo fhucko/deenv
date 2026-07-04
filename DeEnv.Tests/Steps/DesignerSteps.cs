@@ -1,5 +1,6 @@
 ﻿using DeEnv.Kernel;
 using DeEnv.Tests.TestSupport;
+using DeEnv.Instance;
 using Reqnroll;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -25,6 +26,9 @@ namespace DeEnv.Tests.Steps;
 [Binding]
 public sealed class DesignerSteps(InstanceContext ctx)
 {
+    private const string DesignerAdminName = "admin";
+    private const string DesignerAdminPassword = "hunter2";
+
     // The kernel-hosted designer instance (id 1); its targets are reached via ctx.Kernel.Instances by
     // their registry label (Spec.App).
     private HostedInstance _designer = null!;
@@ -49,9 +53,22 @@ public sealed class DesignerSteps(InstanceContext ctx)
         // designer's two seeded designs (the fixture seeds each target's designId to the matching
         // design), then point the browser at the designer's app port.
         _designer = await ctx.StartKernelDesignerBrowserAsync((5, firstLabel), (6, secondLabel));
+        SeedDesignerAdmin();
+        await LoginDesignerAdminAsync();
+    }
+
+    [Given("the anonymous operator IDE is running on a kernel hosting instances {string} and {string}")]
+    public async Task GivenAnonymousIdeRunning(string firstLabel, string secondLabel)
+    {
+        _designer = await ctx.StartKernelDesignerBrowserAsync((5, firstLabel), (6, secondLabel));
+        SeedDesignerAdmin();
     }
 
     // ── When: navigation ─────────────────────────────────────────────────────────
+
+    [When("I open the designer designs route")]
+    public async Task WhenOpenDesignerDesignsRoute() =>
+        await ctx.Page!.GotoReadyAsync(ctx.DesignerUrl("/designs"));
 
     [When("I open the designs list")]
     public async Task WhenOpenDesignsList()
@@ -1146,7 +1163,31 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await Assert.That(match).IsNull();
     }
 
+    [Then("the committed designer login gate is shown")]
+    public async Task ThenCommittedDesignerLoginGateShown()
+    {
+        await ctx.Page!.Locator(".login-form").WaitForAsync();
+        await Assert.That(await ctx.Page.Locator("main.ide-designs, main.ide-list").CountAsync()).IsEqualTo(0);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────
+
+    private void SeedDesignerAdmin()
+    {
+        var desc = InstanceDescriptionLoader.LoadFile(_designer.Spec.SchemaPath);
+        AdminSeed.Seed(_designer.Store, desc, DesignerAdminName, DesignerAdminPassword, "Admin");
+    }
+
+    private async Task LoginDesignerAdminAsync()
+    {
+        var page = ctx.Page ?? throw new InvalidOperationException("Designer browser was not started.");
+        await page.GotoReadyAsync(ctx.DesignerUrl("/designs"));
+        await page.WaitReadyAsync();
+        await page.Locator(".login-form input.name").FillAsync(DesignerAdminName);
+        await page.Locator(".login-form input.password").FillAsync(DesignerAdminPassword);
+        await page.Locator(".login-form button.login-submit").ClickAsync();
+        await page.Locator("main.ide-designs .set-row").First.WaitForAsync();
+    }
 
     // The instances-list row for an instance, located by its app-name cell (exact match, so "todo"
     // never matches "designer"/"crm").

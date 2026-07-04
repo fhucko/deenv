@@ -338,12 +338,12 @@ DECISIONS.md.
 - **M-auth follow-ups.** Small, non-blocking; do as wanted:
   - **Wire login on the deenv.org deploy** — set `DEENV_ADMIN_PASSWORD` on the box and drop the
     basic-auth gate for `devlog` (gate #2 follow-on). Operator ops action; steps in `deploy/DEPLOY.md`.
-  - **Login persistence across page loads — DONE 2026-07-04.** Login-as-state still flips live over the
-    existing WS, and a stateless HttpOnly cookie now carries the principal across fresh GETs/reconnects
-    (`docs/plans/login-persistence.md`, mechanism slice; suite 685). **Next:** re-gate the designer with
-    real access rules (`sys * where currentUser.role == "Admin"` plus data rules + its custom login gate),
-    closing the strategic residual and the clone-of-designer edge. Then wire the deploy login and drop the
-    basic-auth gate.
+  - **Login persistence across page loads + designer flip — DONE 2026-07-04.** Login-as-state still flips
+    live over the existing WS, and a stateless HttpOnly cookie now carries the principal across fresh
+    GETs/reconnects. The committed designer now declares a loginable admin shape, gates `sys` and designer
+    data to `currentUser.role == "Admin"`, keeps Commit/Branch client-write-locked, and hand-rolls its
+    custom `<LoginForm>` gate (`docs/plans/login-persistence.md`; suite 686). **Next:** wire deploy login
+    and drop the basic-auth gate after live verification.
   - **remove-user + inline role-edit** on the generic `/users` list / `/users/<id>` page (remove-user = a Remove control on the `/users` set table; role-edit already works on `/users/<id>` — inline-on-the-list is the convenience).
   - **Users-twice dedup — DONE (`b06b532`).** Solved by deleting the client-toggled `<UserAdmin>` popup and moving set-password onto the generic `/users/<id>` page; the menu now links to `/users`. (Not via the round-trip — a real route was the clean fix.)
   - **set-password feedback — DONE.** Reframed 2026-06-26 to a `password`-type field on User (set like
