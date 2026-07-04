@@ -248,9 +248,8 @@ Feature: The operator IDE (designs library + instance design selector)
   # setting its base type to "enum", and filling its (always-rendered, comma-separated) values input
   # captures the enum in the designer's own store. This stays LIGHT — it asserts the designer captured
   # the authoring, not a full deploy. The two halves the old end-to-end conflated are each tested
-  # cheaply on their own: design→app-document projection of an enum in Bridge.feature ("projects an
-  # enum type's value list"), and applying/deploying a design in "Applying a different design ...
-  # deploys it" + HostAction. So there is no apply / kernel deploy / 45s file-poll here.
+  # cheaply on their own: projection rides the host-action publish/apply path, and this scenario only
+  # proves the editor captures the authoring. So there is no apply / kernel deploy / 45s file-poll here.
   @milestone-10 @single-user
   Scenario: The designer authors an enum type's base and values
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
@@ -267,8 +266,7 @@ Feature: The operator IDE (designs library + instance design selector)
   # to prop.multiline, shown ONLY for a single text prop (the one shape the loader allows it on) — so the
   # designer can never produce an invalid design. Toggling it captures the flag in the designer's own
   # store. LIGHT, like the enum authoring above: it asserts the designer captured the toggle + the
-  # progressive disclosure (shown on a text prop, hidden on a non-text one), not a full deploy — the
-  # design→app-document projection of multiline is proven cheaply in Bridge.feature.
+  # progressive disclosure (shown on a text prop, hidden on a non-text one), not a full deploy.
   @milestone-multiline @single-user
   Scenario: The designer toggles multiline on a single text prop, and hides it on a non-text prop
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"

@@ -189,33 +189,10 @@ public static class SchemaBridge
         return new InstanceDescription(types);
     }
 
-    // Read the designer's data, project it, validate it, and publish it as the
-    // instance's app document (text). Throws SchemaValidationException (writing
-    // nothing) when the designed schema is invalid — the same validation pipeline
-    // as any hand-written document.
-    public static void Export(
-        string metaAppPath, string designerDataPath,
-        string targetAppPath, string targetDataPath)
-    {
-        var meta = InstanceDescriptionLoader.LoadFile(metaAppPath);
-        var store = new JsonFileInstanceStore(designerDataPath, meta);
-
-        var db = store.ReadNode(NodePath.Root)
-            ?? throw new SchemaValidationException("Designer data could not be read.");
-
-        var desc = Project(db);
-
-        // Validate before writing: throws on an invalid design, leaving files as-is.
-        InstanceDescriptionLoader.ValidateDescription(desc);
-
-        WriteDocument(AppPrint.Print(desc), targetAppPath, targetDataPath);
-    }
-
     // Write an already-projected, already-validated app document onto a target instance, PRESERVING
     // its existing data across the schema change when the data still fits (non-destructive apply — the
     // migration substrate under M13 versioning; see DECISIONS "Data must survive schema changes").
-    // Shared by Export (the M4 root-Db path) and the kernel's passed-Design publish, so both apply
-    // identically.
+    // Shared by publish/apply/create paths that already projected a whole Design row.
     //
     // Non-destructive apply — migrate-toward-then-preserve-or-reseed:
     //   • Migrate the existing data TOWARD the new schema (drop removed fields, …), then KEEP it when it

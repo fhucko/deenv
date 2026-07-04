@@ -9,8 +9,7 @@ using DeEnv.Kernel;
 // two kernel-level ports + the per-instance entries). A single instance is just a one-entry registry.
 //
 // The M4 schema tools (designing a schema, publishing it via SchemaBridge) are no longer CLI
-// modes. SchemaBridge stays — still unit-tested by Bridge.feature — to be exposed to Code as a
-// devops action (the host-side "publish" primitive), which is where instance management belongs
+// modes. SchemaBridge stays behind the host-side "publish" primitive, which is where instance management belongs
 // ("C# is the kernel — app logic belongs in the app"). See DECISIONS.
 
 // The kernel's home: where it reads kernel.json and resolves instances/<id>/ (app docs + data).

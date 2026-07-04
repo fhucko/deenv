@@ -1358,8 +1358,7 @@ every spec, stops them all if one fails mid-startup, and exposes the hosted inst
 `--mode`/`--app` switch — the kernel host **is** the entry point, and `kernel.json` is the single
 source of truth for what runs (one entry = a single app; many = multi-instance; a single instance
 is just a one-entry registry). The old `instance`/`designer`/`export` modes are gone. `SchemaBridge`
-(designer publish/export) stays — still unit-tested by `Bridge.feature` — to be **exposed to Code
-as a host-side devops action** (the "publish" primitive), where instance management belongs per
+(designer publish/apply) stays behind the Code-triggered host-side "publish" primitive, where instance management belongs per
 "C# is the kernel — app logic belongs in the app"; its CLI mode is *not* replaced by another CLI
 mode. The designer is now just `designer.app` as a registry entry (the temporary current-schema seeding
 scaffolding is dropped). Specced by `Kernel.feature` (`@milestone-10`): two instances on distinct
@@ -1474,11 +1473,10 @@ the LAST entry yields an empty registry, which `RegistryReader` rejects as "list
 unreachable now since the sole boot instance can't be deleted, but the IDE delete command will need a
 defined empty-kernel mode.)*
 
-**Host actions — the Code→host channel; `sys.publish` + `sys.create` (export/create-to-Code) — landed 2026-06-15.** The first
+**Host actions — the Code→host channel; `sys.publish` + `sys.create` (publish/create-to-Code) — landed 2026-06-15.** The first
 time Code triggers a HOST operation (a server-side C# routine that touches the filesystem/kernel),
 distinct from the data effects Code already does (mutations over the WS). The M4 schema **publish/export**
-(`SchemaBridge.Export` — project a designer instance's data → a target app document + reset its data;
-orphaned since M10 removed `--mode export`) is the first consumer, restored as a Code action.
+path was restored as a Code action after M10 removed `--mode export`.
 
 - **The primitive (reusable channel):** `sys.publish(targetId)` is a side-effecting `sys` builtin —
   SERVER-ONLY at render (a render no-op `ExecNothing` in `CodeExecutor`, like `setRef`; the client
@@ -1490,8 +1488,8 @@ orphaned since M10 removed `--mode export`) is the first consumer, restored as a
   optimistically); on error it surfaces `lastError` with no journal replay (`rollbackJournal` returns a
   bool so a correlated error with no journal entry is the host-action path).
 - **The seam (kernel-vs-image cut):** `IHostActions` (one method) + a `NoHostActions` default that errors
-  (a kernel-less host has no host actions). `KernelHostActions.publish` runs `SchemaBridge.Export`
-  (unchanged) with the CALLING instance as the designer (its own schema = the meta-schema) and the target
+  (a kernel-less host has no host actions). `KernelHostActions.publish` projects the passed Design through
+  `SchemaBridge.ProjectDesignDocument` and applies it with `SchemaBridge.WriteDocument`, with the target
   resolved from `targetId`. The kernel builds one per instance with a live resolver over `_instances`.
 - **id-addressing (the publish target):** `sys.instances` rows gained `id` (`{id, app, port, assetsPort}`)
   — a created instance's id-dir number; a boot/stem-derived instance is `0`. `sys.publish(id)` targets a

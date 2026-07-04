@@ -936,8 +936,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task ThenDesignerTypeIsEnum(string typeName, string values)
     {
         // Split-target (no apply/deploy): assert the designer captured the enum in its OWN sovereign
-        // store — base type "enum" + the values input. The design->app-document projection of an enum is
-        // proven cheaply in Bridge.feature ("projects an enum type's value list"), and applying a design
+        // store — base type "enum" + the values input. Applying a design
         // is proven by "Applying a different design ... deploys it" + HostAction — so there is no kernel
         // deploy, no second instance's schema file, no 45s poll here, just the UI-authoring seam. The
         // values input persists over an async WS round-trip, so poll the (fast, local) MetaType extent.
@@ -953,7 +952,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task ThenDesignerPropMultiline(string propName) =>
         // The designer captured the multiline flag in its OWN sovereign store (the prop's bound checkbox
         // wrote prop.multiline = true). Poll the (fast, local) MetaProp extent — the toggle persists over
-        // an async WS round-trip. The design→app-document projection is proven in Bridge.feature.
+        // an async WS round-trip.
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values.Any(o =>
             o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
             && o.Fields.TryGetValue("multiline", out var v) && v is DeEnv.Storage.BoolValue b && b.Value));

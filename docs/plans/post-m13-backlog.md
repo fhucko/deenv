@@ -68,7 +68,7 @@ time). Update the security doc's follow-up list + the security memory.
 **Conflicts:** auth files — check what the login-persistence session landed before starting;
 coordinate if that session is still active.
 
-### A4 — SchemaBridge.Export dead-code check  [S; builder sonnet; review skip (trivial) or architecture note]
+### A4 — SchemaBridge.Export dead-code check — DONE 2026-07-04  [S; builder sonnet; review skip (trivial) or architecture note]
 The single-store review (2026-07-04) found `SchemaBridge.Export` (SchemaBridge.cs:196-212)
 has no production caller. **Task:** verify with a full grep (including tests + launch
 profiles — the M4-era `--mode Export` VS profile may reach it via Program.cs; if it does, it

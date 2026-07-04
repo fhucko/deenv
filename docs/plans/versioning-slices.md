@@ -203,9 +203,8 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    construction; `FreshDesignHostStore` deleted; era/clone reads share the live store). Bonus
    guard from the review's open question: **the design host can never be its own publish
    target** (a raw publish(design, 1) would have rewritten the designer's own schema —
-   scenario-pinned). Named residuals: cross-call read atomicity on a live source during clone
-   = the deferred concurrency class (comment honest now); `SchemaBridge.Export` looks dead —
-   simplification-pass candidate.
+   scenario-pinned). Named residual: cross-call read atomicity on a live source during clone
+   = the deferred concurrency class (comment honest now). `SchemaBridge.Export` was deleted by A4.
 
 8. **The Commit-button UX slice — DONE 2026-07-04** (main `cc9d17a` + ux fixes `19c103f`; suite
    715/715; ui-arch review SHIP — lockstep sweep clean at all five sites; ux SHIP-WITH-FIXES,
