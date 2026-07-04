@@ -59,8 +59,19 @@ public sealed class SsrRenderer
     // client-side (SPA) breadcrumb/title rebuild shows the same root label.
     private readonly string _appName;
 
+    // The kernel-wired publish-preview delegate (M13 Track-B B3) threaded into the render executor so
+    // `sys.publishPreview(design, targetId)` computes the dry-run PublishReport. Built by the KERNEL (it
+    // alone reaches the target instance's data file + published-commit stamp cross-instance) and passed in
+    // at both SsrRenderer construction sites (ContentHandler SSR + WsHandler refetch), so the preview
+    // computes on first paint AND on the toggle→refetch. Null for a non-kernel host (the in-process test
+    // server) — `sys.publishPreview` is then simply not reachable there, which is fine (only the designer
+    // IDE, hosted by the kernel, calls it). Traffics only Code-layer types: the design ExecObject + the
+    // target's int runtimeId + the render context, an IExecValue report out.
+    private readonly Func<ExecObject, int, ExecContext, IExecValue>? _publishPreview;
+
     public SsrRenderer(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
-        LiveRegistry? registry = null, string appName = "")
+        LiveRegistry? registry = null, string appName = "",
+        Func<ExecObject, int, ExecContext, IExecValue>? publishPreview = null)
     {
         _store = store;
         _desc = desc;
@@ -68,6 +79,7 @@ public sealed class SsrRenderer
         _sessions = sessions;
         _registry = registry ?? new LiveRegistry();
         _appName = appName;
+        _publishPreview = publishPreview;
         (_ui, _systemNames, _isGeneric, _descriptors) = GenericUi.Effective(desc);
     }
 
@@ -230,7 +242,7 @@ public sealed class SsrRenderer
         var currentUser = LoadPrincipal(principalUserId);
         var floor = new AccessFloor(_desc.Rules ?? [], currentUser);
 
-        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor, BuildCommitDiffReport);
+        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor, BuildCommitDiffReport, _publishPreview);
         // Ship EVERY schema descriptor on first paint (not lazily on first use), so a component
         // composing sys.schema(...) over a row that appears only after a client-side add still finds
         // its descriptor in the cache instead of missing. Descriptors are static, user-data-free.
@@ -760,6 +772,44 @@ public sealed class SsrRenderer
            old value — so they signal caution without crying wolf like an always-safe rename/add. */
         .commit-diff .diff-remove { color: var(--danger); }
         .commit-diff .diff-convert, .commit-diff .diff-cardinality { color: var(--warn); }
+
+        /* Publish section (design editor, M13 Track-B B3) — the dry-run preview of what deploying this design
+           onto each running instance WOULD do, surfaced LOUDLY before the Apply. Reuses the diff colour
+           language: removes + un-carriable retypes/reshapes are destructive (red), safe renames/adds are
+           muted; the drift/up-to-date lines are advisory (amber/muted). */
+        .publish-section { margin: 1.6rem 0 0.4rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
+        .publish-heading { margin: 0 0 0.3rem; font-size: 1.1rem; }
+        .publish-caption { margin: 0 0 0.8rem; color: var(--muted); font-size: 0.9rem; }
+        .publish-empty { margin: 0; color: var(--muted); }
+        .publish-row { border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem 0.9rem;
+          margin-bottom: 0.7rem; background: var(--surface); }
+        .publish-row-head { display: flex; align-items: center; gap: 0.7rem; }
+        .publish-target { font-weight: 600; margin-right: auto; }
+        .publish-preview { margin-top: 0.8rem; }
+        .publish-report { display: flex; flex-direction: column; gap: 0.7rem; }
+        .publish-uptodate { margin: 0; color: var(--muted); }
+        .publish-note { margin: 0; color: var(--muted); font-size: 0.9rem; }
+        .publish-drift { margin: 0; color: var(--warn); font-size: 0.9rem; }
+        .publish-group { display: flex; flex-direction: column; gap: 0.2rem; }
+        .publish-label { color: var(--muted); font-size: 0.85rem; }
+        .publish-remove, .publish-convert, .publish-cardinality, .publish-rename, .publish-add {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9rem; }
+        /* Destructive LOUDLY (red): removes always, and retypes/reshapes flagged lossy (is-lossy). A
+           non-lossy retype/reshape stays amber caution; safe rename/add stay neutral text. */
+        .publish-remove { color: var(--danger); }
+        .publish-convert, .publish-cardinality { color: var(--warn); }
+        .publish-convert.is-lossy, .publish-cardinality.is-lossy { color: var(--danger); }
+        .publish-lossy-note { color: var(--danger); }
+        /* Apply sits BELOW the loud warnings — destructive-op-first. A destructive report routes Apply
+           through the two-step ConfirmButton (the same delete pattern); its trigger reads as dangerous. */
+        .publish-preview .apply-publish { margin-top: 0.7rem; }
+        .publish-preview .confirm-button { display: inline-block; margin-top: 0.7rem; }
+        .publish-preview .apply-publish.is-destructive { color: var(--danger); border-color: var(--danger); }
+        .publish-preview .apply-publish.is-destructive:hover { background: #fff0f0; }
+        /* The confirm STEP itself must carry the same danger colour as its trigger (review fix) — otherwise
+           the loudness stops right before the actual point-of-no-return. Mirrors the kebab's own rules. */
+        .publish-preview .delete-confirm { color: var(--danger); }
+        .publish-preview button.delete-yes { color: var(--danger); border-color: var(--danger); }
 
         /* Todo showcase (the committed default app — a custom fn render composing the library).
            These rules are the todo's own LAYOUT only (cards, grid, row arrangement, widths); the

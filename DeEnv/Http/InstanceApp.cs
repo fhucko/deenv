@@ -1,4 +1,5 @@
 using System.Text;
+using DeEnv.Code;
 using DeEnv.Instance;
 using DeEnv.Storage;
 using GenHTTP.Api.Content;
@@ -62,12 +63,13 @@ public static class InstanceApp
     public static (IHandlerBuilder App, IHandlerBuilder Asset) Build(
         IInstanceStore store, InstanceDescription description, string mountBase, int assetPort,
         LiveRegistry? registry = null, IHostActions? hostActions = null, string appName = "",
-        int instanceId = 0, TokenAuth? auth = null)
+        int instanceId = 0, TokenAuth? auth = null,
+        Func<ExecObject, int, ExecContext, IExecValue>? publishPreview = null)
     {
         var sessions = new ClientSessionStore();
         auth ??= TokenAuth.Ephemeral();
         var ws = new WsHandler(store, description, sessions, registry ?? new LiveRegistry(),
-            hostActions ?? new NoHostActions(), mountBase);
+            hostActions ?? new NoHostActions(), mountBase, publishPreview: publishPreview);
 
         // Native GenHTTP websocket (no Fleck). We read/write raw UTF-8 frames so the
         // JSON payload goes on the wire verbatim — no extra serialization wrapping.
@@ -81,7 +83,7 @@ public static class InstanceApp
             });
 
         var app = Layout.Create()
-            .Add(new ContentHandlerBuilder(store, description, sessions, mountBase, assetPort, registry ?? new LiveRegistry(), appName, instanceId, auth));
+            .Add(new ContentHandlerBuilder(store, description, sessions, mountBase, assetPort, registry ?? new LiveRegistry(), appName, instanceId, auth, publishPreview));
 
         var asset = Layout.Create()
             .Add("ws", websocket)

@@ -44,6 +44,15 @@ public sealed class DesignerSteps(InstanceContext ctx)
     // no longer the empty-name one).
     private string _justAddedTypeName = "";
 
+    // The preview→apply consistency-guard scenario (M13 Track-B B3 addendum): the target's ON-DISK log line
+    // count captured right after the target's data was bumped (simulating "data moved since the preview"),
+    // so a later assertion can prove a REJECTED apply appended NO FURTHER log entries — i.e. the versioned
+    // leg's destructive boundary was never materialized onto the target's data file (the review fix this
+    // guards against). Deliberately the ON-DISK log, not the live store's CurrentVersion — the boundary
+    // write is OFFLINE (bypasses the live store until a restart), so CurrentVersion would never move either
+    // way and the check would be vacuous.
+    private int _todoTargetLogLinesAfterStaleness;
+
     // ── Given ───────────────────────────────────────────────────────────────────
 
     [Given("the operator IDE is running on a kernel hosting instances {string} and {string}")]
@@ -827,6 +836,169 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await Assert.That(await ctx.Page!.Locator($".commit-diff .diff-remove:has-text({CssString(name)})").CountAsync())
             .IsEqualTo(0);
     }
+
+    // ── B3 — Publish + dry-run from the designer ──────────────────────────────────
+
+    // Remove a leaf field from a type in the design editor (the prop-row's "×" remove button). Drives
+    // arrayRemove on the type's nested props set; wait for the client edit AND the autosave to the designer's
+    // store (a later commit snapshots the design, so the removal must have landed).
+    [When("I remove the field {string} from the type {string}")]
+    public async Task WhenRemoveField(string propName, string typeName)
+    {
+        var row = ctx.Page!.Locator(
+            $".design-editor .type-card:has(input.type-name[value={CssString(typeName)}]) " +
+            $".prop-row:has(input.prop-name[value={CssString(propName)}])");
+        await row.Locator("button.remove-prop").ClickAsync();
+        // The row disappears from the DOM (the prop is gone client-side)…
+        await row.WaitForAsync(Hidden);
+        // …then the removal reaches the designer's sovereign store (no MetaProp named propName on that type).
+        await EventuallyAsync(() => !_designer.Store.ReadExtent("MetaProp").Values
+            .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == propName));
+    }
+
+    // Open the toggle-gated Preview for an instance in the design editor's Publish section: click its row's
+    // "Preview publish" button, then wait for the report (server-backed read → shipped via the memo cache, so
+    // the preview populates after the toggle-driven refetch lands).
+    [When("I preview the publish for the instance {string}")]
+    public async Task WhenPreviewPublish(string label)
+    {
+        await PublishRowFor(label).Locator("button.preview-publish").ClickAsync();
+        await PublishRowFor(label).Locator(".publish-preview .publish-report").WaitForAsync();
+    }
+
+    // The dry-run report must surface a removal in the LOUD destructive class (.publish-remove — red).
+    [Then("the publish preview flags {string} as removed loudly")]
+    public async Task ThenPreviewFlagsRemoved(string path) =>
+        await PublishRowFor("todo").Locator($".publish-preview .publish-remove:has-text({CssString(path)})").WaitForAsync();
+
+    // The dry-run changed NOTHING: the target instance's own app document still declares the field the
+    // designer removed (the preview never republished). A store/file read of the LIVE target's schema.
+    [Then("the {string} instance's app document still describes the field {string}")]
+    public async Task ThenTargetStillDescribesField(string label, string field)
+    {
+        var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
+        await Assert.That(File.ReadAllText(target.Spec.SchemaPath)).Contains(field);
+    }
+
+    [Then("the publish preview shows a rename from {string} to {string}")]
+    public async Task ThenPreviewShowsRename(string from, string to) =>
+        await PublishRowFor("todo").Locator($".publish-preview .publish-rename:has-text({CssString(from + " → " + to)})").WaitForAsync();
+
+    // The preview→apply CONSISTENCY GUARD (addendum): bump the TARGET's own live store version by a direct
+    // field write (through the live hosted store — never a second store over its file), simulating "the
+    // target's data moved after the preview was taken." A plain re-write of a field to its OWN current value
+    // is enough (WriteField bumps CurrentVersion regardless of whether the value actually changed) — the
+    // lightest possible version bump, with no schema/design involvement.
+    //
+    // Also captures the target's ON-DISK log line count right after the bump (NOT the live store's
+    // CurrentVersion — see the hardening step below for why that would be a VACUOUS check: the versioned
+    // leg's boundary write, JsonFileInstanceStore.ApplyPublishBoundary, is an OFFLINE write straight to the
+    // target's DataPath/log file, bypassing the live hosted store entirely until a restart re-opens it — so
+    // the live store's CurrentVersion never observes it, guarded or not).
+    [Then("the {string} target's data changes since the preview")]
+    public async Task ThenTargetDataChangesSincePreview(string label)
+    {
+        var store = ctx.Kernel!.Instances.Single(i => i.Spec.App == label).Store;
+        var (listId, listFields) = store.ReadExtent("TodoList").First();
+        var name = listFields.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t ? t.Text : "";
+        store.WriteField(listId, "name", new DeEnv.Storage.TextValue(name));
+        var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
+        _todoTargetLogLinesAfterStaleness = TargetLogLineCount(target.Spec.DataPath);
+        await Task.CompletedTask;
+    }
+
+    // The rejected apply performed NO side effect: the target's app document still does not describe the
+    // renamed type (the guard fired before any file write/stamp/restart).
+    [Then("the {string} instance's app document does not describe the type {string}")]
+    public async Task ThenTargetDoesNotDescribeType(string label, string typeName)
+    {
+        var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
+        await Assert.That(File.ReadAllText(target.Spec.SchemaPath)).DoesNotContain(typeName);
+    }
+
+    // Review hardening (M13 Track-B B3 addendum fix): the rejected apply must not have MATERIALIZED the
+    // versioned leg's destructive boundary onto the target's DATA file — the class of bug where the guard
+    // fired too late (after ApplyPublishBoundary had already written the DataPath + a WAL entry, leaving
+    // DataPath migrated but SchemaPath/the stamp/the live store all still on the OLD schema). This checks the
+    // ON-DISK log file (never the live store's CurrentVersion — see the note above: an offline boundary write
+    // never bumps that) grew by EXACTLY ZERO entries since the staleness bump — the boundary apply's first
+    // act is to append a WAL entry BEFORE it rewrites the snapshot, so "the log did not grow at all" is the
+    // most direct proof available that NO write of any kind (not even a partial/crashed one) reached the file.
+    [Then("the {string} target's data is unchanged by the rejected apply")]
+    public async Task ThenTargetDataUnchangedByRejectedApply(string label)
+    {
+        var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
+        var actual = TargetLogLineCount(target.Spec.DataPath);
+        await Assert.That(actual).IsEqualTo(_todoTargetLogLinesAfterStaleness);
+    }
+
+    private static int TargetLogLineCount(string dataPath)
+    {
+        var logPath = DeEnv.Storage.AppPaths.LogPathForDataPath(dataPath);
+        return File.Exists(logPath) ? File.ReadAllLines(logPath).Length : 0;
+    }
+
+    // Apply the previewed publish: click the row's Apply button (or the ConfirmButton's Yes when the report
+    // was destructive — a rename is non-destructive, so a plain button; handle both to keep the step general).
+    [When("I apply the publish for the instance {string}")]
+    public async Task WhenApplyPublish(string label)
+    {
+        var row = PublishRowFor(label);
+        // A destructive report routes Apply through the two-step ConfirmButton; a safe one is a plain button.
+        var confirm = row.Locator(".publish-preview .confirm-button .apply-publish");
+        if (await confirm.CountAsync() > 0)
+        {
+            await confirm.ClickAsync();
+            await row.Locator(".publish-preview .confirm-button button.delete-yes").ClickAsync();
+        }
+        else
+            await row.Locator(".publish-preview button.apply-publish").ClickAsync();
+    }
+
+    // After Apply, the target is published + stamped to the design's head, so a fresh Preview reads "up to
+    // date" — the operator-visible success signal (the diff is now empty). The host-action ack ran
+    // resetViewState (closing the prior open preview) AND dropped the stale `publishPreview:` read (ws.ts), so
+    // the re-opened preview recomputes fresh over the now-stamped target rather than reusing the pre-publish
+    // report. Wide window: the re-preview rides a value-not-available refetch.
+    [Then("the publish preview for the instance {string} reads up to date")]
+    public async Task ThenPreviewReadsUpToDate(string label) =>
+        await PublishRowFor(label).Locator(".publish-preview .publish-uptodate").WaitForAsync(
+            new Microsoft.Playwright.LocatorWaitForOptions { Timeout = 45000 });
+
+    // Seed a TodoItem into the LIVE target instance's store (never a second store over its file — the
+    // single-store invariant): create the item and add it into the existing TodoList's `items` set.
+    [Given("the {string} target holds a TodoItem with text {string}")]
+    public async Task GivenTargetHoldsTodoItem(string label, string text)
+    {
+        var store = ctx.Kernel!.Instances.Single(i => i.Spec.App == label).Store;
+        var (listId, listFields) = store.ReadExtent("TodoList").First();
+        var itemsSet = listFields.Fields.GetValueOrDefault("items") as DeEnv.Storage.SetValue
+            ?? throw new InvalidOperationException("The target TodoList has no `items` set.");
+        var itemId = store.CreateObject("TodoItem", new DeEnv.Storage.ObjectValue(new Dictionary<string, DeEnv.Storage.NodeValue>
+        {
+            ["text"] = new DeEnv.Storage.TextValue(text),
+            ["checked"] = new DeEnv.Storage.BoolValue(false),
+        }));
+        store.AddToSet(itemsSet.Id, itemId);
+        _ = listId;
+        await Task.CompletedTask;
+    }
+
+    // The rename carried the target's data: after the publish + restart, the renamed type "Task" holds the
+    // object whose `text` survived. Re-resolve the LIVE hosted instance each poll (restart hot-swaps the
+    // store), and read the renamed extent — proving the designer's Publish UI reached the rename-safe publish.
+    [Then("the {string} instance eventually holds a {string} with text {string}")]
+    public async Task ThenTargetHoldsRenamed(string label, string typeName, string text) =>
+        await EventuallyAsync(() =>
+        {
+            var store = ctx.Kernel!.Instances.Single(i => i.Spec.App == label).Store;
+            return store.ReadExtent(typeName).Values.Any(o =>
+                o.Fields.TryGetValue("text", out var v) && v is DeEnv.Storage.TextValue t && t.Text == text);
+        }, timeoutMs: 45000);
+
+    // The design editor's Publish-section row for an instance, located by its target name.
+    private Microsoft.Playwright.ILocator PublishRowFor(string label) =>
+        ctx.Page!.Locator($".publish-section .publish-row:has(.publish-target:text-is({CssString(label)}))");
 
     // B1 ride-along: the newest-first FIRST row's label cell is a real <a class="row-link"> (linked
     // restored) whose text is the "(no <humanized labelProp>)" placeholder — "(no Message)" here (the

@@ -662,3 +662,121 @@ Feature: The operator IDE (designs library + instance design selector)
     And I open the commit "rename TodoItem" from the history
     Then the changes-since-parent shows a rename from "TodoItem" to "Task"
     And the changes-since-parent shows no removal of "TodoItem"
+
+  # ── B3 — Publish + dry-run from the designer ─────────────────────────────────────────────────
+  #
+  # The design editor grows a Publish section: for each instance running this design, a toggle-gated
+  # Preview (the dry-run PublishReport, computed server-side by sys.publishPreview — a server-backed READ
+  # shipped via the memo cache like sys.diffCommits, NOT a host action, changing NOTHING) then an Apply
+  # (sys.publish — the existing host action). The preview reaches the TARGET's data file read-only; the
+  # apply carries data through renames. Three proofs: the dry-run is loud + inert, the apply drives the
+  # real publish, and a rename carries data (leaning on Publish.feature's migration-engine proof).
+
+  # 1) The dry-run surfaces a destructive change LOUDLY and changes NOTHING. Remove a leaf field
+  # (TodoItem.checked) in the designer and commit, so the design's head diverges from the target's stamped
+  # boot baseline by a REMOVAL. Previewing the "todo" instance shows the removal in a destructive (red)
+  # class, and the target instance's stored schema STILL has the field — the preview wrote nothing.
+  @milestone-13 @single-user
+  Scenario: Previewing a publish surfaces a destructive change loudly and changes nothing
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I remove the field "checked" from the type "TodoItem"
+    And I type "drop checked" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "drop checked"
+    When I preview the publish for the instance "todo"
+    Then the publish preview flags "TodoItem.checked" as removed loudly
+    And the "todo" instance's app document still describes the field "checked"
+
+  # 2) The confirmed Apply drives the real publish. After a rename+commit, previewing shows the rename;
+  # applying fires sys.publish (which stamps the target to the new head), and the target's app document then
+  # carries the rename. Re-previewing reads "up to date" — the success signal the operator sees (the diff is
+  # now empty). NB the host-action ack runs resetViewState, which closes the open preview toggle; the
+  # operator re-opens Preview to confirm — so this step re-previews rather than expecting an auto-refresh.
+  @milestone-13 @single-user
+  Scenario: Applying a previewed publish deploys the design to the instance
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I rename the type "TodoItem" to "Task"
+    And I retype the prop "items" to "Task"
+    And I type "rename for apply" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "rename for apply"
+    When I preview the publish for the instance "todo"
+    Then the publish preview shows a rename from "TodoItem" to "Task"
+    When I apply the publish for the instance "todo"
+    Then the "todo" instance's app document describes the type "Task"
+    When I preview the publish for the instance "todo"
+    Then the publish preview for the instance "todo" reads up to date
+
+  # 3) A rename carries the target's DATA through the publish. The designer's Publish UI reaches the real
+  # rename-safe publish (Publish.feature is the exhaustive proof of the migration engine itself — this proves
+  # the UI drives it and the data survives, not a re-test of slice-4). Seed a TodoItem in the target, rename
+  # the type in the designer + commit, apply via the UI, then read the target's carried-over data back.
+  @milestone-13 @single-user
+  Scenario: Applying a rename through the Publish UI carries the target's data
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    And the "todo" target holds a TodoItem with text "buy milk"
+    When I open the designs list
+    And I edit the design "todo"
+    And I rename the type "TodoItem" to "Task"
+    And I retype the prop "items" to "Task"
+    And I type "rename carries data" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "rename carries data"
+    When I preview the publish for the instance "todo"
+    And I apply the publish for the instance "todo"
+    Then the "todo" instance eventually holds a "Task" with text "buy milk"
+
+  # 4) The preview→apply CONSISTENCY GUARD (addendum). Splitting preview from apply opens a TOCTOU window:
+  # the operator approves a SPECIFIC plan (the preview), but an unguarded apply recomputes fresh and could
+  # execute a DIFFERENT plan if the target moved in between. The Apply button always passes back the token
+  # `sys.publishPreview` handed it (targetCommit + targetVersion); the server rejects a stale apply BEFORE
+  # any write. Here the target's OWN data moves (a direct field write bumping its store version) after the
+  # preview was taken but before Apply is clicked — the target is never actually published.
+  #
+  # The target holds a REAL TodoItem (review fix): a rename with NOTHING to migrate (an empty TodoItem
+  # extent) never touches the boundary-apply's write path at all (ApplyPublishBoundary short-circuits when
+  # there is no data of the affected type), so a stale-reject proof needs actual data at risk of being
+  # migrated for the "no write happened" assertion to mean anything.
+  @milestone-13 @single-user
+  Scenario: Applying a stale preview is rejected and the target is not published
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    And the "todo" target holds a TodoItem with text "must not be migrated"
+    When I open the designs list
+    And I edit the design "todo"
+    And I rename the type "TodoItem" to "Task"
+    And I retype the prop "items" to "Task"
+    And I type "rename then stale apply" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "rename then stale apply"
+    When I preview the publish for the instance "todo"
+    Then the publish preview shows a rename from "TodoItem" to "Task"
+    And the "todo" target's data changes since the preview
+    When I apply the publish for the instance "todo"
+    Then the global error banner is shown mentioning "changed since the preview"
+    And the "todo" instance's app document does not describe the type "Task"
+    And the "todo" target's data is unchanged by the rejected apply
+
+  # 5) The guard's OTHER leg: a CLEAN (non-stale) guarded apply on the VERSIONED path still succeeds
+  # end-to-end and carries data — proving the guard rejects ONLY a genuinely stale token, never a fresh one.
+  # (Scenario 3 above already proves the UI-driven rename+data-carry; this is the same shape but explicitly
+  # on the guarded 4-arg sys.publish call, since scenario 3 predates the addendum and never exercised it.)
+  @milestone-13 @single-user
+  Scenario: A clean guarded apply on the versioned path still succeeds and carries data
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    And the "todo" target holds a TodoItem with text "guarded apply keeps me"
+    When I open the designs list
+    And I edit the design "todo"
+    And I rename the type "TodoItem" to "Task"
+    And I retype the prop "items" to "Task"
+    And I type "clean guarded apply" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "clean guarded apply"
+    When I preview the publish for the instance "todo"
+    Then the publish preview shows a rename from "TodoItem" to "Task"
+    When I apply the publish for the instance "todo"
+    Then the "todo" instance's app document describes the type "Task"
+    And the "todo" instance eventually holds a "Task" with text "guarded apply keeps me"

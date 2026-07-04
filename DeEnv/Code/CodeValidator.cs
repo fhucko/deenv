@@ -63,34 +63,43 @@ public static class CodeValidator
         if (ui.Render != null) ValidateFunction(ui.Render, top);
     }
 
-    // The fixed arities of the `sys` builtins, mirroring each impl's argument-count check in
-    // CodeExecutor. Used to preserve a load-time arity guard now the builtins are namespaced.
-    // NOTE: a new sys builtin lives in THREE places — both interpreters' dispatch (CodeExecutor +
-    // codeExec.ts) AND this map — or it silently loses its load-time arity guard.
-    private static readonly Dictionary<string, int> BuiltinArities = new()
+    // The allowed arities of the `sys` builtins, mirroring each impl's argument-count check in
+    // CodeExecutor. Used to preserve a load-time arity guard now the builtins are namespaced. Each
+    // entry is a SET of allowed argument counts (almost always one) rather than a single fixed int,
+    // so a genuinely optional trailing arg (below: `publish`'s guard token) can be expressed without
+    // widening every other builtin's shape. NOTE: a new sys builtin lives in THREE places — both
+    // interpreters' dispatch (CodeExecutor + codeExec.ts) AND this map — or it silently loses its
+    // load-time arity guard.
+    private static readonly Dictionary<string, int[]> BuiltinArities = new()
     {
-        ["field"] = 2,
-        ["humanize"] = 1,
-        ["extent"] = 1,
-        ["canWrite"] = 2, // (typeName, verb) — server-resolved write capability, shipped like extent/schema
-        ["canRead"] = 1,  // (typeName) — server-resolved read capability (hide unreadable collections/routes)
-        ["diffCommits"] = 2, // (from, to) — server-computed rename-aware structural diff, shipped like schema/canRead
-        ["setRef"] = 3,
-        ["publish"] = 2, // (schema, targetId)
-        ["create"] = 2,  // (schema, name) — addressing is by path, so no port args
-        ["cloneInstance"] = 1, // (sourceId) — the clone's mount name derives from the source
-        ["delete"] = 1,  // (targetId)
-        ["rename"] = 2,  // (id, name)
-        ["setDesign"] = 2, // (schema, targetId)
-        ["commitDesign"] = 2, // (design, message)
-        ["login"] = 2,   // (name, password) — a client-only host effect (the session→principal bind)
-        ["logout"] = 0,  // () — the mirror of login: a client-only host effect (clear the principal)
-        ["nest"] = 2,
-        ["segment"] = 2,
-        ["toInt"] = 1,
-        ["id"] = 1,
-        ["new"] = 1,
-        ["resolve"] = 1, // (pathText) → { kind, target, parent, prop, typeName, parentType }
+        ["field"] = [2],
+        ["humanize"] = [1],
+        ["extent"] = [1],
+        ["canWrite"] = [2], // (typeName, verb) — server-resolved write capability, shipped like extent/schema
+        ["canRead"] = [1],  // (typeName) — server-resolved read capability (hide unreadable collections/routes)
+        ["diffCommits"] = [2], // (from, to) — server-computed rename-aware structural diff, shipped like schema/canRead
+        ["publishPreview"] = [2], // (design, targetId) — server-computed dry-run PublishReport, shipped like diffCommits
+        ["setRef"] = [3],
+        // (design, targetId) OR (design, targetId, expectedHeadCommit, expectedTargetVersion) — the
+        // preview→apply consistency guard token (M13 Track-B B3 addendum). The trailing pair is
+        // OPTIONAL and BOTH-OR-NEITHER (never just one): a caller either publishes unguarded (2 args,
+        // today's every existing call site) or passes back exactly the token `sys.publishPreview`
+        // handed it (4 args, what the design editor's Apply button does) — there is no 3-arg shape.
+        ["publish"] = [2, 4],
+        ["create"] = [2],  // (schema, name) — addressing is by path, so no port args
+        ["cloneInstance"] = [1], // (sourceId) — the clone's mount name derives from the source
+        ["delete"] = [1],  // (targetId)
+        ["rename"] = [2],  // (id, name)
+        ["setDesign"] = [2], // (schema, targetId)
+        ["commitDesign"] = [2], // (design, message)
+        ["login"] = [2],   // (name, password) — a client-only host effect (the session→principal bind)
+        ["logout"] = [0],  // () — the mirror of login: a client-only host effect (clear the principal)
+        ["nest"] = [2],
+        ["segment"] = [2],
+        ["toInt"] = [1],
+        ["id"] = [1],
+        ["new"] = [1],
+        ["resolve"] = [1], // (pathText) → { kind, target, parent, prop, typeName, parentType }
     };
 
     // A callee of the form `sys.<name>` (a member access on the bare `sys` symbol) — the
@@ -226,10 +235,10 @@ public static class CodeValidator
                 // per-impl argument-count throw; a `sys.field()` with the wrong count fails to
                 // load rather than at first paint.
                 if (IsSysBuiltinCallee(call.Fn, out var builtin)
-                    && BuiltinArities.TryGetValue(builtin, out var builtinArity)
-                    && call.Params.Length != builtinArity)
+                    && BuiltinArities.TryGetValue(builtin, out var allowedArities)
+                    && !allowedArities.Contains(call.Params.Length))
                     throw new SchemaValidationException(
-                        $"'sys.{builtin}' takes {builtinArity} argument(s) but is called with {call.Params.Length}.");
+                        $"'sys.{builtin}' takes {string.Join(" or ", allowedArities)} argument(s) but is called with {call.Params.Length}.");
                 break;
             case CodeFunction fn:
                 ValidateFunction(fn, scope);

@@ -50,14 +50,28 @@ public sealed class CodeExecutor
     // throws, as it needs the designer host.
     private readonly Func<ExecObject, ExecObject, ExecContext, IExecValue>? _commitDiff;
 
+    // The dry-run publish-preview computer (M13 Track-B B3), injected by the renderer so
+    // `sys.publishPreview(design, targetId)` can compute what a publish onto that target WOULD do — the
+    // structured PublishReport (removes/conversions/cardinality with their destructive-cell detail). Like
+    // _commitDiff it is a DELEGATE, not a direct KernelHostActions call, because the compute needs
+    // CROSS-INSTANCE data (the target's own data file + published-commit stamp) that only the kernel can
+    // reach — the interpreter core (and even SsrRenderer) has no kernel reference. The delegate traffics
+    // ONLY Code-layer types (the design ExecObject + the target's int runtimeId + the context for minting
+    // transient ids, an IExecValue report out); its impl is built BY the kernel and threaded through the
+    // render path. Null for a bare executor (conformance, a condition evaluator, the client twin, a
+    // non-kernel test instance) ⇒ `sys.publishPreview` throws, as it needs the designer host.
+    private readonly Func<ExecObject, int, ExecContext, IExecValue>? _publishPreview;
+
     public CodeExecutor(IInstanceStore? store = null, IReadOnlyDictionary<string, CodeObject>? descriptors = null,
-        TypeResolver? resolver = null, AccessFloor? floor = null, Func<ExecObject, ExecObject, ExecContext, IExecValue>? commitDiff = null)
+        TypeResolver? resolver = null, AccessFloor? floor = null, Func<ExecObject, ExecObject, ExecContext, IExecValue>? commitDiff = null,
+        Func<ExecObject, int, ExecContext, IExecValue>? publishPreview = null)
     {
         _store = store;
         _descriptors = descriptors ?? new Dictionary<string, CodeObject>();
         _resolver = resolver;
         _floor = floor;
         _commitDiff = commitDiff;
+        _publishPreview = publishPreview;
     }
 
     // ── statements ──────────────────────────────────────────────────────────────
@@ -569,6 +583,37 @@ public sealed class CodeExecutor
         return report;
     }
 
+    // publishPreview(design, targetId): the dry-run PublishReport a `sys.publish(design, targetId)` WOULD
+    // produce — the structural + destructive changes deploying this design onto that target would make (M13
+    // Track-B B3). A SERVER-BACKED READ, modeled EXACTLY on diffCommits/schema/canRead: the server computes
+    // it (the kernel-wired _publishPreview delegate, which reaches the target's own data file cross-instance)
+    // and the cache entry ships to the client, so the editor's Publish section renders it on SSR and reuses
+    // it on a client-side refetch (a miss → "Value not available" → refetch). NOT a host action (no async
+    // reply, no HostActionScan) — and it changes NOTHING (the delegate computes with dryRun:true; the boundary
+    // apply's own dryRun flag skips every disk-touching side effect). `sys.publish` (the confirmed Apply) is
+    // the existing host action, unchanged. Keyed by the design's + target's ids so both twins produce the
+    // SAME key (the client reuses the shipped result under it). No delegate ⇒ no designer host ⇒ throw.
+    //
+    // Cached DIRECTLY (an empty-deps CacheEntry), exactly like diffCommits/schema and for the same reason:
+    // the report is a freshly-minted transient (negative-id) object tree, which Memoize's factory guard
+    // refuses to cache. The report is pure structural metadata (a dry run reads the target's schema/data
+    // but returns only the diff shape) — caching it is correct, and the cache entry is what ships it.
+    private IExecValue ExecutePublishPreview(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 2)
+            throw new CodeRuntimeException("publishPreview(design, targetId) takes two arguments.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject design)
+            throw new CodeRuntimeException("publishPreview() expects a design object as its first argument.");
+        if (ExecuteValue(call.Params[1], scope, context) is not ExecInt targetId)
+            throw new CodeRuntimeException("publishPreview() expects an integer target id as its second argument.");
+        var key = $"publishPreview:{design.Id}:{targetId.Value}";
+        if (context.Memo.TryGetValue(key, out var cached)) return cached.Result;
+        var report = _publishPreview?.Invoke(design, targetId.Value, context)
+            ?? throw new CodeRuntimeException("publishPreview() requires a designer host context.");
+        context.Memo[key] = new CacheEntry { Key = key, Result = report, Deps = new Deps() };
+        return report;
+    }
+
     // schema(typeName): a type's descriptor — { name, labelProp, props } — the reflective
     // shape the self-hosted generic UI walks (objectForm/refEditor/setTable). The replacement for
     // the old `__descs` registry global: the descriptor is computed from the schema (the literal
@@ -1076,6 +1121,7 @@ public sealed class CodeExecutor
         "canWrite" => ExecuteCanWrite(call, scope, context),
         "canRead" => ExecuteCanRead(call, scope, context),
         "diffCommits" => ExecuteDiffCommits(call, scope, context),
+        "publishPreview" => ExecutePublishPreview(call, scope, context),
         "nest" => ExecuteNest(call, scope, context),
         "segment" => ExecuteSegment(call, scope, context),
         "toInt" => ExecuteToInt(call, scope, context),

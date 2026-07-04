@@ -194,6 +194,7 @@ ui
                                     "Multi-line text"
                         <button class="add-prop" onClick={() => addProp(type)}>
                             "+ Field"
+            publishSection(design)
             <details class="code-areas">
                 <summary class="code-summary">
                     "Advanced (code)"
@@ -206,6 +207,108 @@ ui
                 <label class="initial-label">
                     "Initial data"
                 <textarea class="design-initial" value={sys.field(design, "initialData")}>
+
+    fn instancesRunning(design)
+        return db.instances.where(i => i.design != null && sys.id(i.design) == sys.id(design))
+
+    fn opGroup(label, groupCls, labelCls, items, row)
+        if items.any(x => true)
+            return <div class={groupCls}>
+                <span class={labelCls}>
+                    label
+                foreach item in items
+                    row(item)
+
+    fn reportHasDestructive(report)
+        if report.removes.any(x => true)
+            return true
+        if report.conversions.any(cv => cv.unconvertible.any(u => true))
+            return true
+        if report.cardinality.any(cd => cd.unsupported)
+            return true
+        return false
+
+    fn publishReportView(report)
+        fn removeRow(x)
+            return <div class="publish-remove">
+                x
+        fn convertRow(cv)
+            return <div class={cv.unconvertible.any(u => true) ? "publish-convert is-lossy" : "publish-convert"}>
+                cv.path + ": " + cv.from + " → " + cv.to
+                if cv.unconvertible.any(u => true)
+                    <span class="publish-lossy-note">
+                        " — some values cannot convert and will be lost"
+        fn cardinalityRow(cd)
+            return <div class={cd.unsupported ? "publish-cardinality is-lossy" : "publish-cardinality"}>
+                cd.path + ": " + cd.from + " → " + cd.to
+                if cd.unsupported
+                    <span class="publish-lossy-note">
+                        " — cannot be carried; the old value will be dropped"
+        fn renameRow(r)
+            return <div class="publish-rename">
+                r.from + " → " + r.to
+        fn addRow(a)
+            return <div class="publish-add">
+                a
+        return <div class="publish-report">
+            if report.isEmpty
+                <p class="publish-uptodate">
+                    "Nothing to publish (target is up to date)."
+            if report.uncommittedDrift
+                <p class="publish-drift">
+                    "The editor has uncommitted changes; publish deploys the last commit, not the working copy."
+            if report.fallbackNameMatched
+                <p class="publish-note">
+                    "First publish to this instance — matched by name, then versioned from here on."
+            opGroup("Removed (data will be lost)", "publish-group", "publish-label", report.removes, removeRow)
+            opGroup("Retyped", "publish-group", "publish-label", report.conversions, convertRow)
+            opGroup("Cardinality", "publish-group", "publish-label", report.cardinality, cardinalityRow)
+            opGroup("Renamed (data carried)", "publish-group", "publish-label", report.renames, renameRow)
+            opGroup("Added", "publish-group", "publish-label", report.adds, addRow)
+
+    fn previewBody(design, inst)
+        var report = sys.publishPreview(design, inst.runtimeId)
+        fn doApply()
+            sys.publish(design, inst.runtimeId, report.targetCommit, report.targetVersion)
+        return <div class="publish-preview">
+            publishReportView(report)
+            if report.isEmpty == false
+                if reportHasDestructive(report)
+                    <ConfirmButton label="Apply publish" onConfirm={doApply} cls="apply-publish is-destructive">
+                else
+                    <button class="apply-publish" onClick={doApply}>
+                        "Apply publish"
+
+    fn publishRow(design, inst)
+        var state = { previewing: false }
+        fn render()
+            return <div class="publish-row">
+                <div class="publish-row-head">
+                    <span class="publish-target">
+                        inst.name
+                    if state.previewing == false
+                        <button class="preview-publish" onClick={() => state.previewing = true}>
+                            "Preview publish"
+                    else
+                        <button class="preview-hide" onClick={() => state.previewing = false}>
+                            "Hide"
+                if state.previewing
+                    previewBody(design, inst)
+        return render
+
+    fn publishSection(design)
+        var running = instancesRunning(design)
+        return <section class="publish-section">
+            <h2 class="publish-heading">
+                "Publish"
+            <p class="publish-caption">
+                "Deploy this design's last commit to each running instance. Preview shows what would change before anything is applied."
+            if running.any(i => true)
+                foreach inst in running
+                    <publishRow design={design} inst={inst}>
+            else
+                <p class="publish-empty">
+                    "No instances running this design yet."
 
     fn designEditorPage()
         var routeId = sys.toInt(sys.segment(path, 2))
@@ -295,45 +398,30 @@ ui
 
     fn changesSinceParent(c)
         var diff = sys.diffCommits(c.parent, c)
+        fn renameRow(r)
+            return <div class="diff-rename">
+                r.from + " → " + r.to
+        fn addRow(a)
+            return <div class="diff-add">
+                a
+        fn removeRow(x)
+            return <div class="diff-remove">
+                x
+        fn convertRow(cv)
+            return <div class="diff-convert">
+                cv.path + ": " + cv.from + " → " + cv.to
+        fn cardinalityRow(cd)
+            return <div class="diff-cardinality">
+                cd.path + ": " + cd.from + " → " + cd.to
         return <div class="diff-groups">
             if diff.isEmpty
                 <p class="diff-muted">
                     "No structural changes."
-            if diff.renames.any(r => true)
-                <div class="diff-group">
-                    <span class="diff-label">
-                        "Renamed"
-                    foreach r in diff.renames
-                        <div class="diff-rename">
-                            r.from + " → " + r.to
-            if diff.adds.any(a => true)
-                <div class="diff-group">
-                    <span class="diff-label">
-                        "Added"
-                    foreach a in diff.adds
-                        <div class="diff-add">
-                            a
-            if diff.removes.any(x => true)
-                <div class="diff-group">
-                    <span class="diff-label">
-                        "Removed"
-                    foreach x in diff.removes
-                        <div class="diff-remove">
-                            x
-            if diff.conversions.any(cv => true)
-                <div class="diff-group">
-                    <span class="diff-label">
-                        "Retyped"
-                    foreach cv in diff.conversions
-                        <div class="diff-convert">
-                            cv.path + ": " + cv.from + " → " + cv.to
-            if diff.cardinality.any(cd => true)
-                <div class="diff-group">
-                    <span class="diff-label">
-                        "Cardinality"
-                    foreach cd in diff.cardinality
-                        <div class="diff-cardinality">
-                            cd.path + ": " + cd.from + " → " + cd.to
+            opGroup("Renamed", "diff-group", "diff-label", diff.renames, renameRow)
+            opGroup("Added", "diff-group", "diff-label", diff.adds, addRow)
+            opGroup("Removed", "diff-group", "diff-label", diff.removes, removeRow)
+            opGroup("Retyped", "diff-group", "diff-label", diff.conversions, convertRow)
+            opGroup("Cardinality", "diff-group", "diff-label", diff.cardinality, cardinalityRow)
 
     fn commitDetail(c)
         return <div class="commit-detail">

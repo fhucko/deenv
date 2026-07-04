@@ -1,3 +1,4 @@
+using DeEnv.Code;
 using DeEnv.Http;
 using DeEnv.Instance;
 using DeEnv.Storage;
@@ -47,9 +48,12 @@ public sealed class HostedInstance
     // build the app+asset handler trees with this instance's mount base (`/apps/<name>`) and the
     // kernel's shared asset port (for the client's /js + WebSocket URL). No host is started here — the
     // kernel mounts these handlers under its two shared hosts. `hostActions` is this instance's
-    // host-action seam (sys.publish, …), supplied by the kernel.
+    // host-action seam (sys.publish, …), supplied by the kernel. `publishPreview` (M13 Track-B B3) is the
+    // instance's kernel-wired dry-run publish-preview delegate (sys.publishPreview) — null for a
+    // non-design-host instance (only the designer previews publishes).
     public static HostedInstance Start(
-        InstanceSpec spec, int assetPort, LiveRegistry registry, IHostActions? hostActions = null)
+        InstanceSpec spec, int assetPort, LiveRegistry registry, IHostActions? hostActions = null,
+        Func<ExecObject, int, ExecContext, IExecValue>? publishPreview = null)
     {
         var description = InstanceDescriptionLoader.LoadFile(spec.SchemaPath);
         var store = new JsonFileInstanceStore(spec.DataPath, description);
@@ -64,7 +68,7 @@ public sealed class HostedInstance
         var instancesDir = idDir.Parent!;
         var dataHome = instancesDir.Parent!.FullName;
         var (appApp, assetApp) = InstanceApp.Build(store, description, mountBase, assetPort, registry, hostActions, spec.App,
-            spec.Id, TokenAuth.ForDataHome(dataHome));
+            spec.Id, TokenAuth.ForDataHome(dataHome), publishPreview);
         return new HostedInstance(spec, store, appApp.Build(), assetApp.Build());
     }
 

@@ -969,6 +969,26 @@ function execDiffCommits(codeCall: CodeCall, scope: ExecScope, context: ExecCont
     return r;
 }
 
+// publishPreview(design, targetId): the dry-run PublishReport a publish onto that target would produce
+// (M13 Track-B B3) — the twin of execDiffCommits/execSchema. The server COMPUTES the report (the
+// kernel-wired preview delegate, reaching the target's data file cross-instance) and ships it via the memo
+// cache; the client never computes — it only REUSES the shipped result under the same key, keyed by the
+// design's + target's ids (design.id:targetId) so both twins address the same entry. A cache miss throws
+// "Value not available", which the memoize wrapper turns into a refetch (the same server-resolved-dependency
+// path). No store/kernel on the client — there is nothing to compute here.
+function execPublishPreview(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const design = executeValue(codeCall.params[0], scope, context).value;
+    if (design.type !== "object") throw new Error("publishPreview() expects a design object as its first argument.");
+    const targetId = executeValue(codeCall.params[1], scope, context).value;
+    if (targetId.type !== "int") throw new Error("publishPreview() expects an integer target id as its second argument.");
+    // As in execDiffCommits: a MISS makes memoize return an empty `nothing`; the report is always read as an
+    // object (`.isEmpty`/`.removes`/…), so re-throw the VNA rather than let a `nothing` leak into a value
+    // position. The nearest memoize boundary swallows it → refetch.
+    const r = memoize("publishPreview:" + design.id + ":" + targetId.value, context, () => { throw new Error("Value not available"); });
+    if (r.type === "nothing") throw new Error("Value not available"); // a miss (never shipped)
+    return r;
+}
+
 // setRef(obj, prop, value): set/clear an object REFERENCE prop and persist it. value is an
 // existing candidate (id>0 → refId), a fresh draft (id<0 → its scalar props), or null
 // (clear). Stages in memory (UI reflects it), then sends the id-addressed WS op.
@@ -1000,16 +1020,29 @@ function schemaIdArg(schema: ExecValue): ExecValue {
     return { type: "int", value: schema.type === "object" ? schema.id : 0 };
 }
 
-// sys.publish(schema, targetId): a SERVER-ONLY host action — the M4 schema export runs server-side,
-// projecting the passed SCHEMA object onto an EXISTING target instance. The client stages NOTHING
-// in the data model (no obj.props mutation, no invalidateProp — mirrors execSetRef minus the local
-// mutation); it only fires the hostAction send-hook (schema as its id + the target id), which ws.ts
-// sends as the `hostAction` WS op. The server is authoritative: it alone runs the effect, and an
-// error reply surfaces as a user-visible lastError. Returns nothing; SSR/refetch no-ops it.
+// sys.publish(schema, targetId, expectedHeadCommit?, expectedTargetVersion?): a SERVER-ONLY host
+// action — the M4 schema export runs server-side, projecting the passed SCHEMA object onto an
+// EXISTING target instance. The client stages NOTHING in the data model (no obj.props mutation, no
+// invalidateProp — mirrors execSetRef minus the local mutation); it only fires the hostAction
+// send-hook (schema as its id + the target id [+ the optional guard token]), which ws.ts sends as
+// the `hostAction` WS op. The server is authoritative: it alone runs the effect, and an error reply
+// surfaces as a user-visible lastError. Returns nothing; SSR/refetch no-ops it.
+//
+// The trailing pair (M13 Track-B B3 addendum — the preview→apply consistency guard) is OPTIONAL and
+// BOTH-OR-NEITHER: the design editor's Apply button passes back the exact token
+// `sys.publishPreview` handed it (`report.targetCommit`, `report.targetVersion`), so the server can
+// reject a stale apply (the design or target moved since the operator's approved preview) rather than
+// silently applying a DIFFERENT plan than the one shown. Every other 2-arg call site (existing tests,
+// any future unguarded caller) is unaffected — sent as-is with no trailing args.
 function execPublish(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const schema = executeValue(codeCall.params[0], scope, context).value;
     const targetId = executeValue(codeCall.params[1], scope, context).value;
-    sendHostAction("publish", [schemaIdArg(schema), targetId]);
+    const args = [schemaIdArg(schema), targetId];
+    if (codeCall.params.length > 2) {
+        args.push(executeValue(codeCall.params[2], scope, context).value);
+        args.push(executeValue(codeCall.params[3], scope, context).value);
+    }
+    sendHostAction("publish", args);
     return { type: "nothing" };
 }
 
@@ -1340,6 +1373,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "canWrite": return execCanWrite(codeCall, scope, context);
         case "canRead": return execCanRead(codeCall, scope, context);
         case "diffCommits": return execDiffCommits(codeCall, scope, context);
+        case "publishPreview": return execPublishPreview(codeCall, scope, context);
         case "setRef": return execSetRef(codeCall, scope, context);
         case "publish": return execPublish(codeCall, scope, context);
         case "create": return execCreate(codeCall, scope, context);

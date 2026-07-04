@@ -29,11 +29,12 @@ public sealed class ContentHandler : IHandler
     private readonly int _assetPort;
 
     public ContentHandler(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions,
-        string mountBase, int assetPort, LiveRegistry registry, string appName, int instanceId, TokenAuth auth)
+        string mountBase, int assetPort, LiveRegistry registry, string appName, int instanceId, TokenAuth auth,
+        Func<Code.ExecObject, int, Code.ExecContext, Code.IExecValue>? publishPreview = null)
     {
         _store = store;
         _description = description;
-        _renderer = new SsrRenderer(store, description, sessions, registry, appName);
+        _renderer = new SsrRenderer(store, description, sessions, registry, appName, publishPreview);
         _auth = auth;
         _instanceId = instanceId;
         _mountBase = mountBase;
@@ -103,9 +104,11 @@ public sealed class ContentHandlerBuilder : IHandlerBuilder
     private readonly string _appName;
     private readonly int _instanceId;
     private readonly TokenAuth _auth;
+    private readonly Func<Code.ExecObject, int, Code.ExecContext, Code.IExecValue>? _publishPreview;
 
     public ContentHandlerBuilder(IInstanceStore store, InstanceDescription description, ClientSessionStore sessions,
-        string mountBase, int assetPort, LiveRegistry registry, string appName, int instanceId, TokenAuth auth)
+        string mountBase, int assetPort, LiveRegistry registry, string appName, int instanceId, TokenAuth auth,
+        Func<Code.ExecObject, int, Code.ExecContext, Code.IExecValue>? publishPreview = null)
     {
         _store = store;
         _description = description;
@@ -116,9 +119,10 @@ public sealed class ContentHandlerBuilder : IHandlerBuilder
         _appName = appName;
         _instanceId = instanceId;
         _auth = auth;
+        _publishPreview = publishPreview;
     }
 
-    public IHandler Build() => new ContentHandler(_store, _description, _sessions, _mountBase, _assetPort, _registry, _appName, _instanceId, _auth);
+    public IHandler Build() => new ContentHandler(_store, _description, _sessions, _mountBase, _assetPort, _registry, _appName, _instanceId, _auth, _publishPreview);
 }
 
 public sealed class SessionHandler(IInstanceStore store, InstanceDescription description, int instanceId, TokenAuth auth) : IHandler

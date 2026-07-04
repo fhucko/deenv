@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using DeEnv.Code;
 using DeEnv.Designer;
 using DeEnv.Http;
 using DeEnv.Instance;
@@ -167,7 +168,62 @@ public sealed class KernelHost(
             // M13 slice 4 — the versioning stamp: read the target's current PublishedCommitId (null =
             // unstamped) and persist a NEW one after a successful versioned publish.
             readPublishedCommitId: id => ReadPublishedCommitId(id, registryPath),
-            stampPublishedCommit: (id, commitId) => StampPublishedCommitAsync(id, commitId, registryPath));
+            stampPublishedCommit: (id, commitId) => StampPublishedCommitAsync(id, commitId, registryPath),
+            // M13 Track-B B3 addendum — the preview→apply consistency guard's target-version half: the
+            // TARGET's own live store (by id), the SAME live-hosted-set lookup PublishPreviewFor already
+            // reads (never a second store over the file — the mirror-clobber invariant).
+            resolveTargetStore: id => _instances.GetValueOrDefault(id)?.Store);
+
+    // The kernel-wired dry-run publish-preview delegate for one instance (M13 Track-B B3) — the read-side
+    // sibling of HostActionsFor's `publish` action. Threaded into this instance's render executor (via
+    // SsrRenderer), so `sys.publishPreview(design, targetRuntimeId)` computes what a publish onto that target
+    // WOULD do — the structured PublishReport — and ships it via the memo cache (a server-backed READ, like
+    // sys.diffCommits: NOT a host action). It is READ-ONLY: it computes with `dryRun:true`, so
+    // PublishReportComputer.Compute → ApplyPublishBoundary(dryRun:true) touches the target's data file only to
+    // READ it (the boundary apply's own dryRun flag skips every disk write) — never a second writer on the
+    // target's single-store file.
+    //
+    // Wired ONLY for the design host (like the real host-action seam) — an ordinary app never previews a
+    // publish, and a real delegate exists only where the design library lives. The closure resolves the
+    // DESIGNER's own store for the design's commits (the design is a row there — the same store B2 read for
+    // diffCommits), the TARGET's spec for its DataPath, and the target's stamp from kernel.json, then calls the
+    // shared PublishReportComputer and renders the report as a Code value (a Constant, distinct-negative-id
+    // tree, so ClientState ships the whole structure to the client). Non-design-host instances get null →
+    // sys.publishPreview simply isn't reachable there.
+    private Func<ExecObject, int, ExecContext, IExecValue>? PublishPreviewFor(InstanceSpec spec) =>
+        !IsDesignHost(spec) ? null : (design, targetId, context) =>
+        {
+            // The design host can NEVER preview a publish onto itself (the same single-writer guard the real
+            // publish holds — see KernelHostActions' callerId note). The editor's Publish section already
+            // filters the designer's own instance out of the target list, so this is defensive.
+            if (targetId == spec.Id)
+                throw new InvalidOperationException(
+                    "The design host cannot preview a publish onto itself — publish deploys a design onto an app instance.");
+
+            var store = _instances.GetValueOrDefault(spec.Id)?.Store
+                ?? throw new InvalidOperationException("The design host is not live.");
+            var targetInstance = _instances.GetValueOrDefault(targetId)
+                ?? throw new InvalidOperationException($"No instance with id {targetId} to preview a publish to.");
+            var target = targetInstance.Spec;
+
+            // The design row in the designer's own store (keyed by the ExecObject's intrinsic id — the same
+            // db.designs[id] resolution KernelHostActions.ResolveDesign does). A stale/foreign id resolves to
+            // no Design and is rejected before any read of the target.
+            if (store.ReadById(design.Id) is not (var typeName, var designFields) || typeName != "Design")
+                throw new InvalidOperationException($"No design with id {design.Id} in the designer's `designs` set.");
+
+            var stampedCommitId = ReadPublishedCommitId(targetId, registryPath);
+            var plan = PublishReportComputer.Compute(
+                store, design.Id, designFields, target.DataPath, stampedCommitId, dryRun: true);
+
+            // The preview→apply consistency GUARD token's second half (M13 Track-B B3 addendum): the
+            // TARGET's own live store version, read here (not inside PublishReportComputer, which is
+            // store-agnostic w.r.t. the target's LIVE version — it only ever touches target.DataPath as a
+            // file). Shipped on the report as `targetVersion`; the Apply button passes it straight back to
+            // `sys.publish`, which rejects if the target's version has moved since (any write to the target,
+            // including its own re-stamp, bumps this — no separate stamp check needed).
+            return PublishReportCode.Build(plan.Report, targetInstance.Store.CurrentVersion, context);
+        };
 
     // Resolve an instance id → the live hosted instance and delete it. An id matching no instance is a
     // clear reject before any work. Every instance is deletable now.
@@ -325,7 +381,7 @@ public sealed class KernelHost(
             // seam (a lazy closure over the hosted set).
             foreach (var spec in specs)
             {
-                try { Register(HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec))); }
+                try { Register(HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec), PublishPreviewFor(spec))); }
                 catch (Exception ex)
                 {
                     _failed[spec.Id] = new FailedInstance(spec, ex);
@@ -740,7 +796,7 @@ public sealed class KernelHost(
 
         // Load it (build its handlers) and register — the front routers resolve it by name immediately,
         // and it shows up on EVERY instance's next render (the shared LIVE registry). No host bind.
-        var created = HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec));
+        var created = HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec), PublishPreviewFor(spec));
         Register(created);
 
         // Persist: append the created entry and rewrite kernel.json, so the instance reappears on the
@@ -833,7 +889,7 @@ public sealed class KernelHost(
             new HashSet<string>(KnownSpecs().Select(s => s.DataPath), StringComparer.OrdinalIgnoreCase),
             new HashSet<string>(KnownSpecs().Select(s => s.App), StringComparer.Ordinal));
 
-        var created = HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec));
+        var created = HostedInstance.Start(spec, AdvertisedAssetPort, _registry, HostActionsFor(spec), PublishPreviewFor(spec));
         Register(created);
 
         RegistryWriter.Write(registryPath, new Registry(
@@ -994,7 +1050,7 @@ public sealed class KernelHost(
                 "/apps/<name>, so names must be unique.");
 
         // Rebuild with the new mount base so emitted links/assets use `/apps/<name>`. Same id-dir + store.
-        var renamed = HostedInstance.Start(instance.Spec with { App = name }, AdvertisedAssetPort, _registry, HostActionsFor(instance.Spec with { App = name }));
+        var renamed = HostedInstance.Start(instance.Spec with { App = name }, AdvertisedAssetPort, _registry, HostActionsFor(instance.Spec with { App = name }), PublishPreviewFor(instance.Spec with { App = name }));
         if (!_instances.TryUpdate(id, renamed, instance))
             throw new InvalidOperationException($"Instance {id} changed during the rename.");
         RefreshRegistry();
@@ -1018,7 +1074,7 @@ public sealed class KernelHost(
         try
         {
             if (!_instances.TryGetValue(id, out var existing)) return Task.CompletedTask;
-            var restarted = HostedInstance.Start(existing.Spec, AdvertisedAssetPort, _registry, HostActionsFor(existing.Spec));
+            var restarted = HostedInstance.Start(existing.Spec, AdvertisedAssetPort, _registry, HostActionsFor(existing.Spec), PublishPreviewFor(existing.Spec));
             if (_instances.TryUpdate(id, restarted, existing))
                 RefreshRegistry();
             // If it was deleted / re-swapped during the rebuild, just drop the rebuilt handlers (GC).

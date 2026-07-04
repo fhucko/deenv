@@ -82,7 +82,15 @@ public sealed class KernelHostActions(
     // the CURRENT stamp for a target id (null = unstamped), and persist a NEW one after a successful
     // versioned publish. Mirrors recordDesign's shape (a plain per-target registry read/write pair).
     Func<int, int?> readPublishedCommitId,
-    Func<int, int, Task> stampPublishedCommit) : IHostActions
+    Func<int, int, Task> stampPublishedCommit,
+    // M13 Track-B B3 addendum — the preview→apply consistency guard: the TARGET's own live store (by id),
+    // resolved lazily like `resolveStore` (mirror-clobber fix — never open a second store over a live
+    // instance's file). Used ONLY to read `.CurrentVersion` when a guarded publish checks that the target's
+    // data hasn't moved since the operator's preview. Optional (defaults null) so a caller built before this
+    // addendum keeps compiling; a guarded publish call against a null-supplied resolver simply cannot enforce
+    // the target-version half of the guard (the head-commit half still runs) — never reached in practice
+    // since HostActionsFor always supplies a real one.
+    Func<int, IInstanceStore?>? resolveTargetStore = null) : IHostActions
 {
     public object? Run(string action, JsonElement args) => action switch
     {
@@ -98,27 +106,34 @@ public sealed class KernelHostActions(
         _ => throw new InvalidOperationException($"Unknown host action '{action}'."),
     };
 
-    // publish(design, targetId, dryRun?): project the design's committed HEAD (never its working copy —
-    // design doc §4) onto an EXISTING target. arg 0 the design object's id (resolved against the caller's
-    // store — see ResolveDesign), arg 1 the target id, arg 2 an OPTIONAL bare bool (default false) — a
-    // dry run computes the SAME report and changes NOTHING.
+    // publish(design, targetId, dryRun?) OR publish(design, targetId, expectedHeadCommit, expectedTargetVersion):
+    // project the design's committed HEAD (never its working copy — design doc §4) onto an EXISTING target.
+    // arg 0 the design object's id (resolved against the caller's store — see ResolveDesign), arg 1 the
+    // target id.
     //
-    // VERSIONED path (the design has ≥1 commit): diff the target's stamped commit (or, if unstamped, treat
-    // the diff as "everything is new" and fall back — see below) against the design's HEAD commit BY
-    // IDENTITY (DesignDiff), materialize the changeset as one boundary-marked log entry
-    // (JsonFileInstanceStore.ApplyPublishBoundary — history preserved, unlike the unversioned re-baseline),
-    // stamp the target to the new head, and return the structured PublishReport.
-    //
-    // UNVERSIONED fallback (the design has NO commits yet, OR the target has never been stamped): the
-    // pre-slice-4 by-name apply (SchemaBridge.ProjectDesignDocument + WriteDocument) — a target's FIRST
-    // versioned publish after this slice lands falls back exactly once (`fallbackNameMatched: true`), then
-    // gets stamped so every publish after that is rename-safe.
+    // Two DIFFERENT optional trailing shapes share positions 2/3, disambiguated by ARG COUNT (never
+    // combined — no test or caller ever needs both at once):
+    //   • 3 args, a bare bool at position 2 — the pre-existing `dryRun` (a dry run computes the SAME report
+    //     and changes NOTHING).
+    //   • 4 args, two ints at positions 2/3 — the preview→apply CONSISTENCY GUARD token (M13 Track-B B3
+    //     addendum): `expectedHeadCommit`/`expectedTargetVersion`, exactly what `sys.publishPreview` handed
+    //     the operator as `report.targetCommit`/`report.targetVersion`. Splitting preview from apply opens a
+    //     TOCTOU window — the operator approves a SPECIFIC plan (the preview), but an unguarded apply
+    //     recomputes fresh and could execute a DIFFERENT plan if the design gained a new commit or the
+    //     target's data moved in between. Passing the token back closes it: the design editor's Apply button
+    //     always supplies it (see BOTH-OR-NEITHER below); a 2-arg caller (every existing test, any future
+    //     unguarded caller) stays exactly as unguarded as today.
+    // BOTH-OR-NEITHER: there is no 3-arg "one guard int" shape — an arg count of exactly 4 is what selects
+    // the guard path; 2 or 3 args never attempt to read it.
     private PublishReport Publish(JsonElement args)
     {
         var designId = ArgInt(args, 0);
         var design = ResolveDesign(designId);
         var targetId = ArgInt(args, 1);
-        var dryRun = ArgBoolOptional(args, 2, defaultValue: false);
+        var argCount = args.ValueKind == JsonValueKind.Array ? args.GetArrayLength() : 0;
+        var dryRun = argCount == 4 ? false : ArgBoolOptional(args, 2, defaultValue: false);
+        int? expectedHeadCommit = argCount == 4 ? ArgInt(args, 2) : null;
+        int? expectedTargetVersion = argCount == 4 ? ArgInt(args, 3) : null;
         if (targetId == callerId)
             throw new InvalidOperationException(
                 "The design host cannot be its own publish target — publish deploys a design onto an app instance.");
@@ -127,112 +142,95 @@ public sealed class KernelHostActions(
                 $"No instance with id {targetId} to publish to.");
 
         var store = resolveStore();
-        var head = FindHeadCommit(store, designId);
-
-        if (head is null)
-        {
-            // No commit exists for this design yet — nothing to diff against. The pre-slice-4 behavior:
-            // project the CURRENT working copy and apply by name. Not reported as a "fallback" (that term
-            // is reserved for an unstamped TARGET against a design that DOES have commits) — there is no
-            // identity diff possible here at all.
-            var workingDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
-            if (!dryRun)
-            {
-                SchemaBridge.WriteDocument(workingDoc, target.SchemaPath, target.DataPath);
-                _ = restartInstance(targetId);
-            }
-            return new PublishReport
-            {
-                Applied = !dryRun, DryRun = dryRun, BaseCommit = null, TargetCommit = 0,
-                UncommittedDrift = false, Renames = [], Adds = [], Removes = [], Conversions = [],
-                Cardinality = [], FallbackNameMatched = false,
-            };
-        }
-
-        var (headCommitId, headFields) = head.Value;
-        var headText = TextOf(headFields, "text");
-        var headIdMap = IdMapOf(headFields);
-        var headSnapshot = new DesignSnapshot(headText, headIdMap);
-
-        // Uncommitted working-copy drift: the design's LIVE state may have moved past its own head commit
-        // (an edit made after the last commit) — Snapshot(workingCopy).Text != head.text. Reported, never
-        // published: publish always deploys the committed head, never the working copy.
-        var workingSnapshot = SchemaBridge.Snapshot(design); // throws on an invalid design
-        var uncommittedDrift = workingSnapshot.Text != headText;
-
         var stampedCommitId = readPublishedCommitId(targetId);
-        var stampedFields = stampedCommitId is { } stamped ? FindCommit(store, stamped) : null;
 
-        if (stampedFields is null)
+        // The consistency guard — checked BEFORE ANY MATERIALIZATION, including the versioned leg's
+        // destructive boundary (which PublishReportComputer.Compute(..., dryRun:false) WRITES to
+        // target.DataPath as a side effect of computing the plan, not as a separate later step — see its own
+        // doc). Reviewer fix: a naive "compute-then-check" ordering let a STALE guarded apply migrate the
+        // target's data file BEFORE the guard threw, leaving DataPath migrated but SchemaPath/the stamp/the
+        // live store all still on the OLD schema — exactly the mirror-clobber/schema-mismatch class slice 708
+        // killed, just reached via a different door. So this reads the SAME two identity signals
+        // Compute would land on (the design's current head commit id, the target's live store version)
+        // WITHOUT materializing anything, checks them, and ONLY THEN calls Compute to do the real (writing)
+        // work. Enforced ONLY on a REAL apply with the token supplied (dryRun is unaffected — a 3-arg dry run
+        // never reaches here with a non-null expected*, and a 2-arg unguarded call skips this entirely).
+        //
+        // DEFERRED (design doc §4, NOT implemented here — inherited from the pre-slice concurrency model): the
+        // "take the store lock → briefly reject incoming commits with 'updating' → … → bump the schema epoch"
+        // queueing step. The offline boundary rewrite acts on the target's files directly while its instance
+        // is unmounted (single-operator: no concurrent publisher); an in-flight draft that DOES race between
+        // THIS check and the write below is caught after the fact by the existing baseVersion guard.
+        // Publish-queueing lands with the real-time milestone; it is inherited-as-deferred here, not built.
+        // This guard is the cheap correctness floor that IS built: a narrower, synchronous check that the plan
+        // about to be applied is still the plan that was previewed.
+        if (!dryRun && (expectedHeadCommit is not null || expectedTargetVersion is not null))
         {
-            // Unstamped (or a stamp naming a commit this store no longer has — defensive): the one-time
-            // name-match fallback — the pre-slice-4 by-name apply (WriteDocument), carrying whatever a
-            // by-name apply can, then stamping so the NEXT publish is identity-diffed and rename-safe.
-            if (!dryRun)
-            {
-                SchemaBridge.WriteDocument(headText, target.SchemaPath, target.DataPath);
-                stampPublishedCommit(targetId, headCommitId).GetAwaiter().GetResult();
-                _ = restartInstance(targetId);
-            }
-            return new PublishReport
-            {
-                Applied = !dryRun, DryRun = dryRun, BaseCommit = null, TargetCommit = headCommitId,
-                UncommittedDrift = uncommittedDrift, Renames = [], Adds = [], Removes = [], Conversions = [],
-                Cardinality = [], FallbackNameMatched = true,
-            };
+            // The design's CURRENT head commit id — 0 when the design has no commits yet (the NoHead leg),
+            // mirroring PublishPlan.HeadCommitId exactly (same FindHeadCommit lookup Compute itself makes),
+            // so an expected-head guard on a headless design can never match and always rejects.
+            var currentHeadCommitId = FindHeadCommit(store, designId)?.Id ?? 0;
+            if (expectedHeadCommit is { } expHead && currentHeadCommitId != expHead)
+                throw new InvalidOperationException(
+                    "The design or target changed since the preview — re-preview before applying.");
+            if (expectedTargetVersion is { } expVersion
+                && resolveTargetStore?.Invoke(targetId) is { } targetStore
+                && targetStore.CurrentVersion != expVersion)
+                throw new InvalidOperationException(
+                    "The design or target changed since the preview — re-preview before applying.");
         }
 
-        // ── the versioned path: diff the STAMPED commit against the HEAD commit by identity ──
-        // DEFERRED (design doc §4, NOT implemented here — inherited from the pre-slice concurrency model,
-        // not introduced by this slice): §4's "take the store lock → briefly reject incoming commits with
-        // 'updating' → … → bump the schema epoch" queueing step. The offline boundary rewrite acts on the
-        // target's files directly while its instance is unmounted (single-operator: no concurrent publisher);
-        // an in-flight draft that DOES race is caught after the fact by the existing baseVersion guard (the
-        // boundary entry bumps the touched objects' versions — see ApplyPublishBoundary's own note), which is
-        // the same "app was updated — reload" outcome §4's epoch bump would give. Publish-queueing / a hard
-        // reject-window lands with the real-time milestone; it is inherited-as-deferred here, not built.
-        var baseSnapshot = new DesignSnapshot(TextOf(stampedFields, "text"), IdMapOf(stampedFields));
-        var diff = DesignDiffer.Compute(baseSnapshot, headSnapshot);
-        var targetDesc = InstanceDescriptionLoader.Load(headText);
+        // ONE report-computing core, shared with sys.publishPreview (M13 Track-B B3 — PublishReportComputer):
+        // it decides the leg and, on a REAL run (dryRun:false), MATERIALIZES the versioned leg's destructive
+        // boundary onto the target's data file. So a preview (dryRun:true) reports EXACTLY what this apply
+        // does, never a second copy of the conversion rules. The guard above already ran, so by the time this
+        // is reached (on a real, guarded apply) the plan is KNOWN fresh — nothing rejects after this point.
+        var plan = PublishReportComputer.Compute(store, designId, design, target.DataPath, stampedCommitId, dryRun);
 
-        // Compute the boundary plan EVEN ON A DRY RUN — one code path for both (ApplyPublishBoundary's own
-        // `dryRun` flag skips its two disk-touching side effects, so a preview reports the SAME
-        // unconvertible/unsupported cells a real publish would produce, never a second implementation of
-        // the same conversion rules that could drift from the real one).
-        var boundaryResult = diff.IsEmpty
-            ? new BoundaryApplyResult(false, [], [])
-            : JsonFileInstanceStore.ApplyPublishBoundary(
-                target.DataPath, diff, targetDesc,
-                new BoundaryMarker(designId, headCommitId, BaseCommitId: stampedCommitId), dryRun);
+        if (dryRun) return plan.Report; // prove-it: no file write, no log, no stamp, no restart below
 
-        var report = BuildReport(diff, boundaryResult, applied: !dryRun, dryRun, stampedCommitId, headCommitId,
-            uncommittedDrift, fallbackNameMatched: false);
+        // ── apply-only side effects (a preview does NONE of these) ──
+        switch (plan.Leg)
+        {
+            case PublishLeg.NoHead:
+                // No commit yet — project the CURRENT working copy and apply by name (pre-slice-4 behavior).
+                SchemaBridge.WriteDocument(plan.WorkingDoc, target.SchemaPath, target.DataPath);
+                _ = restartInstance(targetId);
+                break;
 
-        if (dryRun) return report; // prove-it: nothing below ran — no file write, no log, no stamp, no restart
+            case PublishLeg.Fallback:
+                // One-time by-name apply of the head text (carrying whatever a by-name apply can), then stamp
+                // so the NEXT publish is identity-diffed and rename-safe.
+                SchemaBridge.WriteDocument(plan.HeadText, target.SchemaPath, target.DataPath);
+                stampPublishedCommit(targetId, plan.HeadCommitId).GetAwaiter().GetResult();
+                _ = restartInstance(targetId);
+                break;
 
-        // Write the target's app document FROM the commit's cached text (the publish artifact) — always,
-        // even when the diff itself is empty (the design may have gained sections/commits with no
-        // structural change; the target must still run the head's exact document).
-        File.WriteAllText(target.SchemaPath, headText);
+            case PublishLeg.Versioned:
+                // The destructive boundary was already materialized inside Compute (dryRun:false). Write the
+                // target's app document FROM the commit's cached text (the publish artifact) — always, even
+                // when the diff itself was empty (the design may have gained sections/commits with no
+                // structural change; the target must still run the head's exact document).
+                File.WriteAllText(target.SchemaPath, plan.HeadText);
+                stampPublishedCommit(targetId, plan.HeadCommitId).GetAwaiter().GetResult();
 
-        stampPublishedCommit(targetId, headCommitId).GetAwaiter().GetResult();
+                // ONE-STORE-PER-FILE invariant for the TARGET (mirror-clobber fix): ApplyPublishBoundary just
+                // rewrote target.DataPath OFFLINE — directly on the file, NOT through the target's live hosted
+                // store, whose in-memory `_doc` is now stale. Safe because (a) publish is one SYNCHRONOUS
+                // host-action step (single-operator — no concurrent writer to the target between the offline
+                // rewrite and the restart), and (b) restartInstance re-OPENS the target's store fresh from the
+                // rewritten file and hot-swaps it in, discarding the now-stale one. So the offline writer and a
+                // live store never both write the file.
+                _ = restartInstance(targetId);
+                break;
+        }
 
-        // ONE-STORE-PER-FILE invariant for the TARGET (mirror-clobber fix): ApplyPublishBoundary just
-        // rewrote target.DataPath OFFLINE — directly on the file, NOT through the target's live hosted
-        // store, whose in-memory `_doc` is now stale relative to that file. This is safe because
-        // (a) publish is one SYNCHRONOUS host-action step: nothing writes through the target's live store
-        // between the offline rewrite and the restart below (single-operator — no concurrent writer to the
-        // target), and (b) restartInstance re-OPENS the target's store fresh from the rewritten file and
-        // hot-swaps it in (KernelHost.RestartAsync), discarding the now-stale one. So the offline writer and
-        // a live store never both write the file — the stale store is replaced, never saved back over the
-        // rewrite. (This is the pre-existing publish model, unchanged here; the restart is what upholds the
-        // single-writer invariant for the target, exactly as the shared live store does for the designer.)
-        _ = restartInstance(targetId);
-
-        return report;
+        return plan.Report;
     }
 
-    private static PublishReport BuildReport(
+    // `internal` (was private) so PublishReportComputer reuses the SAME report-shaping — one
+    // implementation of the destructive-cell mapping (M13 Track-B B3).
+    internal static PublishReport BuildReport(
         DesignDiff diff, BoundaryApplyResult boundaryResult, bool applied, bool dryRun, int? baseCommit,
         int targetCommit, bool uncommittedDrift, bool fallbackNameMatched) => new()
     {
@@ -1077,7 +1075,10 @@ public sealed class KernelHostActions(
     // The design's `main` Branch's HEAD commit — its (id, fields), or null when the branch has no head yet
     // (a design with zero commits — the pre-slice-4 fallback path in Publish). Reads the branch, then
     // resolves its `head` reference into the Commit extent.
-    private static (int Id, ObjectValue Fields)? FindHeadCommit(IInstanceStore store, int designId)
+    // `internal` (was private) so PublishReportComputer — the shared publish/preview report core (M13
+    // Track-B B3) — reuses the SAME commit lookups this action does, rather than a second copy that could
+    // drift. Still assembly-private; only the extracted computer (same assembly) reaches them.
+    internal static (int Id, ObjectValue Fields)? FindHeadCommit(IInstanceStore store, int designId)
     {
         if (FindMainBranch(store, designId) is not { } branch) return null;
         if (branch.Fields.Fields.GetValueOrDefault("head") is not ReferenceValue { TargetId: { } headId }) return null;
@@ -1086,15 +1087,15 @@ public sealed class KernelHostActions(
 
     // A Commit row by its own intrinsic id, or null if no such commit exists (a stale stamp naming a
     // commit this store no longer has — defensive, since Commit rows are never deleted by any grant).
-    private static ObjectValue? FindCommit(IInstanceStore store, int commitId) =>
+    internal static ObjectValue? FindCommit(IInstanceStore store, int commitId) =>
         store.ReadById(commitId) is (var typeName, var fields) && typeName == "Commit" ? fields : null;
 
-    private static string TextOf(ObjectValue fields, string prop) =>
+    internal static string TextOf(ObjectValue fields, string prop) =>
         fields.Fields.GetValueOrDefault(prop) is TextValue t ? t.Text : "";
 
     // The Commit's cached idMap dict field ("name-path" → intrinsic id) reconstructed into the plain
     // Dictionary<string,int> DesignSnapshot/DesignDiffer expect.
-    private static IReadOnlyDictionary<string, int> IdMapOf(ObjectValue fields)
+    internal static IReadOnlyDictionary<string, int> IdMapOf(ObjectValue fields)
     {
         var map = new Dictionary<string, int>();
         if (fields.Fields.GetValueOrDefault("idMap") is DictionaryValue dict)

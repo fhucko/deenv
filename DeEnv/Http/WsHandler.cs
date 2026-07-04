@@ -286,6 +286,10 @@ public sealed class WsHandler
     // strips the mount before resolving against the schema, so the instance stays mount-unaware (its
     // node paths are root-relative). Identity-stripping when "/" (behavior-preserving).
     private readonly string _mountBase;
+    // The kernel-wired dry-run publish-preview delegate (M13 Track-B B3), passed to the refetch SsrRenderer
+    // so `sys.publishPreview` recomputes on a client-side toggle→refetch exactly as it did on first paint.
+    // Null for a non-design-host / non-kernel instance (sys.publishPreview then isn't reachable there).
+    private readonly Func<Code.ExecObject, int, Code.ExecContext, Code.IExecValue>? _publishPreview;
     private readonly JsonSerializerOptions _jsonOpts = new()
     {
         WriteIndented = false,
@@ -295,7 +299,8 @@ public sealed class WsHandler
 
     public WsHandler(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
         LiveRegistry? registry = null, IHostActions? hostActions = null, string mountBase = "/",
-        Func<string, string, bool>? verifyPassword = null)
+        Func<string, string, bool>? verifyPassword = null,
+        Func<Code.ExecObject, int, Code.ExecContext, Code.IExecValue>? publishPreview = null)
     {
         _store = store;
         _desc = desc;
@@ -305,6 +310,7 @@ public sealed class WsHandler
         _hostActions = hostActions ?? new NoHostActions();
         _mountBase = mountBase;
         _verifyPassword = verifyPassword ?? Code.AuthCrypto.Verify;
+        _publishPreview = publishPreview;
     }
 
     // The warm per-client session a code-UI message addresses (clientId minted at SSR).
@@ -1068,7 +1074,7 @@ public sealed class WsHandler
 
         // The refetch renderer gets the SAME live registry provider as the SSR path, so a refetch
         // re-render reflects the kernel's current instances — no stale `instances` list.
-        var state = new SsrRenderer(_store, _desc, registry: _registry)
+        var state = new SsrRenderer(_store, _desc, registry: _registry, publishPreview: _publishPreview)
             .RenderState(pathStr, sessionVars, db, lastId, principalUserId, seed, harvestAction);
         return Serialize(new RefetchResponse { State = state });
     }

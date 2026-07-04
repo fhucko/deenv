@@ -955,6 +955,17 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // login/logout use — so the SetTable re-renders fresh over the merged set. (A bare refetch alone
         // sufficed only while the list read sys.instances, re-built per-render from the live registry and
         // never memoized as a set.) Client-only orchestration: no twin, no conformance.
+        //
+        // ALSO drop any `publishPreview:` server-backed read (M13 Track-B B3): a publish host action changes
+        // exactly the cross-instance state that read reflects (the target's data file + its published-commit
+        // stamp), and those entries are cached with EMPTY deps (like diffCommits/schema — see codeExec.ts), so
+        // no store-mutation invalidation ever staled them. Without this drop, re-opening the preview after an
+        // Apply would reuse the pre-publish report (still showing the just-applied changes) instead of the
+        // fresh "up to date". Cheap + precise: keyed by prefix, normally a handful of entries. (Any host
+        // action can move a target — create/delete/rename change the instance set previews list over — so
+        // this is unconditional on hostAction, not publish-only.)
+        for (const key of Array.from(uiStatic.cache.keys()))
+            if (key.startsWith("publishPreview:")) uiStatic.cache.delete(key);
         resetViewState();
         maybeRefetch();
     } else if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
