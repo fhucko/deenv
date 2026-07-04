@@ -1708,9 +1708,80 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
     }
 
-    // Serialize a doc to a file atomically (temp-then-move). Shared by the instance save and the
-    // static migrate pass.
-    private static void SaveRaw(string path, StoreDoc doc)
+    // ── time-travel materializer (M13 slice 7) ──────────────────────────────────────────────────────
+    //
+    // The document as it stood at log seq `atSeq`: fold genesis→the last entry with Seq <= atSeq via the
+    // SAME AppLogReplay.Apply fsck/boot-replay already share (never a second apply implementation). Between
+    // two entries, `atSeq` reads as the state right after the last entry AT OR BEFORE it (an entry's Seq is
+    // the version AFTER its own writes — see LogEntry's own doc — so "the state at seq N" is unambiguous:
+    // the fold after every entry whose Seq <= N, and no entry whose Seq > N).
+    //
+    // Bounds (all loud, "nothing creatable" failures — the caller must create NOTHING on any of these):
+    //   • atSeq < 0 → invalid, always.
+    //   • atSeq > the current HEAD version → invalid (nothing this far ahead has ever existed).
+    //   • no genesis file (nothing has EVER mutated this store) → the only valid atSeq is 0, the store's
+    //     one and only version; anything else is out of range (caught by the head check above, since HEAD
+    //     is 0 too here).
+    //   • atSeq < genesis's own GenesisSeq → invalid: genesis freezes at the store's FIRST mutation (M13
+    //     slice 1), so no snapshot of anything strictly BEFORE that moment was ever captured — there is
+    //     nothing to materialize (this also catches a schema that predates the running app's current
+    //     doc — see the caller's era-schema resolution, which validates the result against the chosen doc).
+    //
+    // Read-only: never writes the log/genesis/snapshot. Called on an INSTANCE already constructed over the
+    // source's live files (construction already ran boot reconciliation — a torn tail is repaired before
+    // this ever runs), so LoadLog() here reads a clean, already-reconciled log.
+    public StoreDoc MaterializeAtSeq(int atSeq)
+    {
+        lock (_sync)
+        {
+            if (atSeq < 0 || atSeq > _doc.Version)
+                throw new InvalidOperationException(
+                    $"Cannot materialize at seq {atSeq}: the store's current head is version {_doc.Version}.");
+
+            if (!File.Exists(_genesisPath))
+                return CloneDoc(_doc); // never mutated — atSeq == 0 == _doc.Version, already checked above
+
+            var genesis = JsonSerializer.Deserialize<GenesisFile>(File.ReadAllText(_genesisPath), Opts)
+                ?? throw new StoredDataException($"Genesis file '{_genesisPath}' is not readable.");
+            if (atSeq < genesis.GenesisSeq)
+                throw new InvalidOperationException(
+                    $"Cannot materialize at seq {atSeq}: history begins at seq {genesis.GenesisSeq} " +
+                    "(genesis froze at the store's first mutation) — nothing before that was ever captured.");
+
+            var entries = LoadLog().Where(e => e.Seq <= atSeq);
+            return entries.Aggregate(CloneDoc(genesis.Doc), AppLogReplay.Apply);
+        }
+    }
+
+    // The latest publish BOUNDARY marker (M13 slice 4) at or before `atSeq` — the era-schema resolution a
+    // time-travel clone needs: "which design commit's schema was in force at this seq." Null when no
+    // boundary entry exists at or before atSeq (the instance predates its first publish, or was never
+    // published) — the caller falls back to the instance's CURRENT app.deenv ONLY when EarliestBoundary
+    // (below) is ALSO null (no publish exists anywhere in the log, ever); otherwise it must walk to the
+    // earliest boundary's commit's PARENT for the pre-that-publish schema (see KernelHost.ResolveEraDoc).
+    public BoundaryMarker? LatestBoundaryAtOrBefore(int atSeq)
+    {
+        lock (_sync)
+            return LoadLog().Where(e => e.Seq <= atSeq && e.Boundary is not null)
+                .OrderByDescending(e => e.Seq).FirstOrDefault()?.Boundary;
+    }
+
+    // The EARLIEST publish boundary anywhere in the whole log, regardless of atSeq — used to tell apart
+    // "this instance has never been published, ever" (current app.deenv IS the only schema it has ever
+    // run) from "atSeq predates every publish so far, but a LATER publish already happened by clone time"
+    // (current app.deenv would be the WRONG, POST-publish schema — the era doc must instead come from the
+    // commit that predates this earliest boundary, i.e. that commit's `parent`).
+    public BoundaryMarker? EarliestBoundary()
+    {
+        lock (_sync)
+            return LoadLog().Where(e => e.Boundary is not null).OrderBy(e => e.Seq).FirstOrDefault()?.Boundary;
+    }
+
+    // Serialize a doc to a file atomically (temp-then-move). Shared by the instance save, the static
+    // migrate pass, and the time-travel clone's materialized-doc write (KernelHost.CloneAsync) — `internal`
+    // (not `private`) is this method's ONE approved widening for M13 slice 7, mirroring ApplyPublishBoundary's
+    // own `internal` visibility for the same reason (an offline write onto a NOT-YET-LIVE store's files).
+    internal static void SaveRaw(string path, StoreDoc doc)
     {
         var tmp = path + ".tmp";
         // Ensure the target directory exists before the temp write. A freshly-created instance

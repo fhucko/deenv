@@ -138,7 +138,7 @@ public sealed class KernelHost(
             // delete + clone resolve the id → the live hosted instance, then run the kernel's own
             // DeleteAsync/CloneAsync (fed the same boot baseDir/registryPath as create).
             deleteInstance: id => DeleteAsyncById(id, registryPath),
-            cloneInstance: sourceId => CloneAsyncById(sourceId, baseDir, registryPath),
+            cloneInstance: (sourceId, atSeq) => CloneAsyncById(sourceId, atSeq, baseDir, registryPath),
             // setDesign records the chosen design id on the target's registry entry (and refreshes the
             // live view so the dropdown re-selects it on the next render).
             recordDesign: (targetId, designId) => SetDesignAsyncById(targetId, designId, registryPath),
@@ -161,11 +161,11 @@ public sealed class KernelHost(
 
     // Resolve a source instance id → the live hosted instance and clone it. An unknown id is a clear
     // reject. Any instance is a valid clone source — clone only READS its files (see CloneAsync).
-    private async Task CloneAsyncById(int sourceId, string baseDir, string registryPath)
+    private async Task CloneAsyncById(int sourceId, int? atSeq, string baseDir, string registryPath)
     {
         var source = _instances.GetValueOrDefault(sourceId)
             ?? throw new InvalidOperationException($"No instance with id {sourceId} to clone.");
-        await CloneAsync(source, baseDir, registryPath);
+        await CloneAsync(source, baseDir, registryPath, atSeq);
     }
 
     // Resolve a target instance id → the live hosted instance and record which design it now runs (the
@@ -744,18 +744,53 @@ public sealed class KernelHost(
     // then persist it. The data-carrying sibling of CreateAsync. Any source is fine to clone: we only
     // READ its files. The clone keeps the source's display name with a "-copy" suffix so the mount name
     // stays unique (two instances cannot share `/apps/<name>`); the operator can rename it after.
-    public Task<HostedInstance> CloneAsync(HostedInstance source, string baseDir, string registryPath)
+    //
+    // `atSeq` (M13 slice 7, OPTIONAL) — omitted (null) is BYTE-IDENTICAL to the pre-slice-7 clone (a plain
+    // file copy of the source's CURRENT head, below). When given, the clone gets the source's data as it
+    // stood at that log seq instead — "the app as of Tuesday" (design doc §0) — under the SCHEMA that was
+    // in force at that moment (era resolution, see ResolveEraDoc), one fresh fork, no history carried (its
+    // own log starts genesis-less — the FIRST real mutation freezes its OWN genesis from the materialized
+    // state, exactly like any new instance under slice-1's rules; the design's "fork forever" line).
+    public async Task<HostedInstance> CloneAsync(
+        HostedInstance source, string baseDir, string registryPath, int? atSeq = null)
     {
         var id = NextInstanceId(baseDir);
         var schemaPath = AppPaths.SchemaPathForId(baseDir, id);
         var dataPath = AppPaths.DataPathForId(baseDir, id);
         Directory.CreateDirectory(AppPaths.IdDirFor(baseDir, id));
 
-        // Copy the source's files: the app doc always, and the data file when it exists (a brand-new
-        // source may not have persisted yet). This copied data is the clone's whole point.
-        File.Copy(source.Spec.SchemaPath, schemaPath);
-        if (File.Exists(source.Spec.DataPath))
-            File.Copy(source.Spec.DataPath, dataPath);
+        int? eraCommitId = null;
+        if (atSeq is { } seq)
+        {
+            // Materialize the source's OWN store at `seq` (validates seq bounds — throws loudly, nothing
+            // written yet, on an invalid one) and resolve which schema was in force then.
+            var sourceDesc = InstanceDescriptionLoader.LoadFile(source.Spec.SchemaPath);
+            var sourceStore = new JsonFileInstanceStore(source.Spec.DataPath, sourceDesc);
+            var materialized = sourceStore.MaterializeAtSeq(seq); // throws on an out-of-range/pre-genesis seq
+
+            var (eraDocText, eraDesc, resolvedCommitId) = ResolveEraDoc(sourceStore, sourceDesc, source.Spec.SchemaPath, seq);
+            eraCommitId = resolvedCommitId;
+
+            // Validate the materialized store against the ERA schema BEFORE writing anything — a mismatch
+            // (e.g. genesis-era data whose schema predates every publish boundary) must fail loudly rather
+            // than write an unloadable clone. Same guard HostedInstance.Start's ctor would hit on load —
+            // run it explicitly here so the failure names the remedy before any file exists.
+            StoredDataValidator.Validate(materialized, eraDesc, source.Spec.DataPath);
+
+            File.WriteAllText(schemaPath, eraDocText);
+            JsonFileInstanceStore.SaveRaw(dataPath, materialized);
+            // Deliberately NOT copying the source's log/genesis — a time-travel clone is a FRESH fork with
+            // its own history (design doc §6): its first mutation freezes ITS OWN genesis from this
+            // materialized state, exactly like any brand-new instance (JsonFileInstanceStore.EnsureGenesis).
+        }
+        else
+        {
+            // Copy the source's files: the app doc always, and the data file when it exists (a brand-new
+            // source may not have persisted yet). This copied data is the clone's whole point.
+            File.Copy(source.Spec.SchemaPath, schemaPath);
+            if (File.Exists(source.Spec.DataPath))
+                File.Copy(source.Spec.DataPath, dataPath);
+        }
 
         // A unique mount name (the source's name + a free "-copy[-N]" suffix) — two instances cannot
         // share `/apps/<name>`. The id keeps storage distinct regardless; this keeps the URL distinct.
@@ -775,7 +810,88 @@ public sealed class KernelHost(
 
         MirrorInstanceInsert(id, name, null);
 
-        return Task.FromResult(created);
+        // Stamp the clone's versioning entry (M13 slice 4's PublishedCommitId) to the era commit it was
+        // materialized from — it genuinely IS that design version, so a future publish onto the clone
+        // diffs correctly (identity-safe) instead of falling back to the one-time name-match path. A
+        // never-published source (no boundary at or before atSeq) leaves the clone unstamped, exactly like
+        // today's ordinary (atSeq-less) clone — it was never stamped either.
+        if (eraCommitId is { } commitId)
+            await StampPublishedCommitAsync(id, commitId, registryPath);
+
+        return created;
+    }
+
+    // Era-schema resolution (M13 slice 7): which app document was in force at `atSeq`. The latest publish
+    // BOUNDARY marker in the source's OWN log at or before atSeq names the design commit that was live then
+    // (BoundaryMarker.CommitId, resolved against the DESIGN HOST's store) — its cached `text` field IS that
+    // era's canonical app document (M13 slice 2's per-commit cache).
+    //
+    // Reads the design host's Commit rows through a FRESH `new JsonFileInstanceStore` opened right here,
+    // deliberately NOT the cached `_designHostStore` field: that field is set ONCE at boot and never
+    // refreshed, while `KernelHostActions.CommitDesign`/`Publish`/`MergeBranch` each open their OWN fresh
+    // store per call and write through THAT — so `_designHostStore`'s in-memory copy goes stale the moment
+    // any commit lands after boot (which, for a design host, is constantly — the whole point of the
+    // designer). A cloneInstance run any time after the FIRST post-boot commit would otherwise silently
+    // miss it. Every OTHER KernelHostActions-adjacent read in this file already follows this same
+    // fresh-store convention (ResolveDesign, CommitDesign, etc. — see KernelHostActions.cs); this is that
+    // same discipline applied to the one NEW reader this slice adds.
+    //
+    // NO boundary at or before atSeq splits into TWO genuinely different cases (collapsing them into one
+    // "use current app.deenv" fallback is correct for the first but WRONG for the second — a clone of a
+    // seq that predates the instance's ONE-AND-ONLY publish, taken AFTER that publish already landed, would
+    // otherwise get the POST-publish schema for a PRE-publish seq):
+    //   (a) the instance has NEVER been published, ever (EarliestBoundary() is also null) — it has run the
+    //       SAME schema its whole life, so "current app.deenv" trivially IS the era doc (covers
+    //       pre-first-publish history and a never-published instance alike).
+    //   (b) a LATER publish exists (EarliestBoundary() finds one), just not at-or-before atSeq — the era
+    //       doc is the schema that publish MIGRATED FROM, i.e. that earliest boundary commit's OWN
+    //       `parent` commit's cached text (a root commit with no parent falls back to (a)'s current-doc
+    //       case — the design's adoption-baseline floor, before which no commit/text exists to read).
+    //
+    // Returns (docText, parsedDesc, resolvedCommitId-or-null) — the commit id feeds the clone's
+    // PublishedCommitId stamp (case (b)'s parent commit genuinely IS that era's design version, so it
+    // stamps exactly like case (a)'s direct hit does; only the truly-never-published (a) leaves it null).
+    private (string Text, InstanceDescription Desc, int? CommitId) ResolveEraDoc(
+        JsonFileInstanceStore sourceStore, InstanceDescription currentDesc, string currentSchemaPath, int atSeq)
+    {
+        var designHostStore = FreshDesignHostStore();
+
+        if (sourceStore.LatestBoundaryAtOrBefore(atSeq) is { } boundary
+            && TryReadCommitText(designHostStore, boundary.CommitId) is { } hit)
+            return (hit.Text, InstanceDescriptionLoader.Load(hit.Text), boundary.CommitId);
+
+        if (sourceStore.EarliestBoundary() is { } earliest
+            && TryReadCommitText(designHostStore, earliest.CommitId) is { } earliestHit
+            && earliestHit.ParentId is { } parentId
+            && TryReadCommitText(designHostStore, parentId) is { } parentHit)
+            return (parentHit.Text, InstanceDescriptionLoader.Load(parentHit.Text), parentId);
+
+        // Case (a): no publish anywhere in the log (or the design host/commit is unexpectedly missing, or
+        // the earliest boundary's commit is a ROOT with no parent to walk to — defensive either way): the
+        // current app document IS the era doc.
+        return (File.ReadAllText(currentSchemaPath), currentDesc, null);
+    }
+
+    // A fresh store over the CURRENT design host's files, re-resolved by IsDesignHost every call (never
+    // the boot-cached _designHostStore reference — see ResolveEraDoc's own doc). Null when no instance is
+    // design-shaped (a kernel with no designer at all — cloneInstance/atSeq still works, era resolution
+    // just always falls to case (a) then).
+    private IInstanceStore? FreshDesignHostStore()
+    {
+        var spec = _instances.Values.Select(i => i.Spec).FirstOrDefault(IsDesignHost);
+        if (spec is null) return null;
+        return new JsonFileInstanceStore(spec.DataPath, InstanceDescriptionLoader.LoadFile(spec.SchemaPath));
+    }
+
+    // A Commit row's cached `text` + its `parent` commit id (null = a root commit), read off the given
+    // design-host store. Null when the store is absent or the id does not resolve to a Commit row (defensive).
+    private static (string Text, int? ParentId)? TryReadCommitText(IInstanceStore? designHostStore, int commitId)
+    {
+        if (designHostStore is null) return null;
+        if (designHostStore.ReadById(commitId) is not (var typeName, var fields) || typeName != "Commit") return null;
+        if (fields.Fields.GetValueOrDefault("text") is not TextValue { Text: var text }) return null;
+        var parentId = fields.Fields.GetValueOrDefault("parent") is ReferenceValue { TargetId: { } p } ? p : (int?)null;
+        return (text, parentId);
     }
 
     // A mount name not currently in use: `desired`, else `desired-2`, `desired-3`, … The mount path

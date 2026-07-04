@@ -366,7 +366,7 @@ public sealed class PublishSteps
             id => id == TargetId ? new InstanceSpec(TargetId, "target", _targetAppPath, _targetDataPath) : null,
             createInstance: (_, _, _) => throw new InvalidOperationException("create not exercised by Publish.feature"),
             deleteInstance: _ => throw new InvalidOperationException("delete not exercised by Publish.feature"),
-            cloneInstance: _ => throw new InvalidOperationException("cloneInstance not exercised by Publish.feature"),
+            cloneInstance: (_, _) => throw new InvalidOperationException("cloneInstance not exercised by Publish.feature"),
             recordDesign: (_, _) => throw new InvalidOperationException("setDesign not exercised by Publish.feature"),
             restartInstance: id =>
             {

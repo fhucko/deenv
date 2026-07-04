@@ -642,7 +642,7 @@ public sealed class DesignMergeSteps
             resolveTarget: _ => null,
             createInstance: (_, _, _) => throw new InvalidOperationException("create not exercised by DesignMerge.feature"),
             deleteInstance: _ => throw new InvalidOperationException("delete not exercised by DesignMerge.feature"),
-            cloneInstance: _ => throw new InvalidOperationException("cloneInstance not exercised by DesignMerge.feature"),
+            cloneInstance: (_, _) => throw new InvalidOperationException("cloneInstance not exercised by DesignMerge.feature"),
             recordDesign: (_, _) => throw new InvalidOperationException("setDesign not exercised by DesignMerge.feature"),
             restartInstance: _ => Task.CompletedTask,
             renameInstance: (_, _) => throw new InvalidOperationException("rename not exercised by DesignMerge.feature"),

@@ -18,8 +18,12 @@ namespace DeEnv.Kernel;
 //   • create(design, name) — project the design into a NEW instance with the given display NAME, via
 //     the kernel create delegate (the C# create mechanism: write the doc, load, append the registry,
 //     refresh the live set). NO ports — addressing is by path (`/apps/<name>` derives from the name).
-//   • cloneInstance(sourceId) — copy an existing instance's app doc AND data into a NEW instance, via
-//     the kernel clone delegate. NO ports — the clone gets a unique mount name derived from the source.
+//   • cloneInstance(sourceId, atSeq?) — copy an existing instance's app doc AND data into a NEW instance,
+//     via the kernel clone delegate. NO ports — the clone gets a unique mount name derived from the
+//     source. `atSeq` (M13 slice 7, OPTIONAL — omitted is byte-identical to the pre-slice-7 clone)
+//     materializes the source's data as it stood at that log seq, under the SCHEMA in force then (the
+//     latest publish boundary at-or-before atSeq, else the source's current app.deenv) — time travel as a
+//     fresh fork with its OWN history (design doc §0/§6): "the app as of Tuesday," one op.
 //   • delete(targetId) — remove an existing instance, via the kernel delete delegate.
 //   • setDesign(design, targetId) — record (on the target's registry entry) that it now runs the
 //     passed design, AND deploy it onto the target — the IDE's "Apply" (remember-then-publish). It is
@@ -53,7 +57,7 @@ public sealed class KernelHostActions(
     Func<int, InstanceSpec?> resolveTarget,
     Func<string, string, int?, Task> createInstance,
     Func<int, Task> deleteInstance,
-    Func<int, Task> cloneInstance,
+    Func<int, int?, Task> cloneInstance,
     Func<int, int, Task> recordDesign,
     Func<int, Task> restartInstance,
     Func<int, string, Task> renameInstance,
@@ -289,15 +293,20 @@ public sealed class KernelHostActions(
         return null;
     }
 
-    // cloneInstance(sourceId): copy an existing instance (app doc + data) into a NEW one — the
+    // cloneInstance(sourceId, atSeq?): copy an existing instance (app doc + data) into a NEW one — the
     // data-carrying sibling of create. arg 0 is the SOURCE instance id (a bare int, not a schema
     // object); there are NO port args (the clone gets a unique mount name derived from the source —
-    // addressing is by path). The kernel clone delegate resolves the id and copies the files; an
-    // unknown id throws (surfaced as the reject). Blocked on for the same reason as create.
+    // addressing is by path). arg 1 is the OPTIONAL time-travel seq (M13 slice 7) — omitted (the default
+    // path) is byte-identical to the pre-slice-7 clone; when given, the clone gets what the source's data
+    // looked like at that log seq, under the schema in force then, instead of the source's current head.
+    // The kernel clone delegate resolves the id, materializes if needed, and copies the files; an unknown
+    // id or an invalid atSeq throws (surfaced as the reject, nothing created). Blocked on for the same
+    // reason as create.
     private object? Clone(JsonElement args)
     {
         var sourceId = ArgInt(args, 0);
-        cloneInstance(sourceId).GetAwaiter().GetResult();
+        var atSeq = ArgIntOptional(args, 1);
+        cloneInstance(sourceId, atSeq).GetAwaiter().GetResult();
         return null;
     }
 
@@ -1080,6 +1089,23 @@ public sealed class KernelHostActions(
             && v.ValueKind == JsonValueKind.String)
             return v.GetString()!;
         throw new InvalidOperationException($"host action expects a text argument at position {index}.");
+    }
+
+    // Read an OPTIONAL int argument (M13 slice 7 — cloneInstance's `atSeq`), mirroring ArgBoolOptional's
+    // shape: a call that omits it gets null (the default path, byte-identical to the pre-slice-7 clone —
+    // minimal by default). Code scalars ship as { type, value }; a bare JSON number is accepted too
+    // (defensive, matching ArgInt/ArgBoolOptional's leniency).
+    private static int? ArgIntOptional(JsonElement args, int index)
+    {
+        if (args.ValueKind != JsonValueKind.Array || args.GetArrayLength() <= index)
+            return null;
+        var arg = args[index];
+        if (arg.ValueKind == JsonValueKind.Number)
+            return arg.GetInt32();
+        if (arg.ValueKind == JsonValueKind.Object && arg.TryGetProperty("value", out var v)
+            && v.ValueKind == JsonValueKind.Number)
+            return v.GetInt32();
+        throw new InvalidOperationException($"host action expects an integer argument at position {index}.");
     }
 
     // Read an OPTIONAL bare bool argument (M13 slice 4 — publish's `dryRun`): a call that omits the

@@ -192,7 +192,9 @@ public sealed class HostActionSteps
 
     // What the fake delete/clone delegates recorded — the ids the kernel was asked to act on — so a
     // delete/clone scenario can assert the channel carried the right arguments (no real host). Clone
-    // takes only a source id now (no ports — the clone gets a mount name derived from the source).
+    // takes only a source id now (no ports — the clone gets a mount name derived from the source); its
+    // OPTIONAL atSeq (M13 slice 7) is accepted here for signature parity but this file's existing
+    // scenarios never pass one, so it is discarded, not recorded (nothing to assert yet).
     private int _deletedId;
     private bool _deleteInvoked;
     private int _clonedSourceId;
@@ -625,7 +627,7 @@ public sealed class HostActionSteps
                 _deleteInvoked = true;
                 return Task.CompletedTask;
             },
-            cloneInstance: sourceId =>
+            cloneInstance: (sourceId, _) =>
             {
                 _clonedSourceId = sourceId;
                 _cloneInvoked = true;
