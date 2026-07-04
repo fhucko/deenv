@@ -972,6 +972,13 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.EnsureServerAndBrowserAsync();
     }
 
+    [Given("the scalar-refetch input app is running")]
+    public async Task GivenScalarRefetchInputAppRunning()
+    {
+        ctx.Description = InstanceContext.ScalarRefetchInputDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
     [When("I type {string} into the scratch of the row titled {string}")]
     public async Task WhenTypeScratchOfRow(string value, string title) =>
         await ctx.Page!.Locator(".note-row").Filter(new() { HasText = title })
@@ -988,6 +995,29 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     [When("I reorder the rows")]
     public async Task WhenReorderRows() =>
         await ctx.Page!.Locator("button.reorder").ClickAsync();
+
+    [When("I type {string} into the scalar query input")]
+    public async Task WhenTypeScalarQueryInput(string value) =>
+        await ctx.Page!.Locator("input.query").FillAsync(value);
+
+    [When("a stale refetch reply echoes the old scalar query value")]
+    public async Task WhenStaleRefetchReplyEchoesOldScalarQueryValue() =>
+        await ctx.Page!.EvaluateAsync(
+            """
+            () => {
+                mergeState({
+                    leaves: { objects: {}, arrays: {} },
+                    scope: { query: { isReadOnly: false, value: { type: "simple", value: { type: "text", value: "" } } } },
+                    cache: []
+                });
+                renderUi();
+            }
+            """);
+
+    [Then("the scalar query input is still {string}")]
+    public async Task ThenScalarQueryInputStill(string value) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelector('input.query')?.value === {JsString(value)}");
 
     [Then("the first row is titled {string}")]
     public async Task ThenFirstRowTitled(string title) =>

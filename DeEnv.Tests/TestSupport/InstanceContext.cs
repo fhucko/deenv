@@ -915,6 +915,25 @@ public class InstanceContext
     public static InstanceDescription RowComponentListDb() =>
         InstanceDescriptionLoader.Load(RowComponentListApp);
 
+    public static InstanceDescription ScalarRefetchInputDb() =>
+        InstanceDescriptionLoader.Load(ScalarRefetchInputApp);
+
+    private const string ScalarRefetchInputApp = """
+    types
+        Db
+            title text
+
+    ui
+
+        var query = ""
+
+        fn render()
+            return <main>
+                <input class="query" value={query}>
+                <span class="echo">
+                    query
+    """;
+
     private const string RowComponentListApp = """
     types
         Db

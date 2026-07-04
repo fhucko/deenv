@@ -40,7 +40,7 @@ a new scenario: create design at runtime → commit → Commit row + main branch
 reboot. Suite green from 715.
 **Conflicts:** touches `KernelHostActions.cs` — do not run concurrently with B3/B4.
 
-### A2 — dt.ts scalar-var refetch race (LIVE bug; task chip task_ebc3903d exists)
+### A2 — dt.ts scalar-var refetch race — DONE 2026-07-04
 [M; builder opus — client-reconcile subtle zone; review architecture]
 Already fully specced in the pending task chip — if the chip was started, skip this entry.
 **Bug:** `dt.ts` `mergeState` unconditionally overwrites plain scalar `ui var`s with a refetch

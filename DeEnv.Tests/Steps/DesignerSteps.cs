@@ -723,17 +723,9 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     // ── When/Then: the Commit-button UX slice (M13's last piece) ─────────────────
 
-    // Waits out any refetch already in flight (e.g. a fresh design's editor render hits a VNA reading
-    // db.branches for the Last-commit line, firing an implicit refetch on open) before typing. Otherwise
-    // that refetch's reply lands AFTER the fill and mergeState (dt.ts) unconditionally overwrites a plain
-    // scalar `ui var` — like commitMessage — with its (pre-typing) echoed value, a general existing hazard
-    // this step just needs to not race into (test-harness-only wait; no app change).
     [When("I type {string} into the commit message")]
     public async Task WhenTypeCommitMessage(string message)
-    {
-        await ctx.Page!.WaitForFunctionAsync("() => typeof refetchInFlight !== 'undefined' && !refetchInFlight");
-        await ctx.Page.Locator(".design-editor input.commit-message").FillAsync(message);
-    }
+        => await ctx.Page!.Locator(".design-editor input.commit-message").FillAsync(message);
 
     // Just clicks — the commit message is NEVER cleared client-side (a UX review fix: a synchronous
     // clear both faked "done" before the server ack and destroyed the typed message on a rejected

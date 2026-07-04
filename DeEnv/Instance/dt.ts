@@ -35,6 +35,16 @@ interface AppState {
     serverToLocalIds: { [serverId: number]: number };
 }
 
+const lastMergedScopeScalars: { [key: string]: ExecInt | ExecBool | ExecText | ExecNull | undefined } = {};
+
+function isScalarValue(value: ExecValue | undefined): value is ExecInt | ExecBool | ExecText | ExecNull {
+    return value?.type === "int" || value?.type === "bool" || value?.type === "text" || value?.type === "null";
+}
+
+function sameScalar(a: ExecInt | ExecBool | ExecText | ExecNull, b: ExecInt | ExecBool | ExecText | ExecNull): boolean {
+    return a.type === b.type && (a.type === "null" || b.type === "null" || a.value === b.value);
+}
+
 // Merge a server state payload into uiStatic.state, resolving object/array refs to
 // shared instances by id (so identity is preserved across the graph).
 function mergeState(dtState: ServerDtState): void {
@@ -88,7 +98,13 @@ function mergeState(dtState: ServerDtState): void {
         // initializer to a fresh empty draft, which must not clobber the user's input.
         const existing = scope.items[key];
         if (existing && existing.value.type === "object" && existing.value.id < 0) continue;
-        scope.items[key] = { isReadOnly: value.isReadOnly, value: fromDtValue(value.value) };
+        const incoming = fromDtValue(value.value);
+        const last = lastMergedScopeScalars[key];
+        if (!value.isReadOnly && existing != null && isScalarValue(existing.value) && isScalarValue(incoming)
+            && last != null && !sameScalar(existing.value, last) && !sameScalar(existing.value, incoming)) continue;
+        scope.items[key] = { isReadOnly: value.isReadOnly, value: incoming };
+        if (isScalarValue(incoming)) lastMergedScopeScalars[key] = incoming;
+        else delete lastMergedScopeScalars[key];
     }
 
     // The memoized computation results + dependency refs, for reuse and invalidation.

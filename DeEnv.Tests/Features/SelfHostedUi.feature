@@ -442,6 +442,14 @@ Feature: Self-hosted generic UI (object forms)
     And the scratch of the row titled "Alpha" is "X"
     And the scratch of the row titled "Beta" is "Y"
 
+  @milestone-11 @single-user
+  Scenario: A stale refetch reply does not erase a scalar input edit
+    Given the scalar-refetch input app is running
+    When I open "/"
+    And I type "abc" into the scalar query input
+    And a stale refetch reply echoes the old scalar query value
+    Then the scalar query input is still "abc"
+
   # An explicit key on a component folds into its slot identity, so changing the key resets it
   # (fresh setup + state) — the opt-in "reset when X changes" escape hatch (slice 3).
   @milestone-11 @single-user
