@@ -413,9 +413,11 @@ DECISIONS.md.
   banner), landed 2026-07-04, suite 694; slice 7 = time-travel
   clones — cloneInstance(id, atSeq) with exact era-schema resolution, landed 2026-07-04,
   suite 704; + the single-store-per-file kernel fix (a proven commit-clobber/WAL-collision
-  class, killed structurally), landed 2026-07-04, suite 708. ALL SEVEN CORE SLICES DONE;
-  the milestone's remaining piece = the Commit-button UX slice (lockstep interpreter
-  wiring)).
+  class, killed structurally), landed 2026-07-04, suite 708. the Commit-button UX slice
+  (lockstep interpreter wiring + the designer's commit affordance with confirmation),
+  landed 2026-07-04, suite 715. **M13 core + UX surface COMPLETE** — deferred-with-intent
+  ledger in docs/plans/versioning-slices.md; DECISIONS.md carries the milestone entry;
+  deploy-to-box + devlog dogfood = the open next decision).
 
   **MVP-critical substrate pulled forward — LANDED 2026-06-19/20.** A thin **non-destructive
   apply** — *data survives a schema change* — was built ahead of / interleaved with M11

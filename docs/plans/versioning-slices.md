@@ -207,6 +207,40 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    = the deferred concurrency class (comment honest now); `SchemaBridge.Export` looks dead —
    simplification-pass candidate.
 
+8. **The Commit-button UX slice — DONE 2026-07-04** (main `cc9d17a` + ux fixes `19c103f`; suite
+   715/715; ui-arch review SHIP — lockstep sweep clean at all five sites; ux SHIP-WITH-FIXES,
+   all applied). `sys.commitDesign` wired LOCKSTEP (HostActionScan + CodeValidator arity +
+   CodeExecutor ExecNothing + codeExec.ts execCommitDesign, mirroring publish exactly;
+   host actions are outside the conformance contract by documented precedent;
+   createBranch/mergeBranch deliberately stay WS-op-only until their UI). Designer UI (Code
+   only): commit-bar (message input + Commit + History link) on the design editor; a
+   "Last commit: …" confirmation line reading the branch head (refetch updates it = positive
+   confirmation; the input is NOT cleared, so a rejected commit retains the typed message);
+   /commits = the free generic SetTable, newest-first (orderBy 0−logSeq), `linked={false}`
+   (no dead row-links until a detail page exists). ✔
+
+**THE MILESTONE'S CORE + UX SURFACE IS COMPLETE (slices 1–7 + the single-store fix + the
+Commit button, 2026-07-03/04, suite 628→715).**
+
+## Versioning-UX + follow-up ledger (deferred deliberately; do not lose)
+
+- **Fast-follow (small, real):** a design created at RUNTIME has no `main` Branch until the
+  next boot (`EnsureMainBranches` is boot-only) → Commit on a fresh design fails with the
+  branch-lookup error (scenario-documented). Fix: lazy ensure-main-branch on first
+  commitDesign (idempotent, mirrors the boot semantics).
+- **Live runtime bug (own task chip spawned):** dt.ts `mergeState` scalar-var refetch race —
+  a refetch reply can stomp text the user is typing in ANY bound input. Test harness
+  works around it; the app hazard is real.
+- Commit-detail page (`/commits/<id>` — the natural target of the row-link `linked={false}`
+  currently suppresses); diff view between commits; publish-from-history (+ dry-run report
+  rendering); branch UI (createBranch/mergeBranch surfaces + their lockstep wiring).
+- Fine per-field conflict UI obligations — see slice 6's ledger above.
+- Semantic migrations (`fn migrate` + `Commit.migration` — boundary entries exist, the
+  addition is safe per the slice-4 note); compaction (`sys.compact`, §6); non-temporal field
+  flag (§0b); per-verb sys granularity.
+- Cosmetics: humanized datetimes in generic tables; "(no message)" placeholder generically;
+  the global banner's "Change rejected" vocabulary vs commit actions.
+
 ## Slice-1 spec pointers
 
 Full detail (entry shape, files, Gherkin) lives with the slice's feature file

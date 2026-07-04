@@ -129,10 +129,14 @@ the keep-mine/take-theirs banner**, the fine per-field UI's obligations
 ledgered in the slices doc; time-travel clones — `cloneInstance(id, atSeq)`
 with exact era-schema resolution via boundary base-commit stamps; plus the
 single-store-per-file kernel fix killing a proven commit-clobber/WAL-collision
-class). The `locked` access keyword landed alongside. ALL SEVEN CORE SLICES
-ARE DONE — the milestone's last piece is the Commit-button UX slice (the
-lockstep `sys.commitDesign` interpreter wiring + the designer's versioning
-surface). **M12 (visual component designer) stays deferred
+class). The `locked` access keyword landed alongside. **M13's core + UX surface is
+COMPLETE (2026-07-04, suite 715)** — the Commit button landed with lockstep
+interpreter wiring; the designer commits, publishes rename-safely, resolves
+conflicts, and time-travels. Deferred-with-intent ledger (semantic migrations,
+compaction, fine conflict UI, branch/history UX) lives in
+`docs/plans/versioning-slices.md`; DECISIONS.md carries the milestone entry.
+The versioned build is NOT yet deployed to the box — deploy + devlog dogfood
+is the open decision. **M12 (visual component designer) stays deferred
 until after the MVP.** Login persistence + the committed-designer auth flip landed
 2026-07-04; remaining M-auth follow-ups (deploy login wiring, remove-user /
 inline role-edit, broader auth styling) live in ROADMAP.md

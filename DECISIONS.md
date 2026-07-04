@@ -1934,6 +1934,33 @@ code.
 (the real brick — versioned immutable documents, the foundation everything above sits on). The
 rest stays destination, kept reachable by guarding the seam.
 
+## M13 app versioning — DELIVERED (core + UX surface, 2026-07-03/04)
+
+**Slices 0–7 + the Commit button landed in two days** (suite 628→715; full sequenced record:
+`docs/plans/versioning-slices.md`; design: `docs/plans/app-versioning-design.md`). What deenv
+now has: an append-only per-instance changeset log (WAL append→snapshot, genesis, fsck =
+replay==head) as the only non-derivable artifact; design commits as ordinary data
+(`Commit`/`Branch` rows, `sys.commitDesign` = ONE atomic log entry) under the **authority
+inversion** (design-data + history = truth; `app.deenv` = a publish artifact; boot = one-time
+adoption); **rename-safe publish** by endpoint identity-diff over per-commit {text, idMap}
+caches with boundary-marked log entries (instance history survives deploys — the ROADMAP's
+"only a rename still reseeds" gap is closed, dated); branches + origin-keyed three-way merge
+(report + resolve-by-args v1); **field-level conflicts** (disjoint stale commits auto-merge —
+no retry storms; same-field collisions return {base, mine, theirs} from the log's old-values
+and render the coarse keep-mine/take-theirs banner); time-travel clones
+(`cloneInstance(id, atSeq)` with exact era-schema resolution via boundary base-commit stamps);
+and the designer's commit affordance with lockstep interpreter wiring.
+
+Hard-won lessons recorded where they'll be found again: the access floor is ALLOW-when-unruled
+(immutability = explicit rules → the `locked` keyword, its own addendum under M-auth); **one
+store instance per data file** is a kernel invariant, not a convention (the multi-store class
+produced a proven commit-clobber + WAL-seq-collision — killed structurally, self-publish
+guarded); the WAL order (append THEN snapshot) is a law reviews must re-check at every new
+write site (a publish-path inversion would have bricked instances at deploy-crash); boundary
+markers record the commit a publish migrated FROM (a parent-walk heuristic was proven wrong at
+multi-commit gaps). Deferred with intent (ledger in the slices doc): semantic `fn migrate`,
+compaction, the fine per-field conflict UI, branch/history UX, non-temporal fields.
+
 ## Versioning — unified schema+data, Git-for-data, the instance pins a commit (north star)
 
 Captures a design discussion (2026-06-16) on how deenv versions the db. **North star,
