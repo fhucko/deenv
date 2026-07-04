@@ -291,7 +291,65 @@ ui
                 "Commit history"
             <a class="back" href="/designs">
                 "Back"
-            <SetTable set={newestFirst} desc={sys.schema("Commit")} setPath="/commits" columns={["message", "at", "design"]} linked={false}>
+            <SetTable set={newestFirst} desc={sys.schema("Commit")} setPath="/commits" columns={["message", "at", "design"]}>
+
+    fn commitDetail(c)
+        return <div class="commit-detail">
+            <div class="commit-field">
+                <span class="field-label">
+                    "Message"
+                <span class="field-value">
+                    c.message == "" ? "(no message)" : c.message
+            <div class="commit-field">
+                <span class="field-label">
+                    "At"
+                <span class="field-value">
+                    c.at
+            <div class="commit-field">
+                <span class="field-label">
+                    "Design"
+                <span class="field-value">
+                    c.design != null ? c.design.label : "(none)"
+            <div class="commit-field">
+                <span class="field-label">
+                    "Parent"
+                <span class="field-value">
+                    if c.parent != null
+                        <a class="parent-link" href={sys.nest("/commits", c.parent)}>
+                            c.parent.message == "" ? "(no message)" : c.parent.message
+                    else
+                        "(none)"
+            if c.mergeParent != null
+                <div class="commit-field">
+                    <span class="field-label">
+                        "Merge parent"
+                    <span class="field-value">
+                        <a class="parent-link" href={sys.nest("/commits", c.mergeParent)}>
+                            c.mergeParent.message == "" ? "(no message)" : c.mergeParent.message
+            <div class="commit-field">
+                <span class="field-label">
+                    "Log seq"
+                <span class="field-value">
+                    c.logSeq
+            <label class="text-label">
+                "Snapshot (canonical source)"
+            <pre class="commit-text">
+                c.text
+
+    fn commitDetailPage()
+        var routeId = sys.toInt(sys.segment(path, 2))
+        return <main class="ide-commit-detail">
+            <h1>
+                "Commit"
+            <a class="back" href="/commits">
+                "Back"
+            if db.commits.any(c => sys.id(c) == routeId)
+                foreach c in db.commits
+                    if sys.id(c) == routeId
+                        commitDetail(c)
+            else
+                <p class="not-found">
+                    "Commit not found."
 
     fn instanceSelectorPage()
         var routeId = sys.toInt(sys.segment(path, 2))
@@ -335,7 +393,10 @@ ui
         else
             if section == "commits"
                 active = "designs"
-                page = commitsPage
+                if sub == ""
+                    page = commitsPage
+                else
+                    page = commitDetailPage
             else
                 if sub == ""
                     page = instancesListPage

@@ -407,7 +407,7 @@ public static class GenericUi
                                                     <td class="row-id">
                                                         if linked != false
                                                             <a class="row-link" href={sys.nest(setPath, m)}>
-                                                                sys.field(m, p.name)
+                                                                sys.field(m, p.name) == "" ? "(no " + sys.humanize(p.name) + ")" : sys.field(m, p.name)
                                                         else
                                                             <span class="row-link">
                                                                 sys.field(m, p.name)
@@ -427,7 +427,7 @@ public static class GenericUi
                                         <td class="row-id">
                                             if linked != false
                                                 <a class="row-link" href={sys.nest(setPath, m)}>
-                                                    sys.field(m, desc.labelProp)
+                                                    sys.field(m, desc.labelProp) == "" ? "(no " + sys.humanize(desc.labelProp) + ")" : sys.field(m, desc.labelProp)
                                             else
                                                 <span class="row-link">
                                                     sys.field(m, desc.labelProp)

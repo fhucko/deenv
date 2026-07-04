@@ -222,6 +222,20 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
 **THE MILESTONE'S CORE + UX SURFACE IS COMPLETE (slices 1–7 + the single-store fix + the
 Commit button, 2026-07-03/04, suite 628→715).**
 
+9. **B1 — Commit-detail page — DONE 2026-07-04** (Track B of the post-M13 backlog; suite
+   716/716; ui-arch + ux reviews SHIP). `/commits/<id>` route branch in the designer's
+   `render()` → `commitDetailPage` (mirrors `instanceSelectorPage` segment-for-segment:
+   `sys.toInt(sys.segment(path,2))` resolve, `db.commits.any` guard, `.not-found` + Back leg)
+   → `commitDetail(c)` renders message / at / design / parent (+ mergeParent when set) / logSeq
+   as a read-only field list, plus the cached canonical `text` in a height-capped `<pre>`.
+   The history `<SetTable>` is re-LINKED (`linked={false}` removed) so rows navigate to their
+   detail page; parent/mergeParent are links to their own detail pages. Generic ride-along in
+   the stdlib SetTable: the label cell renders a humanized `"(no <labelProp>)"` placeholder for
+   an EMPTY label WHEN linked (only the linked `<a>` branch — the non-linked `<span>` branches
+   are byte-for-byte unchanged), killing the phantom-empty-anchor that restoring `linked` would
+   otherwise reintroduce. ux fix applied: `.commit-text` capped at `max-height: 24rem` so a long
+   snapshot doesn't strand the metadata above a scroll-wall. ✔
+
 ## Versioning-UX + follow-up ledger (deferred deliberately; do not lose)
 
 - **Fast-follow (small, real):** a design created at RUNTIME has no `main` Branch until the
@@ -231,15 +245,16 @@ Commit button, 2026-07-03/04, suite 628→715).**
 - **Live runtime bug (own task chip spawned):** dt.ts `mergeState` scalar-var refetch race —
   a refetch reply can stomp text the user is typing in ANY bound input. Test harness
   works around it; the app hazard is real.
-- Commit-detail page (`/commits/<id>` — the natural target of the row-link `linked={false}`
-  currently suppresses); diff view between commits; publish-from-history (+ dry-run report
-  rendering); branch UI (createBranch/mergeBranch surfaces + their lockstep wiring).
+- Commit-detail page (`/commits/<id>`) — DONE 2026-07-04 (B1, slice 9 above). Still deferred:
+  diff view between commits (B2); publish-from-history + dry-run report rendering (B3); branch UI
+  (createBranch/mergeBranch surfaces + their lockstep wiring) (B4); fine per-field conflict UI (B5).
 - Fine per-field conflict UI obligations — see slice 6's ledger above.
 - Semantic migrations (`fn migrate` + `Commit.migration` — boundary entries exist, the
   addition is safe per the slice-4 note); compaction (`sys.compact`, §6); non-temporal field
   flag (§0b); per-verb sys granularity.
-- Cosmetics: humanized datetimes in generic tables; "(no message)" placeholder generically;
-  the global banner's "Change rejected" vocabulary vs commit actions.
+- Cosmetics: humanized datetimes in generic tables (still deferred — no cheap generic path yet);
+  the global banner's "Change rejected" vocabulary vs commit actions. (The generic humanized
+  "(no <labelProp>)" empty-label placeholder landed with B1.)
 
 ## Slice-1 spec pointers
 

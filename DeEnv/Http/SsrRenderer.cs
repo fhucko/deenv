@@ -736,6 +736,16 @@ public sealed class SsrRenderer
         /* The detail page's head: name (or inline rename) + the kebab on one line, above the selector. */
         .instance-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.6rem; }
 
+        /* The commit-detail page (/commits/<id>): a read-only field list + the cached canonical snapshot. */
+        .commit-detail { margin-top: 1rem; }
+        .commit-field { display: flex; gap: 0.6rem; padding: 0.35rem 0; border-bottom: 1px solid var(--border-soft); }
+        .commit-field .field-label { flex: 0 0 8rem; color: var(--muted); }
+        .commit-field .field-value { min-width: 0; word-break: break-word; }
+        .commit-detail .text-label { display: block; margin: 1rem 0 0.35rem; color: var(--muted); }
+        .commit-text { margin: 0; padding: 0.8rem; background: var(--surface); border: 1px solid var(--border);
+          border-radius: 8px; max-height: 24rem; overflow: auto; white-space: pre-wrap; word-break: break-word;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
+
         /* Todo showcase (the committed default app — a custom fn render composing the library).
            These rules are the todo's own LAYOUT only (cards, grid, row arrangement, widths); the
            components' visual appearance lives in the component rules above, never re-skinned here. */

@@ -80,7 +80,7 @@ tests. Small, honest simplification-pass item (the <3× rule cuts both ways).
 ## Track B — versioning UX (all touch `DeEnv/instances/1/app.deenv` + DesignerSteps —
 run SEQUENTIALLY among themselves, in this order; each is ui+ux-reviewed with screenshots)
 
-### B1 — Commit-detail page  [M; builder sonnet; reviews ui-arch + ux]
+### B1 — Commit-detail page  [DONE 2026-07-04 — suite 716/716; ui-arch + ux SHIP; slice 9 in versioning-slices.md]
 `/commits/<id>` currently re-renders the list; the history SetTable has `linked={false}` to
 suppress the dead link. **Build:** a commit-detail page (route branch in instances/1's
 `render()`, same idiom as `/commits`): message, at, design, parent (+ mergeParent when set),

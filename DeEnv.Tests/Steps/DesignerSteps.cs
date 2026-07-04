@@ -798,12 +798,36 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const r = document.querySelector('main.ide-commits .set-row'); return r != null && r.textContent.includes({JsString(message)}); }}");
 
-    // UX review FIX 3 (no dead self-link): the commits table was given linked={false}, so its label
-    // column (message) renders a plain span, never an <a> — proven by the ABSENCE of any row-link
-    // anchor anywhere in the table (not just on the just-committed row).
-    [Then("the commit history shows no row links")]
-    public async Task ThenCommitHistoryShowsNoRowLinks() =>
-        await Assert.That(await ctx.Page!.Locator("main.ide-commits a.row-link").CountAsync()).IsEqualTo(0);
+    // B1: a history row is now a real link (linked restored) — clicking it navigates client-side to the
+    // commit-detail page (/commits/<id>). Locate the row by its message and click its row-link.
+    [When("I open the commit {string} from the history")]
+    public async Task WhenOpenCommitFromHistory(string message)
+    {
+        await ctx.Page!.Locator($"main.ide-commits .set-row a.row-link:text-is({CssString(message)})").ClickAsync();
+        await ctx.Page.WaitForSelectorAsync("main.ide-commit-detail");
+    }
+
+    // B1: the commit-detail page renders each field as a .commit-field with a .field-value; a field-value
+    // equal to the message/design proves the right commit resolved (values are distinct across fields).
+    [Then("the commit detail page shows message {string}")]
+    public async Task ThenCommitDetailShowsMessage(string message) =>
+        await ctx.Page!.Locator($"main.ide-commit-detail .field-value:text-is({CssString(message)})").WaitForAsync();
+
+    [Then("the commit detail page shows design {string}")]
+    public async Task ThenCommitDetailShowsDesign(string design) =>
+        await ctx.Page!.Locator($"main.ide-commit-detail .field-value:text-is({CssString(design)})").WaitForAsync();
+
+    // B1 ride-along: the newest-first FIRST row's label cell is a real <a class="row-link"> (linked
+    // restored) whose text is the "(no <humanized labelProp>)" placeholder — "(no Message)" here (the
+    // generic empty-label fallback humanizes the prop name, matching the library convention) — proving both
+    // that the row links and that an empty message is not a phantom empty anchor.
+    [Then("the commit history's first row link reads {string}")]
+    public async Task ThenCommitHistoryFirstRowLinkReads(string text)
+    {
+        var link = ctx.Page!.Locator("main.ide-commits .set-row").First.Locator("a.row-link");
+        await link.WaitForAsync();
+        await Assert.That((await link.InnerTextAsync()).Trim()).IsEqualTo(text);
+    }
 
     [Then("the design {string} has a stored type named {string}")]
     public async Task ThenDesignHasStoredType(string designLabel, string typeName)

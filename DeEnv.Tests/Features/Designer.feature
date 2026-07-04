@@ -606,15 +606,38 @@ Feature: The operator IDE (designs library + instance design selector)
     When I open the commit history
     Then the commit history's first row has message "newest one"
 
-  # UX REVIEW FIX 3: no commit-detail page exists yet, so the history rows must NOT link anywhere —
-  # clicking through re-rendered the same list (a dead self-link), and an empty-message commit rendered
-  # a phantom empty <a>. Plain cells until the commit-detail page exists (ledgered future UX).
+  # B1 — the commit-detail page (/commits/<id>). The history table is LINKED again; clicking a row
+  # navigates client-side to the detail page, which resolves the commit by route id and shows its fields
+  # (message/at/design/parent/logSeq) + the cached canonical snapshot text, read-only. Back returns to
+  # the history list. (Replaces the old "no dead self-link" scenario, which pinned linked={false} while
+  # no detail page existed.)
   @milestone-13 @single-user
-  Scenario: The commit history rows are plain cells with no dead self-link
+  Scenario: A commit history row opens the commit-detail page and Back returns
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I type "snapshot A" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "snapshot A"
+    When I open the commit history
+    And I open the commit "snapshot A" from the history
+    Then the commit detail page shows message "snapshot A"
+    And the commit detail page shows design "todo"
+    When I navigate back
+    Then the commit history shows a commit with message "snapshot A"
+
+  # B1 ride-along: with the history LINKED again, an empty-message commit would otherwise render an empty,
+  # unclickable <a> (the phantom the old linked={false} avoided). The generic SetTable now renders a
+  # "(no <humanized labelProp>)" placeholder for an empty label WHEN linked, so the row has visible,
+  # clickable text that still routes to the detail page. The placeholder humanizes the prop name (matching
+  # the library's own convention, e.g. the "Message" column header), so the cell reads "(no Message)" —
+  # distinct from the design-editor's page-local last-commit line, which stays the lowercase "(no message)".
+  @milestone-13 @single-user
+  Scenario: An empty-message commit history row shows a placeholder label and still links
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
     And I edit the design "todo"
     And I click Commit
     Then the last-commit line eventually shows "(no message)"
     When I open the commit history
-    Then the commit history shows no row links
+    Then the commit history's first row link reads "(no Message)"
