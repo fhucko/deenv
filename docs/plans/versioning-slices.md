@@ -173,9 +173,31 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    keep-mine / take-theirs. First slice to touch wire + TS twin. GATE: conflict payload wire shape.
    Depends on 1.
 
-7. **Time-travel + `cloneInstance(id, atSeq)`.** Replay materializer; floor-over-history = today's
-   rules via lineage, removed fields deny-default, history-read gated to rule-changers. Depends on
-   1 (+5's floor bits).
+7. **Time-travel clones — DONE 2026-07-04** (main `719a2cf` + review fixes `c82855d`; suite
+   704/704 over the combined tree with the designer auth gate). `cloneInstance(id, atSeq)`:
+   materialize = genesis + fold of the ONE shared `AppLogReplay.Apply` up to atSeq (agrees with
+   fsck at head, scenario-proven); era-schema resolution via boundary markers —
+   **`BoundaryMarker` gained `baseCommitId`** (the commit the publish migrated FROM, known at
+   publish time) after the Opus review proved the initial parent-walk heuristic wrong for
+   multi-commit gaps (deployed C1 ← C2 ← C3-published: parent says C2, truth is C1 — the
+   scenario now exercises the multi-gap both directions); a boundary naming an unresolvable
+   commit FAILS LOUDLY (never silently serves the current doc; compaction's promoted
+   checkpoints become the era source when §6 lands — recorded residual); clones are forks with
+   fresh history (no log/genesis copied; slice-1 adoption on first mutation); era-stamped
+   `publishedCommitId` so future publishes diff from the right anchor; atSeq-absent =
+   byte-identical old clone; invalid atSeq creates nothing (registry + filesystem byte-clean).
+   §5's history-read gate = the existing `sys` rule for v1 (per-field floor-over-history rides
+   the future history-browsing UI). Builder-caught extras: era-resolution reads use a FRESH
+   design-host store (the boot-cached staleness class), and it DISCOVERED (not fixed) the
+   severe pre-existing mirror-clobber bug below. ✔
+
+   **URGENT STANDALONE FIX (discovered during slice 7; pre-existing since slice 3's
+   inversion):** `KernelHost._designHostStore` is cached at boot and is a WRITE path — every
+   `MirrorInstance*` call (after create/clone/delete/rename host actions) persists the
+   boot-time snapshot of the designer's data file, CLOBBERING any commits/branches/designs
+   written by fresh stores since boot. Repro: boot → commitDesign → clone twice → the second
+   clone's mirror write silently deletes the commits. Data-loss severity in the
+   design-data-is-truth world; lands BEFORE the Commit-button slice.
 
 ## Slice-1 spec pointers
 
