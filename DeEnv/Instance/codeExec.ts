@@ -1048,6 +1048,18 @@ function execSetDesign(codeCall: CodeCall, scope: ExecScope, context: ExecContex
     return { type: "nothing" };
 }
 
+// sys.commitDesign(design, message): a SERVER-ONLY host action — snapshot the design's CURRENT working
+// copy into an immutable Commit chained onto its owning branch (M13 slice 3). The design crosses the
+// wire as its id (schemaIdArg, like publish/setDesign); the message is a plain text arg (NOT wrapped —
+// it is not a schema object). Stages NOTHING in the data model; only fires the hostAction send-hook.
+// Returns nothing; SSR/refetch no-ops it (CodeExecutor's `commitDesign` host-action case).
+function execCommitDesign(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const design = executeValue(codeCall.params[0], scope, context).value;
+    const message = executeValue(codeCall.params[1], scope, context).value;
+    sendHostAction("commitDesign", [schemaIdArg(design), message]);
+    return { type: "nothing" };
+}
+
 // sys.login(name, password): a CLIENT-only host effect (M-auth login UI) — the session→principal bind.
 // Like execPublish it stages NOTHING in the data model (no obj.props mutation, no invalidateProp), but it
 // fires the dedicated `login` hook (NOT hostAction): login needs its REPLY to drive a refetch so the page
@@ -1315,6 +1327,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "delete": return execDelete(codeCall, scope, context);
         case "rename": return execRename(codeCall, scope, context);
         case "setDesign": return execSetDesign(codeCall, scope, context);
+        case "commitDesign": return execCommitDesign(codeCall, scope, context);
         case "login": return execLogin(codeCall, scope, context);
         case "logout": return execLogout(codeCall, scope, context);
         case "nest": return execNest(codeCall, scope, context);

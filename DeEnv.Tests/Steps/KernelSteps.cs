@@ -134,6 +134,39 @@ public sealed class KernelSteps(InstanceContext ctx)
                 "Delete"
     """;
 
+    // The M13 Commit-button variant of the same shape-≠-authority fixture: designer-SHAPED AND its Code
+    // calls sys.commitDesign (not sys.delete) — proving HostActionScan's AST wiring recognizes the newly
+    // added builtin exactly like it already recognizes delete/publish/etc. No Commit/Branch types are
+    // needed: the `sys` floor rejects BEFORE KernelHostActions.Run ever dispatches to CommitDesign (see
+    // WsHandler.HandleHostAction), so this fixture only needs the designer SHAPE (Db.designs) + a call site.
+    private const string DesignShapedCommitDesignNoRuleApp = """
+    types
+        Db
+            designs set of Design
+        Design
+            label text
+            initialData text
+            common text
+            ui text
+            types set of MetaType
+        MetaType
+            name text
+            baseType text
+            order int
+            props set of MetaProp
+        MetaProp
+            name text
+            type text
+            cardinality text
+            keyType text
+            order int
+
+    ui
+        fn render()
+            return <button class="danger" onClick={() => sys.commitDesign(1, "x")}>
+                "Commit"
+    """;
+
     // What the WS security-gate scenario recorded: the raw `hostAction` reply text (over a REAL
     // WebSocket to the plain instance's /ws) and the design-host's id it targeted.
     private string _hostActionWsReply = "";
@@ -222,6 +255,18 @@ public sealed class KernelSteps(InstanceContext ctx)
     {
         var dir = NewDir();
         WriteApp(dir, 1, DesignShapedNoRuleApp);
+        WriteRegistry(dir, ("shaped", 1));
+        _designHostId = 1;
+    }
+
+    // The Commit-button slice's AST-wiring guard: same shape-≠-authority fixture, but the Code calls
+    // sys.commitDesign instead of sys.delete — proving HostActionScan.UsesHostActions recognizes the
+    // newly wired builtin (a real seam gets built) exactly as it already does for the other host actions.
+    [Given("a registry whose only instance is designer-shaped, calls sys.commitDesign, and has no sys rule")]
+    public void GivenDesignShapedCommitDesignNoRuleRegistry()
+    {
+        var dir = NewDir();
+        WriteApp(dir, 1, DesignShapedCommitDesignNoRuleApp);
         WriteRegistry(dir, ("shaped", 1));
         _designHostId = 1;
     }

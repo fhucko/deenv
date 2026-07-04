@@ -504,3 +504,70 @@ Feature: The operator IDE (designs library + instance design selector)
     When the "todo" instance is renamed to "myrenamedtodo" via host action
     And I open the instances list
     Then the instances list shows the instance "myrenamedtodo" running design "todo"
+
+  # ── the Commit-button UX slice (M13 versioning's last piece) ─────────────────────────────
+  #
+  # sys.commitDesign(design, message) is now wired lockstep into the AST scan / validator / both
+  # interpreters (mirroring sys.publish's existing wiring exactly), and the design editor grows its
+  # first versioning surface: a message input + a Commit button. Committing snapshots the design's
+  # CURRENT working copy into an immutable Commit chained onto its branch's head (DesignCommit.feature
+  # is the full spec of that mechanism; this scenario is the UI's end-to-end proof it is reachable from
+  # the editor, not a re-test of the mechanism itself).
+  @milestone-13 @single-user
+  Scenario: Committing a design from the editor records history and clears the message
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I type "first snapshot" into the commit message
+    And I click Commit
+    Then the commit message input is empty
+    When I open the commit history
+    Then the commit history shows a commit with message "first snapshot"
+
+  # The AST wiring guard: an app whose Code calls sys.commitDesign is detected by
+  # HostActionScan.UsesHostActions exactly like the existing sys.publish/sys.delete detection
+  # (Kernel.feature's "designer-shaped, uses host actions" scenario) — the wiring this slice adds, proven
+  # at the same seam. A real seam is built (the AST wiring works), but the app declares no `sys` rule, so
+  # the authority gate still rejects — the same shape-≠-authority proof Kernel.feature already makes for
+  # sys.delete, now repeated for sys.commitDesign.
+  @milestone-13 @single-user
+  Scenario: An app whose Code calls sys.commitDesign is wired for host actions, and the sys rule still gates it
+    Given a registry whose only instance is designer-shaped, calls sys.commitDesign, and has no sys rule
+    And the kernel has started
+    When I send a hostAction "commitDesign" for that instance's own id over its WebSocket
+    Then the host action reply over the WebSocket is an error
+    And the kernel still hosts that instance
+
+  # Validator arity guard, mirroring sys.publish's existing 2-argument fixed arity: calling
+  # sys.commitDesign with the wrong number of arguments fails to LOAD (a load-time schema error), not at
+  # first paint — the same class Schema.feature's "loading is rejected" scenarios pin for other builtins.
+  @milestone-13 @single-user
+  Scenario: sys.commitDesign with the wrong number of arguments fails to load
+    Given the app description:
+      """
+      types
+          Db
+              designs set of Design
+          Design
+              label text
+
+      ui
+          fn render()
+              return <button onClick={() => sys.commitDesign(1)}>
+                  "Commit"
+      """
+    When the document is loaded
+    Then loading is rejected with an error mentioning "commitDesign"
+
+  # Empty-message commit: the designer's OTHER inputs (design label, rename) accept and persist an empty
+  # value with no client-side guard — a commit message is the same, honest kind of free text, so an
+  # empty message is ALLOWED, not silently blocked. Pinned so a future "helpfully" added required-field
+  # guard is a deliberate decision, not an accident.
+  @milestone-13 @single-user
+  Scenario: Committing with an empty message is allowed, matching the editor's other free-text inputs
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I click Commit
+    When I open the commit history
+    Then the commit history shows a commit with an empty message

@@ -81,6 +81,7 @@ public static class CodeValidator
         ["delete"] = 1,  // (targetId)
         ["rename"] = 2,  // (id, name)
         ["setDesign"] = 2, // (schema, targetId)
+        ["commitDesign"] = 2, // (design, message)
         ["login"] = 2,   // (name, password) — a client-only host effect (the session→principal bind)
         ["logout"] = 0,  // () — the mirror of login: a client-only host effect (clear the principal)
         ["nest"] = 2,

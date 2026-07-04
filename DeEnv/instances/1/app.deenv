@@ -75,6 +75,7 @@ access
 ui
     var renameId = 0
     var renameName = ""
+    var commitMessage = ""
     var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime", "password"]
     var typeKinds = ["object", "enum"]
     var cardinalities = ["single", "set", "dictionary"]
@@ -100,6 +101,10 @@ ui
         sys.rename(i.runtimeId, renameName)
         renameId = 0
 
+    fn doCommit(design)
+        sys.commitDesign(design, commitMessage)
+        commitMessage = ""
+
     fn navBar(active)
         return <nav class="ide-nav">
             <a class={active == "instances" ? "nav-link is-active" : "nav-link"} href="/instances">
@@ -123,6 +128,12 @@ ui
     fn designEditor(design)
         return <section class="design-editor">
             <input class="design-label" value={design.label}>
+            <div class="commit-bar">
+                <input class="commit-message" value={commitMessage}>
+                <button class="commit-design" onClick={() => doCommit(design)}>
+                    "Commit"
+                <a class="view-history" href="/commits">
+                    "History"
             <button class="add-type" onClick={() => addType(design)}>
                 "+ Type"
             foreach type in design.types
@@ -261,6 +272,14 @@ ui
                             "Apply"
         return render
 
+    fn commitsPage()
+        return <main class="ide-commits">
+            <h1>
+                "Commit history"
+            <a class="back" href="/designs">
+                "Back"
+            <SetTable set={db.commits} desc={sys.schema("Commit")} setPath="/commits" columns={["message", "at", "design"]}>
+
     fn instanceSelectorPage()
         var routeId = sys.toInt(sys.segment(path, 2))
         return <main class="ide-instance">
@@ -301,10 +320,14 @@ ui
             else
                 page = designEditorPage
         else
-            if sub == ""
-                page = instancesListPage
+            if section == "commits"
+                active = "designs"
+                page = commitsPage
             else
-                page = instanceSelectorPage
+                if sub == ""
+                    page = instancesListPage
+                else
+                    page = instanceSelectorPage
         return <div class="ide">
             navBar(active)
             page()

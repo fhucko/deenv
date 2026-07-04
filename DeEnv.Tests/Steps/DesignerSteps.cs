@@ -721,6 +721,50 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const e = document.querySelector('.design-editor input.design-label'); return e != null && e.value === {JsString(label)}; }}");
 
+    // ── When/Then: the Commit-button UX slice (M13's last piece) ─────────────────
+
+    [When("I type {string} into the commit message")]
+    public async Task WhenTypeCommitMessage(string message) =>
+        await ctx.Page!.Locator(".design-editor input.commit-message").FillAsync(message);
+
+    // The commit message var clears IMMEDIATELY on click (a local assignment, not gated on the WS
+    // reply — sys.commitDesign only fires the send-hook), so waiting for the input to empty proves the
+    // click ran but NOT that the commit landed. Poll the store for a new Commit row too, so a later
+    // "open the commit history" navigation always finds it (no fixed sleep — the real async completion).
+    [When("I click Commit")]
+    public async Task WhenClickCommit()
+    {
+        var before = _designer.Store.ReadExtent("Commit").Count;
+        await ctx.Page!.Locator(".design-editor button.commit-design").ClickAsync();
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Commit").Count > before);
+    }
+
+    [Then("the commit message input is empty")]
+    public async Task ThenCommitMessageInputEmpty() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const e = document.querySelector('.design-editor input.commit-message'); return e != null && e.value === ''; }");
+
+    [When("I open the commit history")]
+    public async Task WhenOpenCommitHistory()
+    {
+        await ctx.Page!.Locator(".design-editor a.view-history").ClickAsync();
+        await ctx.Page.WaitForSelectorAsync("main.ide-commits");
+        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+    }
+
+    [Then("the commit history shows a commit with message {string}")]
+    public async Task ThenCommitHistoryShowsMessage(string message) =>
+        await ctx.Page!.Locator($"main.ide-commits .set-row:has-text({CssString(message)})").WaitForAsync();
+
+    // An empty-message commit still creates a real row (the label column — Commit.message, the type's
+    // labelProp — renders empty text), so assert the store directly: a Commit exists whose message is "".
+    // The row IS in the DOM (a .set-row per member — SetTable never skips a member for an empty label),
+    // just with no visible text to locate it by, so the browser-visible proof is the row COUNT increasing.
+    [Then("the commit history shows a commit with an empty message")]
+    public async Task ThenCommitHistoryShowsEmptyMessage() =>
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Commit").Values
+            .Any(o => o.Fields.TryGetValue("message", out var v) && v is DeEnv.Storage.TextValue { Text: "" }));
+
     [Then("the design {string} has a stored type named {string}")]
     public async Task ThenDesignHasStoredType(string designLabel, string typeName)
     {

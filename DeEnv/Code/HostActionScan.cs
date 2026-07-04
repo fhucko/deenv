@@ -3,12 +3,13 @@ using DeEnv.Instance;
 namespace DeEnv.Code;
 
 // Static AST scan: does an app's Code CALL a host-action builtin (`sys.create` / `sys.delete` /
-// `sys.cloneInstance` / `sys.publish` / `sys.rename` / `sys.setDesign`) anywhere in its `ui`/`common`
-// sections? This is what the kernel uses to decide which instance gets a REAL KernelHostActions seam —
-// wiring is driven by actual code USE (the AST), not by schema SHAPE. An instance whose Code never calls
-// a host action gets NoHostActions (the seam is unwired, so a `hostAction` frame errors); one that does
-// gets the real seam, and its host actions are then gated by the app's own `sys` access rule
-// (AccessFloor.CanHostAction — the authority check, distinct from this WIRING check).
+// `sys.cloneInstance` / `sys.publish` / `sys.rename` / `sys.setDesign` / `sys.commitDesign`) anywhere in
+// its `ui`/`common` sections? This is what the kernel uses to decide which instance gets a REAL
+// KernelHostActions seam — wiring is driven by actual code USE (the AST), not by schema SHAPE. An
+// instance whose Code never calls a host action gets NoHostActions (the seam is unwired, so a
+// `hostAction` frame errors); one that does gets the real seam, and its host actions are then gated by
+// the app's own `sys` access rule (AccessFloor.CanHostAction — the authority check, distinct from this
+// WIRING check).
 //
 // The detector may be SIMPLE and conservative: a miss fails closed (an unwired seam → the action errors),
 // and a false hit is harmless (the access rule still gates every action). So it looks only for the exact
@@ -19,8 +20,12 @@ public static class HostActionScan
     // The host-action builtins, keyed off the ops KernelHostActions.Run dispatches (the authoritative
     // list). A `sys.<name>(...)` call with `name` in this set is a host-action call. Kept here beside the
     // scan; the arity list (CodeValidator.BuiltinArities) is the other place these names appear.
+    //
+    // `createBranch`/`mergeBranch` (M13 slice 5) are DELIBERATELY absent — they stay WS-op-only until
+    // their UI lands (the same "wire lockstep, all at once" rule the Commit-button slice's commitDesign
+    // addition follows, narrower scope: see docs/plans/versioning-slices.md slice 3's scope line).
     private static readonly HashSet<string> HostActionBuiltins =
-        ["create", "delete", "cloneInstance", "publish", "rename", "setDesign"];
+        ["create", "delete", "cloneInstance", "publish", "rename", "setDesign", "commitDesign"];
 
     // True when any Code in `desc` (ui vars/functions/render + common functions) calls a host-action
     // builtin. Used by KernelHost.HostActionsFor to wire the real seam only for a host-action-using app.

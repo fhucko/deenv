@@ -14,13 +14,13 @@ namespace DeEnv.Tests.Steps;
 // hosted instances — a lightweight design host (its schema alone gives it the IsDesignHost SHAPE, so
 // KernelHost.StartAsync populates _designHostStore, the era-resolution lookup this slice reads) and a
 // target app. Host actions are driven through a DIRECTLY-CONSTRUCTED KernelHostActions — the same
-// convention Publish.feature/PublishSteps.cs uses — rather than a real WebSocket: `commitDesign` is not
-// (yet) in HostActionScan.UsesHostActions' AST-wired builtin list (a named, ledgered scope line from M13
-// slice 3 — wiring it is the future Commit-button slice's job), so a lightweight fixture with no
-// host-action-calling Code never gets a REAL seam through KernelHost.HostActionsFor; constructing
-// KernelHostActions directly is the established bypass. Its `cloneInstance` delegate calls the REAL
-// `_kernel.CloneAsync` (not a recording stub), so the actual materializer + era-resolution logic under
-// test runs for real, reading the REAL _designHostStore a genuine KernelHost.StartAsync populated.
+// convention Publish.feature/PublishSteps.cs uses — rather than a real WebSocket: this fixture's Code
+// never calls a host-action builtin, so it never gets a REAL seam through KernelHost.HostActionsFor
+// regardless of which builtins HostActionScan.UsesHostActions recognizes (commitDesign included, since
+// the Commit-button slice wired it); constructing KernelHostActions directly is the established bypass,
+// unrelated to that wiring. Its `cloneInstance` delegate calls the REAL `_kernel.CloneAsync` (not a
+// recording stub), so the actual materializer + era-resolution logic under test runs for real, reading
+// the REAL _designHostStore a genuine KernelHost.StartAsync populated.
 [Binding]
 public sealed class TimeTravelSteps
 {
