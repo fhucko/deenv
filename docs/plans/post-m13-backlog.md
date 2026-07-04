@@ -150,10 +150,11 @@ disambiguated; theirs visible pre-choice.
 ## Track C — needs a DESIGN PASS first (do NOT hand to a bg builder as-is;
 run `/design` or a planning session, then slice)
 
-- **Semantic migrations** — `fn migrate` + `Commit.migration` (design doc §3 settled at the
-  design level; the designer-schema addition is safe now that boundary entries exist — but
-  the execution model needs its implementation design pass: authoring UX in the commit
-  dialog, old/oldDb/new scope wiring, collapse–step–collapse pathing).
+- **Semantic migrations** — DESIGN PASS DONE 2026-07-04: `docs/plans/semantic-migrations.md`
+  (position + self-grill #1, verdict SOUND-WITH-FIXES, fixes integrated). Awaiting user
+  approval of the schema/arity ask (`Commit.migration text` + hard 3-arity `sys.commitDesign`);
+  then milestone-planner slices it (sketch: slice 1 authoring+storage, slice 2 execution).
+  Slice 1 conflicts with Track B (app.deenv + KernelHostActions) — sequence after B3/B4.
 - **Compaction** — `sys.compact(instance, horizon)` (§6): fold-to-new-genesis, cache
   promotion, retention knobs, never-compact designer default; interacts with time-travel's
   era resolution (the recorded residual: promoted checkpoints become the era source).
