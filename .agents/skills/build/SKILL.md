@@ -96,7 +96,7 @@ recorded at spawn time) or rebase before review — main can move during long bu
 Commit on the branch (Co-Authored-By trailer), then fast-forward main:
 
 ```
-git -C <worktree> add <explicit paths>      # NOT -A — .Codex/launch.json is untracked-local
+git -C <worktree> add <explicit paths>      # NOT -A — .codex/launch.json is untracked-local
 git -C <worktree> commit -m "..."
 git merge --ff-only <branch-name>           # from the main worktree
 ```
