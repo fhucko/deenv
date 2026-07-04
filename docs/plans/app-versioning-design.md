@@ -143,6 +143,11 @@ error banner ("conflicting changes — reload or resolve"), so no app can silent
 **Verdict.** Settled: transient conflicts, ctx-driven UI, coarse-then-fine, resurrection on
 delete/modify. Open: the fine per-field UI's visual design (see-it loop when built); live-edit
 write-write stays last-write-wins until real-time (line already drawn).
+**IMPLEMENTED 2026-07-04 as slice 6** (coarse cut: disjoint auto-merge + {base,mine,theirs}
+payload + keep-mine/take-theirs banner; the fine-slice obligations ledger lives in
+versioning-slices.md §6 — notably: surface `theirs` before the choice, per-field resolve,
+multi-object disambiguation). Delete/modify-at-object-level resurrection: NOT in the coarse cut
+(rides the fine slice with §0 recovery).
 
 ## 3. Semantic migrations — execution model (the sharpest gap; session-4 topic)
 

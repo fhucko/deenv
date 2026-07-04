@@ -408,9 +408,10 @@ DECISIONS.md.
   `locked` access keyword + duplicate-subject rejection landed alongside; **slice 4 = structural
   diff + rename-safe publish with boundary log entries — THE MVP-VISIBLE PAYOFF — landed
   2026-07-03, suite 668**; slice 5 = branches + origin-keyed three-way merge (sys.createBranch /
-  sys.mergeBranch, report + resolve-by-args), landed 2026-07-03, suite 682; next = slice 6
-  (conflict payload + coarse UI — approved wire shape), slice 7 (time-travel), and the
-  Commit-button UX slice (lockstep interpreter wiring)).
+  sys.mergeBranch, report + resolve-by-args), landed 2026-07-03, suite 682; slice 6 = field-level
+  conflicts (disjoint auto-merge + {base,mine,theirs} payload + the coarse keep-mine/take-theirs
+  banner), landed 2026-07-04, suite 694; next = slice 7 (time-travel + cloneInstance(atSeq))
+  and the Commit-button UX slice (lockstep interpreter wiring)).
 
   **MVP-critical substrate pulled forward — LANDED 2026-06-19/20.** A thin **non-destructive
   apply** — *data survives a schema change* — was built ahead of / interleaved with M11

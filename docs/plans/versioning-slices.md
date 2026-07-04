@@ -139,8 +139,37 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    canonical → byte-stable thereafter). Meta-schema additions: `origin int` ×3 + `mergeParent`.
    Deferred as settled: branch deletion, rebase/cherry-pick, recursive LCA, fn identity. ✔
 
-6. **Data conflict payload + coarse UI.** Stale-overlapping commit returns `{base,mine,theirs}`
-   (base read from the log) instead of a flat reject; generic form + `<ConflictBar>` render it;
+6. **Data conflict payload + coarse UI — DONE 2026-07-04** (main `3e25bc3` + `a80dbe0` +
+   `e34e401`; suite 694/694 over the combined tree with login-persistence slice 1). What landed:
+   **field-level overlap analysis** — a stale-based commit whose fields are DISJOINT from the
+   interleaved changes now AUTO-MERGES (apply, not reject — the designed no-retry-storm
+   behavior); only same-field collisions reject, carrying the approved wire payload
+   `conflicts: [{object, field, base, mine, theirs}]` with bases read from the slice-1 log
+   (first-interleaved-write's old); sets/different-dict-keys commute; creates never conflict;
+   multi-object batches stay all-or-none. Client: `ctx.conflicts` + `ctx.keepMine()` /
+   `ctx.takeTheirs()` (client-only, the ctx.status precedent — C# twins are fixed constants, no
+   conformance case, verified). Generic form renders the coarse bar (names the conflicted
+   fields, draft kept); keep-mine = consent-framed force re-commit; take-theirs = drop + refetch
+   with an "Updated to latest" confirmation; Save/Discard HIDE while the bar owns the decision
+   (plain Save was a hidden force — ux finding); the global banner clears on resolution + any
+   successful ack (was stale post-resolution — ux blocks-landing finding; the unconditional SET
+   stays, it is load-bearing for no-silent-clobber); Take-theirs = solid safe-primary, Keep-mine
+   = outlined danger; custom renders fall back to the action-first global banner (no app can
+   silently clobber). Build saga worth remembering: the first full-suite run "failed 54" — a
+   two-tab hold-and-wait deadlock on the test pool's 4 page permits (slice 6 took two-tab
+   scenarios from 1 to 4), proven starvation-free-fixed via the project's ParallelLimiter idiom
+   (`TwoTabScenarioLimit`), NOT a ws.ts race; the builder initially misdiagnosed it as
+   environmental — falsified by a settled-machine rerun. Three-lens review (arch SHIP /
+   ui-arch SHIP / ux SHIP-WITH-FIXES, all findings fixed + both-directions verified).
+   **FINE-SLICE OBLIGATIONS LEDGER (the deferred per-field UI must):** show `theirs` inline
+   before choosing (today the operator chooses blind — the payload carries it, the client drops
+   it before Code: widen `ctx.conflicts` items with base/mine/theirs + per-field resolve when
+   `<ConflictBar>` lands); disambiguate multi-object conflicts by object (today two `title`s
+   render as "Title, Title"); decide the refresh-leave-guard (draft silently lost on F5 —
+   accepted coarse limit for now); double-banner-during-conflict is DELIBERATE (not a bug);
+   Take-theirs int-tagging of wire scalars is a documented display-transient seam if the fine
+   UI ever reads `theirs` without a refetch. Log-read cost on the stale path = whole-file,
+   honestly ceilinged (in-memory tail when it ever gets hot). ✔
    keep-mine / take-theirs. First slice to touch wire + TS twin. GATE: conflict payload wire shape.
    Depends on 1.
 
