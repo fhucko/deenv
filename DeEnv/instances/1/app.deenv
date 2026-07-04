@@ -293,6 +293,48 @@ ui
                 "Back"
             <SetTable set={newestFirst} desc={sys.schema("Commit")} setPath="/commits" columns={["message", "at", "design"]}>
 
+    fn changesSinceParent(c)
+        var diff = sys.diffCommits(c.parent, c)
+        return <div class="diff-groups">
+            if diff.isEmpty
+                <p class="diff-muted">
+                    "No structural changes."
+            if diff.renames.any(r => true)
+                <div class="diff-group">
+                    <span class="diff-label">
+                        "Renamed"
+                    foreach r in diff.renames
+                        <div class="diff-rename">
+                            r.from + " → " + r.to
+            if diff.adds.any(a => true)
+                <div class="diff-group">
+                    <span class="diff-label">
+                        "Added"
+                    foreach a in diff.adds
+                        <div class="diff-add">
+                            a
+            if diff.removes.any(x => true)
+                <div class="diff-group">
+                    <span class="diff-label">
+                        "Removed"
+                    foreach x in diff.removes
+                        <div class="diff-remove">
+                            x
+            if diff.conversions.any(cv => true)
+                <div class="diff-group">
+                    <span class="diff-label">
+                        "Retyped"
+                    foreach cv in diff.conversions
+                        <div class="diff-convert">
+                            cv.path + ": " + cv.from + " → " + cv.to
+            if diff.cardinality.any(cd => true)
+                <div class="diff-group">
+                    <span class="diff-label">
+                        "Cardinality"
+                    foreach cd in diff.cardinality
+                        <div class="diff-cardinality">
+                            cd.path + ": " + cd.from + " → " + cd.to
+
     fn commitDetail(c)
         return <div class="commit-detail">
             <div class="commit-field">
@@ -331,6 +373,14 @@ ui
                     "Log seq"
                 <span class="field-value">
                     c.logSeq
+            <div class="commit-diff">
+                <label class="text-label">
+                    "Changes since parent"
+                if c.parent != null
+                    changesSinceParent(c)
+                else
+                    <p class="diff-muted">
+                        "No parent to compare."
             <label class="text-label">
                 "Snapshot (canonical source)"
             <pre class="commit-text">

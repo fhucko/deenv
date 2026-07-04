@@ -74,6 +74,7 @@ public static class CodeValidator
         ["extent"] = 1,
         ["canWrite"] = 2, // (typeName, verb) — server-resolved write capability, shipped like extent/schema
         ["canRead"] = 1,  // (typeName) — server-resolved read capability (hide unreadable collections/routes)
+        ["diffCommits"] = 2, // (from, to) — server-computed rename-aware structural diff, shipped like schema/canRead
         ["setRef"] = 3,
         ["publish"] = 2, // (schema, targetId)
         ["create"] = 2,  // (schema, name) — addressing is by path, so no port args

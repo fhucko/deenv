@@ -639,3 +639,26 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the last-commit line eventually shows "(no message)"
     When I open the commit history
     Then the commit history's first row link reads "(no Message)"
+
+  # B2 — the "Changes since parent" diff on the commit-detail page. Commit a baseline, then rename a type
+  # (retyping the referencing prop so the design stays valid) and commit again. Opening the second commit's
+  # detail page shows the STRUCTURAL diff against its parent, computed server-side by sys.diffCommits and
+  # shipped via the memo cache (like sys.schema/sys.canRead — no host action, no conformance). The payoff of
+  # the identity diff: the type change renders as a RENAME ("TodoItem → Task"), never as a remove+add.
+  @milestone-13 @single-user
+  Scenario: The commit-detail page shows a rename as a rename in "Changes since parent"
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I type "baseline" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "baseline"
+    When I rename the type "TodoItem" to "Task"
+    And I retype the prop "items" to "Task"
+    And I type "rename TodoItem" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "rename TodoItem"
+    When I open the commit history
+    And I open the commit "rename TodoItem" from the history
+    Then the changes-since-parent shows a rename from "TodoItem" to "Task"
+    And the changes-since-parent shows no removal of "TodoItem"

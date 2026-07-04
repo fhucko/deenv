@@ -235,6 +235,32 @@ Commit button, 2026-07-03/04, suite 628→715).**
    otherwise reintroduce. ux fix applied: `.commit-text` capped at `max-height: 24rem` so a long
    snapshot doesn't strand the metadata above a scroll-wall. ✔
 
+10. **B2 — "Changes since parent" diff view — DONE 2026-07-04** (Track B; suite 708/708;
+   architecture + ui-arch + ux reviews all SHIP after one ux fix). A new server-backed READ
+   builtin **`sys.diffCommits(from, to)`** — NOT a host action; modeled exactly on
+   `sys.schema`/`sys.canRead` (server computes + memoizes, the cache entry ships to the client,
+   which reuses it or VNAs→refetches on a miss). Renders inline on SSR AND hydrates/refetches on
+   client-side nav — no async reply, no wire payload. Keyed `diffCommits:{fromId}:{toId}` (both
+   twins mint the SAME key off the commits' intrinsic ids). LAYERING: `DeEnv.Code` still never
+   references `DeEnv.Designer` — the executor takes an injected `Func<ExecObject,ExecObject,
+   ExecContext,IExecValue>` delegate; `SsrRenderer.BuildCommitDiffReport` (where Designer is
+   visible) reads each commit's cached `text`+`idMap` off the object, runs `DesignDiffer.Compute`,
+   and builds the report as a Constant, distinct-negative-id object tree (so `ClientState` ships
+   it whole and its dedup doesn't collapse it to id=0 — the one real subtlety, cached DIRECTLY like
+   sys.schema since Memoize's factory guard refuses a fresh negative-id object). NO conformance
+   case (server computes, client only reuses — same as sys.schema/canRead). Report reuses
+   PublishReport vocabulary (renames from/to, adds/removes as `Type.prop` paths, conversions +
+   cardinality path/from/to), omitting publish-only boundary fields. UI: a "Changes since parent"
+   section in `commitDetail` (only when `c.parent != null`; "No parent to compare." / "No
+   structural changes." for the degenerate cases). ux fix: removes = red `--danger` (always
+   destructive); retypes + cardinality = amber `--warn` (may lose data) — distinct from
+   always-safe renames/adds. LIMITATION (ledgered, inherited from DesignDiff's migration lens): a
+   BRAND-NEW type is invisible in the diff (nothing to migrate) → a pure type-add reads as "No
+   structural changes"; fixing needs a `TypeAdd` in DesignDiff, which also touches publish — out of
+   B2 scope. A commit whose cached text somehow fails to parse blanks the WHOLE detail page (SSR
+   catch-all, logged not swallowed) — defensible: the cache is built from an already-validated
+   design at commit time. ✔
+
 ## Versioning-UX + follow-up ledger (deferred deliberately; do not lose)
 
 - **Fast-follow (small, real):** a design created at RUNTIME has no `main` Branch until the
@@ -244,9 +270,11 @@ Commit button, 2026-07-03/04, suite 628→715).**
 - **Live runtime bug (own task chip spawned):** dt.ts `mergeState` scalar-var refetch race —
   a refetch reply can stomp text the user is typing in ANY bound input. Test harness
   works around it; the app hazard is real.
-- Commit-detail page (`/commits/<id>`) — DONE 2026-07-04 (B1, slice 9 above). Still deferred:
-  diff view between commits (B2); publish-from-history + dry-run report rendering (B3); branch UI
+- Commit-detail page (`/commits/<id>`) — DONE (B1, slice 9). Diff view between commits — DONE
+  (B2, slice 10). Still deferred: publish-from-history + dry-run report rendering (B3); branch UI
   (createBranch/mergeBranch surfaces + their lockstep wiring) (B4); fine per-field conflict UI (B5).
+  B2 residual: a brand-new type is invisible in the diff (DesignDiff's migration lens — no TypeAdd);
+  revisit with B3's publish UI (same vocabulary) if a "what changed" (vs "what migrates") view is wanted.
 - Fine per-field conflict UI obligations — see slice 6's ledger above.
 - Semantic migrations (`fn migrate` + `Commit.migration` — boundary entries exist, the
   addition is safe per the slice-4 note); compaction (`sys.compact`, §6); non-temporal field

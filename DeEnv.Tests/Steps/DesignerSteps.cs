@@ -817,6 +817,25 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task ThenCommitDetailShowsDesign(string design) =>
         await ctx.Page!.Locator($"main.ide-commit-detail .field-value:text-is({CssString(design)})").WaitForAsync();
 
+    // B2 — the "Changes since parent" section. sys.diffCommits(parent, this) is a server-backed READ builtin
+    // (computed server-side, shipped via the memo cache, reused by the client twin — like sys.schema). A
+    // rename renders as ONE rename row ("From → To"), the identity-diff payoff — never a remove+add.
+    [Then("the changes-since-parent shows a rename from {string} to {string}")]
+    public async Task ThenChangesSinceParentRename(string from, string to) =>
+        await ctx.Page!.Locator($"main.ide-commit-detail .commit-diff .diff-rename:has-text({CssString(from + " → " + to)})").WaitForAsync();
+
+    // The other half of the rename proof: a renamed type must NOT also surface as a removal — the diff joins
+    // by intrinsic id, so the old name never appears in the "Removed" group.
+    [Then("the changes-since-parent shows no removal of {string}")]
+    public async Task ThenChangesSinceParentNoRemoval(string name)
+    {
+        // The rename row must be present first (proves the diff section rendered — otherwise "no removal"
+        // could pass vacuously on a not-yet-hydrated page).
+        await ctx.Page!.Locator("main.ide-commit-detail .commit-diff").WaitForAsync();
+        await Assert.That(await ctx.Page!.Locator($".commit-diff .diff-remove:has-text({CssString(name)})").CountAsync())
+            .IsEqualTo(0);
+    }
+
     // B1 ride-along: the newest-first FIRST row's label cell is a real <a class="row-link"> (linked
     // restored) whose text is the "(no <humanized labelProp>)" placeholder — "(no Message)" here (the
     // generic empty-label fallback humanizes the prop name, matching the library convention) — proving both

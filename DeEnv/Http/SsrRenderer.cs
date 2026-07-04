@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DeEnv.Code;
+using DeEnv.Designer;
 using DeEnv.Instance;
 using DeEnv.Storage;
 
@@ -229,7 +230,7 @@ public sealed class SsrRenderer
         var currentUser = LoadPrincipal(principalUserId);
         var floor = new AccessFloor(_desc.Rules ?? [], currentUser);
 
-        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor);
+        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor, BuildCommitDiffReport);
         // Ship EVERY schema descriptor on first paint (not lazily on first use), so a component
         // composing sys.schema(...) over a row that appears only after a client-side add still finds
         // its descriptor in the cache instead of missing. Descriptors are static, user-data-free.
@@ -488,6 +489,7 @@ public sealed class SsrRenderer
           color-scheme: light;
           --bg: #f6f8fa; --surface: #fff; --border: #d0d7de; --border-soft: #eaeef2;
           --text: #1f2328; --muted: #57606a; --accent: #0969da; --green: #1f883d; --danger: #cf222e;
+          --warn: #9a6700;
         }
         *, *::before, *::after { box-sizing: border-box; }
         body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
@@ -745,6 +747,19 @@ public sealed class SsrRenderer
         .commit-text { margin: 0; padding: 0.8rem; background: var(--surface); border: 1px solid var(--border);
           border-radius: 8px; max-height: 24rem; overflow: auto; white-space: pre-wrap; word-break: break-word;
           font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
+        /* "Changes since parent" — the structural (identity-based) diff between a commit and its parent. */
+        .commit-diff .diff-groups { display: flex; flex-direction: column; gap: 0.7rem; }
+        .commit-diff .diff-muted { margin: 0; color: var(--muted); }
+        .commit-diff .diff-group { display: flex; flex-direction: column; gap: 0.2rem; }
+        .commit-diff .diff-label { color: var(--muted); font-size: 0.85rem; }
+        .commit-diff .diff-rename, .commit-diff .diff-add, .commit-diff .diff-remove,
+        .commit-diff .diff-convert, .commit-diff .diff-cardinality {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9rem; }
+        /* Removes are ALWAYS destructive (red); retypes + cardinality reshapes are POTENTIALLY lossy
+           (amber "may lose data") — a scalar convert defaults unconvertible cells, a reshape can drop the
+           old value — so they signal caution without crying wolf like an always-safe rename/add. */
+        .commit-diff .diff-remove { color: var(--danger); }
+        .commit-diff .diff-convert, .commit-diff .diff-cardinality { color: var(--warn); }
 
         /* Todo showcase (the committed default app — a custom fn render composing the library).
            These rules are the todo's own LAYOUT only (cards, grid, row arrangement, widths); the
@@ -989,6 +1004,92 @@ public sealed class SsrRenderer
     // source of truth shared with the WsHandler write floor so both decide over an identical principal.
     private IExecValue LoadPrincipal(int? principalUserId) =>
         AccessFloor.LoadPrincipal(_store, _desc, principalUserId);
+
+    // ── sys.diffCommits (M13 Track-B B2) ────────────────────────────────────────
+
+    // The compute the CodeExecutor's `sys.diffCommits(from, to)` delegates to (threaded in above). Lives HERE,
+    // not in the Code layer, because it bridges to DesignDiffer (in DeEnv.Designer, which the interpreter core
+    // deliberately never references) — SsrRenderer is where both Designer and Code are visible. Traffics only
+    // Code-layer types: two commit ExecObjects + the render context (to mint transient ids), a Code report
+    // value out. The executor caches the returned report DIRECTLY under `diffCommits:{from}:{to}` (like
+    // sys.schema — Memoize's factory guard would refuse a fresh negative-id object), and that cache entry
+    // ships it to the client whole.
+    //
+    // Reads each commit object's cached `text` (an ExecText) and `idMap` (a Kind=Dict ExecArray of int-by-text
+    // entries) off its props, rebuilds each DesignSnapshot, and runs the rename-aware DesignDiffer. The report
+    // mirrors PublishReport's vocabulary (renames/adds/removes/conversions/cardinality) but omits the
+    // publish-only boundary-apply fields — a pure commit-to-commit diff has no apply result. Every node is
+    // marked Constant so ClientState ships the WHOLE tree (nested arrays and their items), never privacy-
+    // filtered to empty: the report is provably user-data-free structural metadata. Each object/array is
+    // minted with a DISTINCT transient (negative) id off context.LastId — exactly like an evaluated object
+    // literal — so ClientState's identity-dedup (seenObjects/seenArrays) ships each node once, not collapsing
+    // the whole tree onto a single shared id=0.
+    private static IExecValue BuildCommitDiffReport(ExecObject from, ExecObject to, ExecContext context)
+    {
+        var diff = DesignDiffer.Compute(SnapshotOf(from), SnapshotOf(to));
+
+        // Local constructors that mint a distinct negative id and stamp Constant, so the shipped tree arrives
+        // complete AND uniquely-identified on the client (see the id-dedup note above).
+        ExecText T(string v) => new() { Value = v };
+        ExecArray Arr(IEnumerable<IExecValue> items)
+        {
+            var list = items.ToList();
+            return new ExecArray
+            {
+                Id = --context.LastId.Value, Kind = ArrayKind.List, Constant = true,
+                Items = [.. list.Select((v, i) => new ExecItem { Key = i, Value = v })],
+            };
+        }
+        ExecObject Obj(params (string Name, IExecValue Value)[] props) =>
+            new() { Id = --context.LastId.Value, Constant = true, Props = props.ToDictionary(p => p.Name, p => p.Value) };
+
+        // renames: type renames (from=FromName, to=ToName) ++ prop renames (from="Type.fromProp", to="Type.toProp").
+        var renames = Arr([
+            .. diff.TypeRenames.Select(r => (IExecValue)Obj(("from", T(r.FromName)), ("to", T(r.ToName)))),
+            .. diff.PropRenames.Select(r => (IExecValue)Obj(
+                ("from", T($"{r.TypeName}.{r.FromProp}")), ("to", T($"{r.TypeName}.{r.ToProp}")))),
+        ]);
+        // adds: bare path strings "Type.prop", exactly like PublishReport.Adds.
+        var adds = Arr(diff.Adds.Select(a => (IExecValue)T($"{a.TypeName}.{a.PropName}")));
+        // removes: prop removes "Type.prop" ++ whole-type removes "Type" — bare path strings.
+        var removes = Arr([
+            .. diff.Removes.Select(r => (IExecValue)T($"{r.TypeName}.{r.PropName}")),
+            .. diff.TypeRemoves.Select(r => (IExecValue)T(r.TypeName)),
+        ]);
+        // conversions: { path, from, to } — a scalar type change.
+        var conversions = Arr(diff.Conversions.Select(c => (IExecValue)Obj(
+            ("path", T($"{c.TypeName}.{c.PropName}")), ("from", T(c.FromType)), ("to", T(c.ToType)))));
+        // cardinality: { path, from, to } — a single/set/dictionary reshape (Cardinality.ToString()).
+        var cardinality = Arr(diff.CardinalityChanges.Select(c => (IExecValue)Obj(
+            ("path", T($"{c.TypeName}.{c.PropName}")),
+            ("from", T(c.FromCardinality.ToString())), ("to", T(c.ToCardinality.ToString())))));
+
+        return Obj(
+            ("isEmpty", new ExecBool { Value = diff.IsEmpty }),
+            ("renames", renames),
+            ("adds", adds),
+            ("removes", removes),
+            ("conversions", conversions),
+            ("cardinality", cardinality));
+    }
+
+    // Rebuild a commit's DesignSnapshot (text + name-path→id map) from the props shipped on the commit object:
+    // `text` is a plain ExecText; `idMap` is a Kind=Dict ExecArray whose entries are scalar dict rows — each an
+    // entry object carrying its name-path in the reserved `__key` field and its int id in `value` (see
+    // DbBridge's dictionary materialization).
+    private static DesignSnapshot SnapshotOf(ExecObject commit)
+    {
+        var text = commit.Props.TryGetValue("text", out var t) && t is ExecText et ? et.Value
+            : throw new CodeRuntimeException("A commit passed to diffCommits() has no text snapshot.");
+        var idMap = new Dictionary<string, int>();
+        if (commit.Props.TryGetValue("idMap", out var m) && m is ExecArray { Kind: ArrayKind.Dict } arr)
+            foreach (var item in arr.Items)
+                if (item.Value is ExecObject entry
+                    && entry.Props.TryGetValue("__key", out var k) && k is ExecText key
+                    && entry.Props.TryGetValue("value", out var v) && v is ExecInt id)
+                    idMap[key.Value] = id.Value;
+        return new DesignSnapshot(text, idMap);
+    }
 
     // ── helpers ───────────────────────────────────────────────────────────────
 

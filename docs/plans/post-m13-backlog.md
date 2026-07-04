@@ -92,7 +92,7 @@ approach exists (else leave — it's ledgered, not required).
 **Accept:** browser scenario — click a history row → detail shows the right commit; back
 works. Suite green.
 
-### B2 — Diff view between commits  [M-L; builder sonnet; reviews ui-arch + ux]
+### B2 — Diff view between commits  [DONE 2026-07-04 — implemented as a server-backed READ builtin `sys.diffCommits` (NOT a host action — less surface, renders inline); suite 708/708; arch + ui-arch + ux SHIP; slice 10 in versioning-slices.md]
 The server already computes identity diffs (`DeEnv/Designer/DesignDiff.cs`, slice 4) over two
 commits' {text, idMap}. **Build:** on the commit-detail page (B1), a "changes since parent"
 section rendering the diff vs `parent` (renames/adds/removes/conversions/cardinality — the

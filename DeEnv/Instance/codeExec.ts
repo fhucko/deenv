@@ -950,6 +950,25 @@ function execCanRead(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     return r;
 }
 
+// diffCommits(from, to): the rename-aware structural diff between two design commits (M13 Track-B B2) —
+// the twin of execSchema/execCanRead. The server COMPUTES the diff (DesignDiffer, in the Designer layer)
+// and ships it via the memo cache; the client never computes — it only REUSES the shipped result under the
+// same key, keyed by the two commits' intrinsic ids (from.id:to.id) so both twins address the same entry.
+// A cache miss throws "Value not available", which the memoize wrapper turns into a refetch (the same
+// server-resolved-dependency path). No store/DesignDiffer on the client — there is nothing to compute here.
+function execDiffCommits(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const from = executeValue(codeCall.params[0], scope, context).value;
+    if (from.type !== "object") throw new Error("diffCommits() expects a commit object as its first argument.");
+    const to = executeValue(codeCall.params[1], scope, context).value;
+    if (to.type !== "object") throw new Error("diffCommits() expects a commit object as its second argument.");
+    // As in execSchema: a MISS makes memoize return an empty `nothing`; the report is always read as an
+    // object (`.isEmpty`/`.renames`/…), so re-throw the VNA rather than let a `nothing` leak into a value
+    // position (which would throw a misleading non-VNA error). The nearest memoize boundary swallows it → refetch.
+    const r = memoize("diffCommits:" + from.id + ":" + to.id, context, () => { throw new Error("Value not available"); });
+    if (r.type === "nothing") throw new Error("Value not available"); // a miss (never shipped)
+    return r;
+}
+
 // setRef(obj, prop, value): set/clear an object REFERENCE prop and persist it. value is an
 // existing candidate (id>0 → refId), a fresh draft (id<0 → its scalar props), or null
 // (clear). Stages in memory (UI reflects it), then sends the id-addressed WS op.
@@ -1320,6 +1339,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "schema": return execSchema(codeCall, scope, context);
         case "canWrite": return execCanWrite(codeCall, scope, context);
         case "canRead": return execCanRead(codeCall, scope, context);
+        case "diffCommits": return execDiffCommits(codeCall, scope, context);
         case "setRef": return execSetRef(codeCall, scope, context);
         case "publish": return execPublish(codeCall, scope, context);
         case "create": return execCreate(codeCall, scope, context);

@@ -40,13 +40,24 @@ public sealed class CodeExecutor
     // no floor) ⇒ no extent gating, exactly as a dormant app. See ExecuteExtent.
     private readonly AccessFloor? _floor;
 
+    // The structural commit-diff computer (M13 Track-B B2), injected by the renderer so `sys.diffCommits`
+    // can compute a rename-aware diff between two commit objects. Threaded as a DELEGATE — not a direct
+    // DesignDiffer call — because DesignDiffer lives in DeEnv.Designer, which this Code layer deliberately
+    // never references (the interpreter core references only DeEnv.Instance + DeEnv.Storage). The delegate
+    // traffics ONLY Code-layer types (two ExecObject commits + the context for minting transient ids in, an
+    // IExecValue report out); its impl lives in SsrRenderer, where both Designer and Code are referenceable.
+    // Null for a bare executor (conformance, a condition evaluator, the client twin) ⇒ `sys.diffCommits`
+    // throws, as it needs the designer host.
+    private readonly Func<ExecObject, ExecObject, ExecContext, IExecValue>? _commitDiff;
+
     public CodeExecutor(IInstanceStore? store = null, IReadOnlyDictionary<string, CodeObject>? descriptors = null,
-        TypeResolver? resolver = null, AccessFloor? floor = null)
+        TypeResolver? resolver = null, AccessFloor? floor = null, Func<ExecObject, ExecObject, ExecContext, IExecValue>? commitDiff = null)
     {
         _store = store;
         _descriptors = descriptors ?? new Dictionary<string, CodeObject>();
         _resolver = resolver;
         _floor = floor;
+        _commitDiff = commitDiff;
     }
 
     // ── statements ──────────────────────────────────────────────────────────────
@@ -526,6 +537,36 @@ public sealed class CodeExecutor
             throw new CodeRuntimeException("canRead() expects a text type name.");
         return Memoize($"canRead:{typeName.Value}", context,
             () => new ExecBool { Value = _floor?.CanReadType(typeName.Value) ?? true });
+    }
+
+    // diffCommits(from, to): the rename-aware STRUCTURAL diff between two design commits (M13 Track-B B2) —
+    // the same vocabulary PublishReport uses (renames/adds/removes/conversions/cardinality). A SERVER-BACKED
+    // READ, modeled on extent/schema/canRead: the server computes it and the cache entry ships to the client,
+    // so the commit-detail page renders it on SSR and reuses it on a client-side refetch (a miss → "Value not
+    // available" → refetch). NOT a host action (no async reply, no HostActionScan). Keyed by the two commits'
+    // intrinsic ids so both twins produce the SAME key (the client reuses the shipped result under it). The
+    // actual compute is the injected _commitDiff delegate (DesignDiffer lives in the Designer layer this core
+    // cannot reference); no delegate ⇒ no designer host ⇒ throw.
+    //
+    // Cached DIRECTLY (an empty-deps CacheEntry), exactly like sys.schema and for the same reason: the report
+    // is a freshly-minted transient (negative-id) object tree, which Memoize's factory guard refuses to cache
+    // (it assumes a getNewX-style mutable factory). The report is pure, deterministic, user-data-free
+    // structural metadata — caching it is correct, and the cache entry is precisely what ships it to the
+    // client. A hit returns the SAME report for the rest of the render.
+    private IExecValue ExecuteDiffCommits(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 2)
+            throw new CodeRuntimeException("diffCommits(from, to) takes two arguments.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject from)
+            throw new CodeRuntimeException("diffCommits() expects a commit object as its first argument.");
+        if (ExecuteValue(call.Params[1], scope, context) is not ExecObject to)
+            throw new CodeRuntimeException("diffCommits() expects a commit object as its second argument.");
+        var key = $"diffCommits:{from.Id}:{to.Id}";
+        if (context.Memo.TryGetValue(key, out var cached)) return cached.Result;
+        var report = _commitDiff?.Invoke(from, to, context)
+            ?? throw new CodeRuntimeException("diffCommits() requires a designer host context.");
+        context.Memo[key] = new CacheEntry { Key = key, Result = report, Deps = new Deps() };
+        return report;
     }
 
     // schema(typeName): a type's descriptor — { name, labelProp, props } — the reflective
@@ -1034,6 +1075,7 @@ public sealed class CodeExecutor
         "schema" => ExecuteSchema(call, scope, context),
         "canWrite" => ExecuteCanWrite(call, scope, context),
         "canRead" => ExecuteCanRead(call, scope, context),
+        "diffCommits" => ExecuteDiffCommits(call, scope, context),
         "nest" => ExecuteNest(call, scope, context),
         "segment" => ExecuteSegment(call, scope, context),
         "toInt" => ExecuteToInt(call, scope, context),
