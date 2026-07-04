@@ -395,7 +395,7 @@ public sealed class KernelHostActions(
         // Advance the OWNING branch's head (M13 slice 5) — the branch whose workingCopy IS this design,
         // whether that is "main" or a branch clone. Was FindMainBranch (main only) pre-slice-5; widened so a
         // branch commit advances its OWN head, not main's (a commit onto a design no branch owns is rejected).
-        var branch = FindBranchByWorkingCopy(store, designId)
+        var branch = FindOrCreateMainBranchByWorkingCopy(store, designId)
             ?? throw new InvalidOperationException($"Design {designId} has no owning branch to commit onto.");
         NodeValue? headField = branch.Fields.Fields.GetValueOrDefault("head");
         int? parentHeadId = headField is ReferenceValue { TargetId: { } h } ? h : null;
@@ -507,7 +507,7 @@ public sealed class KernelHostActions(
         var store = resolveStore();
 
         var sourceDesign = ReadDesign(store, sourceDesignId);
-        var sourceBranch = FindBranchByWorkingCopy(store, sourceDesignId)
+        var sourceBranch = FindOrCreateMainBranchByWorkingCopy(store, sourceDesignId)
             ?? throw new InvalidOperationException($"Design {sourceDesignId} has no owning branch to branch from.");
 
         // Name uniqueness among the APP's branches — resolved via lineage (the app's ORIGIN anchor), so a
@@ -661,9 +661,9 @@ public sealed class KernelHostActions(
 
         var sourceDesign = ReadDesign(store, sourceDesignId);
         var targetDesign = ReadDesign(store, targetDesignId);
-        var sourceBranch = FindBranchByWorkingCopy(store, sourceDesignId)
+        var sourceBranch = FindOrCreateMainBranchByWorkingCopy(store, sourceDesignId)
             ?? throw new InvalidOperationException($"Design {sourceDesignId} has no owning branch.");
-        var targetBranch = FindBranchByWorkingCopy(store, targetDesignId)
+        var targetBranch = FindOrCreateMainBranchByWorkingCopy(store, targetDesignId)
             ?? throw new InvalidOperationException($"Design {targetDesignId} has no owning branch.");
         var sourceBranchName = TextOf(sourceBranch.Fields, "name");
         var targetBranchName = TextOf(targetBranch.Fields, "name");
@@ -936,6 +936,30 @@ public sealed class KernelHostActions(
             if (branch.Fields.GetValueOrDefault("workingCopy") is ReferenceValue { TargetId: var t } && t == designId)
                 return (id, branch);
         return null;
+    }
+
+    // Runtime-created designs enter db.designs after boot, so EnsureMainBranches has never seen them.
+    // Lazily mint the same empty `main` branch shape the boot path gives a design before its first commit.
+    private static (int Id, ObjectValue Fields)? FindOrCreateMainBranchByWorkingCopy(IInstanceStore store, int designId)
+    {
+        if (FindBranchByWorkingCopy(store, designId) is { } existing) return existing;
+        if (store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString())) is not ObjectValue)
+            return null;
+        var branchesSetId = (store.ReadNode(NodePath.Root.Field("branches")) as SetValue)?.Id
+            ?? throw new InvalidOperationException("The designer's `db.branches` set is missing.");
+
+        const int branchTemp = -1;
+        var result = store.CommitBatch(
+            [new CommitCreate(branchTemp, "Branch", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("main"),
+            }))],
+            [
+                new SetLinkMutation(branchesSetId, branchTemp),
+                new RefLinkMutation(branchTemp, "workingCopy", designId, "Design"),
+            ]);
+        var branchId = result.Creates.First(c => c.TempId == branchTemp).RealId;
+        return store.ReadById(branchId) is ("Branch", var fields) ? (branchId, fields) : null;
     }
 
     // A row's lineage anchor: its own `origin` field if non-zero, else its own id (it IS its own lineage

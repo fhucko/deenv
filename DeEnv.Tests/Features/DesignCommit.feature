@@ -29,6 +29,13 @@ Feature: Design commits — Commit/Branch rows, sys.commitDesign, the authority 
     And that commit's idMap covers every type and prop in the design
     And the design's main branch head points at that commit
 
+  Scenario: First commit of a runtime-created design lazily creates its main branch
+    Given a designer instance holding a runtime-created design with a type "Item" and no branch
+    When the designer commits that design with message "first runtime cut" over the WS
+    Then the host action reply is ok
+    And db.commits holds a commit with message "first runtime cut"
+    And the design's main branch head points at that commit
+
   Scenario: A second commit chains to the first
     Given the designer already committed that design with message "first cut"
     When the designer commits that design with message "second cut" over the WS

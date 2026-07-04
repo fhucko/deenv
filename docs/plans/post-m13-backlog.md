@@ -21,7 +21,7 @@ the box, and none should re-pitch deployment.
 
 ## Track A — correctness fast-follows (small, disjoint, parallel-safe)
 
-### A1 — Lazy main-branch ensure on first commit  [S; builder sonnet; review architecture]
+### A1 — Lazy main-branch ensure on first commit — DONE 2026-07-04  [S; builder sonnet; review architecture]
 **Bug (scenario-documented):** a design created at RUNTIME (designer's generic New) has no
 `main` Branch row — `EnsureMainBranches` runs only at boot (`KernelHost.cs`) — so the first
 `sys.commitDesign` on it fails with the branch-lookup error ("owning branch"). The

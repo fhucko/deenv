@@ -230,6 +230,17 @@ public sealed class HostActionSteps
         DesignSetProp("Db", typeName.ToLowerInvariant() + "s", typeName);
     }
 
+    [Given("a designer instance holding a runtime-created design with a type {string} and no branch")]
+    public void GivenDesignerHoldingRuntimeCreatedDesign(string typeName)
+    {
+        OpenDesigner();
+        AddDesign(CustomUiSection, ensureMainBranch: false);
+        DesignType("Db", "object");
+        DesignType(typeName, "object");
+        DesignProp(typeName, "label", "text");
+        DesignSetProp("Db", typeName.ToLowerInvariant() + "s", typeName);
+    }
+
     // An INVALID design: its root Db is an object type with no props (SchemaBridge rejects it with a
     // "props" error). The projection validates the WHOLE app and writes nothing, so the host action
     // surfaces the rejection. No custom UI needed — the types are already invalid.
@@ -906,7 +917,8 @@ public sealed class HostActionSteps
         BranchesSet().Members
             .Where(m => m.Value is ObjectValue)
             .Select(m => (m.Key, Fields: (ObjectValue)m.Value))
-            .First(b => b.Fields.Fields.GetValueOrDefault("name") is TextValue { Text: "main" });
+            .First(b => b.Fields.Fields.GetValueOrDefault("name") is TextValue { Text: "main" }
+                && b.Fields.Fields.GetValueOrDefault("workingCopy") is ReferenceValue { TargetId: var t } && t == _designId);
 
     // The authorization reject teeth for commitDesign: the store's db.commits stayed empty — the `sys`
     // gate blocked the action BEFORE it ever reached KernelHostActions.Run (mirrors ThenNotAskedToDelete).
@@ -1205,7 +1217,7 @@ public sealed class HostActionSteps
     // The three section texts are authored verbatim; an empty ui section means the generic UI. Also
     // ensures the design's `main` Branch (the same idempotent shape KernelHost.EnsureMainBranches creates
     // at boot — M13 slice 3) so a commitDesign scenario has something to chain onto; head starts UNSET.
-    private void AddDesign(string uiSection)
+    private void AddDesign(string uiSection, bool ensureMainBranch = true)
     {
         _designId = _designer.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
         {
@@ -1215,6 +1227,8 @@ public sealed class HostActionSteps
             ["ui"]          = new TextValue(uiSection),
         }));
         _designer.AddToSet(NodePath.Root.Field("designs"), _designId);
+
+        if (!ensureMainBranch) return;
 
         var branchId = _designer.CreateObject("Branch", new ObjectValue(new Dictionary<string, NodeValue>
         {

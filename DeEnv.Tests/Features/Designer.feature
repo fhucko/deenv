@@ -529,20 +529,18 @@ Feature: The operator IDE (designs library + instance design selector)
     When I open the commit history
     Then the commit history shows a commit with message "first snapshot"
 
-  # The failure leg: committing a design with NO owning branch (a freshly-created design via the
-  # generic New — a branch is minted at boot's EnsureMainBranches / on first commit/createBranch, not
-  # on plain creation, so a same-session commit on a brand-new design genuinely has nothing to chain
-  # onto) rejects with the global error banner, and the typed message is STILL in the input for retry —
-  # proven by construction (nothing ever clears it), not by a special-cased recovery path.
+  # The failure leg: committing an invalid design rejects with the global error banner, and the typed
+  # message is STILL in the input for retry — proven by construction (nothing ever clears it), not by
+  # a special-cased recovery path.
   @milestone-13 @single-user
   Scenario: Committing an invalid design shows the global error banner and keeps the typed message
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
-    And I create a design named "blank"
-    And I edit the design "blank"
+    And I edit the design "todo"
+    And I rename the type "TodoItem" to ""
     And I type "won't land" into the commit message
     And I click Commit
-    Then the global error banner is shown mentioning "owning branch"
+    Then the global error banner is shown mentioning "unknown type"
     And the commit message input still holds "won't land"
 
   # The AST wiring guard: an app whose Code calls sys.commitDesign is detected by
