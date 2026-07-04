@@ -97,6 +97,40 @@ interface ConflictResolution {
 const conflictByMsgId = new Map<number, ConflictResolution>();
 const conflictByCtx = new WeakMap<ExecCtx, ConflictResolution>();
 
+// ── beforeunload guard (M13 Track-B B5) ──────────────────────────────────────────────────────────────
+//
+// While ANY ctx holds unresolved conflicts, the operator's draft (mine, kept in obj.props) is unsaved and
+// unrecoverable: an F5 / tab-close silently loses it (slice 6's "accepted coarse limit"). Register a single
+// window.beforeunload handler that prompts the browser's leave-confirmation when conflicts are outstanding,
+// and remove it the moment they all resolve — so the guard is present ONLY when there is something to lose.
+// The set tracks which ctxs are currently in conflict (a ctx enters on a conflict reply, leaves when its
+// conflicts empty); the listener toggles on the set's non-emptiness. `beforeUnloadGuard` holds the single
+// registered listener so it is added/removed exactly once (idempotent). Guarded on `typeof window` so the
+// non-browser twin (never loaded, but defensive) and any headless context are inert.
+const ctxsInConflict = new Set<ExecCtx>();
+let beforeUnloadGuard: ((e: BeforeUnloadEvent) => void) | null = null;
+function syncUnloadGuard(): void {
+    if (typeof window === "undefined") return;
+    if (ctxsInConflict.size > 0 && beforeUnloadGuard == null) {
+        beforeUnloadGuard = e => { e.preventDefault(); e.returnValue = ""; };
+        window.addEventListener("beforeunload", beforeUnloadGuard);
+    } else if (ctxsInConflict.size === 0 && beforeUnloadGuard != null) {
+        window.removeEventListener("beforeunload", beforeUnloadGuard);
+        beforeUnloadGuard = null;
+    }
+}
+
+// The single conflict-write path in ws.ts: set a ctx's conflicts (via codeExec's setCtxConflicts so the
+// banner re-renders) AND maintain the beforeunload guard's tracking set. Non-empty items → the ctx is in
+// conflict (guard on); empty → resolved (guard off if no other ctx conflicts). Every ws.ts conflict write
+// (the reply populate, the coarse/fine resolutions' clear-to-[]/shrink) goes through here.
+function applyCtxConflicts(ctx: ExecCtx, items: ExecValue[]): void {
+    setCtxConflicts(ctx, items);
+    if (items.length > 0) ctxsInConflict.add(ctx);
+    else ctxsInConflict.delete(ctx);
+    syncUnloadGuard();
+}
+
 // Three-lens review fix 4b: ctxs showing the transient "updated" status (take-theirs's confirmation,
 // symmetric to keep-mine's commit-ack "saved") awaiting the refetch that follows to LAND, so the reply
 // handler (onWsMessage's refetch branch) can settle each back to "idle" once the authoritative merge is
@@ -132,6 +166,24 @@ function wireScalarToExec(v: WireScalar): ExecValue {
     return { type: "text", value: v };
 }
 
+// One conflict as the Code-visible ExecObject the fine <ConflictBar> reads (M13 Track-B B5). Carries the
+// full wire payload — object id, typeName, field, and base/mine/theirs as ExecValues — so the bar can group
+// by object, label by type, and show mine-vs-theirs inline BEFORE the operator picks. id 0 = a transient
+// display-only object (never reconciled/keyed as a real db object).
+function conflictItem(c: WireConflict): ExecValue {
+    return {
+        type: "object", id: 0,
+        props: {
+            object: { type: "int", value: c.object },
+            typeName: { type: "text", value: c.typeName },
+            field: { type: "text", value: c.field },
+            base: wireScalarToExec(c.base),
+            mine: wireScalarToExec(c.mine),
+            theirs: wireScalarToExec(c.theirs),
+        } as { [name: string]: ExecValue },
+    };
+}
+
 // A conflict reply for a journaled commit (M13 slice 6). Finds the commit's registered resolution (by
 // msgId), retires the journal entry WITHOUT undoing it (mine stays in obj.props — the whole point), records
 // the per-field `theirs` for take-theirs, builds the ctx's `ctx.conflicts` list (each `{ field }`) so the
@@ -157,11 +209,13 @@ function handleConflictReply(msgId: number, error: string, conflicts: WireConfli
     const theirsMap = new Map<string, WireScalar>();
     for (const c of conflicts) theirsMap.set(c.object + ":" + c.field, c.theirs);
     takeTheirsValues.set(ctx, theirsMap);
-    // Build the Code-visible conflict list: one `{ field }` object per collision, so the banner can name the
-    // fields (`foreach c in ctx.conflicts` → `c.field`). Transient objects (id 0 — display-only, never keyed).
-    const items: ExecValue[] = conflicts.map(c =>
-        ({ type: "object", id: 0, props: { field: { type: "text", value: c.field } } as { [name: string]: ExecValue } }));
-    setCtxConflicts(ctx, items);
+    // Build the Code-visible conflict list (M13 Track-B B5 — FINE per-field UI): one object per collision
+    // carrying the FULL payload the wire already ships — `object`/`typeName`/`field` plus base/mine/theirs
+    // (converted from bare wire scalars to ExecValues via wireScalarToExec). The coarse bar used only
+    // `{field}`; the fine <ConflictBar> groups by `object`, labels each group by `typeName`, and shows
+    // mine-vs-theirs inline so the operator SEES both sides before choosing (the headline obligation). The
+    // transient id 0 is display-only (never keyed/reconciled as a real object).
+    applyCtxConflicts(ctx, conflicts.map(conflictItem));
     // Re-pin the ctx's base to the CURRENT version (the reply's newVersion) so a keep-mine re-commit forces
     // at a fresh base and the guard passes it. Never regress.
     if (typeof newVersion === "number") ctxBaseVersion.set(ctx, Math.max(ctxBaseVersion.get(ctx) ?? 0, newVersion));
@@ -716,7 +770,6 @@ function connectWs(): void {
             // all (remapping every created id), ONE reject rolls all back atomically (edits reverted AND
             // created rows dropped). Roots = every edited object + every created object (kept alive for undo).
             const editSnapshots = edits.map(e => ({ obj: e.obj, prop: e.prop, before: e.before, after: e.value }));
-            const wireEdits = edits.map(e => e.wire);
             const wireCreates: object[] = [];
             const wireRelations: object[] = [];
             for (const c of creates) {
@@ -771,6 +824,12 @@ function connectWs(): void {
                     conflictByMsgId.set(msgId, res);
                     conflictByCtx.set(ctx, res);
                 }
+                // Rebuild the wire edits from the CURRENT prop values at send time (NOT a snapshot captured at
+                // the first commit). This matters for the B5 per-field resolution's resend: a take-theirs field
+                // was overwritten in obj.props with the server's value, so the re-commit must carry THEIRS (a
+                // no-op at the fresh base), while a keep-mine field still holds mine (a deliberate force). The
+                // ORIGINAL send reads the same props (= mine), so it is unchanged. scalarOf handles a null prop.
+                const wireEdits = editSnapshots.map(s => ({ objectId: s.obj.id, prop: s.prop, value: scalarOf(s.obj.props[s.prop]) }));
                 wsSend({ op: "commit", id: msgId, clientId: uiStatic.clientId, baseVersion,
                     edits: wireEdits, creates: wireCreates, relations: wireRelations });
             }
@@ -787,7 +846,7 @@ function connectWs(): void {
             const res = conflictByCtx.get(ctx);
             if (res == null) return;
             conflictByCtx.delete(ctx);
-            setCtxConflicts(ctx, []); // leave conflict mode; the resend's own reply drives the next outcome
+            applyCtxConflicts(ctx, []); // leave conflict mode (guard off); the resend's own reply drives the next outcome
             // Three-lens review fix 1: the global banner is a REJECTION notice ("your edits were NOT saved…
             // reload"). Choosing Keep mine is the resolution — clearing it here (not at handleConflictReply's
             // SET, which stays unconditional/load-bearing for no-silent-clobber) means the banner never
@@ -807,7 +866,7 @@ function connectWs(): void {
                 const theirs = takeTheirsValue(ctx, eo.obj.id, eo.prop);
                 if (theirs !== undefined) { eo.obj.props[eo.prop] = theirs; invalidateProp(eo.obj.id, eo.prop); }
             }
-            setCtxConflicts(ctx, []);
+            applyCtxConflicts(ctx, []);
             // Three-lens review fix 1: same as keepMine — the rejection banner no longer describes reality
             // once the user has resolved by taking theirs (the draft is gone, values are now authoritative).
             uiStatic.lastError = null;
@@ -823,6 +882,46 @@ function connectWs(): void {
             pendingUpdatedCtxs.add(ctx);
             renderUi();
             maybeRefetch();
+        },
+        // Per-field resolution (M13 Track-B B5 — the fine <ConflictBar>'s per-field buttons, via codeExec's
+        // ctx.resolveField(object, field, take)). The model PROGRESSIVELY SHRINKS ctx.conflicts, deliberately
+        // sidestepping a client-only picks COLLECTION (a known framework constraint — a component-state array
+        // can't round-trip a refetch; B4 hit it). Each call resolves ONE (object, field):
+        //   • take=true (Take theirs): write the server's value (recorded on the conflict reply, keyed by
+        //     object:field) into that edited field's obj.props — the SAME per-field overwrite whole-ctx
+        //     takeTheirs does — then remove the item. mine is discarded for this field only.
+        //   • take=false (Keep mine): just remove the item — mine already sits in obj.props, nothing to write.
+        // When the LAST item is removed, ctx.conflicts is empty → re-commit at the fresh base via res.resend()
+        // (mirroring keepMine): keep-mine fields FORCE-overwrite; take-theirs fields now equal the server's
+        // current value so they no-op — no re-conflict. The re-commit's ack drives the coarse "Saved"/banner-
+        // clear path (slice 6). CLIENT-only; the failed-commit edits + theirs values live here (recorded on
+        // the reply), so the C# twin no-ops (like keepMine/takeTheirs — twin parity, no conformance).
+        resolveField: (ctx, object, field, take) => {
+            const res = conflictByCtx.get(ctx);
+            if (res == null) return;
+            if (take) {
+                const eo = res.editObjs.find(e => e.obj.id === object && e.prop === field);
+                if (eo != null) {
+                    const theirs = takeTheirsValue(ctx, object, field);
+                    if (theirs !== undefined) { eo.obj.props[field] = theirs; invalidateProp(object, field); }
+                }
+            }
+            // Shrink ctx.conflicts by this one (object, field). Each item is the display object built by
+            // conflictItem — its `object`/`field` props identify it.
+            const remaining = ctx.conflicts.filter(c =>
+                !(c.type === "object" && c.props["object"]?.type === "int" && c.props["object"].value === object
+                    && c.props["field"]?.type === "text" && c.props["field"].value === field));
+            applyCtxConflicts(ctx, remaining);
+            if (remaining.length === 0) {
+                // All fields resolved — leave conflict mode and re-commit at the fresh base (keep-mine forces,
+                // take-theirs no-ops). Mirrors the coarse keepMine finalize: clear the global rejection banner
+                // (it no longer describes reality) and delete the ctx's registration (the resend re-registers).
+                conflictByCtx.delete(ctx);
+                uiStatic.lastError = null;
+                res.resend();
+            } else {
+                renderUi();
+            }
         },
     });
 }

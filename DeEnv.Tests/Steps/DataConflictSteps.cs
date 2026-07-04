@@ -289,6 +289,42 @@ public sealed class DataConflictSteps(InstanceContext ctx)
     [When("conflict session 2 saves the title {string}")]
     public async Task WhenS2BrowserSave(string title) => await FillTitleAndSave(ctx.Page2!, "input.title", ".object-form button.save", title);
 
+    // B5 per-field: edit BOTH note fields (title text + count int) in one form and Save, so the commit
+    // stages two edits to ONE object — the two-field collision the fine bar renders as two rows in a group.
+    [When("conflict session 1 saves note {int}'s title {string} and count {int}")]
+    public async Task WhenS1SaveTwoFields(int id, string title, int count) => await FillTwoAndSave(ctx.Page!, title, count);
+
+    [When("conflict session 2 saves note {int}'s title {string} and count {int}")]
+    public async Task WhenS2SaveTwoFields(int id, string title, int count) => await FillTwoAndSave(ctx.Page2!, title, count);
+
+    private static async Task FillTwoAndSave(IPage page, string title, int count)
+    {
+        await page.WaitReadyAsync();
+        await page.Locator("input.title").FillAsync(title);
+        await page.Locator("input.count").FillAsync(count.ToString());
+        await page.Locator(".object-form button.save").First.ClickAsync();
+    }
+
+    // B5 per-field resolution: find the .conflict-field-row whose humanized field name matches (case-
+    // insensitively — the bar humanizes "title" → "Title"), then click its per-field Keep-mine / Take-theirs
+    // button. The row is disambiguated by object group in the DOM; matching on the field name is sufficient
+    // for the single-object fixture (two distinct field rows).
+    [When("conflict session 2 takes theirs for field {string}")]
+    public async Task WhenS2TakeTheirsField(string field) => await ClickFieldButton(field, "button.conflict-field-take");
+
+    [When("conflict session 2 keeps mine for field {string}")]
+    public async Task WhenS2KeepMineField(string field) => await ClickFieldButton(field, "button.conflict-field-keep");
+
+    private async Task ClickFieldButton(string field, string buttonSel)
+    {
+        var row = ctx.Page2!.Locator(".conflict-field-row")
+            .Filter(new LocatorFilterOptions { Has = ctx.Page2.Locator(".conflict-field-name", new PageLocatorOptions { HasTextString = Humanize(field) }) });
+        await row.Locator(buttonSel).ClickAsync();
+    }
+
+    // The label humanization the bar applies (first letter upper) — matches sys.humanize for a single word.
+    private static string Humanize(string field) => field.Length == 0 ? field : char.ToUpper(field[0]) + field[1..];
+
     // The custom-render fixture composes <ObjectForm>, so its title input + Save are the generic selectors;
     // the wrapping .custom-note render is what makes it a custom page (scenario 7 asserts the GLOBAL banner).
     [When("conflict session 1 saves the custom title {string}")]
@@ -327,6 +363,28 @@ public sealed class DataConflictSteps(InstanceContext ctx)
         await Assert.That(text.Contains(field, StringComparison.OrdinalIgnoreCase)).IsTrue();
         await Shot("banner");
     }
+
+    // B5: the fine bar shows THEIRS (the landed value) inline before the operator picks — the headline
+    // obligation. Asserted as its own DOM node (.conflict-theirs) so a regression that renders only the
+    // field name (the coarse behavior) is caught.
+    [Then("conflict session 2's conflict bar shows theirs value {string}")]
+    public async Task ThenS2BarShowsTheirs(string expected) =>
+        await ctx.Page2!.Locator(".conflict-theirs", new PageLocatorOptions { HasTextString = expected })
+            .WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
+
+    [Then("conflict session 2's conflict bar shows mine value {string}")]
+    public async Task ThenS2BarShowsMine(string expected) =>
+        await ctx.Page2!.Locator(".conflict-mine", new PageLocatorOptions { HasTextString = expected })
+            .WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
+
+    // B5 disambiguation: the collisions are grouped BY OBJECT under a labeled header (typeName + " #" + id),
+    // so two objects render as two distinguishable groups (not a flat "field, field" list). The single-object
+    // fixture produces one group; asserting its label carries the object identity proves the grouping/labeling
+    // mechanism that makes multiple objects distinguishable.
+    [Then("conflict session 2's conflict bar group is labeled for note {int}")]
+    public async Task ThenS2GroupLabeled(int id) =>
+        await ctx.Page2!.Locator(".conflict-group-label", new PageLocatorOptions { HasTextString = "Note #" + id })
+            .WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
 
     [When("conflict session 2 clicks Take theirs")]
     public async Task WhenS2TakeTheirs() => await ctx.Page2!.Locator("button.conflict-take").ClickAsync();

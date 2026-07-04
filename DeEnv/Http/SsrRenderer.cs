@@ -561,21 +561,38 @@ public sealed class SsrRenderer
         .field > input:not([type=checkbox]), .field > select { width: 100%; max-width: 440px; }
         a.list-title { display: inline-block; font-weight: 600; font-size: 0.95rem; }
 
-        /* Data-conflict coarse banner (M13 slice 6): a loud tinted bar at the top of the object form when a
-           same-field collision was rejected. Names the conflicted fields and offers Keep mine / Take theirs.
-           Button emphasis (three-lens review fix 4a — ux call, DECIDED, user can override): Take theirs is
-           the SAFE action (discard-and-refresh, never touches another session's data) — it gets the SOLID/
-           primary treatment. Keep mine is the LOUD one (a deliberate force-overwrite of a colleague's change)
-           — it gets the outlined/danger treatment, so the visually heaviest button is never the one that
-           overwrites someone else's work. Same green token the Save button direction already uses. */
+        /* Data-conflict bar (M13 slice 6 coarse → Track-B B5 FINE): a loud tinted bar at the top of the
+           object form when a same-field collision was rejected. B5 makes it FINE — the <ConflictBar> library
+           component groups the collisions BY OBJECT (a labeled group per object, so two objects' `title`
+           conflicts are distinguishable, not a flat "Title, Title"), shows each field's YOURS vs THEIRS value
+           INLINE so the operator SEES both sides before choosing, and offers a per-field Keep mine / Take
+           theirs pair (plus whole-bar "Keep all mine" / "Take all theirs" fallbacks). Button emphasis
+           (three-lens review fix 4a — ux call, DECIDED, user can override): Take theirs is the SAFE action
+           (discard-and-refresh, never touches another session's data) — it gets the SOLID/primary green
+           treatment. Keep mine is the LOUD one (a deliberate force-overwrite of a colleague's change) — it
+           gets the outlined/danger treatment, so the visually heaviest button is never the one that overwrites
+           someone else's work. */
         .conflict-bar { border: 1px solid var(--danger); background: #fff0f0; color: var(--danger);
           border-radius: 8px; padding: 0.7rem 0.9rem; margin: 0 0 1rem; }
-        .conflict-message { display: block; font-weight: 600; }
-        .conflict-field { font-weight: 700; }
-        .conflict-field:not(:last-of-type)::after { content: ", "; font-weight: 400; }
-        .conflict-actions { display: flex; gap: 0.5rem; margin-top: 0.6rem; }
-        .conflict-take { border-color: var(--green); color: #fff; background: var(--green); }
-        .conflict-keep { border-color: var(--danger); color: var(--danger); background: var(--surface); }
+        .conflict-message { display: block; font-weight: 600; margin-bottom: 0.5rem; }
+        .conflict-group { border-top: 1px solid rgba(207,34,46,.25); padding-top: 0.55rem; margin-top: 0.55rem; }
+        .conflict-group:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+        .conflict-group-label { font-weight: 700; font-size: 0.85rem; text-transform: uppercase;
+          letter-spacing: .02em; margin-bottom: 0.35rem; }
+        .conflict-field-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem;
+          padding: 0.35rem 0; }
+        .conflict-field-name { font-weight: 600; min-width: 7rem; }
+        .conflict-sides { display: flex; gap: 0.9rem; flex: 1 1 auto; color: var(--text); }
+        .conflict-side-label { display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: .02em;
+          color: var(--muted); }
+        .conflict-val { font-weight: 600; }
+        .conflict-empty { font-style: italic; color: var(--muted); }
+        .conflict-field-actions { display: flex; gap: 0.4rem; }
+        .conflict-field-actions button, .conflict-actions button { font-size: 0.85rem; }
+        .conflict-field-take, .conflict-take { border-color: var(--green); color: #fff; background: var(--green); }
+        .conflict-field-keep, .conflict-keep { border-color: var(--danger); color: var(--danger); background: var(--surface); }
+        .conflict-actions { display: flex; gap: 0.5rem; margin-top: 0.7rem; padding-top: 0.55rem;
+          border-top: 1px solid rgba(207,34,46,.25); }
 
         .set-table table, .dict-table table { border-collapse: collapse; width: 100%; margin: 0.3rem 0 0.7rem;
           background: var(--surface); border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }

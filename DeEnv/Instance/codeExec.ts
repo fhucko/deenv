@@ -1797,6 +1797,17 @@ function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
         // exit from conflict mode. The C# twin no-ops these (server renders once, never witnesses a conflict).
         case "keepMine": sendKeepMine(m.ctx); return { type: "nothing" };
         case "takeTheirs": sendTakeTheirs(m.ctx); return { type: "nothing" };
+        // Per-field resolution (M13 Track-B B5) — the fine <ConflictBar>'s per-field buttons:
+        // ctx.resolveField(object, field, take). take=true → take theirs for this field; false → keep mine.
+        // CLIENT-only, handed to ws.ts (which owns the failed-commit edits + theirs values). Args: an int
+        // object id, a text field name, a bool take. The C# twin no-ops (parity — server never conflicts).
+        case "resolveField": {
+            const object = args[0]?.type === "int" ? args[0].value : 0;
+            const field = args[1]?.type === "text" ? args[1].value : "";
+            const take = args[2]?.type === "bool" && args[2].value;
+            sendResolveField(m.ctx, object, field, take);
+            return { type: "nothing" };
+        }
         default: throw new Error(`Unknown context method '${m.method}'.`);
     }
 }
@@ -1843,6 +1854,12 @@ interface WsHooks {
     // conflicts. CLIENT-only — the failed-commit edits + theirs values live in ws.ts (recorded on the reply).
     keepMine(ctx: ExecCtx): void;
     takeTheirs(ctx: ExecCtx): void;
+    // Per-field resolution (M13 Track-B B5 — the fine <ConflictBar>'s per-field buttons). Resolve ONE
+    // (object, field): take=true writes the server's value into that field + drops the item; take=false just
+    // drops the item (mine stays). When the last item is dropped, ws.ts re-commits at the fresh base. This
+    // progressively SHRINKS ctx.conflicts, avoiding a client-only picks collection (a refetch can't round-trip
+    // component-state arrays — B4's constraint). CLIENT-only — the failed-commit edits + theirs live in ws.ts.
+    resolveField(ctx: ExecCtx, object: number, field: string, take: boolean): void;
 }
 let wsHooks: WsHooks | null = null;
 function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }
@@ -1891,6 +1908,9 @@ function sendKeepMine(ctx: ExecCtx): void {
 }
 function sendTakeTheirs(ctx: ExecCtx): void {
     wsHooks?.takeTheirs(ctx);
+}
+function sendResolveField(ctx: ExecCtx, object: number, field: string, take: boolean): void {
+    wsHooks?.resolveField(ctx, object, field, take);
 }
 
 // ── conformance entry point ───────────────────────────────────────────────────────

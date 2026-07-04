@@ -109,6 +109,16 @@ namespace DeEnv.Instance;
 //     is a CLIENT-only host effect (a server no-op like sys.publish): on the client it sends a `login` WS op
 //     whose reply drives a refetch, so the page re-renders as the bound principal (currentUser flips). The
 //     boundary lives UNDER it (the WS bind + the floor); relocating/restyling login cannot weaken it.
+//   • ConflictBar() (M13 slice-6 data conflicts, fine per-field UI B5) — a zero-arg COMPONENT reading the
+//     ambient `ctx.conflicts` (the same-field collisions from the last rejected commit, each carrying
+//     object/typeName/field/base/mine/theirs). Groups conflicts by object (labeled `TYPE #id`) and, per
+//     field, shows MINE vs THEIRS inline (so the operator chooses INFORMED, not blind) with a per-field
+//     Keep-mine / Take-theirs pair (`ctx.resolveField`) + whole-bar "Keep all mine" / "Take all theirs"
+//     shortcuts (`ctx.keepMine`/`ctx.takeTheirs`). ObjectForm renders it automatically; a custom `fn render()`
+//     composes `<ConflictBar>` to get the same surface. Client-only (the ctx.status precedent — C# twins are
+//     fixed empty constants; a conflict is a WS-reply phenomenon the server never witnesses). A custom render
+//     that renders NEITHER a ConflictBar nor `ctx.conflicts` still cannot silently clobber: the global error
+//     banner (uiStatic.lastError) is the unconditional fallback.
 //
 // A type's descriptor — { name, labelProp, props } — is fetched by
 // `sys.schema(typeName)`,
@@ -219,6 +229,59 @@ public static class GenericUi
                             body(close)
                 return render
 
+            fn ConflictBar()
+                fn keepAll()
+                    ctx.keepMine()
+                fn takeAll()
+                    ctx.takeTheirs()
+                fn resolve(object, field, take)
+                    ctx.resolveField(object, field, take)
+                fn render()
+                    return <div class="conflict-bar">
+                        <span class="conflict-message">
+                            "Someone else changed this while you were editing. Review each field — your draft still holds your values."
+                        foreach c in ctx.conflicts
+                            if ctx.conflicts.single(g => g.object == c.object).field == c.field
+                                <div class="conflict-group">
+                                    <div class="conflict-group-label">
+                                        sys.humanize(c.typeName)
+                                        " #"
+                                        c.object
+                                    foreach f in ctx.conflicts.where(g => g.object == c.object)
+                                        <div class="conflict-field-row">
+                                            <span class="conflict-field-name">
+                                                sys.humanize(f.field)
+                                            <div class="conflict-sides">
+                                                <div class="conflict-mine">
+                                                    <span class="conflict-side-label">
+                                                        "Yours"
+                                                    if f.mine == null
+                                                        <span class="conflict-empty">
+                                                            "(empty)"
+                                                    else
+                                                        <span class="conflict-val">
+                                                            f.mine
+                                                <div class="conflict-theirs">
+                                                    <span class="conflict-side-label">
+                                                        "Theirs"
+                                                    if f.theirs == null
+                                                        <span class="conflict-empty">
+                                                            "(empty)"
+                                                    else
+                                                        <span class="conflict-val">
+                                                            f.theirs
+                                            <div class="conflict-field-actions">
+                                                <button class="conflict-field-keep" onClick={() => resolve(f.object, f.field, false)}>
+                                                    "Keep mine"
+                                                <button class="conflict-field-take" onClick={() => resolve(f.object, f.field, true)}>
+                                                    "Take theirs"
+                        <div class="conflict-actions">
+                            <button class="conflict-keep" onClick={keepAll}>
+                                "Keep all mine"
+                            <button class="conflict-take" onClick={takeAll}>
+                                "Take all theirs"
+                return render
+
             fn ObjectForm(obj, meta, base, autosave, join, body, onSave, onCancel)
                 var live = autosave == true || (join == null && !meta.props.any(p => p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary"))
                 ambient ctx = ctx.new(live)
@@ -234,10 +297,6 @@ public static class GenericUi
                         onCancel()
                     else
                         ctx.discard()
-                fn keepMine()
-                    ctx.keepMine()
-                fn takeTheirs()
-                    ctx.takeTheirs()
                 fn render()
                     var canEdit = sys.canWrite(meta.name, "edit")
                     var hasFields = meta.props.any(p => p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary")
@@ -263,18 +322,7 @@ public static class GenericUi
                             <h2>
                                 meta.name
                             if ctx.conflicts.any(c => true)
-                                <div class="conflict-bar">
-                                    <span class="conflict-message">
-                                        "Someone else changed "
-                                        foreach c in ctx.conflicts
-                                            <span class="conflict-field">
-                                                sys.humanize(c.field)
-                                        " — your draft still holds your values."
-                                    <div class="conflict-actions">
-                                        <button class="conflict-keep" onClick={keepMine}>
-                                            "Keep mine"
-                                        <button class="conflict-take" onClick={takeTheirs}>
-                                            "Take theirs"
+                                <ConflictBar>
                             foreach p in meta.props
                                 if p.baseType == "object"
                                     if sys.canRead(p.target)

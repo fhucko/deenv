@@ -339,12 +339,15 @@ public sealed class CodeExecutor
                 m.Ctx.Creates.Clear();
                 return new ExecNothing();
             }
-            // Conflict resolution (M13 slice 6): keep-mine (force re-commit at the fresh base) / take-theirs
-            // (drop mine + refresh to theirs). CLIENT-only effects driven by a WS reply (codeExec.ts/ws.ts) —
-            // the C# twin renders once and never witnesses a conflict, so these are server no-ops (present
-            // for twin parity, so an SSR render that references them never throws "Unknown context method").
+            // Conflict resolution (M13 slice 6 + Track-B B5): keep-mine (force re-commit at the fresh base) /
+            // take-theirs (drop mine + refresh to theirs), and B5's per-field `resolveField(object, field,
+            // take)`. CLIENT-only effects driven by a WS reply (codeExec.ts/ws.ts) — the C# twin renders once
+            // and never witnesses a conflict, so these are server no-ops (present for twin parity, so an SSR
+            // render that references them never throws "Unknown context method"). NO conformance case: like
+            // ctx.status/ctx.conflicts, a conflict is a client-only WS-reply phenomenon with no dual semantics.
             case "keepMine":
             case "takeTheirs":
+            case "resolveField":
                 return new ExecNothing();
             default: throw new CodeRuntimeException($"Unknown context method '{m.Method}'.");
         }

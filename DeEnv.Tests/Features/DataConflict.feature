@@ -134,6 +134,47 @@ Feature: Data conflicts — field-level overlap, disjoint auto-merge, and the co
     And conflict session 2's global error banner is gone
     And conflict session 2's Save button is visible again
 
+  # ── (B5-a) the FINE bar shows THEIRS (and yours) inline BEFORE the operator picks ─────────────────────
+  # M13 Track-B B5 (the fine per-field UI). The coarse bar named the field but the operator chose BLIND —
+  # the wire carried `theirs` but the client dropped it. B5 stops dropping it: the same-field collision now
+  # renders session 1's value (theirs) AND session 2's own draft (mine) inline in the bar, so the operator
+  # SEES both sides before choosing. (The headline obligation from the slice-6 ledger.)
+  @multi-user
+  Scenario: The fine conflict bar shows theirs and mine inline before the operator chooses
+    Given the conflict fixture app is served
+    And conflict session 1 opens the note at "/notes/2"
+    And conflict session 2 opens the note at "/notes/2"
+    When conflict session 1 saves the title "Their landed title"
+    Then conflict note 2's stored title is "Their landed title"
+    When conflict session 2 saves the title "My kept title"
+    Then conflict session 2 sees the conflict banner naming "title"
+    And conflict session 2's conflict bar shows theirs value "Their landed title"
+    And conflict session 2's conflict bar shows mine value "My kept title"
+    And conflict session 2's conflict bar group is labeled for note 2
+
+  # ── (B5-b) per-field resolution: take-theirs one field, keep-mine another, in ONE object ──────────────
+  # Session 2 edits BOTH of note 2's fields (title + count) and the same base was collided on both by
+  # session 1. The fine bar lists two field rows in ONE object group. Session 2 resolves per-field: Take
+  # theirs for `title`, Keep mine for `count`. Resolving the last field re-commits at the fresh base — the
+  # store then holds title = THEIRS and count = MINE. (Per-field take-mine / take-theirs — obligation 3;
+  # the shrink-ctx.conflicts model, no client-only picks collection.)
+  @multi-user
+  Scenario: Per-field resolution takes theirs for one field and keeps mine for another
+    Given the conflict fixture app is served
+    And conflict session 1 opens the note at "/notes/2"
+    And conflict session 2 opens the note at "/notes/2"
+    When conflict session 1 saves note 2's title "One's title" and count 7
+    Then conflict note 2's stored title is "One's title"
+    And conflict note 2's stored count is 7
+    When conflict session 2 saves note 2's title "Two's title" and count 3
+    Then conflict session 2 sees the conflict banner naming "title"
+    And conflict session 2 sees the conflict banner naming "count"
+    When conflict session 2 takes theirs for field "title"
+    And conflict session 2 keeps mine for field "count"
+    Then conflict note 2's stored title is "One's title"
+    And conflict note 2's stored count is 3
+    And conflict session 2's conflict banner is gone
+
   # ── (7) a CUSTOM render that ignores ctx.conflicts still shows the global error banner (no clobber) ────
   # A fully-custom fn render() app that never reads ctx.conflicts must still fail loudly on a conflict —
   # the global error banner fires (the no-silent-clobber guarantee), and nothing crashes. The message is
