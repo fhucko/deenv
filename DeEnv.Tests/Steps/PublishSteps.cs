@@ -52,6 +52,7 @@ public sealed class PublishSteps
                 order int
             Commit
                 message text
+                migration text
                 at datetime
                 design Design
                 parent Commit
@@ -309,7 +310,7 @@ public sealed class PublishSteps
         _lastCommitMessage = message;
         var ws = Ws();
         var reply = ws.ProcessMessage(
-            $$"""{ "op": "hostAction", "clientId": "{{_clientId}}", "action": "commitDesign", "args": [ { "type": "int", "value": {{_designId}} }, { "type": "text", "value": "{{message}}" } ] }""");
+            $$"""{ "op": "hostAction", "clientId": "{{_clientId}}", "action": "commitDesign", "args": [ { "type": "int", "value": {{_designId}} }, { "type": "text", "value": "{{message}}" }, { "type": "text", "value": "" } ] }""");
         using var doc = JsonDocument.Parse(reply);
         if (!doc.RootElement.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
             throw new InvalidOperationException($"commitDesign failed: {reply}");

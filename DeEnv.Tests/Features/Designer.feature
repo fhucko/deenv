@@ -505,7 +505,7 @@ Feature: The operator IDE (designs library + instance design selector)
 
   # ── the Commit-button UX slice (M13 versioning's last piece) ─────────────────────────────
   #
-  # sys.commitDesign(design, message) is now wired lockstep into the AST scan / validator / both
+  # sys.commitDesign(design, message, migration) is now wired lockstep into the AST scan / validator / both
   # interpreters (mirroring sys.publish's existing wiring exactly), and the design editor grows its
   # first versioning surface: a message input + a Commit button + a "Last commit:" confirmation line
   # (DesignCommit.feature is the full spec of the commit mechanism; this scenario is the UI's

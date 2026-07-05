@@ -1127,15 +1127,17 @@ function execSetDesign(codeCall: CodeCall, scope: ExecScope, context: ExecContex
     return { type: "nothing" };
 }
 
-// sys.commitDesign(design, message): a SERVER-ONLY host action — snapshot the design's CURRENT working
+// sys.commitDesign(design, message, migration): a SERVER-ONLY host action — snapshot the design's CURRENT working
 // copy into an immutable Commit chained onto its owning branch (M13 slice 3). The design crosses the
 // wire as its id (schemaIdArg, like publish/setDesign); the message is a plain text arg (NOT wrapped —
-// it is not a schema object). Stages NOTHING in the data model; only fires the hostAction send-hook.
+// it is not a schema object). Migration is plain text stored on the Commit for publish-time execution.
+// Stages NOTHING in the data model; only fires the hostAction send-hook.
 // Returns nothing; SSR/refetch no-ops it (CodeExecutor's `commitDesign` host-action case).
 function execCommitDesign(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const design = executeValue(codeCall.params[0], scope, context).value;
     const message = executeValue(codeCall.params[1], scope, context).value;
-    sendHostAction("commitDesign", [schemaIdArg(design), message]);
+    const migration = executeValue(codeCall.params[2], scope, context).value;
+    sendHostAction("commitDesign", [schemaIdArg(design), message, migration]);
     return { type: "nothing" };
 }
 

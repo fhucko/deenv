@@ -4,7 +4,9 @@ Drafted 2026-07-04, triggered by the post-M13 backlog's Track C ("needs a DESIGN
 Status: **ACCEPTED — self-grills #1 (migration core) and #2 (revert model) both done,
 verdicts SOUND-WITH-FIXES, all fixes integrated; the §2 schema/arity ask APPROVED by the
 user 2026-07-04** (`Commit.migration text` + the hard 3-arity `sys.commitDesign` bump).
-Buildable now: slices 1–2 (§6). The restoration bundle (resurrect-with-id primitive +
+Slice 1 landed 2026-07-05: `Commit.migration text`, hard 3-arity `sys.commitDesign`,
+commit-time validation, designer textarea, and commit-detail rendering. Buildable next:
+slice 2 (§6). The restoration bundle (resurrect-with-id primitive +
 sys.revertCommit) is designed but re-scoped to its own later slice with its own approval
 ask. Next: milestone-planner slices it; sequence after Track B's B3/B4 (shared app.deenv +
 KernelHostActions).
@@ -88,7 +90,7 @@ Confirmed by the draft pass + the grill (2026-07-04, worktree at B2/708):
 - Designer schema (instances/1/app.deenv:35): `Commit { message, at, design, parent,
   mergeParent, logSeq, text, idMap }`; `Design` stores code sections as plain text — the
   storage precedent for `migration text`. Commit bar at app.deenv:137
-  (`var commitMessage` + `doCommit` → `sys.commitDesign(design, commitMessage)`), wired
+  (`var commitMessage`/`commitMigration` + `doCommit` → `sys.commitDesign(design, commitMessage, commitMigration)`), wired
   lockstep at 5 sites (slice 8).
 - Layering: `DeEnv.Code` imports `DeEnv.Storage` (AccessFloor.cs:2) — Storage must never import
   Code; the migration runner cannot live inside `ApplyPublishBoundary`.
@@ -149,7 +151,7 @@ empty third arg is internal plumbing, not authoring surface).
 - On rejection (any §1 check) the message AND migration inputs retain their text (B6).
 - `/commits/<id>` (B1's detail page) renders `migration` read-only in a `<pre>` when non-empty,
   beside the cached `text` — same idiom, ride-along.
-- **The approval ask (user gate before building):** `migration text` on the Commit meta-type
+- **Approved and landed in slice 1:** `migration text` on the Commit meta-type
   (slice-4 note: boundary entries make the addition safe; slice-5 precedent: "normal additive
   apply") + the 5-site lockstep arity change to `sys.commitDesign` (slice-8 precedent). Both
   follow recorded precedents but ARE a schema + host-action-shape change.
@@ -394,7 +396,7 @@ for one-click reverts regardless); pipeline/executor/report changes: zero.
 
 ### 6. Slicing sketch (for milestone-planner, not binding)
 
-1. **Authoring + storage**: `Commit.migration` + the hard 3-arity commitDesign change (5
+1. **Authoring + storage — DONE 2026-07-05**: `Commit.migration` + the hard 3-arity commitDesign change (5
    lockstep sites) + the four commit-time validations + commit-bar input + B1 detail render.
    No execution. Scenarios: commit with migration stores + renders; bad fn name rejects;
    shadowed `new` rejects; root-commit migration rejects.

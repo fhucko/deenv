@@ -92,7 +92,7 @@ public static class CodeValidator
         ["delete"] = [1],  // (targetId)
         ["rename"] = [2],  // (id, name)
         ["setDesign"] = [2], // (schema, targetId)
-        ["commitDesign"] = [2], // (design, message)
+        ["commitDesign"] = [3], // (design, message, migration)
         ["createBranch"] = [2], // (design, name) — clone a working copy's subgraph into a new Branch
         ["mergeBranch"] = [2, 3], // (source, target) OR (source, target, resolutions) — resolutions optional
         ["login"] = [2],   // (name, password) — a client-only host effect (the session→principal bind)

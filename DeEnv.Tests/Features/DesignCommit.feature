@@ -2,7 +2,7 @@
 Feature: Design commits — Commit/Branch rows, sys.commitDesign, the authority inversion
   Design history becomes ordinary data in the designer instance: `Commit` and `Branch` rows in root
   sets `db.commits`/`db.branches` (a set, not a hidden mechanism — so history renders for free as a
-  generic SetTable, is reachability-GC'd, and is URL-linkable). `sys.commitDesign(design, message)`
+  generic SetTable, is reachability-GC'd, and is URL-linkable). `sys.commitDesign(design, message, migration)`
   is a host action: it snapshots the SHARED working copy (Figma model — no per-user staging) at a log
   position marked BEFORE the commit's own writes, records it as an immutable Commit (message/at/
   design/parent/logSeq/text/idMap), and advances the design's `main` Branch head. Commit/Branch rows
@@ -44,6 +44,49 @@ Feature: Design commits — Commit/Branch rows, sys.commitDesign, the authority 
     And that commit's parent is the "first cut" commit
     And the design's main branch head points at that commit
     And that commit's logSeq is strictly greater than the "first cut" commit's logSeq
+
+  Scenario: A design commit stores migration source
+    Given the designer already committed that design with message "first cut"
+    When the designer commits that design with message "add migration" and migration
+      """
+      fn Item(old)
+          new.label = old.label
+      """
+    Then the host action reply is ok
+    And db.commits holds a commit with message "add migration"
+    And that commit's migration is
+      """
+      fn Item(old)
+          new.label = old.label
+      """
+
+  Scenario: A migration function must name a committed type
+    Given the designer already committed that design with message "first cut"
+    When the designer commits that design with message "bad migration" and migration
+      """
+      fn Missing(old)
+          new.label = old.label
+      """
+    Then the host action reply is an error mentioning "Missing"
+
+  Scenario: A migration function cannot shadow injected values
+    Given the designer already committed that design with message "first cut"
+    When the designer commits that design with message "shadow migration" and migration
+      """
+      fn Item(old)
+          var new = old
+      """
+    Then the host action reply is an error mentioning "shadow"
+
+  Scenario: A root commit cannot carry a migration
+    When the designer commits that design with message "root migration" and migration
+      """
+      fn Item(old)
+          new.label = old.label
+      """
+    Then the host action reply is an error mentioning "root commit"
+    And db.commits is empty
+    And the design's main branch head is unset
 
   # Review fix 3: the whole commit — Commit row + design/parent refs + db.commits link + every idMap
   # dict entry + the branch-head advance — is ONE atomic CommitBatch, so the designer's append-only

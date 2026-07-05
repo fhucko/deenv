@@ -692,6 +692,7 @@ public sealed class KernelHost(
                     ["at"]      = new DateTimeValue(DateTimeOffset.UtcNow),
                     ["logSeq"]  = new IntValue(store.CurrentVersion),
                     ["text"]    = new TextValue(snapshot.Text),
+                    ["migration"] = new TextValue(""),
                 })),
             };
             var mutations = new List<CommitMutation>

@@ -61,6 +61,7 @@ public sealed class TimeTravelSteps
             design Design
         Commit
             message text
+            migration text
             at datetime
             design Design
             parent Commit
@@ -248,7 +249,8 @@ public sealed class TimeTravelSteps
     [Given("the time-travel design is committed with message {string}")]
     public void GivenDesignCommitted(string message) =>
         HostActions().Run("commitDesign", ArgsOf(
-            $$"""{ "type": "int", "value": {{_designId}} }""", $$"""{ "type": "text", "value": "{{message}}" }"""));
+            $$"""{ "type": "int", "value": {{_designId}} }""", $$"""{ "type": "text", "value": "{{message}}" }""",
+            """{ "type": "text", "value": "" }"""));
 
     [Given("the time-travel designer publishes the design's head commit to the target over the WS")]
     public void GivenDesignerPublishes() =>

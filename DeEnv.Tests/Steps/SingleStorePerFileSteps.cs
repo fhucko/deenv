@@ -53,6 +53,7 @@ public sealed class SingleStorePerFileSteps
             design Design
         Commit
             message text
+            migration text
             at datetime
             design Design
             parent Commit
@@ -180,7 +181,8 @@ public sealed class SingleStorePerFileSteps
     [Given("the designer commits the design with message {string}")]
     public void GivenDesignerCommits(string message) =>
         HostActions().Run("commitDesign", ArgsOf(
-            $$"""{ "type": "int", "value": {{_designId}} }""", $$"""{ "type": "text", "value": "{{message}}" }"""));
+            $$"""{ "type": "int", "value": {{_designId}} }""", $$"""{ "type": "text", "value": "{{message}}" }""",
+            """{ "type": "text", "value": "" }"""));
 
     private int _committedCount;
 

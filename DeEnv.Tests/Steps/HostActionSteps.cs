@@ -1,4 +1,5 @@
 ﻿using DeEnv.Designer;
+using System.Text.Json;
 using DeEnv.Http;
 using DeEnv.Instance;
 using DeEnv.Kernel;
@@ -78,6 +79,7 @@ public sealed class HostActionSteps
                 password password
             Commit
                 message text
+                migration text
                 at datetime
                 design Design
                 parent Commit
@@ -565,7 +567,8 @@ public sealed class HostActionSteps
 
     // ── When: commitDesign over the WS (M13 slice 3) ────────────────────────────
 
-    // commitDesign(design, message): arg 0 the design's id, arg 1 the commit message text. Every commit
+    // commitDesign(design, message, migration): arg 0 the design's id, arg 1 the commit message text,
+    // arg 2 the migration source. Every commit
     // tracks the message it just committed — the "that commit" Then-steps below always read the MOST
     // RECENT one, so a two-commit scenario's later assertions automatically read the second commit.
     private string _lastCommitMessage = "";
@@ -574,20 +577,23 @@ public sealed class HostActionSteps
     [When("the designer commits that design with message {string} over the WS")]
     public void WhenCommitDesign(string message) => Commit(_designId, message);
 
+    [When("the designer commits that design with message {string} and migration")]
+    public void WhenCommitDesignWithMigration(string message, string migration) => Commit(_designId, message, migration);
+
     [When("the operator commits design id {int} with message {string} over the WS")]
     public void WhenOperatorCommitsDesignId(int designId, string message) => Commit(designId, message);
 
     [Given("the designer already committed that design with message {string}")]
     public void GivenAlreadyCommitted(string message) => Commit(_designId, message);
 
-    private void Commit(int designId, string message)
+    private void Commit(int designId, string message, string migration = "")
     {
         _lastCommitMessage = message;
         // _designer is the SAME store instance Ws() builds the WsHandler over — CurrentVersion here IS
         // the "before the commit's own writes" baseline the new commit's logSeq must equal.
         _versionBeforeLastCommit = _designer.CurrentVersion;
         Send("commitDesign",
-            $$"""{ "type": "int", "value": {{designId}} }, { "type": "text", "value": "{{message}}" }""");
+            $$"""{ "type": "int", "value": {{designId}} }, { "type": "text", "value": "{{message}}" }, { "type": "text", "value": {{JsonSerializer.Serialize(migration)}} }""");
     }
 
     // Build the WsHandler (which mints + binds the principal's session), then send ONE hostAction frame
@@ -971,6 +977,14 @@ public sealed class HostActionSteps
         var design = _designer.ReadNode(NodePath.Root.Field("designs").Key(_designId.ToString()))!;
         var expected = SchemaBridge.ProjectDesignDocument(design);
         await Assert.That(text).IsEqualTo(expected);
+    }
+
+    [Then("that commit's migration is")]
+    public async Task ThenCommitMigrationIs(string migration)
+    {
+        var commit = CommitByMessage(_lastCommitMessage);
+        var text = ((TextValue)commit.Fields.Fields["migration"]).Text;
+        await Assert.That(text).IsEqualTo(migration);
     }
 
     [Then("that commit's idMap covers every type and prop in the design")]

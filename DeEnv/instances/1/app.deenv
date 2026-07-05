@@ -34,6 +34,7 @@ types
         origin int
     Commit
         message text
+        migration text
         at datetime
         design Design
         parent Commit
@@ -76,6 +77,7 @@ ui
     var renameId = 0
     var renameName = ""
     var commitMessage = ""
+    var commitMigration = ""
     var branchName = ""
     var previewingBranch = 0
     var mergePicks = []
@@ -105,7 +107,7 @@ ui
         renameId = 0
 
     fn doCommit(design)
-        sys.commitDesign(design, commitMessage)
+        sys.commitDesign(design, commitMessage, commitMigration)
 
     fn lastCommitFor(design)
         var branch = db.branches.single(b => sys.id(b.workingCopy) == sys.id(design))
@@ -139,6 +141,10 @@ ui
             <input class="design-label" value={design.label}>
             <div class="commit-bar">
                 <input class="commit-message" value={commitMessage}>
+                <details class="commit-migration">
+                    <summary>
+                        "Migration"
+                    <textarea class="commit-migration-input" value={commitMigration}>
                 <button class="commit-design" onClick={() => doCommit(design)}>
                     "Commit"
                 <a class="view-history" href="/commits">
@@ -643,6 +649,11 @@ ui
                     "Log seq"
                 <span class="field-value">
                     c.logSeq
+            if c.migration != ""
+                <label class="text-label">
+                    "Migration"
+                <pre class="commit-migration-text">
+                    c.migration
             <div class="commit-diff">
                 <label class="text-label">
                     "Changes since parent"

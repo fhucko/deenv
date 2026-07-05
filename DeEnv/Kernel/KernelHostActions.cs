@@ -1,4 +1,6 @@
 using System.Text.Json;
+using DeEnv.Code;
+using DeEnv.Code.Parsing;
 using DeEnv.Designer;
 using DeEnv.Http;
 using DeEnv.Instance;
@@ -29,7 +31,7 @@ namespace DeEnv.Kernel;
 //     passed design, AND deploy it onto the target — the IDE's "Apply" (remember-then-publish). It is
 //     publish + the registry write: the registry write half (via the kernel recordDesign delegate)
 //     makes the reference explicit so the dropdown can pre-select it later.
-//   • commitDesign(design, message) — snapshot the design at its CURRENT log position into an
+//   • commitDesign(design, message, migration) — snapshot the design at its CURRENT log position into an
 //     immutable Commit row chained onto its main Branch (M13 slice 3 — DECISIONS "App versioning").
 //     Acts purely on the CALLER's own store (no cross-instance kernel delegate needed, unlike
 //     create/delete/clone). No write grants exist on Commit/Branch rows (the designer's own `access`
@@ -363,7 +365,7 @@ public sealed class KernelHostActions(
                 $"No design with id {designId} in the designer's `designs` set.");
     }
 
-    // commitDesign(design, message): snapshot the SHARED working copy (Figma model — no per-user
+    // commitDesign(design, message, migration): snapshot the SHARED working copy (Figma model — no per-user
     // staging) at a marked log position and record it as an immutable Commit row, chaining onto the
     // design's main Branch. arg 0 the design's id (a member of the caller's `db.designs`), arg 1 the
     // commit message text.
@@ -387,6 +389,7 @@ public sealed class KernelHostActions(
     {
         var designId = ArgInt(args, 0);
         var message = ArgText(args, 1);
+        var migration = ArgText(args, 2);
 
         var store = resolveStore();
 
@@ -398,7 +401,7 @@ public sealed class KernelHostActions(
         NodeValue? headField = branch.Fields.Fields.GetValueOrDefault("head");
         int? parentHeadId = headField is ReferenceValue { TargetId: { } h } ? h : null;
 
-        CaptureAndCommit(store, designId, message, parentHeadId, mergeParentHeadId: null, branch.Id);
+        CaptureAndCommit(store, designId, message, migration, parentHeadId, mergeParentHeadId: null, branch.Id);
         return null;
     }
 
@@ -422,8 +425,11 @@ public sealed class KernelHostActions(
     // lock and ONE log entry. Returns the minted commit's own intrinsic id (the merge caller reports it on
     // the MergeReport; an ordinary commit has no caller that needs it).
     private static int CaptureAndCommit(
-        IInstanceStore store, int designId, string message, int? parentHeadId, int? mergeParentHeadId, int branchId)
+        IInstanceStore store, int designId, string message, string migration, int? parentHeadId, int? mergeParentHeadId, int branchId)
     {
+        if (!string.IsNullOrWhiteSpace(migration) && parentHeadId is null)
+            throw new InvalidOperationException("A root commit cannot carry a migration.");
+
         const int maxAttempts = 5;
         DesignSnapshot snap = null!;
         int logSeq = 0;
@@ -437,6 +443,7 @@ public sealed class KernelHostActions(
             if (store.ReadById(designId) is not (var tn, var design) || tn != "Design")
                 throw new InvalidOperationException($"No design with id {designId} to commit.");
             snap = SchemaBridge.Snapshot(design); // throws SchemaValidationException on an invalid design
+            ValidateMigration(migration, snap.Text);
             var s2 = store.CurrentVersion;
             if (s1 == s2) { logSeq = s1; break; }
             if (attempt >= maxAttempts)
@@ -454,6 +461,7 @@ public sealed class KernelHostActions(
             ["at"]      = new DateTimeValue(DateTimeOffset.UtcNow),
             ["logSeq"]  = new IntValue(logSeq),
             ["text"]    = new TextValue(snap.Text),
+            ["migration"] = new TextValue(migration),
         };
         var creates = new List<CommitCreate>
         {
@@ -950,7 +958,154 @@ public sealed class KernelHostActions(
         string sourceBranchName, string targetBranchName) =>
         CaptureAndCommit(
             store, targetDesignId, $"Merged '{sourceBranchName}' into '{targetBranchName}'",
-            parentHeadId: targetPreMergeHeadId, mergeParentHeadId: sourceHeadId, targetBranchId);
+            migration: "", parentHeadId: targetPreMergeHeadId, mergeParentHeadId: sourceHeadId, targetBranchId);
+
+    private static void ValidateMigration(string migration, string committedText)
+    {
+        if (string.IsNullOrWhiteSpace(migration)) return;
+
+        ICodeStatement[] items;
+        try
+        {
+            items = Parse.Run(CodeParse.Section("migration"), "migration\n" + IndentForSection(migration));
+        }
+        catch (CodeParseException ex)
+        {
+            throw new InvalidOperationException($"Invalid migration: {ex.Message}", ex);
+        }
+
+        var desc = InstanceDescriptionLoader.Load(committedText);
+        foreach (var item in items)
+        {
+            if (item is not CodeFunction fn)
+                throw new InvalidOperationException("Migration may only contain functions.");
+            if (fn.Name is null || desc.FindType(fn.Name) is null)
+                throw new InvalidOperationException($"Migration function '{fn.Name}' does not match a committed type.");
+            if (fn.Params.Length != 1)
+                throw new InvalidOperationException($"Migration function '{fn.Name}' must take exactly one argument.");
+            RejectMigrationShadow(fn);
+        }
+    }
+
+    private static string IndentForSection(string text) =>
+        string.Join("\n", text.Replace("\r\n", "\n").Replace('\r', '\n')
+            .Split('\n')
+            .Select(line => line.Length == 0 ? "" : "    " + line));
+
+    private static void RejectMigrationShadow(CodeFunction fn)
+    {
+        foreach (var p in fn.Params)
+            if (p.Name is "new" or "oldDb")
+                throw new InvalidOperationException($"Migration function '{fn.Name}' may not shadow '{p.Name}'.");
+        if (fn.Name is "new" or "oldDb")
+            throw new InvalidOperationException($"Migration may not declare '{fn.Name}'.");
+        RejectMigrationShadow(fn.Body, fn.Name ?? "(anonymous)");
+    }
+
+    private static void RejectMigrationShadow(CodeBlock block, string owner)
+    {
+        foreach (var statement in block.Statements)
+            RejectMigrationShadowStatement(statement, owner);
+    }
+
+    private static void RejectMigrationShadowStatement(ICodeStatement statement, string owner)
+    {
+        switch (statement)
+        {
+            case CodeBlock block:
+                RejectMigrationShadow(block, owner);
+                break;
+            case CodeFunction fn:
+                RejectMigrationShadow(fn);
+                break;
+            case CodeIf codeIf:
+                RejectMigrationShadowValue(codeIf.Condition, owner);
+                RejectMigrationShadowStatement(codeIf.Body, owner);
+                if (codeIf.ElseBody != null) RejectMigrationShadowStatement(codeIf.ElseBody, owner);
+                break;
+            case CodeVarDec { Name: "new" or "oldDb" } v:
+                throw new InvalidOperationException($"Migration function '{owner}' may not shadow '{v.Name}'.");
+            case CodeVarDec v:
+                if (v.Value != null) RejectMigrationShadowValue(v.Value, owner);
+                break;
+            case CodeReturn ret:
+                RejectMigrationShadowValue(ret.Value, owner);
+                break;
+            case CodeAssignment assign:
+                RejectMigrationShadowValue(assign.Target, owner);
+                RejectMigrationShadowValue(assign.Value, owner);
+                break;
+            case CodeCall call:
+                RejectMigrationShadowValue(call, owner);
+                break;
+            case CodeAmbient { Name: "new" or "oldDb" } ambient:
+                throw new InvalidOperationException($"Migration function '{owner}' may not shadow '{ambient.Name}'.");
+            case CodeAmbient ambient:
+                RejectMigrationShadowValue(ambient.Value, owner);
+                break;
+        }
+    }
+
+    private static void RejectMigrationShadowValue(ICodeValue value, string owner)
+    {
+        switch (value)
+        {
+            case CodeFunction fn:
+                RejectMigrationShadow(fn);
+                break;
+            case CodeArray array:
+                foreach (var item in array.Items) RejectMigrationShadowValue(item, owner);
+                break;
+            case CodeObject obj:
+                foreach (var prop in obj.Props) RejectMigrationShadowValue(prop.Value, owner);
+                break;
+            case CodeInfixOp infix:
+                RejectMigrationShadowValue(infix.Left, owner);
+                RejectMigrationShadowValue(infix.Right, owner);
+                break;
+            case CodeNot not:
+                RejectMigrationShadowValue(not.Operand, owner);
+                break;
+            case CodeTernary ternary:
+                RejectMigrationShadowValue(ternary.Condition, owner);
+                RejectMigrationShadowValue(ternary.Then, owner);
+                RejectMigrationShadowValue(ternary.Else, owner);
+                break;
+            case CodeCall call:
+                RejectMigrationShadowValue(call.Fn, owner);
+                foreach (var param in call.Params) RejectMigrationShadowValue(param, owner);
+                break;
+            case CodeAssignment assign:
+                RejectMigrationShadowValue(assign.Target, owner);
+                RejectMigrationShadowValue(assign.Value, owner);
+                break;
+            case CodeTag tag:
+                foreach (var attr in tag.Attributes) RejectMigrationShadowValue(attr.Value, owner);
+                foreach (var child in tag.Children) RejectMigrationShadowTagChild(child, owner);
+                break;
+        }
+    }
+
+    private static void RejectMigrationShadowTagChild(ICodeTagChild child, string owner)
+    {
+        switch (child)
+        {
+            case ICodeValue value:
+                RejectMigrationShadowValue(value, owner);
+                break;
+            case CodeTagForEach { Item.Name: "new" or "oldDb" } loop:
+                throw new InvalidOperationException($"Migration function '{owner}' may not shadow '{loop.Item.Name}'.");
+            case CodeTagForEach loop:
+                RejectMigrationShadowValue(loop.Collection, owner);
+                foreach (var nested in loop.Body) RejectMigrationShadowTagChild(nested, owner);
+                break;
+            case CodeTagIf tagIf:
+                RejectMigrationShadowValue(tagIf.Condition, owner);
+                foreach (var nested in tagIf.Body) RejectMigrationShadowTagChild(nested, owner);
+                foreach (var nested in tagIf.ElseBody) RejectMigrationShadowTagChild(nested, owner);
+                break;
+        }
+    }
 
     // A Design row by id (main's own row, or a branch clone) — the merge/branch actions address a
     // WORKING COPY directly (not "a design in db.designs"), so this reads by raw id rather than requiring

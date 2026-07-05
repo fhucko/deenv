@@ -163,7 +163,7 @@ public sealed class KernelSteps(InstanceContext ctx)
 
     ui
         fn render()
-            return <button class="danger" onClick={() => sys.commitDesign(1, "x")}>
+            return <button class="danger" onClick={() => sys.commitDesign(1, "x", "")}>
                 "Commit"
     """;
 
@@ -1055,7 +1055,7 @@ public sealed class KernelSteps(InstanceContext ctx)
         _logLinesBeforeCommit = File.Exists(logPath) ? File.ReadAllLines(logPath).Length : 0;
     }
 
-    // sys.commitDesign(design, message) over a REAL WebSocket to the designer's OWN /ws — the kernel-
+    // sys.commitDesign(design, message, migration) over a REAL WebSocket to the designer's OWN /ws — the kernel-
     // wired path (HostedInstance.Start → KernelHost.HostActionsFor), not a hand-built WsHandler, so this
     // proves the FULL boot→adopt→commit→restart path end-to-end. The committed designer gates `sys` to an
     // Admin principal, so this logs in through /session, then uses the authenticated SSR's clientId.
@@ -1086,7 +1086,8 @@ public sealed class KernelSteps(InstanceContext ctx)
 
         var frame = $$"""
             { "op": "hostAction", "clientId": "{{clientId}}", "action": "commitDesign", "args": [
-                { "type": "int", "value": {{todoDesignId}} }, { "type": "text", "value": "{{message}}" }
+                { "type": "int", "value": {{todoDesignId}} }, { "type": "text", "value": "{{message}}" },
+                { "type": "text", "value": "" }
             ] }
             """;
         var sendBytes = System.Text.Encoding.UTF8.GetBytes(frame);
