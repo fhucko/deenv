@@ -375,9 +375,23 @@ app.deenv has NO comment syntax; NO fixed sleeps (poll); never kill chrome by na
 `*ms-playwright*` only); no conformance case (kernel-side C#-only execution — the floor-
 condition classification, spec §3); commit on the branch, ff-merge to main; architecture
 review (opus) with the diff PINNED to the branch's merge-base before landing.
+- **Assets (pictures + displayable files) — ADDED 2026-07-05 (user), FIRST in the design
+  queue** (serves the dogfood gate directly — devlog wants images). The design pass must
+  settle: a content-addressed per-instance blob pool BESIDE the JSON store (blobs never
+  enter app-data.json or the log — data holds the hash reference; immutability gives
+  time-travel old images for free and makes erasure = blob deletion, converging with the
+  non-temporal §0b question); an HTTP upload endpoint on the asset tree (the /session
+  endpoint precedent — uploads can't ride the JSON WS channel) + the access-floor question
+  for served blob URLs (read-floor gated vs unguessable-hash boundary — security lens);
+  a new scalar prop type (`image` first, password-precedent special scalar; displayable
+  renders <img> in forms/tables, others = download links); clone/publish blob semantics;
+  unreferenced-blob retention (a compaction question). Sequence the compaction +
+  non-temporal session right after — same log-policy domain, informed by the
+  content-addressing decisions.
 - **Compaction** — `sys.compact(instance, horizon)` (§6): fold-to-new-genesis, cache
   promotion, retention knobs, never-compact designer default; interacts with time-travel's
   era resolution (the recorded residual: promoted checkpoints become the era source).
+  Design TOGETHER with the non-temporal flag + after the assets pass (one log-policy domain).
 - **Non-temporal field flag** (§0b): PII/erasure + high-churn exclusion — schema surface
   decision (a per-field flag = authoring surface, minimal-by-default scrutiny).
 - **Dict READ floor** — gated on how the login-persistence world shakes out; revisit with
