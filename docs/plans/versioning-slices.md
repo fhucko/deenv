@@ -377,13 +377,16 @@ the designer.**
   (B4, slice 12). Fine per-field conflict UI — DONE (B5, slice 13). **All of Track B (B1–B5) DONE.**
   B2 residual: a brand-new type is invisible in the diff (DesignDiff's migration lens — no TypeAdd);
   revisit with B3's publish UI (same vocabulary) if a "what changed" (vs "what migrates") view is wanted.
-- B3 fast-follows: post-apply success signal (a "Last published: … · time" line, like the commit-bar);
+- B3 fast-follows: post-apply success signal — **the mechanism EXISTS since 2026-07-05
+  (`docs/plans/host-action-success-signal.md`: optional trailing callback on every kernel host
+  action, full-handler semantics; first consumer = the commit bar's clear-on-success)**, so the
+  "Last published: … · time" line is now a trivial callback setting a component-state var;
   drift-only preview offers a no-op-looking Apply (relabel/suppress when only drift is non-empty);
   "Cardinality" label + `Single → Set` values are schema jargon on the publish + diff surfaces (a
   global humanize pass — deferred with the same on B2's diff view, kept for now for consistency).
-- B4 fast-follows / notes: (a) post-merge "Merged X into this design" confirmation line — needs an
-  apply-success signal Code can't cheaply read (same class as B3's deferred success line; the
-  cache-drop's "up to date" re-preview is the interim signal); (b) NO regression scenario re-opens
+- B4 fast-follows / notes: (a) post-merge "Merged X into this design" confirmation line — the
+  needed apply-success signal NOW EXISTS (the host-action success callback, see the B3 note);
+  a trivial callback whenever the line is wanted; (b) NO regression scenario re-opens
   the merge preview after apply to pin the `mergePreview:` cache-drop (the fix is verified by the
   green flow + mirrors B3's tested publishPreview drop — add a guard scenario when convenient);
   (c) the `access` section has NO editor UI in the designer — B4's AccessChanges scenario seeds the
