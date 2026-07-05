@@ -150,13 +150,45 @@ disambiguated; theirs visible pre-choice.
 ## Track C — needs a DESIGN PASS first (do NOT hand to a bg builder as-is;
 run `/design` or a planning session, then slice)
 
-- **Semantic migrations** — DESIGN PASS DONE 2026-07-04: `docs/plans/semantic-migrations.md`
-  (position + self-grill #1/#2, verdict SOUND-WITH-FIXES, fixes integrated). Schema/arity ask
-  (`Commit.migration text` + hard 3-arity `sys.commitDesign`) APPROVED 2026-07-04. Slice 1
-  (authoring + storage) LANDED 2026-07-05 (362929e) + a review-fix pass + the host-action
-  success-signal mechanism (531f3f9→cfc8af1, own doc). Slice 2 (execution) LANDED
-  2026-07-05: `fn Type(old)` runs at publish via the C# interpreter, one boundary entry,
-  dry-run parity, range refusals, and crash re-stamp guard; suite 737.
+- **Semantic migrations — DONE 2026-07-05** (both slices landed + verified; ledger entry in
+  `versioning-slices.md`; suite 739 after the review trims 6ca82c4). Remaining from that
+  design, each with its own gate: the restoration bundle (resurrect-with-id store primitive +
+  sys.revertCommit — NEEDS a user approval ask before any brief); decimal/date/datetime
+  migration writes (Code-runtime ceiling); merged-migration publishes (refused loudly).
+
+### NEXT READY TASK — Success-signal consumers + guard tests  [S-M; self-contained; suite baseline 739]
+Three small, disjoint items unlocked this week — one worktree, one landing, reviews per item.
+**Context docs:** `docs/plans/host-action-success-signal.md` (the callback mechanism — optional
+trailing fn on every kernel host action, runs on the ok reply as a FULL handler, never on
+error; the commit bar's clear-on-success at `instances/1/app.deenv` `doCommit`/`afterCommit`
+is the worked example to copy); `versioning-slices.md` B3/B4 fast-follow notes.
+1. **B3 "Last published" line** — in the publish UI's component (`publishRow`/the publish
+   preview component in `instances/1/app.deenv`), pass a callback to `sys.publish(...)` that
+   sets a component-state var (e.g. `state.lastPublishNote = "Published to " + inst.name`);
+   render it as a confirmation line near the Apply control (mirror the commit bar's
+   "Last commit:" idiom). Component state = `var state = {...}` INSIDE the component fn,
+   which MUST be invoked in TAG form (`<publishRow ...>` — it already is): plain fn calls
+   memoize the whole body and wipe state on any invalidation. app.deenv has NO comment syntax.
+2. **B4 "Merged X into this design" line** — same pattern on the merge apply
+   (`sys.mergeBranch(source, target, resolutions?, callback)` — callback is always LAST;
+   the executor type-disambiguates fn-vs-array in third position). Also add the ledgered
+   guard scenario: re-open the merge preview AFTER a merge apply and assert it recomputes
+   (pins the `mergePreview:` cache-drop — B4 note (b)).
+3. **The G1 boundary-or-rebaseline invariant guard test** (from the semantic-migrations
+   design's grill #2 — `docs/plans/semantic-migrations.md` §5 of the revert section): pin
+   with scenarios that "every path that removes schema-shaped data either logs a boundary
+   entry or re-baselines the whole log": (a) versioned publish with a field removal →
+   boundary entry present, log/genesis INTACT; (b) `setDesign` (the IDE's Apply) applying a
+   field removal to a stamped instance → log + genesis GONE (the re-baseline — assert the
+   files' absence, i.e. the CURRENT honest behavior, so any future gentler replacement that
+   forgets to log removals FAILS this test and must handle restoration-staleness consciously).
+   Kernel-level scenarios (Publish.feature / a kernel feature), no browser needed.
+**Scenarios first (Gherkin), @milestone-13.** Items 1-2 are rendered-UI → screenshot-verify
+yourself + reviews ui-architecture + ux; item 3 → architecture note or skip (test-only).
+**Process pins:** isolated worktree off LOCAL main; full suite `dotnet test DeEnv.Tests -c
+Release` from PowerShell, output captured to a file, read on failure; `.deenv` UTF-8 no BOM;
+NO fixed sleeps; never kill chrome by name (testhost / `*ms-playwright*` only); commit on the
+branch, ff-merge; docs sync (tick the B3/B4 fast-follow ledger lines) in the same landing.
 
 ### Migrations slice 2 — EXECUTION — DONE 2026-07-05 (suite 737)
 [L; interpreter+storage+kernel; review architecture (opus) MANDATORY; suite baseline 729]
