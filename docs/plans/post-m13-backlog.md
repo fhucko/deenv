@@ -156,7 +156,42 @@ run `/design` or a planning session, then slice)
   sys.revertCommit — NEEDS a user approval ask before any brief); decimal/date/datetime
   migration writes (Code-runtime ceiling); merged-migration publishes (refused loudly).
 
-### NEXT READY TASK — Success-signal consumers + guard tests — DONE 2026-07-05  [S-M; self-contained; suite baseline 739]
+### NEXT READY TASK — Designer small-slice bundle  [S; self-contained; suite baseline 741]
+Three small, disjoint designer items, one worktree, one landing. All touch
+`DeEnv/instances/1/app.deenv` (+ DesignerSteps for scenarios); Gherkin first; @milestone-13.
+1. **Commit author `by`** — unblocked by login persistence (recorded in versioning-slices.md
+   slice 3's deferred list: "author `by` rides the login-persistence flip; the slice-1 log
+   already records who" — the shape was NAMED in the slice-3 approved list, so the schema
+   addition rides that approval; normal additive apply, slice-5 precedent). Add `by User` to
+   the Commit meta-type (instances/1 app.deenv types); in `KernelHostActions.CaptureAndCommit`
+   set it from the acting principal — find how the store learns "who" today
+   (`StoreWriteContext`, the AsyncLocal ambient set at the WS boundary; the log entries
+   already carry it) and resolve that user id to the User row (absent/anonymous → leave the
+   ref empty). Render on the commit-detail page as a field line ("By" + the user's name)
+   only when set — same idiom as the parent/mergeParent lines. Old commits have no `by` —
+   the guard handles them. Scenario: commit as the logged-in admin → detail shows "By admin";
+   the DesignCommit kernel scenarios stay green (they may commit with no principal — verify
+   the empty leg).
+2. **Access-section editor textarea** — B4's ledgered note (c): the designer's "Advanced
+   (code)" details block has ui/common/initialData textareas (app.deenv:215-226) but NO
+   `access` one, so operators cannot author access rules end-to-end. Add the fourth
+   label+textarea (`class="design-access"`, `value={sys.field(design, "access")}`) — same
+   idiom, one addition. Scenario: type an access rule in the editor, commit, publish to an
+   instance → the rule is live on the target (reuse B4's AccessChanges fixture idea, but
+   end-to-end through the textarea instead of seeding the store).
+3. **B3 drift-only Apply relabel** — the ledgered fast-follow: when a publish preview's
+   report has ONLY `uncommittedDrift` non-empty (no structural ops, no migrations), the
+   Apply button looks like a no-op deploy. Relabel or suppress in `previewBody`: if the
+   report is empty EXCEPT drift, render an explanatory line ("Working copy has uncommitted
+   changes — commit before publishing" or similar honest wording) instead of/beside the
+   misleading Apply. Judge exact wording against the section's existing captions. Scenario:
+   preview with drift-only → the honest state renders, Apply doesn't offer a no-op.
+**Process pins:** isolated worktree off LOCAL main; full suite from PowerShell, Release,
+output captured; `.deenv` UTF-8 no BOM, NO comments in app.deenv; no sleeps; never kill
+chrome by name; reviews: item 1 architecture (kernel touch) + ui-arch/ux ride the bundle;
+ff-merge + docs sync (tick the two ledger notes) in the same landing.
+
+### Success-signal consumers + guard tests — DONE 2026-07-05  [S-M; self-contained; suite baseline 739]
 Three small, disjoint items unlocked this week — one worktree, one landing, reviews per item.
 **Context docs:** `docs/plans/host-action-success-signal.md` (the callback mechanism — optional
 trailing fn on every kernel host action, runs on the ok reply as a FULL handler, never on
