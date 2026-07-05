@@ -1096,10 +1096,21 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // clearing its own ui vars in the callback must not be resurrected by the refetch that follows
         // (the A2 scalar carve-out makes a same-scalar merge a no-op, so this ordering is safe). A
         // throwing callback must never skip the refresh of a successfully-applied action — try/finally.
+        //
+        // Callbacks are FULL handlers, routed through the SAME idiom onClick uses (ui.ts:687): memo-
+        // bypassed + a commit-on-success transaction (runHandlerTransaction). Consistency-by-construction
+        // — a future callback that stages a write or fires a NESTED host action must behave exactly like
+        // any other handler (atomic, buffered sends, VNA/action-miss handling), not a special bare-call
+        // path. No `action` (the action-miss re-invoke identity) is passed: a callback isn't reached via a
+        // render-slot closure the way onClick is, so it has no (fnId, slot) to record — a VNA inside a
+        // callback falls back to runHandlerTransaction's un-recorded flush-and-rethrow leg, same as any
+        // handler built outside a render.
         const callback = typeof msg.id === "number" ? hostActionCallbacks.get(msg.id) : undefined;
         if (typeof msg.id === "number") hostActionCallbacks.delete(msg.id);
         try {
-            if (callback != null) callFunction(callback, { lastId: uiStatic.lastId, ambient: rootAmbient() });
+            if (callback != null)
+                runHandlerTransaction(() =>
+                    runWithMemoBypass(() => callFunction(callback, { lastId: uiStatic.lastId, ambient: rootAmbient() })));
         } finally {
             resetViewState();
             maybeRefetch();

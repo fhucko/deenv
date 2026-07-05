@@ -61,6 +61,20 @@ behavior. B3/B4 both ledgered this as "an apply-success signal Code can't cheapl
 - **Lifecycle edges:** navigate-away before the reply → registry entry dropped, callback
   silently never runs (same class as any stale handler); multiple in-flight actions →
   independent id-keyed entries.
+- **Callbacks ARE full handlers (review fix, closes the open question):** the callback runs
+  through the EXACT SAME idiom `onClick` uses (ui.ts:687) — memo-bypassed
+  (`runWithMemoBypass`) and wrapped in a commit-on-success handler transaction
+  (`runHandlerTransaction`), not a bare `callFunction`. Consistency-by-construction: a
+  callback that only clears a ui var behaves identically whether reached via `onClick` or via
+  a host-action reply, and a FUTURE callback that stages a write or fires a nested host
+  action gets the same atomicity/VNA handling any other handler gets — there is no separate,
+  weaker invocation path to keep in sync. No `action` (the VNA action-miss re-invoke identity,
+  keyed by a render-slot closure's `(fnId, slot)`) is passed — a callback isn't reached via a
+  render-slot the way `onClick` is, so a VNA inside one falls back to
+  `runHandlerTransaction`'s un-recorded flush-and-rethrow leg, same as any handler built
+  outside a render. The outer try/finally around resetViewState/refetch stays: it guards
+  against the transaction itself re-throwing (the genuine-bug and non-recorded-VNA legs both
+  re-throw after cleanly rolling back or flushing).
 
 ## Consumers (immediate)
 

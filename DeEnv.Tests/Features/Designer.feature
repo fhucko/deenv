@@ -658,6 +658,29 @@ Feature: The operator IDE (designs library + instance design selector)
     And the commit message input still holds "should not clear"
     And the migration textarea still holds the migration for "Bogus"
 
+  # Per-design isolation (M13 review fix, D3): commitMessage/commitMigration moved from top-scope ui
+  # vars into designEditor's OWN component state, keyed on the design's id (key={sys.id(design)}) — so
+  # design A and design B get DIFFERENT slots. Typing a migration under "todo" must not bleed into
+  # "crm"'s editor — proven by navigating away and back within ONE tab, no reload. The state move is a
+  # REMOUNT on navigation (a fresh slot has fresh state, by construction), so "todo"'s own textarea is
+  # ALSO expected empty on return — retention-across-navigation was never promised; only cross-design
+  # bleed is what this guards against.
+  @milestone-13 @single-user
+  Scenario: Typing a migration in one design's editor does not bleed into another design's editor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I expand the Migration disclosure
+    And I type a migration for "TodoItem" into the migration textarea
+    And I open the designs list
+    And I edit the design "crm"
+    And I expand the Migration disclosure
+    Then the migration textarea eventually holds ""
+    When I open the designs list
+    And I edit the design "todo"
+    And I expand the Migration disclosure
+    Then the migration textarea eventually holds ""
+
   # B1 — the commit-detail page (/commits/<id>). The history table is LINKED again; clicking a row
   # navigates client-side to the detail page, which resolves the commit by route id and shows its fields
   # (message/at/design/parent/logSeq) + the cached canonical snapshot text, read-only. Back returns to

@@ -1053,21 +1053,19 @@ function schemaIdArg(schema: ExecValue): ExecValue {
 // so the nine call sites (execPublish/execCreate/execRename/execCloneInstance/execDelete/
 // execSetDesign/execCommitDesign/execCreateBranch/execMergeBranch) don't each hand-roll the
 // detect-and-split. `params` is the call's REMAINING (unevaluated) param nodes after the builtin's own
-// fixed leading args have already been consumed by the caller; if the last one evaluates to a fn value
-// it is popped off and returned as `callback` instead of being evaluated into `rest` — so it never
-// reaches sendHostAction's wire args (a fn silently scalarOf's to null otherwise, shipping a bogus arg).
+// fixed leading args have already been consumed by the caller. Evaluates ALL params LEFT-TO-RIGHT
+// (review fix: an earlier version evaluated the last param FIRST, making trailing-arg evaluation
+// right-to-left and risking a double-evaluation if a caller's expr had side effects) into one array,
+// THEN checks whether the last evaluated value is a fn — if so it is popped off as `callback` instead
+// of shipping in `rest`, so it never reaches sendHostAction's wire args (a fn silently scalarOf's to
+// null otherwise, shipping a bogus arg).
 function splitTrailingCallback(
     params: CodeValue[], scope: ExecScope, context: ExecContext
 ): { rest: ExecValue[]; callback?: ExecFunction } {
-    if (params.length === 0) return { rest: [] };
-    const last = executeValue(params[params.length - 1], scope, context).value;
-    if (last.type === "fn") {
-        const rest = params.slice(0, -1).map(p => executeValue(p, scope, context).value);
-        return { rest, callback: last };
-    }
-    const rest = params.slice(0, -1).map(p => executeValue(p, scope, context).value);
-    rest.push(last);
-    return { rest };
+    const evaluated = params.map(p => executeValue(p, scope, context).value);
+    if (evaluated.length > 0 && evaluated[evaluated.length - 1].type === "fn")
+        return { rest: evaluated.slice(0, -1), callback: evaluated[evaluated.length - 1] as ExecFunction };
+    return { rest: evaluated };
 }
 
 // sys.publish(schema, targetId, expectedHeadCommit?, expectedTargetVersion?, callback?): a SERVER-ONLY

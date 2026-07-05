@@ -76,8 +76,6 @@ access
 ui
     var renameId = 0
     var renameName = ""
-    var commitMessage = ""
-    var commitMigration = ""
     var branchName = ""
     var previewingBranch = 0
     var mergePicks = []
@@ -106,11 +104,11 @@ ui
         sys.rename(i.runtimeId, renameName)
         renameId = 0
 
-    fn doCommit(design)
+    fn doCommit(design, state)
         fn afterCommit()
-            commitMessage = ""
-            commitMigration = ""
-        sys.commitDesign(design, commitMessage, commitMigration, afterCommit)
+            state.message = ""
+            state.migration = ""
+        sys.commitDesign(design, state.message, state.migration, afterCommit)
 
     fn lastCommitFor(design)
         var branch = db.branches.single(b => sys.id(b.workingCopy) == sys.id(design))
@@ -139,87 +137,90 @@ ui
             <SetTable set={db.designs} desc={sys.schema("Design")} setPath="/designs" columns={["label"]} rowActions={designActions} createForm={createDesignForm}>
 
     fn designEditor(design)
-        var lastCommit = lastCommitFor(design)
-        return <section class="design-editor">
-            <input class="design-label" value={design.label}>
-            <div class="commit-bar">
-                <input class="commit-message" value={commitMessage}>
-                <details class="commit-migration">
-                    <summary>
-                        commitMigration == "" ? "Migration" : "Migration •"
-                    <textarea class="commit-migration-input" value={commitMigration} placeholder={"fn TypeName(old) — then new.field = old.field on the next line"}>
-                <button class="commit-design" onClick={() => doCommit(design)}>
-                    "Commit"
-                <a class="view-history" href="/commits">
-                    "History"
-                if lastCommit != null
-                    <p class="last-commit">
-                        "Last commit: "
-                        lastCommit.message == "" ? "(no message)" : "\"" + lastCommit.message + "\""
-                        " · "
-                        lastCommit.at
-            <button class="add-type" onClick={() => addType(design)}>
-                "+ Type"
-            foreach type in design.types
-                <div class={type.baseType == "enum" ? "type-card is-enum" : "type-card"}>
-                    <div class="type-head">
-                        <input class="type-name" value={type.name}>
-                        <select class="type-kind" value={type.baseType}>
-                            foreach k in typeKinds
-                                <option value={k}>
-                                    sys.humanize(k)
-                        <button class="remove-type" onClick={() => design.types.remove(type)}>
-                            "×"
-                    <div class="enum-values">
-                        <label class="values-label">
-                            "Values (comma-separated)"
-                        <input class="type-values" value={type.values}>
-                    <div class="props-editor">
-                        <div class="prop-head">
-                            <span class="col-name">
-                                "Name"
-                            <span class="col-type">
-                                "Type"
-                            <span class="col-card">
-                                "Cardinality"
-                        foreach prop in type.props
-                            <div class={propRowClass(prop)}>
-                                <input class="prop-name" value={prop.name}>
-                                <select class="prop-type" value={prop.type}>
-                                    <optgroup label="Built-in">
-                                        foreach s in scalarTypes
-                                            <option value={s}>
-                                                s
-                                    <optgroup label="This design">
-                                        foreach t in design.types
-                                            <option value={t.name}>
-                                                t.name
-                                <select class="prop-cardinality" value={prop.cardinality}>
-                                    foreach c in cardinalities
-                                        <option value={c}>
-                                            sys.humanize(c)
-                                <input class="prop-keytype" value={prop.keyType}>
-                                <button class="remove-prop" onClick={() => type.props.remove(prop)}>
-                                    "×"
-                                <label class="multiline-toggle">
-                                    <input type="checkbox" class="prop-multiline" checked={prop.multiline}>
-                                    "Multi-line text"
-                        <button class="add-prop" onClick={() => addProp(type)}>
-                            "+ Field"
-            publishSection(design)
-            branchSection(design)
-            <details class="code-areas">
-                <summary class="code-summary">
-                    "Advanced (code)"
-                <label class="ui-label">
-                    "UI"
-                <textarea class="design-ui" value={sys.field(design, "ui")}>
-                <label class="common-label">
-                    "Common"
-                <textarea class="design-common" value={sys.field(design, "common")}>
-                <label class="initial-label">
-                    "Initial data"
-                <textarea class="design-initial" value={sys.field(design, "initialData")}>
+        var state = { message: "", migration: "" }
+        fn render()
+            var lastCommit = lastCommitFor(design)
+            return <section class="design-editor">
+                <input class="design-label" value={design.label}>
+                <div class="commit-bar">
+                    <input class="commit-message" value={state.message}>
+                    <details class="commit-migration">
+                        <summary>
+                            state.migration == "" ? "Migration" : "Migration •"
+                        <textarea class="commit-migration-input" value={state.migration} placeholder={"fn TypeName(old) — then new.field = old.field on the next line"}>
+                    <button class="commit-design" onClick={() => doCommit(design, state)}>
+                        "Commit"
+                    <a class="view-history" href="/commits">
+                        "History"
+                    if lastCommit != null
+                        <p class="last-commit">
+                            "Last commit: "
+                            lastCommit.message == "" ? "(no message)" : "\"" + lastCommit.message + "\""
+                            " · "
+                            lastCommit.at
+                <button class="add-type" onClick={() => addType(design)}>
+                    "+ Type"
+                foreach type in design.types
+                    <div class={type.baseType == "enum" ? "type-card is-enum" : "type-card"}>
+                        <div class="type-head">
+                            <input class="type-name" value={type.name}>
+                            <select class="type-kind" value={type.baseType}>
+                                foreach k in typeKinds
+                                    <option value={k}>
+                                        sys.humanize(k)
+                            <button class="remove-type" onClick={() => design.types.remove(type)}>
+                                "×"
+                        <div class="enum-values">
+                            <label class="values-label">
+                                "Values (comma-separated)"
+                            <input class="type-values" value={type.values}>
+                        <div class="props-editor">
+                            <div class="prop-head">
+                                <span class="col-name">
+                                    "Name"
+                                <span class="col-type">
+                                    "Type"
+                                <span class="col-card">
+                                    "Cardinality"
+                            foreach prop in type.props
+                                <div class={propRowClass(prop)}>
+                                    <input class="prop-name" value={prop.name}>
+                                    <select class="prop-type" value={prop.type}>
+                                        <optgroup label="Built-in">
+                                            foreach s in scalarTypes
+                                                <option value={s}>
+                                                    s
+                                        <optgroup label="This design">
+                                            foreach t in design.types
+                                                <option value={t.name}>
+                                                    t.name
+                                    <select class="prop-cardinality" value={prop.cardinality}>
+                                        foreach c in cardinalities
+                                            <option value={c}>
+                                                sys.humanize(c)
+                                    <input class="prop-keytype" value={prop.keyType}>
+                                    <button class="remove-prop" onClick={() => type.props.remove(prop)}>
+                                        "×"
+                                    <label class="multiline-toggle">
+                                        <input type="checkbox" class="prop-multiline" checked={prop.multiline}>
+                                        "Multi-line text"
+                            <button class="add-prop" onClick={() => addProp(type)}>
+                                "+ Field"
+                publishSection(design)
+                branchSection(design)
+                <details class="code-areas">
+                    <summary class="code-summary">
+                        "Advanced (code)"
+                    <label class="ui-label">
+                        "UI"
+                    <textarea class="design-ui" value={sys.field(design, "ui")}>
+                    <label class="common-label">
+                        "Common"
+                    <textarea class="design-common" value={sys.field(design, "common")}>
+                    <label class="initial-label">
+                        "Initial data"
+                    <textarea class="design-initial" value={sys.field(design, "initialData")}>
+        return render
 
     fn instancesRunning(design)
         return db.instances.where(i => i.design != null && sys.id(i.design) == sys.id(design))
@@ -506,12 +507,12 @@ ui
             if db.designs.any(d => sys.id(d) == routeId)
                 foreach d in db.designs
                     if sys.id(d) == routeId
-                        designEditor(d)
+                        <designEditor design={d} key={sys.id(d)}>
             else
                 if branchWorkingCopies().any(b => sys.id(b.workingCopy) == routeId)
                     foreach b in branchWorkingCopies()
                         if sys.id(b.workingCopy) == routeId
-                            designEditor(b.workingCopy)
+                            <designEditor design={b.workingCopy} key={sys.id(b.workingCopy)}>
                 else
                     <p class="not-found">
                         "Design not found."
