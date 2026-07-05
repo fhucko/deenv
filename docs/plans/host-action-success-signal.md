@@ -85,6 +85,21 @@ behavior. B3/B4 both ledgered this as "an apply-success signal Code can't cheapl
    (2 and 3 are follow-ups riding the mechanism, not part of its landing slice — the
    landing slice ships the mechanism + consumer 1.)
 
+## MECHANISM LIMITATION — callbacks cannot durably write COMPONENT STATE (found 2026-07-05)
+
+A callback's write to a component's `var state` object does NOT survive the ok-branch:
+the finally's `resetViewState()` drops the `comp:` cache, so the next render RE-RUNS setup
+and reinitializes the state object — a non-default value the callback just wrote is wiped
+before anything renders it. (Consumer 1 masked this: a cleared `""` and a reinitialized `""`
+are indistinguishable. Consumers 2–3 exposed it — empirically: moving the notes into
+designEditor's state made both note scenarios fail deterministically; reverting to top-scope
+fixed them.) RULE for consumers: post-success DISPLAY state lives in TOP-SCOPE vars (they
+survive the reset); scope leaks are handled with explicit guards (the notes carry a
+`lastPublishFor`/`lastMergeFor` design id checked at render) and staleness with
+clear-at-action-start. Lifting this (preserve/re-ship comp state across the ok-branch reset,
+or run callbacks against the post-refetch state) is a future framework item — do not
+half-fix it per consumer.
+
 ## Self-grill (2026-07-05) — SOUND-WITH-FIXES, integrated above
 
 Fresh-context opus, refute-briefed, verified against code. Confirmed sound: msgId correlation

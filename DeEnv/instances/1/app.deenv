@@ -80,7 +80,9 @@ ui
     var previewingBranch = 0
     var mergePicks = []
     var lastPublishNote = ""
+    var lastPublishFor = 0
     var lastMergeNote = ""
+    var lastMergeFor = 0
     var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime", "password"]
     var typeKinds = ["object", "enum"]
     var cardinalities = ["single", "set", "dictionary"]
@@ -286,7 +288,9 @@ ui
         var report = sys.publishPreview(design, inst.runtimeId)
         fn afterPublish()
             lastPublishNote = "Published to " + inst.name
+            lastPublishFor = sys.id(design)
         fn doApply()
+            lastPublishNote = ""
             sys.publish(design, inst.runtimeId, report.targetCommit, report.targetVersion, afterPublish)
         return <div class="publish-preview">
             publishReportView(report)
@@ -321,7 +325,7 @@ ui
                 "Publish"
             <p class="publish-caption">
                 "Deploy this design's last commit to each running instance. Preview shows what would change before anything is applied."
-            if lastPublishNote != ""
+            if lastPublishNote != "" && lastPublishFor == sys.id(design)
                 <p class="last-publish">
                     lastPublishNote
             if running.any(i => true)
@@ -454,7 +458,9 @@ ui
         fn doMerge()
             fn afterMerge()
                 lastMergeNote = "Merged " + branch.name + " into this design"
+                lastMergeFor = sys.id(design)
                 mergePicks = []
+            lastMergeNote = ""
             sys.mergeBranch(branch.workingCopy, design, mergePicks, afterMerge)
         return <div class="merge-preview">
             mergeReportView(report)
@@ -490,7 +496,7 @@ ui
                 "Branches"
             <p class="branch-caption">
                 "Branch this design to work in isolation, then merge a branch back in. Switching branches opens that branch's own editor."
-            if lastMergeNote != ""
+            if lastMergeNote != "" && lastMergeFor == sys.id(design)
                 <p class="last-merge">
                     lastMergeNote
             <div class="branch-create">
