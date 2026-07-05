@@ -153,10 +153,85 @@ run `/design` or a planning session, then slice)
 - **Semantic migrations** — DESIGN PASS DONE 2026-07-04: `docs/plans/semantic-migrations.md`
   (position + self-grill #1/#2, verdict SOUND-WITH-FIXES, fixes integrated). Schema/arity ask
   (`Commit.migration text` + hard 3-arity `sys.commitDesign`) APPROVED 2026-07-04. Slice 1
-  (authoring + storage) LANDED 2026-07-05 (362929e) + a review-fix pass (parse-error
-  coordinates, banner pre-wrap, detail-pre styling, authoring affordances, browser round-trip
-  scenario). Next: slice 2 (execution — in-memory store ctor + migration runner + range walk +
-  `TransformDoc` refactor + report).
+  (authoring + storage) LANDED 2026-07-05 (362929e) + a review-fix pass + the host-action
+  success-signal mechanism (531f3f9→cfc8af1, own doc). **Next: slice 2 — SELF-CONTAINED BRIEF
+  BELOW (§ "Migrations slice 2").**
+
+### Migrations slice 2 — EXECUTION (the payoff: `fn Invoice(old)` runs at publish)
+[L; interpreter+storage+kernel; review architecture (opus) MANDATORY; suite baseline 729]
+**The spec is `docs/plans/semantic-migrations.md` §3 (scope wiring — the StoreDoc↔ExecObject
+seam, steps 1–5) + §4 (collapse–step–collapse range walk) — READ THEM FIRST; they are
+twice-grilled and user-approved; every decision below is pinned there. Do not re-decide.**
+**Deliverables:**
+1. **Internal in-memory ctor** `JsonFileInstanceStore(StoreDoc, InstanceDescription)` — no
+   file paths, no boot reconcile, `Save()` throws loudly. Grill-verified viable: the read path
+   (`ReadNode`/`ReadById`/`ReadExtent`/`ResolveRef`/`BuildObject`) needs only `_doc`+`_desc`+
+   `_resolver`+`_sync`. This is the ONLY sanctioned store view for migration worlds — NEVER
+   open a second file-backed store (the one-store-per-file kill class, 938b678).
+2. **`TransformDoc` refactor**: split `ApplyPublishBoundary` into a pure per-segment in-memory
+   transform (structural passes + writes list + `doc.NextId` threading) and the final
+   ONE-entry + log-first `SaveRaw` bracket (slice-1 WAL law; one `Version` bump; `Seq==Version`).
+   k=0 must remain byte-equivalent to today's single-shot publish — one code path, no drift.
+3. **Migration runner** (new file in `DeEnv.Code` beside DbBridge — Code imports Storage,
+   Storage must NEVER import Code): per step — OLD world = pre-step doc + the PREVIOUS
+   endpoint commit's cached `text` → desc, wrapped in the in-memory ctor, loaded ONCE via
+   `DbBridge.LoadRoot` → `oldDb` root + an id→ExecObject index; NEW world = the SAME
+   (post-`TransformDoc`) doc + the step commit's desc, loaded the same way. For each migration
+   fn (= type name in `Commit.migration`, parsed like slice 1's `ValidateMigration`), for each
+   object in that type's NEW extent: `CodeExecutor.InvokeFunction(fn, [oldById[id]],
+   scope items {new: newObj, oldDb: oldRoot}, bare ExecContext)` (scope ITEMS, not ambient —
+   bare context ⇒ writes land in `ExecObject.Props` in place). Iteration is EXTENT-based.
+4. **Harvest** (ExecObject → StoredValue): per migrated object, snapshot scalar props before
+   the fn, diff after; each change checked against the STEP schema's declared prop type —
+   **v1 write surface = Int/Text/Bool ONLY** (no ExecDecimal exists; decimal/date/datetime
+   live as ExecText and would 503 the target at remount): a write landing on a
+   decimal/date/datetime prop, a wrong-typed scalar, or ANY non-scalar (set/ref/dict/object)
+   **aborts the whole publish loudly at harvest** — never deferred to StoredDataValidator.
+   Accepted change → `ExecToScalar` → `StoredLeaf` → `FieldWrite{old,new}` appended to the
+   SAME writes list + the doc mutated in place. Dict rule: a fn writing a dict prop aborts
+   ("dictionary migration not supported yet"); READING dicts off old/oldDb is fine. Writes to
+   OLD-world objects are discarded silently (by-discard, the named v1 ceiling — no guard).
+5. **Range walk in `Publish`** (KernelHostActions, versioned path only): first-parent chain
+   head→stamped via `parent` refs (NEW walk — `AncestorsOf` gives the DAG set, not the chain;
+   both needed) + DAG ancestors via parent+mergeParent. Steps = chain commits (exclusive of
+   stamped) with non-empty `migration`, chronological. REFUSE loudly before any work when:
+   a migration-carrying commit is in the DAG range but NOT on the first-parent chain ("merged
+   migration — not supported yet"); or stamped is unreachable from head AND any head-ancestry
+   commit carries a migration ("cannot establish a migration path"). Execution: `prev =
+   stamped; for each step Mi: TransformDoc(diff(prev→Mi)) → run Mi's fns → prev = Mi;` finally
+   `TransformDoc(diff(prev→head))`, no fns. All diffs over cached `{text, idMap}`. ONE
+   boundary entry: ALL segments' writes concatenated in execution order,
+   `BoundaryMarker{designId, headCommitId, baseCommitId: stampedCommitId}` — byte-compatible
+   with slice-7 era resolution; intermediate step states are NOT time-travel-addressable.
+6. **Re-publish crash guard**: before executing, read the target log's LAST boundary marker;
+   if it already names `{designId, headCommitId}` → skip transform+fns, just re-stamp + report
+   (closes the crash-after-entry-before-stamp re-run window; the structural re-diff was
+   already inert, migrations are NOT).
+7. **Report + one-code-path dryRun**: `PublishReport` gains `migrations:
+   [{commitId, message, types, objectsMigrated}]` per step + the abort error shape; `dryRun`
+   runs the FULL pipeline INCLUDING fns on the throwaway doc and discards. CRITICAL
+   INTEGRATION: B3's `sys.publishPreview` READ builtin ships the report to the designer UI and
+   has a preview→apply CONSISTENCY GUARD test — the preview must flow through the SAME
+   pipeline (fns included) or that guard breaks; verify how publishPreview reaches Publish's
+   compute and keep them one path. The unstamped/no-commit fallback paths run NO migrations;
+   the legacy unstamped-WITH-data fallback reports `migrationsSkipped: true` loudly when
+   head's ancestry carries migrations.
+**Scenarios (Gherkin FIRST, `Publish.feature` + slice-4 fixtures, @milestone-13):** a
+rename+compute migration carries data through a publish (the §3 example shape:
+`new.total = old.net + old.tax` on ints); a fn throw aborts atomically (target files
+byte-untouched, no entry, no stamp); a harvest type-violation aborts loudly (fn writes text
+into an int prop); dryRun previews migrations without applying (report shows them, disk
+clean); a merged migration refuses; a fn writing a dict prop refuses; the crash-window
+re-publish re-stamps WITHOUT re-running fns (seed: entry present, stamp absent);
+multi-commit collapse–step–collapse (two migration commits + structural commits between =
+two steps, one entry, correct final data).
+**Process pins:** isolated worktree off LOCAL main; full suite `dotnet test DeEnv.Tests -c
+Release` from PowerShell (solution `DeEnv.slnx`; subset = `-- --treenode-filter
+"/*/*/<RealClass>/*"`), output captured to a file, read on failure; `.deenv` = UTF-8 no BOM;
+app.deenv has NO comment syntax; NO fixed sleeps (poll); never kill chrome by name (testhost /
+`*ms-playwright*` only); no conformance case (kernel-side C#-only execution — the floor-
+condition classification, spec §3); commit on the branch, ff-merge to main; architecture
+review (opus) with the diff PINNED to the branch's merge-base before landing.
 - **Compaction** — `sys.compact(instance, horizon)` (§6): fold-to-new-genesis, cache
   promotion, retention knobs, never-compact designer default; interacts with time-travel's
   era resolution (the recorded residual: promoted checkpoints become the era source).
