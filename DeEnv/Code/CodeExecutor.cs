@@ -1183,7 +1183,7 @@ public sealed class CodeExecutor
         "setRef" => new ExecNothing(),
         // publish(schema, targetId), create(schema, name), cloneInstance(sourceId), delete(targetId),
         // setDesign(schema, targetId), rename(id, name), commitDesign(design, message, migration),
-        // createBranch(design, name) and mergeBranch(source, target, resolutions?) are SERVER-ONLY host
+        // revertCommit(design, commit), createBranch(design, name) and mergeBranch(source, target, resolutions?) are SERVER-ONLY host
         // actions (the host-action channel). They run only when the client fires the event hook → the
         // `hostAction` WS op; the SSR/refetch renderer never runs them, so here they no-op (exactly like
         // setRef). No conformance case: a host effect returns nothing and is outside the conformance
@@ -1205,6 +1205,7 @@ public sealed class CodeExecutor
         "setDesign" => new ExecNothing(),
         "rename" => new ExecNothing(),
         "commitDesign" => new ExecNothing(),
+        "revertCommit" => new ExecNothing(),
         "createBranch" => new ExecNothing(),
         "mergeBranch" => new ExecNothing(),
         // login(name, password) is a CLIENT-only host effect (M-auth login UI): the client fires the

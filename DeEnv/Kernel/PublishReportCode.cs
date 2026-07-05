@@ -69,12 +69,14 @@ public static class PublishReportCode
             ("commitId", I(m.CommitId)), ("message", T(m.Message)),
             ("types", Arr(m.Types.Select(t => (IExecValue)T(t)))),
             ("objectsMigrated", I(m.ObjectsMigrated)))));
+        var restorations = Arr(report.Restorations.Select(r => (IExecValue)T(r)));
 
         // isEmpty: nothing to publish (an empty diff, no migrations) AND no uncommitted drift to warn about.
         // Fallback is itself a real publish (a first stamp), so a fallback is NOT empty.
         var isEmpty = report.Renames.Count == 0 && report.Adds.Count == 0 && report.Removes.Count == 0
             && report.Conversions.Count == 0 && report.Cardinality.Count == 0
-            && report.Migrations.Count == 0 && !report.UncommittedDrift && !report.FallbackNameMatched;
+            && report.Migrations.Count == 0 && report.Restorations.Count == 0
+            && !report.UncommittedDrift && !report.FallbackNameMatched;
 
         return Obj(
             ("isEmpty", B(isEmpty)),
@@ -90,6 +92,7 @@ public static class PublishReportCode
             ("removes", removes),
             ("conversions", conversions),
             ("cardinality", cardinality),
-            ("migrations", migrations));
+            ("migrations", migrations),
+            ("restorations", restorations));
     }
 }

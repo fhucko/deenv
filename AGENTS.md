@@ -156,9 +156,12 @@ conflicts, and time-travels. Semantic migrations slice 2 landed 2026-07-05
 (suite 737): publish now runs commit-authored `fn Type(old)` migrations through
 the C# interpreter, with collapse-step-collapse range walking, one boundary
 entry, dry-run parity, crash re-stamp guard, and v1 Int/Text/Bool harvest
-ceilings. Deferred-with-intent ledger (restoration, compaction, fine conflict UI,
-branch/history UX) lives in
+ceilings. Deferred-with-intent ledger (compaction, fine conflict UI, branch/history UX) lives in
 `docs/plans/versioning-slices.md`; DECISIONS.md carries the milestone entry.
+The restoration bundle landed 2026-07-05 (suite 751): `sys.revertCommit` restores the last
+commit by identity, literal-id resurrection backs it, identity re-add publish restoration
+brings back reachable historical values/rows, TypeAdd closes the pure-type-add diff gap, and
+`Commit.revertMigration` carries authored reverse migrations.
 The versioned build is NOT yet deployed to the box — deploy + devlog dogfood
 is the open decision. **M12 (visual component designer) stays deferred
 until after the MVP.** Login persistence + the committed-designer auth flip landed

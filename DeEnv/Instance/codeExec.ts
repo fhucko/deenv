@@ -1170,6 +1170,14 @@ function execCommitDesign(codeCall: CodeCall, scope: ExecScope, context: ExecCon
     return { type: "nothing" };
 }
 
+function execRevertCommit(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const design = executeValue(codeCall.params[0], scope, context).value;
+    const commit = executeValue(codeCall.params[1], scope, context).value;
+    const { rest, callback } = splitTrailingCallback(codeCall.params.slice(2), scope, context);
+    sendHostAction("revertCommit", [schemaIdArg(design), schemaIdArg(commit), ...rest], callback);
+    return { type: "nothing" };
+}
+
 // sys.createBranch(design, name, callback?): a SERVER-ONLY host action (M13 slice 5, wired in Track-B
 // B4) — clone the design's working-copy subgraph (Design + its MetaTypes + MetaProps) into a NEW
 // Branch named `name`, linked into db.branches (never db.designs). The design crosses as its id
@@ -1475,6 +1483,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "rename": return execRename(codeCall, scope, context);
         case "setDesign": return execSetDesign(codeCall, scope, context);
         case "commitDesign": return execCommitDesign(codeCall, scope, context);
+        case "revertCommit": return execRevertCommit(codeCall, scope, context);
         case "createBranch": return execCreateBranch(codeCall, scope, context);
         case "mergeBranch": return execMergeBranch(codeCall, scope, context);
         case "login": return execLogin(codeCall, scope, context);

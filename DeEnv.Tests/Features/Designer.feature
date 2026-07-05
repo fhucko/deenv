@@ -751,6 +751,16 @@ Feature: The operator IDE (designs library + instance design selector)
     And I open the commit "rename TodoItem" from the history
     Then the changes-since-parent shows a rename from "TodoItem" to "Task"
     And the changes-since-parent shows no removal of "TodoItem"
+    When I navigate back
+    And I navigate back
+    And I add a type to the design
+    And I name the just-added type "Project"
+    And I add a field "title" to the type "Project"
+    And I type "add Project" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "add Project"
+    When I open the commit detail for "add Project"
+    Then the changes-since-parent shows an add of "Project"
 
   # ── B3 — Publish + dry-run from the designer ─────────────────────────────────────────────────
   #

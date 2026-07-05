@@ -99,7 +99,8 @@ public static class CodeValidator
         ["delete"] = [1, 2],  // (targetId) OR + callback
         ["rename"] = [2, 3],  // (id, name) OR + callback
         ["setDesign"] = [2, 3], // (schema, targetId) OR + callback
-        ["commitDesign"] = [3, 4], // (design, message, migration) OR + callback
+        ["commitDesign"] = [3, 4, 5], // (design, message, migration, revertMigration?) OR + callback
+        ["revertCommit"] = [2, 3], // (design, commit) OR + callback — restore the working copy to the previous commit
         ["createBranch"] = [2, 3], // (design, name) OR + callback — clone a working copy's subgraph into a new Branch
         // (source, target) OR (source, target, resolutions) OR (source, target, callback) OR
         // (source, target, resolutions, callback) — resolutions optional, callback optional, the

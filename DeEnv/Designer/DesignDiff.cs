@@ -32,6 +32,7 @@ public static class DesignDiffer
 
         var typeRenames = new List<TypeRename>();
         var propRenames = new List<PropRename>();
+        var typeAdds = new List<TypeAdd>();
         var adds = new List<PropAdd>();
         var removes = new List<PropRemove>();
         var typeRemoves = new List<TypeRemove>();
@@ -77,11 +78,14 @@ public static class DesignDiffer
                 // OWNING TYPE also only exists in the target is folded into that type add (nothing to
                 // migrate cell-by-cell for a type that doesn't exist in the base at all).
                 if (!targetPath!.Contains('.'))
-                    continue; // a brand-new type: nothing in the base to migrate — no per-cell op needed
+                {
+                    typeAdds.Add(new TypeAdd(targetPath, id));
+                    continue;
+                }
                 var (owningType, propName) = SplitPropPath(targetPath);
                 if (baseDesc.FindType(owningType) is null)
                     continue; // the owning type is ALSO new — covered by the type as a whole
-                adds.Add(new PropAdd(owningType, propName));
+                adds.Add(new PropAdd(owningType, propName, id));
                 continue;
             }
 
@@ -122,7 +126,7 @@ public static class DesignDiffer
             }
         }
 
-        return new DesignDiff(typeRenames, propRenames, adds, removes, typeRemoves, conversions, cardinalityChanges);
+        return new DesignDiff(typeRenames, propRenames, typeAdds, adds, removes, typeRemoves, conversions, cardinalityChanges);
     }
 
     private static Dictionary<int, string> Invert(IReadOnlyDictionary<string, int> idMap)
@@ -148,9 +152,11 @@ public sealed record TypeRename(string FromName, string ToName, int TypeId);
 // name — the owning type may itself have been renamed independently.
 public sealed record PropRename(string TypeName, string FromProp, string ToProp, int PropId);
 
+public sealed record TypeAdd(string TypeName, int TypeId);
+
 // A prop that exists only in the target, on a type that ALSO exists in the base (a genuine additive
 // change on an existing type) — a brand-new type's own props are not reported individually.
-public sealed record PropAdd(string TypeName, string PropName);
+public sealed record PropAdd(string TypeName, string PropName, int PropId);
 
 // A prop that existed in the base but not the target, on a type that STILL exists in the target
 // (destructive — the stored value is dropped).
@@ -173,6 +179,7 @@ public sealed record CardinalityChange(string TypeName, string PropName, Cardina
 public sealed record DesignDiff(
     IReadOnlyList<TypeRename> TypeRenames,
     IReadOnlyList<PropRename> PropRenames,
+    IReadOnlyList<TypeAdd> TypeAdds,
     IReadOnlyList<PropAdd> Adds,
     IReadOnlyList<PropRemove> Removes,
     IReadOnlyList<TypeRemove> TypeRemoves,
@@ -180,6 +187,6 @@ public sealed record DesignDiff(
     IReadOnlyList<CardinalityChange> CardinalityChanges)
 {
     public bool IsEmpty =>
-        TypeRenames.Count == 0 && PropRenames.Count == 0 && Adds.Count == 0 && Removes.Count == 0
+        TypeRenames.Count == 0 && PropRenames.Count == 0 && TypeAdds.Count == 0 && Adds.Count == 0 && Removes.Count == 0
         && TypeRemoves.Count == 0 && Conversions.Count == 0 && CardinalityChanges.Count == 0;
 }

@@ -26,7 +26,7 @@ public static class HostActionScan
     // slice's commitDesign addition follows: HostActionScan + CodeValidator arities + both interpreters +
     // the UI, all in one slice).
     private static readonly HashSet<string> HostActionBuiltins =
-        ["create", "delete", "cloneInstance", "publish", "rename", "setDesign", "commitDesign", "createBranch", "mergeBranch"];
+        ["create", "delete", "cloneInstance", "publish", "rename", "setDesign", "commitDesign", "revertCommit", "createBranch", "mergeBranch"];
 
     // True when any Code in `desc` (ui vars/functions/render + common functions) calls a host-action
     // builtin. Used by KernelHost.HostActionsFor to wire the real seam only for a host-action-using app.

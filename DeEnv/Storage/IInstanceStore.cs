@@ -111,6 +111,8 @@ public interface IInstanceStore
     // type/prop is absent or not a single object reference.
     string? SingleReferenceTargetType(string ownerTypeName, string prop);
 
+    bool DeclaresField(string typeName, string prop);
+
     // Drop a member reference from the set at setPath, then collect unreachable
     // objects (mark-sweep from the root). Returns the post-write version.
     int RemoveFromSet(NodePath setPath, int id);
@@ -187,7 +189,7 @@ public class StaleBaseException(string message) : Exception(message);
 // A create in a commit batch: mint an object of TypeName with these (already validated + password-hashed)
 // scalar Fields. TempId is the client's transient negative id, the key the batch's mutations + the returned
 // idMap reference it by until it is minted to a real id.
-public sealed record CommitCreate(int TempId, string TypeName, ObjectValue Fields);
+public sealed record CommitCreate(int TempId, string TypeName, ObjectValue Fields, int? LiteralId = null);
 
 // One mutation in a commit batch, a closed union over the object-graph write seams. An *Ref field is an
 // OBJECT REFERENCE: a positive real id, or a negative tempId resolved to the create's just-minted real id.

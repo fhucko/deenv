@@ -375,9 +375,9 @@ the designer.**
 - Commit-detail page (`/commits/<id>`) — DONE (B1, slice 9). Diff view between commits — DONE
   (B2, slice 10). Publish + dry-run from the designer — DONE (B3, slice 11). Branches + merge — DONE
   (B4, slice 12). Fine per-field conflict UI — DONE (B5, slice 13). **All of Track B (B1–B5) DONE.**
-  B2 residual: a brand-new type is invisible in the diff (DesignDiff's migration lens — no TypeAdd);
-  revisit with B3's publish UI (same vocabulary) if a "what changed" (vs "what migrates") view is wanted.
-  The restoration bundle will close this by adding TypeAdd to the shared diff vocabulary.
+  The B2 residual where a brand-new type was invisible in the diff is **DONE 2026-07-05**:
+  the restoration bundle added `TypeAdd` to the shared diff vocabulary, and the commit-detail
+  scenario now proves a pure type add renders.
 - B3 fast-follows: post-apply success signal — **DONE 2026-07-05**. The mechanism exists
   (`docs/plans/host-action-success-signal.md`: optional trailing callback on every kernel host
   action, full-handler semantics; first consumer = the commit bar's clear-on-success), and the
@@ -441,9 +441,10 @@ the designer.**
   collapse–step–collapse first-parent walk + refusals, ONE boundary entry, crash re-stamp
   guard, preview/apply one pipeline — 72ffbcb + review trims 6ca82c4; arch review
   SHIP-WITH-FIXES applied; suite 739). The host-action success-signal mechanism rode along
-  (own doc). Still deferred from that design: the restoration bundle (resurrect-with-id
-  primitive + sys.revertCommit — own approval ask); decimal/date/datetime migration writes
-  (Code-runtime ceiling); merged-migration publishes. Also still open: compaction
+  (own doc). The restoration bundle also landed 2026-07-05 (suite 751): literal-id
+  resurrection, `sys.revertCommit`, identity re-add restoration, TypeAdd, and
+  `Commit.revertMigration`. Still deferred from that design: decimal/date/datetime migration
+  writes (Code-runtime ceiling); merged-migration publishes. Also still open: compaction
   (`sys.compact`, §6); non-temporal field flag (§0b); per-verb sys granularity.
 - Cosmetics: humanized datetimes in generic tables (still deferred — no cheap generic path yet);
   the global banner's "Change rejected" vocabulary vs commit actions. (The generic humanized

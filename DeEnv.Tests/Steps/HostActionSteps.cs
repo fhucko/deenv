@@ -270,6 +270,13 @@ public sealed class HostActionSteps
         DesignSetProp("Db", typeName.ToLowerInvariant() + "s", typeName);
     }
 
+    [Given("the design adds type {string} with field {string}")]
+    public void GivenDesignAddsTypeWithField(string typeName, string field)
+    {
+        DesignType(typeName, "object");
+        DesignProp(typeName, field, "text");
+    }
+
     // ── Given: a target instance addressed by an id ─────────────────────────────
 
     [Given("a target instance addressed by an id")]
@@ -580,20 +587,24 @@ public sealed class HostActionSteps
     [When("the designer commits that design with message {string} and migration")]
     public void WhenCommitDesignWithMigration(string message, string migration) => Commit(_designId, message, migration);
 
+    [When("the designer commits that design with message {string} and revert migration")]
+    public void WhenCommitDesignWithRevertMigration(string message, string revertMigration) =>
+        Commit(_designId, message, migration: "", revertMigration);
+
     [When("the operator commits design id {int} with message {string} over the WS")]
     public void WhenOperatorCommitsDesignId(int designId, string message) => Commit(designId, message);
 
     [Given("the designer already committed that design with message {string}")]
     public void GivenAlreadyCommitted(string message) => Commit(_designId, message);
 
-    private void Commit(int designId, string message, string migration = "")
+    private void Commit(int designId, string message, string migration = "", string revertMigration = "")
     {
         _lastCommitMessage = message;
         // _designer is the SAME store instance Ws() builds the WsHandler over — CurrentVersion here IS
         // the "before the commit's own writes" baseline the new commit's logSeq must equal.
         _versionBeforeLastCommit = _designer.CurrentVersion;
         Send("commitDesign",
-            $$"""{ "type": "int", "value": {{designId}} }, { "type": "text", "value": "{{message}}" }, { "type": "text", "value": {{JsonSerializer.Serialize(migration)}} }""");
+            $$"""{ "type": "int", "value": {{designId}} }, { "type": "text", "value": "{{message}}" }, { "type": "text", "value": {{JsonSerializer.Serialize(migration)}} }, { "type": "text", "value": {{JsonSerializer.Serialize(revertMigration)}} }""");
     }
 
     // Build the WsHandler (which mints + binds the principal's session), then send ONE hostAction frame

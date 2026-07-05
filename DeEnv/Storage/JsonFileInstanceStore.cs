@@ -657,7 +657,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             // Mint every create first — no per-create Save; the whole batch Saves once at the end.
             foreach (var c in creates)
             {
-                var realId = MintObject(c.TypeName, c.Fields);
+                var realId = MintObject(c.TypeName, c.Fields, c.LiteralId);
                 idMap[c.TempId] = realId;
                 var minted = ExtentEntryById(realId)!;
                 var type = _desc.FindType(c.TypeName)!;
@@ -941,6 +941,12 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
     }
 
+    public bool DeclaresField(string typeName, string prop)
+    {
+        lock (_sync)
+            return _desc.FindType(typeName)?.Props?.Any(p => p.Name == prop) == true;
+    }
+
     // Locate a set node by its intrinsic id (sets live in object fields, in extents).
     private StoredSet? FindSetNode(int setId)
     {
@@ -1164,21 +1170,24 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // (SaveRaw + AppendLogEntry) — so a dry run changes NOTHING while still returning the real report,
     // one code path for both (no second, drifting "preview" implementation of the same conversion rules).
     internal static BoundaryApplyResult ApplyPublishBoundary(
-        string dataPath, DesignDiff diff, InstanceDescription targetDesc, BoundaryMarker boundary, bool dryRun = false)
+        string dataPath, DesignDiff diff, InstanceDescription targetDesc, BoundaryMarker boundary, bool dryRun = false,
+        RestorationPlan? restorations = null)
     {
         var doc = LoadRaw(dataPath);
         var writes = new List<LogWrite>();
         var startVersion = doc.Version;
-        var transformed = TransformDoc(doc, diff, targetDesc, writes);
+        var transformed = TransformDoc(doc, diff, targetDesc, writes, restorations);
 
         if (writes.Count == 0 || dryRun)
-            return new BoundaryApplyResult(writes.Count > 0, transformed.UnconvertibleCells, transformed.UnsupportedReshapes);
+            return new BoundaryApplyResult(
+                writes.Count > 0, transformed.UnconvertibleCells, transformed.UnsupportedReshapes, transformed.RestoredCells);
         SaveBoundary(dataPath, doc, startVersion, writes, boundary);
-        return new BoundaryApplyResult(true, transformed.UnconvertibleCells, transformed.UnsupportedReshapes);
+        return new BoundaryApplyResult(true, transformed.UnconvertibleCells, transformed.UnsupportedReshapes, transformed.RestoredCells);
     }
 
     internal static BoundaryApplyResult TransformDoc(
-        StoreDoc doc, DesignDiff diff, InstanceDescription targetDesc, List<LogWrite> writes)
+        StoreDoc doc, DesignDiff diff, InstanceDescription targetDesc, List<LogWrite> writes,
+        RestorationPlan? restorations = null)
     {
         var startWriteCount = writes.Count;
         // ── type renames first (so every ref-refresh below sees the re-keyed extent) ──
@@ -1291,6 +1300,49 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             doc.Extents.Remove(typeRem.TypeName);
         }
 
+        var restoredCells = new List<string>();
+        var plannedRefs = PlannedRestoredRefs(restorations, diff);
+        var reachableRestoredRefs = ReachableRestoredRefs(restorations, diff, targetDesc);
+        foreach (var add in diff.TypeAdds)
+        {
+            if (restorations is null || !restorations.TypeObjects.TryGetValue(add.TypeId, out var objects)) continue;
+            var targetType = targetDesc.FindType(add.TypeName);
+            if (targetType is null || targetType.BaseType != BaseType.Object) continue;
+            if (!reachableRestoredRefs.TryGetValue(add.TypeName, out var reachableIds)) continue;
+            if (!doc.Extents.TryGetValue(add.TypeName, out var pool))
+                doc.Extents[add.TypeName] = pool = new();
+            foreach (var old in objects)
+            {
+                if (!reachableIds.Contains(old.Id)) continue;
+                if (pool.ContainsKey(old.Id)) continue;
+                if (doc.Extents.Values.Any(p => p.ContainsKey(old.Id)))
+                    throw new InvalidOperationException($"Cannot resurrect id {old.Id}: the id is already in use.");
+                var fields = RestoredObjectFields(old, targetType, add.TypeName, targetDesc, doc, plannedRefs);
+                var restored = new StoredObject(add.TypeName, old.Id, fields);
+                pool[old.Id] = restored;
+                if (doc.NextId <= old.Id) doc.NextId = old.Id + 1;
+                writes.Add(new Create(old.Id, add.TypeName, fields));
+                restoredCells.Add($"{add.TypeName}/{old.Id}");
+            }
+        }
+        foreach (var add in diff.Adds)
+        {
+            if (restorations is null || !restorations.PropValues.TryGetValue(add.PropId, out var values)) continue;
+            if (!doc.Extents.TryGetValue(add.TypeName, out var pool)) continue;
+            var prop = targetDesc.FindType(add.TypeName)?.Props?.FirstOrDefault(p => p.Name == add.PropName);
+            if (prop is null) continue;
+            foreach (var obj in pool.Values)
+            {
+                if (obj.Fields.ContainsKey(add.PropName)) continue;
+                if (!values.TryGetValue(obj.Id, out var oldValue)) continue;
+                var restored = ConvertRestoredValue(oldValue, prop, targetDesc, doc, plannedRefs);
+                if (restored is null) continue;
+                writes.Add(new FieldWrite(obj.Id, add.PropName, null, restored));
+                obj.Fields[add.PropName] = restored;
+                restoredCells.Add($"{add.TypeName}/{obj.Id}.{add.PropName}");
+            }
+        }
+
         // ── refresh every StoredRef.TypeName that pointed at a renamed type — root/field refs directly,
         //    set members via SetUnlink+SetLink (replay recomputes TypeName off the NOW-re-keyed extent) ──
         var renameMap = diff.TypeRenames.ToDictionary(r => r.FromName, r => r.ToName);
@@ -1344,8 +1396,122 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // Nothing to carry (an empty diff, or every op found no data to touch) — leave the target's files
         // and history completely untouched. A caller with a genuinely empty diff should not call this at
         // all, but staying a no-op here keeps the method honest either way.
-        return new BoundaryApplyResult(writes.Count > startWriteCount, unconvertibleCells, unsupportedReshapes);
+        return new BoundaryApplyResult(writes.Count > startWriteCount, unconvertibleCells, unsupportedReshapes, restoredCells);
     }
+
+    private static Dictionary<string, HashSet<int>> PlannedRestoredRefs(RestorationPlan? restorations, DesignDiff diff)
+    {
+        var result = new Dictionary<string, HashSet<int>>();
+        if (restorations is null) return result;
+        var typeNamesById = diff.TypeAdds.ToDictionary(t => t.TypeId, t => t.TypeName);
+        foreach (var (typeId, objects) in restorations.TypeObjects)
+        {
+            if (!typeNamesById.TryGetValue(typeId, out var typeName)) continue;
+            result[typeName] = objects.Select(o => o.Id).ToHashSet();
+        }
+        return result;
+    }
+
+    private static Dictionary<string, HashSet<int>> ReachableRestoredRefs(
+        RestorationPlan? restorations, DesignDiff diff, InstanceDescription targetDesc)
+    {
+        var result = new Dictionary<string, HashSet<int>>();
+        if (restorations is null) return result;
+        foreach (var add in diff.Adds)
+        {
+            if (!restorations.PropValues.TryGetValue(add.PropId, out var values)) continue;
+            var prop = targetDesc.FindType(add.TypeName)?.Props?.FirstOrDefault(p => p.Name == add.PropName);
+            if (prop is null || !targetDesc.IsObjectType(prop.Type)) continue;
+            var ids = result.GetValueOrDefault(prop.Type);
+            if (ids is null) result[prop.Type] = ids = [];
+            foreach (var value in values.Values)
+                CollectRefIds(value, ids);
+        }
+        return result;
+    }
+
+    private static void CollectRefIds(StoredValue value, HashSet<int> ids)
+    {
+        switch (value)
+        {
+            case StoredRef r:
+                ids.Add(r.Id);
+                break;
+            case StoredSet s:
+                foreach (var member in s.Members.Values)
+                    CollectRefIds(member, ids);
+                break;
+            case StoredDict d:
+                foreach (var entry in d.Entries.Values)
+                    CollectRefIds(entry, ids);
+                break;
+        }
+    }
+
+    private static Dictionary<string, StoredValue> RestoredObjectFields(
+        StoredObject old, TypeDefinition targetType, string typeName, InstanceDescription targetDesc, StoreDoc doc,
+        IReadOnlyDictionary<string, HashSet<int>> plannedRefs)
+    {
+        var fields = new Dictionary<string, StoredValue>();
+        foreach (var prop in targetType.Props ?? [])
+        {
+            if (old.Fields.TryGetValue(prop.Name, out var oldValue)
+                && ConvertRestoredValue(oldValue, prop, targetDesc, doc, plannedRefs) is { } restored)
+            {
+                fields[prop.Name] = restored;
+                continue;
+            }
+            if (NewShapeDefault(prop.Name, prop.Cardinality, typeName, targetDesc, doc) is { } def)
+                fields[prop.Name] = def;
+        }
+        return fields;
+    }
+
+    private static StoredValue? ConvertRestoredValue(
+        StoredValue oldValue, PropDefinition prop, InstanceDescription targetDesc, StoreDoc doc,
+        IReadOnlyDictionary<string, HashSet<int>> plannedRefs)
+    {
+        if (prop.Cardinality == Cardinality.Set && oldValue is StoredSet oldSet && targetDesc.IsObjectType(prop.Type))
+        {
+            var members = oldSet.Members.Values.OfType<StoredRef>()
+                .Where(setRef => RefReachable(setRef, prop.Type, doc, plannedRefs))
+                .ToDictionary(setRef => setRef.Id, setRef => (StoredValue)(setRef with { TypeName = prop.Type }));
+            return new StoredSet(MintCollectionId(doc), members);
+        }
+        if (prop.Cardinality == Cardinality.Dictionary && oldValue is StoredDict oldDict)
+        {
+            var entries = new Dictionary<string, StoredValue>();
+            foreach (var (key, value) in oldDict.Entries)
+            {
+                if (targetDesc.IsObjectType(prop.Type))
+                {
+                    if (value is StoredRef dictRef && RefReachable(dictRef, prop.Type, doc, plannedRefs))
+                        entries[key] = dictRef with { TypeName = prop.Type };
+                }
+                else if (value is StoredLeaf dictLeaf)
+                {
+                    var converted = ConvertScalar(dictLeaf.Scalar, prop.Type, targetDesc);
+                    entries[key] = new StoredLeaf(converted ?? DefaultBase(LeafBase(prop.Type, targetDesc)));
+                }
+            }
+            return new StoredDict(MintCollectionId(doc), entries);
+        }
+        if (prop.Cardinality != Cardinality.Single) return null;
+        if (oldValue is StoredLeaf leaf && !targetDesc.IsObjectType(prop.Type))
+        {
+            var converted = ConvertScalar(leaf.Scalar, prop.Type, targetDesc);
+            return new StoredLeaf(converted ?? DefaultBase(LeafBase(prop.Type, targetDesc)));
+        }
+        if (oldValue is StoredRef r && targetDesc.IsObjectType(prop.Type)
+            && RefReachable(r, prop.Type, doc, plannedRefs))
+            return r with { TypeName = prop.Type };
+        return null;
+    }
+
+    private static bool RefReachable(
+        StoredRef r, string typeName, StoreDoc doc, IReadOnlyDictionary<string, HashSet<int>> plannedRefs) =>
+        doc.Extents.GetValueOrDefault(typeName)?.ContainsKey(r.Id) == true
+        || plannedRefs.GetValueOrDefault(typeName)?.Contains(r.Id) == true;
 
     internal static void SaveBoundary(
         string dataPath, StoreDoc doc, int startVersion, List<LogWrite> writes, BoundaryMarker boundary)
@@ -1697,6 +1863,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             .OrderByDescending(e => e.Seq)
             .FirstOrDefault()?.Boundary;
 
+    internal static IReadOnlyList<LogEntry> LoadEntries(string dataPath) =>
+        LoadLog(AppPaths.LogPathForDataPath(dataPath), AppPaths.GenesisPathForDataPath(dataPath));
+
     private static List<LogEntry> LoadLog(string logPath, string genesisPath)
     {
         if (!File.Exists(logPath)) return [];
@@ -1866,11 +2035,18 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // The ONE choke point every extent insert mints through (CommitBatch creates, a dict-value mint inside
     // WriteDictionaryEntryInto, CreateObject) — so a Create LogWrite is recorded here, once, rather than at
     // each of its callers separately.
-    private int MintObject(string typeName, ObjectValue fields)
+    private int MintObject(string typeName, ObjectValue fields, int? literalId = null)
     {
         if (!_doc.Extents.TryGetValue(typeName, out var pool))
             _doc.Extents[typeName] = pool = new();
-        var id = MintId();
+        var id = literalId ?? MintId();
+        if (literalId is not null)
+        {
+            if (id <= 0) throw new InvalidOperationException("A literal object id must be positive.");
+            if (ExtentEntryById(id) is not null)
+                throw new InvalidOperationException($"Cannot resurrect id {id}: the id is already in use.");
+            if (_doc.NextId <= id) _doc.NextId = id + 1;
+        }
         var type = _desc.FindType(typeName)
             ?? throw new InvalidOperationException($"Unknown type '{typeName}'.");
         var built = BuildFields(type, fields);

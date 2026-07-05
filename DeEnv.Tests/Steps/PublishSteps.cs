@@ -53,6 +53,7 @@ public sealed class PublishSteps
             Commit
                 message text
                 migration text
+                revertMigration text
                 at datetime
                 design Design
                 parent Commit
@@ -97,6 +98,7 @@ public sealed class PublishSteps
     private bool _restartInvoked;
     private JsonElement _replyRoot;
     private JsonElement _report;
+    private JsonElement _revertReplyRoot;
 
     private static readonly JsonSerializerOptions StoreOpts = new()
     {
@@ -287,6 +289,16 @@ public sealed class PublishSteps
         _propIds.Remove((typeName, field));
     }
 
+    [Given("the design's type {string} is removed")]
+    public void GivenTypeRemoved(string typeName)
+    {
+        var typeId = _typeIds[typeName];
+        _designer.RemoveFromSet(DesignTypesPath, typeId);
+        _typeIds.Remove(typeName);
+        foreach (var key in _propIds.Keys.Where(k => k.Type == typeName).ToList())
+            _propIds.Remove(key);
+    }
+
     [Given("the design's {string} field {string} is retyped to {string}")]
     public void GivenFieldRetyped(string typeName, string field, string toType)
     {
@@ -337,6 +349,31 @@ public sealed class PublishSteps
         using var doc = JsonDocument.Parse(reply);
         if (!doc.RootElement.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
             throw new InvalidOperationException($"commitDesign failed: {reply}");
+    }
+
+    [When("the designer reverts the design to commit {string} over the WS")]
+    public void WhenRevertToCommit(string message) => RevertToCommit(message);
+
+    [When("the designer attempts to revert the design to commit {string} over the WS")]
+    public void WhenAttemptRevertToCommit(string message) => RevertToCommit(message);
+
+    private void RevertToCommit(string message)
+    {
+        var commitId = CommitIdByMessage(message);
+        var ws = Ws();
+        var reply = ws.ProcessMessage(
+            $$"""{ "op": "hostAction", "clientId": "{{_clientId}}", "action": "revertCommit", "args": [ { "type": "int", "value": {{_designId}} }, { "type": "int", "value": {{commitId}} } ] }""");
+        using var doc = JsonDocument.Parse(reply);
+        _revertReplyRoot = doc.RootElement.Clone();
+    }
+
+    private int CommitIdByMessage(string message)
+    {
+        var fresh = FreshDesigner();
+        foreach (var (id, fields) in fresh.ReadExtent("Commit"))
+            if (fields.Fields.GetValueOrDefault("message") is TextValue { Text: var text } && text == message)
+                return id;
+        throw new InvalidOperationException($"No commit with message '{message}'.");
     }
 
     [Given("the design has a merged side-branch commit with migration:")]
@@ -466,6 +503,20 @@ public sealed class PublishSteps
         await Assert.That(_replyRoot.TryGetProperty("error", out _)).IsFalse();
     }
 
+    [Then("the revert host action reply is ok")]
+    public async Task ThenRevertReplyOk()
+    {
+        await Assert.That(_revertReplyRoot.TryGetProperty("ok", out var ok) && ok.GetBoolean()).IsTrue();
+        await Assert.That(_revertReplyRoot.TryGetProperty("error", out _)).IsFalse();
+    }
+
+    [Then("the revert reply is an error mentioning {string}")]
+    public async Task ThenRevertReplyErrorMentions(string text)
+    {
+        await Assert.That(_revertReplyRoot.TryGetProperty("error", out var err)).IsTrue();
+        await Assert.That(err.GetString()!).Contains(text);
+    }
+
     [Then("the publish report used the name-match fallback")]
     public async Task ThenFallbackUsed() =>
         await Assert.That(_report.GetProperty("fallbackNameMatched").GetBoolean()).IsTrue();
@@ -554,6 +605,17 @@ public sealed class PublishSteps
     public async Task ThenMigrationReportStepCount(int count) =>
         await Assert.That(_report.GetProperty("migrations").GetArrayLength()).IsEqualTo(count);
 
+    [Then("the publish report says {int} cell was restored from history")]
+    public async Task ThenRestorationReportCount(int count) =>
+        await Assert.That(_report.GetProperty("restorations").GetArrayLength()).IsEqualTo(count);
+
+    [Then("the publish report says {int} cells were restored from history")]
+    public async Task ThenRestorationReportCountPlural(int count) => await ThenRestorationReportCount(count);
+
+    [Then("the publish report says no cells were restored from history")]
+    public async Task ThenNoRestorationReport() =>
+        await Assert.That(_report.GetProperty("restorations").GetArrayLength()).IsEqualTo(0);
+
     // ── Then: the target's app document / data / log / genesis ─────────────────────────────────────
 
     // Compares against whichever "before" text the scenario captured: an UNSTAMPED target (never
@@ -590,6 +652,7 @@ public sealed class PublishSteps
         await Assert.That(actual).IsEqualTo(defaultValue);
     }
 
+    [Given("the target's {string} has no stored {string} value")]
     [Then("the target's {string} has no stored {string} value")]
     public async Task ThenTargetHasNoStoredValue(string typeName, string field)
     {
@@ -622,6 +685,25 @@ public sealed class PublishSteps
         var found = store.ReadExtent(typeName).Values
             .Any(o => o.Fields.GetValueOrDefault("label") is TextValue t && t.Text == label);
         await Assert.That(found).IsTrue();
+    }
+
+    [Then("the target's {string} extent holds an object named {string}")]
+    public async Task ThenExtentHoldsNamed(string typeName, string name)
+    {
+        var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
+        var store = new JsonFileInstanceStore(_targetDataPath, published);
+        var found = store.ReadExtent(typeName).Values
+            .Any(o => o.Fields.GetValueOrDefault("name") is TextValue t && t.Text == name);
+        await Assert.That(found).IsTrue();
+    }
+
+    [Then("the target's Db {string} set has {int} member")]
+    public async Task ThenTargetDbSetMemberCount(string setProp, int count)
+    {
+        var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
+        var store = new JsonFileInstanceStore(_targetDataPath, published);
+        var set = (SetValue)store.ReadNode(NodePath.Root.Field(setProp))!;
+        await Assert.That(set.Members.Count).IsEqualTo(count);
     }
 
     [Then("every reference to the renamed type in the target now points at {string}")]

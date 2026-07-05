@@ -828,6 +828,20 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page.WaitForSelectorAsync("main.ide-commit-detail");
     }
 
+    [When("I open the commit detail for {string}")]
+    public async Task WhenOpenCommitDetailFor(string message)
+    {
+        var commitId = _designer.Store.ReadExtent("Commit")
+            .Where(kv => kv.Value.Fields.TryGetValue("message", out var v)
+                && v is DeEnv.Storage.TextValue t && t.Text == message)
+            .OrderByDescending(kv => kv.Value.Fields.TryGetValue("logSeq", out var v) && v is DeEnv.Storage.IntValue i ? i.Value : 0)
+            .Select(kv => kv.Key)
+            .First();
+        var page = ctx.Page!;
+        await page.GotoReadyAsync(ctx.DesignerUrl($"/commits/{commitId}"));
+        await page.WaitForSelectorAsync("main.ide-commit-detail");
+    }
+
     // B1: the commit-detail page renders each field as a .commit-field with a .field-value; a field-value
     // equal to the message/design proves the right commit resolved (values are distinct across fields).
     [Then("the commit detail page shows message {string}")]
@@ -883,6 +897,10 @@ public sealed class DesignerSteps(InstanceContext ctx)
     // Remove a leaf field from a type in the design editor (the prop-row's "×" remove button). Drives
     // arrayRemove on the type's nested props set; wait for the client edit AND the autosave to the designer's
     // store (a later commit snapshots the design, so the removal must have landed).
+    [Then("the changes-since-parent shows an add of {string}")]
+    public async Task ThenChangesSinceParentAdd(string path) =>
+        await ctx.Page!.Locator($"main.ide-commit-detail .commit-diff .diff-add:has-text({CssString(path)})").WaitForAsync();
+
     [When("I remove the field {string} from the type {string}")]
     public async Task WhenRemoveField(string propName, string typeName)
     {

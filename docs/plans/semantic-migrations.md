@@ -8,10 +8,10 @@ Slice 1 landed 2026-07-05: `Commit.migration text`, hard 3-arity `sys.commitDesi
 commit-time validation, designer textarea, and commit-detail rendering. Slice 2 landed
 2026-07-05: publish executes commit-authored migrations with collapse-step-collapse range
 walking, dry-run parity, one boundary entry, and the crash re-stamp guard (suite 737).
-The restoration bundle (resurrect-with-id primitive +
-sys.revertCommit) is designed but re-scoped to its own later slice with its own approval
-ask. Next: milestone-planner slices it; sequence after Track B's B3/B4 (shared app.deenv +
-KernelHostActions).
+The restoration bundle landed 2026-07-05 (suite 751): resurrect-with-id via literal
+`CommitCreate`, `sys.revertCommit`, idMap-membership restoration for re-added fields/types,
+reachable type-row restoration, loud `PublishReport.restorations`, `TypeAdd` in the shared
+diff vocabulary, and the `Commit.revertMigration` authored-reverse rider.
 Companions: `app-versioning-design.md` §3 (the settled design-level position this implements),
 `versioning-slices.md` (what actually landed in M13), `post-m13-backlog.md` (Track C entry).
 
@@ -418,19 +418,15 @@ for one-click reverts regardless); pipeline/executor/report changes: zero.
    atomically; harvest type-violation aborts loudly; dryRun previews without applying; merged
    migration refuses; dict-targeting fn refuses; crash-window re-publish re-stamps without
    re-running; multi-commit collapse-step-collapse produces one boundary entry.
-3. ~~Identity re-add restoration~~ — **MOVED OUT of the migration slices (grill #2 verdict:
-   unbuildable as scheduled).** Restoration ships as ONE coherent later slice bundling:
-   the resurrect-with-id store primitive (interface approval ask) + `sys.revertCommit`
-   (identity-restored commit construction + revertMigration copy + not-stamped/head refusal)
-   + PropAdd id + TypeAdd in DesignDiff (converges with B2's ledgered TypeAdd want) + the
-   idMap-membership backscan with its horizons + the integrity pass (dangling refs,
-   type-restore reachability) + the G1 invariant guard test. Slices 1–2 stand alone; their
-   honest revert story meanwhile: renames/conversions revert manually, authored fns recompute
-   from surviving fields, clone-at-seq for full state. Scenario spine when it lands: publish
-   removes a field → users work → sys.revertCommit → publish → old rows get exact values
-   back, post-publish rows get the revert fn's definition, nothing user-edited clobbered; a
-   manually re-added same-named field (different identity) starts empty; dangling restored
-   refs dropped + reported; unreachable type restore refused.
+3. ~~Identity re-add restoration~~ — **DONE 2026-07-05 (suite 751).** It shipped as the
+   coherent later slice grill #2 required: resurrect-with-id via literal-id `CommitCreate`,
+   `sys.revertCommit` (last commit only, identity-restored working-copy construction,
+   revertMigration copy), PropAdd id + TypeAdd in DesignDiff, idMap-membership backscan with
+   null-BaseCommit horizons, dangling-ref drops, reachable type-row restoration, and loud
+   `PublishReport.restorations`. The scenario spine landed: publish removes a field → users
+   work → sys.revertCommit → publish → old rows get exact values back; manual same-name re-add
+   starts empty; type rows come back through a restored reachable set; dry-run reports without
+   applying; non-last revert is refused; bad parent-schema revertMigration rejects.
 
 ## Self-grill #1 (2026-07-04) — verdict SOUND-WITH-FIXES, all integrated
 
@@ -507,12 +503,8 @@ Open / deferred, named:
 - Merged-migration publishes (rebase-class; refused loudly).
 - Purity/macro-entries (§3's own deferral, unchanged).
 - Migration authoring ergonomics beyond a textarea (editor tooling is a future layer).
-- **The restoration slice** (one coherent bundle, grill #2 re-scope): resurrect-with-id
-  store primitive (IInstanceStore interface-shape change — APPROVAL ASK when scheduled) +
-  `sys.revertCommit` (identity-restored commit construction; refuses non-stamped/non-head
-  targets) + the idMap-membership backscan + integrity pass + G1 guard test + the optional
-  `Commit.revertMigration` authored-reverse rider (S on top; copy-onto-revert-commit, zero
-  pipeline change).
+- ~~The restoration slice~~ — DONE 2026-07-05; see the status note above and
+  `docs/plans/post-m13-backlog.md`.
 - Making setDesign/fallback applies history-PRESERVING (today they re-baseline = wipe the
   log; the G1 corollary) — its own item, prerequisite-adjacent to restoration mattering in
   practice.

@@ -70,6 +70,85 @@ Feature: Structural identity-diff + rename-safe forward publish
     And the target's genesis is unchanged by the publish
     And the target's "Item" has no stored "note" value
 
+  Scenario: A revert commit restores a removed field's old values by identity
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds a "note" field to "Item"
+    And the design is committed with message "add note before revert"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the target's "Item" has "note" set to "old note"
+    And the design's "Item" field "note" is removed
+    And the design is committed with message "remove note before revert"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the target's "Item" has no stored "note" value
+    When the designer reverts the design to commit "add note before revert" over the WS
+    Then the revert host action reply is ok
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the publish report says 1 cell was restored from history
+    And the target's published "Item" reads "note" as "text" "old note"
+    And the target's "Item" still reads "label" as "text" "Keep me"
+
+  Scenario: A manual re-add with a fresh field identity starts empty
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds a "note" field to "Item"
+    And the design is committed with message "add note before fresh readd"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the target's "Item" has "note" set to "old note"
+    And the design's "Item" field "note" is removed
+    And the design is committed with message "remove note before fresh readd"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the design adds a "note" field to "Item"
+    And the design is committed with message "fresh note readd"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the publish report says no cells were restored from history
+    And the target's published "Item" reads "note" defaulted to ""
+
+  Scenario: A revert commit restores a removed type's reachable rows by identity
+    Given the target holds an "Item" labelled "Keep me"
+    And the design's Db gains a "notes" set of "Note"
+    And the design is committed with message "add Note type"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the target's Db "notes" set is seeded with a "Note" named "Remember"
+    And the design's "Db" field "notes" is removed
+    And the design's type "Note" is removed
+    And the design is committed with message "remove Note type"
+    And the designer publishes the design's head commit to the target's id over the WS
+    When the designer reverts the design to commit "add Note type" over the WS
+    Then the revert host action reply is ok
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the publish report says 2 cells were restored from history
+    And the target's "Note" extent holds an object named "Remember"
+    And the target's Db "notes" set has 1 member
+
+  Scenario: Dry-run reports restoration without applying it
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds a "note" field to "Item"
+    And the design is committed with message "add note before dry revert"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the target's "Item" has "note" set to "old note"
+    And the design's "Item" field "note" is removed
+    And the design is committed with message "remove note before dry revert"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the target's own log line count is remembered
+    When the designer reverts the design to commit "add note before dry revert" over the WS
+    Then the revert host action reply is ok
+    When the designer dry-runs a publish of the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the publish report says 1 cell was restored from history
+    And the target's log did not grow
+    And the target's "Item" has no stored "note" value
+
+  Scenario: Reverting past the latest commit is refused
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds a "note" field to "Item"
+    And the design is committed with message "older target"
+    And the design adds a "motto" field to "Item"
+    And the design is committed with message "newer head"
+    When the designer attempts to revert the design to commit "baseline" over the WS
+    Then the revert reply is an error mentioning "last commit"
+
   # ── WAL law: a crash between the boundary entry append and the snapshot rewrite recovers ─────────
   # The boundary apply must append the log entry BEFORE rewriting the snapshot (the slice-1 WAL law,
   # same as the live Save). Proven BOTH DIRECTIONS: (a) the CORRECT-order crash — the entry is on the log

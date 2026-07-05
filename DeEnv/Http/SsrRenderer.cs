@@ -1154,8 +1154,11 @@ public sealed class SsrRenderer
             .. diff.PropRenames.Select(r => (IExecValue)Obj(
                 ("from", T($"{r.TypeName}.{r.FromProp}")), ("to", T($"{r.TypeName}.{r.ToProp}")))),
         ]);
-        // adds: bare path strings "Type.prop", exactly like PublishReport.Adds.
-        var adds = Arr(diff.Adds.Select(a => (IExecValue)T($"{a.TypeName}.{a.PropName}")));
+        // adds: bare path strings "Type" or "Type.prop", exactly like PublishReport.Adds.
+        var adds = Arr([
+            .. diff.TypeAdds.Select(a => (IExecValue)T(a.TypeName)),
+            .. diff.Adds.Select(a => (IExecValue)T($"{a.TypeName}.{a.PropName}")),
+        ]);
         // removes: prop removes "Type.prop" ++ whole-type removes "Type" — bare path strings.
         var removes = Arr([
             .. diff.Removes.Select(r => (IExecValue)T($"{r.TypeName}.{r.PropName}")),

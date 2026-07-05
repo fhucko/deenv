@@ -55,7 +55,14 @@ public sealed record BoundaryMarker(int DesignId, int CommitId, int? BaseCommitI
 // has). Never itself a failure — a boundary apply always SUCCEEDS at carrying what it can; these lists are
 // what the publish report calls out as loud, not blocking.
 public sealed record BoundaryApplyResult(
-    bool Applied, IReadOnlyList<string> UnconvertibleCells, IReadOnlyList<string> UnsupportedReshapes);
+    bool Applied,
+    IReadOnlyList<string> UnconvertibleCells,
+    IReadOnlyList<string> UnsupportedReshapes,
+    IReadOnlyList<string>? RestoredCells = null);
+
+public sealed record RestorationPlan(
+    IReadOnlyDictionary<int, IReadOnlyDictionary<int, StoredValue>> PropValues,
+    IReadOnlyDictionary<int, IReadOnlyList<StoredObject>> TypeObjects);
 
 // The genesis snapshot: the document as it stood BEFORE the first logged entry, written once (frozen) the
 // first time any mutating store method runs. GenesisSeq is the store version genesis was taken at (0 for a

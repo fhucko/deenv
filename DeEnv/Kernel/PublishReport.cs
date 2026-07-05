@@ -44,6 +44,7 @@ public sealed record PublishReport
     public required bool FallbackNameMatched { get; init; }
     public IReadOnlyList<MigrationRunReport> Migrations { get; init; } = [];
     public bool MigrationsSkipped { get; init; }
+    public IReadOnlyList<string> Restorations { get; init; } = [];
 }
 
 public sealed record RenameReportItem(string From, string To);

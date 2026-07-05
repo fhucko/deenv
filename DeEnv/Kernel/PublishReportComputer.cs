@@ -140,9 +140,10 @@ public static class PublishReportComputer
                 return new BoundaryApplyResult(false, [], []);
             }
             migrations = [];
+            var restorations = BuildRestorationPlan(store, targetDataPath, direct);
             return JsonFileInstanceStore.ApplyPublishBoundary(
                 targetDataPath, direct, headDesc,
-                new BoundaryMarker(designId, headCommitId, BaseCommitId: stampedCommitId), dryRun);
+                new BoundaryMarker(designId, headCommitId, BaseCommitId: stampedCommitId), dryRun, restorations);
         }
 
         var chainIds = firstParent.ToHashSet();
@@ -163,9 +164,10 @@ public static class PublishReportComputer
                 return new BoundaryApplyResult(false, [], []);
             }
             migrations = [];
+            var restorations = BuildRestorationPlan(store, targetDataPath, direct);
             return JsonFileInstanceStore.ApplyPublishBoundary(
                 targetDataPath, direct, headDesc,
-                new BoundaryMarker(designId, headCommitId, BaseCommitId: stampedCommitId), dryRun);
+                new BoundaryMarker(designId, headCommitId, BaseCommitId: stampedCommitId), dryRun, restorations);
         }
 
         var doc = JsonFileInstanceStore.LoadRaw(targetDataPath);
@@ -173,6 +175,7 @@ public static class PublishReportComputer
         var writes = new List<LogWrite>();
         var unconvertible = new List<string>();
         var unsupported = new List<string>();
+        var restored = new List<string>();
         var migrationReports = new List<MigrationRunReport>();
         var prevId = stampedCommitId;
         var prevFields = stampedFields;
@@ -195,9 +198,11 @@ public static class PublishReportComputer
         }
 
         var finalDiff = DesignDiffer.Compute(Snapshot(prevFields), Snapshot(headFields));
-        var final = JsonFileInstanceStore.TransformDoc(doc, finalDiff, headDesc, writes);
+        var final = JsonFileInstanceStore.TransformDoc(
+            doc, finalDiff, headDesc, writes, BuildRestorationPlan(store, targetDataPath, finalDiff));
         unconvertible.AddRange(final.UnconvertibleCells);
         unsupported.AddRange(final.UnsupportedReshapes);
+        restored.AddRange(final.RestoredCells ?? []);
 
         if (writes.Count > 0 && !dryRun)
             JsonFileInstanceStore.SaveBoundary(
@@ -205,11 +210,59 @@ public static class PublishReportComputer
                 new BoundaryMarker(designId, headCommitId, BaseCommitId: stampedCommitId));
 
         migrations = migrationReports;
-        return new BoundaryApplyResult(writes.Count > 0, unconvertible, unsupported);
+        return new BoundaryApplyResult(writes.Count > 0, unconvertible, unsupported, restored);
     }
 
     private static DesignSnapshot Snapshot(ObjectValue commitFields) =>
         new(KernelHostActions.TextOf(commitFields, "text"), KernelHostActions.IdMapOf(commitFields));
+
+    private static RestorationPlan? BuildRestorationPlan(IInstanceStore store, string targetDataPath, DesignDiff diff)
+    {
+        if (diff.Adds.Count == 0 && diff.TypeAdds.Count == 0) return null;
+        var wantedProps = diff.Adds.ToDictionary(a => a.PropId);
+        var wantedTypes = diff.TypeAdds.ToDictionary(a => a.TypeId);
+        var restoredProps = new Dictionary<int, IReadOnlyDictionary<int, StoredValue>>();
+        var restoredTypes = new Dictionary<int, IReadOnlyList<StoredObject>>();
+        foreach (var entry in JsonFileInstanceStore.LoadEntries(targetDataPath).Reverse())
+        {
+            if (wantedProps.Count == 0 && wantedTypes.Count == 0) break;
+            if (entry.Boundary is not { } boundary) continue;
+            if (boundary.BaseCommitId is not { } baseCommitId) break;
+
+            var baseMap = KernelHostActions.IdMapOf(FindCommitOrThrow(store, baseCommitId));
+            var commitMap = KernelHostActions.IdMapOf(FindCommitOrThrow(store, boundary.CommitId));
+            var commitIds = commitMap.Values.ToHashSet();
+
+            foreach (var (typeId, add) in wantedTypes.ToList())
+            {
+                var oldType = baseMap.FirstOrDefault(kv => kv.Value == typeId).Key;
+                if (oldType is null || oldType.Contains('.') || commitIds.Contains(typeId)) continue;
+                var objects = entry.Writes.OfType<Remove>()
+                    .Where(w => w.Old.TypeName == oldType)
+                    .Select(w => w.Old)
+                    .ToList();
+                if (objects.Count > 0) restoredTypes[typeId] = objects;
+                wantedTypes.Remove(typeId);
+            }
+
+            foreach (var (propId, add) in wantedProps.ToList())
+            {
+                var oldPath = baseMap.FirstOrDefault(kv => kv.Value == propId).Key;
+                if (oldPath is null || commitIds.Contains(propId)) continue;
+                var dot = oldPath.IndexOf('.');
+                if (dot < 0) continue;
+                var oldProp = oldPath[(dot + 1)..];
+                var values = entry.Writes.OfType<FieldWrite>()
+                    .Where(w => w.Prop == oldProp && w.New is null && w.Old is not null)
+                    .ToDictionary(w => w.ObjectId, w => w.Old!);
+                if (values.Count > 0) restoredProps[propId] = values;
+                wantedProps.Remove(propId);
+            }
+        }
+        return restoredProps.Count == 0 && restoredTypes.Count == 0
+            ? null
+            : new RestorationPlan(restoredProps, restoredTypes);
+    }
 
     private static string MigrationOf(IInstanceStore store, int commitId) =>
         KernelHostActions.TextOf(FindCommitOrThrow(store, commitId), "migration");

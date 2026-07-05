@@ -151,15 +151,13 @@ disambiguated; theirs visible pre-choice.
 run `/design` or a planning session, then slice)
 
 - **Semantic migrations — DONE 2026-07-05** (both slices landed + verified; ledger entry in
-  `versioning-slices.md`; suite 739 after the review trims 6ca82c4). Remaining from that
-  design, each with its own gate: the restoration bundle (**primitive APPROVED 2026-07-05 —
-  brief below**); decimal/date/datetime migration writes (Code-runtime ceiling);
-  merged-migration publishes (refused loudly).
+  `versioning-slices.md`; suite 739 after the review trims 6ca82c4). The restoration bundle
+  also landed 2026-07-05 (suite 751; brief retained below as the spec/provenance record).
+  Remaining from that design, each with its own gate: decimal/date/datetime migration writes
+  (Code-runtime ceiling); merged-migration publishes (refused loudly).
 
-### RESTORATION BUNDLE — sys.revertCommit + identity re-add restoration
-[L; storage+kernel+designer UI; review architecture (opus) MANDATORY + ui-arch/ux for the UI
-bits; suite baseline 741. RUN AFTER the designer small-slice bundle (shared app.deenv +
-KernelHostActions).]
+### RESTORATION BUNDLE — DONE 2026-07-05  [suite 751]
+[L; storage+kernel+designer UI; built after the designer small-slice bundle.]
 **The spec:** `docs/plans/semantic-migrations.md` — the sections "Reverting a publish — a
 normal publish, not a special op" (points 1–6, incl. the G1 invariant) and "Authored revert
 fns"; plus grill #2's integrated fixes. Twice-designed, user-approved (the resurrect-with-id
@@ -221,6 +219,17 @@ host-action-success-signal.md's limitation section); sys.revertCommit wiring: ho
 lockstep sites ONLY if called from Code (it will be — the Revert button — so all five sites,
 commitDesign precedent); ff-merge; docs sync (semantic-migrations.md status, this entry,
 memory) in the same landing.
+**Delivered:** `CommitCreate` can carry a literal id through `CommitBatch`; the store asserts
+the id is free, preserves monotonic `NextId`, and logs a literal `Create(id, ...)`.
+`sys.revertCommit(design, commit)` is wired through Code/TS and the committed designer UI,
+auto-commits only the last-commit revert, resurrects MetaType/MetaProp rows by id, and copies
+`revertMigration` onto the revert commit's `migration`. Publish restoration now backscans
+boundary history by idMap membership for re-added props and types, treats null `BaseCommitId`
+as the hard horizon, restores scalar/set/dict values and reachable type rows, drops dangling
+refs, and reports restorations in `PublishReport`/`sys.publishPreview`. `TypeAdd` is now part
+of the shared diff vocabulary, closing B2's pure-type-add blind spot. The authored-reverse
+rider landed with parent-schema validation, commit-detail rendering, and the collapsed
+designer textarea.
 
 ### Designer small-slice bundle — DONE 2026-07-05  [S; self-contained; suite 744]
 Three small, disjoint designer items, one worktree, one landing. All touch

@@ -69,6 +69,16 @@ Feature: Design commits — Commit/Branch rows, sys.commitDesign, the authority 
       """
     Then the host action reply is an error mentioning "Missing"
 
+  Scenario: A revert migration function must name a parent-committed type
+    Given the designer already committed that design with message "first cut"
+    And the design adds type "Future" with field "label"
+    When the designer commits that design with message "bad revert migration" and revert migration
+      """
+      fn Future(old)
+          new.label = old.label
+      """
+    Then the host action reply is an error mentioning "Future"
+
   Scenario: A migration function cannot shadow injected values
     Given the designer already committed that design with message "first cut"
     When the designer commits that design with message "shadow migration" and migration

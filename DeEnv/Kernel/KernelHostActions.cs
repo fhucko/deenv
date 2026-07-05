@@ -103,6 +103,7 @@ public sealed class KernelHostActions(
         "setDesign"    => SetDesign(args),
         "rename"       => Rename(args),
         "commitDesign" => CommitDesign(args),
+        "revertCommit" => RevertCommit(args),
         "createBranch" => CreateBranch(args),
         "mergeBranch"  => MergeBranch(args),
         _ => throw new InvalidOperationException($"Unknown host action '{action}'."),
@@ -246,7 +247,7 @@ public sealed class KernelHostActions(
             .. diff.TypeRenames.Select(r => new RenameReportItem(r.FromName, r.ToName)),
             .. diff.PropRenames.Select(r => new RenameReportItem($"{r.TypeName}.{r.FromProp}", $"{r.TypeName}.{r.ToProp}")),
         ],
-        Adds = [.. diff.Adds.Select(a => $"{a.TypeName}.{a.PropName}")],
+        Adds = [.. diff.TypeAdds.Select(a => a.TypeName), .. diff.Adds.Select(a => $"{a.TypeName}.{a.PropName}")],
         Removes = [
             .. diff.Removes.Select(r => new RemoveReportItem($"{r.TypeName}.{r.PropName}")),
             .. diff.TypeRemoves.Select(r => new RemoveReportItem(r.TypeName)),
@@ -271,6 +272,7 @@ public sealed class KernelHostActions(
         FallbackNameMatched = fallbackNameMatched,
         Migrations = migrations ?? [],
         MigrationsSkipped = migrationsSkipped,
+        Restorations = boundaryResult.RestoredCells ?? [],
     };
 
     // Whether a BoundaryApplyResult cell string ("TypeName/objectId.propName" — see
@@ -393,6 +395,7 @@ public sealed class KernelHostActions(
         var designId = ArgInt(args, 0);
         var message = ArgText(args, 1);
         var migration = ArgText(args, 2);
+        var revertMigration = ArgTextOptional(args, 3, "");
 
         var store = resolveStore();
 
@@ -404,7 +407,32 @@ public sealed class KernelHostActions(
         NodeValue? headField = branch.Fields.Fields.GetValueOrDefault("head");
         int? parentHeadId = headField is ReferenceValue { TargetId: { } h } ? h : null;
 
-        CaptureAndCommit(store, designId, message, migration, parentHeadId, mergeParentHeadId: null, branch.Id);
+        CaptureAndCommit(store, designId, message, migration, parentHeadId, mergeParentHeadId: null, branch.Id, revertMigration);
+        return null;
+    }
+
+    private object? RevertCommit(JsonElement args)
+    {
+        var designId = ArgInt(args, 0);
+        var targetCommitId = ArgInt(args, 1);
+        var store = resolveStore();
+        var branch = FindOrCreateMainBranchByWorkingCopy(store, designId)
+            ?? throw new InvalidOperationException($"Design {designId} has no owning branch to revert.");
+        var headId = branch.Fields.Fields.GetValueOrDefault("head") is ReferenceValue { TargetId: { } h } ? h
+            : throw new InvalidOperationException("Cannot revert: the design has no head commit.");
+        var head = FindCommit(store, headId)
+            ?? throw new InvalidOperationException($"Commit {headId} referenced by the branch head no longer exists.");
+        var parentId = head.Fields.GetValueOrDefault("parent") is ReferenceValue { TargetId: { } p } ? p
+            : throw new InvalidOperationException("Cannot revert the root commit.");
+        if (targetCommitId != parentId)
+            throw new InvalidOperationException("Only the last commit can be reverted in this version.");
+        var target = FindCommit(store, targetCommitId)
+            ?? throw new InvalidOperationException($"Commit {targetCommitId} no longer exists.");
+
+        RestoreWorkingCopyToCommit(store, designId, target);
+        CaptureAndCommit(
+            store, designId, $"Revert to '{TextOf(target, "message")}'",
+            TextOf(target, "revertMigration"), parentHeadId: headId, mergeParentHeadId: null, branch.Id);
         return null;
     }
 
@@ -428,7 +456,8 @@ public sealed class KernelHostActions(
     // lock and ONE log entry. Returns the minted commit's own intrinsic id (the merge caller reports it on
     // the MergeReport; an ordinary commit has no caller that needs it).
     private static int CaptureAndCommit(
-        IInstanceStore store, int designId, string message, string migration, int? parentHeadId, int? mergeParentHeadId, int branchId)
+        IInstanceStore store, int designId, string message, string migration, int? parentHeadId, int? mergeParentHeadId, int branchId,
+        string revertMigration = "")
     {
         if (!string.IsNullOrWhiteSpace(migration) && parentHeadId is null)
             throw new InvalidOperationException("A root commit cannot carry a migration.");
@@ -447,6 +476,13 @@ public sealed class KernelHostActions(
                 throw new InvalidOperationException($"No design with id {designId} to commit.");
             snap = SchemaBridge.Snapshot(design); // throws SchemaValidationException on an invalid design
             ValidateMigration(migration, snap.Text);
+            if (!string.IsNullOrWhiteSpace(revertMigration))
+            {
+                if (parentHeadId is null) throw new InvalidOperationException("A root commit cannot carry a revert migration.");
+                var parent = FindCommit(store, parentHeadId.Value)
+                    ?? throw new InvalidOperationException($"Commit {parentHeadId.Value} no longer exists.");
+                ValidateMigration(revertMigration, TextOf(parent, "text"));
+            }
             var s2 = store.CurrentVersion;
             if (s1 == s2) { logSeq = s1; break; }
             if (attempt >= maxAttempts)
@@ -466,6 +502,8 @@ public sealed class KernelHostActions(
             ["text"]    = new TextValue(snap.Text),
             ["migration"] = new TextValue(migration),
         };
+        if (store.DeclaresField("Commit", "revertMigration"))
+            commitFields["revertMigration"] = new TextValue(revertMigration);
         var creates = new List<CommitCreate>
         {
             new CommitCreate(commitTemp, "Commit", new ObjectValue(commitFields)),
@@ -493,6 +531,97 @@ public sealed class KernelHostActions(
 
         var result = store.CommitBatch(creates, mutations);
         return result.Creates.First(c => c.TempId == commitTemp).RealId;
+    }
+
+    private static void RestoreWorkingCopyToCommit(IInstanceStore store, int designId, ObjectValue targetCommit)
+    {
+        var targetText = TextOf(targetCommit, "text");
+        var targetDesc = InstanceDescriptionLoader.Load(targetText);
+        var idMap = IdMapOf(targetCommit);
+        var design = ReadDesign(store, designId);
+        var typesSet = design.Fields.GetValueOrDefault("types") as SetValue
+            ?? throw new InvalidOperationException($"Design {designId} has no `types` set.");
+        var typeIds = idMap.Where(kv => !kv.Key.Contains('.')).ToDictionary(kv => kv.Key, kv => kv.Value);
+        var propIds = idMap.Where(kv => kv.Key.Contains('.')).ToDictionary(kv => kv.Key, kv => kv.Value);
+
+        foreach (var currentTypeId in typesSet.Members.Keys.ToList())
+            if (!typeIds.ContainsValue(currentTypeId))
+                store.RemoveFromSet(typesSet.Id, currentTypeId);
+
+        var typeCreates = new List<CommitCreate>();
+        var typeMutations = new List<CommitMutation>();
+        foreach (var (index, type) in targetDesc.AllTypes().Select((t, i) => (i, t)))
+        {
+            if (BaseTypes.IsName(type.Name)) continue;
+            var id = typeIds[type.Name];
+            var fields = new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue(type.Name),
+                ["baseType"] = new TextValue(BaseTypeWordOf(type.BaseType)),
+                ["values"] = new TextValue(string.Join(",", type.Values ?? [])),
+                ["order"] = new IntValue(index * 10),
+            });
+            if (store.ReadById(id) is ("MetaType", _))
+            {
+                typeMutations.Add(new FieldWriteMutation(id, "name", new TextValue(type.Name)));
+                typeMutations.Add(new FieldWriteMutation(id, "baseType", new TextValue(BaseTypeWordOf(type.BaseType))));
+                typeMutations.Add(new FieldWriteMutation(id, "values", new TextValue(string.Join(",", type.Values ?? []))));
+                typeMutations.Add(new FieldWriteMutation(id, "order", new IntValue(index * 10)));
+            }
+            else
+                typeCreates.Add(new CommitCreate(-id, "MetaType", fields, id));
+        }
+        var typeResult = store.CommitBatch(typeCreates, typeMutations);
+        foreach (var created in typeResult.Creates)
+            store.AddToSet(typesSet.Id, created.RealId);
+
+        foreach (var type in targetDesc.AllTypes().Where(t => !BaseTypes.IsName(t.Name)))
+        {
+            var typeId = typeIds[type.Name];
+            if (store.ReadById(typeId) is not ("MetaType", var typeFields)) continue;
+            var propsSet = typeFields.Fields.GetValueOrDefault("props") as SetValue
+                ?? throw new InvalidOperationException($"MetaType {typeId} has no `props` set.");
+            var wantedPropIds = (type.Props ?? []).Select(p => propIds[$"{type.Name}.{p.Name}"]).ToHashSet();
+            foreach (var currentPropId in propsSet.Members.Keys.ToList())
+                if (!wantedPropIds.Contains(currentPropId))
+                    store.RemoveFromSet(propsSet.Id, currentPropId);
+
+            var propCreates = new List<CommitCreate>();
+            var propMutations = new List<CommitMutation>();
+            foreach (var (index, prop) in (type.Props ?? []).Select((p, i) => (i, p)))
+            {
+                var id = propIds[$"{type.Name}.{prop.Name}"];
+                var fields = new ObjectValue(new Dictionary<string, NodeValue>
+                {
+                    ["name"] = new TextValue(prop.Name),
+                    ["type"] = new TextValue(prop.Type),
+                    ["cardinality"] = new TextValue(CardinalityWordOf(prop.Cardinality)),
+                    ["keyType"] = new TextValue(prop.KeyType ?? ""),
+                    ["multiline"] = new BoolValue(prop.Multiline),
+                    ["order"] = new IntValue(index * 10),
+                });
+                if (store.ReadById(id) is ("MetaProp", _))
+                {
+                    propMutations.Add(new FieldWriteMutation(id, "name", new TextValue(prop.Name)));
+                    propMutations.Add(new FieldWriteMutation(id, "type", new TextValue(prop.Type)));
+                    propMutations.Add(new FieldWriteMutation(id, "cardinality", new TextValue(CardinalityWordOf(prop.Cardinality))));
+                    propMutations.Add(new FieldWriteMutation(id, "keyType", new TextValue(prop.KeyType ?? "")));
+                    propMutations.Add(new FieldWriteMutation(id, "multiline", new BoolValue(prop.Multiline)));
+                    propMutations.Add(new FieldWriteMutation(id, "order", new IntValue(index * 10)));
+                }
+                else
+                    propCreates.Add(new CommitCreate(-id, "MetaProp", fields, id));
+            }
+            var propResult = store.CommitBatch(propCreates, propMutations);
+            foreach (var created in propResult.Creates)
+                store.AddToSet(propsSet.Id, created.RealId);
+        }
+
+        var sections = DesignerSeed.SplitSections(targetText);
+        store.WriteField(designId, "initialData", new TextValue(sections.GetValueOrDefault("initialData", "")));
+        store.WriteField(designId, "access", new TextValue(sections.GetValueOrDefault("access", "")));
+        store.WriteField(designId, "common", new TextValue(sections.GetValueOrDefault("common", "")));
+        store.WriteField(designId, "ui", new TextValue(sections.GetValueOrDefault("ui", "")));
     }
 
     // createBranch(design, name): clone a WORKING COPY's whole subgraph (Design + its MetaTypes + its
@@ -1356,6 +1485,19 @@ public sealed class KernelHostActions(
     {
         if (args.ValueKind != JsonValueKind.Array || args.GetArrayLength() <= index)
             throw new InvalidOperationException($"host action expects an argument at position {index}.");
+        var arg = args[index];
+        if (arg.ValueKind == JsonValueKind.String)
+            return arg.GetString()!;
+        if (arg.ValueKind == JsonValueKind.Object && arg.TryGetProperty("value", out var v)
+            && v.ValueKind == JsonValueKind.String)
+            return v.GetString()!;
+        throw new InvalidOperationException($"host action expects a text argument at position {index}.");
+    }
+
+    private static string ArgTextOptional(JsonElement args, int index, string defaultValue)
+    {
+        if (args.ValueKind != JsonValueKind.Array || args.GetArrayLength() <= index)
+            return defaultValue;
         var arg = args[index];
         if (arg.ValueKind == JsonValueKind.String)
             return arg.GetString()!;

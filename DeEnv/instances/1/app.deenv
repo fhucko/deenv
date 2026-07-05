@@ -35,6 +35,7 @@ types
     Commit
         message text
         migration text
+        revertMigration text
         at datetime
         design Design
         by User
@@ -113,13 +114,26 @@ ui
         fn afterCommit()
             state.message = ""
             state.migration = ""
-        sys.commitDesign(design, state.message, state.migration, afterCommit)
+            state.revertMigration = ""
+        sys.commitDesign(design, state.message, state.migration, state.revertMigration, afterCommit)
 
     fn lastCommitFor(design)
         var branch = db.branches.single(b => sys.id(b.workingCopy) == sys.id(design))
         if branch == null
             return null
         return branch.head
+
+    fn canRevertCommit(c)
+        if c.design == null
+            return false
+        var branch = db.branches.single(b => b.workingCopy != null && sys.id(b.workingCopy) == sys.id(c.design))
+        if branch == null
+            return false
+        if branch.head == null
+            return false
+        if branch.head.parent == null
+            return false
+        return sys.id(branch.head.parent) == sys.id(c)
 
     fn navBar(active)
         return <nav class="ide-nav">
@@ -142,7 +156,7 @@ ui
             <SetTable set={db.designs} desc={sys.schema("Design")} setPath="/designs" columns={["label"]} rowActions={designActions} createForm={createDesignForm}>
 
     fn designEditor(design)
-        var state = { message: "", migration: "" }
+        var state = { message: "", migration: "", revertMigration: "" }
         fn render()
             var lastCommit = lastCommitFor(design)
             return <section class="design-editor">
@@ -153,6 +167,10 @@ ui
                         <summary>
                             state.migration == "" ? "Migration" : "Migration •"
                         <textarea class="commit-migration-input" value={state.migration} placeholder={"fn TypeName(old) — then new.field = old.field on the next line"}>
+                    <details class="commit-revert-migration">
+                        <summary>
+                            state.revertMigration == "" ? "Revert migration" : "Revert migration •"
+                        <textarea class="commit-revert-migration-input" value={state.revertMigration} placeholder={"fn TypeName(old) — define data when reverting this commit"}>
                     <button class="commit-design" onClick={() => doCommit(design, state)}>
                         "Commit"
                     <a class="view-history" href="/commits">
@@ -267,6 +285,8 @@ ui
             return false
         if report.migrations.any(x => true)
             return false
+        if report.restorations.any(x => true)
+            return false
         return true
 
     fn publishReportView(report)
@@ -291,6 +311,9 @@ ui
         fn addRow(a)
             return <div class="publish-add">
                 a
+        fn restoreRow(r)
+            return <div class="publish-restore">
+                r
         return <div class="publish-report">
             if report.isEmpty
                 <p class="publish-uptodate">
@@ -306,6 +329,7 @@ ui
             opGroup("Cardinality", "publish-group", "publish-label", report.cardinality, cardinalityRow)
             opGroup("Renamed (data carried)", "publish-group", "publish-label", report.renames, renameRow)
             opGroup("Added", "publish-group", "publish-label", report.adds, addRow)
+            opGroup("Restored from history", "publish-group", "publish-label", report.restorations, restoreRow)
 
     fn previewBody(design, inst)
         var report = sys.publishPreview(design, inst.runtimeId)
@@ -712,6 +736,13 @@ ui
                     "Migration"
                 <pre class="commit-migration-text">
                     c.migration
+            if c.revertMigration != ""
+                <label class="text-label">
+                    "Revert migration"
+                <pre class="commit-migration-text">
+                    c.revertMigration
+            if canRevertCommit(c)
+                <ConfirmButton label="Revert" onConfirm={() => sys.revertCommit(c.design, c)} cls="revert-commit">
             <div class="commit-diff">
                 <label class="text-label">
                     "Changes since parent"
