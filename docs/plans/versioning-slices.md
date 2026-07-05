@@ -427,9 +427,19 @@ the designer.**
     for conflicts, not ObjectForm-only — today an uncorrelated raw commit only gets the coarse banner).
     That work WANTS this model: a first-class staging commit that fails is naturally "a save error with
     an optional resolver." Doing them together also closes the "fine bar is ObjectForm-only" limitation.
-- Semantic migrations (`fn migrate` + `Commit.migration` — boundary entries exist, the
-  addition is safe per the slice-4 note); compaction (`sys.compact`, §6); non-temporal field
-  flag (§0b); per-verb sys granularity.
+- **Semantic migrations — DONE 2026-07-05** (design `docs/plans/semantic-migrations.md`,
+  twice-grilled; slices built by Codex, verified here): slice 1 authoring+storage
+  (`Commit.migration text`, hard 3-arity commitDesign, 4+1 commit-time validations,
+  commit-bar textarea, detail render — 362929e + review-fix f2b2dbb; 3-lens review) +
+  slice 2 EXECUTION (`fn Type(old)` runs at publish: in-memory store ctor, TransformDoc
+  split, MigrationRunner with old/oldDb/new scope, Int/Text/Bool harvest with loud aborts,
+  collapse–step–collapse first-parent walk + refusals, ONE boundary entry, crash re-stamp
+  guard, preview/apply one pipeline — 72ffbcb + review trims 6ca82c4; arch review
+  SHIP-WITH-FIXES applied; suite 739). The host-action success-signal mechanism rode along
+  (own doc). Still deferred from that design: the restoration bundle (resurrect-with-id
+  primitive + sys.revertCommit — own approval ask); decimal/date/datetime migration writes
+  (Code-runtime ceiling); merged-migration publishes. Also still open: compaction
+  (`sys.compact`, §6); non-temporal field flag (§0b); per-verb sys granularity.
 - Cosmetics: humanized datetimes in generic tables (still deferred — no cheap generic path yet);
   the global banner's "Change rejected" vocabulary vs commit actions. (The generic humanized
   "(no <labelProp>)" empty-label placeholder landed with B1.)
