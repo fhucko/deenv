@@ -1191,6 +1191,13 @@ public sealed class CodeExecutor
         // change, not a reactive-semantics one. mergeBranch's structured `resolutions` arg crosses natively
         // via the client's scalarOf array/object serialization (ws.ts) and the server's existing
         // ArgResolutionsOptional — a wire-only change, not evaluation semantics.
+        //
+        // Each of these builtins also accepts an OPTIONAL trailing success-callback fn arg
+        // (docs/plans/host-action-success-signal.md): the CLIENT twin (codeExec.ts) splits it out of the
+        // wire args and invokes it only on the action's ok reply. That is pure client-side WS-reply
+        // orchestration with no SSR/refetch counterpart — this C# switch is keyed on the call NAME alone
+        // and never evaluates args, so a trailing callback (present or not) changes nothing here; the
+        // case stays ExecNothing for every arity.
         "publish" => new ExecNothing(),
         "create" => new ExecNothing(),
         "cloneInstance" => new ExecNothing(),

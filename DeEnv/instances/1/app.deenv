@@ -107,7 +107,10 @@ ui
         renameId = 0
 
     fn doCommit(design)
-        sys.commitDesign(design, commitMessage, commitMigration)
+        fn afterCommit()
+            commitMessage = ""
+            commitMigration = ""
+        sys.commitDesign(design, commitMessage, commitMigration, afterCommit)
 
     fn lastCommitFor(design)
         var branch = db.branches.single(b => sys.id(b.workingCopy) == sys.id(design))

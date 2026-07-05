@@ -85,16 +85,26 @@ public static class CodeValidator
         // preview→apply consistency guard token (M13 Track-B B3 addendum). The trailing pair is
         // OPTIONAL and BOTH-OR-NEITHER (never just one): a caller either publishes unguarded (2 args,
         // today's every existing call site) or passes back exactly the token `sys.publishPreview`
-        // handed it (4 args, what the design editor's Apply button does) — there is no 3-arg shape.
-        ["publish"] = [2, 4],
-        ["create"] = [2],  // (schema, name) — addressing is by path, so no port args
-        ["cloneInstance"] = [1], // (sourceId) — the clone's mount name derives from the source
-        ["delete"] = [1],  // (targetId)
-        ["rename"] = [2],  // (id, name)
-        ["setDesign"] = [2], // (schema, targetId)
-        ["commitDesign"] = [3], // (design, message, migration)
-        ["createBranch"] = [2], // (design, name) — clone a working copy's subgraph into a new Branch
-        ["mergeBranch"] = [2, 3], // (source, target) OR (source, target, resolutions) — resolutions optional
+        // handed it (4 args, what the design editor's Apply button does) — there is no 3-arg shape,
+        // UNLESS arg 2 is itself the success callback (docs/plans/host-action-success-signal.md): 3
+        // args = 2 + callback (a non-fn 3rd arg stays invalid — the guard pair's both-or-neither shape
+        // is preserved), 5 args = the guarded 4 + callback. The executor's universal rule — a
+        // CodeFunction in LAST position is the callback — disambiguates at runtime; this load-time
+        // check only widens the allowed COUNTS.
+        ["publish"] = [2, 3, 4, 5],
+        // (schema, name) OR + callback — addressing is by path, so no port args.
+        ["create"] = [2, 3],
+        // (sourceId) OR + callback — the clone's mount name derives from the source.
+        ["cloneInstance"] = [1, 2],
+        ["delete"] = [1, 2],  // (targetId) OR + callback
+        ["rename"] = [2, 3],  // (id, name) OR + callback
+        ["setDesign"] = [2, 3], // (schema, targetId) OR + callback
+        ["commitDesign"] = [3, 4], // (design, message, migration) OR + callback
+        ["createBranch"] = [2, 3], // (design, name) OR + callback — clone a working copy's subgraph into a new Branch
+        // (source, target) OR (source, target, resolutions) OR (source, target, callback) OR
+        // (source, target, resolutions, callback) — resolutions optional, callback optional, the
+        // executor's fn-in-last-position rule disambiguates arg 3 (resolutions array vs callback fn).
+        ["mergeBranch"] = [2, 3, 4],
         ["login"] = [2],   // (name, password) — a client-only host effect (the session→principal bind)
         ["logout"] = [0],  // () — the mirror of login: a client-only host effect (clear the principal)
         ["nest"] = [2],

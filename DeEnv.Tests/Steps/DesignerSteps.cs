@@ -771,6 +771,26 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await Assert.That(await ctx.Page!.Locator(".design-editor input.commit-message").InputValueAsync())
             .IsEqualTo(message);
 
+    // Host-action success callback (docs/plans/host-action-success-signal.md) — the commit bar's
+    // afterCommit clears commitMessage on the ok reply's refetch, which lands asynchronously (poll,
+    // don't assert immediately after the click).
+    [Then("the commit message input eventually holds {string}")]
+    public async Task ThenCommitMessageInputEventuallyHolds(string message) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const e = document.querySelector('.design-editor input.commit-message'); return e != null && e.value === {JsString(message)}; }}");
+
+    [Then("the migration textarea eventually holds {string}")]
+    public async Task ThenMigrationTextareaEventuallyHolds(string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const e = document.querySelector('.design-editor textarea.commit-migration-input'); return e != null && e.value === {JsString(text)}; }}");
+
+    // The rejection leg's retained-migration proof: the callback never ran, so the textarea still
+    // holds exactly what "I type a migration for ... into the migration textarea" typed.
+    [Then("the migration textarea still holds the migration for {string}")]
+    public async Task ThenMigrationTextareaStillHoldsMigrationFor(string typeName) =>
+        await Assert.That(await ctx.Page!.Locator(".design-editor textarea.commit-migration-input").InputValueAsync())
+            .IsEqualTo($"fn {typeName}(old)\n    new.text = old.text");
+
     [When("I open the commit history")]
     public async Task WhenOpenCommitHistory()
     {

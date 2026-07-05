@@ -621,6 +621,43 @@ Feature: The operator IDE (designs library + instance design selector)
     And I open the commit "with migration" from the history
     Then the commit detail page shows the migration source for "TodoItem"
 
+  # ── Host-action success callback (docs/plans/host-action-success-signal.md) — the commit bar's
+  # first consumer. sys.commitDesign's optional trailing fn arg runs ONLY on the ok reply, so a
+  # successful commit clears BOTH the message and migration inputs (a committed message is done —
+  # retaining it invites a stale re-commit); a rejected commit leaves both exactly as typed (the
+  # callback never ran), matching the existing "keeps the typed message" proof but now over BOTH
+  # inputs and asserting the CLEAR on the success leg the earlier UX-fix scenario deliberately left
+  # unasserted (it predates the callback mechanism — the input was never cleared client-side at all).
+  @milestone-13 @single-user
+  Scenario: Committing successfully clears the message and migration inputs
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I type "cleared on success" into the commit message
+    And I expand the Migration disclosure
+    And I type a migration for "TodoItem" into the migration textarea
+    And I click Commit
+    Then the last-commit line eventually shows message "cleared on success"
+    And the commit message input eventually holds ""
+    And the migration textarea eventually holds ""
+
+  # The rejection leg: an invalid migration (naming a type absent from the design — the same shape
+  # DesignCommit.feature's "must name a committed type" scenario reproduces server-side) rejects with
+  # the global error banner, and the callback never having run means BOTH inputs retain exactly what
+  # was typed.
+  @milestone-13 @single-user
+  Scenario: Committing with an invalid migration keeps both inputs on rejection
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I type "should not clear" into the commit message
+    And I expand the Migration disclosure
+    And I type a migration for "Bogus" into the migration textarea
+    And I click Commit
+    Then the global error banner is shown mentioning "Bogus"
+    And the commit message input still holds "should not clear"
+    And the migration textarea still holds the migration for "Bogus"
+
   # B1 — the commit-detail page (/commits/<id>). The history table is LINKED again; clicking a row
   # navigates client-side to the detail page, which resolves the commit by route id and shows its fields
   # (message/at/design/parent/logSeq) + the cached canonical snapshot text, read-only. Back returns to

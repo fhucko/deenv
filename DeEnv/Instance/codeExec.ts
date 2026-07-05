@@ -1047,128 +1047,162 @@ function schemaIdArg(schema: ExecValue): ExecValue {
     return { type: "int", value: schema.type === "object" ? schema.id : 0 };
 }
 
-// sys.publish(schema, targetId, expectedHeadCommit?, expectedTargetVersion?): a SERVER-ONLY host
-// action — the M4 schema export runs server-side, projecting the passed SCHEMA object onto an
+// Host-action success callback (docs/plans/host-action-success-signal.md) — every kernel host-action
+// builtin accepts ONE optional TRAILING fn arg, invoked when the action's ok reply arrives (never on
+// error). The universal rule: a CodeFunction in LAST position = the callback, everywhere. Shared here
+// so the nine call sites (execPublish/execCreate/execRename/execCloneInstance/execDelete/
+// execSetDesign/execCommitDesign/execCreateBranch/execMergeBranch) don't each hand-roll the
+// detect-and-split. `params` is the call's REMAINING (unevaluated) param nodes after the builtin's own
+// fixed leading args have already been consumed by the caller; if the last one evaluates to a fn value
+// it is popped off and returned as `callback` instead of being evaluated into `rest` — so it never
+// reaches sendHostAction's wire args (a fn silently scalarOf's to null otherwise, shipping a bogus arg).
+function splitTrailingCallback(
+    params: CodeValue[], scope: ExecScope, context: ExecContext
+): { rest: ExecValue[]; callback?: ExecFunction } {
+    if (params.length === 0) return { rest: [] };
+    const last = executeValue(params[params.length - 1], scope, context).value;
+    if (last.type === "fn") {
+        const rest = params.slice(0, -1).map(p => executeValue(p, scope, context).value);
+        return { rest, callback: last };
+    }
+    const rest = params.slice(0, -1).map(p => executeValue(p, scope, context).value);
+    rest.push(last);
+    return { rest };
+}
+
+// sys.publish(schema, targetId, expectedHeadCommit?, expectedTargetVersion?, callback?): a SERVER-ONLY
+// host action — the M4 schema export runs server-side, projecting the passed SCHEMA object onto an
 // EXISTING target instance. The client stages NOTHING in the data model (no obj.props mutation, no
 // invalidateProp — mirrors execSetRef minus the local mutation); it only fires the hostAction
-// send-hook (schema as its id + the target id [+ the optional guard token]), which ws.ts sends as
-// the `hostAction` WS op. The server is authoritative: it alone runs the effect, and an error reply
-// surfaces as a user-visible lastError. Returns nothing; SSR/refetch no-ops it.
+// send-hook (schema as its id + the target id [+ the optional guard token] [+ the optional trailing
+// callback]), which ws.ts sends as the `hostAction` WS op. The server is authoritative: it alone runs
+// the effect, and an error reply surfaces as a user-visible lastError. Returns nothing; SSR/refetch
+// no-ops it.
 //
-// The trailing pair (M13 Track-B B3 addendum — the preview→apply consistency guard) is OPTIONAL and
+// The guard pair (M13 Track-B B3 addendum — the preview→apply consistency guard) is OPTIONAL and
 // BOTH-OR-NEITHER: the design editor's Apply button passes back the exact token
 // `sys.publishPreview` handed it (`report.targetCommit`, `report.targetVersion`), so the server can
 // reject a stale apply (the design or target moved since the operator's approved preview) rather than
 // silently applying a DIFFERENT plan than the one shown. Every other 2-arg call site (existing tests,
-// any future unguarded caller) is unaffected — sent as-is with no trailing args.
+// any future unguarded caller) is unaffected — sent as-is with no trailing args. The success callback
+// (docs/plans/host-action-success-signal.md) is a further OPTIONAL trailing fn: 3 args = 2 + callback
+// (arg 2 MUST be a fn — a non-fn 3rd arg stays invalid, preserving the guard pair's both-or-neither
+// shape), 5 args = the guarded 4 + callback (arg 3, the guard token, is never a fn).
 function execPublish(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const schema = executeValue(codeCall.params[0], scope, context).value;
     const targetId = executeValue(codeCall.params[1], scope, context).value;
     const args = [schemaIdArg(schema), targetId];
-    if (codeCall.params.length > 2) {
-        args.push(executeValue(codeCall.params[2], scope, context).value);
-        args.push(executeValue(codeCall.params[3], scope, context).value);
-    }
-    sendHostAction("publish", args);
+    const { rest, callback } = splitTrailingCallback(codeCall.params.slice(2), scope, context);
+    args.push(...rest);
+    sendHostAction("publish", args, callback);
     return { type: "nothing" };
 }
 
-// sys.create(schema, name): a SERVER-ONLY host action — project the passed SCHEMA object into a NEW
-// kernel instance with the given display NAME (the sibling of publish: publish replaces an existing
-// instance, create spawns a new one). NO ports: addressing is by PATH now, so the new instance is
-// served at `/apps/<name>` (the kernel derives the mount from the name). Like execPublish it stages
-// NOTHING and only fires the hostAction send-hook. Returns nothing; SSR/refetch no-ops it.
+// sys.create(schema, name, callback?): a SERVER-ONLY host action — project the passed SCHEMA object
+// into a NEW kernel instance with the given display NAME (the sibling of publish: publish replaces an
+// existing instance, create spawns a new one). NO ports: addressing is by PATH now, so the new
+// instance is served at `/apps/<name>` (the kernel derives the mount from the name). Like execPublish
+// it stages NOTHING and only fires the hostAction send-hook. Returns nothing; SSR/refetch no-ops it.
 function execCreate(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const schema = executeValue(codeCall.params[0], scope, context).value;
-    const name = executeValue(codeCall.params[1], scope, context).value;
-    sendHostAction("create", [schemaIdArg(schema), name]);
+    const { rest, callback } = splitTrailingCallback(codeCall.params.slice(1), scope, context);
+    sendHostAction("create", [schemaIdArg(schema), ...rest], callback);
     return { type: "nothing" };
 }
 
-// sys.rename(id, name): a SERVER-ONLY host action — update the display label of an existing kernel
-// instance. The id is a bare int (NOT a schema object). Stages NOTHING; only fires the hostAction
-// send-hook. Returns nothing; SSR/refetch no-ops it.
+// sys.rename(id, name, callback?): a SERVER-ONLY host action — update the display label of an existing
+// kernel instance. The id is a bare int (NOT a schema object). Stages NOTHING; only fires the
+// hostAction send-hook. Returns nothing; SSR/refetch no-ops it.
 function execRename(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const id = executeValue(codeCall.params[0], scope, context).value;
-    const name = executeValue(codeCall.params[1], scope, context).value;
-    sendHostAction("rename", [id, name]);
+    const { rest, callback } = splitTrailingCallback(codeCall.params.slice(1), scope, context);
+    sendHostAction("rename", [id, ...rest], callback);
     return { type: "nothing" };
 }
 
-// sys.cloneInstance(sourceId): a SERVER-ONLY host action — copy an existing instance's app document
-// AND data into a NEW instance (the data-carrying sibling of create: create projects a fresh design,
-// clone copies a live one). The source is named by its instance id (a bare int, NOT a schema object —
-// no schemaIdArg). NO ports: the clone is served at a unique `/apps/<name>` the kernel derives from
-// the source's name. Stages NOTHING; only fires the hostAction send-hook. Returns nothing; SSR/refetch
-// no-ops it.
+// sys.cloneInstance(sourceId, callback?): a SERVER-ONLY host action — copy an existing instance's app
+// document AND data into a NEW instance (the data-carrying sibling of create: create projects a fresh
+// design, clone copies a live one). The source is named by its instance id (a bare int, NOT a schema
+// object — no schemaIdArg). NO ports: the clone is served at a unique `/apps/<name>` the kernel derives
+// from the source's name. Stages NOTHING; only fires the hostAction send-hook. Returns nothing;
+// SSR/refetch no-ops it.
 function execCloneInstance(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const sourceId = executeValue(codeCall.params[0], scope, context).value;
-    sendHostAction("cloneInstance", [sourceId]);
+    const { rest, callback } = splitTrailingCallback(codeCall.params.slice(1), scope, context);
+    sendHostAction("cloneInstance", [sourceId, ...rest], callback);
     return { type: "nothing" };
 }
 
-// sys.delete(targetId): a SERVER-ONLY host action — remove an existing kernel instance, named by
-// its instance id (a bare int, NOT a schema object). Stages NOTHING; only fires the hostAction
-// send-hook (the target id). Returns nothing; SSR/refetch no-ops it.
+// sys.delete(targetId, callback?): a SERVER-ONLY host action — remove an existing kernel instance,
+// named by its instance id (a bare int, NOT a schema object). Stages NOTHING; only fires the
+// hostAction send-hook (the target id). Returns nothing; SSR/refetch no-ops it.
 function execDelete(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const targetId = executeValue(codeCall.params[0], scope, context).value;
-    sendHostAction("delete", [targetId]);
+    const { rest, callback } = splitTrailingCallback(codeCall.params.slice(1), scope, context);
+    sendHostAction("delete", [targetId, ...rest], callback);
     return { type: "nothing" };
 }
 
-// sys.setDesign(schema, targetId): a SERVER-ONLY host action — the IDE's "Apply". Record (on the
-// target's registry entry) that it now runs the passed design AND deploy it (publish + the registry
+// sys.setDesign(schema, targetId, callback?): a SERVER-ONLY host action — the IDE's "Apply". Record (on
+// the target's registry entry) that it now runs the passed design AND deploy it (publish + the registry
 // write that makes the reference explicit). Like execPublish it stages NOTHING and only fires the
 // hostAction send-hook (the design as its id + the target id). Returns nothing; SSR/refetch no-ops it.
 function execSetDesign(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const schema = executeValue(codeCall.params[0], scope, context).value;
     const targetId = executeValue(codeCall.params[1], scope, context).value;
-    sendHostAction("setDesign", [schemaIdArg(schema), targetId]);
+    const { rest, callback } = splitTrailingCallback(codeCall.params.slice(2), scope, context);
+    sendHostAction("setDesign", [schemaIdArg(schema), targetId, ...rest], callback);
     return { type: "nothing" };
 }
 
-// sys.commitDesign(design, message, migration): a SERVER-ONLY host action — snapshot the design's CURRENT working
-// copy into an immutable Commit chained onto its owning branch (M13 slice 3). The design crosses the
-// wire as its id (schemaIdArg, like publish/setDesign); the message is a plain text arg (NOT wrapped —
-// it is not a schema object). Migration is plain text stored on the Commit for publish-time execution.
-// Stages NOTHING in the data model; only fires the hostAction send-hook.
-// Returns nothing; SSR/refetch no-ops it (CodeExecutor's `commitDesign` host-action case).
+// sys.commitDesign(design, message, migration, callback?): a SERVER-ONLY host action — snapshot the
+// design's CURRENT working copy into an immutable Commit chained onto its owning branch (M13 slice 3).
+// The design crosses the wire as its id (schemaIdArg, like publish/setDesign); the message is a plain
+// text arg (NOT wrapped — it is not a schema object). Migration is plain text stored on the Commit for
+// publish-time execution. Stages NOTHING in the data model; only fires the hostAction send-hook.
+// Returns nothing; SSR/refetch no-ops it (CodeExecutor's `commitDesign` host-action case). The optional
+// trailing callback (docs/plans/host-action-success-signal.md) is the commit bar's clear-on-success —
+// its first consumer.
 function execCommitDesign(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const design = executeValue(codeCall.params[0], scope, context).value;
     const message = executeValue(codeCall.params[1], scope, context).value;
     const migration = executeValue(codeCall.params[2], scope, context).value;
-    sendHostAction("commitDesign", [schemaIdArg(design), message, migration]);
+    const { rest, callback } = splitTrailingCallback(codeCall.params.slice(3), scope, context);
+    sendHostAction("commitDesign", [schemaIdArg(design), message, migration, ...rest], callback);
     return { type: "nothing" };
 }
 
-// sys.createBranch(design, name): a SERVER-ONLY host action (M13 slice 5, wired in Track-B B4) — clone the
-// design's working-copy subgraph (Design + its MetaTypes + MetaProps) into a NEW Branch named `name`, linked
-// into db.branches (never db.designs). The design crosses as its id (schemaIdArg, like commitDesign); the
-// name is a plain text arg. Stages NOTHING; only fires the hostAction send-hook. Returns nothing; SSR/refetch
-// no-ops it (CodeExecutor's `createBranch` host-action case). The ack's refetch surfaces the new branch.
+// sys.createBranch(design, name, callback?): a SERVER-ONLY host action (M13 slice 5, wired in Track-B
+// B4) — clone the design's working-copy subgraph (Design + its MetaTypes + MetaProps) into a NEW
+// Branch named `name`, linked into db.branches (never db.designs). The design crosses as its id
+// (schemaIdArg, like commitDesign); the name is a plain text arg. Stages NOTHING; only fires the
+// hostAction send-hook. Returns nothing; SSR/refetch no-ops it (CodeExecutor's `createBranch` host-
+// action case). The ack's refetch surfaces the new branch.
 function execCreateBranch(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const design = executeValue(codeCall.params[0], scope, context).value;
     const name = executeValue(codeCall.params[1], scope, context).value;
-    sendHostAction("createBranch", [schemaIdArg(design), name]);
+    const { rest, callback } = splitTrailingCallback(codeCall.params.slice(2), scope, context);
+    sendHostAction("createBranch", [schemaIdArg(design), name, ...rest], callback);
     return { type: "nothing" };
 }
 
-// sys.mergeBranch(source, target, resolutions?): a SERVER-ONLY host action (M13 slice 5, wired in Track-B B4)
-// — a lineage-keyed three-way structural merge of `source`'s branch into `target`'s. Both designs cross as
-// their ids (schemaIdArg). `resolutions` (OPTIONAL) is the operator's per-conflict picks — a Code array of
-// { id, take:"source"|"target" } objects; it crosses NATIVELY because the hostAction send-hook's scalarOf now
-// serializes arrays + objects-of-scalars recursively (ws.ts), which the server's existing
-// ArgResolutionsOptional already parses. Omitted (a clean/preview-only merge) sends no third arg. Stages
-// NOTHING; only fires the send-hook. Returns nothing; SSR/refetch no-ops it (CodeExecutor's `mergeBranch`
-// case). A clean merge lands a two-parent commit; a conflict/drift merge writes nothing and its rejection
-// surfaces via the global error banner.
+// sys.mergeBranch(source, target, resolutions?, callback?): a SERVER-ONLY host action (M13 slice 5,
+// wired in Track-B B4) — a lineage-keyed three-way structural merge of `source`'s branch into
+// `target`'s. Both designs cross as their ids (schemaIdArg). `resolutions` (OPTIONAL) is the operator's
+// per-conflict picks — a Code array of { id, take:"source"|"target" } objects; it crosses NATIVELY
+// because the hostAction send-hook's scalarOf now serializes arrays + objects-of-scalars recursively
+// (ws.ts), which the server's existing ArgResolutionsOptional already parses. Omitted (a clean/preview-
+// only merge) sends no third arg. Stages NOTHING; only fires the send-hook. Returns nothing; SSR/refetch
+// no-ops it (CodeExecutor's `mergeBranch` case). A clean merge lands a two-parent commit; a conflict/
+// drift merge writes nothing and its rejection surfaces via the global error banner. The trailing
+// callback is type-disambiguated from `resolutions` by splitTrailingCallback (array vs fn) — the 3rd
+// arg may be EITHER, and a 4th arg (resolutions + callback together) is the callback alone in last
+// position.
 function execMergeBranch(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     const source = executeValue(codeCall.params[0], scope, context).value;
     const target = executeValue(codeCall.params[1], scope, context).value;
-    const args: ExecValue[] = [schemaIdArg(source), schemaIdArg(target)];
-    if (codeCall.params.length > 2)
-        args.push(executeValue(codeCall.params[2], scope, context).value);
-    sendHostAction("mergeBranch", args);
+    const { rest, callback } = splitTrailingCallback(codeCall.params.slice(2), scope, context);
+    sendHostAction("mergeBranch", [schemaIdArg(source), schemaIdArg(target), ...rest], callback);
     return { type: "nothing" };
 }
 
@@ -1836,8 +1870,11 @@ interface WsHooks {
     entryAdd(arr: ExecArray, item: ExecArrayItem, key: string, value: ExecValue): void;
     entryRemove(arr: ExecArray, item: ExecArrayItem, key: string, index: number): void;
     // A SERVER-ONLY host action (sys.publish): the client fires the action, the server alone runs
-    // the effect. Stages nothing in the data model (no optimistic mutation to roll back).
-    hostAction(action: string, args: ExecValue[]): void;
+    // the effect. Stages nothing in the data model (no optimistic mutation to roll back). `callback`
+    // (docs/plans/host-action-success-signal.md — the optional trailing fn arg every host-action
+    // builtin now accepts) is registered under this send's msgId and invoked ONLY when its ok reply
+    // arrives; it never runs on error (the banner path is unchanged).
+    hostAction(action: string, args: ExecValue[], callback?: ExecFunction): void;
     // The session→principal bind (sys.login, M-auth login UI): send credentials over the WS; its REPLY
     // (unlike a host action) drives a refetch so the page re-renders as the bound principal. Distinct
     // from hostAction because the reply must trigger the refetch, not just surface an error.
@@ -1894,8 +1931,8 @@ function sendEntryAdd(arr: ExecArray, item: ExecArrayItem, key: string, value: E
 function sendEntryRemove(arr: ExecArray, item: ExecArrayItem, key: string, index: number): void {
     wsHooks?.entryRemove(arr, item, key, index);
 }
-function sendHostAction(action: string, args: ExecValue[]): void {
-    wsHooks?.hostAction(action, args);
+function sendHostAction(action: string, args: ExecValue[], callback?: ExecFunction): void {
+    wsHooks?.hostAction(action, args, callback);
 }
 function sendLogin(name: ExecValue, password: ExecValue): void {
     wsHooks?.login(name, password);

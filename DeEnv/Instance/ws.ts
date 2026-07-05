@@ -71,6 +71,12 @@ interface CommitCreate { draft: ExecObject; join: CreateJoin }
 let commitCreates: CommitCreate[] | null = null;
 const journal: JournalEntry[] = [];
 let nextWsMsgId = 1;
+// Host-action success callbacks (docs/plans/host-action-success-signal.md), keyed by the SENT op's
+// msgId (the reply is stamped with the same id via WithId — no wire change). Registered by the
+// hostAction hook when a call carries a trailing fn; invoked ONCE on that id's ok reply, then deleted
+// (also deleted on that id's error reply — never invoked). A navigate-away before the reply just
+// leaves the entry unreachable (same class as any other stale in-flight handler) — harmless.
+const hostActionCallbacks = new Map<number, ExecFunction>();
 
 // Correlation for a commit's staged creates (atomic-commit Step B): the draft's transient negative id → how
 // to re-key it on the ack. The ONE `commit` reply carries an idMap (negId→realId + the minted object's nested
@@ -718,9 +724,13 @@ function connectWs(): void {
         // NOTHING locally and pushes NO journal entry (there is no optimistic state to roll back). It
         // allocates a correlation id only to route the reply; an error reply surfaces as lastError
         // (no journal replay — see onWsMessage). Args ship as wire scalars (the server reads arg 0
-        // as the target id).
-        hostAction: (action, args) => {
+        // as the target id). `callback` (docs/plans/host-action-success-signal.md) — codeExec.ts has
+        // already split it OUT of `args` before this hook ever sees them (so it never scalarOf's to a
+        // bogus null wire arg) — is registered under THIS send's msgId; onWsMessage's hostAction
+        // ok-branch looks it up by the REPLY's id and invokes it before the refetch.
+        hostAction: (action, args, callback) => {
             const msgId = nextWsMsgId++;
+            if (callback != null) hostActionCallbacks.set(msgId, callback);
             wsSend({ op: "hostAction", id: msgId, clientId: uiStatic.clientId,
                 action, args: args.map(scalarOf) });
         },
@@ -954,6 +964,10 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // registration (a form commit registers one per send — see sendCommit; without this it would leak).
         conflictByMsgId.delete(msg.id);
         if (msg.error != null) {
+            // A registered success callback for this id NEVER runs on error (docs/plans/host-action-
+            // success-signal.md) — drop the registration so it can't fire later (it can't: msgIds are
+            // one-shot per send) and can't leak either.
+            hostActionCallbacks.delete(msg.id);
             // A non-journaled send (a host action stages nothing): no journal entry matches, so
             // surface the error and re-render WITHOUT a journal replay.
             if (!rollbackJournal(msg.id, msg.error)) {
@@ -1077,8 +1091,19 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // on hostAction, not publish/merge-only.)
         for (const key of Array.from(uiStatic.cache.keys()))
             if (key.startsWith("publishPreview:") || key.startsWith("mergePreview:")) uiStatic.cache.delete(key);
-        resetViewState();
-        maybeRefetch();
+        // The success callback (docs/plans/host-action-success-signal.md), keyed by THIS reply's id (so
+        // two in-flight actions each run only their own). Runs BEFORE resetViewState/refetch — an app
+        // clearing its own ui vars in the callback must not be resurrected by the refetch that follows
+        // (the A2 scalar carve-out makes a same-scalar merge a no-op, so this ordering is safe). A
+        // throwing callback must never skip the refresh of a successfully-applied action — try/finally.
+        const callback = typeof msg.id === "number" ? hostActionCallbacks.get(msg.id) : undefined;
+        if (typeof msg.id === "number") hostActionCallbacks.delete(msg.id);
+        try {
+            if (callback != null) callFunction(callback, { lastId: uiStatic.lastId, ambient: rootAmbient() });
+        } finally {
+            resetViewState();
+            maybeRefetch();
+        }
     } else if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
         const arrayId = pendingAdds.get(msg.tempId);
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }
