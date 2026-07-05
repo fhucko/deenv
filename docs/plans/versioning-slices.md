@@ -350,7 +350,9 @@ Commit button, 2026-07-03/04, suite 628→715).**
    tested. FALLBACK-BRANCH TEST DEFERRED (both reviewers flagged; needs a hand-rolled staging fixture or a
    deterministic navigate-away hook). Deeper truth: a same-field conflict only arises through `ObjectForm`
    TODAY (only ObjectForm opens a conflict-carrying staging `ctx.new`), which always renders `<ConflictBar>`,
-   so the global conflict banner is effectively a dead defensive net.
+   so the global conflict banner is effectively a dead defensive net. **→ Do not extend this door-detection;
+   REPLACE it — see "TARGET ARCHITECTURE — conflict = a save error at the save site" in the ledger below,
+   which dissolves the referee (and this whole branch) rather than refining it.**
    (b) a genuine TWO-OBJECT same-ctx conflict is NOT producible through user-authorable Code today
    (only ObjectForm opens a conflict-carrying staging ctx, and it binds ONE object) —
    the grouping/disambiguation is implemented + live-when-reachable but browser-tested only at the
@@ -392,6 +394,36 @@ the designer.**
 - Fine per-field conflict UI obligations — DONE (B5, slice 13; §6 obligations MET). The double-banner ux
   finding (global "reload" banner vs the in-form fine bar) is FIXED — the generic UI no longer raises the
   global banner during a conflict (custom-render fallback preserved); see slice 13 (a).
+- **TARGET ARCHITECTURE — conflict = a save error at the save site (SUPERSEDES the slice-13(a)
+  door-detection).** The door-detection (`conflictSurfacedThisRender`), its untested navigate-away
+  fallback branch, and the "read `ctx.conflicts` ≠ handled" footgun are all SYMPTOMS of one root cause:
+  a conflict currently has TWO homes — a GLOBAL top-of-page banner AND an inline resolver — that say
+  different things (banner = "reload/discard", bar = "resolve here"), so something must referee which
+  wins. That referee IS the door-detection. Fix the root: give the conflict ONE home — **the save
+  site.** A conflicting save is an ordinary (and often TRANSIENT — multi-user propagation lag, not a
+  real semantic clash) save error, surfaced by the save ACTION itself; a resolver (generic
+  `<ConflictBar>` or custom) is an OPTIONAL richer rendering of that SAME error, not a competing
+  surface. No two homes → no referee → the machinery deletes.
+  - **No-silent-clobber becomes structural, not a fallback branch:** a failed save ALWAYS shows its own
+    failure at the save site; with no resolver the save just keeps failing visibly until the conflict
+    clears (propagation catches up) or the user resolves it. That floor is the guarantee — there is no
+    separate fallback surface to test. The navigate-away edge DISSOLVES (form gone = draft abandoned =
+    nothing owed).
+  - **DELETE:** `conflictSurfacedThisRender` Set + its `.clear()` (ui.ts) + the `.add()` at the
+    `ctx.conflicts` read (codeExec.ts, both twins); the conditional global-banner-on-conflict in
+    `handleConflictReply` (ws.ts); and with them the whole claim-accessor / render-flag /
+    constructor-param decision space (all moot once there's no banner-vs-resolver to arbitrate).
+  - **KEEP:** the global generic-error handler for UNCORRELATED saves (the `return false` path in
+    `handleConflictReply` — raw `ctx.commit()` with no registered form). That is already "a save error
+    with no home of its own → generic handler," which is exactly this model for the no-form case.
+  - **CHANGE:** a CORRELATED conflict → the form's own surface owns it. ObjectForm already renders
+    `<ConflictBar>` inline (`GenericUi.cs:324`) and has a save-status; stop ALSO firing the global
+    banner, and make the save ACTION show its own failure inline (save-status) so it's visible even
+    when the form renders no resolver.
+  - **Build WITH the `ctx.new` conflict-decoupling** (make custom/hand-rolled staging forms first-class
+    for conflicts, not ObjectForm-only — today an uncorrelated raw commit only gets the coarse banner).
+    That work WANTS this model: a first-class staging commit that fails is naturally "a save error with
+    an optional resolver." Doing them together also closes the "fine bar is ObjectForm-only" limitation.
 - Semantic migrations (`fn migrate` + `Commit.migration` — boundary entries exist, the
   addition is safe per the slice-4 note); compaction (`sys.compact`, §6); non-temporal field
   flag (§0b); per-verb sys granularity.
