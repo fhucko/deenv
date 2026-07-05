@@ -1,3 +1,4 @@
+using DeEnv.Code;
 using DeEnv.Designer;
 using DeEnv.Instance;
 using DeEnv.Storage;
@@ -89,6 +90,7 @@ public static class PublishReportComputer
                 Applied = !dryRun, DryRun = dryRun, BaseCommit = null, TargetCommit = headCommitId,
                 UncommittedDrift = uncommittedDrift, Renames = [], Adds = [], Removes = [], Conversions = [],
                 Cardinality = [], FallbackNameMatched = true,
+                MigrationsSkipped = HasMigrationInDag(store, headCommitId),
             };
             return new PublishPlan(fallbackReport, PublishLeg.Fallback, "", headText, headCommitId);
         }
@@ -99,22 +101,159 @@ public static class PublishReportComputer
         var diff = DesignDiffer.Compute(baseSnapshot, headSnapshot);
         var targetDesc = InstanceDescriptionLoader.Load(headText);
 
-        // Compute the boundary plan EVEN ON A DRY RUN — one code path for both (ApplyPublishBoundary's own
-        // `dryRun` flag skips its two disk-touching side effects, so a preview reports the SAME
-        // unconvertible/unsupported cells a real publish would produce, never a second implementation of
-        // the same conversion rules that could drift from the real one). On a REAL run this is where the
-        // destructive boundary is actually materialized onto the target's data file (the apply); the caller
-        // then writes the head app-document text + stamps + restarts.
-        var boundaryResult = diff.IsEmpty
-            ? new BoundaryApplyResult(false, [], [])
-            : JsonFileInstanceStore.ApplyPublishBoundary(
-                targetDataPath, diff, targetDesc,
-                new BoundaryMarker(designId, headCommitId, BaseCommitId: stampedCommitId), dryRun);
+        var latestBoundary = JsonFileInstanceStore.LatestBoundary(targetDataPath);
+        if (latestBoundary is { } latest && latest.DesignId == designId && latest.CommitId == headCommitId)
+        {
+            var alreadyReport = KernelHostActions.BuildReport(
+                diff, new BoundaryApplyResult(false, [], []), applied: false, dryRun,
+                stampedCommitId, headCommitId, uncommittedDrift, fallbackNameMatched: false);
+            return new PublishPlan(alreadyReport, PublishLeg.Versioned, "", headText, headCommitId);
+        }
+
+        var baseCommitId = stampedCommitId ?? throw new InvalidOperationException("Stamped commit id is missing.");
+        var boundaryResult = ComputeBoundary(
+            store, targetDataPath, designId, baseCommitId, stampedFields, headCommitId, headFields,
+            targetDesc, dryRun, out var migrations);
 
         var report = KernelHostActions.BuildReport(
             diff, boundaryResult, applied: !dryRun, dryRun, stampedCommitId, headCommitId,
-            uncommittedDrift, fallbackNameMatched: false);
+            uncommittedDrift, fallbackNameMatched: false, migrations);
 
         return new PublishPlan(report, PublishLeg.Versioned, "", headText, headCommitId);
     }
+
+    private static BoundaryApplyResult ComputeBoundary(
+        IInstanceStore store, string targetDataPath, int designId, int stampedCommitId, ObjectValue stampedFields,
+        int headCommitId, ObjectValue headFields, InstanceDescription headDesc, bool dryRun,
+        out IReadOnlyList<MigrationRunReport> migrations)
+    {
+        var firstParent = FirstParentChainTo(store, headCommitId, stampedCommitId);
+        var headAncestors = DagAncestors(store, headCommitId);
+        if (firstParent is null)
+        {
+            if (headAncestors.Keys.Any(id => HasMigrationText(store, id)))
+                throw new InvalidOperationException("cannot establish a migration path");
+            var direct = DesignDiffer.Compute(Snapshot(stampedFields), Snapshot(headFields));
+            if (direct.IsEmpty)
+            {
+                migrations = [];
+                return new BoundaryApplyResult(false, [], []);
+            }
+            migrations = [];
+            return JsonFileInstanceStore.ApplyPublishBoundary(
+                targetDataPath, direct, headDesc,
+                new BoundaryMarker(designId, headCommitId, BaseCommitId: stampedCommitId), dryRun);
+        }
+
+        var chainIds = firstParent.ToHashSet();
+        var stampedAncestors = DagAncestors(store, stampedCommitId);
+        var rangeIds = headAncestors.Keys.Where(id => !stampedAncestors.ContainsKey(id)).ToList();
+        if (rangeIds.Any(id => !chainIds.Contains(id) && HasMigrationText(store, id)))
+            throw new InvalidOperationException("publish range contains a merged migration — not supported yet");
+
+        var steps = firstParent.AsEnumerable().Reverse()
+            .Where(id => id != stampedCommitId && HasMigrationText(store, id))
+            .ToList();
+        if (steps.Count == 0)
+        {
+            var direct = DesignDiffer.Compute(Snapshot(stampedFields), Snapshot(headFields));
+            if (direct.IsEmpty)
+            {
+                migrations = [];
+                return new BoundaryApplyResult(false, [], []);
+            }
+            migrations = [];
+            return JsonFileInstanceStore.ApplyPublishBoundary(
+                targetDataPath, direct, headDesc,
+                new BoundaryMarker(designId, headCommitId, BaseCommitId: stampedCommitId), dryRun);
+        }
+
+        var doc = JsonFileInstanceStore.LoadRaw(targetDataPath);
+        var startVersion = doc.Version;
+        var writes = new List<LogWrite>();
+        var unconvertible = new List<string>();
+        var unsupported = new List<string>();
+        var migrationReports = new List<MigrationRunReport>();
+        var prevId = stampedCommitId;
+        var prevFields = stampedFields;
+
+        foreach (var stepId in steps)
+        {
+            var stepFields = FindCommitOrThrow(store, stepId);
+            var oldDoc = JsonFileInstanceStore.CloneDoc(doc);
+            var prevDesc = InstanceDescriptionLoader.Load(KernelHostActions.TextOf(prevFields, "text"));
+            var stepDesc = InstanceDescriptionLoader.Load(KernelHostActions.TextOf(stepFields, "text"));
+            var stepDiff = DesignDiffer.Compute(Snapshot(prevFields), Snapshot(stepFields));
+            var transformed = JsonFileInstanceStore.TransformDoc(doc, stepDiff, stepDesc, writes);
+            unconvertible.AddRange(transformed.UnconvertibleCells);
+            unsupported.AddRange(transformed.UnsupportedReshapes);
+            migrationReports.Add(MigrationRunner.Run(
+                KernelHostActions.TextOf(stepFields, "migration"), stepId,
+                KernelHostActions.TextOf(stepFields, "message"), oldDoc, prevDesc, doc, stepDesc, writes));
+            prevId = stepId;
+            prevFields = stepFields;
+        }
+
+        var finalDiff = DesignDiffer.Compute(Snapshot(prevFields), Snapshot(headFields));
+        var final = JsonFileInstanceStore.TransformDoc(doc, finalDiff, headDesc, writes);
+        unconvertible.AddRange(final.UnconvertibleCells);
+        unsupported.AddRange(final.UnsupportedReshapes);
+
+        if (writes.Count > 0 && !dryRun)
+            JsonFileInstanceStore.SaveBoundary(
+                targetDataPath, doc, startVersion, writes,
+                new BoundaryMarker(designId, headCommitId, BaseCommitId: stampedCommitId));
+
+        migrations = migrationReports;
+        return new BoundaryApplyResult(writes.Count > 0, unconvertible, unsupported);
+    }
+
+    private static DesignSnapshot Snapshot(ObjectValue commitFields) =>
+        new(KernelHostActions.TextOf(commitFields, "text"), KernelHostActions.IdMapOf(commitFields));
+
+    private static string MigrationOf(IInstanceStore store, int commitId) =>
+        KernelHostActions.TextOf(FindCommitOrThrow(store, commitId), "migration");
+
+    private static bool HasMigrationText(IInstanceStore store, int commitId) =>
+        !string.IsNullOrWhiteSpace(MigrationOf(store, commitId));
+
+    private static ObjectValue FindCommitOrThrow(IInstanceStore store, int commitId) =>
+        KernelHostActions.FindCommit(store, commitId)
+        ?? throw new InvalidOperationException($"Commit {commitId} referenced by publish history no longer exists.");
+
+    private static List<int>? FirstParentChainTo(IInstanceStore store, int headId, int stampedId)
+    {
+        var result = new List<int>();
+        var seen = new HashSet<int>();
+        for (var id = headId; seen.Add(id);)
+        {
+            result.Add(id);
+            if (id == stampedId) return result;
+            var fields = FindCommitOrThrow(store, id);
+            if (fields.Fields.GetValueOrDefault("parent") is not ReferenceValue { TargetId: { } parent })
+                return null;
+            id = parent;
+        }
+        return null;
+    }
+
+    private static Dictionary<int, int> DagAncestors(IInstanceStore store, int headId)
+    {
+        var seqs = new Dictionary<int, int>();
+        var stack = new Stack<int>();
+        stack.Push(headId);
+        while (stack.Count > 0)
+        {
+            var id = stack.Pop();
+            if (seqs.ContainsKey(id)) continue;
+            var fields = FindCommitOrThrow(store, id);
+            seqs[id] = fields.Fields.GetValueOrDefault("logSeq") is IntValue { Value: var s } ? s : 0;
+            if (fields.Fields.GetValueOrDefault("parent") is ReferenceValue { TargetId: { } p }) stack.Push(p);
+            if (fields.Fields.GetValueOrDefault("mergeParent") is ReferenceValue { TargetId: { } mp }) stack.Push(mp);
+        }
+        return seqs;
+    }
+
+    private static bool HasMigrationInDag(IInstanceStore store, int headId) =>
+        DagAncestors(store, headId).Keys.Any(id => HasMigrationText(store, id));
 }

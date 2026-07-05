@@ -57,6 +57,9 @@ public sealed record BoundaryMarker(int DesignId, int CommitId, int? BaseCommitI
 public sealed record BoundaryApplyResult(
     bool Applied, IReadOnlyList<string> UnconvertibleCells, IReadOnlyList<string> UnsupportedReshapes);
 
+public sealed record BoundaryTransformResult(
+    bool Applied, IReadOnlyList<string> UnconvertibleCells, IReadOnlyList<string> UnsupportedReshapes);
+
 // The genesis snapshot: the document as it stood BEFORE the first logged entry, written once (frozen) the
 // first time any mutating store method runs. GenesisSeq is the store version genesis was taken at (0 for a
 // store whose very first mutation is what freezes it) — replay starts here and walks every log entry with

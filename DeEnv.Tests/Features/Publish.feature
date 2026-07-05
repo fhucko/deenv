@@ -221,3 +221,135 @@ Feature: Structural identity-diff + rename-safe forward publish
     When the stale client commits its staged edit to the target
     Then the target instance rejects the stale commit with a message mentioning "reload"
     And the target's published "Item" reads "title" as "text" "Keep me"
+
+  Scenario: A migration function computes new data while a rename carries old data
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds an int field "net" to "Item"
+    And the design adds an int field "tax" to "Item"
+    And the design is committed with message "add invoice parts"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the target's "Item" has int field "net" set to 7
+    And the target's "Item" has int field "tax" set to 3
+    And the design's "Item" prop "label" is renamed to "title"
+    And the design adds an int field "total" to "Item"
+    And the design's "Item" field "net" is removed
+    And the design's "Item" field "tax" is removed
+    And the design is committed with message "compute total" and migration:
+      """
+      fn Item(old)
+          new.total = old.net + old.tax
+      """
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the target's published "Item" reads "title" as "text" "Keep me"
+    And the target's published "Item" reads "total" as "int" "10"
+    And the publish report includes a migration for "Item" over 1 object
+
+  Scenario: A throwing migration aborts atomically
+    Given the target holds an "Item" labelled "Keep me"
+    And the target's own log line count is remembered
+    And the design adds an int field "total" to "Item"
+    And the design is committed with message "bad migration" and migration:
+      """
+      fn Item(old)
+          new.total = missing.value
+      """
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish reply is an error mentioning "migration"
+    And the target app document was never republished
+    And the target's log did not grow
+    And the target was not stamped to the failed head commit
+
+  Scenario: A wrong-typed migration write aborts loudly
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds an int field "total" to "Item"
+    And the design is committed with message "wrong type" and migration:
+      """
+      fn Item(old)
+          new.total = "ten"
+      """
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish reply is an error mentioning "Migration wrote Text to Item.total, expected int"
+
+  Scenario: Dry-run executes migrations without applying them
+    Given the target holds an "Item" labelled "Keep me"
+    And the target's own log line count is remembered
+    And the design adds an int field "total" to "Item"
+    And the design is committed with message "preview migration" and migration:
+      """
+      fn Item(old)
+          new.total = 12
+      """
+    When the designer dry-runs a publish of the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the publish report includes a migration for "Item" over 1 object
+    And the target app document was never republished
+    And the target's log did not grow
+    And the target was not stamped by the dry run
+
+  Scenario: A merged migration is refused before publish work
+    Given the target holds an "Item" labelled "Keep me"
+    And the design has a merged side-branch commit with migration:
+      """
+      fn Item(old)
+          new.label = "merged"
+      """
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish reply is an error mentioning "merged migration"
+
+  Scenario: A migration function writing a dictionary prop is refused
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds a text dictionary "notes" to "Item"
+    And the design is committed with message "dict write" and migration:
+      """
+      fn Item(old)
+          new.notes = "nope"
+      """
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish reply is an error mentioning "dictionary migration not supported yet"
+
+  Scenario: Whitespace migration text is treated as no migration
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds an int field "total" to "Item"
+    And the design is committed with message "blank migration" and whitespace migration
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the publish report includes 0 migration steps
+    And the target's published "Item" reads "total" as "int" "0"
+
+  Scenario: Re-publish after a boundary-entry crash re-stamps without re-running migrations
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds an int field "total" to "Item"
+    And the design is committed with message "crash guard" and migration:
+      """
+      fn Item(old)
+          new.total = old.missing
+      """
+    And the target already has the publish boundary entry for the design's head commit but no registry stamp
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the target was stamped to the design's head commit
+
+  Scenario: Multi-commit migration ranges collapse structural spans around migration steps
+    Given the target holds an "Item" labelled "Keep me"
+    And the target's own log line count is remembered
+    And the design adds an int field "net" to "Item"
+    And the design is committed with message "structural before first migration"
+    And the design adds an int field "total" to "Item"
+    And the design is committed with message "first migration" and migration:
+      """
+      fn Item(old)
+          new.total = 1
+      """
+    And the design adds an int field "checksum" to "Item"
+    And the design is committed with message "second migration" and migration:
+      """
+      fn Item(old)
+          new.checksum = old.total + 1
+      """
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the target's log grew by exactly one entry
+    And the target's published "Item" reads "total" as "int" "1"
+    And the target's published "Item" reads "checksum" as "int" "2"
+    And the publish report includes 2 migration steps

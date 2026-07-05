@@ -154,10 +154,11 @@ run `/design` or a planning session, then slice)
   (position + self-grill #1/#2, verdict SOUND-WITH-FIXES, fixes integrated). Schema/arity ask
   (`Commit.migration text` + hard 3-arity `sys.commitDesign`) APPROVED 2026-07-04. Slice 1
   (authoring + storage) LANDED 2026-07-05 (362929e) + a review-fix pass + the host-action
-  success-signal mechanism (531f3f9→cfc8af1, own doc). **Next: slice 2 — SELF-CONTAINED BRIEF
-  BELOW (§ "Migrations slice 2").**
+  success-signal mechanism (531f3f9→cfc8af1, own doc). Slice 2 (execution) LANDED
+  2026-07-05: `fn Type(old)` runs at publish via the C# interpreter, one boundary entry,
+  dry-run parity, range refusals, and crash re-stamp guard; suite 737.
 
-### Migrations slice 2 — EXECUTION (the payoff: `fn Invoice(old)` runs at publish)
+### Migrations slice 2 — EXECUTION — DONE 2026-07-05 (suite 737)
 [L; interpreter+storage+kernel; review architecture (opus) MANDATORY; suite baseline 729]
 **The spec is `docs/plans/semantic-migrations.md` §3 (scope wiring — the StoreDoc↔ExecObject
 seam, steps 1–5) + §4 (collapse–step–collapse range walk) — READ THEM FIRST; they are

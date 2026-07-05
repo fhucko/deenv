@@ -1,5 +1,7 @@
 namespace DeEnv.Kernel;
 
+using DeEnv.Code;
+
 // The structured report the `publish` host action returns (M13 slice 4) — the ONE approved wire widening
 // (IHostActions.Run → object?, carried onto the hostAction reply's `report` field). Camelcase via the
 // shared serializer options (WsHandler._jsonOpts), no per-property attributes — matches the project's
@@ -40,6 +42,8 @@ public sealed record PublishReport
     public required IReadOnlyList<ConversionReportItem> Conversions { get; init; }
     public required IReadOnlyList<CardinalityReportItem> Cardinality { get; init; }
     public required bool FallbackNameMatched { get; init; }
+    public IReadOnlyList<MigrationRunReport> Migrations { get; init; } = [];
+    public bool MigrationsSkipped { get; init; }
 }
 
 public sealed record RenameReportItem(string From, string To);

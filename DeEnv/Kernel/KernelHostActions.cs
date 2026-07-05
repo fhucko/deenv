@@ -234,7 +234,8 @@ public sealed class KernelHostActions(
     // implementation of the destructive-cell mapping (M13 Track-B B3).
     internal static PublishReport BuildReport(
         DesignDiff diff, BoundaryApplyResult boundaryResult, bool applied, bool dryRun, int? baseCommit,
-        int targetCommit, bool uncommittedDrift, bool fallbackNameMatched) => new()
+        int targetCommit, bool uncommittedDrift, bool fallbackNameMatched,
+        IReadOnlyList<MigrationRunReport>? migrations = null, bool migrationsSkipped = false) => new()
     {
         Applied = applied,
         DryRun = dryRun,
@@ -268,6 +269,8 @@ public sealed class KernelHostActions(
                 Unsupported: unsupported, Dropped: unsupported);
         })],
         FallbackNameMatched = fallbackNameMatched,
+        Migrations = migrations ?? [],
+        MigrationsSkipped = migrationsSkipped,
     };
 
     // Whether a BoundaryApplyResult cell string ("TypeName/objectId.propName" — see

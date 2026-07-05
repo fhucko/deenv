@@ -65,12 +65,16 @@ public static class PublishReportCode
         var cardinality = Arr(report.Cardinality.Select(c => (IExecValue)Obj(
             ("path", T(c.Path)), ("from", T(c.From)), ("to", T(c.To)),
             ("unsupported", B(c.Unsupported)), ("dropped", B(c.Dropped)))));
+        var migrations = Arr(report.Migrations.Select(m => (IExecValue)Obj(
+            ("commitId", I(m.CommitId)), ("message", T(m.Message)),
+            ("types", Arr(m.Types.Select(t => (IExecValue)T(t)))),
+            ("objectsMigrated", I(m.ObjectsMigrated)))));
 
-        // isEmpty: nothing to publish (an empty diff) AND no uncommitted drift to warn about. Fallback is
-        // itself a real publish (a first stamp), so a fallback is NOT empty.
+        // isEmpty: nothing to publish (an empty diff, no migrations) AND no uncommitted drift to warn about.
+        // Fallback is itself a real publish (a first stamp), so a fallback is NOT empty.
         var isEmpty = report.Renames.Count == 0 && report.Adds.Count == 0 && report.Removes.Count == 0
             && report.Conversions.Count == 0 && report.Cardinality.Count == 0
-            && !report.UncommittedDrift && !report.FallbackNameMatched;
+            && report.Migrations.Count == 0 && !report.UncommittedDrift && !report.FallbackNameMatched;
 
         return Obj(
             ("isEmpty", B(isEmpty)),
@@ -78,12 +82,14 @@ public static class PublishReportCode
             ("dryRun", B(report.DryRun)),
             ("uncommittedDrift", B(report.UncommittedDrift)),
             ("fallbackNameMatched", B(report.FallbackNameMatched)),
+            ("migrationsSkipped", B(report.MigrationsSkipped)),
             ("targetCommit", I(report.TargetCommit)),
             ("targetVersion", I(targetVersion)),
             ("renames", renames),
             ("adds", adds),
             ("removes", removes),
             ("conversions", conversions),
-            ("cardinality", cardinality));
+            ("cardinality", cardinality),
+            ("migrations", migrations));
     }
 }

@@ -56,6 +56,7 @@ public sealed class PublishSteps
                 at datetime
                 design Design
                 parent Commit
+                mergeParent Commit
                 logSeq int
                 text text
                 idMap dict of int by text
@@ -195,6 +196,15 @@ public sealed class PublishSteps
         store.WriteField(id, field, new TextValue(value));
     }
 
+    [Given("the target's {string} has int field {string} set to {int}")]
+    public void GivenTargetIntFieldSetDirectly(string typeName, string field, int value)
+    {
+        var published = InstanceDescriptionLoader.LoadFile(_targetAppPath);
+        var store = new JsonFileInstanceStore(_targetDataPath, published);
+        var id = store.ReadExtent(typeName).Keys.First();
+        store.WriteField(id, field, new IntValue(value));
+    }
+
     // Seed a member into the target's Db SET prop (against the CURRENT published schema, which already
     // declares it a set) — a real stored StoredRef member the later set -> single reshape must drop.
     [Given("the target's Db {string} set is seeded with a {string} named {string}")]
@@ -260,6 +270,13 @@ public sealed class PublishSteps
     [Given("the design adds a {string} field to {string}")]
     public void GivenFieldAdded(string field, string typeName) => AddProp(typeName, field, "text");
 
+    [Given("the design adds an int field {string} to {string}")]
+    public void GivenIntFieldAdded(string field, string typeName) => AddProp(typeName, field, "int");
+
+    [Given("the design adds a text dictionary {string} to {string}")]
+    public void GivenTextDictionaryAdded(string field, string typeName) =>
+        AddPropCore(typeName, field, "text", cardinality: "dictionary", keyType: "text");
+
     [Given("the design's {string} field {string} is removed")]
     public void GivenFieldRemoved(string typeName, string field)
     {
@@ -304,16 +321,48 @@ public sealed class PublishSteps
 
     [When("the design is committed with message {string}")]
     public void WhenDesignCommitted(string message) => Commit(message);
+    
+    [Given("the design is committed with message {string} and migration:")]
+    public void GivenDesignCommittedWithMigration(string message, string migration) => Commit(message, migration);
 
-    private void Commit(string message)
+    [Given("the design is committed with message {string} and whitespace migration")]
+    public void GivenDesignCommittedWithWhitespaceMigration(string message) => Commit(message, "  \n\t");
+
+    private void Commit(string message, string migration = "")
     {
         _lastCommitMessage = message;
         var ws = Ws();
         var reply = ws.ProcessMessage(
-            $$"""{ "op": "hostAction", "clientId": "{{_clientId}}", "action": "commitDesign", "args": [ { "type": "int", "value": {{_designId}} }, { "type": "text", "value": "{{message}}" }, { "type": "text", "value": "" } ] }""");
+            $$"""{ "op": "hostAction", "clientId": "{{_clientId}}", "action": "commitDesign", "args": [ { "type": "int", "value": {{_designId}} }, { "type": "text", "value": {{JsonSerializer.Serialize(message)}} }, { "type": "text", "value": {{JsonSerializer.Serialize(migration)}} } ] }""");
         using var doc = JsonDocument.Parse(reply);
         if (!doc.RootElement.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
             throw new InvalidOperationException($"commitDesign failed: {reply}");
+    }
+
+    [Given("the design has a merged side-branch commit with migration:")]
+    public void GivenMergedSideBranchMigration(string migration)
+    {
+        var store = FreshDesigner();
+        var baseline = HeadCommitId();
+        var side = CreateCommitRow(store, "side migration", migration, parent: baseline, mergeParent: null);
+        var merge = CreateCommitRow(store, "merge side", "", parent: baseline, mergeParent: side);
+        var branch = store.ReadExtent("Branch").First(b => b.Value.Fields.GetValueOrDefault("name") is TextValue { Text: "main" });
+        store.WriteReference(branch.Key, "head", merge, "Commit");
+    }
+
+    [Given("the target already has the publish boundary entry for the design's head commit but no registry stamp")]
+    public void GivenBoundaryEntryWithoutStamp()
+    {
+        var store = FreshDesigner();
+        var baseline = KernelHost.ReadPublishedCommitId(TargetId, _registryPath)!.Value;
+        _ = CommitFields(store, baseline);
+        var headId = HeadCommitId();
+        var targetStore = new JsonFileInstanceStore(_targetDataPath, InstanceDescriptionLoader.LoadFile(_targetAppPath));
+        var entry = new LogEntry(
+            targetStore.CurrentVersion + 1, DateTimeOffset.UtcNow, null, null, 0, [],
+            new BoundaryMarker(_designId, headId, baseline));
+        File.AppendAllText(_targetLogPath, JsonSerializer.Serialize(entry, StoreOpts) + "\n");
+        KernelHost.StampPublishedCommitAsync(TargetId, baseline, _registryPath).GetAwaiter().GetResult();
     }
 
     // The design's `main` Branch head commit's intrinsic id, read fresh from disk (the store used to
@@ -442,6 +491,13 @@ public sealed class PublishSteps
         await Assert.That(stamped).IsNotEqualTo((int?)HeadCommitId());
     }
 
+    [Then("the target was not stamped to the failed head commit")]
+    public async Task ThenTargetNotStampedToFailedHead()
+    {
+        var stamped = KernelHost.ReadPublishedCommitId(TargetId, _registryPath);
+        await Assert.That(stamped).IsNotEqualTo((int?)HeadCommitId());
+    }
+
     [Then("the target instance was not restarted")]
     public async Task ThenTargetNotRestarted() => await Assert.That(_restartInvoked).IsFalse();
 
@@ -476,6 +532,27 @@ public sealed class PublishSteps
         await Assert.That(hit.ValueKind).IsEqualTo(JsonValueKind.Object);
         await Assert.That(hit.GetProperty("unconvertible").GetArrayLength()).IsGreaterThan(0);
     }
+
+    [Then("the publish reply is an error mentioning {string}")]
+    public async Task ThenPublishReplyErrorMentions(string text)
+    {
+        await Assert.That(_replyRoot.TryGetProperty("error", out var err)).IsTrue();
+        await Assert.That(err.GetString()!).Contains(text);
+    }
+
+    [Then("the publish report includes a migration for {string} over {int} object")]
+    public async Task ThenMigrationReportIncludes(string typeName, int count)
+    {
+        var migrations = _report.GetProperty("migrations").EnumerateArray().ToList();
+        var hit = migrations.FirstOrDefault(m =>
+            m.GetProperty("types").EnumerateArray().Any(t => t.GetString() == typeName));
+        await Assert.That(hit.ValueKind).IsEqualTo(JsonValueKind.Object);
+        await Assert.That(hit.GetProperty("objectsMigrated").GetInt32()).IsEqualTo(count);
+    }
+
+    [Then("the publish report includes {int} migration steps")]
+    public async Task ThenMigrationReportStepCount(int count) =>
+        await Assert.That(_report.GetProperty("migrations").GetArrayLength()).IsEqualTo(count);
 
     // ── Then: the target's app document / data / log / genesis ─────────────────────────────────────
 
@@ -881,7 +958,7 @@ public sealed class PublishSteps
     private void AddSetProp(string typeName, string propName, string propType) =>
         AddPropCore(typeName, propName, propType, cardinality: "set");
 
-    private void AddPropCore(string typeName, string propName, string propType, string cardinality)
+    private void AddPropCore(string typeName, string propName, string propType, string cardinality, string keyType = "")
     {
         var propsPath = DesignTypesPath.Key(_typeIds[typeName].ToString()).Field("props");
         var fields = new Dictionary<string, NodeValue>
@@ -892,10 +969,47 @@ public sealed class PublishSteps
         };
         if (cardinality.Length > 0)
             fields["cardinality"] = new TextValue(cardinality);
+        if (keyType.Length > 0)
+            fields["keyType"] = new TextValue(keyType);
         var id = _designer.CreateObject("MetaProp", new ObjectValue(fields));
         _designer.AddToSet(propsPath, id);
         _propIds[(typeName, propName)] = id;
     }
+
+    private int CreateCommitRow(IInstanceStore store, string message, string migration, int? parent, int? mergeParent)
+    {
+        var design = store.ReadById(_designId) is ("Design", var d) ? d
+            : throw new InvalidOperationException("No design row.");
+        var snap = SchemaBridge.Snapshot(design);
+        var commitsSetId = (store.ReadNode(NodePath.Root.Field("commits")) as SetValue)?.Id
+            ?? throw new InvalidOperationException("No commits set.");
+        const int temp = -1;
+        var creates = new List<CommitCreate>
+        {
+            new(temp, "Commit", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["message"] = new TextValue(message),
+                ["migration"] = new TextValue(migration),
+                ["at"] = new DateTimeValue(DateTimeOffset.UtcNow),
+                ["logSeq"] = new IntValue(store.CurrentVersion),
+                ["text"] = new TextValue(snap.Text),
+            })),
+        };
+        var mutations = new List<CommitMutation>
+        {
+            new RefLinkMutation(temp, "design", _designId, "Design"),
+            new SetLinkMutation(commitsSetId, temp),
+        };
+        if (parent is { } p) mutations.Add(new RefLinkMutation(temp, "parent", p, "Commit"));
+        if (mergeParent is { } mp) mutations.Add(new RefLinkMutation(temp, "mergeParent", mp, "Commit"));
+        foreach (var (path, id) in snap.IdMap)
+            mutations.Add(new DictWriteMutation(temp, "idMap", new TextValue(path), new IntValue(id)));
+        return store.CommitBatch(creates, mutations).Creates.Single().RealId;
+    }
+
+    private static ObjectValue CommitFields(IInstanceStore store, int commitId) =>
+        store.ReadById(commitId) is ("Commit", var fields) ? fields
+            : throw new InvalidOperationException($"No commit {commitId}.");
 
     private static string ScalarText(NodeValue? value) => value switch
     {

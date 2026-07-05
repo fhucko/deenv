@@ -84,6 +84,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private readonly string _genesisPath;
     private readonly List<LogWrite> _pending = new();
     private bool _genesisWritten;
+    private readonly bool _inMemory;
 
     // The store's version when the CURRENT operation began (set by BeginMutation, read by Save). Whether
     // to log an entry is decided by comparing Version to THIS, not by "is _pending non-empty": a
@@ -171,6 +172,19 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
     }
 
+    internal JsonFileInstanceStore(StoreDoc doc, InstanceDescription desc)
+    {
+        _filePath = "";
+        _desc = desc;
+        _resolver = new TypeResolver(desc);
+        _logPath = "";
+        _genesisPath = "";
+        _doc = Normalize(CloneDoc(doc));
+        _versionAtOpStart = _doc.Version;
+        _inMemory = true;
+        StoredDataValidator.Validate(_doc, desc, "<memory>");
+    }
+
     // ── boot reconciliation: repair a torn tail, replay a lagging snapshot, rebuild _objectVersions ──
     //
     // Runs once, after load+Normalize and BEFORE the strict startup guard (so the guard validates the
@@ -251,7 +265,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // Deserialize a data file to the typed model WITHOUT the startup guard (the instance ctor validates
     // separately; the static migrate pass re-validates after reconciling). A garbage / unreadable file
     // becomes a StoredDataException with the same remedy message.
-    private static StoreDoc LoadRaw(string path)
+    internal static StoreDoc LoadRaw(string path)
     {
         try
         {
@@ -1145,7 +1159,18 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         var doc = LoadRaw(dataPath);
         var writes = new List<LogWrite>();
         var startVersion = doc.Version;
+        var transformed = TransformDoc(doc, diff, targetDesc, writes);
 
+        if (writes.Count == 0 || dryRun)
+            return new BoundaryApplyResult(writes.Count > 0, transformed.UnconvertibleCells, transformed.UnsupportedReshapes);
+        SaveBoundary(dataPath, doc, startVersion, writes, boundary);
+        return new BoundaryApplyResult(true, transformed.UnconvertibleCells, transformed.UnsupportedReshapes);
+    }
+
+    internal static BoundaryTransformResult TransformDoc(
+        StoreDoc doc, DesignDiff diff, InstanceDescription targetDesc, List<LogWrite> writes)
+    {
+        var startWriteCount = writes.Count;
         // ── type renames first (so every ref-refresh below sees the re-keyed extent) ──
         foreach (var rename in diff.TypeRenames)
         {
@@ -1309,8 +1334,12 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // Nothing to carry (an empty diff, or every op found no data to touch) — leave the target's files
         // and history completely untouched. A caller with a genuinely empty diff should not call this at
         // all, but staying a no-op here keeps the method honest either way.
-        if (writes.Count == 0 || dryRun) return new BoundaryApplyResult(writes.Count > 0, unconvertibleCells, unsupportedReshapes);
+        return new BoundaryTransformResult(writes.Count > startWriteCount, unconvertibleCells, unsupportedReshapes);
+    }
 
+    internal static void SaveBoundary(
+        string dataPath, StoreDoc doc, int startVersion, List<LogWrite> writes, BoundaryMarker boundary)
+    {
         // WAL ORDER (the slice-1 law): append the log entry FIRST, THEN rewrite the snapshot — the SAME
         // fixed order the live Save() uses (append THEN SaveRaw), never the inverse. A crash BETWEEN the two
         // must leave the snapshot BEHIND the log (so ReconcileLogOnBoot replays the tail forward and serves
@@ -1322,8 +1351,6 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         var entry = new LogEntry(doc.Version, DateTimeOffset.UtcNow, who, msgId, doc.NextId, writes, boundary);
         AppendLogEntry(AppPaths.LogPathForDataPath(dataPath), entry);
         SaveRaw(dataPath, doc);
-
-        return new BoundaryApplyResult(true, unconvertibleCells, unsupportedReshapes);
     }
 
     // The value a freshly-created object would carry for `propName` under its NEW cardinality (mirrors
@@ -1601,6 +1628,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // mutation) never re-appends stale writes.
     private void Save()
     {
+        if (_inMemory)
+            throw new InvalidOperationException("Cannot save an in-memory JsonFileInstanceStore.");
         if (_doc.Version != _versionAtOpStart)
         {
             var (who, msgId) = StoreWriteContext.Get();
@@ -1629,7 +1658,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // A snapshot of doc, independent of the live _doc reference (genesis must not silently track later
     // mutations — it round-trips through the same Opts the rest of the store already uses, so this is
     // exactly what a fresh LoadRaw of the just-serialized bytes would produce).
-    private static StoreDoc CloneDoc(StoreDoc doc) =>
+    internal static StoreDoc CloneDoc(StoreDoc doc) =>
         JsonSerializer.Deserialize<StoreDoc>(JsonSerializer.Serialize(doc, Opts), Opts)!;
 
     // Append one JSONL line (UTF-8, no BOM, trailing '\n') to the log file — the durable half of the WAL
@@ -1649,8 +1678,19 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // JSON but not a LogEntry — is a corrupted log, not a crash artifact: loud StoredDataException.
     private List<LogEntry> LoadLog()
     {
-        if (!File.Exists(_logPath)) return [];
-        var lines = File.ReadAllLines(_logPath).Where(l => l.Length > 0).ToList();
+        return LoadLog(_logPath, _genesisPath);
+    }
+
+    internal static BoundaryMarker? LatestBoundary(string dataPath) =>
+        LoadLog(AppPaths.LogPathForDataPath(dataPath), AppPaths.GenesisPathForDataPath(dataPath))
+            .Where(e => e.Boundary is not null)
+            .OrderByDescending(e => e.Seq)
+            .FirstOrDefault()?.Boundary;
+
+    private static List<LogEntry> LoadLog(string logPath, string genesisPath)
+    {
+        if (!File.Exists(logPath)) return [];
+        var lines = File.ReadAllLines(logPath).Where(l => l.Length > 0).ToList();
         var entries = new List<LogEntry>();
         for (var i = 0; i < lines.Count; i++)
         {
@@ -1662,31 +1702,23 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             }
             catch (JsonException) when (isLast)
             {
-                // Torn tail: truncate the file to the last COMPLETE line and stop — the incomplete append
-                // never committed (its snapshot write, if any, never ran either — WAL order), so dropping
-                // it is exactly undoing the interrupted operation, not losing committed data.
-                RewriteLogWithoutLastLine(lines.Take(i));
+                var kept = lines.Take(i).ToList();
+                var tmp = logPath + ".tmp";
+                File.WriteAllText(tmp, kept.Count == 0 ? "" : string.Join("\n", kept) + "\n",
+                    new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                File.Move(tmp, logPath, overwrite: true);
                 break;
             }
             catch (JsonException ex)
             {
                 throw new StoredDataException(
-                    $"Log file '{_logPath}' line {i + 1} is not a readable changeset entry: {ex.Message} " +
+                    $"Log file '{logPath}' line {i + 1} is not a readable changeset entry: {ex.Message} " +
                     "The log is corrupted (not a crash artifact — a torn line is only tolerated as the " +
                     "LAST line). Restore it from backup, or delete the log + its genesis file " +
-                    $"('{_genesisPath}') to reseed history from the current snapshot.");
+                    $"('{genesisPath}') to reseed history from the current snapshot.");
             }
         }
         return entries;
-    }
-
-    private void RewriteLogWithoutLastLine(IEnumerable<string> keepLines)
-    {
-        var kept = keepLines.ToList();
-        var tmp = _logPath + ".tmp";
-        File.WriteAllText(tmp, kept.Count == 0 ? "" : string.Join("\n", kept) + "\n",
-            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        File.Move(tmp, _logPath, overwrite: true);
     }
 
     // Replay genesis→head and compare against the live snapshot — the fsck invariant this whole clump sits

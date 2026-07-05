@@ -5,8 +5,10 @@ Status: **ACCEPTED — self-grills #1 (migration core) and #2 (revert model) bot
 verdicts SOUND-WITH-FIXES, all fixes integrated; the §2 schema/arity ask APPROVED by the
 user 2026-07-04** (`Commit.migration text` + the hard 3-arity `sys.commitDesign` bump).
 Slice 1 landed 2026-07-05: `Commit.migration text`, hard 3-arity `sys.commitDesign`,
-commit-time validation, designer textarea, and commit-detail rendering. Buildable next:
-slice 2 (§6). The restoration bundle (resurrect-with-id primitive +
+commit-time validation, designer textarea, and commit-detail rendering. Slice 2 landed
+2026-07-05: publish executes commit-authored migrations with collapse-step-collapse range
+walking, dry-run parity, one boundary entry, and the crash re-stamp guard (suite 737).
+The restoration bundle (resurrect-with-id primitive +
 sys.revertCommit) is designed but re-scoped to its own later slice with its own approval
 ask. Next: milestone-planner slices it; sequence after Track B's B3/B4 (shared app.deenv +
 KernelHostActions).
@@ -410,12 +412,12 @@ for one-click reverts regardless); pipeline/executor/report changes: zero.
    SHIP-WITH-FIXES, fixes applied — parse-error coordinates, banner pre-wrap, detail-pre styling,
    placeholder+non-empty indicator, browser round-trip scenario; clear-on-success DEFERRED to the
    host-action success-signal mechanism, wanted 3× now: B3 + B4 + this).
-2. **Execution**: in-memory store ctor + migration runner (seam steps 1–5) + range walk +
+2. **Execution — DONE 2026-07-05 (suite 737)**: in-memory store ctor + migration runner (seam steps 1–5) + range walk +
    `TransformDoc` refactor + re-publish guard + report. Scenario spine: rename+compute
    migration carries data through publish (extends slice-4 fixtures); fn throw aborts
    atomically; harvest type-violation aborts loudly; dryRun previews without applying; merged
    migration refuses; dict-targeting fn refuses; crash-window re-publish re-stamps without
-   re-running.
+   re-running; multi-commit collapse-step-collapse produces one boundary entry.
 3. ~~Identity re-add restoration~~ — **MOVED OUT of the migration slices (grill #2 verdict:
    unbuildable as scheduled).** Restoration ships as ONE coherent later slice bundling:
    the resurrect-with-id store primitive (interface approval ask) + `sys.revertCommit`
