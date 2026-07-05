@@ -152,9 +152,75 @@ run `/design` or a planning session, then slice)
 
 - **Semantic migrations — DONE 2026-07-05** (both slices landed + verified; ledger entry in
   `versioning-slices.md`; suite 739 after the review trims 6ca82c4). Remaining from that
-  design, each with its own gate: the restoration bundle (resurrect-with-id store primitive +
-  sys.revertCommit — NEEDS a user approval ask before any brief); decimal/date/datetime
-  migration writes (Code-runtime ceiling); merged-migration publishes (refused loudly).
+  design, each with its own gate: the restoration bundle (**primitive APPROVED 2026-07-05 —
+  brief below**); decimal/date/datetime migration writes (Code-runtime ceiling);
+  merged-migration publishes (refused loudly).
+
+### RESTORATION BUNDLE — sys.revertCommit + identity re-add restoration
+[L; storage+kernel+designer UI; review architecture (opus) MANDATORY + ui-arch/ux for the UI
+bits; suite baseline 741. RUN AFTER the designer small-slice bundle (shared app.deenv +
+KernelHostActions).]
+**The spec:** `docs/plans/semantic-migrations.md` — the sections "Reverting a publish — a
+normal publish, not a special op" (points 1–6, incl. the G1 invariant) and "Authored revert
+fns"; plus grill #2's integrated fixes. Twice-designed, user-approved (the resurrect-with-id
+IInstanceStore addition approved 2026-07-05). READ IT FIRST; do not re-decide settled points.
+**Deliverables:**
+1. **Resurrect-with-id store primitive** (the approved interface addition): create an extent
+   row with a CHOSEN id. Precedent for the shape: slice 3's server-side-only
+   `DictWriteMutation` CommitMutation case (a batch-level case keeps it atomic with sibling
+   writes); a standalone method is acceptable if the batch shape fights it — propose, the
+   arch review judges. Constraints: the id MUST be currently free (ids are monotonic and
+   never reused, so any removed row's id is free forever — assert absence across extents,
+   throw otherwise); NextId never decreases; the write logs as a literal `Create(id, ...)`
+   (replay already applies literal ids — no log-format change); model-terms only.
+2. **`sys.revertCommit(design, commit)`** host action: constructs a REVERT COMMIT — the
+   design's meta rows (MetaType/MetaProp + Design section fields) restored to the target
+   commit's state WITH ORIGINAL identities (deleted rows resurrect via the primitive; edited
+   rows edit back; rows added since get removed); REFUSES when `commit` is not the design's
+   head's parent-line predecessor... v1 rule, exactly as specced: revert THE LAST commit only
+   (target commit must be the head's parent; reverting past later commits = refused loudly —
+   the staleness trap). Then the operator reviews/commits normally — sys.revertCommit
+   PREPARES the working copy + auto-commits the revert commit (one atomic capture, message
+   "Revert to '<msg>'"), it does NOT publish. Copies the reverted commit's `revertMigration`
+   (deliverable 4) onto the new commit's `migration`. UI affordance: a "Revert" control on
+   the commit-detail page, shown only where the v1 rule allows; ui+ux review it.
+3. **Identity re-add restoration in the publish pipeline** (MigrationRunner/PublishReportComputer
+   era): (a) `DesignDiff.PropAdd` gains its prop id + a new `TypeAdd` record (grill-verified
+   additive-safe at every consumer; NOTE: TypeAdd also fixes B2's ledgered
+   brand-new-type-invisible diff limitation — sys.diffCommits will now report pure type adds;
+   update the affected diff-view scenario legs and the isEmpty accounting deliberately).
+   (b) The backscan, EXACTLY as specced: detection by idMap MEMBERSHIP (identity N removed at
+   boundary entry E iff N ∈ base(E).idMap ∧ N ∉ commit(E).idMap — NEVER pattern-match writes,
+   renames emit the identical FieldWrite shape); newest-first; an entry with null BaseCommitId
+   is a HARD horizon (stop + report "history unresolvable below this point" — skipping could
+   restore stale); genesis/compaction horizon reported as "unrestorable (history compacted)".
+   (c) Restored values pass ConvertScalar against the re-added declared type (unconvertible →
+   default + report). (d) INTEGRITY PASS: restored refs to rows deleted since → drop/null +
+   report (else StoredDataValidator 503s the remount); a TYPE restore verifies post-transform
+   REACHABILITY of restored rows or refuses the restore (else the next GC silently sweeps
+   them). (e) Restoration is LOUD in PublishReport + dry-run ("N cells restored from history").
+   (f) The cross-branch identity gap (idMaps key raw ids, origins ignored) is INHERITED and
+   documented, not fixed.
+4. **`Commit.revertMigration text`** (the authored-reverse rider): meta-type field + a second
+   collapsed textarea in the commit bar ("Revert migration") + the SAME validations as
+   `migration` but pointed at the PARENT snapshot (a revert fn migrates data back TO the
+   parent's schema); root commit → reject like migration. Rendered on the detail page like
+   `migration`. sys.revertCommit copies it (deliverable 2).
+**Scenario spine (Gherkin first, @milestone-13):** publish removes a field → users create/edit
+rows under the new schema → sys.revertCommit → publish the revert → OLD rows get their exact
+pre-removal values back (from the log), post-publish rows get the revert fn's definition,
+user edits on surviving fields untouched; a MANUAL re-add (fresh id) starts empty (fresh-start
+semantics — identity determines continuity); dangling restored refs dropped + reported;
+unreachable type restore refused; revertCommit on a non-last commit refused; revertMigration
+with a bad parent-schema fn name rejects at commit; a pure type-add now visible in the B2
+diff view (the ledgered fix, scenario updated); dry-run shows restorations without applying.
+**Process pins:** isolated worktree off LOCAL main; suite from PowerShell, Release, output
+captured; `.deenv` UTF-8 no BOM, NO comments in app.deenv; no sleeps; never kill chrome by
+name; success-callback consumers note: post-success DISPLAY state = top-scope + guards (see
+host-action-success-signal.md's limitation section); sys.revertCommit wiring: host action +
+lockstep sites ONLY if called from Code (it will be — the Revert button — so all five sites,
+commitDesign precedent); ff-merge; docs sync (semantic-migrations.md status, this entry,
+memory) in the same landing.
 
 ### NEXT READY TASK — Designer small-slice bundle  [S; self-contained; suite baseline 741]
 Three small, disjoint designer items, one worktree, one landing. All touch
