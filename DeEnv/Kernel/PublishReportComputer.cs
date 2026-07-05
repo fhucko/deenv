@@ -131,7 +131,7 @@ public static class PublishReportComputer
         var headAncestors = DagAncestors(store, headCommitId);
         if (firstParent is null)
         {
-            if (headAncestors.Keys.Any(id => HasMigrationText(store, id)))
+            if (headAncestors.Any(id => HasMigrationText(store, id)))
                 throw new InvalidOperationException("cannot establish a migration path");
             var direct = DesignDiffer.Compute(Snapshot(stampedFields), Snapshot(headFields));
             if (direct.IsEmpty)
@@ -147,7 +147,7 @@ public static class PublishReportComputer
 
         var chainIds = firstParent.ToHashSet();
         var stampedAncestors = DagAncestors(store, stampedCommitId);
-        var rangeIds = headAncestors.Keys.Where(id => !stampedAncestors.ContainsKey(id)).ToList();
+        var rangeIds = headAncestors.Where(id => !stampedAncestors.Contains(id)).ToList();
         if (rangeIds.Any(id => !chainIds.Contains(id) && HasMigrationText(store, id)))
             throw new InvalidOperationException("publish range contains a merged migration — not supported yet");
 
@@ -237,23 +237,22 @@ public static class PublishReportComputer
         return null;
     }
 
-    private static Dictionary<int, int> DagAncestors(IInstanceStore store, int headId)
+    private static HashSet<int> DagAncestors(IInstanceStore store, int headId)
     {
-        var seqs = new Dictionary<int, int>();
+        var seen = new HashSet<int>();
         var stack = new Stack<int>();
         stack.Push(headId);
         while (stack.Count > 0)
         {
             var id = stack.Pop();
-            if (seqs.ContainsKey(id)) continue;
+            if (!seen.Add(id)) continue;
             var fields = FindCommitOrThrow(store, id);
-            seqs[id] = fields.Fields.GetValueOrDefault("logSeq") is IntValue { Value: var s } ? s : 0;
             if (fields.Fields.GetValueOrDefault("parent") is ReferenceValue { TargetId: { } p }) stack.Push(p);
             if (fields.Fields.GetValueOrDefault("mergeParent") is ReferenceValue { TargetId: { } mp }) stack.Push(mp);
         }
-        return seqs;
+        return seen;
     }
 
     private static bool HasMigrationInDag(IInstanceStore store, int headId) =>
-        DagAncestors(store, headId).Keys.Any(id => HasMigrationText(store, id));
+        DagAncestors(store, headId).Any(id => HasMigrationText(store, id));
 }

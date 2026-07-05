@@ -243,7 +243,7 @@ public static class DbBridge
         return new ObjectValue(fields);
     }
 
-    public static NodeValue? ExecToScalar(IExecValue value) => value switch
+    private static NodeValue? ExecToScalar(IExecValue value) => value switch
     {
         ExecInt i  => new IntValue(i.Value),
         ExecText t => new TextValue(t.Value),

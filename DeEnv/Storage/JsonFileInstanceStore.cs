@@ -1167,7 +1167,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         return new BoundaryApplyResult(true, transformed.UnconvertibleCells, transformed.UnsupportedReshapes);
     }
 
-    internal static BoundaryTransformResult TransformDoc(
+    internal static BoundaryApplyResult TransformDoc(
         StoreDoc doc, DesignDiff diff, InstanceDescription targetDesc, List<LogWrite> writes)
     {
         var startWriteCount = writes.Count;
@@ -1334,7 +1334,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // Nothing to carry (an empty diff, or every op found no data to touch) — leave the target's files
         // and history completely untouched. A caller with a genuinely empty diff should not call this at
         // all, but staying a no-op here keeps the method honest either way.
-        return new BoundaryTransformResult(writes.Count > startWriteCount, unconvertibleCells, unsupportedReshapes);
+        return new BoundaryApplyResult(writes.Count > startWriteCount, unconvertibleCells, unsupportedReshapes);
     }
 
     internal static void SaveBoundary(
