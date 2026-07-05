@@ -143,8 +143,8 @@ ui
                 <input class="commit-message" value={commitMessage}>
                 <details class="commit-migration">
                     <summary>
-                        "Migration"
-                    <textarea class="commit-migration-input" value={commitMigration}>
+                        commitMigration == "" ? "Migration" : "Migration •"
+                    <textarea class="commit-migration-input" value={commitMigration} placeholder={"fn TypeName(old) — then new.field = old.field on the next line"}>
                 <button class="commit-design" onClick={() => doCommit(design)}>
                     "Commit"
                 <a class="view-history" href="/commits">

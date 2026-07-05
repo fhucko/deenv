@@ -818,6 +818,23 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task ThenCommitDetailShowsDesign(string design) =>
         await ctx.Page!.Locator($"main.ide-commit-detail .field-value:text-is({CssString(design)})").WaitForAsync();
 
+    // Review fix 5 — the textarea→commitDesign→detail round-trip. The Migration input lives inside a
+    // collapsed-by-default <details class="commit-migration">; click its <summary> to expand before
+    // the textarea is fill-able (Playwright refuses to type into a hidden element).
+    [When("I expand the Migration disclosure")]
+    public async Task WhenExpandMigrationDisclosure() =>
+        await ctx.Page!.Locator(".design-editor details.commit-migration summary").ClickAsync();
+
+    [When("I type a migration for {string} into the migration textarea")]
+    public async Task WhenTypeMigrationTextarea(string typeName) =>
+        await ctx.Page!.Locator(".design-editor textarea.commit-migration-input")
+            .FillAsync($"fn {typeName}(old)\n    new.text = old.text");
+
+    [Then("the commit detail page shows the migration source for {string}")]
+    public async Task ThenCommitDetailShowsMigration(string typeName) =>
+        await ctx.Page!.Locator(
+            $"main.ide-commit-detail .commit-migration-text:has-text({CssString($"fn {typeName}(old)")})").WaitForAsync();
+
     // B2 — the "Changes since parent" section. sys.diffCommits(parent, this) is a server-backed READ builtin
     // (computed server-side, shipped via the memo cache, reused by the client twin — like sys.schema). A
     // rename renders as ONE rename row ("From → To"), the identity-diff payoff — never a remove+add.

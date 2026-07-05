@@ -774,7 +774,7 @@ public sealed class SsrRenderer
         .commit-field .field-label { flex: 0 0 8rem; color: var(--muted); }
         .commit-field .field-value { min-width: 0; word-break: break-word; }
         .commit-detail .text-label { display: block; margin: 1rem 0 0.35rem; color: var(--muted); }
-        .commit-text { margin: 0; padding: 0.8rem; background: var(--surface); border: 1px solid var(--border);
+        .commit-text, .commit-migration-text { margin: 0; padding: 0.8rem; background: var(--surface); border: 1px solid var(--border);
           border-radius: 8px; max-height: 24rem; overflow: auto; white-space: pre-wrap; word-break: break-word;
           font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
         /* "Changes since parent" — the structural (identity-based) diff between a commit and its parent. */

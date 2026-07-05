@@ -604,6 +604,23 @@ Feature: The operator IDE (designs library + instance design selector)
     When I open the commit history
     Then the commit history's first row has message "newest one"
 
+  # Review fix 5 — the textarea→commitDesign→detail round-trip has no rendered-UI proof and the
+  # binding is load-bearing: open the Migration disclosure, type a valid migration, commit, then
+  # confirm it rendered on the commit's detail page.
+  @milestone-13 @single-user
+  Scenario: Committing a migration from the editor renders it on the commit's detail page
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I type "with migration" into the commit message
+    And I expand the Migration disclosure
+    And I type a migration for "TodoItem" into the migration textarea
+    And I click Commit
+    Then the last-commit line eventually shows message "with migration"
+    When I open the commit history
+    And I open the commit "with migration" from the history
+    Then the commit detail page shows the migration source for "TodoItem"
+
   # B1 — the commit-detail page (/commits/<id>). The history table is LINKED again; clicking a row
   # navigates client-side to the detail page, which resolves the commit by route id and shows its fields
   # (message/at/design/parent/logSeq) + the cached canonical snapshot text, read-only. Back returns to

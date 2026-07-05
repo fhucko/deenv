@@ -124,17 +124,24 @@ fn Customer(old)
 - **Commit-time validation (all reject the commit; inputs retained — B6 verified):**
   1. Source parses (fns only, the MapCommon-style guard).
   2. Every top-level fn names a type in the committed snapshot — `fn Invocie(old)` fails
-     loudly at commit, never skips silently at publish. Helpers remain possible as fn-values
-     (`var f = fn(...)`) inside a type fn (nested fns exist — conformance 901/902).
+     loudly at commit, never skips silently at publish. No helper-fn affordance in v1 — see
+     the correction below.
   3. **Shadow guard (grill hole):** no fn param/local named `new` or `oldDb` — because they are
      ordinary symbols, a body-local `var new = ...` (or a second param) would shadow the
      injected binding and turn every write into a harvested-by-nobody no-op. Rejected at
      commit, same path.
   4. A migration on a **root commit (no parent) is rejected** — no transition to describe (and
      the range walk can never execute one).
-- Validation depth = parse + the three structural checks above. No type checking of
+  5. Every top-level fn takes **exactly one parameter** (`old`) — a fn with zero or more than
+     one param is rejected at commit; it could never be invoked the way §3 calls it.
+- Validation depth = parse + the four structural checks above. No type checking of
   `old.x`/`new.y` field references — the project has no type checker anywhere (AGENTS.md
   rule 9); runtime errors surface at publish and abort atomically.
+- **Correction (review pass 2026-07-05):** the earlier claim that "helpers remain possible as
+  fn-values (`var f = fn(...)`) inside a type fn" is WRONG — block-bodied fn-values do not
+  parse in ANY section today (a pre-existing grammar limitation, confirmed by the architecture
+  review, not something this slice introduces or could cheaply fix). v1 has **no helper
+  affordance** inside a migration fn; named limitation, revisit if a real migration wants one.
 
 ### 2. Commit dialog UX — migration input + a hard 3-arity bump
 
@@ -399,7 +406,10 @@ for one-click reverts regardless); pipeline/executor/report changes: zero.
 1. **Authoring + storage — DONE 2026-07-05**: `Commit.migration` + the hard 3-arity commitDesign change (5
    lockstep sites) + the four commit-time validations + commit-bar input + B1 detail render.
    No execution. Scenarios: commit with migration stores + renders; bad fn name rejects;
-   shadowed `new` rejects; root-commit migration rejects.
+   shadowed `new` rejects; root-commit migration rejects. Review pass 2026-07-05 (arch+ui-arch+ux
+   SHIP-WITH-FIXES, fixes applied — parse-error coordinates, banner pre-wrap, detail-pre styling,
+   placeholder+non-empty indicator, browser round-trip scenario; clear-on-success DEFERRED to the
+   host-action success-signal mechanism, wanted 3× now: B3 + B4 + this).
 2. **Execution**: in-memory store ctor + migration runner (seam steps 1–5) + range walk +
    `TransformDoc` refactor + re-publish guard + report. Scenario spine: rename+compute
    migration carries data through publish (extends slice-4 fixtures); fn throw aborts

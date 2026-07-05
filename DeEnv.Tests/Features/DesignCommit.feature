@@ -78,6 +78,18 @@ Feature: Design commits — Commit/Branch rows, sys.commitDesign, the authority 
       """
     Then the host action reply is an error mentioning "shadow"
 
+  # Review fix 1: ValidateMigration wraps the author's text in a synthetic "migration\n" header line
+  # plus a 4-space indent before parsing, so a naive error would report coordinates shifted from what
+  # the author actually typed. The surfaced error must match the AUTHOR's own textarea coordinates.
+  Scenario: A migration syntax error reports the author's own line number
+    Given the designer already committed that design with message "first cut"
+    When the designer commits that design with message "broken migration" and migration
+      """
+      fn Item(old
+          new.label = old.label
+      """
+    Then the host action reply is an error mentioning "line 1"
+
   Scenario: A root commit cannot carry a migration
     When the designer commits that design with message "root migration" and migration
       """

@@ -151,10 +151,12 @@ disambiguated; theirs visible pre-choice.
 run `/design` or a planning session, then slice)
 
 - **Semantic migrations** — DESIGN PASS DONE 2026-07-04: `docs/plans/semantic-migrations.md`
-  (position + self-grill #1, verdict SOUND-WITH-FIXES, fixes integrated). Awaiting user
-  approval of the schema/arity ask (`Commit.migration text` + hard 3-arity `sys.commitDesign`);
-  then milestone-planner slices it (sketch: slice 1 authoring+storage, slice 2 execution).
-  Slice 1 conflicts with Track B (app.deenv + KernelHostActions) — sequence after B3/B4.
+  (position + self-grill #1/#2, verdict SOUND-WITH-FIXES, fixes integrated). Schema/arity ask
+  (`Commit.migration text` + hard 3-arity `sys.commitDesign`) APPROVED 2026-07-04. Slice 1
+  (authoring + storage) LANDED 2026-07-05 (362929e) + a review-fix pass (parse-error
+  coordinates, banner pre-wrap, detail-pre styling, authoring affordances, browser round-trip
+  scenario). Next: slice 2 (execution — in-memory store ctor + migration runner + range walk +
+  `TransformDoc` refactor + report).
 - **Compaction** — `sys.compact(instance, horizon)` (§6): fold-to-new-genesis, cache
   promotion, retention knobs, never-compact designer default; interacts with time-travel's
   era resolution (the recorded residual: promoted checkpoints become the era source).

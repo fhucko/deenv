@@ -456,7 +456,8 @@ function refreshErrorBanner(): void {
         banner.id = "__error";
         banner.style.cssText =
             "position:fixed;top:0;left:0;right:0;z-index:9999;padding:0.5rem 1rem;" +
-            "background:#b00020;color:#fff;font:14px system-ui,sans-serif;cursor:pointer;";
+            "background:#b00020;color:#fff;font:14px system-ui,sans-serif;cursor:pointer;" +
+            "white-space:pre-wrap;";
         banner.onclick = () => { uiStatic.lastError = null; refreshErrorBanner(); };
     }
     banner.textContent = `Change rejected: ${uiStatic.lastError} — click to dismiss`;

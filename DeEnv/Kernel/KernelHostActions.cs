@@ -971,7 +971,7 @@ public sealed class KernelHostActions(
         }
         catch (CodeParseException ex)
         {
-            throw new InvalidOperationException($"Invalid migration: {ex.Message}", ex);
+            throw new InvalidOperationException($"Invalid migration: {UnwrapMigrationParseError(ex.Message)}", ex);
         }
 
         var desc = InstanceDescriptionLoader.Load(committedText);
@@ -991,6 +991,28 @@ public sealed class KernelHostActions(
         string.Join("\n", text.Replace("\r\n", "\n").Replace('\r', '\n')
             .Split('\n')
             .Select(line => line.Length == 0 ? "" : "    " + line));
+
+    // ValidateMigration parses the author's text wrapped in a synthetic "migration\n" header line plus a
+    // 4-space indent (IndentForSection above), so Parse.Run's positioned error — message-only, no
+    // structured line/column (CodeParseException) — reports coordinates shifted by +1 line and +4
+    // columns relative to what the author actually typed in the commit-bar textarea. Rewrite the
+    // embedded "line N, column M" and the echoed source line's leading indent back to the author's
+    // own coordinates before this ever reaches the operator.
+    private static string UnwrapMigrationParseError(string message)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            message, @"^Parse error at line (\d+), column (\d+):\n(.*)\n( *)\^$",
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+        if (!match.Success) return message;
+
+        var line = int.Parse(match.Groups[1].Value) - 1;
+        var column = int.Parse(match.Groups[2].Value) - 4;
+        var sourceLine = match.Groups[3].Value;
+        var caretIndent = match.Groups[4].Value.Length - 4;
+        if (sourceLine.StartsWith("    ")) sourceLine = sourceLine[4..];
+        var caret = new string(' ', Math.Max(0, caretIndent)) + "^";
+        return $"Parse error at line {line}, column {column}:\n{sourceLine}\n{caret}";
+    }
 
     private static void RejectMigrationShadow(CodeFunction fn)
     {
