@@ -87,8 +87,8 @@ point is cross-session. One feature file per capability (`AppLog.feature`, `Desi
    `create edit delete where false` rules (the floor is allow-when-unruled, so "no grants" alone
    would NOT deny — corrected at build time).
    Deliberately deferred to their slices (normal additive apply): `mergeParent` + `origin int` on
-   MetaType/MetaProp (slice 5), `migration` (slice 4), author `by` (rides the login-persistence
-   flip; the slice-1 log already records who). Slice-5 revisit flagged: app-identity vs
+   MetaType/MetaProp (slice 5), `migration` (slice 4). Author `by User` landed 2026-07-05
+   after login persistence; the slice-1 log already records who. Slice-5 revisit flagged: app-identity vs
    working-copy anchoring once branches clone Design rows. Depends on 1.
 
 4. **Structural diff + forward publish — DONE 2026-07-03** (main `e5c2566` + review fixes
@@ -377,6 +377,7 @@ the designer.**
   (B4, slice 12). Fine per-field conflict UI — DONE (B5, slice 13). **All of Track B (B1–B5) DONE.**
   B2 residual: a brand-new type is invisible in the diff (DesignDiff's migration lens — no TypeAdd);
   revisit with B3's publish UI (same vocabulary) if a "what changed" (vs "what migrates") view is wanted.
+  The restoration bundle will close this by adding TypeAdd to the shared diff vocabulary.
 - B3 fast-follows: post-apply success signal — **DONE 2026-07-05**. The mechanism exists
   (`docs/plans/host-action-success-signal.md`: optional trailing callback on every kernel host
   action, full-handler semantics; first consumer = the commit bar's clear-on-success), and the
@@ -384,16 +385,18 @@ the designer.**
   to render "Published to <instance>". The per-row component-state version was skipped because
   host-action success resets row component slots; the editor-level var is the smaller durable state.
 - B3 remaining cosmetics:
-  drift-only preview offers a no-op-looking Apply (relabel/suppress when only drift is non-empty);
+  drift-only preview no longer offers a no-op-looking Apply — **DONE 2026-07-05** in the
+  designer small-slice bundle; when only uncommitted drift is present, the preview tells the
+  operator to commit first and suppresses Apply.
   "Cardinality" label + `Single → Set` values are schema jargon on the publish + diff surfaces (a
   global humanize pass — deferred with the same on B2's diff view, kept for now for consistency).
 - B4 fast-follows / notes: (a) post-merge "Merged X into this design" confirmation line — **DONE
   2026-07-05** via the same success callback shape, setting a plain editor UI var on
   `sys.mergeBranch(..., callback)`; (b) the merge-preview cache-drop is now guarded by a browser
   scenario asserting the still-open preview recomputes to "Already up to date" after apply;
-  (c) the `access` section has NO editor UI in the designer — B4's AccessChanges scenario seeds the
-  rule via the store; an access-section editor is a separate small slice if operators should author
-  access changes end-to-end; (d) the merge UI hardcodes "this design" for the target side (correct
+  (c) the `access` section editor UI is **DONE 2026-07-05** in the designer small-slice bundle;
+  the advanced editor writes `design.access`, so operators can author access changes end-to-end;
+  (d) the merge UI hardcodes "this design" for the target side (correct
   while target is always the currently-open design; a future merge-two-arbitrary-branches view would
   need the real target name).
 - Fine per-field conflict UI obligations — DONE (B5, slice 13; §6 obligations MET). The double-banner ux

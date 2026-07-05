@@ -931,6 +931,16 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
     }
 
+    public string? SingleReferenceTargetType(string ownerTypeName, string prop)
+    {
+        lock (_sync)
+        {
+            var field = _desc.FindType(ownerTypeName)?.Props?.FirstOrDefault(p => p.Name == prop);
+            if (field is not { Cardinality: Cardinality.Single }) return null;
+            return _desc.IsObjectType(field.Type) ? field.Type : null;
+        }
+    }
+
     // Locate a set node by its intrinsic id (sets live in object fields, in extents).
     private StoredSet? FindSetNode(int setId)
     {

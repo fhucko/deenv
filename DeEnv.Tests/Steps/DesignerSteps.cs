@@ -1,4 +1,4 @@
-﻿using DeEnv.Kernel;
+using DeEnv.Kernel;
 using DeEnv.Tests.TestSupport;
 using DeEnv.Instance;
 using Reqnroll;
@@ -838,6 +838,10 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task ThenCommitDetailShowsDesign(string design) =>
         await ctx.Page!.Locator($"main.ide-commit-detail .field-value:text-is({CssString(design)})").WaitForAsync();
 
+    [Then("the commit detail page shows author {string}")]
+    public async Task ThenCommitDetailShowsAuthor(string author) =>
+        await ctx.Page!.Locator($"main.ide-commit-detail .commit-field:has(.field-label:text-is({CssString("By")})) .field-value:text-is({CssString(author)})").WaitForAsync();
+
     // Review fix 5 — the textarea→commitDesign→detail round-trip. The Migration input lives inside a
     // collapsed-by-default <details class="commit-migration">; click its <summary> to expand before
     // the textarea is fill-able (Playwright refuses to type into a hidden element).
@@ -907,6 +911,14 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [Then("the publish preview flags {string} as removed loudly")]
     public async Task ThenPreviewFlagsRemoved(string path) =>
         await PublishRowFor("todo").Locator($".publish-preview .publish-remove:has-text({CssString(path)})").WaitForAsync();
+
+    [Then("the publish preview asks me to commit before publishing")]
+    public async Task ThenPreviewAsksCommitFirst() =>
+        await ctx.Page!.Locator(".publish-preview .publish-blocked:has-text(\"commit before publishing\")").WaitForAsync();
+
+    [Then("the publish preview for the instance {string} shows no Apply button")]
+    public async Task ThenPreviewShowsNoApply(string label) =>
+        await Assert.That(await PublishRowFor(label).Locator(".publish-preview button.apply-publish").CountAsync()).IsEqualTo(0);
 
     // The dry-run changed NOTHING: the target instance's own app document still declares the field the
     // designer removed (the preview never republished). A store/file read of the LIVE target's schema.
@@ -1262,6 +1274,20 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             "() => { const e = document.querySelector('.design-editor textarea.design-ui'); return e != null && e.value.includes('fn render'); }");
 
+
+    [When("I expand the Advanced code disclosure")]
+    public async Task WhenExpandAdvancedCode() =>
+        await ctx.Page!.Locator(".design-editor details.code-areas summary").ClickAsync();
+
+    [When("I type this access section:")]
+    public async Task WhenTypeAccessSection(string accessSection)
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-access").FillAsync(accessSection);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "todo" }
+            && o.Fields.TryGetValue("access", out var av) && av is DeEnv.Storage.TextValue at && at.Text == accessSection));
+    }
+
     [Then("the instances list shows the instance {string} running design {string}")]
     public async Task ThenListShows(string label, string designLabel)
     {
@@ -1338,6 +1364,20 @@ public sealed class DesignerSteps(InstanceContext ctx)
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
         await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
             && File.ReadAllText(target.Spec.SchemaPath).Contains(declaration), timeoutMs: 45000);
+    }
+
+
+    [Then("the {string} instance's app document has an access rule for {string} granting {string}")]
+    public async Task ThenTargetHasAccessRule(string label, string subject, string verb)
+    {
+        var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
+        await EventuallyAsync(() =>
+        {
+            if (!File.Exists(target.Spec.SchemaPath)) return false;
+            var source = File.ReadAllText(target.Spec.SchemaPath);
+            return source.Contains($"    {subject}\n        {verb}", StringComparison.Ordinal)
+                || source.Contains($"    {subject}\r\n        {verb}", StringComparison.Ordinal);
+        }, timeoutMs: 45000);
     }
 
     [Then("the design's type {string} is an enum with values {string}")]

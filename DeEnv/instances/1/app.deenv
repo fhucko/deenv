@@ -37,6 +37,7 @@ types
         migration text
         at datetime
         design Design
+        by User
         parent Commit
         mergeParent Commit
         logSeq int
@@ -224,6 +225,9 @@ ui
                     <label class="initial-label">
                         "Initial data"
                     <textarea class="design-initial" value={sys.field(design, "initialData")}>
+                    <label class="access-label">
+                        "Access"
+                    <textarea class="design-access" value={sys.field(design, "access")}>
         return render
 
     fn instancesRunning(design)
@@ -245,6 +249,25 @@ ui
         if report.cardinality.any(cd => cd.unsupported)
             return true
         return false
+
+    fn reportHasOnlyDrift(report)
+        if report.uncommittedDrift == false
+            return false
+        if report.fallbackNameMatched
+            return false
+        if report.renames.any(x => true)
+            return false
+        if report.adds.any(x => true)
+            return false
+        if report.removes.any(x => true)
+            return false
+        if report.conversions.any(x => true)
+            return false
+        if report.cardinality.any(x => true)
+            return false
+        if report.migrations.any(x => true)
+            return false
+        return true
 
     fn publishReportView(report)
         fn removeRow(x)
@@ -294,12 +317,16 @@ ui
             sys.publish(design, inst.runtimeId, report.targetCommit, report.targetVersion, afterPublish)
         return <div class="publish-preview">
             publishReportView(report)
-            if report.isEmpty == false
-                if reportHasDestructive(report)
-                    <ConfirmButton label="Apply publish" onConfirm={doApply} cls="apply-publish is-destructive">
-                else
-                    <button class="apply-publish" onClick={doApply}>
-                        "Apply publish"
+            if reportHasOnlyDrift(report)
+                <p class="publish-blocked">
+                    "Working copy has uncommitted changes - commit before publishing."
+            else
+                if report.isEmpty == false
+                    if reportHasDestructive(report)
+                        <ConfirmButton label="Apply publish" onConfirm={doApply} cls="apply-publish is-destructive">
+                    else
+                        <button class="apply-publish" onClick={doApply}>
+                            "Apply publish"
 
     fn publishRow(design, inst)
         var state = { previewing: false }
@@ -653,6 +680,12 @@ ui
                     "Design"
                 <span class="field-value">
                     c.design != null ? c.design.label : "(none)"
+            if c.by != null
+                <div class="commit-field">
+                    <span class="field-label">
+                        "By"
+                    <span class="field-value">
+                        c.by.name
             <div class="commit-field">
                 <span class="field-label">
                     "Parent"

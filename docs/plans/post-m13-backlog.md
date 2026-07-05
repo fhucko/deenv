@@ -222,7 +222,7 @@ lockstep sites ONLY if called from Code (it will be — the Revert button — so
 commitDesign precedent); ff-merge; docs sync (semantic-migrations.md status, this entry,
 memory) in the same landing.
 
-### NEXT READY TASK — Designer small-slice bundle  [S; self-contained; suite baseline 741]
+### Designer small-slice bundle — DONE 2026-07-05  [S; self-contained; suite 744]
 Three small, disjoint designer items, one worktree, one landing. All touch
 `DeEnv/instances/1/app.deenv` (+ DesignerSteps for scenarios); Gherkin first; @milestone-13.
 1. **Commit author `by`** — unblocked by login persistence (recorded in versioning-slices.md
@@ -256,6 +256,11 @@ Three small, disjoint designer items, one worktree, one landing. All touch
 output captured; `.deenv` UTF-8 no BOM, NO comments in app.deenv; no sleeps; never kill
 chrome by name; reviews: item 1 architecture (kernel touch) + ui-arch/ux ride the bundle;
 ff-merge + docs sync (tick the two ledger notes) in the same landing.
+**Delivered:** `Commit.by User` is schema-additive and `CaptureAndCommit` fills it from the
+`StoreWriteContext` principal only when the active Commit schema declares that reference (so
+test-local schemas without the field stay valid); commit detail renders "By". The advanced
+editor now includes the access-section textarea (`design.access`), proven through Apply to an
+instance document. Drift-only publish previews now say to commit first and suppress Apply.
 
 ### Success-signal consumers + guard tests — DONE 2026-07-05  [S-M; self-contained; suite baseline 739]
 Three small, disjoint items unlocked this week — one worktree, one landing, reviews per item.

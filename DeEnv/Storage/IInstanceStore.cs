@@ -107,6 +107,10 @@ public interface IInstanceStore
     // no set does. Lets a mutation be validated against the schema before it lands.
     string? SetElementType(int setId);
 
+    // The declared target type of a single-reference prop, or null when the owner
+    // type/prop is absent or not a single object reference.
+    string? SingleReferenceTargetType(string ownerTypeName, string prop);
+
     // Drop a member reference from the set at setPath, then collect unreachable
     // objects (mark-sweep from the root). Returns the post-write version.
     int RemoveFromSet(NodePath setPath, int id);

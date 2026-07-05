@@ -478,6 +478,10 @@ public sealed class KernelHostActions(
         {
             new RefLinkMutation(commitTemp, "design", designId, "Design"),
         };
+        if (store.SingleReferenceTargetType("Commit", "by") == "User"
+            && StoreWriteContext.Get().Who is { } authorId
+            && store.ReadById(authorId) is ("User", _))
+            mutations.Add(new RefLinkMutation(commitTemp, "by", authorId, "User"));
         if (parentHeadId.HasValue)
             mutations.Add(new RefLinkMutation(commitTemp, "parent", parentHeadId, "Commit"));
         if (mergeParentHeadId.HasValue)

@@ -701,6 +701,18 @@ Feature: The operator IDE (designs library + instance design selector)
     When I navigate back
     Then the commit history shows a commit with message "snapshot A"
 
+  @milestone-13 @single-user
+  Scenario: A commit made by a logged-in operator shows its author on the detail page
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I type "authored snapshot" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "authored snapshot"
+    When I open the commit history
+    And I open the commit "authored snapshot" from the history
+    Then the commit detail page shows author "admin"
+
   # B1 ride-along: with the history LINKED again, an empty-message commit would otherwise render an empty,
   # unclickable <a> (the phantom the old linked={false} avoided). The generic SetTable now renders a
   # "(no <humanized labelProp>)" placeholder for an empty label WHEN linked, so the row has visible,
@@ -765,6 +777,36 @@ Feature: The operator IDE (designs library + instance design selector)
     When I preview the publish for the instance "todo"
     Then the publish preview flags "TodoItem.checked" as removed loudly
     And the "todo" instance's app document still describes the field "checked"
+
+  @milestone-13 @single-user
+  Scenario: A drift-only publish preview tells the operator to commit instead of offering Apply
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I rename the type "TodoItem" to "Task"
+    And I retype the prop "items" to "Task"
+    When I preview the publish for the instance "todo"
+    Then the publish preview asks me to commit before publishing
+    And the publish preview for the instance "todo" shows no Apply button
+
+  @milestone-13 @single-user
+  Scenario: The advanced editor deploys an authored access section
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I expand the Advanced code disclosure
+    And I type this access section:
+      """
+      access
+          TodoItem
+              read
+      """
+    And I type "grant public todo read" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "grant public todo read"
+    When I open the instance "todo"
+    And I apply the design
+    Then the "todo" instance's app document has an access rule for "TodoItem" granting "read"
 
   # 2) The confirmed Apply drives the real publish. After a rename+commit, previewing shows the rename;
   # applying fires sys.publish (which stamps the target to the new head), and the target's app document then
