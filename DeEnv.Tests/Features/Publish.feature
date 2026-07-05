@@ -54,6 +54,22 @@ Feature: Structural identity-diff + rename-safe forward publish
     And the target's log fsck holds
     And replaying the target's log from genesis to head reproduces the post-publish snapshot
 
+  Scenario: A versioned publish that removes a field logs a boundary and preserves genesis
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds a "note" field to "Item"
+    And the design is committed with message "add note before removal"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the target's "Item" has "note" set to "scratch"
+    And the target's own log line count is remembered
+    And the design's "Item" field "note" is removed
+    And the design is committed with message "remove note with boundary"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the target's log grew by exactly one entry
+    And the target's newest log entry carries a boundary marker for that commit
+    And the target's genesis is unchanged by the publish
+    And the target's "Item" has no stored "note" value
+
   # ── WAL law: a crash between the boundary entry append and the snapshot rewrite recovers ─────────
   # The boundary apply must append the log entry BEFORE rewriting the snapshot (the slice-1 WAL law,
   # same as the live Save). Proven BOTH DIRECTIONS: (a) the CORRECT-order crash — the entry is on the log

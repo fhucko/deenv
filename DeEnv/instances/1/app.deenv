@@ -79,6 +79,8 @@ ui
     var branchName = ""
     var previewingBranch = 0
     var mergePicks = []
+    var lastPublishNote = ""
+    var lastMergeNote = ""
     var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime", "password"]
     var typeKinds = ["object", "enum"]
     var cardinalities = ["single", "set", "dictionary"]
@@ -282,8 +284,10 @@ ui
 
     fn previewBody(design, inst)
         var report = sys.publishPreview(design, inst.runtimeId)
+        fn afterPublish()
+            lastPublishNote = "Published to " + inst.name
         fn doApply()
-            sys.publish(design, inst.runtimeId, report.targetCommit, report.targetVersion)
+            sys.publish(design, inst.runtimeId, report.targetCommit, report.targetVersion, afterPublish)
         return <div class="publish-preview">
             publishReportView(report)
             if report.isEmpty == false
@@ -317,6 +321,9 @@ ui
                 "Publish"
             <p class="publish-caption">
                 "Deploy this design's last commit to each running instance. Preview shows what would change before anything is applied."
+            if lastPublishNote != ""
+                <p class="last-publish">
+                    lastPublishNote
             if running.any(i => true)
                 foreach inst in running
                     <publishRow design={design} inst={inst}>
@@ -445,7 +452,10 @@ ui
     fn mergePreviewBody(design, branch)
         var report = sys.mergePreview(branch.workingCopy, design)
         fn doMerge()
-            sys.mergeBranch(branch.workingCopy, design, mergePicks)
+            fn afterMerge()
+                lastMergeNote = "Merged " + branch.name + " into this design"
+                mergePicks = []
+            sys.mergeBranch(branch.workingCopy, design, mergePicks, afterMerge)
         return <div class="merge-preview">
             mergeReportView(report)
             if report.driftRefusal == null && report.noOp == false
@@ -457,18 +467,20 @@ ui
                         "Merge into this design"
 
     fn mergeRow(design, branch)
-        return <div class="branch-row">
-            <div class="branch-row-head">
-                <span class="branch-link">
-                    "Merge \"" + branch.name + "\""
+        fn render()
+            return <div class="branch-row">
+                <div class="branch-row-head">
+                    <span class="branch-link">
+                        "Merge \"" + branch.name + "\""
+                    if previewingBranch == sys.id(branch.workingCopy)
+                        <button class="merge-hide" onClick={() => closeMergePreview()}>
+                            "Hide"
+                    else
+                        <button class="preview-merge" onClick={() => openMergePreview(branch)}>
+                            "Preview merge"
                 if previewingBranch == sys.id(branch.workingCopy)
-                    <button class="merge-hide" onClick={() => closeMergePreview()}>
-                        "Hide"
-                else
-                    <button class="preview-merge" onClick={() => openMergePreview(branch)}>
-                        "Preview merge"
-            if previewingBranch == sys.id(branch.workingCopy)
-                mergePreviewBody(design, branch)
+                    mergePreviewBody(design, branch)
+        return render
 
     fn branchSection(design)
         var branches = branchesForApp(design)
@@ -478,6 +490,9 @@ ui
                 "Branches"
             <p class="branch-caption">
                 "Branch this design to work in isolation, then merge a branch back in. Switching branches opens that branch's own editor."
+            if lastMergeNote != ""
+                <p class="last-merge">
+                    lastMergeNote
             <div class="branch-create">
                 <input class="branch-name" value={branchName}>
                 <button class="create-branch" onClick={() => doCreateBranch(design)}>
@@ -492,7 +507,7 @@ ui
             if others.any(b => true)
                 <div class="branch-list">
                     foreach b in others
-                        mergeRow(design, b)
+                        <mergeRow design={design} branch={b}>
 
     fn branchWorkingCopies()
         return db.branches.where(b => b.workingCopy != null)

@@ -747,6 +747,20 @@ public sealed class HostActionSteps
         _ = new JsonFileInstanceStore(_targetDataPath, published); // seeded data is present + valid
     }
 
+    [Given("the target has log and genesis files")]
+    public async Task GivenTargetHasHistoryFiles()
+    {
+        await Assert.That(File.Exists(AppPaths.LogPathForDataPath(_targetDataPath))).IsTrue();
+        await Assert.That(File.Exists(AppPaths.GenesisPathForDataPath(_targetDataPath))).IsTrue();
+    }
+
+    [Then("the target has no log or genesis files")]
+    public async Task ThenTargetHasNoHistoryFiles()
+    {
+        await Assert.That(File.Exists(AppPaths.LogPathForDataPath(_targetDataPath))).IsFalse();
+        await Assert.That(File.Exists(AppPaths.GenesisPathForDataPath(_targetDataPath))).IsFalse();
+    }
+
     [Then("the target still holds an {string} labelled {string}")]
     public async Task ThenTargetStillHolds(string typeName, string label)
     {

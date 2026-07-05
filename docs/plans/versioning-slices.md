@@ -377,18 +377,20 @@ the designer.**
   (B4, slice 12). Fine per-field conflict UI — DONE (B5, slice 13). **All of Track B (B1–B5) DONE.**
   B2 residual: a brand-new type is invisible in the diff (DesignDiff's migration lens — no TypeAdd);
   revisit with B3's publish UI (same vocabulary) if a "what changed" (vs "what migrates") view is wanted.
-- B3 fast-follows: post-apply success signal — **the mechanism EXISTS since 2026-07-05
+- B3 fast-follows: post-apply success signal — **DONE 2026-07-05**. The mechanism exists
   (`docs/plans/host-action-success-signal.md`: optional trailing callback on every kernel host
-  action, full-handler semantics; first consumer = the commit bar's clear-on-success)**, so the
-  "Last published: … · time" line is now a trivial callback setting a component-state var;
+  action, full-handler semantics; first consumer = the commit bar's clear-on-success), and the
+  publish UI now sets a plain editor UI var in the `sys.publish(..., callback)` success callback
+  to render "Published to <instance>". The per-row component-state version was skipped because
+  host-action success resets row component slots; the editor-level var is the smaller durable state.
+- B3 remaining cosmetics:
   drift-only preview offers a no-op-looking Apply (relabel/suppress when only drift is non-empty);
   "Cardinality" label + `Single → Set` values are schema jargon on the publish + diff surfaces (a
   global humanize pass — deferred with the same on B2's diff view, kept for now for consistency).
-- B4 fast-follows / notes: (a) post-merge "Merged X into this design" confirmation line — the
-  needed apply-success signal NOW EXISTS (the host-action success callback, see the B3 note);
-  a trivial callback whenever the line is wanted; (b) NO regression scenario re-opens
-  the merge preview after apply to pin the `mergePreview:` cache-drop (the fix is verified by the
-  green flow + mirrors B3's tested publishPreview drop — add a guard scenario when convenient);
+- B4 fast-follows / notes: (a) post-merge "Merged X into this design" confirmation line — **DONE
+  2026-07-05** via the same success callback shape, setting a plain editor UI var on
+  `sys.mergeBranch(..., callback)`; (b) the merge-preview cache-drop is now guarded by a browser
+  scenario asserting the still-open preview recomputes to "Already up to date" after apply;
   (c) the `access` section has NO editor UI in the designer — B4's AccessChanges scenario seeds the
   rule via the store; an access-section editor is a separate small slice if operators should author
   access changes end-to-end; (d) the merge UI hardcodes "this design" for the target side (correct

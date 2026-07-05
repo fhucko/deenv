@@ -785,6 +785,7 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the publish preview shows a rename from "TodoItem" to "Task"
     When I apply the publish for the instance "todo"
     Then the "todo" instance's app document describes the type "Task"
+    And the publish row for instance "todo" eventually shows "Published to todo"
     When I preview the publish for the instance "todo"
     Then the publish preview for the instance "todo" reads up to date
 
@@ -903,7 +904,9 @@ Feature: The operator IDE (designs library + instance design selector)
     And I preview the merge of branch "feature"
     Then the merge preview reports a clean merge
     When I apply the merge of branch "feature"
-    Then the design "todo" eventually has a stored prop named "priority" on "TodoItem"
+    Then the Branches section eventually shows "Merged feature into this design"
+    And the design "todo" eventually has a stored prop named "priority" on "TodoItem"
+    And the merge preview reports already up to date
 
   # 3) A conflict is shown, resolved by a per-conflict pick, then applied. Rename the same prop differently
   # on the branch and on main; the merge preview surfaces the conflict with its base/source/target values,

@@ -1002,6 +1002,10 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await PublishRowFor(label).Locator(".publish-preview .publish-uptodate").WaitForAsync(
             new Microsoft.Playwright.LocatorWaitForOptions { Timeout = 45000 });
 
+    [Then("the publish row for instance {string} eventually shows {string}")]
+    public async Task ThenPublishRowShows(string label, string text) =>
+        await ctx.Page!.Locator($".publish-section .last-publish:has-text({CssString(text)})").WaitForAsync();
+
     // Seed a TodoItem into the LIVE target instance's store (never a second store over its file — the
     // single-store invariant): create the item and add it into the existing TodoList's `items` set.
     [Given("the {string} target holds a TodoItem with text {string}")]
@@ -1125,6 +1129,14 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [Then("the merge preview reports a clean merge")]
     public async Task ThenMergePreviewClean() =>
         await ctx.Page!.Locator(".merge-preview .merge-clean").WaitForAsync();
+
+    [Then("the merge preview reports already up to date")]
+    public async Task ThenMergePreviewUpToDate() =>
+        await ctx.Page!.Locator(".merge-preview .merge-uptodate").WaitForAsync();
+
+    [Then("the Branches section eventually shows {string}")]
+    public async Task ThenBranchesShows(string text) =>
+        await ctx.Page!.Locator($".branch-section:has-text({CssString(text)})").WaitForAsync();
 
     // The conflict's source row is labeled with the SOURCE BRANCH's real name (review fix — "source:"/
     // "target:" named the internal marker, not a branch, so the UI now reads "<branchName>: <value>" /

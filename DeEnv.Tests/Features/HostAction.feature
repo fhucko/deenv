@@ -84,6 +84,16 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
   # value ("3"). An unconvertible value (text "abc" → int) resets that ONE field to its default and is
   # reported (server log) — never silent corruption; the rest of the data survives either way.
   @milestone-13 @single-user @persistence
+  Scenario: Apply rebaselines history when it removes schema-shaped data
+    Given a target instance holding an "Item" with label "Keep me" and note "scratch"
+    And the target has log and genesis files
+    And a designer instance holding a design with a type "Item" and a custom render
+    When the operator applies that design to the target's id over the WS
+    Then the host action reply is ok
+    And the target still holds an "Item" labelled "Keep me"
+    And the target has no log or genesis files
+
+  @milestone-13 @single-user @persistence
   Scenario: Apply converts a scalar field's value when its type changes
     Given a target instance whose "Item" has "qty" of type "int" set to "3"
     And a designer instance holding a design with "Item" field "qty" typed "text"

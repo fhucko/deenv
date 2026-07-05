@@ -156,12 +156,16 @@ run `/design` or a planning session, then slice)
   sys.revertCommit — NEEDS a user approval ask before any brief); decimal/date/datetime
   migration writes (Code-runtime ceiling); merged-migration publishes (refused loudly).
 
-### NEXT READY TASK — Success-signal consumers + guard tests  [S-M; self-contained; suite baseline 739]
+### NEXT READY TASK — Success-signal consumers + guard tests — DONE 2026-07-05  [S-M; self-contained; suite baseline 739]
 Three small, disjoint items unlocked this week — one worktree, one landing, reviews per item.
 **Context docs:** `docs/plans/host-action-success-signal.md` (the callback mechanism — optional
 trailing fn on every kernel host action, runs on the ok reply as a FULL handler, never on
 error; the commit bar's clear-on-success at `instances/1/app.deenv` `doCommit`/`afterCommit`
 is the worked example to copy); `versioning-slices.md` B3/B4 fast-follow notes.
+**Delivered:** the publish and merge confirmations use plain editor UI vars set by the success
+callbacks; the suggested per-row component-state variant was skipped because host-action success
+resets row component slots. The merge-preview guard asserts the still-open preview recomputes to
+"Already up to date" after apply, which is the actual stale-cache surface in this UI.
 1. **B3 "Last published" line** — in the publish UI's component (`publishRow`/the publish
    preview component in `instances/1/app.deenv`), pass a callback to `sys.publish(...)` that
    sets a component-state var (e.g. `state.lastPublishNote = "Published to " + inst.name`);
