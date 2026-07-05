@@ -507,12 +507,12 @@ ui
             if db.designs.any(d => sys.id(d) == routeId)
                 foreach d in db.designs
                     if sys.id(d) == routeId
-                        <designEditor design={d} key={sys.id(d)}>
+                        <designEditor design={d}>
             else
                 if branchWorkingCopies().any(b => sys.id(b.workingCopy) == routeId)
                     foreach b in branchWorkingCopies()
                         if sys.id(b.workingCopy) == routeId
-                            <designEditor design={b.workingCopy} key={sys.id(b.workingCopy)}>
+                            <designEditor design={b.workingCopy}>
                 else
                     <p class="not-found">
                         "Design not found."
