@@ -398,11 +398,10 @@ review (opus) with the diff PINNED to the branch's merge-base before landing.
   non-temporal session right after — same log-policy domain, informed by the
   content-addressing decisions.
   **DESIGN PASS DONE 2026-07-06** → docs/plans/assets-design.md (drafted, self-grilled
-  ×1, refutations folded in). Every brief question settled except ONE open user
-  decision: the prod URL shape for serving blobs (`= /assets` + query param
-  recommended vs separate hostname vs `/assets/*` subtree — the app-namespace
-  reservation question). Retention handed to compaction §6 with a clean "referenced"
-  definition, as sequenced.
+  ×1, refutations folded in; URL shape user-settled same day: `/assets/<name>` on the
+  asset port, same infra class as /ws + /js). All brief questions settled; ready for
+  slicing. Retention handed to compaction §6 with a clean "referenced" definition, as
+  sequenced.
 - **Compaction** — `sys.compact(instance, horizon)` (§6): fold-to-new-genesis, cache
   promotion, retention knobs, never-compact designer default; interacts with time-travel's
   era resolution (the recorded residual: promoted checkpoints become the era source).

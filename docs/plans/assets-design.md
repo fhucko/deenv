@@ -3,8 +3,9 @@
 *2026-07-06. Triggered by the Track C brief (post-m13-backlog.md "Assets — FIRST in the
 design queue"; serves the dogfood gate — devlog wants images). Status: design draft,
 self-grilled ×1 (grill record at bottom; its refutations are folded into the body).
-Not yet accepted. ONE question needs the user: the prod URL shape for serving blobs
-(§3 — the app-namespace-reservation decision).*
+The one open question — prod URL shape — was settled by the user 2026-07-06: asset-port
+paths like /ws and /js (§3). No open questions remain; ready for milestone-planner
+slicing.*
 
 Companions: docs/plans/app-versioning-design.md (§0b non-temporal, §6 compaction),
 docs/plans/post-m13-backlog.md (the brief), docs/plans/login-persistence.md (the
@@ -79,8 +80,7 @@ data log, nothing more.
 - There is NO multipart/binary handling anywhere today (only the /session JSON body
   read) — but none is needed, see Upload below.
 - nginx (deploy/DEPLOY.md:136-171) proxies `= /ws` and `= /js` to the asset port; the
-  new edges need their own location block — the SHAPE of which is the one open user
-  decision (§3), because a prefix location would reserve app URL space — and
+  new edges add a `location /assets/` block to the same port (user-settled, §3) and
   **`client_max_body_size` must be raised** (absent today → nginx's 1 MB default would
   reject uploads).
 
@@ -142,31 +142,16 @@ temp past the cap). Deploy: `client_max_body_size 12m;` in the nginx block.
 
 ### 3. Serve edge (bytes out)
 
-**URL shape — OPEN, needs the user (grill #1 refuted the draft's shape).** The draft
-said `GET /assets/<name>` "on the asset tree, so the app tree stays reserved-path-free"
-— true in local two-port dev, **wrong in prod**: nginx splits the trees by `location`
-on ONE shared origin (deploy/DEPLOY.md:136-170), and a per-hash path needs a *prefix*
-`location /assets/`, which reserves the entire `/assets/*` subtree from every app on
-every subdomain. That is exactly the framework-reserving-app-URL-space the project
-rejects. Candidates:
+**URL shape — SETTLED (user, 2026-07-06): assets ride the asset port like `/ws` and
+`/js`.** `GET /assets/<name>` on the per-instance asset tree; in prod, one nginx
+`location /assets/` block proxying to the asset port beside the existing `= /ws` and
+`= /js` blocks (deploy/DEPLOY.md:136-170). Grill #1 raised that a prefix location
+reserves the `/assets/*` subtree from apps on every subdomain — the user's ruling:
+that's the same already-accepted infra class as `/ws` and `/js` (asset-port
+namespace, not app namespace), not the rejected kind of app-URL reservation. The
+query-param and separate-hostname alternatives the grill offered are dropped.
 
-1. **(Recommended)** `GET /assets?n=<name>` — the name rides a query param on an EXACT
-   path, so nginx gets `location = /assets`, the same one-exact-path footprint as the
-   already-reserved `= /ws` and `= /js`. Caches key on the full URL, so immutable
-   caching still works. Cost: a slightly less pretty URL, and the reservation grows
-   from two exact paths to three — precedented, but still a reservation the user
-   should bless.
-2. A separate hostname in prod (`<app>-assets.deenv.org` or one shared
-   `assets.deenv.org/<instance>/...`) — zero app-path reservation, but new cert/nginx
-   surface, and the upload edge's cookie (`Path=/`, per-instance name) stops riding
-   along cross-host, so upload auth needs rework. More machinery for the same result.
-3. Accept the `/assets/*` subtree reservation — smallest code, but contradicts a hard
-   project rule; listed only for completeness.
-
-The rest of this section assumes candidate 1; nothing else in the design depends on
-the choice.
-
-`GET /assets?n=<name>`: validate the name shape strictly
+`GET /assets/<name>`: validate the name shape strictly
 (`^[0-9a-f]{64}\.[a-z0-9]+$` — this alone kills path traversal; verified against
 Windows ADS/reserved-name tricks in grill #1), open the file, stream it with:
 
@@ -368,8 +353,8 @@ Every cited file was opened. Verdicts, all folded into the body above:
    names; image is image-declared) → build slice adds the `"image"` arm; rename-only
    already worked.
 2. `location /assets/` prefix reserves the `/assets/*` subtree from every app in prod
-   → §3 rewritten as an OPEN user decision, recommended shape = exact path + query
-   (`= /assets`, same footprint class as `/ws`/`/js`).
+   → raised to the user; RULED 2026-07-06: asset-port paths are the same accepted
+   infra class as `/ws`/`/js`, keep `GET /assets/<name>` with a prefix location.
 3. Clone does NOT copy sibling dirs — pool copy is an explicit new step in both
    branches, with a missing-dir guard for pre-pool instances.
 4. Upload edge was silent on CSRF/Origin → mirrors SessionHandler.Cors + SameSite=Lax,
@@ -381,8 +366,9 @@ Every cited file was opened. Verdicts, all folded into the body above:
    scope (origin deletion guaranteed, cache recall not).
 
 **Left open by the grill:** GenHTTP streaming behavior (the named spike);
-the URL-shape decision (user); image-migration-write unblocking scope (resolved here
-as: add image now, decimal/date stay deferred — default judgment call, cheap-gap rule).
+image-migration-write unblocking scope (resolved here as: add image now, decimal/date
+stay deferred — default judgment call, cheap-gap rule). The URL-shape question went to
+the user and was settled same day (§3).
 
 ## Status summary
 
@@ -391,7 +377,7 @@ as: add image now, decimal/date stay deferred — default judgment call, cheap-g
 | Content-addressed per-instance append-only pool | Settled (design; grill-verified inert to store machinery) |
 | Upload edge: raw-body POST, dormant-open/cookie auth, Cors mirror, 10 MB cap | Settled (design) — GenHTTP streaming = named spike |
 | Serve edge: capability-URL boundary, immutable caching, SVG-less allowlist | Settled (design; default judgment calls) |
-| **Prod URL shape (`= /assets` + query vs subdomain vs subtree)** | **OPEN — user decision** |
+| Prod URL shape | Settled (USER 2026-07-06): `/assets/<name>` on the asset port, prefix nginx location — same infra class as /ws, /js |
 | `image` scalar (password-template, text-shaped) | Settled (design) |
 | Clone = whole-pool copy (explicit step + guard) | Settled (design) |
 | Publish/revert/setDesign: no blob handling needed | Settled (grill-verified) |
