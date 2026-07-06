@@ -409,6 +409,12 @@ review (opus) with the diff PINNED to the branch's merge-base before landing.
   Design TOGETHER with the non-temporal flag + after the assets pass (one log-policy domain).
 - **Non-temporal field flag** (§0b): PII/erasure + high-churn exclusion — schema surface
   decision (a per-field flag = authoring surface, minimal-by-default scrutiny).
+- **Fully clean app URL space** (user 2026-07-06) — move the last three framework-reserved
+  paths (`/ws`, `/js`, `/session`) OFF app subdomains so apps own their URL space with ZERO
+  reserved paths, same motive as the blob-domain decision. `/js` (static) and probably `/ws`
+  (in-band WS auth) are cheap; `/session` + the SSR-auth cookie is the design-worthy crux —
+  user OKs changing the auth mechanism off the host-scoped cookie. Touches login-persistence;
+  design pass sketched in docs/plans/assets-design.md "Follow-up: fully clean app URL space".
 - **Dict READ floor** — gated on how the login-persistence world shakes out; revisit with
   the security follow-ups.
 

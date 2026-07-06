@@ -135,11 +135,12 @@ serve is a capability GET (a plain cross-origin `<img>` load, no CORS), upload u
 ticket (below). So the assets change leaves js/ws/session untouched and working.
 
 Two properties fall out for free:
-1. **App URL space is untouched** — apps own 100% of `<app>.deenv.org/*`.
-   (Caveat, out of scope: `/ws`, `/js`, `/session` still occupy three EXACT paths on
-   the app subdomain today. Those pre-date this pass and are exact-match, not a
-   subtree; moving them is a separate decision, not required by the assets feature.
-   Flagged so "completely clean" isn't overclaimed.)
+1. **App URL space is untouched by assets** — apps own 100% of `<app>.deenv.org/*`
+   *for the blob feature*. But it is not yet TRULY clean: `/ws`, `/js`, `/session`
+   still occupy three EXACT reserved paths on the app subdomain (pre-date this pass).
+   The user wants those gone too (2026-07-06) — see the "Fully clean app URL space"
+   follow-up at the bottom; it's a separate design pass (auth mechanism may change),
+   not part of this assets slice. Flagged here so "completely clean" isn't overclaimed.
 2. **User content is origin-isolated** — served blobs sit on a throwaway origin with no
    app cookies and no app DOM, the `githubusercontent.com` pattern. Any residual
    content-sniffing risk that slipped past `nosniff` + the no-SVG allowlist can't reach
@@ -454,3 +455,36 @@ the user and was settled same day (§3).
 | Publish/revert/setDesign: no blob handling needed | Settled (grill-verified) |
 | Blob GC / retention | Deferred to compaction §6 (per the brief; handed a clean "referenced" definition) |
 | `file` scalar, thumbnails, EXIF strip, per-object blob floor | Deferred, named |
+| Fully clean app URL space (move /ws, /js, /session off the app subdomain) | Follow-up design pass (user 2026-07-06) — see below |
+
+## Follow-up (adjacent, NOT this slice): fully clean app URL space
+
+*User direction 2026-07-06: apps should own their subdomain URL space with ZERO
+framework-reserved paths — not just for blobs. Today three exact paths remain reserved:
+`/ws`, `/js`, `/session`. The user explicitly OKs changing the auth mechanism (away from
+the host-scoped cookie) if that's what full cleanliness needs. This is its own design
+pass; recorded here because it's the same "clean namespace" motive as the blob-domain
+decision.*
+
+Rough shape (to be designed, not settled — confirmed facts cited, the rest is sketch):
+
+- **`/js` — easy.** It's a static compiled-in script (BundleHandler, ContentHandler.cs:
+  211-223), no auth. Serve it cross-origin from the blob/static domain; `<script src>`
+  cross-origin is unrestricted. The SSR page just emits the off-subdomain URL.
+- **`/ws` — likely movable.** WS-session auth is already IN-BAND (an explicit
+  login/logout WS op, not the cookie — WsHandler.cs:1300-1338), so a cross-origin WS
+  upgrade to a dedicated host is plausible if the server accepts the Origin. OPEN: does
+  the login-persistence path ALSO read the cookie on WS connect to restore state? If so,
+  that read is part of the mechanism-change the user blessed — verify before assuming
+  ws moves freely.
+- **`/session` + the SSR cookie — the crux.** The SSR GET reads the host-scoped cookie
+  to render an authenticated first paint (PrincipalFromCookie, ContentHandler.cs:61-68).
+  The GET at `/` and app paths ARE the app's own space (fine), but the `/session`
+  login/logout endpoint is a reserved path, and the cookie is what pins auth to the app
+  subdomain. Moving `/session` off-subdomain means the SSR principal must arrive by a
+  mechanism that isn't the per-subdomain cookie — a `.deenv.org`-scoped token (rejected
+  for blobs due to cross-app leak — reconsider under a real design), or a scheme that
+  carries the principal without a reserved app-subdomain path. This is the real work and
+  where the user's "other mechanism if needed" applies.
+- Net: `/js` and probably `/ws` are cheap; `/session`+SSR-auth is the design-worthy
+  piece. Sequence after assets; it touches login-persistence, so loop that design in.
