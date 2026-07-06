@@ -90,15 +90,29 @@ data log, nothing more.
 
 ### 1. The pool
 
+**The load-bearing invariant (why any of this works):** blob BYTES live only as raw
+binary files in the pool; the JSON data and the history log hold ONLY the hash string
+(~70 chars). This is not an optimization — it is the whole reason the design is viable.
+The append-only log records the full prior object on every `FieldWrite`/`Remove` and
+keeps it forever (AppLog.cs:87-90); if the field value were the bytes (or base64), then
+editing one image N times would embed N copies of the bytes in the log and history
+would blow up without bound. Because the value is a content hash instead:
+- history holds N tiny hash strings, not N copies of the image;
+- identical bytes dedup to one pool file (content-addressing), even across versions;
+- blobs are immutable + append-only, so an old hash in old history always resolves.
+Binary-in-the-pool, hash-in-the-log is the invariant; nothing in the design may store
+blob bytes inside a value, a snapshot, or the log.
+
 `instances/<id>/blobs/<sha256-hex-lowercase>.<ext>` — flat directory, per-instance
 (data sovereignty per id; nothing in the codebase shares files cross-instance, and this
 design doesn't start). Append-only: **no code path deletes a blob** except (future)
 compaction §6 and (future) explicit erasure. That single invariant is what makes
 time-travel/revert free.
 
-Write protocol: stream request body to `blobs/.tmp-<random>`, hash while streaming
-(SHA-256), rename to final name (no-op if it exists), return the name. Never buffer the
-file in RAM (the prod box has 1 GB total).
+Write protocol: stream request body **as raw bytes** to `blobs/.tmp-<random>`, hash
+while streaming (SHA-256), rename to final name (no-op if it exists), return the name.
+Never base64-encode and never buffer the file in RAM (the prod box has 1 GB total) —
+bytes go disk-to-disk, and only the resulting hash ever touches JSON.
 
 The extension is captured at upload from the declared Content-Type via a fixed
 allowlist table (see security), and lives IN the value string — so serving derives
