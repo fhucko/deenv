@@ -143,13 +143,24 @@ temp past the cap). Deploy: `client_max_body_size 12m;` in the nginx block.
 ### 3. Serve edge (bytes out)
 
 **URL shape — SETTLED (user, 2026-07-06): assets ride the asset port like `/ws` and
-`/js`.** `GET /assets/<name>` on the per-instance asset tree; in prod, one nginx
-`location /assets/` block proxying to the asset port beside the existing `= /ws` and
-`= /js` blocks (deploy/DEPLOY.md:136-170). Grill #1 raised that a prefix location
-reserves the `/assets/*` subtree from apps on every subdomain — the user's ruling:
-that's the same already-accepted infra class as `/ws` and `/js` (asset-port
-namespace, not app namespace), not the rejected kind of app-URL reservation. The
-query-param and separate-hostname alternatives the grill offered are dropped.
+`/js`, instance prefix included.** `/ws`/`/js` are per-instance routes on the asset
+port (each instance mounts its own asset tree, InstanceApp.cs:85-91; PathRouter routes
+`/apps/<name>/...` to it) — only nginx makes them look bare by re-adding the instance
+from the subdomain (`location = /ws` → `8081/apps/$deenv_app/ws`). Assets take the
+identical shape:
+
+- kernel/dev: `GET <assetPort>/apps/<name>/assets/<hash>.<ext>` — the per-instance
+  tree gains `assets` beside `ws`/`js`/`session`; the instance prefix scopes the URL
+  to that instance's own pool.
+- prod: `GET https://<app>.deenv.org/assets/<hash>.<ext>` — one nginx
+  `location /assets/` block proxying to `8081/apps/$deenv_app/assets/...`, beside the
+  existing `= /ws` and `= /js` blocks (deploy/DEPLOY.md:136-170).
+
+Grill #1 raised that the prefix location reserves the `/assets/*` subtree from apps on
+every subdomain — the user's ruling: that's the same already-accepted infra class as
+`/ws` and `/js` (asset-port namespace, not app namespace), not the rejected kind of
+app-URL reservation. The query-param and separate-hostname alternatives the grill
+offered are dropped.
 
 `GET /assets/<name>`: validate the name shape strictly
 (`^[0-9a-f]{64}\.[a-z0-9]+$` — this alone kills path traversal; verified against
