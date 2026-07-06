@@ -123,6 +123,17 @@ deenv.org) — **no new cert**. In dev the two-port setup already gives origin i
 for free (`localhost:8081` ≠ `localhost:8080`), so dev blobs stay on the asset port and
 `assets.deenv.org` is a prod-only rewrite.
 
+**`/ws`, `/js`, `/session` do NOT move — and this is deliberate, not an oversight.**
+They must stay same-origin with the app page for auth to work: WS upgrades on the app
+origin, and the `deenv_session_<id>` cookie is host-scoped to `<app>.deenv.org`
+(`Path=/; HttpOnly; SameSite=Lax`) so it only rides to that subdomain. Today nginx
+already serves page + `/ws` + `/js` + `/session` all on `<app>.deenv.org` (same origin,
+proxied to the asset port under `/apps/<name>/...`, DEPLOY.md:153-159) — which is why
+login and live WS work on devlog now. Moving them to `assets.deenv.org` would break
+exactly that. Blobs CAN move only because they're built to not need the app cookie:
+serve is a capability GET (a plain cross-origin `<img>` load, no CORS), upload uses the
+ticket (below). So the assets change leaves js/ws/session untouched and working.
+
 Two properties fall out for free:
 1. **App URL space is untouched** — apps own 100% of `<app>.deenv.org/*`.
    (Caveat, out of scope: `/ws`, `/js`, `/session` still occupy three EXACT paths on
