@@ -98,10 +98,20 @@ data-model-literate; the coding burden moves from "developer only" to
 6. **Code.** A purpose-built code layer for an immersive, full experience.
    Starts interpreted — no host platform required. (See DECISIONS.md.)
 
-7. **Multi-device / distributed runtime.** The system can be configured to
-   run across multiple machines, scaling on ordinary VPSes, the way cloud
-   infrastructure does — ACID maintained across that distribution.
-   (Late milestone. This is architecture, not a detail. See DECISIONS.md.)
+7. **Multi-device / distributed runtime — full horizontal scale.** The system
+   can be configured to run across multiple machines, scaling on ordinary
+   VPSes the way cloud infrastructure does — and a *single app's* data can
+   shard across those machines with ACID transactions maintained across the
+   distribution: per-shard replication and consensus, cross-shard
+   transactions, automatic splitting and rebalancing, strong consistency
+   throughout (the Spanner/CockroachDB class). *(Upgraded 2026-07-06 from a
+   replication-only reading: horizontal write-scaling of one app is in scope,
+   not only placement of many apps.)* Correctness at this layer is bought
+   **simulation-first** — a deterministic fault-injecting cluster simulator is
+   the first brick of the distribution work, because it is what lets
+   AI-accelerated implementation of known algorithms be *verified*, not just
+   written. (Late milestone — it stays last. This is architecture, not a
+   detail. See DECISIONS.md and docs/plans/distributed-acid-design.md.)
 
 8. **UI customization.** Later, users can customize how the UI renders —
    including auto-tabs for deep structures (presenting a large
@@ -117,12 +127,15 @@ data-model-literate; the coding burden moves from "developer only" to
 **What it competes with.** Today's cloud is the incumbent, and for the vast
 middle of applications it is both overwrought and overpriced — a sprawl of
 managed services, each billed separately, each needing someone who knows it.
-deenv is a **superior solution for that over-served middle**: the small-to-mid
-database-backed apps that do not need hyperscale. The claim is scoped on purpose
-— deenv is *not* trying to beat the hyperscalers at global, high-traffic,
-distributed scale (that is the hardest, latest pillar — pillar 7, STAGES.md
-Stage 5). "Superior to expensive cloud, for the apps cloud over-serves" is a
-large and honest claim; "superior to cloud, full stop" would be an overpromise.
+deenv's **entry wedge** is that over-served middle: a superior solution for the
+small-to-mid database-backed apps that do not need hyperscale, from day one.
+The ceiling is no longer scoped out *(rewritten 2026-07-06; the earlier text
+renounced hyperscale)*: pillar 7's full form — sharded, strongly-consistent
+horizontal scale of a single app — puts genuine high-traffic distributed scale
+in scope as the **latest** destination, not a renounced one. The honest form of
+the claim is temporal, not categorical: superior for the middle *first*; scale
+earned *last*, and only as fast as its correctness can be verified
+(simulation-first — pillar 7).
 
 **Free, open, and steward-led.** deenv is **free and open source** under the **MIT
 license** — chosen for maximum reach and embedding. The considered alternative was
@@ -149,8 +162,10 @@ to fear is **obscurity, not imitation.**
 
 ## Honest scope note
 
-This is a multi-year mission. Some pillars — distributed ACID in particular —
-represent an industry's worth of engineering. That is not a reason to
-abandon them. It is the reason the work must be **sequenced**: a mission
-ships in finished pieces, or it ships never. Keep this document whole; let
-ROADMAP.md decide order.
+This is a multi-year mission. Some pillars — distributed ACID in particular,
+now in its full sharded form — represent an industry's worth of engineering.
+That is not a reason to abandon them. It is the reason the work must be
+**sequenced** (a mission ships in finished pieces, or it ships never) and the
+reason the distribution layer is approached **verification-first**: the
+deterministic simulation harness precedes the algorithms it must prove. Keep
+this document whole; let ROADMAP.md decide order.

@@ -454,7 +454,9 @@ DECISIONS.md.
   concurrent safety fix (write-lock / atomic rename) inline as part of this
   milestone. Target state: the app in the browser never needs a reload.
 
-- **Custom storage engine.** The only storage milestone. A bespoke engine
+- **Custom storage engine.** The only *general-purpose* storage-engine
+  milestone (the distributed milestone's sharded/per-shard storage work is
+  Stage 5, pillar 7 — see below). A bespoke engine
   built ground-up — no SQLite, no Postgres. API TBD; must support data
   filtering at fetch time and be render-coupled: the engine participates in
   rendering to determine exactly what to load, preload, and cache — including
@@ -467,7 +469,12 @@ DECISIONS.md.
 
 - **Multi-device / distributed runtime + distributed ACID.** The hardest
   part of the mission. An in-process C# lock does not solve cross-machine
-  coordination.
+  coordination. **Vision upgraded 2026-07-06**: the destination is full
+  horizontal scale of a single app (sharded, cross-shard ACID transactions,
+  auto-rebalancing — the Spanner/CockroachDB class), reached through the
+  replication-first ladder in docs/plans/distributed-acid-design.md; the
+  deterministic simulation harness is the first brick of this milestone.
+  Sequencing unchanged: it stays last.
 
 - **Desktop wrapper.**
 

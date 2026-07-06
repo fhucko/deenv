@@ -435,7 +435,10 @@ It is therefore a deliberate future milestone, designed for when reached.
 Distributed ACID specifically: the CAP theorem means you cannot have full
 ACID + always-available multi-device + tolerance of network failure. Systems
 that keep ACID while distributed (Spanner, CockroachDB) run consensus
-protocols and are the work of large specialist teams.
+protocols and are the work of large specialist teams. *(2026-07-06: that
+class is now the stated destination, not a foil — see "Distributed ACID
+upgraded: sharding is the destination" below; the cost assessment here stays
+true and is answered by simulation-first verification, not denial.)*
 
 ## Conflict handling: two different problems
 
@@ -1889,7 +1892,10 @@ it must arrive in pieces each small enough for one steward to verify and vouch f
 6. **Distribution / single-system-image (Stage 5).** Kernel **fabric**
    (transport/membership/coordination) in the trusted floor + image-configured
    topology + single-primary-per-instance + sync replication + failover. Last —
-   every rung above is its prerequisite.
+   every rung above is its prerequisite. *(2026-07-06: this rung's destination
+   extended beyond single-primary-per-instance to intra-instance sharding —
+   see "Distributed ACID upgraded" below; the replication form here remains
+   the stepping stone.)*
 
 **CAP is the organizing constraint, and the other pillars are its payment plan.**
 "Replicas must not disagree" = choosing **strong consistency** (the right default —
@@ -1902,7 +1908,10 @@ the right remote data ahead of render. Four interlocking answers to CAP, not fou
 independent features.
 
 **deenv earns "no disagreement" mostly by avoiding the situation, not by heroic
-consensus.** Each instance has **one sovereign db** (a single authority — no
+consensus.** *(Scoped 2026-07-06: this is now the INTERIM stance — sovereignty
+per instance is the first, coarsest shard granularity, not the permanent
+ceiling; see "Distributed ACID upgraded: sharding is the destination" below.)*
+Each instance has **one sovereign db** (a single authority — no
 multi-master *within* an instance, so nothing to diverge); cross-instance facts use
 **one authoritative owner + idempotent projection** (no two-phase commit — see "The
 self-hosted image"). What cannot be dodged and stays Stage-5 hard: **failover**
@@ -1914,7 +1923,8 @@ place "consistent **and** available" forces real coordination) and
 The docs name distributed ACID "the work of large specialist teams." A solo steward
 hand-rolling Paxos is how you get silent data loss — lean on a **proven algorithm
 (Raft)** or building block; per-instance sovereignty already shrinks the need to
-~failover. Correctness is the whole job at this layer (a subtle bug eats people's
+~failover *(interim-true only — the sharded destination re-widens the consensus
+surface; see "Distributed ACID upgraded" below)*. Correctness is the whole job at this layer (a subtle bug eats people's
 data): property-based tests, fault injection, conformance discipline. AI accelerates
 *implementing* a known algorithm; it does **not** remove the design-judgment /
 verification burden — for the trust floor, that burden is the point.
@@ -2372,3 +2382,71 @@ collisions (`EnsureNoCollisions`) also stay fatal — a registry aliasing two in
 operator config error with no unambiguous "bad instance" to skip. This is the first, cheapest
 increment of the north-star recovery floor (STAGES) — the "mint a fresh known-good designer"
 half stays future.
+
+## Distributed ACID upgraded: sharding is the destination — 2026-07-06
+
+**User vision decision (2026-07-06), during the pillar-7 design-ahead pass**
+(docs/plans/distributed-acid-design.md): the distributed endgame is upgraded
+from "replicate + place sovereign instances" to **full horizontal scale of a
+single app** — data sharded across machines, cross-shard ACID transactions,
+automatic splitting/rebalancing, strong consistency throughout (the
+Spanner/CockroachDB class). Trigger: weighing the sharded model's advantages
+(single-DB write scaling, transparent capacity, transactions spanning
+everything, hot-spot dissolution, geo-locality) the user chose to want them
+all, judging AI-accelerated implementation makes the class reachable.
+
+**What this supersedes / rescopes (each site carries a pointer here):**
+- "Multi-device is architecture…" — Spanner/CockroachDB flip from cautionary
+  foil to stated destination; the cost assessment stands and is answered by
+  verification, not denial.
+- "The endgame database" — the "avoid the situation" consistency stance and
+  single-sovereign-db-per-instance become the **interim** stance: the
+  instance is the *first, coarsest shard granularity*, not the permanent
+  ceiling. The ladder's rung 6 extends into sharding rungs (see the design
+  doc's rungs 6–8).
+- VISION pillar 7 + Positioning rewritten (hyperscale no longer renounced —
+  entry wedge = the over-served middle, scale = the latest destination);
+  STAGES Stage 5, ROADMAP late-milestone entry, README updated the same day.
+
+**What does NOT change (user-confirmed same session):**
+- **Sequencing.** Distribution stays LAST (Stage 5, after real-time, temporal
+  versioning, and the render-coupled engine). The vision grew; the order
+  didn't. **Refined same day (user decision, after weighing the solo-steward
+  failure modes): the sharding era (design-doc rungs 6–8) is FAR FUTURE and
+  GATED — entered only with (a) traction, (b) more developers than the
+  steward carrying the trust floor, and (c) an emerging real need pressing
+  the single-leader ceiling. The present-day obligation the vision change
+  creates is exactly ONE thing: do not make it harder later — the
+  foreclosure-avoidance guard list (design doc rung 0), nothing else.**
+- **Consistency stance.** CP / strong consistency — CockroachDB is CP too;
+  this upgrade changes shard granularity, not the CAP position.
+- **The interim hatch.** Until intra-instance sharding lands, a hot app
+  splits into sovereign instances + owner/idempotent-projection — the coarse
+  form of the same idea, subsumed later, not throwaway.
+- **The replication ladder.** Rungs 1–5 of the design doc are unchanged and
+  remain the stepping stone: CockroachDB *is* per-range single-leader
+  replicated logs plus a transaction layer — nothing built for replication is
+  wasted by the sharded destination.
+
+**The method decision that makes "fast with AI" honest — simulation-first.**
+AI accelerates *implementing* known algorithms; it does not remove the
+verification burden, and at the trust floor verification IS the work (this
+file already said so). Therefore the FoundationDB lesson is adopted as a
+first-class commitment: **a deterministic, fault-injecting, seed-replayable
+cluster simulation harness is the FIRST brick of the distribution milestone**
+— built before the consensus/transaction code it must prove, so that
+AI-written distributed code is machine-checkable at the speed it is written.
+
+**New seam guards with force NOW (join the design doc's rung 0):**
+- Do not deepen the "one monotonic Seq totally orders the instance"
+  assumption in new features; Seq's eventual successor is a commit timestamp
+  (likely HLC) — time-travel and OCC currently lean on the single total
+  order and will need a mapping story.
+- The M5 per-node id-range reservation is **needed again** (sharded minting
+  is multi-authority) — reversing the design doc's earlier "not needed for
+  single-leader" note, which held only for the replication-era design.
+- Footprint/journal tracking stays PRECISE — it is the future read/write-set
+  of distributed OCC; letting it coarsen to "whole instance" would foreclose
+  the transaction layer.
+- Extents are the natural shard seam; nothing new should straddle extents
+  with un-transactional atomicity assumptions.

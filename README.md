@@ -39,14 +39,16 @@ The full destination — the pillars, drawn in [VISION.md](VISION.md):
 - **A render-coupled storage engine.** A storage engine co-designed with the
   renderer, so it knows what the UI is about to display and loads accordingly —
   something a general-purpose engine structurally cannot do.
-- **A distributed runtime.** Configured to scale across ordinary machines, with
-  ACID maintained across the distribution.
+- **A distributed runtime.** Configured to scale across ordinary machines —
+  up to sharding a single app's data across them, with ACID transactions and
+  strong consistency maintained across the distribution.
 - **One IDE-grade environment.** Schema design, code, versioning, and instance
   management in a single web-first app.
 
-It aims squarely at the **over-served middle**: the small-to-mid apps today's
+Its entry wedge is the **over-served middle**: the small-to-mid apps today's
 cloud makes overwrought and overpriced — booking tools, CRMs, work-order
-trackers, inventories, small shops. Not hyperscale; the apps cloud over-serves.
+trackers, inventories, small shops. Genuine horizontal scale is the mission's
+latest destination, not its first claim.
 The operator must be *data-model literate* (they understand "this links to that")
 but need not be a professional developer.
 

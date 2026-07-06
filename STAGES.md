@@ -191,10 +191,18 @@ Placeholders, defined by the remaining pillars (see VISION.md / ROADMAP.md):
   *resolution* changes, not user code; M5 identity (resolvable anywhere) is the
   other half. The kernel gains a **fabric** (transport/membership/coordination) in
   the trusted floor; the **image configures topology** as kernel-owned data via the
-  privileged control-plane path. The unavoidable cost is **CAP** — a
+  privileged control-plane path. **Destination upgraded 2026-07-06** (vision
+  change; docs/plans/distributed-acid-design.md): not only placing and
+  replicating whole instances, but **sharding a single app's data across
+  machines** with cross-shard ACID transactions and auto-rebalancing (the
+  Spanner/CockroachDB class) — reached through the replication-first ladder
+  (instance = the first, coarsest shard granularity), with the **deterministic
+  fault-injecting simulation harness as this stage's first brick** (it is what
+  makes AI-speed implementation verifiable). The unavoidable cost is **CAP** — a
   strongly-consistent single-system-image is unavailable under partition;
   versioning (3+4) reconciles where divergence is allowed, and render-coupled
-  storage (5) hides latency by remote preload. The hardest part of the mission.
+  storage (5) hides latency by remote preload. The hardest part of the mission,
+  and it stays last.
 
 These stay in the vision; they are simply not next. Stage boundaries here are
 provisional and will be redrawn as the earlier stages land.
