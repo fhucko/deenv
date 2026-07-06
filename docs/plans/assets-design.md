@@ -263,7 +263,10 @@ Follows `password` exactly as the text-shaped template:
   (a hash is not a label).
 - The upload control is the one new client primitive: an `<input type=file>` variant
   that POSTs the file and writes the returned name into the draft prop (client-side
-  transient, like any other input edit).
+  transient, like any other input edit). **It ships as a PUBLIC library component, not
+  GenericUi-internal** — the RefSelect precedent (the ref-binding select lib component):
+  the generic UI composes it AND a custom `fn render()` composes the same component. One
+  home, both modes, per the two-UI-modes rule (one component library both compose).
 - **`sys.assetUrl(name)` — real new plumbing the draft hand-waved (grill #1):**
   GenericUi cannot compose an `<img src>` without a builtin that knows the blob origin.
   Both twins implement `sys.assetUrl(name)` → `<blobBase>/<instance>/<name>`. Note the
@@ -274,6 +277,22 @@ Follows `password` exactly as the text-shaped template:
   `initAssetAuthority` global. Pure function of session-known state — no refetch
   machinery, not a server-data builtin, so AGENTS.md rule 12 isn't in play. One
   conformance-adjacent check that both twins emit the same URL for the same name.
+
+**Generic AND custom apps — both fully served, storage-identical.** The two ways an app
+gets pixels on screen (fully-auto generic UI vs fully-custom `fn render()`) share ONE
+mechanism:
+- *Display*: `sys.assetUrl(name)` is a builtin, so a custom render does
+  `<img src={sys.assetUrl(obj.photo)}>` exactly as the generic UI does — no
+  custom-app-only plumbing.
+- *Upload*: the same public upload component (above) — a custom app drops it into its
+  `fn render()`; it POSTs to the same blob domain and writes the hash into the same
+  draft prop. No second upload path, no custom-app HTTP wiring.
+- *Storage*: mode-agnostic. The value is a hash string in a text-shaped scalar; the
+  save path moves opaque `NodeValue`s (grill-confirmed nothing type-specific), so the
+  pool + field are identical whether the hash came from generic or custom UI. A custom
+  app that stores an `image` prop, and a generic form that stores it, produce
+  byte-identical data + pool state. This is the "least custom app code" floor: an app
+  needs zero bespoke code to store/serve an image beyond composing the shared component.
 - Designer picker: add `"image"` to the `scalarTypes` array (instances/1/app.deenv:88)
   — not optional: `DesignerVocabularyTests.Scalar_types_match_the_leaf_base_types`
   pins the array to the BaseType enum, so the build goes red until it's added.
@@ -451,6 +470,7 @@ the user and was settled same day (§3).
 | Upload edge: raw-body POST to blob domain, short-lived ticket auth, same-site CORS, 10 MB cap | Settled (design) — GenHTTP streaming = named spike |
 | Serve edge: capability-URL boundary, origin-isolated, immutable caching, SVG-less allowlist | Settled (design; default judgment calls) |
 | `image` scalar (password-template, text-shaped) | Settled (design) |
+| Generic AND custom-app upload+display+storage | Settled (design): shared upload component (RefSelect precedent) + `sys.assetUrl` builtin; storage mode-agnostic |
 | Clone = whole-pool copy (explicit step + guard) | Settled (design) |
 | Publish/revert/setDesign: no blob handling needed | Settled (grill-verified) |
 | Blob GC / retention | Deferred to compaction §6 (per the brief; handed a clean "referenced" definition) |
