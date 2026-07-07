@@ -215,4 +215,4 @@ DeEnv is **free and open source**, built and maintained by a single **steward**
 multiplier that makes a solo, multi-year build viable. The durable advantage is
 meant to be the **community**, not code secrecy or hosting.
 
-**License:** released under the [MIT License](LICENSE).
+**License:** released under the [Apache License 2.0](LICENSE).
