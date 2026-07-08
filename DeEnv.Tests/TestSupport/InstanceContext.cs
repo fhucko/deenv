@@ -1788,8 +1788,11 @@ public class InstanceContext
         var entries = new List<string> { RegistryEntryJson(1, "designer", designIds["designer"]) };
         foreach (var (id, label) in targets)
         {
+            // A label with no designId in the committed registry (devlog, demo) boots DESIGN-LESS —
+            // its mirror row in db.instances never gets a design reference, exactly the real dev/prod
+            // shape the aged-store harness drives (AgedStore.feature).
             WriteIdApp(dir, id, File.ReadAllText(CommittedAppForLabel(label)));
-            entries.Add(RegistryEntryJson(id, label, designIds[label]));
+            entries.Add(RegistryEntryJson(id, label, designIds.TryGetValue(label, out var did) ? did : (int?)null));
         }
 
         File.WriteAllText(Path.Combine(dir, "kernel.json"),
