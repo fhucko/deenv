@@ -384,6 +384,14 @@ public static class CodeParse
         return (MapCommon(common), MapUi(ui));
     }
 
+    // Parse a standalone `ui` section — its keyword line plus indented body (e.g.
+    // "ui\n    fn render()\n        …"), tolerating trailing whitespace. Uses the SAME Section("ui") + MapUi
+    // the whole-document parser uses, so a section parsed on its own is identical to one parsed in-document.
+    // The inverse of AppPrint.PrintUi; used to canonicalize a designer's verbatim `ui` field before it is
+    // assembled into an app document (M12 S0). Throws CodeParseException on an unparseable section.
+    public static InstanceUi ParseUiSection(string source) =>
+        MapUi(Run(Seq(Section("ui"), Ws0, (items, _) => items), source));
+
     public static InstanceCommon? MapCommon(ICodeStatement[]? items)
     {
         if (items == null) return null;

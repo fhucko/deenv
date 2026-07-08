@@ -37,26 +37,36 @@ public static class AppPrint
         }
 
         if (desc.Ui is { } ui)
-        {
-            sb.Append("\nui\n");
-            foreach (var v in ui.Vars ?? [])
-            {
-                sb.Append("    var ").Append(v.Name);
-                if (v.Value != null) sb.Append(" = ").Append(CodePrint.Value(v.Value));
-                sb.Append('\n');
-            }
-            foreach (var fn in ui.Functions ?? [])
-            {
-                sb.Append('\n');
-                CodePrint.Function(sb, fn, "    ");
-            }
-            if (ui.Render != null)
-            {
-                sb.Append('\n');
-                CodePrint.Function(sb, ui.Render, "    ");
-            }
-        }
+            sb.Append('\n').Append(PrintUi(ui));
 
+        return sb.ToString();
+    }
+
+    // Print the `ui` section on its own — its keyword line plus the canonical body (vars, then functions,
+    // then render), with NO leading blank-line separator (Print prepends that). Extracted from Print so the
+    // designer's forward projection can canonicalize a verbatim `ui` field on the commit/publish path
+    // (M12 S0) using the exact same printer that keeps parse∘print the identity — the inverse of
+    // CodeParse.ParseUiSection.
+    public static string PrintUi(InstanceUi ui)
+    {
+        var sb = new StringBuilder();
+        sb.Append("ui\n");
+        foreach (var v in ui.Vars ?? [])
+        {
+            sb.Append("    var ").Append(v.Name);
+            if (v.Value != null) sb.Append(" = ").Append(CodePrint.Value(v.Value));
+            sb.Append('\n');
+        }
+        foreach (var fn in ui.Functions ?? [])
+        {
+            sb.Append('\n');
+            CodePrint.Function(sb, fn, "    ");
+        }
+        if (ui.Render != null)
+        {
+            sb.Append('\n');
+            CodePrint.Function(sb, ui.Render, "    ");
+        }
         return sb.ToString();
     }
 

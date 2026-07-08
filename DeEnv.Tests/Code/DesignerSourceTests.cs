@@ -109,4 +109,51 @@ public sealed class DesignerSourceTests
 
     // The canonical printed form, so two documents compare by semantics not incidental whitespace.
     private static string Canonical(string appDoc) => AppPrint.Print(AppParse.Parse(appDoc));
+
+    // ── M12 S0: canonicalize-on-project for the `ui` section ──────────────────────
+
+    // The `ui` canonicalization primitive: a non-canonically-formatted section round-trips through
+    // parse∘print to the printer's canonical form, and canonicalizing again is the identity (the
+    // fixpoint). This is exactly what ProjectDesignDocument uses to keep the commit/publish artifact
+    // stable regardless of how the render code was typed.
+    [Test]
+    public async Task A_ui_section_canonicalizes_through_parse_then_print()
+    {
+        var messy = "ui\n  fn render()\n    return <main class=\"x\">\n      \"hi\"\n"; // 2-space nesting
+        var canonical = AppPrint.PrintUi(CodeParse.ParseUiSection(messy));
+
+        await Assert.That(canonical).Contains("\n    fn render()");   // re-indented to the canonical 4 spaces
+        await Assert.That(messy).DoesNotContain("\n    fn render()");  // the input genuinely was not canonical
+        // Idempotent: canonical text canonicalizes to itself.
+        await Assert.That(AppPrint.PrintUi(CodeParse.ParseUiSection(canonical))).IsEqualTo(canonical);
+    }
+
+    // ProjectDesignDocument emits a CANONICAL `ui` section even when the design carries a
+    // non-canonically-formatted one (DesignerSeed carries `ui` verbatim, so this reverse→forward path
+    // would otherwise reproduce the messy form). Only `ui` is re-printed; the wiring is what makes the
+    // commit/publish artifact stable across authoring formatting (M12 S0).
+    [Test]
+    public async Task ProjectDesignDocument_canonicalizes_the_ui_section()
+    {
+        var messyUi = "ui\n  fn render()\n    return <main class=\"x\">\n      \"hi\"\n";
+        var appDoc = "types\n    Db\n        greeting text\n\n" + messyUi;
+
+        // Reverse-project into a live Design node (ui carried verbatim), then forward-project it.
+        var seed = DesignerSeed.Build([("app-messy", 71, appDoc)], []);
+        var designerDesc = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1))
+            with { InitialData = seed };
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s0-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, designerDesc);
+        try
+        {
+            var design = store.ReadNode(NodePath.Root.Field("designs").Key("71"))!;
+            var projected = SchemaBridge.ProjectDesignDocument(design);
+            await Assert.That(projected).Contains("\n    fn render()");     // canonical 4-space indent
+            await Assert.That(projected).DoesNotContain("\n  fn render()");  // the verbatim 2-space form is gone
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
 }

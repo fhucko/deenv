@@ -153,11 +153,15 @@ mutations the designer app performs in deenv code — that machinery already exi
 
 ## Rough slice order (each thin; Gherkin at build time)
 
-- **S0 — canonicalize-on-save.** The designer round-trips the `ui` text through
-  parse∘print whenever it saves. Trivial, standalone value (uniform formatting), and it
-  preps import: canonical text diffs structurally, not by formatting noise. (It touches
-  the live designer save path — if pulled ahead of M12, it goes through milestone-planner
-  as its own decision, not as riding "prep". Vision-keeper note.)
+- **S0 — canonicalize the `ui` section on projection. ✅ DONE 2026-07-08** (arch review
+  SHIP; suite 753). Built as canonicalize-on-PROJECT, not on-save: `ProjectDesignDocument`
+  re-prints the `ui` section (parse∘print) instead of passing it verbatim, so the
+  commit/publish artifact is byte-stable regardless of render-code formatting — the M13
+  diff-stability win, without touching the live textarea save path or adding a `sys`
+  builtin. `AppPrint.PrintUi` ↔ `CodeParse.ParseUiSection` (reuses the same
+  `Section("ui")+MapUi` the document parser uses). Scoped to `ui` only: `initialData`
+  would be dict-reordered by the printer; `common` (also code) is a trivial symmetric
+  follow-up, deliberately deferred (ledgered in Open questions).
 - **S1 — structured storage + import (the foundation).** The tag-tree meta-schema lands;
   existing `ui` text imports into rows (identity minted once); text pane = the cached
   projection; editing text = re-import with identity matching (boundary op, save/blur).
@@ -233,6 +237,10 @@ feeds S5's palette. Nothing here blocks on versioning Track C.
   needs the crossed component-boundary chain carried too (grill #5).
 - Which sections go structured: `ui` fns first; `common`/`initialData`/`access` stay
   text until something needs them structured (YAGNI).
+- Follow-up (from S0 review): canonicalize `common` symmetrically on projection — a
+  one-line change mirroring `ui` (`common` is code with the same printer fixpoint). Not
+  built in S0 (render, not helpers, is the visual designer's concern); do it when a
+  `common` diff-stability need actually shows up.
 
 ## Grill record (2026-07-06, adversarial pass — verdict SHIP-WITH-FIXES, all folded in)
 

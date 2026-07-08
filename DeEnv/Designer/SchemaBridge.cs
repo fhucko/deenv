@@ -1,3 +1,4 @@
+using DeEnv.Code;
 using DeEnv.Instance;
 using DeEnv.Storage;
 
@@ -18,9 +19,10 @@ namespace DeEnv.Designer;
 // keyword and its indentation — e.g. the `ui` field is "ui\n    fn render()\n…",
 // the empty string when there is no such section. That representation makes both
 // directions trivial: assembly here is "print the types section, then concatenate
-// the non-empty section texts" (no per-section sub-parsing — each section parser
-// already consumes its own keyword), and the future committed-app → Design split is
-// just slicing a document at its section boundaries. Validation (and an empty-section
+// the non-empty section texts", and the future committed-app → Design split is
+// just slicing a document at its section boundaries. The one exception is `ui`, which
+// assembly CANONICALIZES (parse∘print) rather than concatenating verbatim (M12 S0), so
+// the projected artifact is stable however the render code was formatted. Validation (and an empty-section
 // app — empty `ui` → generic UI, empty `initialData` → no seed) all fall out of the
 // normal AppParse pipeline.
 //
@@ -105,14 +107,23 @@ public static class SchemaBridge
         if (design is ObjectValue d)
             foreach (var name in new[] { "initialData", "access", "common", "ui" })
                 if (TextField(d, name) is { Length: > 0 } section)
-                    sections.Add(section.TrimEnd('\n'));
+                    // The `ui` section is CANONICALIZED (parse∘print) rather than passed through verbatim, so
+                    // two designs differing only in render-code formatting project to byte-identical text —
+                    // a stable commit/publish artifact for M13 diff (M12 S0). Only `ui` is re-printed: it has
+                    // the canonical printer fixpoint, whereas re-printing `initialData` would reorder its dict
+                    // entries, so those sections stay verbatim. An unparseable `ui` throws here — as it would
+                    // at the Load below — so an invalid design still yields no document.
+                    sections.Add((name == "ui"
+                        ? AppPrint.PrintUi(CodeParse.ParseUiSection(section))
+                        : section).TrimEnd('\n'));
 
         var document = string.Join("\n\n", sections) + "\n";
 
         // Validate the WHOLE assembled document via the normal loader (parse + semantic validation):
         // this is what catches a malformed section text or a cross-section error (e.g. a Code/UI or
         // initialData problem). Throws on an invalid design, so nothing is published/spawned. Returning
-        // the assembled text (not a re-print) keeps the user's exact section source.
+        // the assembled text keeps the initialData/access/common sections as the user's exact source
+        // (only `ui` was canonicalized above).
         InstanceDescriptionLoader.Load(document);
         return document;
     }
