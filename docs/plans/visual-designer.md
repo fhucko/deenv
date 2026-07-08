@@ -305,6 +305,14 @@ mutations the designer app performs in deenv code — that machinery already exi
   (design, state)-keyed eval context's slot; the hand-walk is a STRUCTURAL INTERIM — the
   evaluation slice pivots to assemble-real-AST + run the twin (no-second-engine guard);
   chips never lie (canvas-never-lies invariant).
+- **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
+  removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
+  (a) page order splits the authoring pair (types … render) with publish/branches between —
+  the one high-value reorder when composition is next touched: types → render → publish →
+  branches; (b) canvas-above-tree loses same-frame feedback on DEEP trees (the update scrolls
+  off-screen) — the concrete reason the eval-era canvas wants sticky/side-by-side, premature
+  while chips-only; (c) an empty-but-tagged root renders a blank canvas card — wants a thin
+  empty-state hint; (d) heading-size nit was resolved by the grouping fix.
 - **S4 — inspector edits (first write).** Select a node → its row in a generic-UI-grade
   form (attribute slots, expression leaves as text inputs) → ordinary data commit →
   projection + preview update. Canvas v1 = the live preview itself with selection

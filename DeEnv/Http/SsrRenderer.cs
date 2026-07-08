@@ -752,9 +752,12 @@ public sealed class SsrRenderer
         .design-canvas .expr-chip { display: inline-block; padding: 0 0.35rem; border-radius: 4px; background: #eef1f5;
           color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.85rem; }
         .design-canvas .expr-chip.is-empty { font-style: italic; background: #f6ecec; }
-        .canvas-section { margin: 1.4rem 0 0.4rem; }
-        .canvas-heading { font-size: 1rem; margin: 0 0 0.2rem; }
-        .canvas-caption { color: var(--muted); font-size: 0.86rem; margin: 0 0 0.6rem; }
+        /* The render group: the CANVAS (live structural view) + the TREE EDITOR it mirrors are ONE
+           authoring pair under one heading/divider — the divider must sit ABOVE the pair, never between
+           them (a border between the canvas and its own tree visually cut the pair apart — ux review). */
+        .render-section { margin: 1.6rem 0 0.4rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
+        .render-heading { font-size: 1.1rem; margin: 0 0 0.2rem; }
+        .render-caption { color: var(--muted); font-size: 0.86rem; margin: 0.6rem 0; }
         /* Raw code areas tucked behind a disclosure so the type editor reads as just types by default. */
         details.code-areas { margin-top: 1.4rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
         details.code-areas summary.code-summary { font-weight: 600; color: var(--muted); cursor: pointer; padding: 0.3rem 0; }

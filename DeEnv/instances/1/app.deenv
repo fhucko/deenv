@@ -304,16 +304,13 @@ ui
                 publishSection(design)
                 branchSection(design)
                 if design.render.any(x => true)
-                    <section class="canvas-section">
-                        <h2 class="canvas-heading">
-                            "Canvas"
-                        <p class="canvas-caption">
-                            "A live structural view of the render tree — expressions show as chips until evaluation lands."
+                    <section class="render-section">
+                        <h2 class="render-heading">
+                            "Render"
+                        <p class="render-caption">
+                            "The canvas is a live structural view of the tree below — it repaints as you edit; expressions show as chips until evaluation lands."
                         <designCanvas design={design}>
-                    <section class="publish-section">
-                        <h2 class="publish-heading">
-                            "Structured render"
-                        <p class="publish-caption">
+                        <p class="render-caption">
                             "Edit each node's fields inline. Add and remove nodes and attributes with the controls; reordering is coming."
                         <div class="render-tree">
                             foreach n in design.render
