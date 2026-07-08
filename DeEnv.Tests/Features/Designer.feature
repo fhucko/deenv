@@ -1180,3 +1180,55 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the design canvas shows a "section" element with a data-node attribute
     When I add a child element to the root node
     Then the design canvas shows a "div" element with a data-node attribute
+
+  # ── M12 CANVAS-EVAL-1 — the canvas EVALUATES expressions (sys.evalContext) ─────────────────────
+  #
+  # CANVAS-1 rendered a non-literal leaf/attr as an inert chip (display-only, no evaluation). This slice
+  # wires `sys.renderTree(node, sys.evalContext(design, evalRefresh))`: the server ships a SYNTHETIC `db`
+  # seed graph (the design's own `initialData`, re-minted) plus a content-addressed map of PARSED expression
+  # ASTs, and the walk runs each non-literal leaf through the REAL interpreter over that seed — so the
+  # canvas shows the design's actual evaluated output, not a placeholder.
+  #
+  # The schema (a `Db` type with `greeting`/`greeting2` fields) and the `initialData` seed are authored
+  # BEFORE the render tree exists, so the render section's FIRST-EVER appearance (right after Convert) already
+  # has a complete, valid schema+data — the evalContext's first compute succeeds outright, sidestepping any
+  # question of whether an ordinary field edit alone forces a fresh eval (deliberately, it does not — only an
+  # explicit Refresh does; see below).
+  #
+  # THE RACE GUARD: editing the leaf's expr text (a plain optimistic tree-editor mutation, no server round
+  # trip) must fall the canvas to a HONEST chip showing the NEW source — same frame, no refetch storm — and
+  # must NOT disturb the tree editor's own input (still reads the edited text, not reverted). Clicking
+  # "Refresh values" is the ONLY thing that re-evaluates. A later STRUCTURAL edit (renaming the root tag) must
+  # repaint the structural part same-frame WITHOUT touching the (unrelated, still-cached) evaluated leaf — no
+  # chip flicker on it.
+  @m12 @single-user
+  Scenario: The canvas evaluates expressions against the design's seed data, chips an edited expression until Refresh, and never flickers an evaluated leaf on a structural edit
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "treeme"
+    And I edit the design "treeme"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "greeting" to the type "Db"
+    And I add a field "greeting2" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              greeting: "Hello"
+              greeting2: "World"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a projectable nested render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows the evaluated leaf text "Hello"
+    When I edit the leaf expr input to "db.greeting2"
+    Then the design canvas shows an expression chip reading "db.greeting2"
+    And the tree editor shows a leaf expr input reading "db.greeting2"
+    When I click Refresh values
+    Then the design canvas shows the evaluated leaf text "World"
+    When I edit the root node's tag input to "section"
+    Then the design canvas shows a "section" element with a data-node attribute
+    And the design canvas shows the evaluated leaf text "World"

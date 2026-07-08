@@ -1559,6 +1559,52 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task ThenCanvasShowsChip(string source) =>
         await ctx.Page!.Locator($".design-canvas span.expr-chip[data-node]:has-text({CssString(source)})").First.WaitForAsync();
 
+    // ── M12 CANVAS-EVAL-1 — the canvas EVALUATES expressions (sys.evalContext) ─────────────────────
+    //
+    // These steps drive the eval-context wiring: an idempotent Advanced-disclosure opener (Convert-to-
+    // structured collapses the disclosure — see WhenClickConvert — so a later textarea edit needs it
+    // reopened, but blindly clicking the summary again would TOGGLE it shut), authoring `initialData` through
+    // the same journaled-textarea idiom the access/common sections use, editing a LEAF's expr input (the
+    // render's one leaf under the imported <h1>), clicking the Refresh-values control, and asserting the
+    // canvas's EVALUATED text (as opposed to a chip) — the twin of ThenCanvasShowsChip.
+
+    [When("I ensure the Advanced code disclosure is open")]
+    public async Task WhenEnsureAdvancedOpen()
+    {
+        if (await ctx.Page!.Locator(".design-editor details.code-areas[open]").CountAsync() == 0)
+            await ctx.Page!.Locator(".design-editor details.code-areas summary").ClickAsync();
+    }
+
+    // The `.design-initial` textarea is a journaled scalar autosave over sys.field(design, "initialData"),
+    // exactly like `.design-access`/`.design-common` (see WhenTypeAccessSection). Poll the store so the seed
+    // has landed before evaluating against it.
+    [When("I set the design's initial data to:")]
+    public async Task WhenSetInitialData(string initialData)
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-initial").FillAsync(initialData);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("initialData", out var iv) && iv is DeEnv.Storage.TextValue it && it.Text == initialData));
+    }
+
+    // The render's one leaf (imported from `{db.greeting}` under <h1>) — a plain journaled edit, the same
+    // two-way-bound MetaNode.expr write the leaf input already exercises (ThenLeafExprInput reads it back).
+    [When("I edit the leaf expr input to {string}")]
+    public async Task WhenEditLeafExpr(string expr) =>
+        await ctx.Page!.Locator(".design-editor .render-tree input.node-expr").First.FillAsync(expr);
+
+    [When("I click Refresh values")]
+    public async Task WhenClickRefreshValues() =>
+        await ctx.Page!.Locator(".design-editor button.refresh-eval").ClickAsync();
+
+    // The canvas's <h1> (the render's one element wrapping the evaluated leaf) shows its EVALUATED text —
+    // never a chip's raw source — proving the eval-context pivot actually ran the real interpreter over the
+    // seed graph. Scoped to <h1> (the render's only element besides the root <main>/<section>), so this
+    // cannot accidentally match a chip's OWN text (a chip is a <span>, never an <h1>).
+    [Then("the design canvas shows the evaluated leaf text {string}")]
+    public async Task ThenCanvasShowsEvaluatedText(string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const e = document.querySelector('.design-canvas h1'); return e != null && e.textContent === {JsString(text)}; }}");
+
     // The Design id of the (main working-copy) design with the given label, or 0 if not yet present.
     private int DesignIdByLabel(string label)
     {

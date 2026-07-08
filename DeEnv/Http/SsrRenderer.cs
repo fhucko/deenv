@@ -243,7 +243,7 @@ public sealed class SsrRenderer
         var currentUser = LoadPrincipal(principalUserId);
         var floor = new AccessFloor(_desc.Rules ?? [], currentUser);
 
-        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor, BuildCommitDiffReport, _publishPreview, BuildMergePreviewReport);
+        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor, BuildCommitDiffReport, _publishPreview, BuildMergePreviewReport, BuildEvalContext);
         // Ship EVERY schema descriptor on first paint (not lazily on first use), so a component
         // composing sys.schema(...) over a row that appears only after a client-side add still finds
         // its descriptor in the cache instead of missing. Descriptors are static, user-data-free.
@@ -1267,6 +1267,130 @@ public sealed class SsrRenderer
             throw new CodeRuntimeException("mergePreview() requires the designer's file-backed store.");
         var plan = KernelHostActions.ComputeMergePlan(store, source.Id, target.Id, DesignMerger.NoResolutions);
         return MergeReportCode.Build(plan.Report, context);
+    }
+
+    // ── sys.evalContext (M12 CANVAS-EVAL-1) ─────────────────────────────────────
+
+    // The compute `sys.evalContext(design[, refreshKey])` delegates to (threaded into the render executor).
+    // SELF-BUILT here (like mergePreview) — a design is a row in the designer's OWN store, and the seed needs
+    // only the design node + its own `initialData` (no kernel/cross-instance data). Ships the payload the
+    // canvas walk consumes: ONE Constant ExecObject { db, exprs, ambients, params }, all-Constant so
+    // ClientState ships the WHOLE tree (the seed graph + the AST map) to the client, which evaluates the
+    // canvas identically.
+    //   • db    — the design's `initialData` seeded into a THROWAWAY file-backed store, read back via the SAME
+    //             DbBridge.LoadRoot that binds live `db`, then RE-MINTED with distinct NEGATIVE ids + Constant
+    //             (RemintConstant): the client registers memo-result nodes by id in a GLOBAL registry, so a
+    //             positive id would collide with the designer's live data. Shared/cyclic structure is
+    //             preserved (a seen-map, mirroring LoadRoot's `loaded`).
+    //   • exprs — a content-addressed source-text → { text, ast } map: every render-tree leaf `expr` / attr
+    //             `value` source that PARSES, its AST serialized to a JSON string (SchemaJson.Options — the
+    //             same wire format the app render trusts). An unparseable source gets no entry (it chips).
+    //   • ambients / params — reserved-empty in v1 (the uses/S6/params follow-ups fill them).
+    // An INVALID design (projection/load throws) degrades to an EMPTY payload — never a thrown exception that
+    // would break the whole canvas: the walk then renders every expr as its chip (honest), and the STRUCTURAL
+    // canvas still paints. The temp seed dir is deleted in a finally.
+    internal IExecValue BuildEvalContext(ExecObject design, ExecContext context)
+    {
+        if (_store is not JsonFileInstanceStore)
+            throw new CodeRuntimeException("evalContext() requires the designer's file-backed store.");
+        ExecObject Obj(params (string Name, IExecValue Value)[] props) =>
+            new() { Id = --context.LastId.Value, Constant = true, Props = props.ToDictionary(p => p.Name, p => p.Value) };
+        var empty = Obj();
+        try
+        {
+            var designNode = _store.ReadNode(NodePath.Root.Field("designs").Key(design.Id.ToString())) as ObjectValue
+                ?? throw new CodeRuntimeException($"No design with id {design.Id}.");
+            // Project (validates — throws SchemaValidationException on an invalid design) → load → seed graph.
+            var appDoc = SchemaBridge.ProjectDesignDocument(designNode);
+            var desc = InstanceDescriptionLoader.Load(appDoc);
+            var seedDb = LoadSeedGraph(desc, context);
+            // exprs: every parseable render-tree leaf/attr source → { text, ast:serialized-JSON }.
+            var exprs = new Dictionary<string, IExecValue>();
+            foreach (var text in SchemaBridge.RenderExprSources(designNode))
+            {
+                if (exprs.ContainsKey(text)) continue;
+                try
+                {
+                    var ast = CodeParse.ParseExpression(text);
+                    var json = JsonSerializer.Serialize(ast, SchemaJson.Options);
+                    exprs[text] = Obj(("text", new ExecText { Value = text }), ("ast", new ExecText { Value = json }));
+                }
+                catch { /* unparseable → no entry (the walk chips it) */ }
+            }
+            var exprsObj = new ExecObject { Id = --context.LastId.Value, Constant = true, Props = exprs };
+            return Obj(("db", seedDb), ("exprs", exprsObj), ("ambients", Obj()), ("params", Obj()));
+        }
+        catch (Exception ex)
+        {
+            // An invalid/unloadable design must not break the canvas — degrade to an empty context (every
+            // expr chips) and log the detail. The structural canvas still paints.
+            Console.Error.WriteLine($"evalContext of design {design.Id} failed: {ex}");
+            return Obj(("db", empty), ("exprs", empty), ("ambients", empty), ("params", empty));
+        }
+    }
+
+    // Seed the design's `initialData` into a THROWAWAY file-backed store (self-seeds when there is no data
+    // file — JsonFileInstanceStore), read the graph back with DbBridge.LoadRoot (the SAME builder that binds
+    // live `db`), and RE-MINT it with distinct negative ids + Constant so it can ship without colliding with
+    // the designer's live data. The temp dir is deleted wholesale afterward.
+    private static ExecObject LoadSeedGraph(InstanceDescription desc, ExecContext context)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "deenv-eval-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var store = new JsonFileInstanceStore(Path.Combine(dir, "data.json"), desc);
+            var loaded = DbBridge.LoadRoot(store, desc, context);
+            return (ExecObject)RemintConstant(loaded, context, new Dictionary<IExecValue, IExecValue>(ReferenceEqualityComparer.Instance));
+        }
+        finally { try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ } }
+    }
+
+    // Re-mint a loaded (positive-id) graph as a distinct-NEGATIVE-id, Constant graph — the PublishReportCode
+    // idiom, applied to a whole object graph. Distinct negative ids: memo-result nodes register in the
+    // client's GLOBAL object registry by id, so a positive id would clobber the designer's live data.
+    // Constant: ClientState ships a Constant node WHOLE (every prop/item), so the seed graph arrives complete
+    // for the client's own evaluation. Shared/cyclic structure is preserved via `seen` (keyed by original
+    // reference) — a node reached twice re-mints once; the new object is registered BEFORE recursing so a
+    // cycle terminates. Scalars/null are immutable → reused as-is. A set/dict item's Key tracks its re-minted
+    // object id (DbBridge's Key==Value.Id invariant), keeping identity keys unique within the array.
+    private static IExecValue RemintConstant(IExecValue value, ExecContext context, Dictionary<IExecValue, IExecValue> seen)
+    {
+        switch (value)
+        {
+            case ExecObject o:
+            {
+                if (seen.TryGetValue(o, out var existing)) return existing;
+                var minted = new ExecObject
+                {
+                    Id = --context.LastId.Value, Constant = true, Props = new(),
+                    TypeName = o.TypeName, SourcePath = o.SourcePath, ScalarEntry = o.ScalarEntry,
+                };
+                seen[o] = minted;
+                foreach (var (k, pv) in o.Props) minted.Props[k] = RemintConstant(pv, context, seen);
+                return minted;
+            }
+            case ExecArray a:
+            {
+                if (seen.TryGetValue(a, out var existing)) return existing;
+                var minted = new ExecArray
+                {
+                    Id = --context.LastId.Value, Kind = a.Kind, Constant = true, Items = new(),
+                    ElementTypeName = a.ElementTypeName, SourcePath = a.SourcePath,
+                };
+                seen[a] = minted;
+                foreach (var item in a.Items)
+                {
+                    var mv = RemintConstant(item.Value, context, seen);
+                    // Keep Key == Value.Id for set/dict (identity-keyed); a list keeps its ordinal key.
+                    var key = a.Kind != ArrayKind.List && mv is ExecObject mo ? mo.Id : item.Key;
+                    minted.Items.Add(new ExecItem { Key = key, Value = mv });
+                }
+                return minted;
+            }
+            default:
+                return value; // scalars / null / nothing are immutable — reuse
+        }
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

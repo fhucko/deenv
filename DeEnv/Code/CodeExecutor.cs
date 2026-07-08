@@ -74,10 +74,25 @@ public sealed class CodeExecutor
     // `sys.mergePreview` throws, as it needs the designer host.
     private readonly Func<ExecObject, ExecObject, ExecContext, IExecValue>? _mergePreview;
 
+    // The eval-context computer (M12 CANVAS-EVAL-1), injected by the renderer so `sys.evalContext(design[,
+    // refreshKey])` can ship the two things the canvas walk cannot make itself: a SYNTHETIC `db` graph (the
+    // design's own `initialData` seeded into a throwaway store, read back, re-minted with distinct negative
+    // ids + Constant) and a content-addressed map of PARSED expression ASTs (source text → serialized AST
+    // JSON), which `sys.renderTree(node, ctx)` consumes to evaluate each non-literal leaf/attr against the
+    // seed graph with the REAL interpreter. Like _mergePreview it is a DELEGATE, not a direct call, and it is
+    // SELF-CONTAINED on the DESIGNER's own store (a design is a row there; the seed needs only the design node
+    // + its `initialData`), so its impl is built in SsrRenderer (which has the designer store), not by the
+    // kernel. Traffics only Code-layer types (the design ExecObject + the render context for minting the
+    // payload's transient ids, an IExecValue payload out). Null for a bare executor (conformance, the client
+    // twin, a non-designer host) ⇒ `sys.evalContext` throws — but the CANVAS still renders structurally (its
+    // chips), since renderTree(node) with no ctx is the byte-identical pre-eval behavior.
+    private readonly Func<ExecObject, ExecContext, IExecValue>? _evalContext;
+
     public CodeExecutor(IInstanceStore? store = null, IReadOnlyDictionary<string, CodeObject>? descriptors = null,
         TypeResolver? resolver = null, AccessFloor? floor = null, Func<ExecObject, ExecObject, ExecContext, IExecValue>? commitDiff = null,
         Func<ExecObject, int, ExecContext, IExecValue>? publishPreview = null,
-        Func<ExecObject, ExecObject, ExecContext, IExecValue>? mergePreview = null)
+        Func<ExecObject, ExecObject, ExecContext, IExecValue>? mergePreview = null,
+        Func<ExecObject, ExecContext, IExecValue>? evalContext = null)
     {
         _store = store;
         _descriptors = descriptors ?? new Dictionary<string, CodeObject>();
@@ -86,6 +101,7 @@ public sealed class CodeExecutor
         _commitDiff = commitDiff;
         _publishPreview = publishPreview;
         _mergePreview = mergePreview;
+        _evalContext = evalContext;
     }
 
     // ── statements ──────────────────────────────────────────────────────────────
@@ -664,6 +680,57 @@ public sealed class CodeExecutor
     }
 
 
+    // evalContext(design[, refreshKey]): the SERVER-BACKED eval context the canvas walk consumes (M12
+    // CANVAS-EVAL-1) — the twin of execEvalContext. A SERVER-COMPUTED READ modeled EXACTLY on publishPreview/
+    // mergePreview: the server builds the payload (the injected _evalContext delegate, SELF-BUILT in
+    // SsrRenderer over the designer's own store) and the cache entry ships it to the client, so the editor's
+    // canvas evaluates on SSR and reuses the SAME payload on a client refetch (a miss → "Value not available"
+    // → refetch). The payload is ONE Constant ExecObject { db, exprs, ambients, params }: `db` a re-minted
+    // synthetic seed graph, `exprs` a content-addressed source-text → { text, ast } map (ast = a serialized
+    // AST JSON string), `ambients`/`params` reserved-empty for the follow-ups. Keyed by the design id +
+    // stateKey ("default" in v1 — the reserved uses/state slot) + the optional refreshKey scalar, EMPTY deps
+    // (never keyed on the design subgraph — the deliberate inversion of the S3a auto-live race: an edit to a
+    // node's expr does NOT stale this entry, so it never forces a refetch that would clobber the optimistic
+    // tree-editor mutation; the edited text simply misses the shipped map → its chip, until an explicit
+    // Refresh bumps refreshKey). No delegate ⇒ no designer host ⇒ throw.
+    //
+    // Memo leak discipline (the shipped execPreviewRender pattern): a Refresh mints a NEW key for the SAME
+    // design; nothing else evicts the prior generation (empty deps, never stale), so PRUNE any other
+    // `evalContext:<designId>[:*]` entry right before computing a genuinely new key — bounding the cache to
+    // one seed graph per design (the GC sweep reclaims the orphaned graph). Scoped to a real new-key miss: an
+    // ordinary re-render with the SAME key is a plain cache HIT, undisturbed (evicting on every render would
+    // force a miss that defeats the SPA flash guard — the S3a regression).
+    private IExecValue ExecuteEvalContext(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length is not (1 or 2))
+            throw new CodeRuntimeException("evalContext(design[, refreshKey]) takes one or two arguments.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject design)
+            throw new CodeRuntimeException("evalContext() expects a design object as its first argument.");
+        var key = $"evalContext:{design.Id}:default";
+        if (call.Params.Length == 2)
+            key += ":" + ScalarKeyPart(ExecuteValue(call.Params[1], scope, context));
+        if (context.Memo.TryGetValue(key, out var cached)) return cached.Result;
+        // A genuinely NEW key (a Refresh, or first compute): prune the prior generation for THIS design.
+        var prefix = $"evalContext:{design.Id}";
+        foreach (var k in context.Memo.Keys.ToList())
+            if (k != key && (k == prefix || k.StartsWith(prefix + ":", StringComparison.Ordinal)))
+                context.Memo.Remove(k);
+        var payload = _evalContext?.Invoke(design, context)
+            ?? throw new CodeRuntimeException("evalContext() requires a designer host context.");
+        context.Memo[key] = new CacheEntry { Key = key, Result = payload, Deps = new Deps() };
+        return payload;
+    }
+
+    // A scalar's contribution to a memo key (the evalContext refresh key) — twin-stable with codeExec.ts's
+    // scalarKeyPart. Non-scalars contribute empty (a caller passes a scalar refresh token).
+    private static string ScalarKeyPart(IExecValue v) => v switch
+    {
+        ExecInt i => i.Value.ToString(),
+        ExecText t => t.Value,
+        ExecBool b => b.Value ? "true" : "false",
+        _ => "",
+    };
+
     // renderTree(node[, ctx]): the CLIENT-COMPUTABLE canvas (M12 S4 foundation) — turns a MetaNode row (tag/
     // expr/order scalars + attrs/children sets, the S1a structured-render schema) into a live tag tree built
     // from the rows. UNLIKE the server-backed reads (publishPreview et al., shipped as data), this is computed by BOTH
@@ -685,7 +752,11 @@ public sealed class CodeExecutor
             throw new CodeRuntimeException("renderTree(node[, ctx]) takes one or two arguments.");
         if (ExecuteValue(call.Params[0], scope, context) is not ExecObject node)
             throw new CodeRuntimeException("renderTree() expects a node object as its first argument.");
-        return BuildRenderTree(node, context);
+        // The optional eval context (M12 CANVAS-EVAL-1): a { db, exprs, … } payload (from sys.evalContext).
+        // Present ⇒ non-literal leaf/attr expressions EVALUATE against the seed graph; absent ⇒ today's exact
+        // chip behavior (the no-ctx conformance case stays byte-identical). A non-object 2nd arg is ignored.
+        var ctx = call.Params.Length == 2 && ExecuteValue(call.Params[1], scope, context) is ExecObject c ? c : null;
+        return BuildRenderTree(node, context, ctx);
     }
 
     // Walk one MetaNode row → its rendered node. ELEMENT (tag non-empty): a `tag` element carrying
@@ -695,7 +766,7 @@ public sealed class CodeExecutor
     // LEAF (tag empty, expr non-empty): a literal expr → its unquoted value as a text child; otherwise an
     // EXPRESSION CHIP (span.expr-chip) holding the raw source — the interim placeholder until evaluation lands.
     // INVALID (tag AND expr empty): span.expr-chip.is-empty "(empty)" — a visible marker, never silent nothing.
-    private IExecValue BuildRenderTree(ExecObject node, ExecContext context)
+    private IExecValue BuildRenderTree(ExecObject node, ExecContext context, ExecObject? ctx)
     {
         var id = node.Id;
         var tag = ReadNodeText(node, "tag", context);
@@ -711,21 +782,74 @@ public sealed class CodeExecutor
                 // stamps (above) — a user attr of that name is skipped so it can never clobber the id S4's
                 // click-to-select depends on.
                 if (name.Length == 0 || IsEventAttr(name) || name == "data-node") continue;
-                if (LiteralValue(value) is { } literal) attributes[name] = literal;  // non-literal → skipped
+                if (LiteralValue(value) is { } literal) { attributes[name] = literal; continue; } // literal → applied
+                // Non-literal + an eval context: evaluate the attr's expression against the seed graph; a
+                // SCALAR result applies (the same scalar-to-text an attr takes), any throw / map-miss / non-
+                // scalar is skipped (today's exact non-literal behavior). No ctx ⇒ skipped, unchanged.
+                if (ctx != null && EvaluateCtxExpr(value, ctx, context) is (ExecText or ExecInt or ExecBool) and { } scalar)
+                    attributes[name] = scalar;
             }
             var children = OrderedMembers(node, "children", context)
-                .Select(c => (IExecTagChild)BuildRenderTree(c, context))
+                .Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx))
                 .ToArray();
             return new ExecTag { Name = tag, Attributes = attributes, Children = children };
         }
         if (expr.Length > 0)
         {
-            return IsLiteral(expr)
-                ? new ExecText { Value = LiteralDisplay(expr) }                      // a literal text/number/bool
-                : Chip("expr-chip", expr, id);                                       // an expression placeholder
+            if (IsLiteral(expr)) return new ExecText { Value = LiteralDisplay(expr) }; // a literal text/number/bool
+            // Non-literal + an eval context: evaluate against the seed graph. A clean eval renders the value
+            // (as a text child, the same scalar-to-text a rendered child takes); any throw (tier 2) or a
+            // map-miss (tier 3, an edited-but-unrefreshed expr) falls to today's exact chip — the fallback is
+            // already visually defined and never guesses.
+            if (ctx != null && EvaluateCtxExpr(expr, ctx, context) is { } value)
+                return new ExecText { Value = ChildText(value) };
+            return Chip("expr-chip", expr, id);                                       // an expression placeholder
         }
         return Chip("expr-chip is-empty", "(empty)", id);                            // neither tag nor expr
     }
+
+    // Evaluate ONE canvas expression against the eval context's seed graph (M12 CANVAS-EVAL-1). Looks the
+    // source text up in ctx.exprs (content-addressed) → deserializes the shipped AST JSON → runs it through
+    // ExecuteValue (the SAME single dispatch ExecuteTag uses — the no-second-engine guard) over a FRESH,
+    // ISOLATED scope+context so the designer's own render is UNTOUCHED:
+    //   • a fresh ExecScope (NO parent) binding only `db` = the seed graph — the designer's live scope/db is
+    //     never reached, and store-backed builtins (sys.extent/schema/…) are unreachable on the BARE executor
+    //     below (no _store) so they throw → chip, IDENTICALLY to the client twin (which has no store either) —
+    //     twin-symmetric by construction, not by luck (no SSR-vs-hydration flicker);
+    //   • a fresh ExecContext with MemoBypass (so where/orderBy compute directly, never touching a shared memo
+    //     — the twin of the client's memo-bypass eval, which avoids the id-0 lambda memo-key collision) and
+    //     its OWN empty DepStack (the seed reads are NOT recorded as the designer render's deps);
+    //   • a BARE `new CodeExecutor()` (store/floor/descriptors all null) — the same interpreter, store-less,
+    //     so faithful over values-in-hand (db navigation, collections, arithmetic, pure sys builtins) and
+    //     chipping everything store/floor-backed. `ambients`/`params` are reserved-empty in v1, so an expr
+    //     referencing path/status/currentUser/row-vars simply misses scope → throws → chip (widens with the
+    //     uses/S6 follow-ups). Returns the value, or null on any miss/parse-failure/throw (the caller chips).
+    private IExecValue? EvaluateCtxExpr(string text, ExecObject ctx, ExecContext context)
+    {
+        if (ctx.Props.GetValueOrDefault("exprs") is not ExecObject exprs) return null;
+        if (exprs.Props.GetValueOrDefault(text) is not ExecObject entry) return null;
+        if (entry.Props.GetValueOrDefault("ast") is not ExecText astText) return null;
+        ICodeValue ast;
+        try { ast = System.Text.Json.JsonSerializer.Deserialize<ICodeValue>(astText.Value, SchemaJson.Options)!; }
+        catch { return null; }
+        if (ast == null) return null;
+        var evalScope = new ExecScope();
+        if (ctx.Props.GetValueOrDefault("db") is { } seedDb)
+            evalScope.Items["db"] = new ExecScopeItem { Value = seedDb, IsReadOnly = true };
+        try { return new CodeExecutor().ExecuteValue(ast, evalScope, new ExecContext { MemoBypass = true }); }
+        catch { return null; }
+    }
+
+    // The display text of an evaluated leaf value — the same scalar-to-text the tag-child serializer uses
+    // (SsrRenderer.SerializeChild / codeExec.ts scalarText): text as-is, int/bool their rendered form, and
+    // any non-scalar (an object/array/null the leaf wasn't meant to produce) as empty. Twin-stable.
+    private static string ChildText(IExecValue v) => v switch
+    {
+        ExecText t => t.Value,
+        ExecInt i => i.Value.ToString(),
+        ExecBool b => b.Value ? "true" : "false",
+        _ => "",
+    };
 
     // A span.expr-chip (or its .is-empty variant) with the node's provenance id and one text child.
     private static ExecTag Chip(string cls, string text, int id) => new()
@@ -1363,6 +1487,7 @@ public sealed class CodeExecutor
         "diffCommits" => ExecuteDiffCommits(call, scope, context),
         "publishPreview" => ExecutePublishPreview(call, scope, context),
         "mergePreview" => ExecuteMergePreview(call, scope, context),
+        "evalContext" => ExecuteEvalContext(call, scope, context),
         "renderTree" => ExecuteRenderTree(call, scope, context),
         "nest" => ExecuteNest(call, scope, context),
         "segment" => ExecuteSegment(call, scope, context),

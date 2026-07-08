@@ -305,6 +305,19 @@ mutations the designer app performs in deenv code — that machinery already exi
   (design, state)-keyed eval context's slot; the hand-walk is a STRUCTURAL INTERIM — the
   evaluation slice pivots to assemble-real-AST + run the twin (no-second-engine guard);
   chips never lie (canvas-never-lies invariant).
+- **CANVAS-EVAL-1 — the canvas EVALUATES. ✅ DONE 2026-07-08** (arch review SHIP; suite
+  785; design docs/plans/canvas-eval.md). `sys.evalContext(design[, refreshKey])` ships the
+  FAKE DB (initialData → throwaway store → LoadRoot → re-mint negative+Constant) + the
+  content-addressed text→AST map; renderTree's ctx pivot delegates every non-literal
+  leaf/attr to the REAL interpreter's ExecuteValue in an isolated parent-less {db} scope,
+  per-node try/catch → value or chip (tiers 0–3; no-ctx byte-identical). The S3a-race
+  INVERSION held: empty-deps (design,refreshKey) key — optimistic edits chip honestly, no
+  refetch; "Refresh values" re-evaluates; structural edits same-frame, no chip flicker (all
+  browser-pinned). Review highlights: the TS memoBypass closed a REAL canvas-lies class
+  (lambda memo-key collisions caching wrong values — conformance-pinned); the re-mint
+  preserves shared/cyclic structure. Caveats: sys.id shows synthetic negative ids; the eval
+  scope is parent-less (path/status/helpers chip — safe). v1 surface = db-rooted exprs;
+  widens with S6 + uses/params per the north star.
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —

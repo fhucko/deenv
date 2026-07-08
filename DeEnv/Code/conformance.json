@@ -1111,6 +1111,487 @@
         ]
       },
       "expect": { "kind": "tag", "value": "<div class=\"box\" data-node=\"-25\"><span data-node=\"-21\" tabindex=\"2\">hi</span><span class=\"expr-chip\" data-node=\"-23\">a + b</span><span class=\"expr-chip is-empty\" data-node=\"-13\">(empty)</span></div>" }
+    },
+    {
+      "name": "sys.renderTree with an eval context — db-rooted exprs evaluate (single/where+any/orderBy+single), an attr expr applies, a store-backed builtin chips (tier 2), an expr absent from the map chips (tier 3)",
+      "comment": "The canvas EVALUATION pivot (M12 CANVAS-EVAL-1). renderTree(node, ctx) consumes a { db, exprs } eval context: each non-literal leaf/attr source is looked up in ctx.exprs (content-addressed by text) -> its serialized AST JSON is deserialized and run through ExecuteValue over an ISOLATED scope binding db=ctx.db on a store-less executor, so both twins agree. Tier 1 (AST + clean eval): db.title -> attr id=\"Hi\"; db.settings.single(s=>true).title -> \"Hello\"; db.notes.where(n=>n.done).any(n=>n.rank==0) -> \"true\"; db.notes.orderBy(n=>n.rank).single(n=>n.done).title -> \"C\" (collections over the synthetic graph, values in hand — the verified caveat). Tier 2 (AST + throw): sys.extent(\"X\") is in the map but store-backed -> throws on the store-less executor -> its raw-source chip. Tier 3 (no AST): db.notes is NOT in the map (an edited-but-unrefreshed expr) -> its chip. data-node ids are the inline node literals negative ids, assigned identically by both twins. Proves the no-second-engine pivot: the walk evaluates NOTHING itself, delegating every eval to ExecuteValue.",
+      "expr": {
+        "type": "call",
+        "fn": {
+          "type": "infixOp",
+          "op": "objectProp",
+          "left": {
+            "type": "symbol",
+            "name": "sys"
+          },
+          "right": {
+            "type": "symbol",
+            "name": "renderTree"
+          }
+        },
+        "params": [
+          {
+            "type": "object",
+            "props": [
+              {
+                "name": "tag",
+                "value": {
+                  "type": "text",
+                  "value": "div"
+                }
+              },
+              {
+                "name": "expr",
+                "value": {
+                  "type": "text",
+                  "value": ""
+                }
+              },
+              {
+                "name": "order",
+                "value": {
+                  "type": "int",
+                  "value": 0
+                }
+              },
+              {
+                "name": "attrs",
+                "value": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "object",
+                      "props": [
+                        {
+                          "name": "name",
+                          "value": {
+                            "type": "text",
+                            "value": "id"
+                          }
+                        },
+                        {
+                          "name": "value",
+                          "value": {
+                            "type": "text",
+                            "value": "db.title"
+                          }
+                        },
+                        {
+                          "name": "order",
+                          "value": {
+                            "type": "int",
+                            "value": 0
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "children",
+                "value": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "object",
+                      "props": [
+                        {
+                          "name": "tag",
+                          "value": {
+                            "type": "text",
+                            "value": ""
+                          }
+                        },
+                        {
+                          "name": "expr",
+                          "value": {
+                            "type": "text",
+                            "value": "db.settings.single(s => true).title"
+                          }
+                        },
+                        {
+                          "name": "order",
+                          "value": {
+                            "type": "int",
+                            "value": 0
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "props": [
+                        {
+                          "name": "tag",
+                          "value": {
+                            "type": "text",
+                            "value": ""
+                          }
+                        },
+                        {
+                          "name": "expr",
+                          "value": {
+                            "type": "text",
+                            "value": "db.notes.where(n => n.done).any(n => n.rank == 0)"
+                          }
+                        },
+                        {
+                          "name": "order",
+                          "value": {
+                            "type": "int",
+                            "value": 1
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "props": [
+                        {
+                          "name": "tag",
+                          "value": {
+                            "type": "text",
+                            "value": ""
+                          }
+                        },
+                        {
+                          "name": "expr",
+                          "value": {
+                            "type": "text",
+                            "value": "db.notes.orderBy(n => n.rank).single(n => n.done).title"
+                          }
+                        },
+                        {
+                          "name": "order",
+                          "value": {
+                            "type": "int",
+                            "value": 2
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "props": [
+                        {
+                          "name": "tag",
+                          "value": {
+                            "type": "text",
+                            "value": ""
+                          }
+                        },
+                        {
+                          "name": "expr",
+                          "value": {
+                            "type": "text",
+                            "value": "sys.extent(\"X\")"
+                          }
+                        },
+                        {
+                          "name": "order",
+                          "value": {
+                            "type": "int",
+                            "value": 3
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "props": [
+                        {
+                          "name": "tag",
+                          "value": {
+                            "type": "text",
+                            "value": ""
+                          }
+                        },
+                        {
+                          "name": "expr",
+                          "value": {
+                            "type": "text",
+                            "value": "db.notes"
+                          }
+                        },
+                        {
+                          "name": "order",
+                          "value": {
+                            "type": "int",
+                            "value": 4
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "props": [
+              {
+                "name": "db",
+                "value": {
+                  "type": "object",
+                  "props": [
+                    {
+                      "name": "title",
+                      "value": {
+                        "type": "text",
+                        "value": "Hi"
+                      }
+                    },
+                    {
+                      "name": "settings",
+                      "value": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "type": "object",
+                            "props": [
+                              {
+                                "name": "title",
+                                "value": {
+                                  "type": "text",
+                                  "value": "Hello"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "name": "notes",
+                      "value": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "type": "object",
+                            "props": [
+                              {
+                                "name": "done",
+                                "value": {
+                                  "type": "bool",
+                                  "value": true
+                                }
+                              },
+                              {
+                                "name": "rank",
+                                "value": {
+                                  "type": "int",
+                                  "value": 2
+                                }
+                              },
+                              {
+                                "name": "title",
+                                "value": {
+                                  "type": "text",
+                                  "value": "B"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "props": [
+                              {
+                                "name": "done",
+                                "value": {
+                                  "type": "bool",
+                                  "value": false
+                                }
+                              },
+                              {
+                                "name": "rank",
+                                "value": {
+                                  "type": "int",
+                                  "value": 1
+                                }
+                              },
+                              {
+                                "name": "title",
+                                "value": {
+                                  "type": "text",
+                                  "value": "A"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "props": [
+                              {
+                                "name": "done",
+                                "value": {
+                                  "type": "bool",
+                                  "value": true
+                                }
+                              },
+                              {
+                                "name": "rank",
+                                "value": {
+                                  "type": "int",
+                                  "value": 0
+                                }
+                              },
+                              {
+                                "name": "title",
+                                "value": {
+                                  "type": "text",
+                                  "value": "C"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "exprs",
+                "value": {
+                  "type": "object",
+                  "props": [
+                    {
+                      "name": "db.title",
+                      "value": {
+                        "type": "object",
+                        "props": [
+                          {
+                            "name": "text",
+                            "value": {
+                              "type": "text",
+                              "value": "db.title"
+                            }
+                          },
+                          {
+                            "name": "ast",
+                            "value": {
+                              "type": "text",
+                              "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"db\"},\"right\":{\"type\":\"symbol\",\"name\":\"title\"}}"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "name": "db.settings.single(s => true).title",
+                      "value": {
+                        "type": "object",
+                        "props": [
+                          {
+                            "name": "text",
+                            "value": {
+                              "type": "text",
+                              "value": "db.settings.single(s => true).title"
+                            }
+                          },
+                          {
+                            "name": "ast",
+                            "value": {
+                              "type": "text",
+                              "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"call\",\"fn\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"db\"},\"right\":{\"type\":\"symbol\",\"name\":\"settings\"}},\"right\":{\"type\":\"symbol\",\"name\":\"single\"}},\"params\":[{\"type\":\"fn\",\"name\":null,\"params\":[{\"name\":\"s\"}],\"body\":{\"statements\":[{\"type\":\"return\",\"value\":{\"type\":\"bool\",\"value\":true}}]},\"id\":0,\"serverOnly\":false}]},\"right\":{\"type\":\"symbol\",\"name\":\"title\"}}"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "name": "db.notes.where(n => n.done).any(n => n.rank == 0)",
+                      "value": {
+                        "type": "object",
+                        "props": [
+                          {
+                            "name": "text",
+                            "value": {
+                              "type": "text",
+                              "value": "db.notes.where(n => n.done).any(n => n.rank == 0)"
+                            }
+                          },
+                          {
+                            "name": "ast",
+                            "value": {
+                              "type": "text",
+                              "value": "{\"type\":\"call\",\"fn\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"call\",\"fn\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"db\"},\"right\":{\"type\":\"symbol\",\"name\":\"notes\"}},\"right\":{\"type\":\"symbol\",\"name\":\"where\"}},\"params\":[{\"type\":\"fn\",\"name\":null,\"params\":[{\"name\":\"n\"}],\"body\":{\"statements\":[{\"type\":\"return\",\"value\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"n\"},\"right\":{\"type\":\"symbol\",\"name\":\"done\"}}}]},\"id\":0,\"serverOnly\":false}]},\"right\":{\"type\":\"symbol\",\"name\":\"any\"}},\"params\":[{\"type\":\"fn\",\"name\":null,\"params\":[{\"name\":\"n\"}],\"body\":{\"statements\":[{\"type\":\"return\",\"value\":{\"type\":\"infixOp\",\"op\":\"equals\",\"left\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"n\"},\"right\":{\"type\":\"symbol\",\"name\":\"rank\"}},\"right\":{\"type\":\"int\",\"value\":0}}}]},\"id\":0,\"serverOnly\":false}]}"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "name": "db.notes.orderBy(n => n.rank).single(n => n.done).title",
+                      "value": {
+                        "type": "object",
+                        "props": [
+                          {
+                            "name": "text",
+                            "value": {
+                              "type": "text",
+                              "value": "db.notes.orderBy(n => n.rank).single(n => n.done).title"
+                            }
+                          },
+                          {
+                            "name": "ast",
+                            "value": {
+                              "type": "text",
+                              "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"call\",\"fn\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"call\",\"fn\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"db\"},\"right\":{\"type\":\"symbol\",\"name\":\"notes\"}},\"right\":{\"type\":\"symbol\",\"name\":\"orderBy\"}},\"params\":[{\"type\":\"fn\",\"name\":null,\"params\":[{\"name\":\"n\"}],\"body\":{\"statements\":[{\"type\":\"return\",\"value\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"n\"},\"right\":{\"type\":\"symbol\",\"name\":\"rank\"}}}]},\"id\":0,\"serverOnly\":false}]},\"right\":{\"type\":\"symbol\",\"name\":\"single\"}},\"params\":[{\"type\":\"fn\",\"name\":null,\"params\":[{\"name\":\"n\"}],\"body\":{\"statements\":[{\"type\":\"return\",\"value\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"n\"},\"right\":{\"type\":\"symbol\",\"name\":\"done\"}}}]},\"id\":0,\"serverOnly\":false}]},\"right\":{\"type\":\"symbol\",\"name\":\"title\"}}"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "name": "sys.extent(\"X\")",
+                      "value": {
+                        "type": "object",
+                        "props": [
+                          {
+                            "name": "text",
+                            "value": {
+                              "type": "text",
+                              "value": "sys.extent(\"X\")"
+                            }
+                          },
+                          {
+                            "name": "ast",
+                            "value": {
+                              "type": "text",
+                              "value": "{\"type\":\"call\",\"fn\":{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"sys\"},\"right\":{\"type\":\"symbol\",\"name\":\"extent\"}},\"params\":[{\"type\":\"text\",\"value\":\"X\"}]}"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "ambients",
+                "value": {
+                  "type": "object",
+                  "props": []
+                }
+              },
+              {
+                "name": "params",
+                "value": {
+                  "type": "object",
+                  "props": []
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "kind": "tag",
+        "value": "<div data-node=\"-15\" id=\"Hi\">HellotrueC<span class=\"expr-chip\" data-node=\"-11\">sys.extent(\"X\")</span><span class=\"expr-chip\" data-node=\"-13\">db.notes</span></div>"
+      }
     }
   ]
 }

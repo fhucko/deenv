@@ -286,6 +286,43 @@ public static class SchemaBridge
         return new CodeTag { Name = tag, Attributes = attrs, Children = children };
     }
 
+    // ── M12 CANVAS-EVAL-1: collect the render tree's expression sources ───────────
+    //
+    // Walk a design's structured `render` tree (the MetaNode/MetaAttr rows) and return every leaf `expr` and
+    // attr `value` SOURCE TEXT, in walk order (deduping is the caller's job — it content-addresses by text).
+    // The eval-context compute parses + serializes each into the AST map the canvas walk consumes. This is
+    // the ProjectNode walk shape, but it COLLECTS source text instead of projecting to an AST — so a source
+    // that won't parse is still returned here (the caller drops it, and the canvas chips it) rather than
+    // throwing. Literal sources ("box"/2/true) are returned too — harmless, since the canvas walk resolves a
+    // literal leaf/attr BEFORE consulting the map, so their (unused) entries are never looked up. Empty ⇒ no
+    // structured render (a text-mode / generic-UI design) → no sources.
+    public static List<string> RenderExprSources(NodeValue design)
+    {
+        var sources = new List<string>();
+        if (design is ObjectValue d && d.Fields.TryGetValue("render", out var r)
+            && OrderedObjects(r).FirstOrDefault() is { } root)
+            CollectExprSources(root, sources);
+        return sources;
+    }
+
+    // NOTE: this is a hand-kept PARALLEL walk of the render tree — its branch condition (tag-non-empty =
+    // element with attrs+children; else expr leaf) MUST mirror the canvas walk (CodeExecutor.BuildRenderTree /
+    // codeExec.ts renderTreeNode) so it can never UNDER-collect a source the walk will look up (over-collecting
+    // dead entries is harmless — content-addressed + parse-or-skip). If the walk's shape changes (S6 for…in/if
+    // rows), change this in the same slice.
+    private static void CollectExprSources(ObjectValue node, List<string> into)
+    {
+        if (TextField(node, "tag") is { Length: > 0 })
+        {
+            foreach (var a in OrderedObjects(node.Fields.GetValueOrDefault("attrs")))
+                if (TextField(a, "value") is { Length: > 0 } value) into.Add(value);
+            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children")))
+                CollectExprSources(c, into);
+        }
+        else if (TextField(node, "expr") is { Length: > 0 } expr)
+            into.Add(expr);
+    }
+
     // ── M12 S1b: `ui` render text → structured MetaNode rows (the inverse of ProjectRenderUi) ─────
     //
     // Import a design authored as `ui` TEXT (a custom `fn render()`) INTO the structured MetaNode tree

@@ -1016,6 +1016,46 @@ function execMergePreview(codeCall: CodeCall, scope: ExecScope, context: ExecCon
     return r;
 }
 
+// evalContext(design[, refreshKey]): the SERVER-BACKED eval context the canvas walk consumes (M12
+// CANVAS-EVAL-1) — the twin of CodeExecutor.ExecuteEvalContext / execPublishPreview. The server COMPUTES the
+// payload (the SELF-BUILT delegate in SsrRenderer over the designer's own store) and ships it via the memo
+// cache; the client never computes — it REUSES the shipped { db, exprs, ambients, params } object under the
+// same key (design id + stateKey "default" + optional refresh scalar) so both twins address the same entry.
+// A miss throws "Value not available" → refetch, exactly like execPublishPreview. Keyed with EMPTY deps
+// (never on the design subgraph — the deliberate inversion of the S3a auto-live race): an edit to a node's
+// expr does NOT stale this entry, so the edited text simply misses the shipped AST map → its chip, until a
+// Refresh bumps refreshKey. Memo-leak discipline (the shipped execPreviewRender pattern): a Refresh mints a
+// NEW key for the SAME design; prune any OTHER evalContext:<designId>[:*] entry right before a genuinely new
+// key MISS, bounding the cache to one seed graph per design — WITHOUT disturbing an ordinary same-key re-
+// render (a plain cache HIT; evicting on every render would force a miss that defeats the SPA flash guard).
+function execEvalContext(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const design = executeValue(codeCall.params[0], scope, context).value;
+    if (design.type !== "object") throw new Error("evalContext() expects a design object as its first argument.");
+    let key = "evalContext:" + design.id + ":default";
+    if (codeCall.params.length > 1) key += ":" + scalarKeyPart(executeValue(codeCall.params[1], scope, context).value);
+    if (memoCache != null && !memoCache.has(key)) {
+        const prefix = "evalContext:" + design.id;
+        for (const k of Array.from(memoCache.keys()))
+            if (k !== key && (k === prefix || k.startsWith(prefix + ":"))) memoCache.delete(k);
+    }
+    // As in execPublishPreview: a MISS makes memoize return an empty `nothing`; the payload is always read as
+    // an object (`.db`/`.exprs`), so re-throw the VNA rather than let a `nothing` leak into a value position.
+    const r = memoize(key, context, () => { throw new Error("Value not available"); });
+    if (r.type === "nothing") throw new Error("Value not available"); // a miss (never shipped)
+    return r;
+}
+
+// A scalar's contribution to a memo key (the evalContext refresh key) — twin-stable with CodeExecutor's
+// ScalarKeyPart. Non-scalars contribute empty.
+function scalarKeyPart(v: ExecValue): string {
+    switch (v.type) {
+        case "int": return String(v.value);
+        case "text": return v.value;
+        case "bool": return v.value ? "true" : "false";
+        default: return "";
+    }
+}
+
 // renderTree(node[, ctx]): the CLIENT-COMPUTABLE canvas (M12 S4 foundation) — the twin of
 // CodeExecutor.ExecuteRenderTree. Turns a MetaNode row (tag/expr/order scalars + attrs/children sets, the
 // S1a structured-render schema) into a live tag tree built from the rows. UNLIKE the server-backed reads
@@ -1030,7 +1070,12 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
         throw new Error("renderTree(node[, ctx]) takes one or two arguments.");
     const node = executeValue(codeCall.params[0], scope, context).value;
     if (node.type !== "object") throw new Error("renderTree() expects a node object as its first argument.");
-    return renderTreeNode(node, context);
+    // The optional eval context (M12 CANVAS-EVAL-1): a { db, exprs, … } payload (from sys.evalContext).
+    // Present ⇒ non-literal leaf/attr expressions EVALUATE against the seed graph; absent ⇒ today's exact chip
+    // behavior (the no-ctx conformance case stays byte-identical). A non-object 2nd arg is ignored.
+    const ctxV = codeCall.params.length === 2 ? executeValue(codeCall.params[1], scope, context).value : null;
+    const ctx = ctxV != null && ctxV.type === "object" ? ctxV : null;
+    return renderTreeNode(node, context, ctx);
 }
 
 // Walk one MetaNode row → its rendered node. ELEMENT (tag non-empty): a `tag` element carrying
@@ -1039,7 +1084,7 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
 // recursively-rendered children (ordered by `order`). LEAF (tag empty, expr non-empty): a literal expr →
 // its unquoted value as a text child; otherwise an EXPRESSION CHIP (span.expr-chip) holding the raw source.
 // INVALID (tag AND expr empty): span.expr-chip.is-empty "(empty)" — a visible marker, never silent nothing.
-function renderTreeNode(node: ExecObject, context: ExecContext): ExecValue {
+function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject | null): ExecValue {
     const id = node.id;
     const tag = readNodeText(node, "tag", context);
     const expr = readNodeText(node, "expr", context);
@@ -1053,14 +1098,60 @@ function renderTreeNode(node: ExecObject, context: ExecContext): ExecValue {
             // click-to-select depends on.
             if (name.length === 0 || isEventAttr(name) || name === "data-node") continue;
             const lit = literalValue(value);
-            if (lit != null) attributes[name] = { value: lit };        // non-literal → skipped
+            if (lit != null) { attributes[name] = { value: lit }; continue; }  // literal → applied
+            // Non-literal + an eval context: evaluate the attr's expression; a SCALAR result applies, any
+            // throw / map-miss / non-scalar is skipped (today's exact non-literal behavior).
+            if (ctx != null) {
+                const v = evalCtxExpr(value, ctx);
+                if (v != null && (v.type === "text" || v.type === "int" || v.type === "bool")) attributes[name] = { value: v };
+            }
         }
-        const children: ExecTagChild[] = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context));
+        const children: ExecTagChild[] = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx));
         return { type: "tag", name: tag, attributes, children };
     }
-    if (expr.length > 0)
-        return isLiteral(expr) ? { type: "text", value: literalDisplay(expr) } : chip("expr-chip", expr, id);
+    if (expr.length > 0) {
+        if (isLiteral(expr)) return { type: "text", value: literalDisplay(expr) };
+        // Non-literal + an eval context: evaluate against the seed graph. A clean eval renders the value (as a
+        // text child, the same scalar-to-text a rendered child takes); any throw (tier 2) or a map-miss (tier
+        // 3, an edited-but-unrefreshed expr) falls to today's exact chip.
+        if (ctx != null) {
+            const v = evalCtxExpr(expr, ctx);
+            if (v != null) return { type: "text", value: scalarText(v) };
+        }
+        return chip("expr-chip", expr, id);
+    }
     return chip("expr-chip is-empty", "(empty)", id);
+}
+
+// Evaluate ONE canvas expression against the eval context's seed graph (M12 CANVAS-EVAL-1) — the twin of
+// CodeExecutor.EvaluateCtxExpr. Looks the source text up in ctx.exprs (content-addressed) → JSON.parses the
+// shipped AST (the client executes AST JSON natively) → runs it through executeValue (the SAME dispatch the
+// walk uses — the no-second-engine guard) over a FRESH, ISOLATED scope+context so the designer's own render
+// is UNTOUCHED: a parent-less scope binding only `db` = the seed graph (the client has no store, so store-
+// backed builtins throw → chip, IDENTICALLY to the server's bare executor), a fresh context, memo-BYPASS (so
+// where/orderBy compute directly — never the shared memoCache, avoiding the id-0 lambda memo-key collision),
+// and its OWN throwaway deps frame (the seed reads are NOT recorded as the designer render's deps; the
+// module-level slotPath is untouched since a value expr renders no tags). Returns the value, or null on any
+// miss / parse-failure / throw (the caller chips).
+function evalCtxExpr(text: string, ctx: ExecObject): ExecValue | null {
+    const exprs = ctx.props["exprs"];
+    if (exprs == null || exprs.type !== "object") return null;
+    const entry = exprs.props[text];
+    if (entry == null || entry.type !== "object") return null;
+    const astText = entry.props["ast"];
+    if (astText == null || astText.type !== "text") return null;
+    let ast: CodeValue;
+    try { ast = JSON.parse(astText.value) as CodeValue; } catch { return null; }
+    const evalScope: ExecScope = { items: {}, parent: null };
+    const seedDb = ctx.props["db"];
+    if (seedDb != null) evalScope.items["db"] = { value: seedDb, isReadOnly: true };
+    const evalCtx: ExecContext = { lastId: { value: 0 }, ambient: null };
+    const savedBypass = memoBypass;
+    memoBypass = true;
+    depStack.push({ props: [], members: [], vars: [] });
+    try { return executeValue(ast, evalScope, evalCtx).value; }
+    catch { return null; }
+    finally { depStack.pop(); memoBypass = savedBypass; }
 }
 
 // A span.expr-chip (or its .is-empty variant) with the node's provenance id and one text child.
@@ -1647,6 +1738,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "publishPreview": return execPublishPreview(codeCall, scope, context);
         case "renderTree": return execRenderTree(codeCall, scope, context);
         case "mergePreview": return execMergePreview(codeCall, scope, context);
+        case "evalContext": return execEvalContext(codeCall, scope, context);
         case "setRef": return execSetRef(codeCall, scope, context);
         case "publish": return execPublish(codeCall, scope, context);
         case "create": return execCreate(codeCall, scope, context);

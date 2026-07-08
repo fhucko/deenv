@@ -47,11 +47,14 @@ falling back to the identical chip whenever evaluation isn't faithful.
   context.SlotPath — safe under synchronous balanced push/pop; noted for reentrancy.
 - **v1 scope needs are tiny:** S1b import REFUSES helpers/ambient vars (SchemaBridge.cs:
   329-332), so structured designs' expressions reference only `db` + literals/operators +
-  faithful sys builtins. Builtin partition: FAITHFUL = db navigation + collections,
-  arithmetic/logic/ternary, sys.humanize/id/nest/segment/toInt/field, path/status. CHIP =
-  sys.extent/schema/canWrite/canRead/resolve/new + the preview reads + floor-derived
-  ambients (currentUser etc.). Client store-backed builtins already throw VNA on miss —
-  try/catch converts to chips for free.
+  faithful sys builtins. Builtin partition AS BUILT (review-corrected): FAITHFUL = db
+  navigation + collections, arithmetic/logic/ternary, sys.humanize/id/nest/segment/toInt/
+  field. CHIP = sys.extent/schema/canWrite/canRead/resolve/new + the preview reads +
+  ALL ambients incl. path/status (the eval scope is deliberately PARENT-LESS with only
+  `db` — safer than the earlier Parent=libScope sketch; anything unbound chips, never
+  guesses). CAVEAT: `sys.id` over the seed graph returns the re-minted synthetic NEGATIVE
+  id (twin-stable, but not a production id — a v1 display quirk, not a data lie). Client
+  store-backed builtins already throw VNA on miss — try/catch converts to chips for free.
 
 ## Invalidation — the deliberate inversion of the S3a race
 
@@ -99,7 +102,7 @@ fidelity jump) → S6 `for … in` + row scope (makes `{note.title}`-class exprs
 most real renders) → uses/states {name, args, ambient, data, order} via the `state` arg →
 params with structured fns (BindParams idiom, CodeExecutor.cs:1868-1922) → auto-live (gated
 on refetch-race-safe optimistic mutations — the ledgered precondition) → real-data seed
-(access-scoped shipping) → in-memory throwaway store.
+(access-scoped shipping) → in-memory throwaway store; move BuildEvalContext's concrete-store guard inside its try (uniform degrade-to-chips — review trivial note).
 
 ## Self-grill record (all HOLD; refutations folded above)
 
