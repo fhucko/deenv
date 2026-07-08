@@ -1084,15 +1084,17 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
 // recursively-rendered children (ordered by `order`). LEAF (tag empty, expr non-empty): a literal expr →
 // its unquoted value as a text child; otherwise an EXPRESSION CHIP (span.expr-chip) holding the raw source.
 // INVALID (tag AND expr empty): span.expr-chip.is-empty "(empty)" — a visible marker, never silent nothing.
-function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject | null): ExecValue {
+function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject | null, bindings?: { [name: string]: ExecValue }): ExecValue {
     const id = node.id;
-    // S6a control-flow rows — `kind` is the authoritative discriminator, read defensively (a legacy/
-    // hand-built node without it reads "" → tag/expr discrimination). A for/if row renders as a NO-CTX
-    // TEMPLATE regardless of `ctx` (the loop/condition are NOT evaluated — S6b); ctx only reaches the
-    // leaf/attr evaluation inside the body, unchanged. Twin of CodeExecutor.BuildRenderTree.
+    // S6a/S6b control-flow rows — `kind` is the authoritative discriminator, read defensively (a legacy/
+    // hand-built node without it reads "" → tag/expr discrimination). WITHOUT ctx (or on ANY eval failure)
+    // a for/if row renders as the S6a NO-CTX TEMPLATE; WITH ctx (S6b) buildFor/buildIf EVALUATE the
+    // collection/condition and render the taken branch / per-item instances (the row scope). `bindings` is
+    // the accumulated row scope (loop vars) layered onto {db} in the isolated eval — undefined at the top
+    // level, extended per for-item as the walk recurses inward. Twin of CodeExecutor.BuildRenderTree.
     const kind = readNodeTextOptional(node, "kind", context);
-    if (kind === "for") return buildForTemplate(node, id, context, ctx);
-    if (kind === "if") return buildIfTemplate(node, id, context, ctx);
+    if (kind === "for") return buildFor(node, id, context, ctx, bindings);
+    if (kind === "if") return buildIf(node, id, context, ctx, bindings);
     const tag = readNodeText(node, "tag", context);
     const expr = readNodeText(node, "expr", context);
     if (tag.length > 0) {
@@ -1109,11 +1111,11 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
             // Non-literal + an eval context: evaluate the attr's expression; a SCALAR result applies, any
             // throw / map-miss / non-scalar is skipped (today's exact non-literal behavior).
             if (ctx != null) {
-                const v = evalCtxExpr(value, ctx);
+                const v = evalCtxExpr(value, ctx, bindings);
                 if (v != null && (v.type === "text" || v.type === "int" || v.type === "bool")) attributes[name] = { value: v };
             }
         }
-        const children: ExecTagChild[] = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx));
+        const children: ExecTagChild[] = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx, bindings));
         return { type: "tag", name: tag, attributes, children };
     }
     if (expr.length > 0) {
@@ -1122,7 +1124,7 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
         // text child, the same scalar-to-text a rendered child takes); any throw (tier 2) or a map-miss (tier
         // 3, an edited-but-unrefreshed expr) falls to today's exact chip.
         if (ctx != null) {
-            const v = evalCtxExpr(expr, ctx);
+            const v = evalCtxExpr(expr, ctx, bindings);
             if (v != null) return { type: "text", value: scalarText(v) };
         }
         return chip("expr-chip", expr, id);
@@ -1130,10 +1132,58 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
     return chip("expr-chip is-empty", "(empty)", id);
 }
 
-// A `for` row → its NO-CTX TEMPLATE (S6a): a <div class="for-template" data-node=id> with a badge (the loop
-// var name + the collection SOURCE as an expr-chip, unevaluated) and the body rendered ONCE. Body leaves
-// referencing the item var chip (unbound — honest). Twin of CodeExecutor.BuildForTemplate.
-function buildForTemplate(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null): ExecValue {
+// A `for` row (S6b, WITH ctx). Evaluate the `collection` source against the seed graph under the CURRENT
+// accumulated row scope (a nested for's collection may reference an outer loop var), then render the body PER
+// ITEM with the loop var bound — the instances REPLACE the template (real content: no badge, no wrapper).
+// Each item extends the bindings with {item → its value} and re-walks the body; the per-item instances are
+// spliced FLAT into an array value (exactly how the real foreach splices rows — serializeChild/ui.ts flatten
+// an array child, and each body element keeps its OWN MetaNode data-node, so N instances share 1 template
+// row's id — the S6a provenance decision). ANY failure — no source, an eval throw/miss, or a non-collection
+// result — DEGRADES to the S6a template (never guesses). A set and a list both iterate via .items. Twin of
+// CodeExecutor.BuildFor.
+function buildFor(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null, bindings?: { [name: string]: ExecValue }): ExecValue {
+    if (ctx != null) {
+        const collection = evalCtxExpr(readNodeText(node, "collection", context), ctx, bindings);
+        if (collection != null && collection.type === "array") {
+            const item = readNodeText(node, "item", context);
+            const body = orderedMembers(node, "children", context);
+            const instances: ExecArrayItem[] = [];
+            let key = 0;
+            for (const member of collection.items) {
+                const itemBindings = { ...(bindings ?? {}) };
+                if (item.length > 0) itemBindings[item] = member.value;
+                for (const b of body)
+                    instances.push({ key: key++, value: renderTreeNode(b, context, ctx, itemBindings) });
+            }
+            return { type: "array", kind: "list", items: instances, id };
+        }
+    }
+    return buildForTemplate(node, id, context, ctx, bindings);
+}
+
+// An `if` row (S6b, WITH ctx). Evaluate the `condition` under the current row scope; the result MUST be a
+// bool — deenv truthiness belongs to the INTERPRETER, not the canvas, so a non-bool result (or any eval
+// failure → null) DEGRADES to the S6a both-branches template rather than inventing truthiness or guessing a
+// branch. A bool renders ONLY the taken branch's children FLAT (no then/else labels), spliced into an array
+// like buildFor. A false condition with an empty elseChildren yields an empty array → nothing. Twin of
+// CodeExecutor.BuildIf.
+function buildIf(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null, bindings?: { [name: string]: ExecValue }): ExecValue {
+    if (ctx != null) {
+        const cond = evalCtxExpr(readNodeText(node, "condition", context), ctx, bindings);
+        if (cond != null && cond.type === "bool") {
+            const members = orderedMembers(node, cond.value ? "children" : "elseChildren", context);
+            const items: ExecArrayItem[] = members.map((m, i) => ({ key: i, value: renderTreeNode(m, context, ctx, bindings) }));
+            return { type: "array", kind: "list", items, id };
+        }
+    }
+    return buildIfTemplate(node, id, context, ctx, bindings);
+}
+
+// A `for` row → its NO-CTX / DEGRADE TEMPLATE (S6a): a <div class="for-template" data-node=id> with a badge
+// (the loop var name + the collection SOURCE as an expr-chip, unevaluated) and the body rendered ONCE. Body
+// leaves referencing the item var chip (unbound — honest); any OUTER row-scope binding still threads through.
+// Twin of CodeExecutor.BuildForTemplate.
+function buildForTemplate(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null, bindings?: { [name: string]: ExecValue }): ExecValue {
     const item = readNodeText(node, "item", context);
     const collection = readNodeText(node, "collection", context);
     const badge: ExecTag = {
@@ -1143,7 +1193,7 @@ function buildForTemplate(node: ExecObject, id: number, context: ExecContext, ct
             chip("expr-chip", collection, id),
         ],
     };
-    const children: ExecTagChild[] = [badge, ...orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx))];
+    const children: ExecTagChild[] = [badge, ...orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx, bindings))];
     return {
         type: "tag", name: "div",
         attributes: { "class": { value: { type: "text", value: "for-template" } }, "data-node": { value: { type: "text", value: String(id) } } },
@@ -1151,13 +1201,14 @@ function buildForTemplate(node: ExecObject, id: number, context: ExecContext, ct
     };
 }
 
-// An `if` row → its NO-CTX TEMPLATE (S6a): a <div class="if-template" data-node=id> with the condition
-// SOURCE as an expr-chip and BOTH branches, each wrapped + marked (then / else); the else branch is OMITTED
-// when `elseChildren` is empty. Never guesses a taken branch (S6b). Twin of CodeExecutor.BuildIfTemplate.
-function buildIfTemplate(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null): ExecValue {
+// An `if` row → its NO-CTX / DEGRADE TEMPLATE (S6a): a <div class="if-template" data-node=id> with the
+// condition SOURCE as an expr-chip and BOTH branches, each wrapped + marked (then / else); the else branch
+// is OMITTED when `elseChildren` is empty. Never guesses a taken branch (evaluated selection is buildIf);
+// any OUTER row-scope binding still threads through. Twin of CodeExecutor.BuildIfTemplate.
+function buildIfTemplate(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null, bindings?: { [name: string]: ExecValue }): ExecValue {
     const condition = readNodeText(node, "condition", context);
-    const thenBody = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx));
-    const elseBody = orderedMembers(node, "elseChildren", context).map(c => renderTreeNode(c, context, ctx));
+    const thenBody = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx, bindings));
+    const elseBody = orderedMembers(node, "elseChildren", context).map(c => renderTreeNode(c, context, ctx, bindings));
     const children: ExecTagChild[] = [
         { type: "tag", name: "div", attributes: { "class": { value: { type: "text", value: "if-badge" } } }, children: [chip("expr-chip", condition, id)] },
         branch("if-branch if-then", "then", thenBody),
@@ -1186,9 +1237,12 @@ function branch(cls: string, label: string, body: ExecTagChild[]): ExecTag {
 // backed builtins throw → chip, IDENTICALLY to the server's bare executor), a fresh context, memo-BYPASS (so
 // where/orderBy compute directly — never the shared memoCache, avoiding the id-0 lambda memo-key collision),
 // and its OWN throwaway deps frame (the seed reads are NOT recorded as the designer render's deps; the
-// module-level slotPath is untouched since a value expr renders no tags). Returns the value, or null on any
-// miss / parse-failure / throw (the caller chips).
-function evalCtxExpr(text: string, ctx: ExecObject): ExecValue | null {
+// module-level slotPath is untouched since a value expr renders no tags). `bindings` (S6b) is the ROW SCOPE —
+// the accumulated loop-var values layered onto {db} in the isolated scope (a nested for stacks its item onto
+// the outer bindings the walk passed down), so `{note.title}` inside a `foreach note in db.notes` resolves
+// against the current item; the bindings ride the SAME parent-less isolation as db (read-only). Returns the
+// value, or null on any miss / parse-failure / throw (the caller chips).
+function evalCtxExpr(text: string, ctx: ExecObject, bindings?: { [name: string]: ExecValue }): ExecValue | null {
     const exprs = ctx.props["exprs"];
     if (exprs == null || exprs.type !== "object") return null;
     const entry = exprs.props[text];
@@ -1200,6 +1254,8 @@ function evalCtxExpr(text: string, ctx: ExecObject): ExecValue | null {
     const evalScope: ExecScope = { items: {}, parent: null };
     const seedDb = ctx.props["db"];
     if (seedDb != null) evalScope.items["db"] = { value: seedDb, isReadOnly: true };
+    if (bindings != null)
+        for (const name of Object.keys(bindings)) evalScope.items[name] = { value: bindings[name], isReadOnly: true };
     const evalCtx: ExecContext = { lastId: { value: 0 }, ambient: null };
     const savedBypass = memoBypass;
     memoBypass = true;
@@ -2369,6 +2425,10 @@ function serializeTree(node: ExecValue): string {
         for (const c of node.children) s += serializeTree(c);
         return s + "</" + node.name + ">";
     }
+    // An ARRAY child splices FLAT (recursively) — the same flattening production does (SsrRenderer
+    // .SerializeChild / ui.ts flatten), so a for/if row's evaluated instances (S6b returns an array value)
+    // serialize as if spliced into the parent, with no wrapper. Twin of ConformanceTests.SerializeTree.
+    if (node.type === "array") return node.items.map(i => serializeTree(i.value)).join("");
     return scalarText(node);
 }
 

@@ -1636,8 +1636,16 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.Locator(".design-editor .render-tree input.node-for-item").First.FillAsync(item);
 
     [When("I edit the for row's collection input to {string}")]
-    public async Task WhenEditForCollection(string collection) =>
+    public async Task WhenEditForCollection(string collection)
+    {
         await ctx.Page!.Locator(".design-editor .render-tree input.node-for-collection").First.FillAsync(collection);
+        // Poll for the journaled autosave to reach the designer's store (no timer): the collection field's
+        // new value must be persisted before a later "Refresh values" recomputes sys.evalContext server-side
+        // (it reads the design fresh) — otherwise the refresh would re-ship the OLD source's AST and the
+        // canvas would still miss. The optimistic client edit re-renders the canvas immediately regardless.
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaNode").Values.Any(o =>
+            o.Fields.TryGetValue("collection", out var v) && v is DeEnv.Storage.TextValue t && t.Text == collection));
+    }
 
     // The canvas's for-template badge shows the loop var name in `.for-item` — the NO-CTX marker (S6a; the
     // loop is not evaluated). Auto-waits, so an item-input edit's live repaint (no reload) is observed here.
@@ -1675,6 +1683,57 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await EventuallyAsync(() =>
             _designer.Store.ReadExtent("MetaNode").Values.Count(o =>
                 o.Fields.TryGetValue("kind", out var kv) && kv is DeEnv.Storage.TextValue { Text: "for" }) == count);
+
+    // ── M12 S6b — the canvas EVALUATES for/if rows (row-scope evaluation) ─────────────────────────
+    //
+    // A convertible render whose <main> holds a `foreach note in db.notes → <li>{note.title}` AND an
+    // `if db.flag → <p>"ON" else <p>"OFF"`. Paired with a Db{notes: set of Note{title}, flag: bool} schema
+    // and a two-note seed, so after Convert the WITH-CTX canvas evaluates the loop (two <li>s with real
+    // titles) and the if (the taken branch). Same authoring plumbing as the other fixtures.
+    private const string ForAndIfConvertibleRender =
+        "ui\n    fn render()\n        return <main class=\"x\">\n" +
+        "            foreach note in db.notes\n" +
+        "                <li>\n" +
+        "                    note.title\n" +
+        "            if db.flag\n" +
+        "                <p class=\"on\">\n" +
+        "                    \"ON\"\n" +
+        "            else\n" +
+        "                <p class=\"off\">\n" +
+        "                    \"OFF\"\n";
+
+    [When("I author a for-and-if convertible render into the design's UI")]
+    public async Task WhenAuthorForAndIfRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(ForAndIfConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "loopme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ForAndIfConvertibleRender));
+    }
+
+    // A REAL evaluated element in the canvas whose textContent is the given text — the S6b proof that a
+    // for-body instance (`<li>{note.title}` -> "Alpha"/"Beta") or an if taken-branch (`<p>"ON"`) rendered as
+    // actual content, NOT a chip and NOT a for-template badge. Auto-waits so a live repaint (edit/refresh)
+    // is observed with no reload. Matches ANY element of that tag in the canvas whose text equals `text`.
+    [Then("the design canvas shows a {string} element reading {string}")]
+    public async Task ThenCanvasElementReading(string tag, string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll({JsString(".design-canvas " + tag)})].some(e => e.textContent === {JsString(text)})");
+
+    // The falsy/omitted if-branch is NEVER rendered: the canvas must not contain the given text anywhere.
+    // Guarded by a WaitForFunction so it settles rather than reading a mid-render frame (the preceding
+    // positive assertions already prove the canvas is populated, so a persistent presence would fail here).
+    [Then("the design canvas does not show the text {string}")]
+    public async Task ThenCanvasNoText(string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const c = document.querySelector('.design-canvas'); return c != null && !c.textContent.includes({JsString(text)}); }}");
+
+    // The tree editor's for-row collection input still reads the edited source (the race-guard proof: the
+    // canvas falls to the template, but the operator's own input is UNDISTURBED — not reverted).
+    [Then("the tree editor shows a for-collection input reading {string}")]
+    public async Task ThenForCollectionInputReads(string collection) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.design-editor .render-tree input.node-for-collection')].some(e => e.value === {JsString(collection)})");
 
     // The Design id of the (main working-copy) design with the given label, or 0 if not yet present.
     private int DesignIdByLabel(string label)

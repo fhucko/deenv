@@ -1268,3 +1268,72 @@ Feature: The operator IDE (designs library + instance design selector)
     And the render tree has 2 for rows
     When I remove the root node's last child for row
     Then the render tree has 1 for row
+
+  # ── M12 S6b — the canvas EVALUATES for/if rows (row-scope evaluation) ────────────────────────────
+  #
+  # S6a rendered a for/if row as a NO-CTX marked TEMPLATE (badge + collection chip; both if branches).
+  # S6b, with the eval context present (the canvas always passes `sys.evalContext(design, evalRefresh)`),
+  # EVALUATES the row: a `for` iterates its collection against the seed graph and instantiates the body
+  # PER ITEM with the loop var bound (the row scope — an ambient-bindings layer over {db}); an `if`
+  # evaluates its condition and renders ONLY the taken branch. The instances REPLACE the template — real
+  # content, no badge. This is the end-to-end integration over a REAL seed graph (initialData → the
+  # evalContext's synthetic db), the piece the conformance suite pins on both twins at the value level.
+  #
+  # The design: a Db root with `notes` (a set of Note{title}) and a bool `flag`, seeded with two notes
+  # ("Alpha","Beta") and flag=true; a render whose <main> holds `foreach note in db.notes → <li>{note.title}`
+  # plus `if db.flag → <p>"ON" else <p>"OFF"`. After Convert the canvas shows BOTH titles as real <li> text
+  # (not chips, not a for-template badge) and the taken `if` branch ("ON", never "OFF").
+  #
+  # THE RACE GUARD (the S3a idiom, now for a collection): editing the for-row's collection to a source the
+  # shipped AST map does not carry falls the canvas to the S6a template (honest — never guesses) WITHOUT
+  # disturbing the tree editor's own input, until "Refresh values" bumps the refresh key so the server re-
+  # ships the new source's AST and the loop evaluates again. A later STRUCTURAL edit (root tag rename)
+  # repaints same-frame with the evaluated items intact.
+  @m12 @single-user
+  Scenario: The canvas evaluates a foreach against the seed data, shows both items and the taken if-branch, and falls a loop to its template until Refresh
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "loopme"
+    And I edit the design "loopme"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I add a field "notes" to the type "Db"
+    And I add a field "flag" to the type "Db"
+    # Reload so the prop rows re-render via SSR — a client-added row's type/cardinality <select>s draw their
+    # options from module-level `var` arrays (scalarTypes / cardinalities) that only populate on a server
+    # render, so the select-based edits below must run against SSR-rendered rows (a pre-existing designer trait).
+    When I reload the design editor
+    And I retype the prop "notes" to "Note"
+    And I set the prop "notes" cardinality to "set"
+    And I retype the prop "flag" to "bool"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              notes: [2, 3]
+              flag: true
+          Note 2
+              title: "Alpha"
+          Note 3
+              title: "Beta"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a for-and-if convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows a "li" element reading "Alpha"
+    And the design canvas shows a "li" element reading "Beta"
+    And the design canvas shows a "p" element reading "ON"
+    And the design canvas does not show the text "OFF"
+    When I edit the for row's collection input to "db.notes.orderBy(n => n.title)"
+    Then the design canvas shows a for-template with item "note"
+    And the tree editor shows a for-collection input reading "db.notes.orderBy(n => n.title)"
+    When I click Refresh values
+    Then the design canvas shows a "li" element reading "Alpha"
+    When I edit the root node's tag input to "section"
+    Then the design canvas shows a "section" element with a data-node attribute
+    And the design canvas shows a "li" element reading "Alpha"

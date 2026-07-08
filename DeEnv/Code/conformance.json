@@ -1718,6 +1718,276 @@
       "text": "null != null && sys.id(null) == 1",
       "expr": { "type": "infixOp", "op": "and", "left": { "type": "infixOp", "op": "notEquals", "left": { "type": "null" }, "right": { "type": "null" } }, "right": { "type": "infixOp", "op": "equals", "left": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "id" } }, "params": [ { "type": "null" } ] }, "right": { "type": "int", "value": 1 } } },
       "expect": { "kind": "bool", "value": false }
+    },
+    {
+      "name": "sys.renderTree with ctx — a `for` row EVALUATES its collection and instantiates the body PER ITEM with the loop var bound (M12 S6b)",
+      "comment": "The row-scope evaluation pivot. A parent <ul> wraps a for-row (the shape a real render has — a control-flow row is a CHILD of an element). renderTree(ul, ctx): the for-row's `collection` (db.notes) evaluates against the seed graph -> a 2-item collection; the body (an <li> holding the leaf `note.title`) is rendered ONCE PER ITEM with {note -> the item} layered onto {db} in the isolated eval scope, so note.title resolves to each item's title. The instances REPLACE the template (no badge, no for-template wrapper) — the for-row returns an ARRAY value spliced FLAT into the <ul> children (exactly how the real foreach splices rows; SerializeChild/ui.ts flatten an array child). PROVENANCE: both <li> instances carry the SAME data-node (the body <li>'s own MetaNode id, -8) — N instances : 1 template row (S6a). The walk mints NOTHING into LastId, so the output is deterministic regardless of item count; the data-node ids come only from the input node literals (ul=-12, li=-8). Twin-identical.",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "tag", "value": { "type": "text", "value": "ul" } },
+            { "name": "expr", "value": { "type": "text", "value": "" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "attrs", "value": { "type": "array", "items": [] } },
+            { "name": "children", "value": { "type": "array", "items": [
+            { "type": "object", "props": [
+            { "name": "kind", "value": { "type": "text", "value": "for" } },
+            { "name": "item", "value": { "type": "text", "value": "note" } },
+            { "name": "collection", "value": { "type": "text", "value": "db.notes" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "li" } },
+                { "name": "expr", "value": { "type": "text", "value": "" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } },
+                { "name": "attrs", "value": { "type": "array", "items": [] } },
+                { "name": "children", "value": { "type": "array", "items": [
+                  { "type": "object", "props": [
+                    { "name": "tag", "value": { "type": "text", "value": "" } },
+                    { "name": "expr", "value": { "type": "text", "value": "note.title" } },
+                    { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+                ] } }
+              ] }
+            ] } }
+          ] } ] } }
+          ] },
+          { "type": "object", "props": [
+            { "name": "db", "value": { "type": "object", "props": [
+              { "name": "notes", "value": { "type": "array", "items": [
+                { "type": "object", "props": [ { "name": "title", "value": { "type": "text", "value": "Alpha" } } ] },
+                { "type": "object", "props": [ { "name": "title", "value": { "type": "text", "value": "Beta" } } ] }
+              ] } }
+            ] } },
+            { "name": "exprs", "value": { "type": "object", "props": [
+              { "name": "db.notes", "value": { "type": "object", "props": [
+                { "name": "text", "value": { "type": "text", "value": "db.notes" } },
+                { "name": "ast", "value": { "type": "text", "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"db\"},\"right\":{\"type\":\"symbol\",\"name\":\"notes\"}}" } } ] } },
+              { "name": "note.title", "value": { "type": "object", "props": [
+                { "name": "text", "value": { "type": "text", "value": "note.title" } },
+                { "name": "ast", "value": { "type": "text", "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"note\"},\"right\":{\"type\":\"symbol\",\"name\":\"title\"}}" } } ] } }
+            ] } }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<ul data-node=\"-12\"><li data-node=\"-8\">Alpha</li><li data-node=\"-8\">Beta</li></ul>" }
+    },
+    {
+      "name": "sys.renderTree with ctx — NESTED `for` rows STACK bindings; the inner collection references the OUTER loop var (M12 S6b)",
+      "comment": "Stacked row scope (wrapped in a parent <ul>): an outer `foreach cat in db.cats` whose body is an inner `foreach item in cat.items` (the inner collection reads the OUTER loop var `cat`). For each outer cat, {cat -> item} is layered onto {db}, and the inner `for`'s collection `cat.items` evaluates against that binding; then {item -> ...} STACKS on top for the inner body leaf `item.label`. Seed: cats=[{items:[{label:\"a1\"}]},{items:[{label:\"b1\"},{label:\"b2\"}]}] -> the flat instance stream is a1,b1,b2 (each in its own <span>). Proves nested bindings accumulate (the outer item is visible to the inner collection AND the inner body) and that an array-of-arrays child flattens recursively. All three <span>s across both outer iterations share the span's ONE MetaNode data-node id (-9); the <ul> is -15.",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "tag", "value": { "type": "text", "value": "ul" } },
+            { "name": "expr", "value": { "type": "text", "value": "" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "attrs", "value": { "type": "array", "items": [] } },
+            { "name": "children", "value": { "type": "array", "items": [
+            { "type": "object", "props": [
+            { "name": "kind", "value": { "type": "text", "value": "for" } },
+            { "name": "item", "value": { "type": "text", "value": "cat" } },
+            { "name": "collection", "value": { "type": "text", "value": "db.cats" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "kind", "value": { "type": "text", "value": "for" } },
+                { "name": "item", "value": { "type": "text", "value": "item" } },
+                { "name": "collection", "value": { "type": "text", "value": "cat.items" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } },
+                { "name": "children", "value": { "type": "array", "items": [
+                  { "type": "object", "props": [
+                    { "name": "tag", "value": { "type": "text", "value": "span" } },
+                    { "name": "expr", "value": { "type": "text", "value": "" } },
+                    { "name": "order", "value": { "type": "int", "value": 0 } },
+                    { "name": "attrs", "value": { "type": "array", "items": [] } },
+                    { "name": "children", "value": { "type": "array", "items": [
+                      { "type": "object", "props": [
+                        { "name": "tag", "value": { "type": "text", "value": "" } },
+                        { "name": "expr", "value": { "type": "text", "value": "item.label" } },
+                        { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+                    ] } }
+                  ] }
+                ] } }
+              ] }
+            ] } }
+          ] } ] } } ] },
+          { "type": "object", "props": [
+            { "name": "db", "value": { "type": "object", "props": [
+              { "name": "cats", "value": { "type": "array", "items": [
+                { "type": "object", "props": [ { "name": "items", "value": { "type": "array", "items": [
+                  { "type": "object", "props": [ { "name": "label", "value": { "type": "text", "value": "a1" } } ] }
+                ] } } ] },
+                { "type": "object", "props": [ { "name": "items", "value": { "type": "array", "items": [
+                  { "type": "object", "props": [ { "name": "label", "value": { "type": "text", "value": "b1" } } ] },
+                  { "type": "object", "props": [ { "name": "label", "value": { "type": "text", "value": "b2" } } ] }
+                ] } } ] }
+              ] } }
+            ] } },
+            { "name": "exprs", "value": { "type": "object", "props": [
+              { "name": "db.cats", "value": { "type": "object", "props": [
+                { "name": "text", "value": { "type": "text", "value": "db.cats" } },
+                { "name": "ast", "value": { "type": "text", "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"db\"},\"right\":{\"type\":\"symbol\",\"name\":\"cats\"}}" } } ] } },
+              { "name": "cat.items", "value": { "type": "object", "props": [
+                { "name": "text", "value": { "type": "text", "value": "cat.items" } },
+                { "name": "ast", "value": { "type": "text", "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"cat\"},\"right\":{\"type\":\"symbol\",\"name\":\"items\"}}" } } ] } },
+              { "name": "item.label", "value": { "type": "object", "props": [
+                { "name": "text", "value": { "type": "text", "value": "item.label" } },
+                { "name": "ast", "value": { "type": "text", "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"item\"},\"right\":{\"type\":\"symbol\",\"name\":\"label\"}}" } } ] } }
+            ] } }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<ul data-node=\"-15\"><span data-node=\"-9\">a1</span><span data-node=\"-9\">b1</span><span data-node=\"-9\">b2</span></ul>" }
+    },
+    {
+      "name": "sys.renderTree with ctx — an `if` row evaluates its condition and renders ONLY the taken branch, flat + unlabeled (then / else) (M12 S6b)",
+      "comment": "A parent <div> wraps an if-row. renderTree(div, ctx) with condition db.flag=true renders ONLY the `then` branch (the string-literal leaf \"On\") FLAT into the <div> — no if-template wrapper, no then/else labels, no condition chip (real content). The else branch (\"Off\") is NOT rendered. Twin of the false case below (same tree, flag=false -> \"Off\"). data-node: div=-11.",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "tag", "value": { "type": "text", "value": "div" } },
+            { "name": "expr", "value": { "type": "text", "value": "" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "attrs", "value": { "type": "array", "items": [] } },
+            { "name": "children", "value": { "type": "array", "items": [
+            { "type": "object", "props": [
+            { "name": "kind", "value": { "type": "text", "value": "if" } },
+            { "name": "condition", "value": { "type": "text", "value": "db.flag" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "\"On\"" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+            ] } },
+            { "name": "elseChildren", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "\"Off\"" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+            ] } }
+          ] } ] } } ] },
+          { "type": "object", "props": [
+            { "name": "db", "value": { "type": "object", "props": [ { "name": "flag", "value": { "type": "bool", "value": true } } ] } },
+            { "name": "exprs", "value": { "type": "object", "props": [
+              { "name": "db.flag", "value": { "type": "object", "props": [
+                { "name": "text", "value": { "type": "text", "value": "db.flag" } },
+                { "name": "ast", "value": { "type": "text", "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"db\"},\"right\":{\"type\":\"symbol\",\"name\":\"flag\"}}" } } ] } }
+            ] } }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div data-node=\"-11\">On</div>" }
+    },
+    {
+      "name": "sys.renderTree with ctx — an `if` row with a FALSE condition renders ONLY the else branch (M12 S6b)",
+      "comment": "Same shape as the then case (wrapped in a <div>) but db.flag=false -> ONLY the else-branch leaf \"Off\" renders, flat. Pins that a false condition selects elseChildren (and an empty elseChildren would render nothing). data-node: div=-11.",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "tag", "value": { "type": "text", "value": "div" } },
+            { "name": "expr", "value": { "type": "text", "value": "" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "attrs", "value": { "type": "array", "items": [] } },
+            { "name": "children", "value": { "type": "array", "items": [
+            { "type": "object", "props": [
+            { "name": "kind", "value": { "type": "text", "value": "if" } },
+            { "name": "condition", "value": { "type": "text", "value": "db.flag" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "\"On\"" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+            ] } },
+            { "name": "elseChildren", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "\"Off\"" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+            ] } }
+          ] } ] } } ] },
+          { "type": "object", "props": [
+            { "name": "db", "value": { "type": "object", "props": [ { "name": "flag", "value": { "type": "bool", "value": false } } ] } },
+            { "name": "exprs", "value": { "type": "object", "props": [
+              { "name": "db.flag", "value": { "type": "object", "props": [
+                { "name": "text", "value": { "type": "text", "value": "db.flag" } },
+                { "name": "ast", "value": { "type": "text", "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"db\"},\"right\":{\"type\":\"symbol\",\"name\":\"flag\"}}" } } ] } }
+            ] } }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div data-node=\"-11\">Off</div>" }
+    },
+    {
+      "name": "sys.renderTree with ctx — an `if` whose condition evaluates to a NON-BOOL DEGRADES to the S6a both-branches template (M12 S6b)",
+      "comment": "The truthiness guard: db.title evaluates to a TEXT, not a bool. deenv truthiness belongs to the interpreter, not the canvas, so the canvas must NOT invent a taken branch — it DEGRADES to the S6a both-branches labeled template (condition chip + then/else). (An UNEVALUABLE condition — a source absent from the exprs map, or one that throws — degrades identically, since evalCtxExpr returns null.) Ids identical to the S6a if-with-else template case: children leaf=-2, its array=-3, elseChildren leaf=-5, its array=-6, if-row=-7.",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "kind", "value": { "type": "text", "value": "if" } },
+            { "name": "condition", "value": { "type": "text", "value": "db.title" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "\"On\"" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+            ] } },
+            { "name": "elseChildren", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "\"Off\"" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+            ] } }
+          ] },
+          { "type": "object", "props": [
+            { "name": "db", "value": { "type": "object", "props": [ { "name": "title", "value": { "type": "text", "value": "hi" } } ] } },
+            { "name": "exprs", "value": { "type": "object", "props": [
+              { "name": "db.title", "value": { "type": "object", "props": [
+                { "name": "text", "value": { "type": "text", "value": "db.title" } },
+                { "name": "ast", "value": { "type": "text", "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"db\"},\"right\":{\"type\":\"symbol\",\"name\":\"title\"}}" } } ] } }
+            ] } }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div class=\"if-template\" data-node=\"-7\"><div class=\"if-badge\"><span class=\"expr-chip\" data-node=\"-7\">db.title</span></div><div class=\"if-branch if-then\"><span class=\"branch-label\">then</span>On</div><div class=\"if-branch if-else\"><span class=\"branch-label\">else</span>Off</div></div>" }
+    },
+    {
+      "name": "sys.renderTree with ctx — a `for` whose collection is UNEVALUABLE degrades to the S6a template (M12 S6b)",
+      "comment": "The collection source `db.missing` is NOT in the exprs map (an edited-but-unrefreshed / non-navigable source) -> evalCtxExpr returns null -> the for row DEGRADES to the S6a NO-CTX template (for-template wrapper + badge with the item var + the collection chip; the body leaf note.title chips too, item unbound). NEVER guesses. Ids: leaf=-2, for-row's children array=-3, for-row=-4 (as the S6a for-template case).",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "kind", "value": { "type": "text", "value": "for" } },
+            { "name": "item", "value": { "type": "text", "value": "note" } },
+            { "name": "collection", "value": { "type": "text", "value": "db.missing" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "note.title" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+            ] } }
+          ] },
+          { "type": "object", "props": [
+            { "name": "db", "value": { "type": "object", "props": [ { "name": "notes", "value": { "type": "array", "items": [] } } ] } },
+            { "name": "exprs", "value": { "type": "object", "props": [] } }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div class=\"for-template\" data-node=\"-4\"><div class=\"for-badge\"><span class=\"for-item\">note</span><span class=\"expr-chip\" data-node=\"-4\">db.missing</span></div><span class=\"expr-chip\" data-node=\"-2\">note.title</span></div>" }
     }
   ]
 }

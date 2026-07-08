@@ -318,6 +318,30 @@ mutations the designer app performs in deenv code — that machinery already exi
   preserves shared/cyclic structure. Caveats: sys.id shows synthetic negative ids; the eval
   scope is parent-less (path/status/helpers chip — safe). v1 surface = db-rooted exprs;
   widens with S6 + uses/params per the north star.
+- **S6b — row-scope evaluation. ✅ DONE 2026-07-08** (arch review SHIP; suite 805; 6
+  conformance cases both twins). The canvas EVALUATES `for` collections against the seed
+  graph and instantiates the body PER ITEM with the loop var bound (`EvaluateCtxExpr` gained
+  an ambient-bindings param; bindings STACK for nested loops — an inner collection can
+  reference the outer item); `if` evaluates its condition (with bindings) and renders only
+  the taken branch. Instances splice flat as REAL content (no template chrome), each carrying
+  the body row's data-node (N:1 per the S6a decision). ANY failure — non-bool condition,
+  unevaluable/non-collection result, eval throw — degrades to the S6a template mode
+  identically on both twins (never guesses); one item's bad leaf chips THAT leaf only.
+  Race-guard browser-pinned: editing the collection falls to the template with the tree
+  editor undisturbed until Refresh. Ledgered follow-up pins (review, optional): a same-name
+  nested-loop shadowing conformance case (inner shadows outer — last-write-wins by
+  construction on both twins; pin it as a contract) + a scalar-collection degrade case.
+  Ledger (builder-found, PRE-EXISTING, orthogonal): client-added prop rows' type/cardinality
+  selects draw options from module-var arrays that only populate on a server render — the
+  module-var client-shipping gap.
+- **INTERPRETER FIX (same day, via real use): `&&`/`||` now SHORT-CIRCUIT** (main `a79f19f`;
+  3 red-proven conformance pins incl. the `null != null && sys.id(null) == 1` guard idiom).
+  Both twins were eagerly evaluating both operands, making every `x != null && f(x)` guard
+  decoration — found because a real dev store held design-less instances (a shape no test
+  fixture ever minted) and every design page threw "id() expects an object" on refetch.
+  Post-hoc review: SHIP (dep-recording argument verified: a skipped right side can't affect
+  the result while the left gates it; the left's own deps re-trigger on flip). The deeper
+  lesson → the aged-store test-harness task (real-data shapes driven through the refetch path).
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —

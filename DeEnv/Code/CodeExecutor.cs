@@ -777,18 +777,20 @@ public sealed class CodeExecutor
     // LEAF (tag empty, expr non-empty): a literal expr → its unquoted value as a text child; otherwise an
     // EXPRESSION CHIP (span.expr-chip) holding the raw source — the interim placeholder until evaluation lands.
     // INVALID (tag AND expr empty): span.expr-chip.is-empty "(empty)" — a visible marker, never silent nothing.
-    private IExecValue BuildRenderTree(ExecObject node, ExecContext context, ExecObject? ctx)
+    private IExecValue BuildRenderTree(ExecObject node, ExecContext context, ExecObject? ctx, Dictionary<string, IExecValue>? bindings = null)
     {
         var id = node.Id;
-        // S6a control-flow rows. `kind` is the authoritative discriminator; it is read defensively
+        // S6a/S6b control-flow rows. `kind` is the authoritative discriminator; it is read defensively
         // (ReadNodeTextOptional) so a legacy node predating the field — or a hand-built test node — reads
         // "" and falls to the tag/expr discrimination, never a hard miss. A real row always carries it
-        // (M5-defaulted), so the dep is recorded and shipped exactly like tag/expr. In S6a a for/if row
-        // renders as a NO-CTX TEMPLATE regardless of `ctx` (the loop/condition are NOT evaluated — that is
-        // S6b's row-scope eval); the ctx only reaches the leaf/attr evaluation inside the body, unchanged.
+        // (M5-defaulted), so the dep is recorded and shipped exactly like tag/expr. WITHOUT ctx (or on ANY
+        // eval failure) a for/if row renders as the S6a NO-CTX TEMPLATE; WITH ctx (S6b) BuildFor/BuildIf
+        // EVALUATE the collection/condition against the seed graph and render the taken branch / per-item
+        // instances (the row scope). `bindings` is the accumulated row scope (loop vars) layered onto {db}
+        // in the isolated eval — null at the top level, extended per for-item as the walk recurses inward.
         var kind = ReadNodeTextOptional(node, "kind", context);
-        if (kind == "for") return BuildForTemplate(node, id, context, ctx);
-        if (kind == "if") return BuildIfTemplate(node, id, context, ctx);
+        if (kind == "for") return BuildFor(node, id, context, ctx, bindings);
+        if (kind == "if") return BuildIf(node, id, context, ctx, bindings);
         var tag = ReadNodeText(node, "tag", context);
         var expr = ReadNodeText(node, "expr", context);
         if (tag.Length > 0)
@@ -806,11 +808,11 @@ public sealed class CodeExecutor
                 // Non-literal + an eval context: evaluate the attr's expression against the seed graph; a
                 // SCALAR result applies (the same scalar-to-text an attr takes), any throw / map-miss / non-
                 // scalar is skipped (today's exact non-literal behavior). No ctx ⇒ skipped, unchanged.
-                if (ctx != null && EvaluateCtxExpr(value, ctx, context) is (ExecText or ExecInt or ExecBool) and { } scalar)
+                if (ctx != null && EvaluateCtxExpr(value, ctx, context, bindings) is (ExecText or ExecInt or ExecBool) and { } scalar)
                     attributes[name] = scalar;
             }
             var children = OrderedMembers(node, "children", context)
-                .Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx))
+                .Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings))
                 .ToArray();
             return new ExecTag { Name = tag, Attributes = attributes, Children = children };
         }
@@ -821,18 +823,71 @@ public sealed class CodeExecutor
             // (as a text child, the same scalar-to-text a rendered child takes); any throw (tier 2) or a
             // map-miss (tier 3, an edited-but-unrefreshed expr) falls to today's exact chip — the fallback is
             // already visually defined and never guesses.
-            if (ctx != null && EvaluateCtxExpr(expr, ctx, context) is { } value)
+            if (ctx != null && EvaluateCtxExpr(expr, ctx, context, bindings) is { } value)
                 return new ExecText { Value = ChildText(value) };
             return Chip("expr-chip", expr, id);                                       // an expression placeholder
         }
         return Chip("expr-chip is-empty", "(empty)", id);                            // neither tag nor expr
     }
 
-    // A `for` row → its NO-CTX TEMPLATE (S6a): a <div class="for-template" data-node=id> holding a small
-    // badge (the loop var name + the collection SOURCE as an expr-chip — unevaluated, honest) and the body
-    // rendered ONCE. Body leaves referencing the item var render as chips (the item var is unbound in the
-    // template — honest, never a guess). Deterministic + twin-identical (pinned by the conformance case).
-    private IExecValue BuildForTemplate(ExecObject node, int id, ExecContext context, ExecObject? ctx)
+    // A `for` row (S6b, WITH ctx). Evaluate the `collection` source against the seed graph under the CURRENT
+    // accumulated row scope (a nested for's collection may reference an outer loop var), then render the body
+    // PER ITEM with the loop var bound — the instances REPLACE the template (real content: no badge, no
+    // dashed marker, no wrapper element). Each item extends the bindings with {item → its value} and re-walks
+    // the body; the per-item instances are spliced FLAT into an ExecArray (exactly how the real foreach
+    // splices rows — SerializeChild/ui.ts flatten an array child, and each body element keeps its OWN
+    // MetaNode data-node, so N instances share 1 template row's id — the S6a provenance decision). The array
+    // carries the for-row's own id (inert in the display-inert canvas) so the walk mints nothing into
+    // context.LastId (determinism unchanged). ANY failure — no collection source, an eval throw/miss, or a
+    // non-collection result — DEGRADES to the S6a template (never guesses). A Set and a List both iterate via
+    // .Items, so a synthetic-graph set and a where/orderBy list both instantiate cleanly.
+    private IExecValue BuildFor(ExecObject node, int id, ExecContext context, ExecObject? ctx, Dictionary<string, IExecValue>? bindings)
+    {
+        if (ctx != null && EvaluateCtxExpr(ReadNodeText(node, "collection", context), ctx, context, bindings) is ExecArray collection)
+        {
+            var item = ReadNodeText(node, "item", context);
+            var body = OrderedMembers(node, "children", context).ToList();
+            var instances = new List<ExecItem>();
+            var key = 0;
+            foreach (var member in collection.Items)
+            {
+                var itemBindings = new Dictionary<string, IExecValue>(bindings ?? []);
+                if (item.Length > 0) itemBindings[item] = member.Value;
+                foreach (var b in body)
+                    instances.Add(new ExecItem { Key = key++, Value = BuildRenderTree(b, context, ctx, itemBindings) });
+            }
+            return new ExecArray { Items = instances, Id = id, Kind = ArrayKind.List };
+        }
+        return BuildForTemplate(node, id, context, ctx, bindings);
+    }
+
+    // An `if` row (S6b, WITH ctx). Evaluate the `condition` under the current row scope; the result MUST be a
+    // bool — deenv truthiness belongs to the INTERPRETER, not the canvas, so a non-bool result (or any
+    // eval failure → null) DEGRADES to the S6a both-branches template rather than inventing truthiness or
+    // guessing a branch. A bool renders ONLY the taken branch's children FLAT (no then/else labels — the
+    // taken branch is real content), spliced into an ExecArray exactly like BuildFor. A false condition with
+    // an empty elseChildren yields an empty array → nothing (correct).
+    private IExecValue BuildIf(ExecObject node, int id, ExecContext context, ExecObject? ctx, Dictionary<string, IExecValue>? bindings)
+    {
+        if (ctx != null && EvaluateCtxExpr(ReadNodeText(node, "condition", context), ctx, context, bindings) is ExecBool cond)
+        {
+            var members = OrderedMembers(node, cond.Value ? "children" : "elseChildren", context).ToList();
+            var items = new List<ExecItem>();
+            var key = 0;
+            foreach (var m in members)
+                items.Add(new ExecItem { Key = key++, Value = BuildRenderTree(m, context, ctx, bindings) });
+            return new ExecArray { Items = items, Id = id, Kind = ArrayKind.List };
+        }
+        return BuildIfTemplate(node, id, context, ctx, bindings);
+    }
+
+    // A `for` row → its NO-CTX / DEGRADE TEMPLATE (S6a): a <div class="for-template" data-node=id> holding a
+    // small badge (the loop var name + the collection SOURCE as an expr-chip — unevaluated, honest) and the
+    // body rendered ONCE. Body leaves referencing the item var render as chips (the item var is unbound in
+    // the template — honest, never a guess); any OUTER row-scope binding still threads through (a fallback
+    // for nested inside an evaluated outer for). Deterministic + twin-identical (pinned by the conformance
+    // case).
+    private IExecValue BuildForTemplate(ExecObject node, int id, ExecContext context, ExecObject? ctx, Dictionary<string, IExecValue>? bindings)
     {
         var item = ReadNodeText(node, "item", context);
         var collection = ReadNodeText(node, "collection", context);
@@ -852,7 +907,7 @@ public sealed class CodeExecutor
             },
         };
         var children = new List<IExecTagChild> { badge };
-        children.AddRange(OrderedMembers(node, "children", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx)));
+        children.AddRange(OrderedMembers(node, "children", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings)));
         return new ExecTag
         {
             Name = "div",
@@ -861,15 +916,16 @@ public sealed class CodeExecutor
         };
     }
 
-    // An `if` row → its NO-CTX TEMPLATE (S6a): a <div class="if-template" data-node=id> showing the
-    // condition SOURCE as an expr-chip and BOTH branches, each wrapped + marked (then / else). The else
-    // branch is OMITTED when `elseChildren` is empty. Never guesses a taken branch (taken-branch selection
-    // is S6b). Deterministic + twin-identical (pinned by the conformance case).
-    private IExecValue BuildIfTemplate(ExecObject node, int id, ExecContext context, ExecObject? ctx)
+    // An `if` row → its NO-CTX / DEGRADE TEMPLATE (S6a): a <div class="if-template" data-node=id> showing
+    // the condition SOURCE as an expr-chip and BOTH branches, each wrapped + marked (then / else). The else
+    // branch is OMITTED when `elseChildren` is empty. Never guesses a taken branch (evaluated taken-branch
+    // selection is BuildIf); any OUTER row-scope binding still threads through the branch bodies.
+    // Deterministic + twin-identical (pinned by the conformance case).
+    private IExecValue BuildIfTemplate(ExecObject node, int id, ExecContext context, ExecObject? ctx, Dictionary<string, IExecValue>? bindings)
     {
         var condition = ReadNodeText(node, "condition", context);
-        var thenBody = OrderedMembers(node, "children", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx)).ToList();
-        var elseBody = OrderedMembers(node, "elseChildren", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx)).ToList();
+        var thenBody = OrderedMembers(node, "children", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings)).ToList();
+        var elseBody = OrderedMembers(node, "elseChildren", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings)).ToList();
         var children = new List<IExecTagChild>
         {
             new ExecTag
@@ -921,8 +977,13 @@ public sealed class CodeExecutor
     //     so faithful over values-in-hand (db navigation, collections, arithmetic, pure sys builtins) and
     //     chipping everything store/floor-backed. `ambients`/`params` are reserved-empty in v1, so an expr
     //     referencing path/status/currentUser/row-vars simply misses scope → throws → chip (widens with the
-    //     uses/S6 follow-ups). Returns the value, or null on any miss/parse-failure/throw (the caller chips).
-    private IExecValue? EvaluateCtxExpr(string text, ExecObject ctx, ExecContext context)
+    //     uses/S6 follow-ups). `bindings` (S6b) is the ROW SCOPE — the accumulated loop-var values layered
+    //     onto {db} in the isolated scope (a nested for stacks its item onto the outer bindings the walk
+    //     passed down), so `{note.title}` inside a `foreach note in db.notes` resolves against the current
+    //     item. The bindings ride the SAME parent-less isolation as db (read-only, no pollution of the
+    //     designer scope, no dep leakage — the fresh MemoBypass context owns its own DepStack).
+    //     Returns the value, or null on any miss/parse-failure/throw (the caller chips).
+    private IExecValue? EvaluateCtxExpr(string text, ExecObject ctx, ExecContext context, Dictionary<string, IExecValue>? bindings = null)
     {
         if (ctx.Props.GetValueOrDefault("exprs") is not ExecObject exprs) return null;
         if (exprs.Props.GetValueOrDefault(text) is not ExecObject entry) return null;
@@ -934,6 +995,9 @@ public sealed class CodeExecutor
         var evalScope = new ExecScope();
         if (ctx.Props.GetValueOrDefault("db") is { } seedDb)
             evalScope.Items["db"] = new ExecScopeItem { Value = seedDb, IsReadOnly = true };
+        if (bindings != null)
+            foreach (var (name, value) in bindings)
+                evalScope.Items[name] = new ExecScopeItem { Value = value, IsReadOnly = true };
         try { return new CodeExecutor().ExecuteValue(ast, evalScope, new ExecContext { MemoBypass = true }); }
         catch { return null; }
     }

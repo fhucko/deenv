@@ -385,7 +385,7 @@ ui
                             <button class="refresh-eval" onClick={() => evalRefresh = evalRefresh + 1}>
                                 "Refresh values"
                         <p class="render-caption">
-                            "The canvas is a live structural view of the tree below — it repaints as you edit; expressions evaluate against the design's seed data; edited expressions show as chips until you refresh."
+                            "The canvas is a live structural view of the tree below — it repaints as you edit; expressions, loops, and conditions evaluate against the design's seed data; edited expressions show as chips until you refresh."
                         <designCanvas design={design}>
                         <p class="render-caption">
                             "Edit each node's fields inline. Add and remove nodes and attributes with the controls; reordering is coming."
