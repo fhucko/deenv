@@ -270,7 +270,7 @@ mutations the designer app performs in deenv code — that machinery already exi
 - **S2 — provenance + click-to-source (read-only).** Twins stamp node identity onto
   DOM; click an element in a rendered page → the designer navigates to the producing
   row + highlights its span in the text pane. Standalone debugging win.
-- **S3a — inline preview (`sys.previewRender`). ✅ DONE 2026-07-08** (arch + ux review
+- **S3a — inline preview (`sys.previewRender`). ✅ built 2026-07-08 → ⛔ REMOVED same day** (arch + ux review
   SHIP-WITH-FIXES, fixes applied; suite 779). The design being edited renders INLINE in the
   designer as regular content — no iframe, no kernel mount (the user's requirement; the
   earlier "mini-instance mount" framing is superseded — full record + the settled two-view

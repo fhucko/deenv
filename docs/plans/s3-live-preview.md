@@ -6,6 +6,20 @@ Companion: docs/plans/visual-designer.md (the M12 map; S0–E2 landed — a desi
 structured MetaNode rows editable via a recursive tree editor). This is direction; the
 build is sliced below.*
 
+## ⛔⛔ FINAL STATUS 2026-07-08: `sys.previewRender` BUILT (`3f40bc7`) then REMOVED same day (user decision)
+
+The tree-as-data inline preview below WAS built, reviewed, and landed — then the user ordered
+the server-backed preview removed entirely: "too static if it's rendered on server." The one
+preview surface is now the CLIENT-computed canvas (`sys.renderTree`, landed `c317718`); the
+future evaluated preview is client-side too (the eval-context ladder: parsed expr ASTs + seed
+graph + stored per-component uses {args, ambient, data} — see the memory/plan records). This
+doc remains as the design record + the banked findings below (the inline-splice infeasibility,
+the memo-leak/flash-guard/auto-live-race lessons — all still true and still binding on the
+client-side preview work). **SALVAGE: the eval-context slice should lift the seeding machinery
+(project → load → initialData-seeded throwaway store → read graph) from `3f40bc7`'s
+BuildPreviewRenderData — it IS the fake-db builder.** Accepted losses (user-accepted, don't
+re-pitch): no preview for text-mode/generic-UI designs; no server-floor fidelity view.
+
 ## ⛔ 2026-07-08 — build-time finding: the `sys.previewRender(design)` inline-splice variant is INFEASIBLE (STOP)
 
 A later S3a build attempt was directed to REPLACE the iframe (Option A, below) with a

@@ -243,7 +243,7 @@ public sealed class SsrRenderer
         var currentUser = LoadPrincipal(principalUserId);
         var floor = new AccessFloor(_desc.Rules ?? [], currentUser);
 
-        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor, BuildCommitDiffReport, _publishPreview, BuildMergePreviewReport, BuildPreviewRenderData);
+        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor, BuildCommitDiffReport, _publishPreview, BuildMergePreviewReport);
         // Ship EVERY schema descriptor on first paint (not lazily on first use), so a component
         // composing sys.schema(...) over a row that appears only after a client-side add still finds
         // its descriptor in the cache instead of missing. Descriptors are static, user-data-free.
@@ -742,25 +742,9 @@ public sealed class SsrRenderer
           padding: 0.15rem 0.5rem; font-size: 0.82rem; color: var(--muted); }
         button.remove-node, button.remove-attr { padding: 0.1rem 0.45rem; color: var(--danger); flex: 0 0 auto; }
         button.remove-node:hover, button.remove-attr:hover { background: #fff0f0; border-color: var(--danger); }
-        /* The inline live preview (M12 S3a): the design's own rendered UI, revived from server-shipped data
-           as regular content. A border delineates it as a distinct surface; it deliberately shares the page's
-           default stylesheet (the same ViewChromeCss every app gets), so the preview looks like the running
-           app — it is NOT greyed/disabled (it becomes the canvas). .preview-error is the fail-soft message a
-           projection/render failure surfaces in-place. pointer-events:none is the VISIBLE half of "inert": the
-           revived tree carries no handlers (stripped server-side), so a click/type inside would otherwise look
-           like it works (a native <input> still accepts keystrokes) while doing nothing — disabling pointer
-           events makes that failure honest instead of silently swallowed. The caption's "Not interactive" is
-           the verbal half of the same signal. */
-        .preview-section { margin: 1.6rem 0 0.4rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
-        .preview-head { display: flex; align-items: center; gap: 0.6rem; }
-        button.refresh-preview { padding: 0.15rem 0.6rem; font-size: 0.82rem; color: var(--muted); }
-        .preview-heading { font-size: 1rem; margin: 0 0 0.2rem; }
-        .preview-caption { color: var(--muted); font-size: 0.86rem; margin: 0 0 0.6rem; }
-        .design-preview { border: 1px solid var(--border); border-radius: 10px; padding: 1rem; background: var(--surface); pointer-events: none; }
-        .design-preview .preview-error { color: var(--muted); font-style: italic; }
         /* The client-computable CANVAS (M12): a live structural view of the render tree, built by both twins
            from the MetaNode rows (sys.renderTree) — it repaints instantly as the tree editor is edited, no
-           server round-trip. A surface card like .design-preview; NOT pointer-events:none — S4 turns clicks
+           server round-trip. A bordered surface card; NOT pointer-events:none — S4 turns clicks
            here into node selection, so the surface must stay clickable. Expressions that can't evaluate
            client-side yet show as .expr-chip pills (a monospace placeholder meaning "an expression lives
            here"); the .is-empty variant marks a node with neither a tag nor an expression. */
@@ -1280,140 +1264,6 @@ public sealed class SsrRenderer
             throw new CodeRuntimeException("mergePreview() requires the designer's file-backed store.");
         var plan = KernelHostActions.ComputeMergePlan(store, source.Id, target.Id, DesignMerger.NoResolutions);
         return MergeReportCode.Build(plan.Report, context);
-    }
-
-    // ── sys.previewRender (M12 S3a) ─────────────────────────────────────────────
-
-    // The compute the CodeExecutor's `sys.previewRender(design)` delegates to (threaded in above). SELF-BUILT
-    // here (like mergePreview) because the design is a row in the designer's OWN store — no kernel/cross-
-    // instance data; projection needs only the design node + its own `initialData` seed. Renders the design
-    // HEADLESSLY — projects the working copy to an app document (validating), loads it, opens a THROWAWAY
-    // file-backed store that self-seeds from the design's `initialData` (no kernel, no registration, no WS),
-    // and runs the design's own render at the root "/" as an ANONYMOUS request (the preview shows what an
-    // un-logged-in visitor sees; a design that locks out anonymous shows its own login gate — a faithful
-    // preview). Returns the rendered tree AS PLAIN DATA (handler-stripped {tag, attrs, children}/text), NOT
-    // an ExecTag — the data has an ordinary wire form, so ClientState ships it like a report; the call site
-    // revives it to a tree. An INVALID design (SchemaBridge.ProjectDesignDocument throws) — or any other
-    // failure to project/load/render — becomes an error-div DATA node, never a thrown exception that would
-    // blow up the whole designer page (a preview must fail soft). Traffics only Code-layer types: the design
-    // ExecObject (for its id) + the render context (to mint the data's transient ids), the data graph out.
-    // Internal (not private) so the S3a integration test can drive it directly with a stub design ExecObject.
-    internal IExecValue BuildPreviewRenderData(ExecObject design, ExecContext context)
-    {
-        if (_store is not JsonFileInstanceStore)
-            throw new CodeRuntimeException("previewRender() requires the designer's file-backed store.");
-        try
-        {
-            var designNode = _store.ReadNode(NodePath.Root.Field("designs").Key(design.Id.ToString()))
-                ?? throw new CodeRuntimeException($"No design with id {design.Id}.");
-            // ProjectDesignDocument validates and throws SchemaValidationException on an invalid design.
-            var appDoc = SchemaBridge.ProjectDesignDocument(designNode);
-            var desc = InstanceDescriptionLoader.Load(appDoc);
-            var tree = RenderPreviewTree(desc);
-            // The root is always a fragment ({children:[…]}, no `tag`) so a single-root, multi-root, or text
-            // render revives uniformly (the call site turns a fragment into a flat-splicing ExecArray).
-            return PreviewObj(context, ("children", PreviewArr(context, PreviewChildren([tree], context))));
-        }
-        catch (SchemaValidationException ex) { return PreviewErrorData(ex.Message, context); }
-        catch (CodeRuntimeException ex)      { return PreviewErrorData(ex.Message, context); }
-        catch (Exception ex)
-        {
-            // Any other failure (a projection/load/render engine error) must not crash the designer page —
-            // surface it in the preview slot and log the detail.
-            Console.Error.WriteLine($"previewRender of design {design.Id} failed: {ex}");
-            return PreviewErrorData("Preview unavailable.", context);
-        }
-    }
-
-    // Render the projected design HEADLESSLY and return its raw tree (the IExecTagChild the render produced).
-    // A THROWAWAY file-backed store over a temp dir self-seeds from `desc.InitialData` (JsonFileInstanceStore
-    // seeds when there is no data file); the temp dir is deleted wholesale afterward. A fresh SsrRenderer over
-    // (store, desc) runs the design's own render at "/" anonymously — the real interpreter, so the preview
-    // cannot diverge from runtime. No sessions/registry/asset host: only the tree matters.
-    private static IExecTagChild RenderPreviewTree(InstanceDescription desc)
-    {
-        var dir = Path.Combine(Path.GetTempPath(), "deenv-preview-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        try
-        {
-            var store = new JsonFileInstanceStore(Path.Combine(dir, "data.json"), desc);
-            var (result, _, _, _, _) = new SsrRenderer(store, desc).ExecuteRender("/", new ExecContext(), principalUserId: null);
-            return result;
-        }
-        finally { try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ } }
-    }
-
-    // ── tree → preview DATA (handler-stripped {tag, attrs, children}/text) ───────
-    //
-    // Converts a rendered ExecTag tree into the plain nested DATA the memo ships. Handlers are STRIPPED: an
-    // attribute whose value is a function (onClick/onChange/…) is dropped; only scalar attrs survive (a
-    // two-way `value` bind is already the evaluated scalar). Non-scalar attr values (objects/arrays/null) are
-    // display-irrelevant and dropped too. Each node/array is minted with a DISTINCT negative id and marked
-    // Constant, so ClientState ships the WHOLE tree (it is provably display-only, user-facing rendered
-    // content) rather than privacy-filtering it. Scalar children (int/bool) coerce to their rendered text,
-    // matching SerializeChild — the reviver then only ever sees tags and text.
-
-    // A distinct-negative-id Constant object, so the shipped tree arrives complete AND uniquely identified.
-    private static ExecObject PreviewObj(ExecContext context, params (string Name, IExecValue Value)[] props) =>
-        new() { Id = --context.LastId.Value, Constant = true, Props = props.ToDictionary(p => p.Name, p => p.Value) };
-
-    private static ExecArray PreviewArr(ExecContext context, IEnumerable<IExecValue> items) =>
-        new()
-        {
-            Id = --context.LastId.Value, Kind = ArrayKind.List, Constant = true,
-            Items = [.. items.Select((v, i) => new ExecItem { Key = i, Value = v })],
-        };
-
-    // Convert a child stream to DATA nodes, flattening arrays (a where/orderBy/foreach result spliced into the
-    // stream) and dropping non-renderable values (null/nothing/functions) — mirroring SerializeChild.
-    private static List<IExecValue> PreviewChildren(IEnumerable<IExecTagChild> children, ExecContext context)
-    {
-        var list = new List<IExecValue>();
-        foreach (var child in children)
-            switch (child)
-            {
-                case ExecArray arr: list.AddRange(PreviewChildren(arr.Items.Select(i => (IExecTagChild)i.Value), context)); break;
-                case ExecTag or ExecText or ExecInt or ExecBool: list.Add(PreviewNode(child, context)); break;
-                // null / nothing / functions render nothing — dropped.
-            }
-        return list;
-    }
-
-    // One node → its DATA form. A tag becomes {tag, attrs, children}; a scalar becomes its rendered text.
-    private static IExecValue PreviewNode(IExecTagChild node, ExecContext context) => node switch
-    {
-        ExecTag t => PreviewObj(context,
-            ("tag", new ExecText { Value = t.Name }),
-            ("attrs", PreviewAttrs(t.Attributes, context)),
-            ("children", PreviewArr(context, PreviewChildren(t.Children, context)))),
-        ExecText x => new ExecText { Value = x.Value },
-        ExecInt i  => new ExecText { Value = i.Value.ToString(CultureInfo.InvariantCulture) },
-        ExecBool b => new ExecText { Value = b.Value ? "true" : "false" },
-        _ => new ExecText { Value = "" },
-    };
-
-    // The surviving (scalar, non-handler) attributes as a Constant DATA object. A function value is a handler
-    // → stripped; an event-name attribute is dropped whatever its value (the SSR/client XSS guard), so a
-    // stripped-then-revived tree is never interactive. Objects/arrays/null are display-irrelevant → dropped.
-    private static ExecObject PreviewAttrs(IReadOnlyDictionary<string, IExecValue> attrs, ExecContext context)
-    {
-        var kept = new List<(string, IExecValue)>();
-        foreach (var (name, value) in attrs)
-            if (!IsEventAttribute(name) && value is ExecText or ExecInt or ExecBool)
-                kept.Add((name, value));
-        return PreviewObj(context, [.. kept]);
-    }
-
-    // An error surfaced by the preview compute, as an error-div DATA node (the same {tag, attrs, children}
-    // shape a real element takes) wrapped in the root fragment — so it ships and revives exactly like a real
-    // preview, never crashing the designer. `.preview-error` is styled muted in the designer's stylesheet.
-    private static IExecValue PreviewErrorData(string message, ExecContext context)
-    {
-        var div = PreviewObj(context,
-            ("tag", new ExecText { Value = "div" }),
-            ("attrs", PreviewObj(context, ("class", new ExecText { Value = "preview-error" }))),
-            ("children", PreviewArr(context, [new ExecText { Value = message }])));
-        return PreviewObj(context, ("children", PreviewArr(context, [div])));
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

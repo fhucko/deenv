@@ -103,7 +103,6 @@ ui
     var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime", "password"]
     var typeKinds = ["object", "enum"]
     var cardinalities = ["single", "set", "dictionary"]
-    var previewRefresh = 0
 
     fn addType(design)
         design.types.add({ name: "", baseType: "object", values: "", order: 0, props: [] })
@@ -223,10 +222,6 @@ ui
                 "Designs"
             <SetTable set={db.designs} desc={sys.schema("Design")} setPath="/designs" columns={["label"]} rowActions={designActions} createForm={createDesignForm}>
 
-    fn designPreview(design)
-        return <div class="design-preview">
-            sys.previewRender(design, previewRefresh)
-
     fn designCanvas(design)
         return <div class="design-canvas">
             foreach n in design.render
@@ -323,15 +318,6 @@ ui
                         <div class="render-tree">
                             foreach n in design.render
                                 <renderNodeEditor node={n}>
-                <section class="preview-section">
-                    <div class="preview-head">
-                        <h2 class="preview-heading">
-                            "Preview"
-                        <button class="refresh-preview" onClick={() => previewRefresh = previewRefresh + 1}>
-                            "Refresh"
-                    <p class="preview-caption">
-                        "Shows this design against its seed data, as an anonymous visitor sees it. Not interactive. Edits above may not appear until you press Refresh."
-                    <designPreview design={design}>
                 <details class="code-areas">
                     <summary class="code-summary">
                         "Advanced (code)"
