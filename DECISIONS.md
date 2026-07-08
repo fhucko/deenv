@@ -1109,6 +1109,13 @@ to *UI*). Decisions:
   repeated template (the XAML `ItemsControl`/`DataTemplate` role). The `for` must express
   **key-by-identity vs key-by-position** (default identity; a variant for position) — the
   one reactive detail the surface exposes; the rest is invisible sugar.
+  **[SUPERSEDED 2026-07-08, user-confirmed: NO new keyword.** By build time, `foreach` had
+  already become exactly this — paren-free, declaratively keyed (identity-keyed DOM
+  reconciliation, `key=` reset) — the decision predated the M11 keying work. A new `for … in`
+  would be a synonym, violating no-special-primitive + minimal-by-default. S6 structures the
+  EXISTING `foreach`/`if` as rows; the canvas's DataTemplate rendering is canvas work either
+  way; key-by-position (the one true gap) is deferred until a real case and is additively
+  addable to `foreach` as a variant. See docs/plans/forif-rows.md.]**
 
 **Scope:** further future — pillar 1 × pillar 9, layered on the public component library +
 the printer + the reactivity model + the Stage-2 live preview. Direction only.
