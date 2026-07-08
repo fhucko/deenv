@@ -238,9 +238,9 @@ public sealed class AgedStoreSteps(InstanceContext ctx)
         // as DateTime.Today via the same DefaultBase — a row predating a `due date` field displays a
         // phantom "today" that changes every day (and would persist on Save), while a UI-CLEARED date
         // reads "" (the WsHandler.OptionalLeaf empty-leaf model: empty means UNSET). Absent and
-        // cleared should read alike; when DefaultBase is aligned to the empty-leaf model, tighten
-        // this to IsEqualTo("") — the consistency asserts above stay as-is.
-        await Assert.That(clientDue).IsNotEqualTo(null);
+        // cleared should read alike; when DefaultBase is aligned to the empty-leaf model, add
+        //     await Assert.That(clientDue).IsEqualTo("");
+        // here to red-prove it — until then the SSR/client consistency asserts above are the pin.
     }
 
     [Then("the aged note form shows title {string}")]

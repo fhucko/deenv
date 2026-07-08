@@ -31,3 +31,12 @@ public sealed class DesignerScenarioLimit : IParallelLimit
 public partial class TheOperatorIDEDesignsLibraryInstanceDesignSelectorFeature
 {
 }
+
+// AgedStore.feature's designer scenario boots the SAME heavy shape (a real kernel hosting three
+// instances), so it must share the operator-IDE cap — without this partial it would escape the
+// limiter and let a third heavy kernel overlap the two Designer.feature allows. Same generated-name
+// caveat as above: derived from the feature TITLE in AgedStore.feature.
+[ParallelLimiter<DesignerScenarioLimit>]
+public partial class AgedStoreReal_WorldDataShapesFreshSeedsNeverHoldFeature
+{
+}

@@ -10,11 +10,12 @@ Feature: Aged store (real-world data shapes fresh seeds never hold)
   written-then-cleared single refs (WriteReference null: a logged clear + GC, a different history than
   never-written), rows predating schema fields, adoption-baseline commits (no author, no parent) — and
   drives the affected pages through a REAL browser over a warm session. The &&/|| repro required the
-  CLIENT-SIDE nav → refetch path (SSR alone did not reproduce), so every page transition here is a
-  clicked in-app link, not a fresh GET; a console/pageerror collector asserts the whole sweep stayed
-  error-free (a failed refetch surfaces only as console.error("Server error:", …), never as a throw).
+  CLIENT-SIDE nav → refetch path (SSR alone did not reproduce), so the load-bearing transitions — the
+  designer sweep and each list→member step — are clicked in-app links, not fresh GETs; a
+  console/pageerror collector asserts the whole sweep stayed error-free (a failed refetch surfaces
+  only as console.error("Server error:", …), never as a throw).
 
-  @aged-store @single-user
+  @m12 @aged-store @single-user
   Scenario: The designer's pages survive design-less and cleared-design instances plus adoption baselines
     Given the operator IDE is running on an aged kernel store
     When I click into the aged design editor for "todo"
@@ -33,7 +34,7 @@ Feature: Aged store (real-world data shapes fresh seeds never hold)
   # date reads "" (the empty-leaf model) — absent and cleared should read alike. The fix is its own
   # decision (DefaultBase is also the CREATE/seed/migration backfill); until it lands the date
   # assertion pins SSR/client CONSISTENCY only (see AgedStoreSteps).
-  @aged-store @single-user
+  @m12 @aged-store @single-user
   Scenario: The generic UI survives rows created under an older schema than the one served
     Given an app store aged under an old schema and served under one with added fields
     When I open the aged notes list
