@@ -6,6 +6,63 @@ Companion: docs/plans/visual-designer.md (the M12 map; S0–E2 landed — a desi
 structured MetaNode rows editable via a recursive tree editor). This is direction; the
 build is sliced below.*
 
+## ⛔ 2026-07-08 — build-time finding: the `sys.previewRender(design)` inline-splice variant is INFEASIBLE (STOP)
+
+A later S3a build attempt was directed to REPLACE the iframe (Option A, below) with a
+server-backed read builtin `sys.previewRender(design)` returning the design's RENDERED
+ExecTag TREE, spliced inline in the designer via `{sys.previewRender(design)}` (mirroring
+`sys.publishPreview`). **That variant cannot work, at the interpreter/client boundary — it
+is not a wiring detail but a structural incompatibility.** Recorded here so it is not
+re-attempted:
+
+- **A tree has NO wire form to the client.** `ClientState.Serialize` (ClientState.cs:131)
+  EXPLICITLY skips any memo entry whose result is `ExecTag`/`ExecFunction` — "a tag- or
+  function-valued result has no wire form; the client recomputes it from the shipped data on
+  first render." The DtValue wire union (dt.ts:7) has no tag variant. So a tag-valued
+  `sys.previewRender` result, cached like `publishPreview`, is NEVER shipped. This is the
+  privacy/design floor, not an oversight: trees are *recomputed on the client*, never
+  serialized.
+- **The client CANNOT recompute this tree.** Every other `sys.` read returns plain DATA the
+  client reuses; a preview is a foreign design's `fn render()` run against a throwaway store
+  — the client has NO store, NO Designer, NO kernel, and (Option B, rejected below) cannot
+  host a second app scope. So on the client `execPreviewRender` MUST miss the memo → throw
+  "Value not available" → return `nothing` → the preview slot renders EMPTY → refetch. The
+  refetch re-runs SSR but STILL can't ship the tree (same skip) → the client render misses
+  again → **an empty preview + a self-re-arming refetch**, never a painted preview.
+- **The SSR-only floor is ALSO wiped.** The designer (instances/1) is a fully-custom
+  `fn render()` app; `init.ts:104` runs `renderUi()` on hydration and REPLACES the `#app`
+  DOM with the client's own render. So the preview the server splices into the SSR HTML
+  survives only until the first client frame, then the client recompute (which misses, above)
+  blanks it. There is no stable SSR-only slice here.
+- **This is exactly the interpreter-boundary the doc's rejected Option B hit** ("Running app
+  B's render needs app B's whole ambient state → it collapses into a second HostedInstance").
+  Splicing a foreign design's rendered tree into the designer's OWN client render is Option B
+  wearing a `sys.` builtin's clothes.
+
+**Consequence for the direction:** the preview must be ISOLATED from the designer's own
+client render — it cannot be inline content. The inline-splice framing is CLOSED. Two feasible
+isolated shapes remain, both using an iframe (the isolation boundary):
+
+- **Lightest feasible — `sys.previewRender(design)` → HTML STRING + `<iframe srcdoc={html}>`.**
+  A *string* HAS a wire form (unlike a tree), so a read builtin that returns the headless-
+  rendered HTML string ships to the client fine and refetches on edit; the designer shows it via
+  a passive `srcdoc` iframe. NO kernel mount, NO host action, NO throwaway-instance lifecycle —
+  just the builtin + an iframe attribute. Static (non-interactive) preview, updates on edit.
+  This recovers almost all the lightness; the only concession is the iframe wrapper. **This is
+  the recommended shape if/when S3 is revisited.**
+- **Heavier — Option A (throwaway mount + `sys.mountPreview` host action), below.** A live
+  *interactive* preview (its own WS). Only worth the machinery if in-preview interactivity is
+  genuinely needed — not needed for a WYSIWYG-canvas preview.
+
+## ⏸ STATUS: PAUSED 2026-07-08 (user decision)
+
+After the inline-splice infeasibility surfaced, the user chose to PAUSE/RETHINK S3 rather than
+proceed with either isolated shape. **S3 is not being built.** The editable structured-render
+designer (S0–E2, on main) is a complete, self-contained milestone; the live preview is deferred.
+When revisited, start from the `sys.previewRender` → HTML-string + `srcdoc` shape above (lightest
+feasible); Option A (below) is the heavier interactive alternative. Everything below is the
+original (pre-finding) Option A design, kept for reference.
+
 ## Position (one sentence)
 
 The designer shows a live preview of the design being edited by **projecting the working
