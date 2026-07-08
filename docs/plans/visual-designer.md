@@ -243,6 +243,13 @@ mutations the designer app performs in deenv code — that machinery already exi
   add/remove/reorder of nodes/attrs yet (both covered by the caption). A framework bug found +
   routed around + spawned as a task: `.single()` over a set freshly repopulated by a host-action
   ack drops to a stale client render (E1 uses `foreach` over the one-member root set instead).
+  **✅ FIXED 2026-07-08** — root cause was server-only: `single`/`any` recorded only a membership
+  *dep* (`RecordMembership`) but never recorded their scanned items as accessed *leaves* the way
+  `foreach` does, so a set consumed ONLY by `single`/`any` in output position never harvested its
+  membership into the client state and the client replayed the scan over an empty array. Fix:
+  a shared `RecordScannedItem` (CodeExecutor.cs) now used by foreach + single + any; regression
+  tests in CodeExecutorTests. `.single`/`.any` over a host-action-repopulated set are now safe
+  (E1's `foreach` workaround still works and was left as-is).
 - **E2 — add/remove nodes + attributes. ✅ DONE 2026-07-08** (ux SHIP-WITH-FIXES, fixes
   applied; suite 773). The tree editor is now STRUCTURALLY editable: each element node has
   `+ element` / `+ text/expr` / `+ attr` controls; each non-root node + each attr has a remove

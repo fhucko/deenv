@@ -1,4 +1,5 @@
-﻿using DeEnv.Code;
+﻿using System.Text.Json.Nodes;
+using DeEnv.Code;
 using DeEnv.Instance;
 using DeEnv.Storage;
 using TUnit.Assertions;
@@ -156,6 +157,60 @@ public sealed class CodeExecutorTests
 
         var ps = result.Items.Select(i => ((ExecInt)((ExecObject)i.Value).Props["p"]).Value).ToList();
         await Assert.That(ps).IsEquivalentTo(new[] { 2, 3 });
+    }
+
+    // ── scan-method harvest (single/any ship membership for client replay) ──────────
+
+    CodeObject PItem(int p) => new() { Props = [new CodeObjectProp { Name = "p", Value = Int(p) }] };
+    CodeFunction PredEq(int p) => new()
+    {
+        Params = [new CodeFunctionParam { Name = "x" }],
+        Body = new CodeBlock { Statements = [new CodeReturn { Value = Op(CodeInfixOpType.Equals, Prop(Sym("x"), "p"), Int(p)) }] },
+    };
+
+    // A `.single(pred)` over a set in OUTPUT POSITION (a custom `fn render()`, DepStack empty) must harvest
+    // the set's membership into the client state — else the client replays `.single` over an EMPTY array and
+    // gets null/stale (the E1 bug: a set freshly repopulated by a host-action ack, consumed only by `.single`,
+    // never by a foreach). Twin of ExecuteTagForEach's per-row leaf recording; `where`/`orderBy` avoid the
+    // trap only because a foreach (or the shipped cache result) carries their membership.
+    [Test]
+    public async Task Single_in_output_position_ships_the_scanned_membership()
+    {
+        var scope = new ExecScope();
+        var exec = new CodeExecutor();
+        var ctx = new ExecContext();
+
+        Run(scope, exec, ctx, new CodeVarDec { Name = "arr", Value = new CodeArray { Items = [PItem(1), PItem(2)] } });
+        var srcArr = (ExecArray)scope.Items["arr"].Value;
+
+        var single = new CodeCall { Fn = Prop(Sym("arr"), "single"), Params = [PredEq(2)] };
+        var matched = (ExecObject)exec.ExecuteValue(single, scope, ctx);
+
+        var arrays = (JsonObject)ClientState.Serialize(scope, ctx)["leaves"]!["arrays"]!;
+        await Assert.That(arrays.ContainsKey(srcArr.Id.ToString())).IsTrue(); // membership harvested (was absent before the fix)
+        var shippedIds = ((JsonArray)arrays[srcArr.Id.ToString()]!["items"]!)
+            .Select(i => i!["value"]!["id"]!.GetValue<int>()).ToList();
+        await Assert.That(shippedIds).Contains(matched.Id); // the matched member ships so the client re-finds it
+    }
+
+    // `.any(pred)` shares the exact defect (E1's section guard is `design.render.any(x => true)`): a set
+    // consumed only by `.any` must still ship its membership, or the client replays `.any` over empty → false.
+    [Test]
+    public async Task Any_in_output_position_ships_the_scanned_membership()
+    {
+        var scope = new ExecScope();
+        var exec = new CodeExecutor();
+        var ctx = new ExecContext();
+
+        Run(scope, exec, ctx, new CodeVarDec { Name = "arr", Value = new CodeArray { Items = [PItem(1), PItem(2)] } });
+        var srcArr = (ExecArray)scope.Items["arr"].Value;
+
+        var any = new CodeCall { Fn = Prop(Sym("arr"), "any"), Params = [PredEq(2)] };
+        await Assert.That(((ExecBool)exec.ExecuteValue(any, scope, ctx)).Value).IsTrue();
+
+        var arrays = (JsonObject)ClientState.Serialize(scope, ctx)["leaves"]!["arrays"]!;
+        await Assert.That(arrays.ContainsKey(srcArr.Id.ToString())).IsTrue();
+        await Assert.That(((JsonArray)arrays[srcArr.Id.ToString()]!["items"]!).Count).IsGreaterThan(0);
     }
 
     // ── memoization (Stage 4) ────────────────────────────────────────────────────────

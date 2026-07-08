@@ -1455,11 +1455,13 @@ public sealed class CodeExecutor
             {
                 var lambda = AsLambda(args[0], scope, context);
                 RecordMembership(sysFn.Target, context);
-                return new ExecBool
+                foreach (var item in sysFn.Target.Items)
                 {
-                    Value = sysFn.Target.Items.Any(
-                        item => InvokeLambda(lambda, item.Value, context) is ExecBool { Value: true }),
-                };
+                    RecordScannedItem(sysFn.Target, item, context);
+                    if (InvokeLambda(lambda, item.Value, context) is ExecBool { Value: true })
+                        return new ExecBool { Value = true };
+                }
+                return new ExecBool { Value = false };
             }
             // single(predicate): the first member matching the predicate, or NULL when none match (it does
             // NOT throw on no-match — a "(choose…)" pick that matches nothing must CLEAR a ref, so null is the
@@ -1471,8 +1473,11 @@ public sealed class CodeExecutor
                 var lambda = AsLambda(args[0], scope, context);
                 RecordMembership(sysFn.Target, context);
                 foreach (var item in sysFn.Target.Items)
+                {
+                    RecordScannedItem(sysFn.Target, item, context);
                     if (InvokeLambda(lambda, item.Value, context) is ExecBool { Value: true })
                         return item.Value;
+                }
                 return new ExecNull();
             }
             default:
@@ -1562,6 +1567,21 @@ public sealed class CodeExecutor
     private static void RecordMembership(ExecArray coll, ExecContext context)
     {
         if (context.DepStack.Count > 0) context.DepStack.Peek().Members.Add(new MemberDep(coll.Id));
+    }
+
+    // Record an item OBSERVED by a scan (foreach's rows, or the members single/any test until they
+    // short-circuit) as an accessed LEAF, so ClientState.Serialize harvests the membership the client must
+    // replay the scan over. In output position it is a displayed leaf (AccessedItems); inside a computation it
+    // is a pending leaf of the surrounding tag fn (LeafStack), promoted only if that fn returns tags — so a
+    // scan used inside a where predicate stays private. RecordMembership alone is just an invalidation dep and
+    // ships nothing: a set consumed ONLY by single/any (never a foreach) would otherwise ship empty and the
+    // client's single/any would return null/false over it (the E1 host-action-repopulated-set bug). Server
+    // harvesting only — the TS twin has no client-state to emit, so it records no leaves.
+    private static void RecordScannedItem(ExecArray coll, ExecItem item, ExecContext context)
+    {
+        if (context.DepStack.Count == 0) context.AccessedItems.Add((coll, item));
+        else context.LeafStack.Peek().Items.Add((coll, item));
+        OnValueAccessed(context, item.Value);
     }
 
     // ── tags ──────────────────────────────────────────────────────────────────────
@@ -1735,9 +1755,7 @@ public sealed class CodeExecutor
         var children = new List<IExecTagChild>();
         foreach (var item in collection.Items)
         {
-            if (context.DepStack.Count == 0) context.AccessedItems.Add((collection, item));
-            else context.LeafStack.Peek().Items.Add((collection, item));
-            OnValueAccessed(context, item.Value);
+            RecordScannedItem(collection, item, context);
             var itemScope = new ExecScope { Parent = scope };
             itemScope.Items[codeForEach.Item.Name] = new ExecScopeItem { Value = item.Value, IsReadOnly = true };
             // Push a per-row segment onto the slot path so a component inside this row keys on the
