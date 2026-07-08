@@ -1747,9 +1747,17 @@ function executeNot(codeNot: CodeNot, scope: ExecScope, context: ExecContext): E
 
 function executeInfixOpBasic(codeInfixOp: CodeInfixOp, scope: ExecScope, context: ExecContext): ExecValue {
     const left = executeValue(codeInfixOp.left, scope, context).value;
-    const right = executeValue(codeInfixOp.right, scope, context).value;
     const asInt = (v: ExecValue) => { if (v.type !== "int") throw new Error("Expected an int."); return v.value; };
     const asBool = (v: ExecValue) => { if (v.type !== "bool") throw new Error("Expected a bool."); return v.value; };
+    // `&&` / `||` SHORT-CIRCUIT: the right operand evaluates ONLY when the left doesn't decide the
+    // result — so the universal null-guard idiom `x != null && f(x)` never evaluates f(null). Twin of
+    // CodeExecutor's And/Or (see its comment for the dep note: a skipped right side records no deps,
+    // and the left's own deps re-trigger evaluation whenever the guard flips).
+    if (codeInfixOp.op === "and")
+        return { type: "bool", value: asBool(left) && asBool(executeValue(codeInfixOp.right, scope, context).value) };
+    if (codeInfixOp.op === "or")
+        return { type: "bool", value: asBool(left) || asBool(executeValue(codeInfixOp.right, scope, context).value) };
+    const right = executeValue(codeInfixOp.right, scope, context).value;
     switch (codeInfixOp.op) {
         // `+` is overloaded: a string operand makes it concatenation (both sides stringified),
         // otherwise integer addition. Twin of CodeExecutor's Add arm + AsText.
@@ -1774,8 +1782,6 @@ function executeInfixOpBasic(codeInfixOp: CodeInfixOp, scope: ExecScope, context
         case "lessThanOrEqual": return { type: "bool", value: asInt(left) <= asInt(right) };
         case "moreThan": return { type: "bool", value: asInt(left) > asInt(right) };
         case "moreThanOrEqual": return { type: "bool", value: asInt(left) >= asInt(right) };
-        case "and": return { type: "bool", value: asBool(left) && asBool(right) };
-        case "or": return { type: "bool", value: asBool(left) || asBool(right) };
         default: throw new Error("NotImplementedException");
     }
 }

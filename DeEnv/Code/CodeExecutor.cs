@@ -450,6 +450,19 @@ public sealed class CodeExecutor
         }
 
         var left = ExecuteValue(codeInfixOp.Left, scope, context);
+
+        // `&&` / `||` SHORT-CIRCUIT (the fix for the real-data designer break): the right operand is
+        // evaluated ONLY when the left doesn't already decide the result — so the universal null-guard
+        // idiom `x != null && f(x)` never evaluates `f(null)`. Every guard in the apps was written
+        // assuming this (it is what every mainstream language does); the old eager evaluation made those
+        // guards decoration and threw on legitimate data (an Instance with no design). Dep note: when the
+        // right side is skipped, its reads record no deps — correct, because the left side's own recorded
+        // deps re-trigger evaluation whenever the guard flips. Twin of codeExec.ts's "and"/"or".
+        if (codeInfixOp.Op == CodeInfixOpType.And)
+            return new ExecBool { Value = AsBool(left) && AsBool(ExecuteValue(codeInfixOp.Right, scope, context)) };
+        if (codeInfixOp.Op == CodeInfixOpType.Or)
+            return new ExecBool { Value = AsBool(left) || AsBool(ExecuteValue(codeInfixOp.Right, scope, context)) };
+
         var right = ExecuteValue(codeInfixOp.Right, scope, context);
         return codeInfixOp.Op switch
         {
@@ -468,8 +481,6 @@ public sealed class CodeExecutor
             CodeInfixOpType.LessThanOrEqual => new ExecBool { Value = AsInt(left) <= AsInt(right) },
             CodeInfixOpType.MoreThan        => new ExecBool { Value = AsInt(left) > AsInt(right) },
             CodeInfixOpType.MoreThanOrEqual => new ExecBool { Value = AsInt(left) >= AsInt(right) },
-            CodeInfixOpType.And             => new ExecBool { Value = AsBool(left) && AsBool(right) },
-            CodeInfixOpType.Or              => new ExecBool { Value = AsBool(left) || AsBool(right) },
             _ => throw new NotImplementedException($"Infix op {codeInfixOp.Op}"),
         };
     }

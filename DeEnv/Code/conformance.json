@@ -1697,6 +1697,27 @@
         "kind": "tag",
         "value": "<div data-node=\"-15\" id=\"Hi\">HellotrueC<span class=\"expr-chip\" data-node=\"-11\">sys.extent(\"X\")</span><span class=\"expr-chip\" data-node=\"-13\">db.notes</span></div>"
       }
+    },
+    {
+      "name": "&& short-circuits — the right operand is NOT evaluated when the left is false",
+      "comment": "The universal null-guard idiom `x != null && f(x)` depends on this: the right side here reads an UNBOUND symbol, which throws on both twins if evaluated. Pre-fix (eager operands) this case throws; with short-circuit it is simply false. Found via a real-data break: an Instance with no design made every design page throw 'id() expects an object' straight through its `i.design != null &&` guard.",
+      "text": "false && zzz == 1",
+      "expr": { "type": "infixOp", "op": "and", "left": { "type": "bool", "value": false }, "right": { "type": "infixOp", "op": "equals", "left": { "type": "symbol", "name": "zzz" }, "right": { "type": "int", "value": 1 } } },
+      "expect": { "kind": "bool", "value": false }
+    },
+    {
+      "name": "|| short-circuits — the right operand is NOT evaluated when the left is true",
+      "comment": "The dual of the && case: an unbound-symbol right side never evaluates when the left already decides true.",
+      "text": "true || zzz == 1",
+      "expr": { "type": "infixOp", "op": "or", "left": { "type": "bool", "value": true }, "right": { "type": "infixOp", "op": "equals", "left": { "type": "symbol", "name": "zzz" }, "right": { "type": "int", "value": 1 } } },
+      "expect": { "kind": "bool", "value": true }
+    },
+    {
+      "name": "the null-guard idiom — `x != null && f(x)` never evaluates f(null)",
+      "comment": "The app-shaped pin for the real-data break: sys.id(null) throws if evaluated, so this expression only yields false under short-circuit. This is the guard every app writes (the designer's own `i.design != null && sys.id(i.design) == ...`, which threw 'id() expects an object' over an instance with no design).",
+      "text": "null != null && sys.id(null) == 1",
+      "expr": { "type": "infixOp", "op": "and", "left": { "type": "infixOp", "op": "notEquals", "left": { "type": "null" }, "right": { "type": "null" } }, "right": { "type": "infixOp", "op": "equals", "left": { "type": "call", "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "id" } }, "params": [ { "type": "null" } ] }, "right": { "type": "int", "value": 1 } } },
+      "expect": { "kind": "bool", "value": false }
     }
   ]
 }
