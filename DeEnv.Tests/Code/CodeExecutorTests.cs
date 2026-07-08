@@ -279,4 +279,161 @@ public sealed class CodeExecutorTests
         var users = store.ReadNode(NodePath.Root.Field("users")) as SetValue;
         await Assert.That(users!.Members.Count).IsEqualTo(1);
     }
+
+    // ── sys.renderTree (M12 client-computable canvas) ────────────────────────────────
+
+    // A MetaNode row (positive store ids, like real design rows) → the expected tag tree: element with
+    // data-node provenance, a literal attr applied, a non-literal + an event attr both skipped, children
+    // ORDERED by `order`, a literal leaf as text, a non-literal leaf as an expr chip, a nested element.
+    [Test]
+    public async Task RenderTree_builds_the_expected_tag_tree_over_a_seeded_node()
+    {
+        ExecObject Node(int id, params (string, IExecValue)[] props) =>
+            new() { Id = id, Props = props.ToDictionary(p => p.Item1, p => p.Item2) };
+        ExecArray Set(int id, params ExecObject[] members) =>
+            new() { Id = id, Kind = ArrayKind.Set, Items = [.. members.Select(m => new ExecItem { Key = m.Id, Value = m })] };
+        ExecText T(string v) => new() { Value = v };
+        ExecInt I(int v) => new() { Value = v };
+
+        var attrClass = Node(201, ("name", T("class")), ("value", T("\"box\"")), ("order", I(0)));   // literal → applied
+        var attrEvent = Node(202, ("name", T("onmouseover")), ("value", T("\"x\"")), ("order", I(1))); // event → skipped
+        var attrExpr  = Node(203, ("name", T("id")), ("value", T("user.id")), ("order", I(2)));       // non-literal → skipped
+
+        var chipLeaf = Node(302, ("tag", T("")), ("expr", T("items.count")), ("order", I(0)));         // chip
+        var textLeaf = Node(301, ("tag", T("")), ("expr", T("\"hello\"")), ("order", I(1)));           // literal text
+        var childEl  = Node(303, ("tag", T("b")), ("expr", T("")), ("order", I(2)),
+            ("attrs", Set(330)), ("children", Set(331)));
+
+        var root = Node(100, ("tag", T("div")), ("expr", T("")), ("order", I(0)),
+            ("attrs", Set(210, attrExpr, attrClass, attrEvent)),          // inserted OUT of order
+            ("children", Set(220, textLeaf, chipLeaf, childEl)));         // inserted OUT of order
+
+        var scope = new ExecScope();
+        scope.Items["root"] = new ExecScopeItem { Value = root, IsReadOnly = true };
+        var call = new CodeCall { Fn = Prop(Sym("sys"), "renderTree"), Params = [Sym("root")] };
+        var tag = (ExecTag)new CodeExecutor().ExecuteValue(call, scope, new ExecContext());
+
+        // Element: data-node provenance + the one literal attr; the event + non-literal attrs are gone.
+        await Assert.That(tag.Name).IsEqualTo("div");
+        await Assert.That(((ExecText)tag.Attributes["data-node"]).Value).IsEqualTo("100");
+        await Assert.That(((ExecText)tag.Attributes["class"]).Value).IsEqualTo("box");
+        await Assert.That(tag.Attributes.Count).IsEqualTo(2);
+
+        // Children ORDERED by `order`: chip (0), literal text (1), nested element (2).
+        await Assert.That(tag.Children.Length).IsEqualTo(3);
+
+        var chip = (ExecTag)tag.Children[0];
+        await Assert.That(chip.Name).IsEqualTo("span");
+        await Assert.That(((ExecText)chip.Attributes["class"]).Value).IsEqualTo("expr-chip");
+        await Assert.That(((ExecText)chip.Attributes["data-node"]).Value).IsEqualTo("302");
+        await Assert.That(((ExecText)chip.Children[0]).Value).IsEqualTo("items.count");
+
+        await Assert.That(((ExecText)tag.Children[1]).Value).IsEqualTo("hello");
+
+        var nested = (ExecTag)tag.Children[2];
+        await Assert.That(nested.Name).IsEqualTo("b");
+        await Assert.That(((ExecText)nested.Attributes["data-node"]).Value).IsEqualTo("303");
+        await Assert.That(nested.Children.Length).IsEqualTo(0);
+    }
+
+    // An INVALID node (tag AND expr both empty) → a visible empty chip, never silent nothing.
+    [Test]
+    public async Task RenderTree_empty_node_renders_a_visible_empty_chip()
+    {
+        var node = new ExecObject { Id = 7, Props = new()
+            { ["tag"] = new ExecText { Value = "" }, ["expr"] = new ExecText { Value = "" }, ["order"] = new ExecInt { Value = 0 } } };
+        var scope = new ExecScope();
+        scope.Items["n"] = new ExecScopeItem { Value = node, IsReadOnly = true };
+        var call = new CodeCall { Fn = Prop(Sym("sys"), "renderTree"), Params = [Sym("n")] };
+        var tag = (ExecTag)new CodeExecutor().ExecuteValue(call, scope, new ExecContext());
+
+        await Assert.That(tag.Name).IsEqualTo("span");
+        await Assert.That(((ExecText)tag.Attributes["class"]).Value).IsEqualTo("expr-chip is-empty");
+        await Assert.That(((ExecText)tag.Attributes["data-node"]).Value).IsEqualTo("7");
+        await Assert.That(((ExecText)tag.Children[0]).Value).IsEqualTo("(empty)");
+    }
+
+    // The walk records the node fields + set memberships it reads as accessed leaves (output position),
+    // so the server ships the subgraph and the client can replay renderTree — the liveness substrate.
+    [Test]
+    public async Task RenderTree_harvests_the_node_subgraph_as_accessed_leaves()
+    {
+        var child = new ExecObject { Id = 40, Props = new()
+            { ["tag"] = new ExecText { Value = "" }, ["expr"] = new ExecText { Value = "\"x\"" }, ["order"] = new ExecInt { Value = 0 } } };
+        var kids = new ExecArray { Id = 41, Kind = ArrayKind.Set, Items = [new ExecItem { Key = 40, Value = child }] };
+        var root = new ExecObject { Id = 30, Props = new()
+            { ["tag"] = new ExecText { Value = "div" }, ["expr"] = new ExecText { Value = "" },
+              ["order"] = new ExecInt { Value = 0 }, ["attrs"] = new ExecArray { Id = 42, Kind = ArrayKind.Set, Items = [] },
+              ["children"] = kids } };
+
+        var scope = new ExecScope();
+        scope.Items["root"] = new ExecScopeItem { Value = root, IsReadOnly = true };
+        var ctx = new ExecContext();
+        var call = new CodeCall { Fn = Prop(Sym("sys"), "renderTree"), Params = [Sym("root")] };
+        new CodeExecutor().ExecuteValue(call, scope, ctx);
+
+        // The root's tag + the children-set membership + the child's expr are demanded data.
+        await Assert.That(ctx.AccessedObjectProps.Contains((root, "tag"))).IsTrue();
+        await Assert.That(ctx.AccessedObjectProps.Contains((root, "children"))).IsTrue();
+        await Assert.That(ctx.AccessedItems.Any(i => i.Item1 == kids)).IsTrue();
+        await Assert.That(ctx.AccessedObjectProps.Contains((child, "expr"))).IsTrue();
+    }
+
+    // Review fix 1: an int-SHAPED attr value outside Int32 range (deenv's int is 32-bit) must NOT crash the
+    // server (int.Parse would throw OverflowException, 500ing the whole render) — it is classified NON-
+    // LITERAL and the attr is skipped, exactly like a bare expression. Value is 2^31 (one past Int32.MaxValue).
+    [Test]
+    public async Task RenderTree_an_out_of_range_int_attr_is_skipped_not_a_crash()
+    {
+        var attr = new ExecObject { Id = 501, Props = new()
+            { ["name"] = new ExecText { Value = "big" }, ["value"] = new ExecText { Value = "2147483648" }, ["order"] = new ExecInt { Value = 0 } } };
+        var attrs = new ExecArray { Id = 502, Kind = ArrayKind.Set, Items = [new ExecItem { Key = 501, Value = attr }] };
+        var node = new ExecObject { Id = 500, Props = new()
+            { ["tag"] = new ExecText { Value = "div" }, ["expr"] = new ExecText { Value = "" }, ["order"] = new ExecInt { Value = 0 },
+              ["attrs"] = attrs, ["children"] = new ExecArray { Id = 503, Kind = ArrayKind.Set, Items = [] } } };
+        var scope = new ExecScope();
+        scope.Items["n"] = new ExecScopeItem { Value = node, IsReadOnly = true };
+        var call = new CodeCall { Fn = Prop(Sym("sys"), "renderTree"), Params = [Sym("n")] };
+
+        var tag = (ExecTag)new CodeExecutor().ExecuteValue(call, scope, new ExecContext()); // must not throw
+
+        await Assert.That(tag.Attributes.ContainsKey("big")).IsFalse();
+        await Assert.That(tag.Attributes.Count).IsEqualTo(1); // data-node only
+    }
+
+    // Review fix 3: a user MetaAttr literally named "data-node" must not clobber the provenance id the walk
+    // itself stamps — it is skipped like an event attr, so data-node always carries the node's own intrinsic id.
+    [Test]
+    public async Task RenderTree_a_user_attr_named_data_node_is_skipped_never_clobbers_provenance()
+    {
+        var attr = new ExecObject { Id = 601, Props = new()
+            { ["name"] = new ExecText { Value = "data-node" }, ["value"] = new ExecText { Value = "\"clobber\"" }, ["order"] = new ExecInt { Value = 0 } } };
+        var attrs = new ExecArray { Id = 602, Kind = ArrayKind.Set, Items = [new ExecItem { Key = 601, Value = attr }] };
+        var node = new ExecObject { Id = 600, Props = new()
+            { ["tag"] = new ExecText { Value = "div" }, ["expr"] = new ExecText { Value = "" }, ["order"] = new ExecInt { Value = 0 },
+              ["attrs"] = attrs, ["children"] = new ExecArray { Id = 603, Kind = ArrayKind.Set, Items = [] } } };
+        var scope = new ExecScope();
+        scope.Items["n"] = new ExecScopeItem { Value = node, IsReadOnly = true };
+        var call = new CodeCall { Fn = Prop(Sym("sys"), "renderTree"), Params = [Sym("n")] };
+
+        var tag = (ExecTag)new CodeExecutor().ExecuteValue(call, scope, new ExecContext());
+
+        await Assert.That(((ExecText)tag.Attributes["data-node"]).Value).IsEqualTo("600"); // the node's OWN id, not "clobber"
+        await Assert.That(tag.Attributes.Count).IsEqualTo(1);
+    }
+
+    // Review fix 2: an ABSENT prop on a MetaNode/MetaAttr row now THROWS (matching every other read in both
+    // twins), instead of silently swallowing to ExecNull — a transient/incomplete draft (S4) must surface as
+    // a genuine miss so the dep still gets recorded and a client refetch can heal it.
+    [Test]
+    public async Task RenderTree_an_absent_field_throws_instead_of_swallowing()
+    {
+        var node = new ExecObject { Id = 700, Props = new() { ["tag"] = new ExecText { Value = "div" } } }; // no "expr"/"order"/"attrs"/"children"
+        var scope = new ExecScope();
+        scope.Items["n"] = new ExecScopeItem { Value = node, IsReadOnly = true };
+        var call = new CodeCall { Fn = Prop(Sym("sys"), "renderTree"), Params = [Sym("n")] };
+
+        await Assert.That(() => new CodeExecutor().ExecuteValue(call, scope, new ExecContext()))
+            .Throws<CodeRuntimeException>();
+    }
 }

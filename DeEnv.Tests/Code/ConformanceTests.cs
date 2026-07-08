@@ -132,8 +132,37 @@ public sealed class ConformanceTests
             case "null":
                 await Assert.That(result is ExecNull).IsTrue();
                 break;
+            case "tag":
+                // A tag-tree result (sys.renderTree) has no scalar form; compare a canonical string
+                // serialization, twin-identical with codeExec.ts's serializeTree in runConformance.
+                await Assert.That(SerializeTree(result)).IsEqualTo(c.Expect.Value.GetString());
+                break;
             default:
                 throw new InvalidOperationException($"Unknown expect kind '{c.Expect.Kind}' in case '{c.Name}'.");
         }
     }
+
+    // Canonical string form of a rendered tag tree: `<name attr="v"…>children…</name>` with attributes
+    // sorted ordinally (DOM order is a browser concern), text children inline. Twin of codeExec.ts's
+    // serializeTree — the two must produce the same string for the SAME tree, so the tag conformance case
+    // proves both interpreters build an identical canvas.
+    private static string SerializeTree(IExecTagChild node) => node switch
+    {
+        ExecTag t => "<" + t.Name
+            + string.Concat(t.Attributes.Keys.OrderBy(k => k, StringComparer.Ordinal)
+                .Select(k => " " + k + "=\"" + ScalarText(t.Attributes[k]) + "\""))
+            + ">" + string.Concat(t.Children.Select(SerializeTree)) + "</" + t.Name + ">",
+        ExecText x => x.Value,
+        ExecInt i => i.Value.ToString(),
+        ExecBool b => b.Value ? "true" : "false",
+        _ => "",
+    };
+
+    private static string ScalarText(IExecValue v) => v switch
+    {
+        ExecText t => t.Value,
+        ExecInt i => i.Value.ToString(),
+        ExecBool b => b.Value ? "true" : "false",
+        _ => "",
+    };
 }

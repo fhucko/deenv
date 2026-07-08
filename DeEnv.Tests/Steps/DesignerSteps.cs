@@ -1601,6 +1601,30 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     private string _lastProjectError = "";
 
+    // ── M12 CANVAS-1 — the client-computable canvas (sys.renderTree) ────────────────────────────
+    //
+    // The canvas (.design-canvas) renders the design's MetaNode rows into a live tag tree via
+    // sys.renderTree — computed on the CLIENT from the row data it already holds. An element node emits its
+    // real tag carrying data-node=<row id> (the provenance spine); a non-literal expression leaf emits a
+    // span.expr-chip. These steps assert the canvas's rendered DOM directly (a REAL element, not an input),
+    // and — crucially — that it updates LIVE (no reload) after a tree-editor edit, proving dep-recording
+    // fires through the builtin's walk.
+
+    // A real rendered element of the given tag inside the canvas, stamped with data-node. Auto-waits, so a
+    // tree-editor edit that flips a tag (main → section) or an add that introduces a new element (div) is
+    // observed WITHOUT any reload — the liveness proof: the edit alone re-rendered the canvas.
+    [Then("the design canvas shows a {string} element with a data-node attribute")]
+    public async Task ThenCanvasShowsElement(string tag) =>
+        // Attached (presence in the DOM), not Visible — a freshly-added empty element (e.g. an empty <div>)
+        // has zero size and would fail a visibility check, but it IS in the canvas; presence is the assertion.
+        await ctx.Page!.Locator($".design-canvas {tag}[data-node]").First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
+
+    // A non-literal expression leaf renders as a visible span.expr-chip placeholder carrying the raw source.
+    [Then("the design canvas shows an expression chip reading {string}")]
+    public async Task ThenCanvasShowsChip(string source) =>
+        await ctx.Page!.Locator($".design-canvas span.expr-chip[data-node]:has-text({CssString(source)})").First.WaitForAsync();
+
     // The Design id of the (main working-copy) design with the given label, or 0 if not yet present.
     private int DesignIdByLabel(string label)
     {

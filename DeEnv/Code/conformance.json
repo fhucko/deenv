@@ -1049,6 +1049,68 @@
         { "type": "symbol", "name": "seen" }
       ],
       "expect": { "kind": "text", "value": "12" }
+    },
+    {
+      "name": "sys.renderTree — nested elements, ordered attrs (literal applied / non-literal + event skipped), out-of-range int + reserved data-node attrs skipped, literal + chip + empty leaves, data-node stamping",
+      "comment": "The CLIENT-COMPUTABLE canvas (M12). renderTree walks a MetaNode row (tag/expr/order + attrs/children sets) into a tag tree, both twins from the SAME row data — so this pins the literal rules, the chip/empty leaf shapes, the event/non-literal attr skips, child ordering by `order`, and data-node provenance on EVERY element. The root <div> has: class=\"box\" (string literal, applied), id=a+b (non-literal, skipped), onClick=\"go\" (event attr, skipped though literal), big=9999999999 (an int-SHAPED source outside Int32 range — review fix 1: non-literal, skipped, no overflow crash on either twin), and data-node=\"clobber\" (a user attr named the RESERVED provenance attr — review fix 3: skipped so it can never clobber the id renderTree itself stamps); its children are given OUT of order and sorted by `order` to <span>, chip, empty. The <span> has tabindex=2 (int literal, applied) and one string-literal leaf (\"hi\" -> text). The chip leaf's expr is non-literal (a+b -> span.expr-chip with the raw source); the last child has neither tag nor expr (span.expr-chip.is-empty '(empty)'). data-node ids are the inline literals' transient negative ids, assigned identically by both twins (props-then-object, key-then-value for arrays), so the serialized trees match. Attributes are serialized ordinally-sorted (DOM attr order is a browser concern, verified in the browser scenario, not here).",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "tag", "value": { "type": "text", "value": "div" } },
+            { "name": "expr", "value": { "type": "text", "value": "" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "attrs", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "name", "value": { "type": "text", "value": "id" } },
+                { "name": "value", "value": { "type": "text", "value": "a + b" } },
+                { "name": "order", "value": { "type": "int", "value": 1 } } ] },
+              { "type": "object", "props": [
+                { "name": "name", "value": { "type": "text", "value": "class" } },
+                { "name": "value", "value": { "type": "text", "value": "\"box\"" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } } ] },
+              { "type": "object", "props": [
+                { "name": "name", "value": { "type": "text", "value": "onClick" } },
+                { "name": "value", "value": { "type": "text", "value": "\"go\"" } },
+                { "name": "order", "value": { "type": "int", "value": 2 } } ] },
+              { "type": "object", "props": [
+                { "name": "name", "value": { "type": "text", "value": "big" } },
+                { "name": "value", "value": { "type": "text", "value": "9999999999" } },
+                { "name": "order", "value": { "type": "int", "value": 3 } } ] },
+              { "type": "object", "props": [
+                { "name": "name", "value": { "type": "text", "value": "data-node" } },
+                { "name": "value", "value": { "type": "text", "value": "\"clobber\"" } },
+                { "name": "order", "value": { "type": "int", "value": 4 } } ] }
+            ] } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "" } },
+                { "name": "order", "value": { "type": "int", "value": 2 } } ] },
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "span" } },
+                { "name": "expr", "value": { "type": "text", "value": "" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } },
+                { "name": "attrs", "value": { "type": "array", "items": [
+                  { "type": "object", "props": [
+                    { "name": "name", "value": { "type": "text", "value": "tabindex" } },
+                    { "name": "value", "value": { "type": "text", "value": "2" } },
+                    { "name": "order", "value": { "type": "int", "value": 0 } } ] } ] } },
+                { "name": "children", "value": { "type": "array", "items": [
+                  { "type": "object", "props": [
+                    { "name": "tag", "value": { "type": "text", "value": "" } },
+                    { "name": "expr", "value": { "type": "text", "value": "\"hi\"" } },
+                    { "name": "order", "value": { "type": "int", "value": 0 } } ] } ] } } ] },
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "a + b" } },
+                { "name": "order", "value": { "type": "int", "value": 1 } } ] }
+            ] } }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div class=\"box\" data-node=\"-25\"><span data-node=\"-21\" tabindex=\"2\">hi</span><span class=\"expr-chip\" data-node=\"-23\">a + b</span><span class=\"expr-chip is-empty\" data-node=\"-13\">(empty)</span></div>" }
     }
   ]
 }

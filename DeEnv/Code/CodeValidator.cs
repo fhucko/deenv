@@ -81,6 +81,7 @@ public static class CodeValidator
         ["publishPreview"] = [2], // (design, targetId) — server-computed dry-run PublishReport, shipped like diffCommits
         ["mergePreview"] = [2], // (source, target) — server-computed no-write MergeReport, shipped like publishPreview
         ["previewRender"] = [1, 2], // (design) OR (design, refreshKey) — server-rendered inline preview shipped AS DATA, revived to a tag tree; refreshKey re-keys the memo for on-demand refresh (M12 S3a)
+        ["renderTree"] = [1, 2], // (node) OR (node, ctx) — the CLIENT-COMPUTABLE canvas: a MetaNode row → a live tag tree, both twins from row data; the 2nd arg is the reserved eval-context (M12 S4 foundation)
         ["setRef"] = [3],
         // (design, targetId) OR (design, targetId, expectedHeadCommit, expectedTargetVersion) — the
         // preview→apply consistency guard token (M13 Track-B B3 addendum). The trailing pair is

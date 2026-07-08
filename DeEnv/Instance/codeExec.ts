@@ -1097,6 +1097,163 @@ function revivePreview(data: ExecValue, context: ExecContext): ExecValue {
     return data; // a text (or other scalar) child, as-is
 }
 
+// renderTree(node[, ctx]): the CLIENT-COMPUTABLE canvas (M12 S4 foundation) — the twin of
+// CodeExecutor.ExecuteRenderTree. Turns a MetaNode row (tag/expr/order scalars + attrs/children sets, the
+// S1a structured-render schema) into a live tag tree built from the rows. UNLIKE execPreviewRender (a
+// server-backed read revived from shipped data), this is computed by BOTH twins from row data the client
+// already holds — no memoize, no refetch. Every node-field / set read goes through the SAME dep-recording
+// paths ordinary reads use (recordProp, recordMember), so an ordinary tree-editor edit (rename a tag, edit
+// an attr, add/remove a node) invalidates the enclosing render and the canvas re-renders in the same
+// interaction with no round-trip. The optional SECOND arg is reserved for the eval-context slice (ignored
+// today) so the signature is extensible without reshaping — mirroring execPreviewRender's [, refreshKey].
+function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    if (codeCall.params.length !== 1 && codeCall.params.length !== 2)
+        throw new Error("renderTree(node[, ctx]) takes one or two arguments.");
+    const node = executeValue(codeCall.params[0], scope, context).value;
+    if (node.type !== "object") throw new Error("renderTree() expects a node object as its first argument.");
+    return renderTreeNode(node, context);
+}
+
+// Walk one MetaNode row → its rendered node. ELEMENT (tag non-empty): a `tag` element carrying
+// data-node=<id> (the provenance spine for click-to-select — on EVERY emitted element), literal attrs
+// (ordered by `order`; non-literal + event `on*` attrs skipped — the canvas is display-inert), and its
+// recursively-rendered children (ordered by `order`). LEAF (tag empty, expr non-empty): a literal expr →
+// its unquoted value as a text child; otherwise an EXPRESSION CHIP (span.expr-chip) holding the raw source.
+// INVALID (tag AND expr empty): span.expr-chip.is-empty "(empty)" — a visible marker, never silent nothing.
+function renderTreeNode(node: ExecObject, context: ExecContext): ExecValue {
+    const id = node.id;
+    const tag = readNodeText(node, "tag", context);
+    const expr = readNodeText(node, "expr", context);
+    if (tag.length > 0) {
+        const attributes: { [name: string]: ExecResult } = { "data-node": { value: { type: "text", value: String(id) } } };
+        for (const attr of orderedMembers(node, "attrs", context)) {
+            const name = readNodeText(attr, "name", context);
+            const value = readNodeText(attr, "value", context);
+            // Event attrs are always inert; "data-node" is the RESERVED provenance attr this walk itself
+            // stamps (above) — a user attr of that name is skipped so it can never clobber the id S4's
+            // click-to-select depends on.
+            if (name.length === 0 || isEventAttr(name) || name === "data-node") continue;
+            const lit = literalValue(value);
+            if (lit != null) attributes[name] = { value: lit };        // non-literal → skipped
+        }
+        const children: ExecTagChild[] = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context));
+        return { type: "tag", name: tag, attributes, children };
+    }
+    if (expr.length > 0)
+        return isLiteral(expr) ? { type: "text", value: literalDisplay(expr) } : chip("expr-chip", expr, id);
+    return chip("expr-chip is-empty", "(empty)", id);
+}
+
+// A span.expr-chip (or its .is-empty variant) with the node's provenance id and one text child.
+function chip(cls: string, text: string, id: number): ExecTag {
+    return {
+        type: "tag", name: "span",
+        attributes: { "class": { value: { type: "text", value: cls } }, "data-node": { value: { type: "text", value: String(id) } } },
+        children: [{ type: "text", value: text }],
+    };
+}
+
+// Read a MetaNode/MetaAttr field through the ordinary dep-recording prop path (recordProp), so an edit to it
+// stales the canvas. A staging overlay wins (a ctx draft edit reflects live). An absent prop throws "Value
+// not available" — the standard refetch path (the server ships every field renderTree read, so a real render
+// never misses); the twin of the objectProp read.
+function readNodeProp(node: ExecObject, name: string, context: ExecContext): ExecValue {
+    const staged = nearestStagedValue(node, name, context);
+    if (staged != null) { recordProp(node.id, name); return staged; }
+    const value = node.props[name];
+    if (value == null) throw new Error("Value not available");
+    recordProp(node.id, name);
+    return value;
+}
+
+function readNodeText(node: ExecObject, name: string, context: ExecContext): string {
+    const v = readNodeProp(node, name, context);
+    return v.type === "text" ? v.value : "";
+}
+
+// The members of a node's attrs/children SET, ordered by each member's `order` — observed through the same
+// reads a `node.children.orderBy(order)` foreach makes (a prop dep on the set, a membership dep, an order
+// read per member), so an add/remove/reorder re-renders the canvas. Non-object / absent → empty.
+function orderedMembers(node: ExecObject, setProp: string, context: ExecContext): ExecObject[] {
+    const setV = readNodeProp(node, setProp, context);
+    if (setV.type !== "array") return [];
+    recordMember(setV.id);
+    const objs: { o: ExecObject; order: number }[] = [];
+    for (const item of setV.items)
+        if (item.value.type === "object") {
+            const ord = readNodeProp(item.value, "order", context);
+            objs.push({ o: item.value, order: ord.type === "int" ? ord.value : 0 });
+        }
+    return objs.sort((a, b) => a.order - b.order).map(p => p.o);
+}
+
+// ── render-tree literal rules (twin-identical with CodeExecutor.cs; pinned by the conformance case) ──────
+// A leaf/attr value source is a LITERAL when it is ONE complete quoted string, an int, or a bool. Anything
+// else (`a + b`, a bare symbol, `"a" + b`) is non-literal → a chip (leaf) or a skip (attr). A manual
+// char-scan (not a RegExp) so both interpreters agree byte-for-byte.
+function isLiteral(s: string): boolean { return isStringLiteral(s) || isIntLiteral(s) || isBoolLiteral(s); }
+
+// The DISPLAY text of a literal LEAF: a string literal's unescaped content; an int/bool's raw source.
+function literalDisplay(s: string): string { return isStringLiteral(s) ? unquoteString(s) : s; }
+
+// The typed VALUE of a literal ATTR — string → text, int → int, bool → bool; null for a non-literal (skipped).
+// Review fix 1: an int-SHAPED source outside Int32 range (deenv's `int` is 32-bit) is treated as NON-LITERAL
+// here — an explicit range check (JS numbers don't overflow like C#'s int.Parse, so classification must be
+// asserted explicitly) so this twin agrees with CodeExecutor.cs's TryParse guard. The LEAF path
+// (literalDisplay) never parses — it shows the raw digits verbatim regardless of magnitude — so only the
+// ATTR path needed this guard.
+function literalValue(s: string): ExecValue | null {
+    if (isStringLiteral(s)) return { type: "text", value: unquoteString(s) };
+    if (isIntLiteral(s)) {
+        const n = parseInt(s, 10);
+        return (n >= -2147483648 && n <= 2147483647) ? { type: "int", value: n } : null;
+    }
+    if (isBoolLiteral(s)) return { type: "bool", value: s === "true" };
+    return null;
+}
+
+function isEventAttr(name: string): boolean {
+    return name.length >= 2 && (name[0] === "o" || name[0] === "O") && (name[1] === "n" || name[1] === "N");
+}
+
+function isBoolLiteral(s: string): boolean { return s === "true" || s === "false"; }
+
+function isIntLiteral(s: string): boolean {
+    if (s.length === 0) return false;
+    let i = 0;
+    if (s[0] === "-") { if (s.length === 1) return false; i = 1; }
+    for (; i < s.length; i++) { const c = s.charCodeAt(i); if (c < 48 || c > 57) return false; }
+    return true;
+}
+
+// Matches ^"([^"\\]|\\.)*"$ — a single complete quoted string: an unescaped `"` may appear ONLY as the final
+// char, and a `\` escapes the next char. So `"a" + b` (a quote inside) is NOT a literal.
+function isStringLiteral(s: string): boolean {
+    if (s.length < 2 || s[0] !== '"') return false;
+    let i = 1;
+    while (i < s.length) {
+        const c = s[i];
+        if (c === '"') return i === s.length - 1;                     // a bare quote is valid only as the close
+        if (c === "\\") { if (i + 1 >= s.length) return false; i += 2; continue; }  // no trailing backslash
+        i++;
+    }
+    return false;                                                     // never closed
+}
+
+// Strip the outer quotes of a confirmed string literal and unescape \" and \\ (other \x kept verbatim).
+function unquoteString(s: string): string {
+    const inner = s.substring(1, s.length - 1);
+    let out = "";
+    let i = 0;
+    while (i < inner.length) {
+        if (inner[i] === "\\" && i + 1 < inner.length && (inner[i + 1] === '"' || inner[i + 1] === "\\")) {
+            out += inner[i + 1]; i += 2; continue;
+        }
+        out += inner[i]; i++;
+    }
+    return out;
+}
+
 // setRef(obj, prop, value): set/clear an object REFERENCE prop and persist it. value is an
 // existing candidate (id>0 → refId), a fresh draft (id<0 → its scalar props), or null
 // (clear). Stages in memory (UI reflects it), then sends the id-addressed WS op.
@@ -1570,6 +1727,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "diffCommits": return execDiffCommits(codeCall, scope, context);
         case "publishPreview": return execPublishPreview(codeCall, scope, context);
         case "previewRender": return execPreviewRender(codeCall, scope, context);
+        case "renderTree": return execRenderTree(codeCall, scope, context);
         case "mergePreview": return execMergePreview(codeCall, scope, context);
         case "setRef": return execSetRef(codeCall, scope, context);
         case "publish": return execPublish(codeCall, scope, context);
@@ -2108,10 +2266,26 @@ function runConformance(caseJson: string): string {
         case "text": return JSON.stringify({ kind: "text", value: result.value });
         case "bool": return JSON.stringify({ kind: "bool", value: result.value });
         case "array": return JSON.stringify({ kind: "intList", value: result.items.map(i => (i.value as ExecInt).value) });
+        case "tag": return JSON.stringify({ kind: "tag", value: serializeTree(result) });
         case "nothing": return JSON.stringify({ kind: "nothing", value: null });
         case "null": return JSON.stringify({ kind: "null", value: null });
         default: throw new Error(`Non-scalar conformance result '${result.type}'.`);
     }
+}
+
+// Canonical string form of a rendered tag tree (conformance only): `<name attr="v"…>children…</name>`,
+// attributes sorted ordinally, text children inline. Twin of ConformanceTests.SerializeTree — both must
+// produce the same string for the SAME tree, so the tag conformance case proves the twins build an
+// identical sys.renderTree canvas.
+function serializeTree(node: ExecValue): string {
+    if (node.type === "tag") {
+        let s = "<" + node.name;
+        for (const k of Object.keys(node.attributes).sort()) s += " " + k + "=\"" + scalarText(node.attributes[k].value) + "\"";
+        s += ">";
+        for (const c of node.children) s += serializeTree(c);
+        return s + "</" + node.name + ">";
+    }
+    return scalarText(node);
 }
 
 (globalThis as any).runConformance = runConformance;

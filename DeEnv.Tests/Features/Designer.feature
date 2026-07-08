@@ -1146,3 +1146,37 @@ Feature: The operator IDE (designs library + instance design selector)
     When I remove the root node's last child
     Then the root node no longer has a child element with tag "footer"
     And the stored render projects to a valid design document
+
+  # ── M12 CANVAS-1 — the CLIENT-COMPUTABLE canvas (sys.renderTree) ──────────────────────────────
+  #
+  # The tree editor (E1/E2) edits the render as DATA; the canvas is the paired VIEW of that data — a live
+  # rendered tag tree the operator watches change as they edit. Unlike the S3a Preview (a server-backed read
+  # of the design's REAL evaluated render, refreshed on demand), the canvas is `sys.renderTree(node)` computed
+  # by BOTH twins from the MetaNode rows the client already holds — so it repaints INSTANTLY as the tree editor
+  # mutates, with no server round-trip. This is the surface S4 turns into the visual editor, so its contract
+  # carries three baked-in guards proven here: (1) data-node provenance on every emitted element (the future
+  # click-to-select spine); (2) expressions that can't evaluate client-side yet show as span.expr-chip
+  # placeholders; (3) the walk goes through dep-recording reads, so an edit re-renders the canvas live.
+  #
+  # The proof converts <main class="x"><h1>{leaf}</h1></main> (leaf is the bare symbol `leaf` — a NON-literal,
+  # so it renders as a chip). The canvas then shows a <main> and a nested <h1>, each carrying data-node, and a
+  # chip reading "leaf". THE LIVENESS PROOF: editing the root's tag input in the tree editor flips the canvas's
+  # <main> to <section> with NO reload; adding a child element makes a <div> appear in the canvas — both in the
+  # same interaction, proving dep-recording fires through renderTree's row walk. Auto-waiting locators, no sleep.
+  @m12 @single-user
+  Scenario: The canvas renders the structured render live and updates as the tree is edited, with no reload
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "treeme"
+    And I edit the design "treeme"
+    And I expand the Advanced code disclosure
+    And I author a nested convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows a "main" element with a data-node attribute
+    And the design canvas shows a "h1" element with a data-node attribute
+    And the design canvas shows an expression chip reading "leaf"
+    When I edit the root node's tag input to "section"
+    Then the design canvas shows a "section" element with a data-node attribute
+    When I add a child element to the root node
+    Then the design canvas shows a "div" element with a data-node attribute

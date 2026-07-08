@@ -757,6 +757,196 @@ public sealed class CodeExecutor
         }
     }
 
+    // renderTree(node[, ctx]): the CLIENT-COMPUTABLE canvas (M12 S4 foundation) — turns a MetaNode row (tag/
+    // expr/order scalars + attrs/children sets, the S1a structured-render schema) into a live tag tree built
+    // from the rows. UNLIKE previewRender (a server-backed read shipped as data), this is computed by BOTH
+    // twins from row data the client already holds — no server delegate, no memo, no refetch. Every read of a
+    // node field / set goes through the SAME dep-recording paths ordinary reads use (RecordPropAccess,
+    // RecordMembership, RecordScannedItem), so an ordinary tree-editor edit (rename a tag, edit an attr, add/
+    // remove a node) re-renders the canvas in the same interaction with no round-trip: on the server the walk
+    // harvests the node subgraph into the client state (so the client can replay it); on the client the same
+    // reads record deps so an edit invalidates the enclosing render.
+    //
+    // The optional SECOND arg is reserved for the eval-context slice (a context keyed by (design, state) that
+    // lets expression leaves/attrs evaluate client-side); today it is ignored so the signature is extensible
+    // without reshaping — mirroring previewRender's [, refreshKey]. No singleton/global state is baked into
+    // the walk. Twin of codeExec.ts's execRenderTree; the literal rules + chip/empty shapes are pinned by a
+    // conformance case.
+    private IExecValue ExecuteRenderTree(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length is not (1 or 2))
+            throw new CodeRuntimeException("renderTree(node[, ctx]) takes one or two arguments.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject node)
+            throw new CodeRuntimeException("renderTree() expects a node object as its first argument.");
+        return BuildRenderTree(node, context);
+    }
+
+    // Walk one MetaNode row → its rendered node. ELEMENT (tag non-empty): a `tag` element carrying
+    // data-node=<id> (the provenance spine S4's click-to-select needs — on EVERY emitted element), its
+    // literal attrs (ordered by `order`; non-literal and event `on*` attrs skipped — the canvas is display-
+    // inert and can't evaluate expressions yet), and its recursively-rendered children (ordered by `order`).
+    // LEAF (tag empty, expr non-empty): a literal expr → its unquoted value as a text child; otherwise an
+    // EXPRESSION CHIP (span.expr-chip) holding the raw source — the interim placeholder until evaluation lands.
+    // INVALID (tag AND expr empty): span.expr-chip.is-empty "(empty)" — a visible marker, never silent nothing.
+    private IExecValue BuildRenderTree(ExecObject node, ExecContext context)
+    {
+        var id = node.Id;
+        var tag = ReadNodeText(node, "tag", context);
+        var expr = ReadNodeText(node, "expr", context);
+        if (tag.Length > 0)
+        {
+            var attributes = new Dictionary<string, IExecValue> { ["data-node"] = new ExecText { Value = id.ToString() } };
+            foreach (var attr in OrderedMembers(node, "attrs", context))
+            {
+                var name = ReadNodeText(attr, "name", context);
+                var value = ReadNodeText(attr, "value", context);
+                // Event attrs are always inert; "data-node" is the RESERVED provenance attr this walk itself
+                // stamps (above) — a user attr of that name is skipped so it can never clobber the id S4's
+                // click-to-select depends on.
+                if (name.Length == 0 || IsEventAttr(name) || name == "data-node") continue;
+                if (LiteralValue(value) is { } literal) attributes[name] = literal;  // non-literal → skipped
+            }
+            var children = OrderedMembers(node, "children", context)
+                .Select(c => (IExecTagChild)BuildRenderTree(c, context))
+                .ToArray();
+            return new ExecTag { Name = tag, Attributes = attributes, Children = children };
+        }
+        if (expr.Length > 0)
+        {
+            return IsLiteral(expr)
+                ? new ExecText { Value = LiteralDisplay(expr) }                      // a literal text/number/bool
+                : Chip("expr-chip", expr, id);                                       // an expression placeholder
+        }
+        return Chip("expr-chip is-empty", "(empty)", id);                            // neither tag nor expr
+    }
+
+    // A span.expr-chip (or its .is-empty variant) with the node's provenance id and one text child.
+    private static ExecTag Chip(string cls, string text, int id) => new()
+    {
+        Name = "span",
+        Attributes = new() { ["class"] = new ExecText { Value = cls }, ["data-node"] = new ExecText { Value = id.ToString() } },
+        Children = [new ExecText { Value = text }],
+    };
+
+    // Read a MetaNode/MetaAttr text field through the ordinary dep-recording prop path (RecordPropAccess), so
+    // an edit to it stales the canvas. A staging overlay wins (a ctx draft edit reflects live). An ABSENT prop
+    // THROWS "Unknown field" (review fix 2) — matching the standard `.member`/`sys.field` read AND the TS
+    // twin's readNodeProp (which throws "Value not available"): a real MetaNode/MetaAttr row always carries
+    // every declared field (M5 defaulting fills an absent int/text on load), so this never fires against a
+    // complete row (proven by the green browser scenario); it only matters once S4 drafts a transient node
+    // BEFORE every field is set — swallowing to null there would skip RecordPropAccess, so the server would
+    // never harvest/ship the field and a client miss could never heal on refetch. Throwing (like every other
+    // read) keeps the dep recorded and the miss refetchable.
+    private IExecValue ReadNodeProp(ExecObject node, string name, ExecContext context)
+    {
+        if (NearestStagedValue(node, name, context) is { } staged)
+        {
+            RecordPropAccess(node, name, staged, context);
+            return staged;
+        }
+        if (!node.Props.TryGetValue(name, out var value))
+            throw new CodeRuntimeException($"Unknown field '{name}'.");
+        RecordPropAccess(node, name, value, context);
+        return value;
+    }
+
+    private string ReadNodeText(ExecObject node, string name, ExecContext context) =>
+        ReadNodeProp(node, name, context) is ExecText t ? t.Value : "";
+
+    // The members of a node's `attrs`/`children` SET, ordered by each member's `order` field — observed
+    // through the same reads a `node.children.orderBy(order)` foreach makes: a prop dep on the set, a
+    // membership dep, and each scanned item recorded (so the server harvests the membership and the client
+    // replays it, and an add/remove re-renders). Non-object / absent → empty.
+    private List<ExecObject> OrderedMembers(ExecObject node, string setProp, ExecContext context)
+    {
+        if (ReadNodeProp(node, setProp, context) is not ExecArray set) return [];
+        RecordMembership(set, context);
+        // Read each member's `order` EXPLICITLY (not lazily inside OrderBy's key selector — a single-element
+        // OrderBy can elide the selector, which would skip the `order` dep and NOT ship it, breaking the
+        // client replay) — the same explicit per-member read the TS twin makes. RecordScannedItem harvests
+        // the membership. OrderBy over the precomputed keys is a STABLE sort (twin of the TS Array.sort).
+        var keyed = new List<(ExecObject Obj, int Order)>();
+        foreach (var item in set.Items)
+        {
+            RecordScannedItem(set, item, context);
+            if (item.Value is ExecObject o)
+                keyed.Add((o, ReadNodeProp(o, "order", context) is ExecInt n ? n.Value : 0));
+        }
+        return keyed.OrderBy(p => p.Order).Select(p => p.Obj).ToList();
+    }
+
+    // ── render-tree literal rules (twin-identical with codeExec.ts; pinned by the conformance case) ──────
+    // A leaf/attr value source is a LITERAL when it is ONE complete quoted string, an int, or a bool. Anything
+    // else (an expression like `a + b`, a bare symbol, `"a" + b`) is non-literal → a chip (leaf) or a skip
+    // (attr). Detection is a manual char-scan (not a Regex) so both interpreters agree byte-for-byte.
+    private static bool IsLiteral(string s) => IsStringLiteral(s) || IsIntLiteral(s) || IsBoolLiteral(s);
+
+    // The DISPLAY text of a literal LEAF: a string literal's unescaped content; an int/bool's raw source.
+    private static string LiteralDisplay(string s) => IsStringLiteral(s) ? UnquoteString(s) : s;
+
+    // The typed VALUE of a literal ATTR — string → text, int → int, bool → bool (the literal's own value);
+    // null for a non-literal (the caller skips it). Review fix 1: an int-SHAPED source outside Int32 range
+    // (deenv's `int` is 32-bit) is treated as NON-LITERAL here — TryParse (not Parse) so an overflow returns
+    // null instead of throwing OverflowException (which would 500 the whole render); the twin TS literalValue
+    // mirrors this with an explicit range check so classification agrees on both interpreters. The LEAF path
+    // (LiteralDisplay) never parses — it shows the raw digits verbatim regardless of magnitude — so only the
+    // ATTR path needed this guard.
+    private static IExecValue? LiteralValue(string s) =>
+        IsStringLiteral(s) ? new ExecText { Value = UnquoteString(s) }
+        : IsIntLiteral(s) ? (int.TryParse(s, out var n) ? new ExecInt { Value = n } : null)
+        : IsBoolLiteral(s) ? new ExecBool { Value = s == "true" }
+        : null;
+
+    private static bool IsEventAttr(string name) =>
+        name.Length >= 2 && (name[0] is 'o' or 'O') && (name[1] is 'n' or 'N');
+
+    private static bool IsBoolLiteral(string s) => s is "true" or "false";
+
+    private static bool IsIntLiteral(string s)
+    {
+        if (s.Length == 0) return false;
+        var i = 0;
+        if (s[0] == '-') { if (s.Length == 1) return false; i = 1; }
+        for (; i < s.Length; i++) if (s[i] is < '0' or > '9') return false;
+        return true;
+    }
+
+    // Matches ^"([^"\\]|\\.)*"$ — a single complete quoted string: an unescaped `"` may appear ONLY as the
+    // final char, and a `\` escapes the next char. So `"a" + b` (a quote inside) is NOT a literal.
+    private static bool IsStringLiteral(string s)
+    {
+        if (s.Length < 2 || s[0] != '"') return false;
+        var i = 1;
+        while (i < s.Length)
+        {
+            var c = s[i];
+            if (c == '"') return i == s.Length - 1;   // a bare quote is valid only as the closing quote
+            if (c == '\\') { if (i + 1 >= s.Length) return false; i += 2; continue; }  // no trailing backslash
+            i++;
+        }
+        return false;   // never closed
+    }
+
+    // Strip the outer quotes of a confirmed string literal and unescape \" and \\ (other \x kept verbatim).
+    private static string UnquoteString(string s)
+    {
+        var inner = s.Substring(1, s.Length - 2);
+        var sb = new System.Text.StringBuilder(inner.Length);
+        var i = 0;
+        while (i < inner.Length)
+        {
+            if (inner[i] == '\\' && i + 1 < inner.Length && inner[i + 1] is '"' or '\\')
+            {
+                sb.Append(inner[i + 1]);
+                i += 2;
+                continue;
+            }
+            sb.Append(inner[i]);
+            i++;
+        }
+        return sb.ToString();
+    }
+
     // schema(typeName): a type's descriptor — { name, labelProp, props } — the reflective
     // shape the self-hosted generic UI walks (objectForm/refEditor/setTable). The replacement for
     // the old `__descs` registry global: the descriptor is computed from the schema (the literal
@@ -1267,6 +1457,7 @@ public sealed class CodeExecutor
         "publishPreview" => ExecutePublishPreview(call, scope, context),
         "mergePreview" => ExecuteMergePreview(call, scope, context),
         "previewRender" => ExecutePreviewRender(call, scope, context),
+        "renderTree" => ExecuteRenderTree(call, scope, context),
         "nest" => ExecuteNest(call, scope, context),
         "segment" => ExecuteSegment(call, scope, context),
         "toInt" => ExecuteToInt(call, scope, context),

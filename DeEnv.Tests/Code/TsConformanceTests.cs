@@ -54,6 +54,9 @@ public sealed class TsConformanceTests
                     await Assert.That(string.Join(",", got)).IsEqualTo(string.Join(",", want));
                     break;
                 }
+                case "tag":
+                    await Assert.That(result.GetProperty("value").GetString()).IsEqualTo(expect.GetProperty("value").GetString());
+                    break;
                 case "nothing":
                 case "null":
                     break; // the kind comparison above is the whole assertion

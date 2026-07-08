@@ -227,6 +227,11 @@ ui
         return <div class="design-preview">
             sys.previewRender(design, previewRefresh)
 
+    fn designCanvas(design)
+        return <div class="design-canvas">
+            foreach n in design.render
+                sys.renderTree(n)
+
     fn designEditor(design)
         var state = { message: "", migration: "", revertMigration: "" }
         fn render()
@@ -304,6 +309,12 @@ ui
                 publishSection(design)
                 branchSection(design)
                 if design.render.any(x => true)
+                    <section class="canvas-section">
+                        <h2 class="canvas-heading">
+                            "Canvas"
+                        <p class="canvas-caption">
+                            "A live structural view of the render tree — expressions show as chips until evaluation lands."
+                        <designCanvas design={design}>
                     <section class="publish-section">
                         <h2 class="publish-heading">
                             "Structured render"

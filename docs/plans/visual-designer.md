@@ -281,11 +281,30 @@ mutations the designer app performs in deenv code — that machinery already exi
   `sys.previewRender(design[, refreshKey])` call site. Liveness = explicit Refresh (auto-live
   raced the tree editor's optimistic mutations — reproduced, dropped, ledgered; returns once
   optimistic mutations are refetch-race-safe). Preview is display-inert + anonymous-principal,
-  fail-soft on invalid designs. **The settled destination is TWO VIEWS: this truth view
-  (real render, evaluated) + the client-only CANVAS (`sys.renderTree` over the MetaNode rows
-  — instant, provenance-stamped, the surface S4 turns into the editor), with evaluation
-  arriving in the canvas via shipped eval contexts (parsed ASTs + seed graph) and stored
-  per-component STATES ("main uses") as the workbench — recorded in the S3 doc + memory.**
+  fail-soft on invalid designs. *(SUPERSEDED same day: the user ordered the server preview
+  REMOVED — "too static if it's rendered on server"; the canvas below is the one preview
+  surface, with the future client-side evaluated preview (configurable ambients + params +
+  fake db per stored uses) replacing this entirely. Removal slice follows the canvas landing.
+  SALVAGE for the eval-context slice: lift the seeding machinery from `3f40bc7`'s
+  BuildPreviewRenderData — it IS the fake-db builder.)*
+- **CANVAS-1 — `sys.renderTree`, the client-computed live canvas. ✅ DONE 2026-07-08**
+  (arch review SHIP-WITH-FIXES, fixes applied + conformance-pinned; suite 787).
+  `renderTree(node[, ctx])` turns the MetaNode rows into a live tag tree, computed by BOTH
+  twins from row data the client already holds — no server call, no memo, no refetch. The
+  walk dep-records every read, so a tree-editor edit re-renders the canvas SAME-FRAME
+  (browser-proven: rename tag → canvas flips; add child → appears; no reload). Every element
+  + chip carries `data-node={rowId}` (real store ids — S4's click-to-select spine;
+  `data-node` is a RESERVED attr name, user attrs can't clobber it). Literal attr/leaf values
+  render (strict twin-identical rules: one-complete-string-literal regex; Int32-range ints —
+  out-of-range = non-literal, conformance-pinned after review caught C#'s int.Parse overflow
+  crash); non-literal exprs = `.expr-chip` placeholders (until the eval-context slice);
+  empty nodes = `.is-empty` chips. First tree-returning client-computable builtin: has a
+  CONFORMANCE CASE (harness gained a reusable `tag` expect kind + canonical serializer).
+  Review also caught + fixed: C# ReadNodeProp swallowed absent props (now throws like TS +
+  the standard read). GUARDS live in the contract: the reserved `ctx` second arg = the
+  (design, state)-keyed eval context's slot; the hand-walk is a STRUCTURAL INTERIM — the
+  evaluation slice pivots to assemble-real-AST + run the twin (no-second-engine guard);
+  chips never lie (canvas-never-lies invariant).
 - **S4 — inspector edits (first write).** Select a node → its row in a generic-UI-grade
   form (attribute slots, expression leaves as text inputs) → ordinary data commit →
   projection + preview update. Canvas v1 = the live preview itself with selection
