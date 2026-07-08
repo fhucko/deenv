@@ -112,6 +112,72 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
     }
 
+    // ── When/Then: the inline live preview (M12 S3a) ─────────────────────────────
+
+    // Rename the design's SEEDED user by rewriting its `initialData` text field (in the code-areas
+    // details) — the whole seed, with the one name changed. The textarea two-way bind commits on input
+    // (ui.ts wireEvents), so a single fill persists the edit. This edit ALONE does not change what the
+    // preview shows: previewRender's memo entry carries EMPTY deps (it reads the design via raw store
+    // reads, not dep-recorded — see CodeExecutor.ExecutePreviewRender), so nothing stales it. The preview
+    // only picks up the edit when Refresh bumps `previewRefresh`, re-keying the memo (`previewRender:<id>:
+    // <refreshKey>`) to a fresh, unseen key — a miss → refetch → the server re-renders over the now-edited
+    // seed. See the "click Refresh" step below.
+    [When("I rename the design's seeded user to {string}")]
+    public async Task WhenRenameSeededUser(string name)
+    {
+        await ctx.Page!.WaitReadyAsync(); // a mutation — wait for an established, acknowledged WS connection
+        await ctx.Page.Locator("details.code-areas summary.code-summary").ClickAsync();
+        var seed =
+            "initialData\n" +
+            "    Db 1\n" +
+            "        users: [2]\n" +
+            "    User 2\n" +
+            $"        name: \"{name}\"\n" +
+            "        todoLists: [3]\n" +
+            "    TodoList 3\n" +
+            "        name: \"List 1\"\n" +
+            "        items: []\n";
+        await ctx.Page.Locator("textarea.design-initial").FillAsync(seed);
+    }
+
+    // Refresh is an on-demand re-key of the preview memo (the preview is deliberately NOT auto-live per edit —
+    // that raced the optimistic tree editor). The click bumps `previewRefresh`, so the next preview read keys a
+    // fresh entry → miss → refetch → the server re-renders over the now-edited seed.
+    [When("I click Refresh on the preview")]
+    public async Task WhenClickRefreshPreview() =>
+        await ctx.Page!.Locator("button.refresh-preview").ClickAsync();
+
+    [Then("the inline preview shows the design's rendered content {string}")]
+    public async Task ThenPreviewShows(string content) =>
+        // Auto-waiting: the preview paints on the client render (revived from the shipped DATA), or updates
+        // after a refetch; :has-text matches the container once any descendant carries the text.
+        await ctx.Page!.Locator($".design-preview:has-text({CssString(content)})").WaitForAsync();
+
+    // The NEGATIVE proof of the manual (Refresh-only) liveness model: a plain seed edit is provably NOT
+    // enough to change the preview — previewRender's memo entry carries EMPTY deps, so nothing stales it
+    // (see the comment on WhenRenameSeededUser above). Unlike a positive "eventually shows X" wait, this
+    // must assert the CURRENT state — there is nothing async in flight that could make it true later, so a
+    // single read (no polling, no fixed sleep) is the correct check for a genuinely stable condition, and it
+    // asserts BOTH that the old content survives and the new content has NOT appeared.
+    [Then("the inline preview still shows the old content {string}, proving the edit alone does not refresh it")]
+    public async Task ThenPreviewUnaffectedByEditAlone(string oldContent)
+    {
+        var text = await ctx.Page!.Locator(".design-preview").InnerTextAsync();
+        await Assert.That(text).Contains(oldContent);
+        await Assert.That(text).DoesNotContain("Renamed User");
+    }
+
+    [Then("the inline preview still shows {string} after a reload and hydration")]
+    public async Task ThenPreviewSurvivesReload(string content)
+    {
+        // A full reload = a fresh SSR paint of the editor; then the client bundle hydrates and RE-RENDERS,
+        // replacing the #app DOM. The preview surviving THAT transition is the whole point of the tree-as-
+        // data mechanism (the tag-shipping variant blanked here — the client recompute missed).
+        await ctx.Page!.ReloadAsync();
+        await ctx.Page.WaitHydratedAsync();
+        await ctx.Page.Locator($".design-preview:has-text({CssString(content)})").WaitForAsync();
+    }
+
     [When("I open the instance {string}")]
     public async Task WhenOpenInstance(string label)
     {

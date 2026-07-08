@@ -54,13 +54,124 @@ isolated shapes remain, both using an iframe (the isolation boundary):
   *interactive* preview (its own WS). Only worth the machinery if in-preview interactivity is
   genuinely needed — not needed for a WYSIWYG-canvas preview.
 
-## ⏸ STATUS: PAUSED 2026-07-08 (user decision)
+## ✅ STATUS: BUILT 2026-07-08 — S3a inline preview via tree-AS-DATA + twin revival
+
+The PAUSE above is SUPERSEDED. S3a shipped as an **INLINE** preview (no iframe, no kernel mount) —
+the shape the ⛔ finding said was infeasible — by DISSOLVING all three blockers the finding names.
+The finding stays correct about the variant it examined (shipping a rendered ExecTag **tree**); this
+slice is its RESOLUTION, not its contradiction. What changed: **the server ships the rendered tree AS
+PLAIN DATA, and both twins revive it into a tag tree at the call site.**
+
+**The mechanism (built):**
+- A handler-stripped rendered tree is PLAIN DATA: `{tag, attrs:{name→scalar}, children:[same | text]}`.
+  Plain nested object/array/text data already HAS a wire form and already ships in memo entries (it is
+  how `sys.publishPreview`'s report ships). So the blocker "a tree has no wire form" (ClientState skips
+  ExecTag) never triggers — the memo result is a DATA object, not a tag.
+- `sys.previewRender(design)` is a server-backed read (like publishPreview/mergePreview), **self-built in
+  `SsrRenderer.BuildPreviewRenderData`** (no kernel wiring — a design is a row in the designer's own
+  store; the compute needs only the design node + its own `initialData` seed). It projects the design
+  (validates), loads it, opens a **throwaway file-backed store that self-seeds from `initialData`** (no
+  kernel/registration/WS; temp dir deleted after), runs the design's own render HEADLESSLY at `/` as an
+  ANONYMOUS request, STRIPS handlers (function-valued attrs dropped), and returns the tree AS DATA.
+- At the `{sys.previewRender(design)}` call site BOTH twins REVIVE the data → a real ExecTag tree and
+  RETURN it (`CodeExecutor.RevivePreviewTree` / `codeExec.ts revivePreview`). The interpreter splices a
+  returned tree inline; the client reconciler builds DOM from it. **The client never recomputes the
+  foreign render — it revives it from shipped data**, so hydration KEEPS the preview instead of blanking
+  (the finding's third blocker). The revival is deterministic → both twins paint identical DOM.
+- **Refresh — ON DEMAND, not auto-live per edit (build finding).** The preview shows the design as of the
+  last (re)compute — a fresh compute on navigation to the editor, and on demand via a **Refresh button**
+  (`sys.previewRender(design, previewRefresh)` — a `refreshKey` scalar folded into the memo key; the button
+  bumps `previewRefresh`, so the next read keys a fresh entry → miss → refetch → fresh preview). AUTO-LIVE
+  per edit was BUILT FIRST (dep-record the whole design subgraph so any edit stales the entry) and it WORKED
+  in isolation — but it forced a server refetch on EVERY design edit, and those refetches RACED the
+  designer's optimistic tree-editor mutations (add-node / edit-tag were previously pure-client, no
+  round-trip; making them refetch destabilized the just-added optimistic nodes). Two attempts to contain it
+  (taint the hosting view incomplete; isolate the preview in its own component) each still left a per-edit
+  refetch that regressed the tree editor. Per the slice's stop-condition (docs task: "if dep-recording the
+  subgraph is hairy … ship explicit refresh + report"), auto-live was DROPPED for an explicit Refresh. The
+  preview compute reads raw store, so no dep recording is needed; the memo entry has empty deps. Proven by a
+  browser scenario (edit the seed → click Refresh → the inline preview updates). Re-instating auto-live is a
+  later, isolated problem (it needs the designer's optimistic-mutation path to be refetch-race-safe first).
+
+**Where it lives:** `sys.previewRender` dispatch + revival (+ the `refreshKey` in the memo key) in
+`CodeExecutor.cs` / `codeExec.ts`;
+the compute + tree→data conversion + throwaway-store render in `SsrRenderer.cs`
+(`BuildPreviewRenderData`, threaded into the render executor like `mergePreview` — self-built, no kernel);
+arity in `CodeValidator.cs`; the `<div class="design-preview">{sys.previewRender(design)}</div>` Preview
+section + scoped CSS in `instances/1/app.deenv` + the designer stylesheet. Tests: `PreviewRender.feature`
+(server compute + revival: structure/seed/handler-strip/error-div/temp-cleanup) + `PreviewRenderBrowser.feature`
+(end-to-end inline preview, hydration survival, live update on edit). Security: READ-ONLY over a throwaway
+seeded store, headless (no host-action seam) — same trust class as publishPreview's compute; rides the
+designer's `sys` floor like other reads.
+
+**Deferred (unchanged direction):** a real-data (time-travel clone) preview source; per-boundary remount
+of an interactive preview (Option A, below) if in-preview interactivity is ever needed. The
+`srcdoc`/HTML-string isolated shape (recommended by the finding as the lightest FEASIBLE **isolated** shape)
+was NOT needed — the tree-as-data mechanism recovered the INLINE shape the user wanted without an iframe.
+
+**2026-07-08 review fixes (architecture + ux, both SHIP-WITH-FIXES) — landed same day:**
+- Client memo leak: each Refresh mints a fresh `previewRender:<id>:<refreshKey>` entry; nothing evicted the
+  PRIOR generations (only `comp:` keys were dropped on navigation). **First attempt (wrong, caught by
+  testing, NOT what shipped):** extending `resetViewState` (ui.ts) to also drop `previewRender:` keys on
+  every navigation. This closed the leak but broke navigation itself — the SPA's speculative flash guard
+  (`navigateClientSide`/`renderUiSpeculative`, ui.ts) treats ANY incomplete subtree as "hold the WHOLE
+  navigation, blank until the refetch replies", and forcing every re-entry into a design editor to MISS
+  the preview made every such navigation blank-and-wait for a round trip — a real, deterministic UX
+  regression (reproduced via `TheCommit_DetailPageShowsARenameAsARenameInChangesSinceParent`, which failed
+  100% of the time in isolation, not a flake — bisected to this hunk by reverting it alone against the
+  same test). **What actually shipped:** prune stale generations at the point a NEW key is genuinely about
+  to be computed (`execPreviewRender`, codeExec.ts) — right before a real miss for a NEW `refreshKey`, sweep
+  and delete any OTHER `previewRender:<designId>[:*]` entry for the SAME design. An ordinary re-render or
+  re-navigation with the SAME (unchanged) key stays a plain cache HIT (no eviction, no VNA, instant paint —
+  byte-identical to pre-fix navigation behavior); only an actual Refresh click (a genuinely new key) prunes
+  the old generation. Bounds the cache to at most one entry per design without touching navigation.
+- The caption now states the contract imperatively in one place (anonymous-visitor view, not interactive,
+  edits may need Refresh — "may" not "won't", per the semi-liveness below) instead of a weaker "as of the
+  last refresh" that didn't warn about the edit→look-down moment.
+- `.design-preview { pointer-events: none; }` makes the "not interactive" promise VISIBLE — without it a
+  native `<input>` inside the revived tree still accepted keystrokes (looked live, did nothing on submit).
+  The Refresh button lives OUTSIDE `.design-preview` (a sibling in `.preview-head`), so it stays clickable.
+- `PreviewRenderBrowser.feature`'s refresh scenario now asserts the NEGATIVE case explicitly: after the seed
+  edit and BEFORE clicking Refresh, the preview still shows the OLD value — the provable half of the manual
+  model (previewRender's memo entry has empty deps, so nothing stales it without a refreshKey bump).
+
+**Ledger — not built, flagged for later:**
+- **Semi-liveness is opportunistic, not a race.** Refresh is the ONLY *guaranteed* update path, but the
+  preview is an ordinary memo entry: ANY refetch the editor page fires for its own reasons (e.g. a host
+  action's reply) re-renders the whole page and, if the previewRender key happens to be a hit, repaints
+  from that hit's already-shipped result — so the preview can occasionally look fresher than "last Refresh"
+  without another race, because it never triggers ITS OWN refetch (dep-free) and only rides refetches the
+  page was already doing. Display-only, harmless; the caption's "may" already covers it.
+- **The concrete-store guard leaks storage-engine identity into the render layer.** `SsrRenderer.cs`'s
+  `BuildPreviewRenderData` checks `_store is not JsonFileInstanceStore` and hard-constructs a
+  `new JsonFileInstanceStore` for the throwaway preview seed — fine today (the only store the render layer
+  is ever handed), but it MUST NOT HARDEN: the already-ledgered in-memory-throwaway-store seam (below) is
+  what removes this coupling, not a workaround bolted on here.
+- **Per-editor-render recompute cost.** The throwaway store does real disk I/O (temp dir create/write/
+  delete) on every SSR paint of the editor AND on every Refresh AND on any host-action-triggered refetch
+  of the page — never per-keystroke (the preview isn't in that path), but still more than zero. The
+  in-memory store + a session-scoped memo (skip the file round-trip entirely for a preview compute) is the
+  optimization; deferred, not needed at S3a's scale.
+- **No "stale" badge.** The preview cannot self-report "this may be out of date since your last edit"
+  without the design-subgraph dep-tracking that auto-live needed and this slice dropped (the race). Rides
+  the auto-live follow-up (which needs the tree editor's optimistic-mutation path made refetch-race-safe
+  first) — a badge without real dep-tracking would just be another caption, not a signal.
+- **Layout.** The Preview section is appended below Structured render / Publish / Branches — the editor page
+  is getting long. Side-by-side or sticky layout is the visual-canvas slice's problem to solve, not S3a's.
+- **`previewRefresh` is one global `ui var`.** Fine while exactly one design editor is open per session (the
+  designer's current shape); the multi-instance IDE future (multiple editors live at once) may want the
+  refresh key scoped per-design rather than shared. Open question, not a bug today.
+
+---
+
+*Everything below is the original (pre-finding) Option A design, kept for reference — a heavier
+interactive alternative, not what S3a built.*
+
+## ⏸ (superseded) STATUS: PAUSED 2026-07-08
 
 After the inline-splice infeasibility surfaced, the user chose to PAUSE/RETHINK S3 rather than
-proceed with either isolated shape. **S3 is not being built.** The editable structured-render
-designer (S0–E2, on main) is a complete, self-contained milestone; the live preview is deferred.
-When revisited, start from the `sys.previewRender` → HTML-string + `srcdoc` shape above (lightest
-feasible); Option A (below) is the heavier interactive alternative. Everything below is the
+proceed with either isolated shape. The editable structured-render
+designer (S0–E2, on main) is a complete, self-contained milestone. Everything below is the
 original (pre-finding) Option A design, kept for reference.
 
 ## Position (one sentence)

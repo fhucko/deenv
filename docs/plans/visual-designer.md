@@ -270,10 +270,22 @@ mutations the designer app performs in deenv code — that machinery already exi
 - **S2 — provenance + click-to-source (read-only).** Twins stamp node identity onto
   DOM; click an element in a rendered page → the designer navigates to the producing
   row + highlights its span in the text pane. Standalone debugging win.
-- **S3 — live-preview mini-instance.** The Stage-2 inner loop: designer renders the
-  in-progress design against representative data, updating on edit, no publish/restart.
-  Biggest infra slice; sequenced before any visual WRITE because editing without live
-  feedback is not the product.
+- **S3a — inline preview (`sys.previewRender`). ✅ DONE 2026-07-08** (arch + ux review
+  SHIP-WITH-FIXES, fixes applied; suite 779). The design being edited renders INLINE in the
+  designer as regular content — no iframe, no kernel mount (the user's requirement; the
+  earlier "mini-instance mount" framing is superseded — full record + the settled two-view
+  architecture in docs/plans/s3-live-preview.md). Mechanism: **rendered-tree-AS-DATA + twin
+  revival** — the server renders the projected design headlessly over a throwaway
+  `initialData`-seeded store, strips handlers, ships the tree as plain `{tag,attrs,children}`
+  data (trees have no wire form; data does), and BOTH twins revive data→tags at the
+  `sys.previewRender(design[, refreshKey])` call site. Liveness = explicit Refresh (auto-live
+  raced the tree editor's optimistic mutations — reproduced, dropped, ledgered; returns once
+  optimistic mutations are refetch-race-safe). Preview is display-inert + anonymous-principal,
+  fail-soft on invalid designs. **The settled destination is TWO VIEWS: this truth view
+  (real render, evaluated) + the client-only CANVAS (`sys.renderTree` over the MetaNode rows
+  — instant, provenance-stamped, the surface S4 turns into the editor), with evaluation
+  arriving in the canvas via shipped eval contexts (parsed ASTs + seed graph) and stored
+  per-component STATES ("main uses") as the workbench — recorded in the S3 doc + memory.**
 - **S4 — inspector edits (first write).** Select a node → its row in a generic-UI-grade
   form (attribute slots, expression leaves as text inputs) → ordinary data commit →
   projection + preview update. Canvas v1 = the live preview itself with selection

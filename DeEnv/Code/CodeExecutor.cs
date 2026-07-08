@@ -74,10 +74,23 @@ public sealed class CodeExecutor
     // `sys.mergePreview` throws, as it needs the designer host.
     private readonly Func<ExecObject, ExecObject, ExecContext, IExecValue>? _mergePreview;
 
+    // The inline-preview computer (M12 S3a), injected by the renderer so `sys.previewRender(design)` can
+    // render the design being edited HEADLESSLY (its own `fn render()`/generic UI over a throwaway store
+    // seeded from the design's `initialData`) and return the rendered tree AS PLAIN DATA — a handler-stripped
+    // {tag, attrs, children}/text graph that HAS a wire form (unlike a tag tree, which ClientState refuses to
+    // ship). Like _mergePreview it is SELF-BUILT in SsrRenderer (the design is a row in the designer's OWN
+    // store — no kernel/cross-instance data); it bridges to SchemaBridge/InstanceDescriptionLoader (in
+    // DeEnv.Designer/DeEnv.Instance) which the interpreter core never references. The delegate traffics only
+    // Code-layer types (the design ExecObject + the render context to mint the data's transient ids, the data
+    // graph out). At the call site BOTH twins revive the data → a real ExecTag tree (deterministic, identical
+    // DOM). Null for a bare executor (conformance, the client twin, a non-designer instance) ⇒ throw.
+    private readonly Func<ExecObject, ExecContext, IExecValue>? _previewRender;
+
     public CodeExecutor(IInstanceStore? store = null, IReadOnlyDictionary<string, CodeObject>? descriptors = null,
         TypeResolver? resolver = null, AccessFloor? floor = null, Func<ExecObject, ExecObject, ExecContext, IExecValue>? commitDiff = null,
         Func<ExecObject, int, ExecContext, IExecValue>? publishPreview = null,
-        Func<ExecObject, ExecObject, ExecContext, IExecValue>? mergePreview = null)
+        Func<ExecObject, ExecObject, ExecContext, IExecValue>? mergePreview = null,
+        Func<ExecObject, ExecContext, IExecValue>? previewRender = null)
     {
         _store = store;
         _descriptors = descriptors ?? new Dictionary<string, CodeObject>();
@@ -86,6 +99,7 @@ public sealed class CodeExecutor
         _commitDiff = commitDiff;
         _publishPreview = publishPreview;
         _mergePreview = mergePreview;
+        _previewRender = previewRender;
     }
 
     // ── statements ──────────────────────────────────────────────────────────────
@@ -663,6 +677,86 @@ public sealed class CodeExecutor
         return report;
     }
 
+    // previewRender(design[, refreshKey]): an INLINE render of the design being edited, shown as regular
+    // content in the designer (M12 S3a). A SERVER-BACKED READ modeled on publishPreview/mergePreview: the
+    // server computes the design's rendered UI HEADLESSLY (its own render over a throwaway store seeded from
+    // the design's `initialData`) and ships it — but NOT as a tag tree (ClientState refuses those,
+    // ClientState.cs — a tree has no wire form). Instead the server returns the tree AS PLAIN DATA: a
+    // handler-stripped {tag, attrs, children}/text graph, an ordinary nested object/array/text value that ships
+    // in the memo exactly like a publishPreview report. At THIS call site both twins REVIVE the data → a real
+    // ExecTag tree and return it; the interpreter splices a returned tree inline (SpliceView / the {expr} child
+    // site) and the client reconciler builds DOM from it — the client never recomputes the foreign render, it
+    // revives it from shipped data, so hydration keeps the preview instead of blanking. The revival is
+    // deterministic, so both twins paint identical DOM.
+    //
+    // Cached DIRECTLY (not via Memoize — the data is a fresh negative-id tree Memoize's factory guard would
+    // refuse), with EMPTY deps, keyed by the design's id + the optional `refreshKey` scalar (both twins build
+    // the same key). The preview is deliberately NOT auto-live per edit: the compute reads the design via raw
+    // store reads, and wiring per-edit invalidation forced a server refetch on EVERY design edit (each edit
+    // stales the preview) which RACED the designer's optimistic tree-editor mutations (adds/edits that were
+    // pure-client now round-trip). So the preview shows the design as of the last (re)compute — a fresh compute
+    // on navigation to the editor, and ON DEMAND when the caller bumps `refreshKey` (the Refresh button): a
+    // changed key is a fresh entry → miss → refetch → fresh preview, with no per-edit refetch and no race. No
+    // delegate ⇒ throw.
+    private IExecValue ExecutePreviewRender(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length is not (1 or 2))
+            throw new CodeRuntimeException("previewRender(design[, refreshKey]) takes one or two arguments.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecObject design)
+            throw new CodeRuntimeException("previewRender() expects a design object as its first argument.");
+        var key = $"previewRender:{design.Id}";
+        if (call.Params.Length == 2)
+            key += ":" + ScalarKeyPart(ExecuteValue(call.Params[1], scope, context));
+        if (context.Memo.TryGetValue(key, out var cached))
+            return RevivePreviewTree(cached.Result, context);
+        var data = _previewRender?.Invoke(design, context)
+            ?? throw new CodeRuntimeException("previewRender() requires a designer host context.");
+        context.Memo[key] = new CacheEntry { Key = key, Result = data, Deps = new Deps() };
+        return RevivePreviewTree(data, context);
+    }
+
+    // A scalar's contribution to a memo key (the previewRender refresh key) — twin-stable with codeExec.ts.
+    private static string ScalarKeyPart(IExecValue v) => v switch
+    {
+        ExecInt i  => i.Value.ToString(),
+        ExecText t => t.Value,
+        ExecBool b => b.Value ? "true" : "false",
+        _ => "",
+    };
+
+    // Revive a preview DATA graph (the plain {tag, attrs, children}/text form the server cached) into a real
+    // ExecTag tree to splice at the `sys.previewRender(design)` child site. The data carries NO handlers
+    // (stripped server-side) and is display-only. Deterministic + semantically identical to codeExec.ts's
+    // revivePreview, so both twins paint the same DOM. A text leaf revives as-is (a text child); a tag object
+    // ({tag, attrs, children}) revives to an ExecTag; the ROOT fragment (an object with `children` but no
+    // `tag`) revives to an ExecArray that splices flat — so a single-root, multi-root, or text render all
+    // splice uniformly. Marked internal so the S3a integration test can drive it directly.
+    internal static IExecValue RevivePreviewTree(IExecValue data, ExecContext context)
+    {
+        switch (data)
+        {
+            case ExecObject o when o.Props.TryGetValue("tag", out var t) && t is ExecText tag:
+            {
+                var attrs = o.Props.TryGetValue("attrs", out var a) && a is ExecObject ao
+                    ? new Dictionary<string, IExecValue>(ao.Props)
+                    : [];
+                var kids = o.Props.TryGetValue("children", out var c) && c is ExecArray ca
+                    ? ca.Items.Select(i => (IExecTagChild)RevivePreviewTree(i.Value, context)).ToArray()
+                    : [];
+                return new ExecTag { Name = tag.Value, Attributes = attrs, Children = kids };
+            }
+            case ExecObject o when o.Props.TryGetValue("children", out var c) && c is ExecArray ca:
+                // The root fragment — splice its revived children flat.
+                return new ExecArray
+                {
+                    Id = --context.LastId.Value, Kind = ArrayKind.List,
+                    Items = [.. ca.Items.Select((i, idx) => new ExecItem { Key = idx, Value = RevivePreviewTree(i.Value, context) })],
+                };
+            default:
+                return data; // a text (or other scalar) child, as-is
+        }
+    }
+
     // schema(typeName): a type's descriptor — { name, labelProp, props } — the reflective
     // shape the self-hosted generic UI walks (objectForm/refEditor/setTable). The replacement for
     // the old `__descs` registry global: the descriptor is computed from the schema (the literal
@@ -1172,6 +1266,7 @@ public sealed class CodeExecutor
         "diffCommits" => ExecuteDiffCommits(call, scope, context),
         "publishPreview" => ExecutePublishPreview(call, scope, context),
         "mergePreview" => ExecuteMergePreview(call, scope, context),
+        "previewRender" => ExecutePreviewRender(call, scope, context),
         "nest" => ExecuteNest(call, scope, context),
         "segment" => ExecuteSegment(call, scope, context),
         "toInt" => ExecuteToInt(call, scope, context),

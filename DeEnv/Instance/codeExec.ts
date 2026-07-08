@@ -1016,6 +1016,87 @@ function execMergePreview(codeCall: CodeCall, scope: ExecScope, context: ExecCon
     return r;
 }
 
+// previewRender(design[, refreshKey]): an INLINE render of the design being edited (M12 S3a) — the twin of
+// execMergePreview/execPublishPreview. The server RENDERS the design headlessly (its own render over a
+// throwaway store seeded from the design's initialData) and ships the result AS PLAIN DATA — a handler-
+// stripped {tag, attrs, children}/text graph. A tree has NO wire form (ClientState refuses it), but plain
+// nested data does, so it ships in the memo like a report. The client NEVER recomputes the foreign render:
+// on a hit it REVIVES the shipped data into a real tag tree and returns it, spliced inline (so hydration
+// keeps the preview instead of blanking); a miss throws "Value not available" → refetch, exactly like
+// execPublishPreview. Keyed by the design id + the optional `refreshKey` scalar so both twins address the
+// same entry. The preview is NOT auto-live per edit (that forced a server refetch on every edit, racing the
+// designer's optimistic tree-editor mutations) — it shows the design as of the last (re)compute; the caller
+// bumps `refreshKey` (the Refresh button) to force a fresh entry → miss → refetch → fresh preview.
+function execPreviewRender(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const design = executeValue(codeCall.params[0], scope, context).value;
+    if (design.type !== "object") throw new Error("previewRender() expects a design object as its first argument.");
+    let key = "previewRender:" + design.id;
+    if (codeCall.params.length > 1) key += ":" + scalarKeyPart(executeValue(codeCall.params[1], scope, context).value);
+    // A Refresh click bumps refreshKey, minting a NEW key for the SAME design — nothing else ever evicts the
+    // OLD generation (it is not `comp:`, never goes stale, is never incomplete), so it would otherwise
+    // accumulate one full preview tree per Refresh click, bounded only by a page reload (the client memo
+    // leak). Prune any OTHER `previewRender:<designId>[:*]` entry for THIS design right before computing a
+    // genuinely NEW key, so at most one generation per design ever lives in the cache. Scoped to an actual
+    // new-key MISS (memoCache has no entry for THIS exact key yet) — an ordinary re-render/re-navigation
+    // with the SAME key is an ordinary cache HIT and must NOT be disturbed here: evicting on every render
+    // (e.g. from `resetViewState` on navigation, an earlier version of this fix) forces a miss on every
+    // nav — defeating the SPA's speculative flash guard (navigateClientSide/renderUiSpeculative), which
+    // treats ANY incomplete subtree as "hold the WHOLE navigation, blank until the refetch replies" — an
+    // unrelated, worse regression this narrower scoping avoids (verified: a plain revisit reuses the
+    // existing entry and paints instantly, exactly as before this fix; only a genuine Refresh prunes).
+    if (memoCache != null && !memoCache.has(key)) {
+        const prefix = "previewRender:" + design.id;
+        for (const k of Array.from(memoCache.keys()))
+            if (k !== key && (k === prefix || k.startsWith(prefix + ":"))) memoCache.delete(k);
+    }
+    // As in execPublishPreview: a MISS makes memoize return an empty `nothing`; re-throw the VNA so it never
+    // leaks into a value position, and the nearest memoize boundary turns it into a refetch.
+    const r = memoize(key, context, () => { throw new Error("Value not available"); });
+    if (r.type === "nothing") throw new Error("Value not available"); // a miss (never shipped)
+    return revivePreview(r, context);
+}
+
+// A scalar's contribution to a memo key (the previewRender refresh key) — twin-stable with CodeExecutor's
+// ScalarKeyPart.
+function scalarKeyPart(v: ExecValue): string {
+    switch (v.type) {
+        case "int": return String(v.value);
+        case "text": return v.value;
+        case "bool": return v.value ? "true" : "false";
+        default: return "";
+    }
+}
+
+// Revive a preview DATA graph (the plain {tag, attrs, children}/text form the server cached) into a real tag
+// tree to splice at the sys.previewRender(design) child site (twin of CodeExecutor.RevivePreviewTree). The
+// data carries NO handlers (stripped server-side) and is display-only. A text leaf revives as-is; a tag
+// object revives to a tag (its attrs wrapped as ExecResults, the client's native attribute shape); the ROOT
+// fragment (an object with `children` but no `tag`) revives to an array that splices flat.
+function revivePreview(data: ExecValue, context: ExecContext): ExecValue {
+    if (data.type === "object") {
+        const tagV = data.props["tag"];
+        if (tagV != null && tagV.type === "text") {
+            const attributes: { [name: string]: ExecResult } = {};
+            const attrsV = data.props["attrs"];
+            if (attrsV != null && attrsV.type === "object")
+                for (const [name, v] of Object.entries(attrsV.props)) attributes[name] = { value: v };
+            const children: ExecTagChild[] = [];
+            const childrenV = data.props["children"];
+            if (childrenV != null && childrenV.type === "array")
+                for (const item of childrenV.items) children.push(revivePreview(item.value, context));
+            return { type: "tag", name: tagV.value, attributes, children };
+        }
+        // The root fragment ({children:[…]}, no `tag`) → an array that splices flat.
+        const childrenV = data.props["children"];
+        if (childrenV != null && childrenV.type === "array")
+            return {
+                type: "array", kind: "list", id: --context.lastId.value,
+                items: childrenV.items.map((item, i) => ({ key: i, value: revivePreview(item.value, context) })),
+            };
+    }
+    return data; // a text (or other scalar) child, as-is
+}
+
 // setRef(obj, prop, value): set/clear an object REFERENCE prop and persist it. value is an
 // existing candidate (id>0 → refId), a fresh draft (id<0 → its scalar props), or null
 // (clear). Stages in memory (UI reflects it), then sends the id-addressed WS op.
@@ -1488,6 +1569,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "canRead": return execCanRead(codeCall, scope, context);
         case "diffCommits": return execDiffCommits(codeCall, scope, context);
         case "publishPreview": return execPublishPreview(codeCall, scope, context);
+        case "previewRender": return execPreviewRender(codeCall, scope, context);
         case "mergePreview": return execMergePreview(codeCall, scope, context);
         case "setRef": return execSetRef(codeCall, scope, context);
         case "publish": return execPublish(codeCall, scope, context);

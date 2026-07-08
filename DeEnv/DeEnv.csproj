@@ -8,6 +8,13 @@
     <RootNamespace>DeEnv</RootNamespace>
   </PropertyGroup>
 
+  <!-- The test assembly drives a few internal server-side seams directly (e.g. SsrRenderer's
+       BuildPreviewRenderData / CodeExecutor.RevivePreviewTree for the M12 S3a preview compute),
+       so it can assert their behavior without a browser. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="DeEnv.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.TypeScript.MSBuild" Version="5.8.3" PrivateAssets="All" />
     <PackageReference Include="GenHTTP.Core" Version="10.5.3" />
