@@ -117,27 +117,57 @@ ui
             return "prop-row is-text-single"
         return "prop-row"
 
-    fn renderNodeEditor(node)
+    fn orderForAppend(coll)
+        var top = coll.orderBy(c => 0 - c.order).single(c => true)
+        if top == null
+            return 0
+        return top.order + 1
+
+    fn addChildElement(node)
+        node.children.add({ tag: "div", expr: "", order: orderForAppend(node.children), attrs: [], children: [] })
+
+    fn addChildText(node)
+        node.children.add({ tag: "", expr: "\"\"", order: orderForAppend(node.children), attrs: [], children: [] })
+
+    fn addAttr(node)
+        node.attrs.add({ name: "class", value: "\"\"", order: orderForAppend(node.attrs) })
+
+    fn renderNodeEditor(node, onRemove)
         if node.tag == ""
             return <div class="node-leaf">
                 <span class="node-leaf-anchor">
                     "->"
                 <input class="node-expr" value={node.expr} placeholder={"\"text\" or expression"}>
+                if onRemove != null
+                    <button class="remove-node" onClick={onRemove}>
+                        "×"
         return <div class="node-element">
             <div class="node-tag-row">
                 <span class="node-angle">
                     "<"
                 <input class="node-tag" value={node.tag}>
+                if onRemove != null
+                    <button class="remove-node" onClick={onRemove}>
+                        "×"
             foreach attr in node.attrs.orderBy(a => a.order)
                 <div class="node-attr">
                     <input class="node-attr-name" value={attr.name}>
                     <span class="node-attr-eq">
                         "="
                     <input class="node-attr-value" value={attr.value} placeholder={"\"value\" or expression"}>
+                    <button class="remove-attr" onClick={() => node.attrs.remove(attr)}>
+                        "×"
             if node.children.any(c => true)
                 <div class="node-children">
                     foreach child in node.children.orderBy(c => c.order)
-                        <renderNodeEditor node={child}>
+                        <renderNodeEditor node={child} onRemove={() => node.children.remove(child)}>
+            <div class="node-add-row">
+                <button class="add-element" onClick={() => addChildElement(node)}>
+                    "+ element"
+                <button class="add-text" onClick={() => addChildText(node)}>
+                    "+ text/expr"
+                <button class="add-attr" onClick={() => addAttr(node)}>
+                    "+ attr"
 
     fn startRename(i)
         renameId = i.runtimeId
@@ -273,7 +303,7 @@ ui
                         <h2 class="publish-heading">
                             "Structured render"
                         <p class="publish-caption">
-                            "Edit each node's fields inline. Adding, removing, and reordering nodes is coming."
+                            "Edit each node's fields inline. Add and remove nodes and attributes with the controls; reordering is coming."
                         <div class="render-tree">
                             foreach n in design.render
                                 <renderNodeEditor node={n}>

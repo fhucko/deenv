@@ -1368,6 +1368,23 @@ public sealed class DesignerSteps(InstanceContext ctx)
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == NestedConvertibleRender));
     }
 
+    // A PROJECTABLE nested convertible render for E2: like NestedConvertibleRender, but the leaf is a REAL
+    // bound expression (`db.greeting`) rather than the bare undefined symbol `leaf` — so once the design
+    // carries a Db root type with a `greeting` field, the whole document PROJECTS to a valid design document
+    // (the bare `leaf` cannot resolve, which is fine for E1's tree-recursion proof but blocks a projection
+    // check). Same authoring plumbing (fill the ui textarea, poll the store).
+    private const string ProjectableNestedRender =
+        "ui\n    fn render()\n        return <main class=\"x\">\n            <h1>\n                db.greeting\n";
+
+    [When("I author a projectable nested render into the design's UI")]
+    public async Task WhenAuthorProjectableNestedRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(ProjectableNestedRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "treeme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ProjectableNestedRender));
+    }
+
     // After the import host action's ack refetch re-renders the editor, the mode flips: a first-class
     // "Structured render" section (OUTSIDE the collapsing Advanced disclosure) appears, holding the
     // recursive tree editor over design.render. Plain visible wait — no fixed sleep, no disclosure dance.
@@ -1419,6 +1436,118 @@ public sealed class DesignerSteps(InstanceContext ctx)
             return nodes.Any(o => o.Fields.TryGetValue("tag", out var tv) && tv is DeEnv.Storage.TextValue t && t.Text == tag)
                 && !nodes.Any(o => o.Fields.TryGetValue("tag", out var tv) && tv is DeEnv.Storage.TextValue { Text: "main" });
         });
+
+    // ── M12 E2 — structural editing (add/remove child nodes + attributes, appending in order) ────────
+
+    // The ROOT node is the first .node-element directly under .render-tree; its OWN controls are direct
+    // children (`>`) so a nested node's identically-classed controls can't satisfy the locator. Its add-row
+    // holds "+ element" / "+ text/expr" / "+ attr"; its direct children live in its own .node-children, one
+    // per child node — no wrapper (the E2 ux fix dropped the .node-child sibling wrapper so each child's
+    // remove × lives INSIDE that child's own tag-row/leaf-row instead of floating beside the whole subtree).
+    private const string RootNode = ".design-editor .render-tree > .node-element";
+    // The root's LAST direct child's editor (the appended element must be LAST under .orderBy(order)).
+    private const string RootLastChildElement = RootNode + " > .node-children > :last-child.node-element";
+
+    [When("I add a child element to the root node")]
+    public async Task WhenAddChildElement() =>
+        await ctx.Page!.Locator(RootNode + " > .node-add-row > button.add-element").ClickAsync();
+
+    // The appended element sorts LAST (order = max sibling order + 1). Assert the root's LAST child is an
+    // element whose own tag input reads the expected default/edited tag — proving both that it landed and
+    // that it landed at the END (a naive order:0 would sort it to the FRONT, ahead of the imported <h1>).
+    [Then("the root node's last child is an element with tag {string}")]
+    public async Task ThenRootLastChildTag(string tag) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const e = document.querySelector({JsString(RootLastChildElement + " > .node-tag-row > input.node-tag")}); return e != null && e.value === {JsString(tag)}; }}");
+
+    [When("I edit the root node's last child tag input to {string}")]
+    public async Task WhenEditLastChildTag(string tag) =>
+        await ctx.Page!.Locator(RootLastChildElement + " > .node-tag-row > input.node-tag").FillAsync(tag);
+
+    [When("I add an attribute to the root node's last child")]
+    public async Task WhenAddAttrToLastChild() =>
+        await ctx.Page!.Locator(RootLastChildElement + " > .node-add-row > button.add-attr").ClickAsync();
+
+    [When("I add a text child to the root node's last child")]
+    public async Task WhenAddTextToLastChild() =>
+        await ctx.Page!.Locator(RootLastChildElement + " > .node-add-row > button.add-text").ClickAsync();
+
+    // The added element now carries a real attribute row (name/value inputs) and a nested text-leaf child
+    // (a .node-leaf with an expr input). Both appended controls prove add-attr and add-text landed.
+    [Then("the root node's last child element has an attribute input and a text-leaf child")]
+    public async Task ThenLastChildHasAttrAndText()
+    {
+        await ctx.Page!.Locator(RootLastChildElement + " > .node-attr > input.node-attr-name").First.WaitForAsync();
+        await ctx.Page!.Locator(RootLastChildElement + " > .node-children .node-leaf > input.node-expr").First.WaitForAsync();
+    }
+
+    // The × now lives INSIDE the last child's own tag-row (the E2 ux fix), not beside a .node-child wrapper.
+    [When("I remove the root node's last child")]
+    public async Task WhenRemoveLastChild() =>
+        await ctx.Page!.Locator(RootLastChildElement + " > .node-tag-row > button.remove-node").ClickAsync();
+
+    // The removed subtree is gone from the store: no MetaNode carries the removed element's tag any more
+    // (GC reclaims the detached subtree on the remove mutation).
+    [Then("the root node no longer has a child element with tag {string}")]
+    public async Task ThenNoChildWithTag(string tag) =>
+        await EventuallyAsync(() =>
+            !_designer.Store.ReadExtent("MetaNode").Values.Any(o =>
+                o.Fields.TryGetValue("tag", out var tv) && tv is DeEnv.Storage.TextValue t && t.Text == tag));
+
+    // The whole point of a structured render: after every structural edit it must still PROJECT to a valid
+    // app document. Read the "treeme" Design node (resolved recursively) from the store and run the real
+    // SchemaBridge.ProjectDesignDocument — an un-projectable node (an empty-nothing node, or an attribute
+    // with an empty value expression) throws a SchemaValidationException here. Polled (the add is a staged
+    // ctx mutation flushed over the WS, so there is a brief async window); on timeout the LAST projection
+    // error is surfaced (a bare EventuallyAsync would only say "expected true").
+    [Then("the stored render projects to a valid design document")]
+    public async Task ThenProjectsValid()
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (TryProject()) return;
+            await Task.Delay(200);
+        }
+        throw new Exception("Projection never became valid. Last error: " + _lastProjectError);
+    }
+
+    private bool TryProject()
+    {
+        var designId = DesignIdByLabel("treeme");
+        if (designId == 0) { _lastProjectError = "design 'treeme' not found"; return false; }
+        var design = _designer.Store.ReadNode(
+            DeEnv.Storage.NodePath.Root.Field("designs").Key(designId.ToString()));
+        if (design is null) { _lastProjectError = "design node null"; return false; }
+        try
+        {
+            // ProjectDesignDocument builds + validates the whole document, including the render tree: an
+            // un-projectable node (an empty-nothing node, or an attribute with an empty value expression)
+            // throws a SchemaValidationException here. That is the E2 correctness bar — the STRUCTURAL
+            // projectability of the edited render. (We deliberately do NOT then interpreter-LOAD the doc:
+            // the imported fixture render references a bare symbol `leaf` that a running app has no binding
+            // for — a symbol-resolution concern orthogonal to whether the render tree projects.)
+            var doc = DeEnv.Designer.SchemaBridge.ProjectDesignDocument(design);
+            return doc.Contains("fn render()");
+        }
+        catch (Exception ex) { _lastProjectError = ex.Message; return false; }
+    }
+
+    private string _lastProjectError = "";
+
+    // The Design id of the (main working-copy) design with the given label, or 0 if not yet present.
+    private int DesignIdByLabel(string label)
+    {
+        var designs = _designer.Store.ReadNode(DeEnv.Storage.NodePath.Root.Field("designs")) as DeEnv.Storage.SetValue;
+        if (designs is null) return 0;
+        foreach (var id in designs.Members.Keys)
+        {
+            var d = _designer.Store.ReadById(id);
+            if (d is { } dv && dv.Fields.Fields.GetValueOrDefault("label") is DeEnv.Storage.TextValue { Text: var l } && l == label)
+                return id;
+        }
+        return 0;
+    }
 
     [Then("the design editor no longer shows the UI textarea")]
     public async Task ThenNoUiTextarea() =>

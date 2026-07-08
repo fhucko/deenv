@@ -1096,3 +1096,53 @@ Feature: The operator IDE (designs library + instance design selector)
     And I edit the design "treeme"
     Then the design editor eventually shows the structured render tree editor
     And the tree editor's root node tag input reads "section"
+
+  # ── M12 E2 — the structured-render tree editor becomes STRUCTURALLY editable ───────────────────
+  #
+  # E1 made the tree editor recurse and inline-edit each node's SCALAR fields, but you could not change the
+  # SHAPE of the tree — no way to add or remove nodes/attributes. E2 adds that, mirroring the type editor's
+  # add/remove idiom (set.add({…all fields defaulted…}) + an inline set.remove(member)). Each ELEMENT node
+  # gets a small button row — "+ element" / "+ text" / "+ attr" — that appends a child element (default tag
+  # "div"), a child text-leaf (expr defaulting to the empty-string literal source "" so it PROJECTS), or an
+  # attribute (value likewise "" so it projects). Each non-root child and each attr gets an inline "×" that
+  # removes it from its parent's set (the removed subtree is GC-reclaimed). The single-root invariant holds:
+  # the ROOT keeps its add controls but has NO remove control.
+  #
+  # The one real correctness trap: E1 renders children via .orderBy(c => c.order), and the import assigns
+  # dense 0,1,2… orders, so a naive order:0 on a new child would SORT TO THE FRONT and collide with the
+  # imported first child. New members must APPEND — order = (max existing sibling order) + 1, computed in
+  # Code over the sibling set (orderBy descending, take the first). The scenario proves it: after adding an
+  # element to the root (whose sole imported child is <h1>), the new node lands LAST, not first.
+  #
+  # The proof: convert the nested render, add an element child to the root (assert it appears nested and
+  # LAST), edit its tag, add an attribute to it, add a text child, then REMOVE that added element — and the
+  # design still projects to a valid fn render() (re-open round-trips). Auto-waiting locators / store polls
+  # throughout, no fixed sleep.
+  @m12 @single-user
+  Scenario: The structured render tree editor adds and removes child nodes and attributes, appending in order
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "treeme"
+    And I edit the design "treeme"
+    And I expand the Advanced code disclosure
+    And I author a projectable nested render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the tree editor's root node tag input reads "main"
+    # A projectable app document needs a Db root type — give this create-form design one (with a `greeting`
+    # field the imported leaf `db.greeting` binds to) so the projection assertions below check the RENDER's
+    # structural validity, not an incidental missing-schema or unbound-symbol error.
+    When I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "greeting" to the type "Db"
+    When I add a child element to the root node
+    Then the root node's last child is an element with tag "div"
+    When I edit the root node's last child tag input to "footer"
+    Then the root node's last child is an element with tag "footer"
+    When I add an attribute to the root node's last child
+    And I add a text child to the root node's last child
+    Then the root node's last child element has an attribute input and a text-leaf child
+    And the stored render projects to a valid design document
+    When I remove the root node's last child
+    Then the root node no longer has a child element with tag "footer"
+    And the stored render projects to a valid design document

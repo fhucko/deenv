@@ -730,6 +730,18 @@ public sealed class SsrRenderer
         .node-leaf { display: flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0; margin: 0.2rem 0; }
         .node-leaf-anchor { color: var(--muted); font-family: ui-monospace, monospace; }
         .node-leaf input.node-expr { width: 100%; max-width: 440px; font-family: ui-monospace, monospace; }
+        /* E2 — structural editing. The remove (×) for a child node is passed down as an onRemove handler and
+           rendered INSIDE that node's OWN tag-row (element) / leaf row (leaf) — right next to the input it
+           removes, not as a sibling of the whole (possibly deep) subtree, so it never drifts far from the
+           node it deletes or floats to the subtree's vertical middle. The root's invocation passes no
+           onRemove (null), so it renders no × (the single-root invariant). The add-row's small buttons add a
+           child element / text-or-expr leaf / attribute to the node itself. All × removes reuse the danger
+           treatment (.remove-*), sized to sit tidily inline with the row's inputs. */
+        .node-add-row { display: flex; gap: 0.3rem; margin: 0.3rem 0 0.2rem 0; }
+        .node-add-row button.add-element, .node-add-row button.add-text, .node-add-row button.add-attr {
+          padding: 0.15rem 0.5rem; font-size: 0.82rem; color: var(--muted); }
+        button.remove-node, button.remove-attr { padding: 0.1rem 0.45rem; color: var(--danger); flex: 0 0 auto; }
+        button.remove-node:hover, button.remove-attr:hover { background: #fff0f0; border-color: var(--danger); }
         /* Raw code areas tucked behind a disclosure so the type editor reads as just types by default. */
         details.code-areas { margin-top: 1.4rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
         details.code-areas summary.code-summary { font-weight: 600; color: var(--muted); cursor: pointer; padding: 0.3rem 0; }

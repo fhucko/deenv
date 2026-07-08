@@ -243,6 +243,20 @@ mutations the designer app performs in deenv code — that machinery already exi
   add/remove/reorder of nodes/attrs yet (both covered by the caption). A framework bug found +
   routed around + spawned as a task: `.single()` over a set freshly repopulated by a host-action
   ack drops to a stale client render (E1 uses `foreach` over the one-member root set instead).
+- **E2 — add/remove nodes + attributes. ✅ DONE 2026-07-08** (ux SHIP-WITH-FIXES, fixes
+  applied; suite 773). The tree editor is now STRUCTURALLY editable: each element node has
+  `+ element` / `+ text/expr` / `+ attr` controls; each non-root node + each attr has a remove
+  `×` (anchored in the node's own tag row via an `onRemove` handler passed down the recursion —
+  the ux-review fix; the `×` was floating to the far-right margin detached from its node).
+  New members APPEND (`orderForAppend` = max sibling `order` + 1, NOT `order:0` which would sort
+  to the front under E1's `orderBy(order)`); add-defaults are projectable (`<div>`, empty-string
+  leaf, `class=""`). Root keeps no `×` (single-root invariant); leaves get no add-row. All ops
+  are ctx-staged `set.add({...})`/`set.remove` (atomic; GC reclaims removed subtrees). Twin-free
+  (existing collection primitives only). Ledgered: subtree-delete has no confirm/undo (consistent
+  with the type editor's remove-type/prop; versioning backstops it); a newly-added deep child
+  appends last with no scroll-into-view. **Editable tree editor COMPLETE — convert a text render,
+  then fully build/prune its structure.** Still deferred: REORDER (E3) + the server-backed
+  un-projectable indicator. NEXT toward the WYSIWYG canvas = S3 live-preview (design-first).
 - **S1c — MergeTags.** A per-row-kind 3-way merge + apply loop for MetaNode/MetaAttr with
   CONFLICT-CAPABLE child order (grill #1/#2 — do NOT inherit the cosmetic
   `order`-never-conflicts policy). Makes render rows branch/mergeable like types.
