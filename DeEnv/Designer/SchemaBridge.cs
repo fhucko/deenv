@@ -299,10 +299,11 @@ public static class SchemaBridge
     // no structured shape yet (S6). Such a render stays as `ui` text. Component tags (PascalCase) and html
     // tags are BOTH just MetaNode {tag=Name}; neither is special-cased.
     //
-    // Store writes are BUILT TOP-DOWN: the store GC-sweeps any transiently-unreferenced object, so each
-    // parent is created and linked into its owner BEFORE its children are created into the parent's set
-    // (link the root into Design.render, then create each child already linked into the parent's set, …).
-    // Behind IInstanceStore in the model's terms — never a flat kv or direct file write.
+    // ATOMIC: the whole import is ONE store.CommitBatch — all creates + links + the `ui` clear persist
+    // all-or-none (the store mints, links, and Saves ONCE). A mid-import crash can therefore never leave a
+    // design with partial `render` rows AND a non-empty `ui` (the bricked state ProjectDesignDocument's S1a
+    // precedence gate refuses). Every refusal below is checked BEFORE the batch is built, so a refusal
+    // builds and commits NOTHING. Behind IInstanceStore in the model's terms — never a flat kv or file write.
     public static void ImportRender(IInstanceStore store, int designId)
     {
         var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
@@ -342,66 +343,64 @@ public static class SchemaBridge
                 "This design's `fn render()` is not a single `return <element>` — only a plain tag tree can be imported.");
 
         // Refuse a tree containing any `for`/`if` tag form ANYWHERE (no structured form yet — S6). Checked
-        // BEFORE any store write so a refusal imports nothing.
+        // BEFORE the batch is built so a refusal imports nothing.
         RefuseUnstructurableChildren(root);
 
-        // Build top-down: create the root MetaNode, link it into Design.render, then recurse into its
-        // already-linked set. The design's `render` set has its own intrinsic id (an empty StoredSet minted
-        // when the Design object was created) — link by that id so no per-node NodePath is recomputed.
-        var renderSetId = SetIdOf(store, designId, "render");
-        var rootId = ImportNode(store, root, order: 0);
-        store.AddToSet(renderSetId, rootId);
-
-        // Clear the `ui` text field so the S1a gate accepts the structured render as the authority.
-        store.WriteLeaf(designPath.Field("ui"), new TextValue(""));
-    }
-
-    // Create one MetaNode row for a tag child (already refused of for/if), recursively creating its attrs
-    // and children INTO the freshly-linked node's own sets (top-down, GC-safe). Returns the minted id.
-    //   • element CodeTag → MetaNode {tag=Name}; each attribute → MetaAttr {name, value=CodePrint.Value};
-    //     each child (in order) → recurse.
-    //   • a leaf child (any non-CodeTag ICodeValue: CodeText, an expression, …) → MetaNode {tag="",
-    //     expr=CodePrint.Value(child)} — CodePrint.Value is the inverse of CodeParse.ParseExpression, so a
-    //     CodeText "Hi" prints back to the source `"Hi"` and the round-trip is the printer's canonical fixpoint.
-    private static int ImportNode(IInstanceStore store, ICodeTagChild child, int order)
-    {
-        if (child is not CodeTag tag)
+        // Build the whole changeset: a CommitCreate per MetaNode/MetaAttr keyed by a distinct NEGATIVE
+        // tempId, and mutations that link each child into its parent's `children` set, each attr into its
+        // node's `attrs` set (both addressed by (owner-tempId, prop) so a child can link into its
+        // just-minted parent within the ONE batch), the root into the EXISTING Design's `render` set, and
+        // a field-write clearing the design's `ui` text. store.CommitBatch mints + links + Saves ONCE.
+        var creates = new List<CommitCreate>();
+        var mutations = new List<CommitMutation>();
+        var nextTempId = -1;
+        int ImportNode(ICodeTagChild child, int order)
         {
-            // A leaf: print its source back (the inverse of ParseExpression on import).
-            var leaf = (ICodeValue)child;
-            var nodeId = store.CreateObject("MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
+            var tempId = nextTempId--;
+            if (child is not CodeTag tag)
             {
-                ["tag"] = new TextValue(""), ["expr"] = new TextValue(CodePrint.Value(leaf)), ["order"] = new IntValue(order),
-            }));
-            return nodeId;
+                // A leaf: print its source back (the inverse of ParseExpression on import) — CodePrint.Value
+                // is the printer's canonical fixpoint, so a CodeText "Hi" round-trips to the source `"Hi"`.
+                var leaf = (ICodeValue)child;
+                creates.Add(new CommitCreate(tempId, "MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
+                {
+                    ["tag"] = new TextValue(""), ["expr"] = new TextValue(CodePrint.Value(leaf)), ["order"] = new IntValue(order),
+                })));
+                return tempId;
+            }
+
+            creates.Add(new CommitCreate(tempId, "MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["tag"] = new TextValue(tag.Name), ["expr"] = new TextValue(""), ["order"] = new IntValue(order),
+            })));
+
+            var attrOrder = 0;
+            foreach (var attr in tag.Attributes)
+            {
+                var attrTempId = nextTempId--;
+                creates.Add(new CommitCreate(attrTempId, "MetaAttr", new ObjectValue(new Dictionary<string, NodeValue>
+                {
+                    ["name"] = new TextValue(attr.Name),
+                    ["value"] = new TextValue(CodePrint.Value(attr.Value)),
+                    ["order"] = new IntValue(attrOrder++),
+                })));
+                mutations.Add(new SetLinkByPropMutation(tempId, "attrs", attrTempId));
+            }
+
+            var childOrder = 0;
+            foreach (var c in tag.Children)
+                mutations.Add(new SetLinkByPropMutation(tempId, "children", ImportNode(c, childOrder++)));
+
+            return tempId;
         }
 
-        var elementId = store.CreateObject("MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
-        {
-            ["tag"] = new TextValue(tag.Name), ["expr"] = new TextValue(""), ["order"] = new IntValue(order),
-        }));
+        var rootTempId = ImportNode(root, order: 0);
+        mutations.Add(new SetLinkByPropMutation(designId, "render", rootTempId));
+        // Clear the `ui` text field so the S1a gate accepts the structured render as the authority — in the
+        // SAME batch, so the rows and the cleared text land together (the atomicity that unbricks a crash).
+        mutations.Add(new FieldWriteMutation(designId, "ui", new TextValue("")));
 
-        // Attributes — created into the node's own `attrs` set (already an empty StoredSet on the fresh node).
-        var attrsSetId = SetIdOf(store, elementId, "attrs");
-        var attrOrder = 0;
-        foreach (var attr in tag.Attributes)
-        {
-            var attrId = store.CreateObject("MetaAttr", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue(attr.Name),
-                ["value"] = new TextValue(CodePrint.Value(attr.Value)),
-                ["order"] = new IntValue(attrOrder++),
-            }));
-            store.AddToSet(attrsSetId, attrId);
-        }
-
-        // Children — recurse, linking each already-created child into the node's `children` set in order.
-        var childrenSetId = SetIdOf(store, elementId, "children");
-        var childOrder = 0;
-        foreach (var c in tag.Children)
-            store.AddToSet(childrenSetId, ImportNode(store, c, childOrder++));
-
-        return elementId;
+        store.CommitBatch(creates, mutations);
     }
 
     // Throw (importing nothing) if the tree rooted at `tag` contains any `for`/`if` tag form — they have no
@@ -421,17 +420,6 @@ public static class SchemaBridge
                     RefuseUnstructurableChildren(childTag);
                     break;
             }
-    }
-
-    // The intrinsic id of a just-created object's named SET prop (every declared set prop starts as an
-    // empty StoredSet with its own minted id), read back through ReadById since a fresh node is not yet
-    // reachable by a NodePath. Mirrors DesignerSeed.SetIdOf — the same top-down-link store idiom.
-    private static int SetIdOf(IInstanceStore store, int objectId, string setProp)
-    {
-        var hit = store.ReadById(objectId)
-            ?? throw new InvalidOperationException($"Object {objectId} vanished immediately after creation.");
-        return hit.Fields.Fields.GetValueOrDefault(setProp) is SetValue sv ? sv.Id
-            : throw new InvalidOperationException($"'{hit.TypeName}' has no set prop '{setProp}'.");
     }
 
     // Write an already-projected, already-validated app document onto a target instance, PRESERVING

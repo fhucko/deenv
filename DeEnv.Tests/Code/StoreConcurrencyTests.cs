@@ -118,4 +118,105 @@ public sealed class StoreConcurrencyTests
             if (File.Exists(genesisPath)) File.Delete(genesisPath);
         }
     }
+
+    // M12 X1: SetLinkByPropMutation — link a member into an owner's SET addressed by (owner, prop), so a
+    // child can link into a JUST-CREATED parent's nested set within ONE batch (the parent's set id isn't
+    // known until minted). Proven at the store level, resolving BOTH owner kinds: a tempId owner (the fresh
+    // parent Node's `children` set) AND a real-id owner (the pre-existing root Db's `nodes` set). Read the
+    // whole tree back to prove it persisted, and fsck to prove the batch is one consistent changeset.
+    [Test]
+    public async Task A_set_link_by_prop_links_into_a_fresh_parent_and_an_existing_owner()
+    {
+        var dataFile = Path.Combine(Path.GetTempPath(), "deenv-setlinkbyprop-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var desc = InstanceDescriptionLoader.Load("""
+                types
+                    Db
+                        nodes set of Node
+                    Node
+                        label text
+                        children set of Node
+                """);
+            var store = new JsonFileInstanceStore(dataFile, desc);
+
+            // ONE batch: mint a parent Node (tempId -1) + a child Node (tempId -2); link the CHILD into the
+            // PARENT's `children` set (owner = a tempId — the parent's nested set is minted in this same
+            // batch) and the PARENT into the EXISTING Db root's `nodes` set (owner = the real Db id 1).
+            const int parentTemp = -1, childTemp = -2;
+            store.CommitBatch(
+                [
+                    new CommitCreate(parentTemp, "Node", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("parent") })),
+                    new CommitCreate(childTemp, "Node", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("child") })),
+                ],
+                [
+                    new SetLinkByPropMutation(parentTemp, "children", childTemp),
+                    new SetLinkByPropMutation(1, "nodes", parentTemp), // real-id owner: the Db root
+                ]);
+
+            // Read the tree back: db.nodes holds exactly the parent, whose `children` holds exactly the child.
+            var nodes = (SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!;
+            var parent = nodes.Members.Values.OfType<ObjectValue>().Single();
+            await Assert.That(((TextValue)parent.Fields["label"]).Text).IsEqualTo("parent");
+            var children = (SetValue)parent.Fields["children"];
+            var child = children.Members.Values.OfType<ObjectValue>().Single();
+            await Assert.That(((TextValue)child.Fields["label"]).Text).IsEqualTo("child");
+
+            // fsck: replay(genesis→head) reproduces the snapshot — creates + both set links are one changeset.
+            await Assert.That(((JsonFileInstanceStore)store).Fsck()).IsTrue();
+            await Assert.That(new JsonFileInstanceStore(dataFile, desc).Fsck()).IsTrue();
+        }
+        finally
+        {
+            if (File.Exists(dataFile)) File.Delete(dataFile);
+            var logPath = AppPaths.LogPathForDataPath(dataFile);
+            var genesisPath = AppPaths.GenesisPathForDataPath(dataFile);
+            if (File.Exists(logPath)) File.Delete(logPath);
+            if (File.Exists(genesisPath)) File.Delete(genesisPath);
+        }
+    }
+
+    // M12 X1: a SetLinkByPropMutation naming a prop that is NOT a set is rejected in PRE-VALIDATION, so the
+    // whole batch is refused with the store UNTOUCHED — nothing minted. CommitBatch has no rollback; its
+    // all-or-none guarantee rests on the pre-validation loop throwing BEFORE the apply loop mutates. This
+    // guards that the new mutation's set-prop check can never fire mid-apply and leave half-minted state.
+    [Test]
+    public async Task A_set_link_by_prop_on_a_non_set_prop_is_rejected_with_nothing_minted()
+    {
+        var dataFile = Path.Combine(Path.GetTempPath(), "deenv-setlinkbadprop-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var desc = InstanceDescriptionLoader.Load("""
+                types
+                    Db
+                        nodes set of Node
+                    Node
+                        label text
+                        children set of Node
+                """);
+            var store = new JsonFileInstanceStore(dataFile, desc);
+
+            // `label` is a TEXT prop, not a set — linking into it must throw, and mint nothing.
+            const int parentTemp = -1, childTemp = -2;
+            await Assert.That(() => store.CommitBatch(
+                [
+                    new CommitCreate(parentTemp, "Node", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("p") })),
+                    new CommitCreate(childTemp, "Node", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("c") })),
+                ],
+                [new SetLinkByPropMutation(parentTemp, "label", childTemp)]))
+                .Throws<InvalidOperationException>();
+
+            // Store UNTOUCHED: no Node minted (the pre-validation threw before the create loop ran).
+            await Assert.That(store.ReadExtent("Node").Count).IsEqualTo(0);
+            await Assert.That(((SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!).Members.Count).IsEqualTo(0);
+        }
+        finally
+        {
+            if (File.Exists(dataFile)) File.Delete(dataFile);
+            var logPath = AppPaths.LogPathForDataPath(dataFile);
+            var genesisPath = AppPaths.GenesisPathForDataPath(dataFile);
+            if (File.Exists(logPath)) File.Delete(logPath);
+            if (File.Exists(genesisPath)) File.Delete(genesisPath);
+        }
+    }
 }

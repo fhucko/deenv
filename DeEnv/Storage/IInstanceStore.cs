@@ -211,6 +211,13 @@ public sealed record FieldWriteMutation(int ObjectRef, string Prop, NodeValue Va
 // (pre-validated), staleness + version attribution key on OwnerRef, and it logs the same DictSet the
 // standalone WriteDictionaryEntry emits (so fsck/replay stay total).
 public sealed record DictWriteMutation(int OwnerRef, string Prop, NodeValue Key, NodeValue Value) : CommitMutation;
+// Link MemberRef into OwnerRef's `Prop` SET — the set analog of RefLinkMutation (which does the same for a
+// single-ref prop). OwnerRef/MemberRef are object references (positive real id, or a negative tempId resolved
+// to a create's just-minted real id). Unlike SetLinkMutation (raw SetId), this addresses the set by (owner,
+// prop) — so a child can link into a just-created parent's set within ONE batch (the parent's nested set id
+// isn't known until minted). SERVER-SIDE ONLY (like DictWriteMutation): constructed by SchemaBridge.ImportRender,
+// never from a wire `commit` message. Owner's `Prop` must be a set prop (pre-validated by the caller).
+public sealed record SetLinkByPropMutation(int OwnerRef, string Prop, int MemberRef) : CommitMutation;
 
 // The result of minting one create in a commit batch: the tempId→realId mapping plus the minted object's
 // nested COLLECTION props (their own intrinsic ids + element types), so the caller re-keys the client's

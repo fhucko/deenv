@@ -191,14 +191,15 @@ mutations the designer app performs in deenv code — that machinery already exi
   <element>`; and — the review-caught data-loss guard — a `ui` section with `var`s or
   HELPER functions besides `fn render()` (clearing `ui` would silently drop them, so it
   stays as text). Leaf/attr values round-trip via `CodePrint.Value` ↔ `ParseExpression`.
-  - Known limit ledgered (S1b review): **`ImportRender` is NON-ATOMIC** — it does N
-    separate store writes then clears `ui`; a mid-build crash leaves the design with
-    partial `render` rows AND non-empty `ui`, which `ProjectDesignDocument` then refuses
-    (bricked until hand-repaired). Harmless now (test-only, no trigger), but the trigger
-    slice (S4 canvas "convert" button / host action) MUST wrap import in one atomic
-    `CommitBatch` — which needs the `CommitMutation` union extended to address a create's
-    nested set by `(tempId, propName)` (a child links into its tempId-parent's `children`
-    set, whose id isn't known until after the mint). Design that before wiring a trigger.
+  - ~~Known limit (S1b review): `ImportRender` is NON-ATOMIC~~ **✅ RESOLVED by X1
+    2026-07-08** (arch review SHIP-WITH-FIXES, fixes applied; suite 765). `ImportRender`
+    is now ONE `CommitBatch` (all creates + links + the `ui` clear, all-or-none), so a
+    mid-import crash can no longer brick a design. The enabling change: **`SetLinkByPropMutation
+    (OwnerRef, Prop, MemberRef)`** added to the store's `CommitMutation` union (user-approved)
+    — the set analog of `RefLinkMutation`, addressing a set by `(owner, prop)` so a child
+    links into its just-minted tempId-parent's `children` set within the one batch. Server-side
+    vocabulary only (never from a wire commit); twin-free. Its "prop is a set" precondition is
+    checked in CommitBatch PRE-validation (the store's all-or-none guard), not mid-apply.
 - **S1c — MergeTags.** A per-row-kind 3-way merge + apply loop for MetaNode/MetaAttr with
   CONFLICT-CAPABLE child order (grill #1/#2 — do NOT inherit the cosmetic
   `order`-never-conflicts policy). Makes render rows branch/mergeable like types.

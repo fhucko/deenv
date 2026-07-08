@@ -566,6 +566,21 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     case DictWriteMutation(var ownerRef, _, _, _):
                         RequireResolvable(ownerRef);
                         break;
+                    case SetLinkByPropMutation(var ownerRef, var prop, var memberRef):
+                        RequireResolvable(ownerRef);
+                        RequireResolvable(memberRef);
+                        // The owner's `prop` must be a SET — asserted HERE (pre-apply), not in the apply arm,
+                        // so a bad prop throws with the store UNTOUCHED. CommitBatch has no rollback: its
+                        // all-or-none guard IS this loop throwing before the apply loop mutates `_doc` (a
+                        // half-minted owner would otherwise be served to the next read). RequireResolvable
+                        // above already proved the owner resolves, so the type lookup is known-good.
+                        var ownerType = ownerRef < 0
+                            ? creates.First(c => c.TempId == ownerRef).TypeName
+                            : ExtentEntryById(ownerRef)!.TypeName;
+                        if (_desc.FindType(ownerType)?.Props?.FirstOrDefault(p => p.Name == prop)
+                            is not { Cardinality: Cardinality.Set })
+                            throw new InvalidOperationException($"'{ownerType}' has no set prop '{prop}'.");
+                        break;
                 }
 
             // The FIELD-LEVEL overlap check (M13 slice 6 — DECISIONS.md / app-versioning-design.md §2 + §0's
@@ -730,6 +745,26 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         _pending.Add(new DictSet(dict.Id, keyStr, dict.Entries.GetValueOrDefault(keyStr), newLeaf));
                         dict.Entries[keyStr] = newLeaf;
                         BumpVersion(ownerId);
+                        break;
+                    }
+                    case SetLinkByPropMutation(var ownerRef, var prop, var memberRef):
+                    {
+                        // Link a member into the owner's `prop` SET, addressed by (owner, prop) rather than a
+                        // raw set id — so the owner may be a fresh create just minted above (its nested set ids
+                        // are on the extent entry BuildFields minted, unreachable by any NodePath yet). Resolve
+                        // the owner (tempId→real like RefLinkMutation), read its `prop` StoredSet, then apply the
+                        // SAME in-memory add + SetLink log-write + member-version bump the SetLinkMutation arm does.
+                        var ownerId = ResolveRefId(ownerRef);
+                        var owner = ExtentEntryById(ownerId)
+                            ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
+                        if (owner.Fields.GetValueOrDefault(prop) is not StoredSet set)
+                            throw new InvalidOperationException($"'{owner.TypeName}' has no set prop '{prop}'.");
+                        var memberId = ResolveRefId(memberRef);
+                        var typeName = ExtentEntryById(memberId)?.TypeName
+                            ?? throw new InvalidOperationException($"No object with id {memberId}.");
+                        set.Members[memberId] = new StoredRef(typeName, memberId);
+                        _pending.Add(new SetLink(set.Id, memberId));
+                        BumpVersion(memberId);
                         break;
                     }
                 }
