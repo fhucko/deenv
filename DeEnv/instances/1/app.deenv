@@ -117,6 +117,28 @@ ui
             return "prop-row is-text-single"
         return "prop-row"
 
+    fn renderNodeEditor(node)
+        if node.tag == ""
+            return <div class="node-leaf">
+                <span class="node-leaf-anchor">
+                    "->"
+                <input class="node-expr" value={node.expr} placeholder={"\"text\" or expression"}>
+        return <div class="node-element">
+            <div class="node-tag-row">
+                <span class="node-angle">
+                    "<"
+                <input class="node-tag" value={node.tag}>
+            foreach attr in node.attrs.orderBy(a => a.order)
+                <div class="node-attr">
+                    <input class="node-attr-name" value={attr.name}>
+                    <span class="node-attr-eq">
+                        "="
+                    <input class="node-attr-value" value={attr.value} placeholder={"\"value\" or expression"}>
+            if node.children.any(c => true)
+                <div class="node-children">
+                    foreach child in node.children.orderBy(c => c.order)
+                        <renderNodeEditor node={child}>
+
     fn startRename(i)
         renameId = i.runtimeId
         renameName = i.name
@@ -251,8 +273,10 @@ ui
                         <h2 class="publish-heading">
                             "Structured render"
                         <p class="publish-caption">
-                            "Structured render — read-only preview; the tree editor is coming."
-                        <SetTable set={design.render} desc={sys.schema("MetaNode")} columns={["tag", "expr", "order"]} linked={false} readOnly={true}>
+                            "Edit each node's fields inline. Adding, removing, and reordering nodes is coming."
+                        <div class="render-tree">
+                            foreach n in design.render
+                                <renderNodeEditor node={n}>
                 <details class="code-areas">
                     <summary class="code-summary">
                         "Advanced (code)"

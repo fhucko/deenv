@@ -225,7 +225,24 @@ mutations the designer app performs in deenv code — that machinery already exi
   drill-in (the tree editor is a later slice — captioned "read-only preview"); the global banner
   prefix "Change rejected:" mis-frames a convert-decline (shared save-rejection chrome, ui.ts —
   a banner-copy pass, not this slice); no "convert back to text" / no confirm (fine while
-  conversion is lossless for the accepted plain-tag subset).
+  conversion is lossless for the accepted plain-tag subset). *(The read-only SetTable view +
+  its `readOnly` param were superseded/deleted by E1 below.)*
+- **E1 — editable recursive tree editor. ✅ DONE 2026-07-08** (ui-arch SHIP + ux
+  SHIP-WITH-FIXES, fixes applied; suite 772). Replaces X2b's read-only SetTable with an
+  EDITABLE tree: a self-recursive `fn renderNodeEditor(node)` renders each MetaNode and
+  recurses into `node.children.orderBy(order)` to arbitrary depth (element → editable `tag`
+  input + attr name/value inputs + nested children; leaf → editable `expr` input). All scalars
+  two-way-bound (ordinary ctx field writes) → editing tag/expr/attr persists + round-trips
+  through projection. **LOAD-BEARING RESULT: a self-recursive render component WORKS** (keyed by
+  the full ancestor-id chain via the foreach slot path — no collision, no caret-drop since
+  object-field writes don't hit the dt.ts scalar-var race) — the green light the S4/S5 canvas
+  track depended on. Review fixes: expression-hint placeholders on the expr/attr-value inputs
+  (they're Code exprs — a string needs quotes) + a leaf anchor glyph + deleted the now-dead
+  `readOnly` SetTable param. Ledgered for E2: (a) NO operator-visible signal when an edit makes
+  the render un-projectable (e.g. emptying a `tag` → empty-expr leaf projection refuses); (b) no
+  add/remove/reorder of nodes/attrs yet (both covered by the caption). A framework bug found +
+  routed around + spawned as a task: `.single()` over a set freshly repopulated by a host-action
+  ack drops to a stale client render (E1 uses `foreach` over the one-member root set instead).
 - **S1c — MergeTags.** A per-row-kind 3-way merge + apply loop for MetaNode/MetaAttr with
   CONFLICT-CAPABLE child order (grill #1/#2 — do NOT inherit the cosmetic
   `order`-never-conflicts policy). Makes render rows branch/mergeable like types.

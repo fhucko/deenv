@@ -63,7 +63,7 @@ namespace DeEnv.Instance;
 //     candidate list is the caller's `candidates` collection (not necessarily the full extent), labeled
 //     by `labelProp`. Use it where a form needs to bind ONE reference from a known candidate set without
 //     the full RefEditor (current-label / per-candidate buttons / create-new).
-//   • SetTable(set, desc, setPath, columns, rowActions, createForm, onCreate, linked, readOnly) — a set table: an aligned header +
+//   • SetTable(set, desc, setPath, columns, rowActions, createForm, onCreate, linked) — a set table: an aligned header +
 //     member rows + a `+ New` button. A whole data row is navigable — its first cell wraps the member's
 //     identity (labelProp value) in a stretched `<a class="row-link" href=nest(setPath, m)>` (CSS
 //     `::after { inset:0 }` covers the row); a per-row Remove sits z-raised above the overlay. A bool
@@ -97,13 +97,6 @@ namespace DeEnv.Instance;
 //         draft.design) to drive the host action.
 //       · linked — omitted/default (not `false`) keeps the identity cell a navigating `<a>`; `linked={false}`
 //         renders it as a plain `<span>` (no `sys.nest(setPath, m)` link) for a set with no per-member route.
-//       · readOnly — `readOnly={true}` suppresses ALL write affordances the table itself would offer: the
-//         `+ New`/create-form path AND the delete header cell + per-row Remove button (whether or not
-//         `sys.canWrite` would otherwise allow them). For a set the CALLER's page must not let the operator
-//         mutate through this particular view (e.g. a nested read-only preview) even though the underlying
-//         type is normally writable elsewhere. Omitted/null → unchanged, byte-for-byte (existing callers pass
-//         nothing). The `rowActions` path is untouched by this flag — a caller supplying its own action cell
-//         already fully owns what that cell does.
 //
 // Builtins do the reflective work, all under the framework `sys` namespace: sys.field (dynamic
 // access), sys.humanize (labels), sys.extent (a type's objects), sys.schema (a type's descriptor),
@@ -427,7 +420,7 @@ public static class GenericUi
                                 sys.field(c, labelProp)
                 return render
 
-            fn SetTable(set, desc, setPath, columns, rowActions, createForm, onCreate, linked, readOnly)
+            fn SetTable(set, desc, setPath, columns, rowActions, createForm, onCreate, linked)
                 var state = { draft: sys.new(desc), creating: false }
                 fn startCreate()
                     state.creating = true
@@ -453,7 +446,7 @@ public static class GenericUi
                                         if p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "password" && p.name != desc.labelProp && p.multiline != true
                                             <th>
                                                 sys.humanize(p.name)
-                                if rowActions != null || (readOnly != true && sys.canWrite(desc.name, "delete"))
+                                if rowActions != null || sys.canWrite(desc.name, "delete")
                                     <th>
                             foreach m in set
                                 <tr class="set-row">
@@ -503,7 +496,7 @@ public static class GenericUi
                                                         sys.field(m, p.name)
                                     if rowActions != null
                                         rowActions(m)
-                                    else if readOnly != true && sys.canWrite(desc.name, "delete")
+                                    else if sys.canWrite(desc.name, "delete")
                                         <td class="row-action">
                                             <button class="set-remove" onClick={() => set.remove(m)}>
                                                 "Remove"
@@ -517,7 +510,7 @@ public static class GenericUi
                                 <ObjectForm obj={state.draft} meta={desc} join={d => onCreate(d)} body={createForm} onSave={closeCreate} onCancel={closeCreate}>
                             else
                                 <ObjectForm obj={state.draft} meta={desc} join={d => set.add(d)} body={createForm} onSave={closeCreate} onCancel={closeCreate}>
-                        else if readOnly != true && sys.canWrite(desc.name, "create")
+                        else if sys.canWrite(desc.name, "create")
                             <button class="new-btn" onClick={startCreate}>
                                 "New "
                                 sys.humanize(desc.name)

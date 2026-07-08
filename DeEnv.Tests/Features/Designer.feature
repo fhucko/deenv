@@ -1026,21 +1026,19 @@ Feature: The operator IDE (designs library + instance design selector)
   # precedence gate: a design's render is EITHER text OR structured, never both), so the editor shows one
   # or the other; the `ui` textarea + Convert button stay under Advanced for a text design.
   #
-  # The structured render view is READ-ONLY (review fix): MetaNode is `* where role==Admin`, so the
-  # generic SetTable would otherwise offer its own "+ New MetaNode" (minting a blank, unparented second
-  # root — violates Design.render's single-root invariant) and a per-row Remove (deleting the ROOT blanks
-  # the whole render). `SetTable`'s new `readOnly={true}` param suppresses both, independent of
-  # sys.canWrite — proven by asserting neither control is present after convert.
+  # Once structured, the render shows as the TREE EDITOR (M12 E1, replacing X2b's read-only SetTable): a
+  # recursive `renderNodeEditor` component renders the imported root element with an editable `tag` input.
+  # No add/remove/reorder this slice (that's E2), so there is no create/remove affordance to guard — the
+  # tree editor simply has no such control.
   #
   # The proof authors a SIMPLE convertible render (an element tree with an attribute + a text child — the
   # shape S1b's import accepts; the seeded todo render uses foreach/helpers and is deliberately NOT
   # importable) into a fresh design's `ui`, converts it, and asserts the mode flipped: the `ui` textarea is
-  # gone and the structured render SetTable — now visible without reopening any disclosure — shows the
-  # imported ROOT row (a `main` tag cell) with no create/remove controls. The convert is a host action; its
-  # ack refetch re-renders the editor, flipping the mode — polled via the SetTable's appearance, no fixed
-  # sleep.
+  # gone and the tree editor — now visible without reopening any disclosure — shows the imported ROOT
+  # element with its `tag` input reading "main". The convert is a host action; its ack refetch re-renders
+  # the editor, flipping the mode — polled via the tree editor's appearance, no fixed sleep.
   @m12 @single-user
-  Scenario: A text-authored design shows a Convert button that converts it to a read-only structured render view
+  Scenario: A text-authored design shows a Convert button that converts it to the structured tree editor
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
     And I create a design named "convertme"
@@ -1050,9 +1048,51 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the design editor shows the Convert-to-structured button
     And the design editor shows the design's UI text in a textarea
     When I click Convert to structured
-    Then the design editor eventually shows the structured render table
-    And the structured render table shows a root row with tag "main"
+    Then the design editor eventually shows the structured render tree editor
+    And the tree editor's root node tag input reads "main"
     And the design editor no longer shows the UI textarea
     And the design editor no longer shows the Convert-to-structured button
-    And the structured render table shows no New MetaNode button
-    And the structured render table shows no Remove button
+
+  # ── M12 E1 — the structured-render TREE EDITOR: recursive, inline scalar editing ──────────────────
+  #
+  # X2b left the structured render as a read-only ONE-ROW SetTable (root only, no way to see or edit the
+  # tree). E1 turns it into a real editor. The crux (a load-bearing finding for the whole canvas track,
+  # S4/S5): the designer had never used a SELF-RECURSIVE render component. `renderNodeEditor(node)` renders
+  # `node` and, inside a keyed `foreach child in node.children`, invokes `<renderNodeEditor node={child}>`
+  # again — a component that renders ITSELF for descendants, to arbitrary depth. The foreach already pushes
+  # each child's id onto the slot path (executeTagForEach), so each recursion gets a distinct, stable slot
+  # key per node — no collision, no explicit key= needed; the data tree is finite, so recursion terminates.
+  # This scenario runs that recursion through the REAL render path (SSR + a browser DOM assertion): the
+  # nested `<h1>` must appear NESTED under `<main>`, proving the component recursed a level deep.
+  #
+  # Each node's scalar fields are two-way-bound inputs, exactly like the type/prop editor: an ELEMENT node
+  # (non-empty tag) shows an editable `tag` input, its attrs (name/value inputs), then its children
+  # (recursed, indented); a LEAF node (empty tag) shows an editable `expr` input. Editing is an ordinary
+  # ctx field write on the MetaNode/MetaAttr; projection reads the edited fields, so after an edit the
+  # design still PROJECTS to a valid `fn render()`. This slice is SCALAR EDITING ONLY — add/remove/reorder
+  # of nodes and attrs is deferred to E2; the single-root invariant is kept (no root-level add/remove).
+  #
+  # The proof converts a design whose render is <main class="x"><h1>{leaf}</h1></main> (an element with a
+  # nested element whose child is a text-expression leaf). The tree editor then shows the nested structure
+  # (the h1's tag input nested under main; the leaf's expr shown). Editing the root's tag input from "main"
+  # to "section" persists (store poll) AND the design still projects — re-opening the editor round-trips the
+  # new tag. Auto-waiting locators / store polls throughout, no fixed sleep.
+  @m12 @single-user
+  Scenario: The structured render tree editor recurses to show nesting and inline-edits a node's tag with a valid round-trip
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "treeme"
+    And I edit the design "treeme"
+    And I expand the Advanced code disclosure
+    And I author a nested convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the tree editor's root node tag input reads "main"
+    And the tree editor shows a nested node with tag input "h1"
+    And the tree editor shows a leaf expr input reading "leaf"
+    When I edit the root node's tag input to "section"
+    Then the stored render root node has tag "section"
+    When I open the designs list
+    And I edit the design "treeme"
+    Then the design editor eventually shows the structured render tree editor
+    And the tree editor's root node tag input reads "section"

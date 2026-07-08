@@ -714,6 +714,22 @@ public sealed class SsrRenderer
         .prop-row:not(.is-text-single) label.multiline-toggle { display: none; }
         .type-card:not(.is-enum) .enum-values { display: none; }
         .type-card.is-enum .props-editor { display: none; }
+        /* The structured-render tree editor (M12 E1): each element node is a labeled box; its children
+           nest one indent level deeper, so the tree's shape reads visually. Leaf nodes (empty tag) show
+           only their expr input. Scalar fields are inline inputs, like the type/prop editor above. */
+        .render-tree { margin-top: 0.6rem; }
+        .node-element { border-left: 2px solid var(--border); padding: 0.15rem 0 0.15rem 0.6rem; margin: 0.2rem 0; }
+        .node-tag-row { display: flex; align-items: center; gap: 0.3rem; }
+        .node-angle, .node-attr-eq { color: var(--muted); font-family: ui-monospace, monospace; }
+        .node-tag { font-weight: 600; flex: 0 1 200px; min-width: 0; }
+        .node-attr { display: flex; align-items: center; gap: 0.3rem; margin: 0.2rem 0 0.2rem 1rem; }
+        .node-attr input { min-width: 0; flex: 0 1 180px; }
+        .node-children { margin-left: 0.9rem; }
+        /* A leaf has no tag, so it gets its own muted anchor (mirroring .node-angle's "<" on an element)
+           so the lone input still reads as "this node's text/expression content", not an orphan field. */
+        .node-leaf { display: flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0; margin: 0.2rem 0; }
+        .node-leaf-anchor { color: var(--muted); font-family: ui-monospace, monospace; }
+        .node-leaf input.node-expr { width: 100%; max-width: 440px; font-family: ui-monospace, monospace; }
         /* Raw code areas tucked behind a disclosure so the type editor reads as just types by default. */
         details.code-areas { margin-top: 1.4rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
         details.code-areas summary.code-summary { font-weight: 600; color: var(--muted); cursor: pointer; padding: 0.3rem 0; }

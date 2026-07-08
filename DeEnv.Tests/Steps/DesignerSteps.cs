@@ -1349,20 +1349,76 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.Locator(".design-editor button.convert-render").ClickAsync();
     }
 
-    // After the import host action's ack refetch re-renders the editor, the mode flips: a first-class
-    // "Structured render" section (OUTSIDE the collapsing Advanced disclosure — review fix) appears,
-    // holding the generic SetTable over design.render. Plain visible wait — no fixed sleep, and no
-    // disclosure re-open dance needed since this section is not nested in one.
-    [Then("the design editor eventually shows the structured render table")]
-    public async Task ThenShowsRenderTable() =>
-        await ctx.Page!.WaitForSelectorAsync(".design-editor .set-table .set-row");
+    // ── M12 E1 — the structured-render TREE EDITOR (recursive renderNodeEditor) ──────────────────
 
-    // The imported ROOT MetaNode's `tag` cell — the SetTable's identity column (linked={false}, so a
-    // read-only span.row-link) — reads "main" (the render's root <main> element).
-    [Then("the structured render table shows a root row with tag {string}")]
-    public async Task ThenRenderTableRootTag(string tag) =>
+    // A NESTED convertible render: <main class="x"><h1>{leaf}</h1></main> — an element with an attribute,
+    // a nested ELEMENT child (h1), whose own child is a text-EXPRESSION leaf ({leaf}). Its structure
+    // forces the recursion to descend a level (main → h1) and to render both an element and a leaf node,
+    // so the tree editor's nesting + leaf handling are both exercised. Same authoring plumbing as the
+    // simple render: fill the `ui` textarea, poll the store for the write.
+    private const string NestedConvertibleRender =
+        "ui\n    fn render()\n        return <main class=\"x\">\n            <h1>\n                leaf\n";
+
+    [When("I author a nested convertible render into the design's UI")]
+    public async Task WhenAuthorNestedRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(NestedConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "treeme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == NestedConvertibleRender));
+    }
+
+    // After the import host action's ack refetch re-renders the editor, the mode flips: a first-class
+    // "Structured render" section (OUTSIDE the collapsing Advanced disclosure) appears, holding the
+    // recursive tree editor over design.render. Plain visible wait — no fixed sleep, no disclosure dance.
+    // After the import host action's ack refetch re-renders the editor, the mode flips: a first-class
+    // "Structured render" section (OUTSIDE the collapsing Advanced disclosure) appears, holding the
+    // recursive tree editor over design.render. Wait for the ROOT element's own tag input — proof the
+    // recursive renderNodeEditor ran at least once. No fixed sleep, no disclosure dance.
+    [Then("the design editor eventually shows the structured render tree editor")]
+    public async Task ThenShowsTreeEditor() =>
+        await ctx.Page!.WaitForSelectorAsync(".design-editor .render-tree > .node-element > .node-tag-row > input.node-tag");
+
+    // The tree editor renders element nodes outermost-first; the ROOT is the first .node-element, so its
+    // direct `input.node-tag` (not a descendant's) reads the root's tag. Scoped to the first element's own
+    // tag row so a nested node's input can't satisfy it.
+    [Then("the tree editor's root node tag input reads {string}")]
+    public async Task ThenRootTagInput(string tag) =>
         await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('.design-editor .set-table .set-row .row-link')].some(e => e.textContent.trim() === {JsString(tag)})");
+            $"() => {{ const r = document.querySelector('.design-editor .render-tree > .node-element > .node-tag-row > input.node-tag'); return r != null && r.value === {JsString(tag)}; }}");
+
+    // Recursion proof: a NESTED element (h1) must appear as its OWN .node-element nested UNDER the root's
+    // .node-children — i.e. the component recursed a level deep, rendering a child element with its own tag
+    // input. Assert some node-tag input inside .node-children reads the child's tag.
+    [Then("the tree editor shows a nested node with tag input {string}")]
+    public async Task ThenNestedTagInput(string tag) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.design-editor .render-tree .node-children input.node-tag')].some(e => e.value === {JsString(tag)})");
+
+    // A LEAF node (empty tag) renders only its `expr` input. The nested h1's text child {leaf} imports as a
+    // leaf whose expr source is `leaf`; assert some node-expr input reads it (proving leaves render too).
+    [Then("the tree editor shows a leaf expr input reading {string}")]
+    public async Task ThenLeafExprInput(string expr) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.design-editor .render-tree input.node-expr')].some(e => e.value === {JsString(expr)})");
+
+    // Edit the ROOT's tag input (an ordinary two-way-bound MetaNode.tag write, like type.name): fill the
+    // first .node-element's own tag input with the new value.
+    [When("I edit the root node's tag input to {string}")]
+    public async Task WhenEditRootTag(string tag) =>
+        await ctx.Page!.Locator(".design-editor .render-tree > .node-element > .node-tag-row > input.node-tag").FillAsync(tag);
+
+    // The edit is a journaled scalar autosave; poll the store: the root MetaNode is the one whose tag is
+    // the new value AND that is not a child of any other node (a root). Simpler: assert SOME MetaNode now
+    // carries the new tag and the OLD root tag is gone — a rename, not an add.
+    [Then("the stored render root node has tag {string}")]
+    public async Task ThenStoredRootTag(string tag) =>
+        await EventuallyAsync(() =>
+        {
+            var nodes = _designer.Store.ReadExtent("MetaNode").Values;
+            return nodes.Any(o => o.Fields.TryGetValue("tag", out var tv) && tv is DeEnv.Storage.TextValue t && t.Text == tag)
+                && !nodes.Any(o => o.Fields.TryGetValue("tag", out var tv) && tv is DeEnv.Storage.TextValue { Text: "main" });
+        });
 
     [Then("the design editor no longer shows the UI textarea")]
     public async Task ThenNoUiTextarea() =>
@@ -1371,18 +1427,6 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [Then("the design editor no longer shows the Convert-to-structured button")]
     public async Task ThenNoConvertButton() =>
         await Assert.That(await ctx.Page!.Locator(".design-editor button.convert-render").CountAsync()).IsEqualTo(0);
-
-    // The read-only guarantee (review fix): SetTable's readOnly={true} must suppress BOTH write
-    // affordances it would otherwise offer for an admin-writable type (MetaNode is `* where role==Admin`)
-    // — the create button (which would mint a blank, unparented second root, violating the single-root
-    // invariant) and the per-row Remove (which would delete the ROOT, blanking the whole render).
-    [Then("the structured render table shows no New MetaNode button")]
-    public async Task ThenNoNewMetaNodeButton() =>
-        await Assert.That(await ctx.Page!.Locator(".design-editor .set-table button.new-btn").CountAsync()).IsEqualTo(0);
-
-    [Then("the structured render table shows no Remove button")]
-    public async Task ThenNoRemoveButton() =>
-        await Assert.That(await ctx.Page!.Locator(".design-editor .set-table button.set-remove").CountAsync()).IsEqualTo(0);
 
     [Then("the instances list shows the instance {string} running design {string}")]
     public async Task ThenListShows(string label, string designLabel)
