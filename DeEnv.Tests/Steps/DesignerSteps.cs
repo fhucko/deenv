@@ -1605,6 +1605,77 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const e = document.querySelector('.design-canvas h1'); return e != null && e.textContent === {JsString(text)}; }}");
 
+    // ── M12 S6a — `foreach`/`if` as structured rows (for-row tree editor + canvas template mode) ───
+
+    // A convertible render whose root has ONE `foreach` child — the S6a import lift's target shape
+    // (S1b previously REFUSED this; it now mints a `kind="for"` row). Same authoring plumbing as the other
+    // convertible-render fixtures: fill the `ui` textarea, poll the store for the write.
+    private const string ForLoopConvertibleRender =
+        "ui\n    fn render()\n        return <main class=\"x\">\n            foreach note in db.notes\n                <li>\n                    note.title\n";
+
+    [When("I author a for-loop convertible render into the design's UI")]
+    public async Task WhenAuthorForLoopRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(ForLoopConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "treeme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ForLoopConvertibleRender));
+    }
+
+    // The tree editor's for-row: item/collection inputs (`.node-for-item`/`.node-for-collection`) hold the
+    // imported values. Scoped loosely (some input reads X) — there is only one for-row in these scenarios.
+    [Then("the tree editor shows a for row with item {string} and collection {string}")]
+    public async Task ThenForRowInputs(string item, string collection) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const i = document.querySelector('.design-editor .render-tree input.node-for-item'); " +
+            $"const c = document.querySelector('.design-editor .render-tree input.node-for-collection'); " +
+            $"return i != null && i.value === {JsString(item)} && c != null && c.value === {JsString(collection)}; }}");
+
+    [When("I edit the for row's item input to {string}")]
+    public async Task WhenEditForItem(string item) =>
+        await ctx.Page!.Locator(".design-editor .render-tree input.node-for-item").First.FillAsync(item);
+
+    [When("I edit the for row's collection input to {string}")]
+    public async Task WhenEditForCollection(string collection) =>
+        await ctx.Page!.Locator(".design-editor .render-tree input.node-for-collection").First.FillAsync(collection);
+
+    // The canvas's for-template badge shows the loop var name in `.for-item` — the NO-CTX marker (S6a; the
+    // loop is not evaluated). Auto-waits, so an item-input edit's live repaint (no reload) is observed here.
+    [Then("the design canvas shows a for-template with item {string}")]
+    public async Task ThenCanvasForTemplateItem(string item) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const e = document.querySelector('.design-canvas .for-template .for-item'); return e != null && e.textContent === {JsString(item)}; }}");
+
+    // The root's "+ for" control (same add-row as "+ element"/"+ text"/"+ attr") appends a for-row LAST,
+    // exactly like E2's element append (order = max sibling order + 1).
+    [When("I add a for loop to the root node")]
+    public async Task WhenAddForLoop() =>
+        await ctx.Page!.Locator(RootNode + " > .node-add-row > button.add-for").ClickAsync();
+
+    // The root's last child (by DOM order under `.node-children`) carries the for-row's `.node-for` class —
+    // NOT `.node-element` (a for-row is a distinct kind), so this can't reuse RootLastChildElement.
+    [Then("the root node's last child is a for row")]
+    public async Task ThenRootLastChildIsForRow() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const kids = document.querySelectorAll({JsString(RootNode + " > .node-children > *")}); " +
+            "const last = kids[kids.length - 1]; return last != null && last.classList.contains('node-for'); }");
+
+    // The added for-row's own remove control lives in its `.node-for-head` (the S6a mirror of E2's
+    // tag-row-anchored ×). Scoped to the LAST for-row under the root's children.
+    [When("I remove the root node's last child for row")]
+    public async Task WhenRemoveLastForRow() =>
+        await ctx.Page!.Locator(RootNode + " > .node-children > .node-for:last-child > .node-for-head > button.remove-node").ClickAsync();
+
+    // The GC-reclaim proof, by COUNT rather than presence: the scenario's imported for-row is edited (still
+    // kind="for") BEFORE a second one is added and then removed again, so "no for row remains" would be
+    // false even after a correct removal. Counting is unambiguous: 1 (imported) -> 2 (after add) -> 1 (after
+    // remove) proves the ADDED subtree specifically was reclaimed, not a false "zero" read.
+    [Then("the render tree has {int} for row(s)")]
+    public async Task ThenForRowCount(int count) =>
+        await EventuallyAsync(() =>
+            _designer.Store.ReadExtent("MetaNode").Values.Count(o =>
+                o.Fields.TryGetValue("kind", out var kv) && kv is DeEnv.Storage.TextValue { Text: "for" }) == count);
+
     // The Design id of the (main working-copy) design with the given label, or 0 if not yet present.
     private int DesignIdByLabel(string label)
     {

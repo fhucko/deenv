@@ -1232,3 +1232,39 @@ Feature: The operator IDE (designs library + instance design selector)
     When I edit the root node's tag input to "section"
     Then the design canvas shows a "section" element with a data-node attribute
     And the design canvas shows the evaluated leaf text "World"
+
+  # ── M12 S6a — `foreach`/`if` become structured ROWS (rows + canvas template mode) ───────────────
+  #
+  # A `foreach` render form now imports to a `kind="for"` MetaNode row (item + collection, body under
+  # `children`) instead of being refused. The tree editor gets a matching for-row editor (item/collection
+  # inputs, recursive body, its own "+ for"/"+ if"/"+ element"/"+ text" add-row); the canvas (NO-CTX in
+  # S6a — the loop is NOT evaluated, that is S6b) renders the row as a MARKED TEMPLATE: a badge showing the
+  # item var name plus the collection SOURCE as an (honest, unevaluated) expression chip, with the body
+  # rendered once underneath. The proof: convert a render whose root has one `foreach` child, see the
+  # for-template badge + chip + tree-editor inputs, edit the item/collection inputs and watch the canvas
+  # repaint live (no reload — the SAME dep-recording renderTree already proved for elements), then use the
+  # root's own "+ for" control to add a second loop and remove it again — proving subtree GC reaches a
+  # for-row exactly like an element.
+  @m12 @single-user
+  Scenario: A foreach render imports to a structured for row, the canvas shows it as a marked template, and it can be added/removed
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "treeme"
+    And I edit the design "treeme"
+    And I expand the Advanced code disclosure
+    And I author a for-loop convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the tree editor shows a for row with item "note" and collection "db.notes"
+    And the design canvas shows a for-template with item "note"
+    And the design canvas shows an expression chip reading "db.notes"
+    When I edit the for row's item input to "row"
+    Then the design canvas shows a for-template with item "row"
+    When I edit the for row's collection input to "db.items"
+    Then the design canvas shows an expression chip reading "db.items"
+    And the render tree has 1 for row
+    When I add a for loop to the root node
+    Then the root node's last child is a for row
+    And the render tree has 2 for rows
+    When I remove the root node's last child for row
+    Then the render tree has 1 for row

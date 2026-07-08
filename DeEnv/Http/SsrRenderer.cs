@@ -738,10 +738,23 @@ public sealed class SsrRenderer
            child element / text-or-expr leaf / attribute to the node itself. All × removes reuse the danger
            treatment (.remove-*), sized to sit tidily inline with the row's inputs. */
         .node-add-row { display: flex; gap: 0.3rem; margin: 0.3rem 0 0.2rem 0; }
-        .node-add-row button.add-element, .node-add-row button.add-text, .node-add-row button.add-attr {
+        .node-add-row button.add-element, .node-add-row button.add-text, .node-add-row button.add-attr,
+        .node-add-row button.add-for, .node-add-row button.add-if {
           padding: 0.15rem 0.5rem; font-size: 0.82rem; color: var(--muted); }
         button.remove-node, button.remove-attr { padding: 0.1rem 0.45rem; color: var(--danger); flex: 0 0 auto; }
         button.remove-node:hover, button.remove-attr:hover { background: #fff0f0; border-color: var(--danger); }
+        /* S6a — for/if control-flow ROWS in the tree editor: a distinct dashed-border box (vs the
+           element's solid left border) so a loop/condition row reads as structurally different from a
+           plain tag, echoing the canvas's own for-template/if-template marking below. */
+        .node-for, .node-if { border-left: 2px dashed var(--border); padding: 0.15rem 0 0.15rem 0.6rem; margin: 0.2rem 0; }
+        .node-for-head, .node-if-head { display: flex; align-items: center; gap: 0.3rem; }
+        .node-keyword { color: var(--muted); font-family: ui-monospace, monospace; font-weight: 600; }
+        .node-for-item, .node-for-collection, .node-if-condition { min-width: 0; }
+        .node-for-collection, .node-if-condition { flex: 1 1 auto; font-family: ui-monospace, monospace; }
+        .node-branch { margin-left: 0.9rem; padding-left: 0.5rem; border-left: 1px dotted var(--border); }
+        .branch-label { display: block; color: var(--muted); font-size: 0.78rem; text-transform: uppercase;
+          letter-spacing: 0.03em; margin: 0.2rem 0; }
+        button.add-else { padding: 0.15rem 0.5rem; font-size: 0.82rem; color: var(--muted); margin: 0.2rem 0; }
         /* The client-computable CANVAS (M12): a live structural view of the render tree, built by both twins
            from the MetaNode rows (sys.renderTree) — it repaints instantly as the tree editor is edited, no
            server round-trip. A bordered surface card; NOT pointer-events:none — S4 turns clicks
@@ -752,6 +765,17 @@ public sealed class SsrRenderer
         .design-canvas .expr-chip { display: inline-block; padding: 0 0.35rem; border-radius: 4px; background: #eef1f5;
           color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.85rem; }
         .design-canvas .expr-chip.is-empty { font-style: italic; background: #f6ecec; }
+        /* S6a — the NO-CTX TEMPLATE mode for for/if canvas rows: a for renders its body ONCE behind a
+           dashed marker card (echoing the tree editor's dashed .node-for/.node-if); an if renders BOTH
+           branches, each labeled then/else — the canvas never guesses which loop iterations or which
+           branch would run (that is S6b's row-scope eval). */
+        .design-canvas .for-template, .design-canvas .if-template {
+          border: 1px dashed var(--border); border-radius: 6px; padding: 0.4rem 0.6rem; margin: 0.3rem 0; }
+        .design-canvas .for-badge, .design-canvas .if-badge {
+          display: flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; color: var(--muted); margin-bottom: 0.3rem; }
+        .design-canvas .for-item { font-family: ui-monospace, monospace; font-weight: 600; }
+        .design-canvas .if-branch { margin: 0.2rem 0; }
+        .design-canvas .if-branch .branch-label { font-size: 0.72rem; }
         /* The render group: the CANVAS (live structural view) + the TREE EDITOR it mirrors are ONE
            authoring pair under one heading/divider — the divider must sit ABOVE the pair, never between
            them (a border between the canvas and its own tree visually cut the pair apart — ux review). */

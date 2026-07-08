@@ -1086,6 +1086,13 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
 // INVALID (tag AND expr empty): span.expr-chip.is-empty "(empty)" — a visible marker, never silent nothing.
 function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject | null): ExecValue {
     const id = node.id;
+    // S6a control-flow rows — `kind` is the authoritative discriminator, read defensively (a legacy/
+    // hand-built node without it reads "" → tag/expr discrimination). A for/if row renders as a NO-CTX
+    // TEMPLATE regardless of `ctx` (the loop/condition are NOT evaluated — S6b); ctx only reaches the
+    // leaf/attr evaluation inside the body, unchanged. Twin of CodeExecutor.BuildRenderTree.
+    const kind = readNodeTextOptional(node, "kind", context);
+    if (kind === "for") return buildForTemplate(node, id, context, ctx);
+    if (kind === "if") return buildIfTemplate(node, id, context, ctx);
     const tag = readNodeText(node, "tag", context);
     const expr = readNodeText(node, "expr", context);
     if (tag.length > 0) {
@@ -1121,6 +1128,54 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
         return chip("expr-chip", expr, id);
     }
     return chip("expr-chip is-empty", "(empty)", id);
+}
+
+// A `for` row → its NO-CTX TEMPLATE (S6a): a <div class="for-template" data-node=id> with a badge (the loop
+// var name + the collection SOURCE as an expr-chip, unevaluated) and the body rendered ONCE. Body leaves
+// referencing the item var chip (unbound — honest). Twin of CodeExecutor.BuildForTemplate.
+function buildForTemplate(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null): ExecValue {
+    const item = readNodeText(node, "item", context);
+    const collection = readNodeText(node, "collection", context);
+    const badge: ExecTag = {
+        type: "tag", name: "div", attributes: { "class": { value: { type: "text", value: "for-badge" } } },
+        children: [
+            { type: "tag", name: "span", attributes: { "class": { value: { type: "text", value: "for-item" } } }, children: [{ type: "text", value: item }] },
+            chip("expr-chip", collection, id),
+        ],
+    };
+    const children: ExecTagChild[] = [badge, ...orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx))];
+    return {
+        type: "tag", name: "div",
+        attributes: { "class": { value: { type: "text", value: "for-template" } }, "data-node": { value: { type: "text", value: String(id) } } },
+        children,
+    };
+}
+
+// An `if` row → its NO-CTX TEMPLATE (S6a): a <div class="if-template" data-node=id> with the condition
+// SOURCE as an expr-chip and BOTH branches, each wrapped + marked (then / else); the else branch is OMITTED
+// when `elseChildren` is empty. Never guesses a taken branch (S6b). Twin of CodeExecutor.BuildIfTemplate.
+function buildIfTemplate(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null): ExecValue {
+    const condition = readNodeText(node, "condition", context);
+    const thenBody = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx));
+    const elseBody = orderedMembers(node, "elseChildren", context).map(c => renderTreeNode(c, context, ctx));
+    const children: ExecTagChild[] = [
+        { type: "tag", name: "div", attributes: { "class": { value: { type: "text", value: "if-badge" } } }, children: [chip("expr-chip", condition, id)] },
+        branch("if-branch if-then", "then", thenBody),
+    ];
+    if (elseBody.length > 0) children.push(branch("if-branch if-else", "else", elseBody));
+    return {
+        type: "tag", name: "div",
+        attributes: { "class": { value: { type: "text", value: "if-template" } }, "data-node": { value: { type: "text", value: String(id) } } },
+        children,
+    };
+}
+
+// A labeled branch wrapper for the if-template: <div class=cls><span class="branch-label">label</span>…body…</div>.
+function branch(cls: string, label: string, body: ExecTagChild[]): ExecTag {
+    return {
+        type: "tag", name: "div", attributes: { "class": { value: { type: "text", value: cls } } },
+        children: [{ type: "tag", name: "span", attributes: { "class": { value: { type: "text", value: "branch-label" } } }, children: [{ type: "text", value: label }] }, ...body],
+    };
 }
 
 // Evaluate ONE canvas expression against the eval context's seed graph (M12 CANVAS-EVAL-1) — the twin of
@@ -1179,6 +1234,19 @@ function readNodeProp(node: ExecObject, name: string, context: ExecContext): Exe
 function readNodeText(node: ExecObject, name: string, context: ExecContext): string {
     const v = readNodeProp(node, name, context);
     return v.type === "text" ? v.value : "";
+}
+
+// Like readNodeText, but tolerant of an ABSENT prop — returns "" instead of throwing. Used ONLY for the
+// `kind` discriminator so a legacy/incomplete node reads as legacy rather than crashing the canvas walk.
+// A PRESENT prop (every real row) still records the dep + ships the value; the graceful branch only spares
+// the never-a-real-row absent case. Twin of CodeExecutor.ReadNodeTextOptional.
+function readNodeTextOptional(node: ExecObject, name: string, context: ExecContext): string {
+    const staged = nearestStagedValue(node, name, context);
+    if (staged != null) { recordProp(node.id, name); return staged.type === "text" ? staged.value : ""; }
+    const value = node.props[name];
+    if (value == null) return "";
+    recordProp(node.id, name);
+    return value.type === "text" ? value.value : "";
 }
 
 // The members of a node's attrs/children SET, ordered by each member's `order` — observed through the same

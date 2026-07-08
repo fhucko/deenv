@@ -19,10 +19,15 @@ types
         types set of MetaType
         origin int
     MetaNode
+        kind text
         tag text
         expr text
+        item text
+        collection text
+        condition text
         attrs set of MetaAttr
         children set of MetaNode
+        elseChildren set of MetaNode
         order int
     MetaAttr
         name text
@@ -124,16 +129,79 @@ ui
             return 0
         return top.order + 1
 
-    fn addChildElement(node)
-        node.children.add({ tag: "div", expr: "", order: orderForAppend(node.children), attrs: [], children: [] })
+    fn addElement(coll)
+        coll.add({ kind: "", tag: "div", expr: "", item: "", collection: "", condition: "", order: orderForAppend(coll), attrs: [], children: [], elseChildren: [] })
 
-    fn addChildText(node)
-        node.children.add({ tag: "", expr: "\"\"", order: orderForAppend(node.children), attrs: [], children: [] })
+    fn addText(coll)
+        coll.add({ kind: "", tag: "", expr: "\"\"", item: "", collection: "", condition: "", order: orderForAppend(coll), attrs: [], children: [], elseChildren: [] })
+
+    fn addFor(coll)
+        coll.add({ kind: "for", tag: "", expr: "", item: "row", collection: "", condition: "", order: orderForAppend(coll), attrs: [], children: [], elseChildren: [] })
+
+    fn addIf(coll)
+        coll.add({ kind: "if", tag: "", expr: "", item: "", collection: "", condition: "true", order: orderForAppend(coll), attrs: [], children: [], elseChildren: [] })
+
+    fn addElse(node)
+        addText(node.elseChildren)
 
     fn addAttr(node)
         node.attrs.add({ name: "class", value: "\"\"", order: orderForAppend(node.attrs) })
 
+    fn addRow(coll)
+        return <div class="node-add-row">
+            <button class="add-element" onClick={() => addElement(coll)}>
+                "+ element"
+            <button class="add-text" onClick={() => addText(coll)}>
+                "+ text/expr"
+            <button class="add-for" onClick={() => addFor(coll)}>
+                "+ for"
+            <button class="add-if" onClick={() => addIf(coll)}>
+                "+ if"
+
     fn renderNodeEditor(node, onRemove)
+        if node.kind == "for"
+            return <div class="node-for">
+                <div class="node-for-head">
+                    <span class="node-keyword">
+                        "for"
+                    <input class="node-for-item" value={node.item}>
+                    <span class="node-keyword">
+                        "in"
+                    <input class="node-for-collection" value={node.collection} placeholder={"db.... or expression"}>
+                    if onRemove != null
+                        <button class="remove-node" onClick={onRemove}>
+                            "×"
+                <div class="node-children">
+                    foreach child in node.children.orderBy(c => c.order)
+                        <renderNodeEditor node={child} onRemove={() => node.children.remove(child)}>
+                addRow(node.children)
+        if node.kind == "if"
+            return <div class="node-if">
+                <div class="node-if-head">
+                    <span class="node-keyword">
+                        "if"
+                    <input class="node-if-condition" value={node.condition} placeholder={"expression"}>
+                    if onRemove != null
+                        <button class="remove-node" onClick={onRemove}>
+                            "×"
+                <div class="node-branch node-then">
+                    <span class="branch-label">
+                        "then"
+                    <div class="node-children">
+                        foreach child in node.children.orderBy(c => c.order)
+                            <renderNodeEditor node={child} onRemove={() => node.children.remove(child)}>
+                    addRow(node.children)
+                if node.elseChildren.any(c => true)
+                    <div class="node-branch node-else">
+                        <span class="branch-label">
+                            "else"
+                        <div class="node-children">
+                            foreach child in node.elseChildren.orderBy(c => c.order)
+                                <renderNodeEditor node={child} onRemove={() => node.elseChildren.remove(child)}>
+                        addRow(node.elseChildren)
+                else
+                    <button class="add-else" onClick={() => addElse(node)}>
+                        "+ else"
         if node.tag == ""
             return <div class="node-leaf">
                 <span class="node-leaf-anchor">
@@ -163,10 +231,14 @@ ui
                     foreach child in node.children.orderBy(c => c.order)
                         <renderNodeEditor node={child} onRemove={() => node.children.remove(child)}>
             <div class="node-add-row">
-                <button class="add-element" onClick={() => addChildElement(node)}>
+                <button class="add-element" onClick={() => addElement(node.children)}>
                     "+ element"
-                <button class="add-text" onClick={() => addChildText(node)}>
+                <button class="add-text" onClick={() => addText(node.children)}>
                     "+ text/expr"
+                <button class="add-for" onClick={() => addFor(node.children)}>
+                    "+ for"
+                <button class="add-if" onClick={() => addIf(node.children)}>
+                    "+ if"
                 <button class="add-attr" onClick={() => addAttr(node)}>
                     "+ attr"
 

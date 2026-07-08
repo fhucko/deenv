@@ -257,31 +257,190 @@ public sealed class DesignerSourceTests
         }
     }
 
-    // Import REFUSES a render containing a `foreach` form anywhere (no structured shape yet — S6), importing
-    // NOTHING: the `render` set stays empty and the `ui` text is untouched (so it stays a valid text design).
+    // ── M12 S6a: `foreach`/`if` render forms import to structured `kind="for"`/`kind="if"` rows ──
+
+    // Import LIFTS the old for/if refusal: a `foreach` loop mints a `kind="for"` row (item + collection
+    // source, body under `children`), and an `if`/`else` mints a `kind="if"` row (condition source, the
+    // then-branch under `children`, the else-branch under `elseChildren`). Proven at the row level AND at
+    // the round-trip boundary — the load-bearing S6a proof.
     [Test]
-    public async Task ImportRender_refuses_a_foreach_form_and_imports_nothing()
+    public async Task ImportRender_converts_a_foreach_loop_and_an_if_else_to_structured_rows_and_round_trips()
     {
         var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1b-foreach-" + Guid.NewGuid().ToString("N") + ".json");
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s6a-forif-" + Guid.NewGuid().ToString("N") + ".json");
         var store = new JsonFileInstanceStore(storePath, meta);
         try
         {
-            var ui = "ui\n    fn render()\n        return <main>\n            foreach item in db.items\n                <li>\n                    item.name\n";
+            var ui = "ui\n    fn render()\n        return <main>\n"
+                   + "            foreach note in db.notes\n"
+                   + "                <li>\n                    note.title\n"
+                   + "            if db.greeting == \"hi\"\n"
+                   + "                <p>\n                    \"hello\"\n"
+                   + "            else\n"
+                   + "                <p>\n                    \"bye\"\n";
             var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
             {
-                ["label"] = new TextValue("loop"), ["ui"] = new TextValue(ui),
+                ["label"] = new TextValue("forif"), ["ui"] = new TextValue(ui),
             }));
             store.AddToSet(NodePath.Root.Field("designs"), designId);
             AddDbType(store, designId);
 
-            var ex = await Assert.That(() => SchemaBridge.ImportRender(store, designId))
-                .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("`for`/`if`");
+            SchemaBridge.ImportRender(store, designId);
 
             var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0); // nothing minted
-            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);            // ui untouched
+            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
+
+            var root = OrderedByOrder((SetValue)design.Fields["render"]).Single();
+            var children = OrderedByOrder((SetValue)root.Fields["children"]).ToList();
+            await Assert.That(children.Count).IsEqualTo(2);
+
+            var forRow = children[0];
+            await Assert.That(Text(forRow, "kind")).IsEqualTo("for");
+            await Assert.That(Text(forRow, "item")).IsEqualTo("note");
+            await Assert.That(Text(forRow, "collection")).IsEqualTo("db.notes");
+            var forBody = OrderedByOrder((SetValue)forRow.Fields["children"]).Single();
+            await Assert.That(Text(forBody, "tag")).IsEqualTo("li");
+
+            var ifRow = children[1];
+            await Assert.That(Text(ifRow, "kind")).IsEqualTo("if");
+            await Assert.That(Text(ifRow, "condition")).IsEqualTo("db.greeting == \"hi\"");
+            var thenBody = OrderedByOrder((SetValue)ifRow.Fields["children"]).Single();
+            await Assert.That(Text(thenBody, "tag")).IsEqualTo("p");
+            var elseBody = OrderedByOrder((SetValue)ifRow.Fields["elseChildren"]).Single();
+            await Assert.That(Text(elseBody, "tag")).IsEqualTo("p");
+
+            // The round-trip: projecting the imported design yields the canonical form of the original render.
+            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
+            await Assert.That(projected).Contains(expectedUi);
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // The else-if fixpoint (M12 S6a review fix 2 — the load-bearing corner of the printer collapse):
+    // CodePrint.TagIf prints an `if` whose ElseBody is EXACTLY ONE CodeTagIf as `else if …` (not a nested
+    // `else` block wrapping an `if`) — so an imported `if … else if … else …` must mint an OUTER kind="if"
+    // row whose `elseChildren` holds exactly ONE NESTED kind="if" row (never two flat rows), which in turn
+    // carries the final `else` body in ITS OWN `elseChildren`. Proven at the row shape AND the round-trip.
+    [Test]
+    public async Task ImportRender_converts_an_else_if_chain_to_a_nested_if_row_and_round_trips()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s6a-elseif-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var ui = "ui\n    fn render()\n        return <main>\n"
+                   + "            if db.a\n"
+                   + "                <p>\n                    \"A\"\n"
+                   + "            else if db.b\n"
+                   + "                <p>\n                    \"B\"\n"
+                   + "            else\n"
+                   + "                <p>\n                    \"C\"\n";
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("elseif"), ["ui"] = new TextValue(ui),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+
+            SchemaBridge.ImportRender(store, designId);
+
+            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
+
+            var root = OrderedByOrder((SetValue)design.Fields["render"]).Single();
+            var outerIf = OrderedByOrder((SetValue)root.Fields["children"]).Single();
+            await Assert.That(Text(outerIf, "kind")).IsEqualTo("if");
+            await Assert.That(Text(outerIf, "condition")).IsEqualTo("db.a");
+            var outerThen = OrderedByOrder((SetValue)outerIf.Fields["children"]).Single();
+            await Assert.That(Text(outerThen, "tag")).IsEqualTo("p");
+
+            // The outer if's elseChildren holds EXACTLY ONE row, and it is itself a NESTED kind="if" row —
+            // not two flat sibling rows — the shape the printer's else-if collapse depends on.
+            var outerElse = OrderedByOrder((SetValue)outerIf.Fields["elseChildren"]).ToList();
+            await Assert.That(outerElse.Count).IsEqualTo(1);
+            var nestedIf = outerElse[0];
+            await Assert.That(Text(nestedIf, "kind")).IsEqualTo("if");
+            await Assert.That(Text(nestedIf, "condition")).IsEqualTo("db.b");
+            var nestedThen = OrderedByOrder((SetValue)nestedIf.Fields["children"]).Single();
+            await Assert.That(Text(nestedThen, "tag")).IsEqualTo("p");
+            var nestedElse = OrderedByOrder((SetValue)nestedIf.Fields["elseChildren"]).Single();
+            await Assert.That(Text(nestedElse, "tag")).IsEqualTo("p");
+
+            // The round-trip: projecting the imported design yields the canonical form of the original
+            // render — the nested rows collapse back through CodePrint.TagIf to `else if`, not a nested
+            // `else` block wrapping an `if`.
+            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
+            await Assert.That(projected).Contains(expectedUi);
+            await Assert.That(expectedUi).Contains("else if"); // the fixture actually exercises the collapse
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // The collector invariant (M12 S6a): SchemaBridge.RenderExprSources — the hand-kept parallel walk the
+    // canvas's eval-context builder uses to find every expression the canvas walk (BuildRenderTree /
+    // renderTreeNode) can look up — must never UNDER-collect. Pins the two S6a-added branches explicitly:
+    // a `for` row's `collection` source, and — the easy-to-forget one — an expression INSIDE `elseChildren`
+    // (a leaf nested in the else branch of an `if`). Over-collecting (e.g. a literal source) is harmless and
+    // not asserted against.
+    [Test]
+    public async Task RenderExprSources_collects_a_for_collection_and_an_expr_inside_elseChildren()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s6a-collect-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("collect"), ["ui"] = new TextValue(""),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+
+            // Root <main> holds a `for` row (collection = db.notes, body leaf note.title) and an `if` row
+            // (condition = db.flag, then-leaf "\"on\"", else-leaf db.elseExpr — INSIDE elseChildren).
+            var main = store.CreateObject("MetaNode", Node("main"));
+            store.AddToSet(designPath.Field("render"), main);
+            var mainPath = designPath.Field("render").Key(main.ToString());
+
+            var forRow = store.CreateObject("MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["kind"] = new TextValue("for"), ["item"] = new TextValue("note"),
+                ["collection"] = new TextValue("db.notes"), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(mainPath.Field("children"), forRow);
+            var forLeaf = store.CreateObject("MetaNode", Node("", "note.title"));
+            store.AddToSet(mainPath.Field("children").Key(forRow.ToString()).Field("children"), forLeaf);
+
+            var ifRow = store.CreateObject("MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["kind"] = new TextValue("if"), ["condition"] = new TextValue("db.flag"), ["order"] = new IntValue(1),
+            }));
+            store.AddToSet(mainPath.Field("children"), ifRow);
+            var ifPath = mainPath.Field("children").Key(ifRow.ToString());
+            var thenLeaf = store.CreateObject("MetaNode", Node("", "\"on\""));
+            store.AddToSet(ifPath.Field("children"), thenLeaf);
+            var elseLeaf = store.CreateObject("MetaNode", Node("", "db.elseExpr"));
+            store.AddToSet(ifPath.Field("elseChildren"), elseLeaf);
+
+            var design = store.ReadNode(designPath)!;
+            var sources = SchemaBridge.RenderExprSources(design);
+
+            await Assert.That(sources).Contains("db.notes");     // the for row's collection
+            await Assert.That(sources).Contains("note.title");   // the for body leaf
+            await Assert.That(sources).Contains("db.flag");      // the if row's condition
+            await Assert.That(sources).Contains("\"on\"");       // the then-branch leaf
+            await Assert.That(sources).Contains("db.elseExpr");  // the ELSE-branch leaf — the easy-to-forget one
         }
         finally
         {

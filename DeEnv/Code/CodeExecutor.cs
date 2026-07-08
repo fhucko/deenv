@@ -769,6 +769,15 @@ public sealed class CodeExecutor
     private IExecValue BuildRenderTree(ExecObject node, ExecContext context, ExecObject? ctx)
     {
         var id = node.Id;
+        // S6a control-flow rows. `kind` is the authoritative discriminator; it is read defensively
+        // (ReadNodeTextOptional) so a legacy node predating the field — or a hand-built test node — reads
+        // "" and falls to the tag/expr discrimination, never a hard miss. A real row always carries it
+        // (M5-defaulted), so the dep is recorded and shipped exactly like tag/expr. In S6a a for/if row
+        // renders as a NO-CTX TEMPLATE regardless of `ctx` (the loop/condition are NOT evaluated — that is
+        // S6b's row-scope eval); the ctx only reaches the leaf/attr evaluation inside the body, unchanged.
+        var kind = ReadNodeTextOptional(node, "kind", context);
+        if (kind == "for") return BuildForTemplate(node, id, context, ctx);
+        if (kind == "if") return BuildIfTemplate(node, id, context, ctx);
         var tag = ReadNodeText(node, "tag", context);
         var expr = ReadNodeText(node, "expr", context);
         if (tag.Length > 0)
@@ -806,6 +815,84 @@ public sealed class CodeExecutor
             return Chip("expr-chip", expr, id);                                       // an expression placeholder
         }
         return Chip("expr-chip is-empty", "(empty)", id);                            // neither tag nor expr
+    }
+
+    // A `for` row → its NO-CTX TEMPLATE (S6a): a <div class="for-template" data-node=id> holding a small
+    // badge (the loop var name + the collection SOURCE as an expr-chip — unevaluated, honest) and the body
+    // rendered ONCE. Body leaves referencing the item var render as chips (the item var is unbound in the
+    // template — honest, never a guess). Deterministic + twin-identical (pinned by the conformance case).
+    private IExecValue BuildForTemplate(ExecObject node, int id, ExecContext context, ExecObject? ctx)
+    {
+        var item = ReadNodeText(node, "item", context);
+        var collection = ReadNodeText(node, "collection", context);
+        var badge = new ExecTag
+        {
+            Name = "div",
+            Attributes = new() { ["class"] = new ExecText { Value = "for-badge" } },
+            Children = new IExecTagChild[]
+            {
+                new ExecTag
+                {
+                    Name = "span",
+                    Attributes = new() { ["class"] = new ExecText { Value = "for-item" } },
+                    Children = [new ExecText { Value = item }],
+                },
+                Chip("expr-chip", collection, id),
+            },
+        };
+        var children = new List<IExecTagChild> { badge };
+        children.AddRange(OrderedMembers(node, "children", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx)));
+        return new ExecTag
+        {
+            Name = "div",
+            Attributes = new() { ["class"] = new ExecText { Value = "for-template" }, ["data-node"] = new ExecText { Value = id.ToString() } },
+            Children = children.ToArray(),
+        };
+    }
+
+    // An `if` row → its NO-CTX TEMPLATE (S6a): a <div class="if-template" data-node=id> showing the
+    // condition SOURCE as an expr-chip and BOTH branches, each wrapped + marked (then / else). The else
+    // branch is OMITTED when `elseChildren` is empty. Never guesses a taken branch (taken-branch selection
+    // is S6b). Deterministic + twin-identical (pinned by the conformance case).
+    private IExecValue BuildIfTemplate(ExecObject node, int id, ExecContext context, ExecObject? ctx)
+    {
+        var condition = ReadNodeText(node, "condition", context);
+        var thenBody = OrderedMembers(node, "children", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx)).ToList();
+        var elseBody = OrderedMembers(node, "elseChildren", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx)).ToList();
+        var children = new List<IExecTagChild>
+        {
+            new ExecTag
+            {
+                Name = "div",
+                Attributes = new() { ["class"] = new ExecText { Value = "if-badge" } },
+                Children = [Chip("expr-chip", condition, id)],
+            },
+            Branch("if-branch if-then", "then", thenBody),
+        };
+        if (elseBody.Count > 0)
+            children.Add(Branch("if-branch if-else", "else", elseBody));
+        return new ExecTag
+        {
+            Name = "div",
+            Attributes = new() { ["class"] = new ExecText { Value = "if-template" }, ["data-node"] = new ExecText { Value = id.ToString() } },
+            Children = children.ToArray(),
+        };
+    }
+
+    // A labeled branch wrapper for the if-template: <div class=cls><span class="branch-label">label</span>…body…</div>.
+    private static ExecTag Branch(string cls, string label, List<IExecTagChild> body)
+    {
+        var children = new List<IExecTagChild>
+        {
+            new ExecTag
+            {
+                Name = "span",
+                Attributes = new() { ["class"] = new ExecText { Value = "branch-label" } },
+                Children = [new ExecText { Value = label }],
+            },
+        };
+        children.AddRange(body);
+        return new ExecTag { Name = "div", Attributes = new() { ["class"] = new ExecText { Value = cls } }, Children = children.ToArray() };
     }
 
     // Evaluate ONE canvas expression against the eval context's seed graph (M12 CANVAS-EVAL-1). Looks the
@@ -883,6 +970,23 @@ public sealed class CodeExecutor
 
     private string ReadNodeText(ExecObject node, string name, ExecContext context) =>
         ReadNodeProp(node, name, context) is ExecText t ? t.Value : "";
+
+    // Like ReadNodeText, but tolerant of an ABSENT prop — returns "" instead of throwing. Used ONLY for the
+    // `kind` discriminator so a legacy/incomplete node (one predating the field, or a hand-built test node
+    // that omits it) reads as legacy rather than crashing the whole canvas walk. When the prop is PRESENT
+    // (every real row — M5 defaults it) the dep is still recorded and the value shipped, exactly like
+    // ReadNodeText; the graceful branch only spares the never-a-real-row absent case. Twin of readNodeTextOptional.
+    private string ReadNodeTextOptional(ExecObject node, string name, ExecContext context)
+    {
+        if (NearestStagedValue(node, name, context) is { } staged)
+        {
+            RecordPropAccess(node, name, staged, context);
+            return staged is ExecText st ? st.Value : "";
+        }
+        if (!node.Props.TryGetValue(name, out var value)) return "";
+        RecordPropAccess(node, name, value, context);
+        return value is ExecText t ? t.Value : "";
+    }
 
     // The members of a node's `attrs`/`children` SET, ordered by each member's `order` field — observed
     // through the same reads a `node.children.orderBy(order)` foreach makes: a prop dep on the set, a

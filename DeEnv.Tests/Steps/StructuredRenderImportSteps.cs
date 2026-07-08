@@ -33,10 +33,15 @@ public sealed class StructuredRenderImportSteps
                 render set of MetaNode
                 types set of MetaType
             MetaNode
+                kind text
                 tag text
                 expr text
+                item text
+                collection text
+                condition text
                 attrs set of MetaAttr
                 children set of MetaNode
+                elseChildren set of MetaNode
                 order int
             MetaAttr
                 name text
@@ -72,9 +77,21 @@ public sealed class StructuredRenderImportSteps
     public void GivenNestedRenderDesign() => SeedDesign(
         "ui\n    fn render()\n        return <main class=\"hello\">\n            <h1>\n                \"Hi\"\n");
 
-    [Given("a design whose `ui` text is a fn render\\() whose body iterates a set with a foreach")]
-    public void GivenForeachRenderDesign() => SeedDesign(
-        "ui\n    fn render()\n        return <main>\n            foreach item in db.items\n                <li>\n                    item.name\n");
+    // S6a: `foreach`/`if` render forms now IMPORT to structured `kind="for"`/`kind="if"` rows (the refusal
+    // lifted). This design's render has a foreach loop over `db.notes` AND an if/else keyed off `db.greeting`
+    // — the load-bearing round-trip proof (import → structured rows → project back ≡ canonical original).
+    [Given("a design whose `ui` text is a fn render\\(\\) whose body has a foreach loop and an if with an else branch")]
+    public void GivenForeachAndIfRenderDesign() => SeedDesign(
+        "ui\n    fn render()\n        return <main>\n" +
+        "            foreach note in db.notes\n" +
+        "                <li>\n" +
+        "                    note.title\n" +
+        "            if db.greeting == \"hi\"\n" +
+        "                <p>\n" +
+        "                    \"hello\"\n" +
+        "            else\n" +
+        "                <p>\n" +
+        "                    \"bye\"\n");
 
     private void SeedDesign(string uiText)
     {
@@ -130,6 +147,32 @@ public sealed class StructuredRenderImportSteps
         await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(1);
     }
 
+    // The imported `main` root's `children` set holds, in order, the for-row and the if-row this design's
+    // render authors — walk it to find the row of the given `kind` (S6a: the import lift's own assertion).
+    private ObjectValue RowOfKind(string kind)
+    {
+        var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
+        var root = (ObjectValue)((SetValue)design.Fields["render"]).Members.Single().Value;
+        var children = (SetValue)root.Fields["children"];
+        return children.Members.Select(m => (ObjectValue)m.Value)
+            .Single(n => ((TextValue)n.Fields["kind"]).Text == kind);
+    }
+
+    [Then("the imported for row has item {string} and collection {string}")]
+    public async Task ThenForRowShape(string item, string collection)
+    {
+        var row = RowOfKind("for");
+        await Assert.That(((TextValue)row.Fields["item"]).Text).IsEqualTo(item);
+        await Assert.That(((TextValue)row.Fields["collection"]).Text).IsEqualTo(collection);
+    }
+
+    [Then("the imported if row has an else branch")]
+    public async Task ThenIfRowHasElse()
+    {
+        var row = RowOfKind("if");
+        await Assert.That(((SetValue)row.Fields["elseChildren"]).Members.Count).IsGreaterThan(0);
+    }
+
     // The heart of the slice: import then project is the IDENTITY on the render. The projected document's
     // `ui` section must equal the canonical form of the ORIGINAL `ui` text (parse∘print) — nothing about the
     // tree was lost or reshaped by the import → project round-trip.
@@ -147,19 +190,5 @@ public sealed class StructuredRenderImportSteps
     {
         await Assert.That(_error).IsNotNull();
         await Assert.That(_error).IsTypeOf<SchemaValidationException>();
-    }
-
-    [Then("the design's `render` set is still empty")]
-    public async Task ThenRenderEmpty()
-    {
-        var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
-        await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0);
-    }
-
-    [Then("the design's `ui` text field is unchanged")]
-    public async Task ThenUiUnchanged()
-    {
-        var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
-        await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(_originalUi);
     }
 }

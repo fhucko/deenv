@@ -1113,6 +1113,111 @@
       "expect": { "kind": "tag", "value": "<div class=\"box\" data-node=\"-25\"><span data-node=\"-21\" tabindex=\"2\">hi</span><span class=\"expr-chip\" data-node=\"-23\">a + b</span><span class=\"expr-chip is-empty\" data-node=\"-13\">(empty)</span></div>" }
     },
     {
+      "name": "sys.renderTree — a `for` row (kind=\"for\") renders its NO-CTX TEMPLATE (M12 S6a)",
+      "comment": "S6a control-flow rows: a MetaNode with kind=\"for\" renders as a for-template wrapper (data-node=<row id>) holding a badge (the item var name + the collection SOURCE as an unevaluated expr-chip carrying the SAME row id) and the body rendered ONCE. The body's leaf `note.title` is a non-literal bare symbol (the item var is unbound in this template mode — S6b's row-scope eval is a separate slice) -> its own expr-chip with the LEAF's own id. Ids: the leaf's ExecuteObject runs first (props-then-object), then the children array, then the for-row's own object id last — LastId starts at 0 in a fresh case, so leaf=-2, for-row=-4 on BOTH twins.",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "kind", "value": { "type": "text", "value": "for" } },
+            { "name": "item", "value": { "type": "text", "value": "note" } },
+            { "name": "collection", "value": { "type": "text", "value": "db.notes" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "note.title" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+            ] } }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div class=\"for-template\" data-node=\"-4\"><div class=\"for-badge\"><span class=\"for-item\">note</span><span class=\"expr-chip\" data-node=\"-4\">db.notes</span></div><span class=\"expr-chip\" data-node=\"-2\">note.title</span></div>" }
+    },
+    {
+      "name": "sys.renderTree — an `if` row (kind=\"if\") with an else renders BOTH branches, then/else labeled (M12 S6a)",
+      "comment": "kind=\"if\" renders as an if-template wrapper (data-node=<row id>) with the condition SOURCE as an unevaluated expr-chip (carrying the SAME row id — never guesses the taken branch, S6b's concern) and BOTH branches wrapped + labeled then/else. Both leaves are STRING LITERALS (\\\"Done\\\"/\\\"Pending\\\") so they render as plain text, not chips (today's exact literal-leaf rule, unchanged). Ids: children's leaf=-2, its array=-3, elseChildren's leaf=-5, its array=-6, the if-row's own id=-7 (props-then-object, key-then-value for arrays) on BOTH twins.",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "kind", "value": { "type": "text", "value": "if" } },
+            { "name": "condition", "value": { "type": "text", "value": "note.done" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "\"Done\"" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+            ] } },
+            { "name": "elseChildren", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "\"Pending\"" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+            ] } }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div class=\"if-template\" data-node=\"-7\"><div class=\"if-badge\"><span class=\"expr-chip\" data-node=\"-7\">note.done</span></div><div class=\"if-branch if-then\"><span class=\"branch-label\">then</span>Done</div><div class=\"if-branch if-else\"><span class=\"branch-label\">else</span>Pending</div></div>" }
+    },
+    {
+      "name": "sys.renderTree — an `if` row with an EMPTY elseChildren omits the else branch entirely (M12 S6a)",
+      "comment": "elseChildren present but with zero members (the shape a fresh `if` row starts in — no else authored yet) renders NO else-branch element at all, not an empty one — the operator sees only a `then` branch until '+ else' is used. Ids: children's leaf=-2, its array=-3, the empty elseChildren array=-4 (no items to consume ids), the if-row's own id=-5.",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "kind", "value": { "type": "text", "value": "if" } },
+            { "name": "condition", "value": { "type": "text", "value": "true" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "" } },
+                { "name": "expr", "value": { "type": "text", "value": "\"Yes\"" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+            ] } },
+            { "name": "elseChildren", "value": { "type": "array", "items": [] } }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div class=\"if-template\" data-node=\"-5\"><div class=\"if-badge\"><span class=\"expr-chip\" data-node=\"-5\">true</span></div><div class=\"if-branch if-then\"><span class=\"branch-label\">then</span>Yes</div></div>" }
+    },
+    {
+      "name": "sys.renderTree — a `for` row containing an `if` row (NESTED control-flow templates) pins twin id-assignment through the nesting (M12 S6a review fix 3)",
+      "comment": "A for-row's body is itself an if-row (condition note.done, one leaf then-branch note.title, no else) — proving the recursive BuildRenderTree/renderTreeNode dispatch (kind check re-fires on a child that is itself a control-flow row, not just a plain element/leaf) and that id-assignment order stays twin-identical through the extra nesting level. Ids (props-then-object, key-then-value for arrays, LastId starts at 0): the innermost leaf's ExecuteObject runs first -> leaf=-3; then the if-row's `children` array=-4; the if-row's `elseChildren` (empty)=-5; the if-row's own object id=-6; then the for-row's `children` array (holding the already-built if-row)=-7; the for-row's own object id=-8 last.",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "kind", "value": { "type": "text", "value": "for" } },
+            { "name": "item", "value": { "type": "text", "value": "note" } },
+            { "name": "collection", "value": { "type": "text", "value": "db.notes" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "kind", "value": { "type": "text", "value": "if" } },
+                { "name": "condition", "value": { "type": "text", "value": "note.done" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } },
+                { "name": "children", "value": { "type": "array", "items": [
+                  { "type": "object", "props": [
+                    { "name": "tag", "value": { "type": "text", "value": "" } },
+                    { "name": "expr", "value": { "type": "text", "value": "note.title" } },
+                    { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+                ] } },
+                { "name": "elseChildren", "value": { "type": "array", "items": [] } }
+              ] }
+            ] } }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div class=\"for-template\" data-node=\"-8\"><div class=\"for-badge\"><span class=\"for-item\">note</span><span class=\"expr-chip\" data-node=\"-8\">db.notes</span></div><div class=\"if-template\" data-node=\"-6\"><div class=\"if-badge\"><span class=\"expr-chip\" data-node=\"-6\">note.done</span></div><div class=\"if-branch if-then\"><span class=\"branch-label\">then</span><span class=\"expr-chip\" data-node=\"-3\">note.title</span></div></div></div>" }
+    },
+    {
       "name": "sys.renderTree with an eval context — db-rooted exprs evaluate (single/where+any/orderBy+single), an attr expr applies, a store-backed builtin chips (tier 2), an expr absent from the map chips (tier 3)",
       "comment": "The canvas EVALUATION pivot (M12 CANVAS-EVAL-1). renderTree(node, ctx) consumes a { db, exprs } eval context: each non-literal leaf/attr source is looked up in ctx.exprs (content-addressed by text) -> its serialized AST JSON is deserialized and run through ExecuteValue over an ISOLATED scope binding db=ctx.db on a store-less executor, so both twins agree. Tier 1 (AST + clean eval): db.title -> attr id=\"Hi\"; db.settings.single(s=>true).title -> \"Hello\"; db.notes.where(n=>n.done).any(n=>n.rank==0) -> \"true\"; db.notes.orderBy(n=>n.rank).single(n=>n.done).title -> \"C\" (collections over the synthetic graph, values in hand — the verified caveat). Tier 2 (AST + throw): sys.extent(\"X\") is in the map but store-backed -> throws on the store-less executor -> its raw-source chip. Tier 3 (no AST): db.notes is NOT in the map (an edited-but-unrefreshed expr) -> its chip. data-node ids are the inline node literals negative ids, assigned identically by both twins. Proves the no-second-engine pivot: the walk evaluates NOTHING itself, delegating every eval to ExecuteValue.",
       "expr": {

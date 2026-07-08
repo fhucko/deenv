@@ -245,17 +245,60 @@ public static class SchemaBridge
         {
             Name = "render",
             Params = [],
-            Body = new CodeBlock { Statements = [new CodeReturn { Value = ProjectNode(root) }] },
+            // The root is guaranteed an element (the tag guard above), so ProjectNode yields a CodeTag,
+            // which is an ICodeValue — the value a `return` carries.
+            Body = new CodeBlock { Statements = [new CodeReturn { Value = (ICodeValue)ProjectNode(root) }] },
         };
         return new InstanceUi(Render: render);
     }
 
-    // Project one MetaNode ObjectValue → an ICodeValue (a tag child): an element (tag non-empty) → CodeTag
-    // with its attributes and children projected in `order`; a leaf (tag empty) → its `expr` source parsed
-    // as an expression (a string-literal source like "\"Hi\"" parses to CodeText, so a text child is just
-    // an expr). Recurses directly on child ObjectValues — already resolved inline by the store.
-    private static ICodeValue ProjectNode(ObjectValue node)
+    // Project one MetaNode ObjectValue → an ICodeTagChild, dispatching on `kind` (S6a): "for" → a
+    // CodeTagForEach (`item`/`collection` + the `children` body); "if" → a CodeTagIf (`condition` + the
+    // `children` then-branch + the `elseChildren` else-branch); "" (legacy) → the tag/expr discrimination
+    // an element (tag non-empty) → CodeTag with its attributes and children projected in `order`; a leaf
+    // (tag empty) → its `expr` source parsed as an expression (a string-literal source like "\"Hi\"" parses
+    // to CodeText, so a text child is just an expr). Every projected form flows through the UNCHANGED print
+    // → parse pipeline (CodePrint emits the canonical `foreach`/`if` text the existing parser accepts — no
+    // grammar/printer change). Recurses directly on child ObjectValues — already resolved inline by the store.
+    private static ICodeTagChild ProjectNode(ObjectValue node)
     {
+        switch (TextField(node, "kind"))
+        {
+            case "for":
+            {
+                // A loop needs both a variable name and a collection expression; empty either ⇒ refuse with
+                // a designer-facing message (the S1a empty-guard precedent), not a raw parser error on "".
+                var item = TextField(node, "item");
+                if (item is not { Length: > 0 })
+                    throw new SchemaValidationException(
+                        "A structured `for` render row has an empty loop variable (`item`).");
+                var collection = TextField(node, "collection");
+                if (collection is not { Length: > 0 })
+                    throw new SchemaValidationException(
+                        "A structured `for` render row has an empty `collection` expression.");
+                return new CodeTagForEach
+                {
+                    Item = new CodeSymbol { Name = item },
+                    Collection = CodeParse.ParseExpression(collection),
+                    Body = ProjectChildren(node, "children"),
+                };
+            }
+            case "if":
+            {
+                var condition = TextField(node, "condition");
+                if (condition is not { Length: > 0 })
+                    throw new SchemaValidationException(
+                        "A structured `if` render row has an empty `condition` expression.");
+                return new CodeTagIf
+                {
+                    Condition = CodeParse.ParseExpression(condition),
+                    Body = ProjectChildren(node, "children"),
+                    // An empty `elseChildren` set projects to an empty ElseBody — the printer emits no `else`.
+                    ElseBody = ProjectChildren(node, "elseChildren"),
+                };
+            }
+        }
+
         var tag = TextField(node, "tag");
         if (tag is not { Length: > 0 })
         {
@@ -280,11 +323,12 @@ public static class SchemaBridge
             return new CodeTagAttribute { Name = attrName, Value = CodeParse.ParseExpression(value) };
         }).ToArray();
 
-        var children = OrderedObjects(node.Fields.GetValueOrDefault("children"))
-            .Select(c => (ICodeTagChild)ProjectNode(c)).ToArray();
-
-        return new CodeTag { Name = tag, Attributes = attrs, Children = children };
+        return new CodeTag { Name = tag, Attributes = attrs, Children = ProjectChildren(node, "children") };
     }
+
+    // Project a MetaNode's child set (`children` or `elseChildren`) → an ordered ICodeTagChild array.
+    private static ICodeTagChild[] ProjectChildren(ObjectValue node, string setProp) =>
+        OrderedObjects(node.Fields.GetValueOrDefault(setProp)).Select(ProjectNode).ToArray();
 
     // ── M12 CANVAS-EVAL-1: collect the render tree's expression sources ───────────
     //
@@ -305,13 +349,32 @@ public static class SchemaBridge
         return sources;
     }
 
-    // NOTE: this is a hand-kept PARALLEL walk of the render tree — its branch condition (tag-non-empty =
-    // element with attrs+children; else expr leaf) MUST mirror the canvas walk (CodeExecutor.BuildRenderTree /
-    // codeExec.ts renderTreeNode) so it can never UNDER-collect a source the walk will look up (over-collecting
-    // dead entries is harmless — content-addressed + parse-or-skip). If the walk's shape changes (S6 for…in/if
-    // rows), change this in the same slice.
+    // NOTE: this is a hand-kept PARALLEL walk of the render tree — its `kind` dispatch (for → collect
+    // `collection` + recurse `children`; if → collect `condition` + recurse `children` AND `elseChildren`;
+    // "" → tag-non-empty element with attrs+children, else expr leaf) MUST mirror the canvas walk
+    // (CodeExecutor.BuildRenderTree / codeExec.ts renderTreeNode) so it can never UNDER-collect a source the
+    // walk will look up (over-collecting dead entries is harmless — content-addressed + parse-or-skip). The
+    // easy-to-forget branch is `elseChildren` — a collector-invariant test pins that every source the canvas
+    // evaluates (including one inside an else branch) is collected. If the walk's shape changes, change this
+    // in the SAME slice (S6a lifted the for/if rows here in lockstep with the canvas walk).
     private static void CollectExprSources(ObjectValue node, List<string> into)
     {
+        switch (TextField(node, "kind"))
+        {
+            case "for":
+                if (TextField(node, "collection") is { Length: > 0 } coll) into.Add(coll);
+                foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children")))
+                    CollectExprSources(c, into);
+                return;
+            case "if":
+                if (TextField(node, "condition") is { Length: > 0 } cond) into.Add(cond);
+                foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children")))
+                    CollectExprSources(c, into);
+                foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("elseChildren")))
+                    CollectExprSources(c, into);
+                return;
+        }
+
         if (TextField(node, "tag") is { Length: > 0 })
         {
             foreach (var a in OrderedObjects(node.Fields.GetValueOrDefault("attrs")))
@@ -331,10 +394,10 @@ public static class SchemaBridge
     // (modulo canonical formatting): ProjectDesignDocument(after import) ≡ canonicalize(original `ui`).
     //
     // This is a ONE-TIME FRESH MINT (AdoptInto-style — new ids, no re-import identity matching): the
-    // design must currently carry a `ui` render fn and an EMPTY `render` set. It refuses (throws, imports
-    // nothing) a render whose tree contains a `for`/`if` tag form (CodeTagForEach/CodeTagIf) — those have
-    // no structured shape yet (S6). Such a render stays as `ui` text. Component tags (PascalCase) and html
-    // tags are BOTH just MetaNode {tag=Name}; neither is special-cased.
+    // design must currently carry a `ui` render fn and an EMPTY `render` set. `foreach`/`if` render forms
+    // now import to structured `kind="for"`/`kind="if"` rows (S6a); the helper/var refusals below STAY
+    // (a later rung). Component tags (PascalCase) and html tags are BOTH just MetaNode {tag=Name}; neither
+    // is special-cased.
     //
     // ATOMIC: the whole import is ONE store.CommitBatch — all creates + links + the `ui` clear persist
     // all-or-none (the store mints, links, and Saves ONCE). A mid-import crash can therefore never leave a
@@ -379,33 +442,66 @@ public static class SchemaBridge
             throw new SchemaValidationException(
                 "This design's `fn render()` is not a single `return <element>` — only a plain tag tree can be imported.");
 
-        // Refuse a tree containing any `for`/`if` tag form ANYWHERE (no structured form yet — S6). Checked
-        // BEFORE the batch is built so a refusal imports nothing.
-        RefuseUnstructurableChildren(root);
-
         // Build the whole changeset: a CommitCreate per MetaNode/MetaAttr keyed by a distinct NEGATIVE
-        // tempId, and mutations that link each child into its parent's `children` set, each attr into its
-        // node's `attrs` set (both addressed by (owner-tempId, prop) so a child can link into its
-        // just-minted parent within the ONE batch), the root into the EXISTING Design's `render` set, and
-        // a field-write clearing the design's `ui` text. store.CommitBatch mints + links + Saves ONCE.
+        // tempId, and mutations that link each child into its parent's `children`/`elseChildren` set, each
+        // attr into its node's `attrs` set (all addressed by (owner-tempId, prop) so a child can link into
+        // its just-minted parent within the ONE batch), the root into the EXISTING Design's `render` set,
+        // and a field-write clearing the design's `ui` text. store.CommitBatch mints + links + Saves ONCE.
         var creates = new List<CommitCreate>();
         var mutations = new List<CommitMutation>();
         var nextTempId = -1;
+        // Link a body of tag children into `owner.setProp` in `order`, minting each child first (top-down:
+        // the parent is already minted, so the store's GC never sweeps a transiently-unlinked child).
+        void LinkBody(int owner, string setProp, IEnumerable<ICodeTagChild> body)
+        {
+            var order = 0;
+            foreach (var c in body)
+                mutations.Add(new SetLinkByPropMutation(owner, setProp, ImportNode(c, order++)));
+        }
         int ImportNode(ICodeTagChild child, int order)
         {
             var tempId = nextTempId--;
-            if (child is not CodeTag tag)
+            switch (child)
             {
-                // A leaf: print its source back (the inverse of ParseExpression on import) — CodePrint.Value
-                // is the printer's canonical fixpoint, so a CodeText "Hi" round-trips to the source `"Hi"`.
-                var leaf = (ICodeValue)child;
-                creates.Add(new CommitCreate(tempId, "MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
-                {
-                    ["tag"] = new TextValue(""), ["expr"] = new TextValue(CodePrint.Value(leaf)), ["order"] = new IntValue(order),
-                })));
-                return tempId;
+                case CodeTagForEach forEach:
+                    // A `for` row: kind="for" + the loop var + the collection source (CodePrint.Value is the
+                    // printer's canonical fixpoint, so it round-trips through ParseExpression on projection).
+                    // Its body is the `children` set. Unset tag/expr default to "" — a for row is neither an
+                    // element nor a leaf.
+                    creates.Add(new CommitCreate(tempId, "MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
+                    {
+                        ["kind"] = new TextValue("for"),
+                        ["item"] = new TextValue(forEach.Item.Name),
+                        ["collection"] = new TextValue(CodePrint.Value(forEach.Collection)),
+                        ["order"] = new IntValue(order),
+                    })));
+                    LinkBody(tempId, "children", forEach.Body);
+                    return tempId;
+                case CodeTagIf tagIf:
+                    // An `if` row: kind="if" + the condition source; the then-branch is `children`, the
+                    // else-branch is `elseChildren` (a SECOND semantic child-order set — empty ElseBody links
+                    // nothing, so the row projects back with no `else`).
+                    creates.Add(new CommitCreate(tempId, "MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
+                    {
+                        ["kind"] = new TextValue("if"),
+                        ["condition"] = new TextValue(CodePrint.Value(tagIf.Condition)),
+                        ["order"] = new IntValue(order),
+                    })));
+                    LinkBody(tempId, "children", tagIf.Body);
+                    LinkBody(tempId, "elseChildren", tagIf.ElseBody);
+                    return tempId;
+                case not CodeTag:
+                    // A leaf: print its source back (the inverse of ParseExpression on import) — CodePrint.Value
+                    // is the printer's canonical fixpoint, so a CodeText "Hi" round-trips to the source `"Hi"`.
+                    var leaf = (ICodeValue)child;
+                    creates.Add(new CommitCreate(tempId, "MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
+                    {
+                        ["tag"] = new TextValue(""), ["expr"] = new TextValue(CodePrint.Value(leaf)), ["order"] = new IntValue(order),
+                    })));
+                    return tempId;
             }
 
+            var tag = (CodeTag)child;
             creates.Add(new CommitCreate(tempId, "MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
             {
                 ["tag"] = new TextValue(tag.Name), ["expr"] = new TextValue(""), ["order"] = new IntValue(order),
@@ -424,10 +520,7 @@ public static class SchemaBridge
                 mutations.Add(new SetLinkByPropMutation(tempId, "attrs", attrTempId));
             }
 
-            var childOrder = 0;
-            foreach (var c in tag.Children)
-                mutations.Add(new SetLinkByPropMutation(tempId, "children", ImportNode(c, childOrder++)));
-
+            LinkBody(tempId, "children", tag.Children);
             return tempId;
         }
 
@@ -438,25 +531,6 @@ public static class SchemaBridge
         mutations.Add(new FieldWriteMutation(designId, "ui", new TextValue("")));
 
         store.CommitBatch(creates, mutations);
-    }
-
-    // Throw (importing nothing) if the tree rooted at `tag` contains any `for`/`if` tag form — they have no
-    // structured MetaNode shape yet (deferred to S6). A leaf child cannot contain tag children, so only
-    // CodeTag children recurse.
-    private static void RefuseUnstructurableChildren(CodeTag tag)
-    {
-        foreach (var child in tag.Children)
-            switch (child)
-            {
-                case CodeTagForEach:
-                case CodeTagIf:
-                    throw new SchemaValidationException(
-                        "This design's render uses a `for`/`if` render form, which has no structured shape yet — " +
-                        "it stays as `ui` text (import supports a plain tag tree only).");
-                case CodeTag childTag:
-                    RefuseUnstructurableChildren(childTag);
-                    break;
-            }
     }
 
     // Write an already-projected, already-validated app document onto a target instance, PRESERVING
