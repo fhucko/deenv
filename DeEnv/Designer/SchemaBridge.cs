@@ -85,6 +85,22 @@ public static class SchemaBridge
     // pipeline as any hand-written document), so a bad design yields no document.
     public static string ProjectDesignDocument(NodeValue design)
     {
+        // M12 S1a — a structured render tree (Design.render, a `set of MetaNode` holding exactly one root)
+        // projects to a canonical `ui` section, the same authority-inversion the `types` set already uses
+        // (structure = truth, printed text = artifact). The root lives in a SET (not a single reference) so
+        // ReadNode resolves it — and its nested `children`/`attrs` — recursively, exactly like `types`;
+        // no store/resolver plumbing needed here. Empty set ⇒ no structured render (fall through to the
+        // `ui` text field, unchanged). The gate: a structured render is valid ONLY when the `ui` text field
+        // is empty; if BOTH are present, refuse (the user-decided precedence) rather than silently pick one.
+        var renderRoot = design is ObjectValue dr && dr.Fields.TryGetValue("render", out var r)
+            ? OrderedObjects(r).ToList() : [];
+        if (renderRoot.Count > 1)
+            throw new SchemaValidationException("A design's `render` tree may have only one root, but more than one was found.");
+        if (renderRoot.Count == 1 && design is ObjectValue dt && TextField(dt, "ui") is { Length: > 0 })
+            throw new SchemaValidationException(
+                "A design cannot carry both a structured `render` tree and a non-empty `ui` text field — " +
+                "the render tree projects the `ui` section, so the text field must be empty.");
+
         // Validate the projected TYPES first, on the typed description — so a structural type error
         // (e.g. an object Db with no props) surfaces as its precise semantic message ("…has baseType
         // 'object' but no props") rather than the parse error that printing-then-reparsing such an
@@ -106,6 +122,16 @@ public static class SchemaBridge
         var sections = new List<string> { typesSection.TrimEnd('\n') };
         if (design is ObjectValue d)
             foreach (var name in new[] { "initialData", "access", "common", "ui" })
+            {
+                // The `ui` section, when a structured render root is present, is PROJECTED from the MetaNode
+                // tree (S1a) rather than read from the `ui` text field (which the gate has already forced
+                // empty). Projecting to AST-then-existing-printer inherits the canonical fixpoint exactly
+                // as the canonicalize-on-project path below does — never hand-emitting text.
+                if (name == "ui" && renderRoot.Count == 1)
+                {
+                    sections.Add(AppPrint.PrintUi(ProjectRenderUi(renderRoot[0])).TrimEnd('\n'));
+                    continue;
+                }
                 if (TextField(d, name) is { Length: > 0 } section)
                     // The `ui` section is CANONICALIZED (parse∘print) rather than passed through verbatim, so
                     // two designs differing only in render-code formatting project to byte-identical text —
@@ -116,6 +142,7 @@ public static class SchemaBridge
                     sections.Add((name == "ui"
                         ? AppPrint.PrintUi(CodeParse.ParseUiSection(section))
                         : section).TrimEnd('\n'));
+            }
 
         var document = string.Join("\n\n", sections) + "\n";
 
@@ -198,6 +225,65 @@ public static class SchemaBridge
         }
 
         return new InstanceDescription(types);
+    }
+
+    // ── M12 S1a: structured render tree → `ui` section ────────────────────────────
+    //
+    // Project the MetaNode tree rooted at `root` into an InstanceUi whose only content is `fn render()`
+    // returning the root element — the exact shape a hand-written custom-UI design carries, so it flows
+    // unchanged through the existing print→parse→run pipeline (NO interpreter/grammar change). The root
+    // MUST be an element (a non-empty tag) — a `render` returning a bare text/expression leaf is not a
+    // page. `root`'s `children`/`attrs` sets (and every descendant's) are already resolved inline on the
+    // ObjectValue — the store builds them recursively at read, exactly like `types` — so no resolver.
+    private static InstanceUi ProjectRenderUi(ObjectValue root)
+    {
+        if (TextField(root, "tag") is not { Length: > 0 })
+            throw new SchemaValidationException(
+                "A structured `render` root must be an element (a MetaNode with a non-empty `tag`), not a leaf expression.");
+
+        var render = new CodeFunction
+        {
+            Name = "render",
+            Params = [],
+            Body = new CodeBlock { Statements = [new CodeReturn { Value = ProjectNode(root) }] },
+        };
+        return new InstanceUi(Render: render);
+    }
+
+    // Project one MetaNode ObjectValue → an ICodeValue (a tag child): an element (tag non-empty) → CodeTag
+    // with its attributes and children projected in `order`; a leaf (tag empty) → its `expr` source parsed
+    // as an expression (a string-literal source like "\"Hi\"" parses to CodeText, so a text child is just
+    // an expr). Recurses directly on child ObjectValues — already resolved inline by the store.
+    private static ICodeValue ProjectNode(ObjectValue node)
+    {
+        var tag = TextField(node, "tag");
+        if (tag is not { Length: > 0 })
+        {
+            // A leaf: `expr` is the child expression source. Empty ⇒ neither an element (no `tag`) nor an
+            // expression — refuse with a designer-facing message rather than a raw parser error on "".
+            var expr = TextField(node, "expr");
+            if (expr is not { Length: > 0 })
+                throw new SchemaValidationException(
+                    "A structured render node has neither a `tag` (an element) nor an `expr` (a leaf expression).");
+            return CodeParse.ParseExpression(expr);
+        }
+
+        var attrs = OrderedObjects(node.Fields.GetValueOrDefault("attrs")).Select(a =>
+        {
+            var attrName = TextField(a, "name");
+            // An attribute value is an expression source; empty ⇒ refuse with a clear message, not a raw
+            // parse error on "" (the malformed-but-non-empty case still surfaces as a CodeParseException —
+            // ledgered for the authoring slice, which can point at the offending node).
+            if (TextField(a, "value") is not { Length: > 0 } value)
+                throw new SchemaValidationException(
+                    $"A structured render attribute '{attrName}' on <{tag}> has an empty value expression.");
+            return new CodeTagAttribute { Name = attrName, Value = CodeParse.ParseExpression(value) };
+        }).ToArray();
+
+        var children = OrderedObjects(node.Fields.GetValueOrDefault("children"))
+            .Select(c => (ICodeTagChild)ProjectNode(c)).ToArray();
+
+        return new CodeTag { Name = tag, Attributes = attrs, Children = children };
     }
 
     // Write an already-projected, already-validated app document onto a target instance, PRESERVING

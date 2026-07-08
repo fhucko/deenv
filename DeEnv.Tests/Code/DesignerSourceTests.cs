@@ -110,6 +110,110 @@ public sealed class DesignerSourceTests
     // The canonical printed form, so two documents compare by semantics not incidental whitespace.
     private static string Canonical(string appDoc) => AppPrint.Print(AppParse.Parse(appDoc));
 
+    // ── M12 S1a: structured render tree → canonical fn render() ───────────────────
+
+    // A structured render (Design.render, a MetaNode tree) projects to the CANONICAL `fn render()` text —
+    // the same text the equivalent hand-written custom UI would print. Proven at the projection boundary
+    // (ProjectDesignDocument output contains the canonical render fn), beside the round-trip guards.
+    [Test]
+    public async Task ProjectDesignDocument_projects_a_structured_render_to_a_canonical_render_fn()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1a-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("hello-app"),
+                ["ui"]    = new TextValue(""), // empty — the render tree is the authority
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId); // a custom-UI app still needs a valid Db root type
+
+            // main.hello > h1 > "Hi", built top-down so no node is transiently unreachable (the store GCs
+            // unreferenced objects on link mutations). `render` is now a SET (holding exactly one root), so
+            // the root itself is addressed as a set member (Key(main)), like any other set-owned object.
+            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+            var main = store.CreateObject("MetaNode", Node("main"));
+            store.AddToSet(designPath.Field("render"), main);
+            var mainPath = designPath.Field("render").Key(main.ToString());
+            var cls = store.CreateObject("MetaAttr", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("class"), ["value"] = new TextValue("\"hello\""), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(mainPath.Field("attrs"), cls);
+            var h1 = store.CreateObject("MetaNode", Node("h1"));
+            store.AddToSet(mainPath.Field("children"), h1);
+            var hi = store.CreateObject("MetaNode", Node("", "\"Hi\""));
+            store.AddToSet(mainPath.Field("children").Key(h1.ToString()).Field("children"), hi);
+
+            var design = store.ReadNode(designPath)!;
+            var projected = SchemaBridge.ProjectDesignDocument(design);
+
+            // The exact canonical render fn the printer produces for the equivalent hand-written UI.
+            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(
+                "ui\n    fn render()\n        return <main class=\"hello\">\n            <h1>\n                \"Hi\"\n"));
+            await Assert.That(projected).Contains(expectedUi.TrimEnd('\n'));
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // ProjectDesignDocument REFUSES a design carrying both a structured render tree AND a non-empty `ui`
+    // text field — the user-decided precedence (the render tree owns the `ui` section, so the text must be
+    // empty), surfaced as a SchemaValidationException rather than silently picking one.
+    [Test]
+    public async Task ProjectDesignDocument_refuses_a_render_tree_alongside_a_non_empty_ui_text()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1a-both-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("clash"),
+                ["ui"]    = new TextValue("ui\n    fn render()\n        return <main>\n            \"x\"\n"),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            var main = store.CreateObject("MetaNode", Node("main"));
+            store.AddToSet(NodePath.Root.Field("designs").Key(designId.ToString()).Field("render"), main);
+
+            var design = store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(design))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("both a structured `render`");
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    private static ObjectValue Node(string tag, string expr = "") =>
+        new(new Dictionary<string, NodeValue>
+        {
+            ["tag"] = new TextValue(tag), ["expr"] = new TextValue(expr), ["order"] = new IntValue(0),
+        });
+
+    private static void AddDbType(JsonFileInstanceStore store, int designId)
+    {
+        var typesPath = NodePath.Root.Field("designs").Key(designId.ToString()).Field("types");
+        var db = store.CreateObject("MetaType", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue("Db"), ["baseType"] = new TextValue("object"), ["order"] = new IntValue(0),
+        }));
+        store.AddToSet(typesPath, db);
+        var greeting = store.CreateObject("MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue("greeting"), ["type"] = new TextValue("text"), ["order"] = new IntValue(0),
+        }));
+        store.AddToSet(typesPath.Key(db.ToString()).Field("props"), greeting);
+    }
+
     // ── M12 S0: canonicalize-on-project for the `ui` section ──────────────────────
 
     // The `ui` canonicalization primitive: a non-canonically-formatted section round-trips through

@@ -15,8 +15,19 @@ types
         access text
         common text
         ui text
+        render set of MetaNode
         types set of MetaType
         origin int
+    MetaNode
+        tag text
+        expr text
+        attrs set of MetaAttr
+        children set of MetaNode
+        order int
+    MetaAttr
+        name text
+        value text
+        order int
     MetaType
         name text
         baseType text
@@ -65,6 +76,10 @@ access
     MetaType
         * where currentUser.role == "Admin"
     MetaProp
+        * where currentUser.role == "Admin"
+    MetaNode
+        * where currentUser.role == "Admin"
+    MetaAttr
         * where currentUser.role == "Admin"
     User
         * where currentUser.role == "Admin"

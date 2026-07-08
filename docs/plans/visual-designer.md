@@ -162,12 +162,31 @@ mutations the designer app performs in deenv code — that machinery already exi
   `Section("ui")+MapUi` the document parser uses). Scoped to `ui` only: `initialData`
   would be dict-reordered by the printer; `common` (also code) is a trivial symmetric
   follow-up, deliberately deferred (ledgered in Open questions).
-- **S1 — structured storage + import (the foundation).** The tag-tree meta-schema lands;
-  existing `ui` text imports into rows (identity minted once); text pane = the cached
-  projection; editing text = re-import with identity matching (boundary op, save/blur).
-  No canvas yet — but UI code is now versionable/mergeable data, valuable on its own.
-  NOT a trivial slice: it carries the tree-alignment re-import and the MergeTags pass
-  (§Storage shape) — the two hardest pieces of the whole map, front-loaded deliberately.
+- **S1a — structured storage + one-way projection. ✅ DONE 2026-07-08** (arch review
+  SHIP; suite 756). A Design carries its render as structured rows: `render set of
+  MetaNode` (the root lives in a SET — like `types set of MetaType` — so `ReadNode`
+  resolves the whole tree recursively, no resolver plumbing, every caller unchanged),
+  `MetaNode {tag, expr, attrs set of MetaAttr, children set of MetaNode, order}`,
+  `MetaAttr {name, value, order}`. `ProjectDesignDocument` projects the tree to a
+  canonical `fn render()` (element → `CodeTag`; leaf → `ParseExpression(expr)`; attr
+  value → `ParseExpression`; root wrapped in a render fn; printed via `AppPrint.PrintUi`)
+  that runs through the UNCHANGED parse→run pipeline — no interpreter/grammar/conformance
+  change. Precedence gate (user-decided): structured render valid ONLY when `ui` text is
+  empty (both → throw); >1 root → throw; non-element root → throw. Proven by a `@m12` SSR
+  scenario + projection/gate unit tests. Deferred to S1b/S1c below.
+  - Known limits ledgered (S1a review): (1) a malformed-but-non-empty leaf/attr
+    expression still surfaces as a raw `CodeParseException` (empty is now guarded with a
+    designer-facing message) — the authoring slice (S4) should wrap it and point at the
+    offending node. (2) Store GC sweeps a transiently-unlinked node, so a tree must be
+    built top-down (link parent before child); the authoring/import slices must order
+    create-then-link deliberately.
+- **S1b — import (existing `ui` text → rows).** Parse a design's `ui` `fn render()` into
+  MetaNode rows (identity minted once, `AdoptInto`-style). Carries the tree-alignment
+  problem for re-import at save/blur (grill #3/#4). MUST clear the `ui` text field when it
+  populates `render`, or the S1a precedence gate rejects every imported design.
+- **S1c — MergeTags.** A per-row-kind 3-way merge + apply loop for MetaNode/MetaAttr with
+  CONFLICT-CAPABLE child order (grill #1/#2 — do NOT inherit the cosmetic
+  `order`-never-conflicts policy). Makes render rows branch/mergeable like types.
 - **S2 — provenance + click-to-source (read-only).** Twins stamp node identity onto
   DOM; click an element in a rendered page → the designer navigates to the producing
   row + highlights its span in the text pane. Standalone debugging win.
@@ -189,9 +208,10 @@ mutations the designer app performs in deenv code — that machinery already exi
 - **S7 — styling.** Inspector edits `class`/`style` day one; the theming seam (per-app
   tokens over ViewChromeCss) is designed as its own session first.
 
-Dependencies: S0 is free-standing; S1 is the foundation for everything; S2 needs S1's
-row identity; S3 gates the writes (S4+). M11 (component library) matures in parallel and
-feeds S5's palette. Nothing here blocks on versioning Track C.
+Dependencies: S0 ✅ and S1a ✅ are the landed foundation; S1b (import) and S1c (merge)
+extend it; S2 needs S1a's row identity; S3 gates the writes (S4+). M11 (component
+library) matures in parallel and feeds S5's palette. Nothing here blocks on versioning
+Track C.
 
 ## Foreclosure guards (what near-term work must NOT do)
 
