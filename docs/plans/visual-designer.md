@@ -210,11 +210,22 @@ mutations the designer app performs in deenv code — that machinery already exi
   scenarios (non-admin, anonymous) prove the design is NOT converted with disk-level teeth.
   Twin-lockstep, no conformance case. Note for X2b: the refusal messages become user-facing
   copy when the button lands — ux-review them then.
-- **X2b — designer "Convert to structured" button + render-tree view. NEXT.** In app.deenv:
-  a button (shown when a design has `ui` text + empty `render`) calling `sys.importRender(design)`,
-  and a view of `design.render` (reuse the generic SetTable / nested forms) so the imported
-  MetaNode rows are visible + editable. This is where the whole S1a→X2a foundation becomes
-  USABLE through the generic UI. UI slice → ui-architecture + ux review.
+- **X2b — designer "Convert to structured" button + render view. ✅ DONE 2026-07-08**
+  (ui-architecture + ux review SHIP-WITH-FIXES, fixes applied; suite 771). In app.deenv: a
+  text-authored design shows the `ui` textarea + a "Convert render to structured" button
+  (`onClick sys.importRender(design)`, shown only when `ui` is non-empty); once structured,
+  a FIRST-CLASS "Structured render" section (outside the collapsing Advanced disclosure, so a
+  convert visibly lands) shows `design.render` via the generic `SetTable`. **This is where the
+  S1a→X2a foundation became USABLE end-to-end** (import a text render → edit as data via the
+  generic UI). Review-caught fixes applied: the view is genuinely READ-ONLY — added a general
+  `readOnly` param to the lib `SetTable` (suppresses the create + per-row Remove controls
+  regardless of `sys.canWrite`; the first caller to need it) and pass `readOnly={true}`, because
+  the default write controls would corrupt the single-root tree (add a stray 2nd root / delete
+  the root). Ledgered as acceptable-interim / out-of-scope: the view is root-row-only, no
+  drill-in (the tree editor is a later slice — captioned "read-only preview"); the global banner
+  prefix "Change rejected:" mis-frames a convert-decline (shared save-rejection chrome, ui.ts —
+  a banner-copy pass, not this slice); no "convert back to text" / no confirm (fine while
+  conversion is lossless for the accepted plain-tag subset).
 - **S1c — MergeTags.** A per-row-kind 3-way merge + apply loop for MetaNode/MetaAttr with
   CONFLICT-CAPABLE child order (grill #1/#2 — do NOT inherit the cosmetic
   `order`-never-conflicts policy). Makes render rows branch/mergeable like types.

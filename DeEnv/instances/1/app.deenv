@@ -246,12 +246,23 @@ ui
                                 "+ Field"
                 publishSection(design)
                 branchSection(design)
+                if design.render.any(x => true)
+                    <section class="publish-section">
+                        <h2 class="publish-heading">
+                            "Structured render"
+                        <p class="publish-caption">
+                            "Structured render — read-only preview; the tree editor is coming."
+                        <SetTable set={design.render} desc={sys.schema("MetaNode")} columns={["tag", "expr", "order"]} linked={false} readOnly={true}>
                 <details class="code-areas">
                     <summary class="code-summary">
                         "Advanced (code)"
-                    <label class="ui-label">
-                        "UI"
-                    <textarea class="design-ui" value={sys.field(design, "ui")}>
+                    if design.render.any(x => true) == false
+                        <label class="ui-label">
+                            "UI"
+                        <textarea class="design-ui" value={sys.field(design, "ui")}>
+                        if sys.field(design, "ui") != ""
+                            <button class="convert-render" onClick={() => sys.importRender(design)}>
+                                "Convert render to structured"
                     <label class="common-label">
                         "Common"
                     <textarea class="design-common" value={sys.field(design, "common")}>

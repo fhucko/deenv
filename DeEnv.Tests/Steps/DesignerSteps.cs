@@ -1306,6 +1306,84 @@ public sealed class DesignerSteps(InstanceContext ctx)
             && o.Fields.TryGetValue("access", out var av) && av is DeEnv.Storage.TextValue at && at.Text == accessSection));
     }
 
+    // ── M12 X2b — the Convert-to-structured button + the structured render view ──────────────────
+
+    // A SIMPLE convertible render: a `fn render()` returning a `<main>` with an attribute and a nested
+    // element whose child is a text literal — the exact shape S1b's ImportRender accepts (no foreach / if /
+    // helper components, which it refuses). Filled into the editable `ui` textarea (bound to
+    // sys.field(design,"ui"), a journaled scalar autosave like the access textarea); polled on the store so
+    // the write has landed before we convert.
+    // The stored `ui` field carries the `ui` SECTION (header + indented body) — the exact text
+    // AppPrint.PrintUi emits and SchemaBridge.ImportRender re-parses via ParseUiSection (which expects the
+    // `ui` header). So author the whole section, render body indented under `fn render()`.
+    private const string SimpleConvertibleRender =
+        "ui\n    fn render()\n        return <main class=\"greeting\">\n            <h1>\n                \"Hi\"\n";
+
+    [When("I author a simple convertible render into the design's UI")]
+    public async Task WhenAuthorSimpleRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(SimpleConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "convertme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == SimpleConvertibleRender));
+    }
+
+    // The convert button lives inside the Advanced (code) <details> disclosure. Its open/closed state is
+    // uncontrolled DOM (not model-bound), so the autosave re-render after authoring the render rebuilds the
+    // disclosure CLOSED — the button is present but hidden. Assert it is ATTACHED (the mode-conditional
+    // rendered it), independent of the disclosure's transient open state.
+    [Then("the design editor shows the Convert-to-structured button")]
+    public async Task ThenShowsConvertButton() =>
+        await ctx.Page!.Locator(".design-editor button.convert-render")
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
+
+    [When("I click Convert to structured")]
+    public async Task WhenClickConvert()
+    {
+        // The convert button lives under the Advanced (code) disclosure (a text design's `ui` is "advanced
+        // code"); the authoring autosave re-render collapses it (uncontrolled DOM open state) — re-open it
+        // if closed so the button is visible and hit-testable, then click it. (The RESULT — the structured
+        // render section — is first-class, OUTSIDE this disclosure, so it needs no such dance to observe.)
+        if (await ctx.Page!.Locator(".design-editor details.code-areas[open]").CountAsync() == 0)
+            await ctx.Page!.Locator(".design-editor details.code-areas summary").ClickAsync();
+        await ctx.Page!.Locator(".design-editor button.convert-render").ClickAsync();
+    }
+
+    // After the import host action's ack refetch re-renders the editor, the mode flips: a first-class
+    // "Structured render" section (OUTSIDE the collapsing Advanced disclosure — review fix) appears,
+    // holding the generic SetTable over design.render. Plain visible wait — no fixed sleep, and no
+    // disclosure re-open dance needed since this section is not nested in one.
+    [Then("the design editor eventually shows the structured render table")]
+    public async Task ThenShowsRenderTable() =>
+        await ctx.Page!.WaitForSelectorAsync(".design-editor .set-table .set-row");
+
+    // The imported ROOT MetaNode's `tag` cell — the SetTable's identity column (linked={false}, so a
+    // read-only span.row-link) — reads "main" (the render's root <main> element).
+    [Then("the structured render table shows a root row with tag {string}")]
+    public async Task ThenRenderTableRootTag(string tag) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.design-editor .set-table .set-row .row-link')].some(e => e.textContent.trim() === {JsString(tag)})");
+
+    [Then("the design editor no longer shows the UI textarea")]
+    public async Task ThenNoUiTextarea() =>
+        await Assert.That(await ctx.Page!.Locator(".design-editor textarea.design-ui").CountAsync()).IsEqualTo(0);
+
+    [Then("the design editor no longer shows the Convert-to-structured button")]
+    public async Task ThenNoConvertButton() =>
+        await Assert.That(await ctx.Page!.Locator(".design-editor button.convert-render").CountAsync()).IsEqualTo(0);
+
+    // The read-only guarantee (review fix): SetTable's readOnly={true} must suppress BOTH write
+    // affordances it would otherwise offer for an admin-writable type (MetaNode is `* where role==Admin`)
+    // — the create button (which would mint a blank, unparented second root, violating the single-root
+    // invariant) and the per-row Remove (which would delete the ROOT, blanking the whole render).
+    [Then("the structured render table shows no New MetaNode button")]
+    public async Task ThenNoNewMetaNodeButton() =>
+        await Assert.That(await ctx.Page!.Locator(".design-editor .set-table button.new-btn").CountAsync()).IsEqualTo(0);
+
+    [Then("the structured render table shows no Remove button")]
+    public async Task ThenNoRemoveButton() =>
+        await Assert.That(await ctx.Page!.Locator(".design-editor .set-table button.set-remove").CountAsync()).IsEqualTo(0);
+
     [Then("the instances list shows the instance {string} running design {string}")]
     public async Task ThenListShows(string label, string designLabel)
     {

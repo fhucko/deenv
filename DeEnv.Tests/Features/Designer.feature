@@ -1012,3 +1012,47 @@ Feature: The operator IDE (designs library + instance design selector)
     And I edit the design "todo"
     And I preview the merge of branch "feature"
     Then the merge preview's access block mentions "TodoItem"
+
+  # ── M12 X2b — the "Convert to structured" button + the structured render view ─────────────────
+  #
+  # X2a wired sys.importRender(design) (a server-only, admin-gated host action that converts a design's
+  # text `ui` render into structured MetaNode rows and clears `ui`); nothing called it. X2b makes the
+  # foundation USABLE from the editor: the Advanced code block shows a "Convert render to structured"
+  # button ONLY for a TEXT-authored design (a non-empty `ui`, an empty `render` set), and — once
+  # converted — shows the structured MetaNode rows as a FIRST-CLASS "Structured render" section (OUTSIDE
+  # the collapsing Advanced disclosure, so a successful convert is immediately visible — review fix: the
+  # disclosure's open/closed state is uncontrolled DOM, and the convert ack's re-render was collapsing it,
+  # making a successful convert look like nothing happened). The two modes are exclusive (the S1a
+  # precedence gate: a design's render is EITHER text OR structured, never both), so the editor shows one
+  # or the other; the `ui` textarea + Convert button stay under Advanced for a text design.
+  #
+  # The structured render view is READ-ONLY (review fix): MetaNode is `* where role==Admin`, so the
+  # generic SetTable would otherwise offer its own "+ New MetaNode" (minting a blank, unparented second
+  # root — violates Design.render's single-root invariant) and a per-row Remove (deleting the ROOT blanks
+  # the whole render). `SetTable`'s new `readOnly={true}` param suppresses both, independent of
+  # sys.canWrite — proven by asserting neither control is present after convert.
+  #
+  # The proof authors a SIMPLE convertible render (an element tree with an attribute + a text child — the
+  # shape S1b's import accepts; the seeded todo render uses foreach/helpers and is deliberately NOT
+  # importable) into a fresh design's `ui`, converts it, and asserts the mode flipped: the `ui` textarea is
+  # gone and the structured render SetTable — now visible without reopening any disclosure — shows the
+  # imported ROOT row (a `main` tag cell) with no create/remove controls. The convert is a host action; its
+  # ack refetch re-renders the editor, flipping the mode — polled via the SetTable's appearance, no fixed
+  # sleep.
+  @m12 @single-user
+  Scenario: A text-authored design shows a Convert button that converts it to a read-only structured render view
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "convertme"
+    And I edit the design "convertme"
+    And I expand the Advanced code disclosure
+    And I author a simple convertible render into the design's UI
+    Then the design editor shows the Convert-to-structured button
+    And the design editor shows the design's UI text in a textarea
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render table
+    And the structured render table shows a root row with tag "main"
+    And the design editor no longer shows the UI textarea
+    And the design editor no longer shows the Convert-to-structured button
+    And the structured render table shows no New MetaNode button
+    And the structured render table shows no Remove button
