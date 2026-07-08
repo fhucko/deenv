@@ -200,6 +200,21 @@ mutations the designer app performs in deenv code — that machinery already exi
     links into its just-minted tempId-parent's `children` set within the one batch. Server-side
     vocabulary only (never from a wire commit); twin-free. Its "prop is a set" precondition is
     checked in CommitBatch PRE-validation (the store's all-or-none guard), not mid-apply.
+- **X2a — `sys.importRender` host action. ✅ DONE 2026-07-08** (arch review SHIP,
+  security-focused; suite 770). Wires `sys.importRender(design)` as a server-only host action
+  across the five lockstep sites (HostActionScan recognize, CodeValidator arity `[1,2]`,
+  CodeExecutor no-op, codeExec.ts `execImportRender` fires the WS op, KernelHostActions handler
+  → `resolveStore()` + `SchemaBridge.ImportRender`). Admin-gated with NO new access rule — the
+  designer's `sys * where currentUser.role == "Admin"` covers it (`CanHostAction` is
+  action-agnostic, deny-unless-granted, gate-before-run; the sole `Run` call site). Reject
+  scenarios (non-admin, anonymous) prove the design is NOT converted with disk-level teeth.
+  Twin-lockstep, no conformance case. Note for X2b: the refusal messages become user-facing
+  copy when the button lands — ux-review them then.
+- **X2b — designer "Convert to structured" button + render-tree view. NEXT.** In app.deenv:
+  a button (shown when a design has `ui` text + empty `render`) calling `sys.importRender(design)`,
+  and a view of `design.render` (reuse the generic SetTable / nested forms) so the imported
+  MetaNode rows are visible + editable. This is where the whole S1a→X2a foundation becomes
+  USABLE through the generic UI. UI slice → ui-architecture + ux review.
 - **S1c — MergeTags.** A per-row-kind 3-way merge + apply loop for MetaNode/MetaAttr with
   CONFLICT-CAPABLE child order (grill #1/#2 — do NOT inherit the cosmetic
   `order`-never-conflicts policy). Makes render rows branch/mergeable like types.

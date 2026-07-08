@@ -1178,6 +1178,20 @@ function execRevertCommit(codeCall: CodeCall, scope: ExecScope, context: ExecCon
     return { type: "nothing" };
 }
 
+// sys.importRender(design, callback?): a SERVER-ONLY host action (M12 X2a) — convert the design's text
+// `ui` render (a custom `fn render()`) INTO structured MetaNode rows (Design.render), clearing the `ui`
+// text so the design then projects its `ui` FROM the structured tree. The design crosses the wire as its
+// id (schemaIdArg, like setDesign/commitDesign); server-side SchemaBridge.ImportRender does the atomic
+// mint. Stages NOTHING in the data model; only fires the hostAction send-hook. Returns nothing;
+// SSR/refetch no-ops it (CodeExecutor's `importRender` host-action case). The ack's refetch surfaces the
+// now-structured render.
+function execImportRender(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const design = executeValue(codeCall.params[0], scope, context).value;
+    const { rest, callback } = splitTrailingCallback(codeCall.params.slice(1), scope, context);
+    sendHostAction("importRender", [schemaIdArg(design), ...rest], callback);
+    return { type: "nothing" };
+}
+
 // sys.createBranch(design, name, callback?): a SERVER-ONLY host action (M13 slice 5, wired in Track-B
 // B4) — clone the design's working-copy subgraph (Design + its MetaTypes + MetaProps) into a NEW
 // Branch named `name`, linked into db.branches (never db.designs). The design crosses as its id
@@ -1484,6 +1498,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "setDesign": return execSetDesign(codeCall, scope, context);
         case "commitDesign": return execCommitDesign(codeCall, scope, context);
         case "revertCommit": return execRevertCommit(codeCall, scope, context);
+        case "importRender": return execImportRender(codeCall, scope, context);
         case "createBranch": return execCreateBranch(codeCall, scope, context);
         case "mergeBranch": return execMergeBranch(codeCall, scope, context);
         case "login": return execLogin(codeCall, scope, context);

@@ -25,8 +25,12 @@ public static class HostActionScan
     // so they are wired into Code lockstep (the same "wire lockstep, all at once" rule the Commit-button
     // slice's commitDesign addition follows: HostActionScan + CodeValidator arities + both interpreters +
     // the UI, all in one slice).
+    //
+    // `importRender` (M12 X2a) — convert a design's text `ui` render into structured MetaNode rows via
+    // SchemaBridge.ImportRender. It is a SERVER-ONLY host action like the rest; the designer's own `sys`
+    // access rule gates it (AccessFloor.CanHostAction), so it is admin-gated with no bespoke rule.
     private static readonly HashSet<string> HostActionBuiltins =
-        ["create", "delete", "cloneInstance", "publish", "rename", "setDesign", "commitDesign", "revertCommit", "createBranch", "mergeBranch"];
+        ["create", "delete", "cloneInstance", "publish", "rename", "setDesign", "commitDesign", "revertCommit", "createBranch", "mergeBranch", "importRender"];
 
     // True when any Code in `desc` (ui vars/functions/render + common functions) calls a host-action
     // builtin. Used by KernelHost.HostActionsFor to wire the real seam only for a host-action-using app.

@@ -101,6 +101,7 @@ public static class CodeValidator
         ["setDesign"] = [2, 3], // (schema, targetId) OR + callback
         ["commitDesign"] = [3, 4, 5], // (design, message, migration, revertMigration?) OR + callback
         ["revertCommit"] = [2, 3], // (design, commit) OR + callback — restore the working copy to the previous commit
+        ["importRender"] = [1, 2], // (design) OR + callback — convert a design's text render into structured MetaNode rows
         ["createBranch"] = [2, 3], // (design, name) OR + callback — clone a working copy's subgraph into a new Branch
         // (source, target) OR (source, target, resolutions) OR (source, target, callback) OR
         // (source, target, resolutions, callback) — resolutions optional, callback optional, the

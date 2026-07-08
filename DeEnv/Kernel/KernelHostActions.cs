@@ -104,6 +104,7 @@ public sealed class KernelHostActions(
         "rename"       => Rename(args),
         "commitDesign" => CommitDesign(args),
         "revertCommit" => RevertCommit(args),
+        "importRender" => ImportRender(args),
         "createBranch" => CreateBranch(args),
         "mergeBranch"  => MergeBranch(args),
         _ => throw new InvalidOperationException($"Unknown host action '{action}'."),
@@ -433,6 +434,22 @@ public sealed class KernelHostActions(
         CaptureAndCommit(
             store, designId, $"Revert to '{TextOf(target, "message")}'",
             TextOf(target, "revertMigration"), parentHeadId: headId, mergeParentHeadId: null, branch.Id);
+        return null;
+    }
+
+    // importRender(design): convert the design's text `ui` render into structured MetaNode rows (M12 X2a).
+    // arg 0 is the design's id (a member of the CALLER's db.designs — resolved the same way ResolveDesign
+    // does, so a non-design id is rejected before any write). Acts purely on the CALLER's own store (no
+    // cross-instance delegate — the design is one of the designer's own rows), so it shares the ONE live
+    // store like commitDesign/revertCommit. SchemaBridge.ImportRender does the whole conversion as ONE
+    // atomic CommitBatch (mint the MetaNode/MetaAttr rows, link them, clear `ui`), refusing (throwing) an
+    // un-importable render (foreach/if, helpers, an already-structured tree) with nothing written; the
+    // throw surfaces as the WsHandler `{ error }` reply. Returns null → the plain { ok:true } reply.
+    private object? ImportRender(JsonElement args)
+    {
+        var designId = ArgInt(args, 0);
+        var store = resolveStore();
+        SchemaBridge.ImportRender(store, designId);
         return null;
     }
 

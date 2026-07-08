@@ -58,7 +58,18 @@ public sealed class HostActionSteps
                 initialData text
                 common text
                 ui text
+                render set of MetaNode
                 types set of MetaType
+            MetaNode
+                tag text
+                expr text
+                attrs set of MetaAttr
+                children set of MetaNode
+                order int
+            MetaAttr
+                name text
+                value text
+                order int
             MetaType
                 name text
                 baseType text
@@ -571,6 +582,47 @@ public sealed class HostActionSteps
     [When("the operator applies that design to the target's id over the WS")]
     public void WhenApplyDesignToTarget() =>
         Send("setDesign", $$"""{ "type": "int", "value": {{_designId}} }, { "type": "int", "value": {{TargetId}} }""");
+
+    // ── When: importRender over the WS (M12 X2a) ────────────────────────────────
+
+    // importRender(design): arg 0 the design's id. The real KernelHostActions resolves it against the
+    // caller's own store and runs SchemaBridge.ImportRender (convert the text `ui` render to structured
+    // MetaNode rows + clear `ui`), atomically. Drives the full server path: WsHandler.HandleHostAction →
+    // KernelHostActions.Run → SchemaBridge.ImportRender, gated by the `sys` access rule.
+    [When("the designer imports that design's render over the WS")]
+    public void WhenImportRender() =>
+        Send("importRender", $$"""{ "type": "int", "value": {{_designId}} }""");
+
+    [When("the operator imports that design's render over the WS")]
+    public void WhenOperatorImportRender() => WhenImportRender();
+
+    // The design's own render/ui state, read fresh from disk (KernelHostActions wrote through the store).
+    private ObjectValue FreshDesign() =>
+        (ObjectValue)FreshDesigner().ReadNode(NodePath.Root.Field("designs").Key(_designId.ToString()))!;
+
+    [Then("the design's `ui` text is cleared")]
+    public async Task ThenDesignUiCleared() =>
+        await Assert.That(((TextValue)FreshDesign().Fields["ui"]).Text).IsEqualTo("");
+
+    [Then("the design's `render` set now holds the imported tree")]
+    public async Task ThenDesignRenderPopulated()
+    {
+        var render = FreshDesign().Fields.GetValueOrDefault("render") as SetValue;
+        await Assert.That(render).IsNotNull();
+        await Assert.That(render!.Members.Count).IsGreaterThan(0);
+    }
+
+    // The authorization reject teeth for importRender: the design's `ui` text is UNCHANGED (still holds
+    // the original render) and `render` stays empty — the `sys` gate blocked the action BEFORE it reached
+    // KernelHostActions.Run, so nothing was converted (mirrors ThenNotAskedToDelete).
+    [Then("the design's render was not imported")]
+    public async Task ThenRenderNotImported()
+    {
+        var design = FreshDesign();
+        await Assert.That(((TextValue)design.Fields["ui"]).Text.Length).IsGreaterThan(0);
+        var render = design.Fields.GetValueOrDefault("render") as SetValue;
+        await Assert.That(render is null || render.Members.Count == 0).IsTrue();
+    }
 
     // ── When: commitDesign over the WS (M13 slice 3) ────────────────────────────
 

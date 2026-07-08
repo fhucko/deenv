@@ -1208,6 +1208,10 @@ public sealed class CodeExecutor
         "revertCommit" => new ExecNothing(),
         "createBranch" => new ExecNothing(),
         "mergeBranch" => new ExecNothing(),
+        // importRender(design) (M12 X2a) — convert the design's text render into structured MetaNode rows,
+        // server-side via SchemaBridge.ImportRender. A host action like the rest: it runs only on the WS op,
+        // never during SSR/refetch render, so it no-ops here (outside the conformance contract).
+        "importRender" => new ExecNothing(),
         // login(name, password) is a CLIENT-only host effect (M-auth login UI): the client fires the
         // event hook → a `login` WS op (whose reply drives a refetch); the SSR/refetch renderer never
         // runs it, so here it no-ops like the host actions. A host effect returns NOTHING and is OUTSIDE

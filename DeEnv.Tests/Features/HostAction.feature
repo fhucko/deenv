@@ -199,6 +199,39 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     Then the host action reply is ok
     And the kernel was asked to rename instance id 7 to "renamed"
 
+  # ── sys.importRender: convert a design's text render to structured rows (M12 X2a) ──
+  # importRender(design) is a SERVER-ONLY host action: on the DESIGN HOST, as an ADMIN, it converts a
+  # design whose `ui` is a plain `fn render()` into structured MetaNode rows (Design.render) and clears
+  # `ui`, atomically (SchemaBridge.ImportRender). Driven end-to-end through the WS hostAction path — the
+  # wiring + the `sys` access floor — no browser.
+  @m12 @single-user
+  Scenario: Import converts a design's text render into structured rows
+    Given a designer instance holding a design with a type "Item" and a custom render
+    When the designer imports that design's render over the WS
+    Then the host action reply is ok
+    And the design's `ui` text is cleared
+    And the design's `render` set now holds the imported tree
+
+  # The security guarantee: importRender is a `sys` host action, so a NON-ADMIN session is rejected and
+  # the design is NOT converted (the render stays as `ui` text). Mirrors the delete-authorization teeth —
+  # the reject proves the `sys` floor blocked the action BEFORE it reached the seam.
+  @m12 @single-user
+  Scenario: A non-admin session cannot import a design's render
+    Given a designer instance holding a design with a type "Item" and a custom render
+    And a seeded admin operator and a seeded member operator
+    And the current operator is the member
+    When the operator imports that design's render over the WS
+    Then the host action reply is an error
+    And the design's render was not imported
+
+  @m12 @single-user
+  Scenario: An anonymous session cannot import a design's render
+    Given a designer instance holding a design with a type "Item" and a custom render
+    And the operator session is anonymous
+    When the operator imports that design's render over the WS
+    Then the host action reply is an error
+    And the design's render was not imported
+
   # ── host-action AUTHORIZATION (the access section's `sys` subject) ────────────────
   # Host actions run with KERNEL authority, so authority is NOT "the seam was wired" — it is the app's
   # own access rule. The access section gains a `sys` subject; a host action is accepted ONLY when the
