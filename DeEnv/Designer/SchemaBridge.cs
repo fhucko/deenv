@@ -286,6 +286,154 @@ public static class SchemaBridge
         return new CodeTag { Name = tag, Attributes = attrs, Children = children };
     }
 
+    // ── M12 S1b: `ui` render text → structured MetaNode rows (the inverse of ProjectRenderUi) ─────
+    //
+    // Import a design authored as `ui` TEXT (a custom `fn render()`) INTO the structured MetaNode tree
+    // (Design.render), then CLEAR the `ui` text field so the S1a precedence gate passes and the design
+    // now projects its `ui` section FROM `render`. Import then project is the IDENTITY on the render
+    // (modulo canonical formatting): ProjectDesignDocument(after import) ≡ canonicalize(original `ui`).
+    //
+    // This is a ONE-TIME FRESH MINT (AdoptInto-style — new ids, no re-import identity matching): the
+    // design must currently carry a `ui` render fn and an EMPTY `render` set. It refuses (throws, imports
+    // nothing) a render whose tree contains a `for`/`if` tag form (CodeTagForEach/CodeTagIf) — those have
+    // no structured shape yet (S6). Such a render stays as `ui` text. Component tags (PascalCase) and html
+    // tags are BOTH just MetaNode {tag=Name}; neither is special-cased.
+    //
+    // Store writes are BUILT TOP-DOWN: the store GC-sweeps any transiently-unreferenced object, so each
+    // parent is created and linked into its owner BEFORE its children are created into the parent's set
+    // (link the root into Design.render, then create each child already linked into the parent's set, …).
+    // Behind IInstanceStore in the model's terms — never a flat kv or direct file write.
+    public static void ImportRender(IInstanceStore store, int designId)
+    {
+        var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+        if (store.ReadNode(designPath) is not ObjectValue design)
+            throw new SchemaValidationException($"No design with id {designId} to import.");
+
+        // The render tree must be empty (fresh mint only) and the `ui` text must carry a render fn.
+        if (design.Fields.GetValueOrDefault("render") is SetValue existing && existing.Members.Count > 0)
+            throw new SchemaValidationException(
+                "This design already has a structured `render` tree; re-import (identity matching) is not supported yet.");
+
+        var uiText = TextField(design, "ui");
+        if (uiText.Length == 0)
+            throw new SchemaValidationException("This design has no `ui` render text to import.");
+
+        var ui = CodeParse.ParseUiSection(uiText);
+
+        // Import clears the WHOLE `ui` text but only carries the render TREE to structured form — so a `ui`
+        // section that ALSO has `var`s or helper functions besides `fn render()` cannot be imported without
+        // silently dropping them. Refuse it (import nothing); such a design stays as `ui` text until the
+        // structured tree can carry vars/helpers (a later slice). This guards real designs (e.g. todo/crm,
+        // whose `ui` carries helper fns alongside render) from losing code on import.
+        if (ui.Vars is { Count: > 0 } || ui.Functions is { Count: > 0 })
+            throw new SchemaValidationException(
+                "This design's `ui` section has `var`s or helper functions besides `fn render()`, which import " +
+                "cannot carry to structured form yet — it stays as `ui` text.");
+
+        var render = ui.Render
+            ?? throw new SchemaValidationException(
+                "This design's `ui` section has no `fn render()` to import (a generic-UI design has no render tree).");
+
+        // The render body must be a single `return <element>` — the exact shape ProjectRenderUi mints and
+        // a canonical custom render carries. Anything else (helper statements, a non-element return) is
+        // outside the plain-tag subset this slice imports; it stays as `ui` text.
+        if (render.Body.Statements is not [CodeReturn { Value: CodeTag root }])
+            throw new SchemaValidationException(
+                "This design's `fn render()` is not a single `return <element>` — only a plain tag tree can be imported.");
+
+        // Refuse a tree containing any `for`/`if` tag form ANYWHERE (no structured form yet — S6). Checked
+        // BEFORE any store write so a refusal imports nothing.
+        RefuseUnstructurableChildren(root);
+
+        // Build top-down: create the root MetaNode, link it into Design.render, then recurse into its
+        // already-linked set. The design's `render` set has its own intrinsic id (an empty StoredSet minted
+        // when the Design object was created) — link by that id so no per-node NodePath is recomputed.
+        var renderSetId = SetIdOf(store, designId, "render");
+        var rootId = ImportNode(store, root, order: 0);
+        store.AddToSet(renderSetId, rootId);
+
+        // Clear the `ui` text field so the S1a gate accepts the structured render as the authority.
+        store.WriteLeaf(designPath.Field("ui"), new TextValue(""));
+    }
+
+    // Create one MetaNode row for a tag child (already refused of for/if), recursively creating its attrs
+    // and children INTO the freshly-linked node's own sets (top-down, GC-safe). Returns the minted id.
+    //   • element CodeTag → MetaNode {tag=Name}; each attribute → MetaAttr {name, value=CodePrint.Value};
+    //     each child (in order) → recurse.
+    //   • a leaf child (any non-CodeTag ICodeValue: CodeText, an expression, …) → MetaNode {tag="",
+    //     expr=CodePrint.Value(child)} — CodePrint.Value is the inverse of CodeParse.ParseExpression, so a
+    //     CodeText "Hi" prints back to the source `"Hi"` and the round-trip is the printer's canonical fixpoint.
+    private static int ImportNode(IInstanceStore store, ICodeTagChild child, int order)
+    {
+        if (child is not CodeTag tag)
+        {
+            // A leaf: print its source back (the inverse of ParseExpression on import).
+            var leaf = (ICodeValue)child;
+            var nodeId = store.CreateObject("MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["tag"] = new TextValue(""), ["expr"] = new TextValue(CodePrint.Value(leaf)), ["order"] = new IntValue(order),
+            }));
+            return nodeId;
+        }
+
+        var elementId = store.CreateObject("MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["tag"] = new TextValue(tag.Name), ["expr"] = new TextValue(""), ["order"] = new IntValue(order),
+        }));
+
+        // Attributes — created into the node's own `attrs` set (already an empty StoredSet on the fresh node).
+        var attrsSetId = SetIdOf(store, elementId, "attrs");
+        var attrOrder = 0;
+        foreach (var attr in tag.Attributes)
+        {
+            var attrId = store.CreateObject("MetaAttr", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue(attr.Name),
+                ["value"] = new TextValue(CodePrint.Value(attr.Value)),
+                ["order"] = new IntValue(attrOrder++),
+            }));
+            store.AddToSet(attrsSetId, attrId);
+        }
+
+        // Children — recurse, linking each already-created child into the node's `children` set in order.
+        var childrenSetId = SetIdOf(store, elementId, "children");
+        var childOrder = 0;
+        foreach (var c in tag.Children)
+            store.AddToSet(childrenSetId, ImportNode(store, c, childOrder++));
+
+        return elementId;
+    }
+
+    // Throw (importing nothing) if the tree rooted at `tag` contains any `for`/`if` tag form — they have no
+    // structured MetaNode shape yet (deferred to S6). A leaf child cannot contain tag children, so only
+    // CodeTag children recurse.
+    private static void RefuseUnstructurableChildren(CodeTag tag)
+    {
+        foreach (var child in tag.Children)
+            switch (child)
+            {
+                case CodeTagForEach:
+                case CodeTagIf:
+                    throw new SchemaValidationException(
+                        "This design's render uses a `for`/`if` render form, which has no structured shape yet — " +
+                        "it stays as `ui` text (import supports a plain tag tree only).");
+                case CodeTag childTag:
+                    RefuseUnstructurableChildren(childTag);
+                    break;
+            }
+    }
+
+    // The intrinsic id of a just-created object's named SET prop (every declared set prop starts as an
+    // empty StoredSet with its own minted id), read back through ReadById since a fresh node is not yet
+    // reachable by a NodePath. Mirrors DesignerSeed.SetIdOf — the same top-down-link store idiom.
+    private static int SetIdOf(IInstanceStore store, int objectId, string setProp)
+    {
+        var hit = store.ReadById(objectId)
+            ?? throw new InvalidOperationException($"Object {objectId} vanished immediately after creation.");
+        return hit.Fields.Fields.GetValueOrDefault(setProp) is SetValue sv ? sv.Id
+            : throw new InvalidOperationException($"'{hit.TypeName}' has no set prop '{setProp}'.");
+    }
+
     // Write an already-projected, already-validated app document onto a target instance, PRESERVING
     // its existing data across the schema change when the data still fits (non-destructive apply — the
     // migration substrate under M13 versioning; see DECISIONS "Data must survive schema changes").

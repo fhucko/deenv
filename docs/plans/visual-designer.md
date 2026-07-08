@@ -180,10 +180,25 @@ mutations the designer app performs in deenv code — that machinery already exi
     offending node. (2) Store GC sweeps a transiently-unlinked node, so a tree must be
     built top-down (link parent before child); the authoring/import slices must order
     create-then-link deliberately.
-- **S1b — import (existing `ui` text → rows).** Parse a design's `ui` `fn render()` into
-  MetaNode rows (identity minted once, `AdoptInto`-style). Carries the tree-alignment
-  problem for re-import at save/blur (grill #3/#4). MUST clear the `ui` text field when it
-  populates `render`, or the S1a precedence gate rejects every imported design.
+- **S1b — import (existing `ui` text → rows). ✅ DONE 2026-07-08** (arch review
+  SHIP-WITH-FIXES, fixes applied; suite 763). `SchemaBridge.ImportRender(store, designId)`
+  is the inverse of S1a's projection: parses the design's `ui` `fn render()`, builds the
+  MetaNode/MetaAttr tree top-down (link parent before children — the store GC gotcha),
+  clears the `ui` text so the S1a gate accepts the structured render. Import then project
+  is the IDENTITY on the render (proven by a `@m12` round-trip scenario + walk/handler
+  unit tests). One-time FRESH MINT only. Refuses (imports nothing): a `for`/`if` form
+  anywhere (no structured shape until S6); a render body that isn't a single `return
+  <element>`; and — the review-caught data-loss guard — a `ui` section with `var`s or
+  HELPER functions besides `fn render()` (clearing `ui` would silently drop them, so it
+  stays as text). Leaf/attr values round-trip via `CodePrint.Value` ↔ `ParseExpression`.
+  - Known limit ledgered (S1b review): **`ImportRender` is NON-ATOMIC** — it does N
+    separate store writes then clears `ui`; a mid-build crash leaves the design with
+    partial `render` rows AND non-empty `ui`, which `ProjectDesignDocument` then refuses
+    (bricked until hand-repaired). Harmless now (test-only, no trigger), but the trigger
+    slice (S4 canvas "convert" button / host action) MUST wrap import in one atomic
+    `CommitBatch` — which needs the `CommitMutation` union extended to address a create's
+    nested set by `(tempId, propName)` (a child links into its tempId-parent's `children`
+    set, whose id isn't known until after the mint). Design that before wiring a trigger.
 - **S1c — MergeTags.** A per-row-kind 3-way merge + apply loop for MetaNode/MetaAttr with
   CONFLICT-CAPABLE child order (grill #1/#2 — do NOT inherit the cosmetic
   `order`-never-conflicts policy). Makes render rows branch/mergeable like types.
@@ -208,8 +223,8 @@ mutations the designer app performs in deenv code — that machinery already exi
 - **S7 — styling.** Inspector edits `class`/`style` day one; the theming seam (per-app
   tokens over ViewChromeCss) is designed as its own session first.
 
-Dependencies: S0 ✅ and S1a ✅ are the landed foundation; S1b (import) and S1c (merge)
-extend it; S2 needs S1a's row identity; S3 gates the writes (S4+). M11 (component
+Dependencies: S0 ✅, S1a ✅, and S1b ✅ are the landed foundation; S1c (merge) extends it;
+S2 needs S1a's row identity; S3 gates the writes (S4+). M11 (component
 library) matures in parallel and feeds S5's palette. Nothing here blocks on versioning
 Track C.
 

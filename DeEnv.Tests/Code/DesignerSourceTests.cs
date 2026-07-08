@@ -193,6 +193,180 @@ public sealed class DesignerSourceTests
         }
     }
 
+    // ── M12 S1b: import (`ui` render text → structured MetaNode rows) ─────────────
+
+    // The import walk mirrors the tag tree into MetaNode/MetaAttr rows: nesting depth, MULTIPLE attributes
+    // in order, a TEXT leaf, and an EXPRESSION leaf. Proven at the row level (read the minted MetaNode tree
+    // back and check its shape) AND at the round-trip boundary (project the imported design and compare to
+    // the canonical original). A multi-attr element with both a nested element child and an expression leaf
+    // exercises every ImportNode branch.
+    [Test]
+    public async Task ImportRender_mints_the_row_tree_and_round_trips()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1b-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            // <main class="hello" id="root"> with a nested <h1>"Hi" AND a bare-symbol expression leaf `db.greeting`.
+            var ui = "ui\n    fn render()\n        return <main class=\"hello\" id=\"root\">\n"
+                   + "            <h1>\n                \"Hi\"\n            db.greeting\n";
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("s1b"), ["ui"] = new TextValue(ui),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+
+            SchemaBridge.ImportRender(store, designId);
+
+            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+
+            // The `ui` text field was cleared (so the S1a gate accepts the structured render).
+            var design = (ObjectValue)store.ReadNode(designPath)!;
+            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo("");
+
+            // Root: <main> with two attrs in order (class, id) and two children (the <h1> element, then the
+            // db.greeting leaf).
+            var root = OrderedByOrder((SetValue)design.Fields["render"]).Single();
+            await Assert.That(Text(root, "tag")).IsEqualTo("main");
+            var attrs = OrderedByOrder((SetValue)root.Fields["attrs"]).ToList();
+            await Assert.That(attrs.Select(a => Text(a, "name")).ToList()).IsEquivalentTo(new[] { "class", "id" });
+            await Assert.That(Text(attrs[0], "value")).IsEqualTo("\"hello\"");
+            await Assert.That(Text(attrs[1], "value")).IsEqualTo("\"root\"");
+
+            var children = OrderedByOrder((SetValue)root.Fields["children"]).ToList();
+            await Assert.That(children.Count).IsEqualTo(2);
+            // Child 0: the nested <h1> element carrying a text leaf.
+            await Assert.That(Text(children[0], "tag")).IsEqualTo("h1");
+            var h1Kids = OrderedByOrder((SetValue)children[0].Fields["children"]).Single();
+            await Assert.That(Text(h1Kids, "tag")).IsEqualTo("");            // a leaf: empty tag
+            await Assert.That(Text(h1Kids, "expr")).IsEqualTo("\"Hi\"");    // the text leaf's source
+            // Child 1: the expression leaf `db.greeting` (empty tag, expr carries the source).
+            await Assert.That(Text(children[1], "tag")).IsEqualTo("");
+            await Assert.That(Text(children[1], "expr")).IsEqualTo("db.greeting");
+
+            // The round-trip: projecting the imported design yields the canonical form of the original render.
+            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
+            await Assert.That(projected).Contains(expectedUi);
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // Import REFUSES a render containing a `foreach` form anywhere (no structured shape yet — S6), importing
+    // NOTHING: the `render` set stays empty and the `ui` text is untouched (so it stays a valid text design).
+    [Test]
+    public async Task ImportRender_refuses_a_foreach_form_and_imports_nothing()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1b-foreach-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var ui = "ui\n    fn render()\n        return <main>\n            foreach item in db.items\n                <li>\n                    item.name\n";
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("loop"), ["ui"] = new TextValue(ui),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+
+            var ex = await Assert.That(() => SchemaBridge.ImportRender(store, designId))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("`for`/`if`");
+
+            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+            await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0); // nothing minted
+            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);            // ui untouched
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // Import REFUSES a `ui` section that carries helper functions (or vars) besides `fn render()`: clearing
+    // the whole `ui` text would silently DROP them, so such a design stays as text. Nothing minted, `ui`
+    // untouched. (Guards real designs like todo/crm, whose `ui` carries helper fns alongside render.)
+    [Test]
+    public async Task ImportRender_refuses_a_ui_with_helper_functions_and_imports_nothing()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1b-helper-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var ui = "ui\n    fn helper()\n        return \"x\"\n    fn render()\n        return <main>\n            \"hi\"\n";
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("helpers"), ["ui"] = new TextValue(ui),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+
+            var ex = await Assert.That(() => SchemaBridge.ImportRender(store, designId))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("helper functions");
+
+            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+            await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0); // nothing minted
+            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);            // ui untouched
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // A handler attribute (`onClick={() => ...}`) round-trips losslessly: import prints the lambda source
+    // into MetaAttr.value, and projecting re-parses it to the identical expression (the print∘parse
+    // fixpoint). Real designs' whole point is handlers, so pin the shape explicitly.
+    [Test]
+    public async Task ImportRender_round_trips_a_handler_attribute()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1b-handler-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var ui = "ui\n    fn render()\n        return <button onClick={() => db.greeting = \"hi\"}>\n            \"Click\"\n";
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("handler"), ["ui"] = new TextValue(ui),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+
+            SchemaBridge.ImportRender(store, designId);
+
+            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
+            var onClick = OrderedByOrder((SetValue)OrderedByOrder((SetValue)design.Fields["render"]).Single().Fields["attrs"]).Single();
+            await Assert.That(Text(onClick, "name")).IsEqualTo("onClick");
+
+            // The lossless proof: projecting the imported design reproduces the canonical original render,
+            // handler and all.
+            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
+            await Assert.That(projected).Contains(expectedUi);
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    private static IEnumerable<ObjectValue> OrderedByOrder(SetValue set) =>
+        set.Members.Values.OfType<ObjectValue>()
+            .OrderBy(o => o.Fields.GetValueOrDefault("order") is IntValue i ? i.Value : 0);
+
+    private static string Text(ObjectValue o, string name) =>
+        o.Fields.GetValueOrDefault(name) is TextValue t ? t.Text : "";
+
     private static ObjectValue Node(string tag, string expr = "") =>
         new(new Dictionary<string, NodeValue>
         {
