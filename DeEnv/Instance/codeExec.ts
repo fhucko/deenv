@@ -1125,7 +1125,10 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
         // M12 F2 — resolve the tag against `fns` (a dep-recorded row read, so a rename re-renders same-frame),
         // UNLESS a walk-local binding shadows it (grill E1). A match EXPANDS, subject to the depth cap + node
         // budget (grill E4), past which it degrades to an honest component chip.
-        if (fns != null && (bindings == null || !(tag in bindings))) {
+        // Own-key check, NOT `in`: `in` walks the prototype chain, so a component named like an
+        // Object.prototype member (toString, constructor, ...) would read as shadowed here while the
+        // C# twin's ContainsKey resolves it — a twin divergence closed by construction.
+        if (fns != null && (bindings == null || !Object.prototype.hasOwnProperty.call(bindings, tag))) {
             const fn = resolveFn(fns, tag, context);
             if (fn != null) {
                 if (expansion.depth >= expansionDepthCap || expansion.used >= expansionNodeBudget)
