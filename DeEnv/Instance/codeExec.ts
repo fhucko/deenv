@@ -1362,11 +1362,18 @@ function evalCtxExpr(text: string, ctx: ExecObject, bindings?: { [name: string]:
         for (const name of Object.keys(bindings)) evalScope.items[name] = { value: bindings[name], isReadOnly: true };
     const evalCtx: ExecContext = { lastId: { value: 0 }, ambient: null };
     const savedBypass = memoBypass;
+    // callDepth (M12 FG, arch review — divergence closed): callDepth is module-level like memoBypass/
+    // depStack, so without this save/reset/restore the isolated eval would INHERIT the outer render's
+    // live depth instead of starting fresh — the C# twin gets this for free (EvaluateCtxExpr's `new
+    // ExecContext` zeroes CallDepth by construction). Undetected today (F3 doesn't call fns from ctx-expr
+    // eval yet), but F3 walks straight through this door — closing it now, not deferred to F3.
+    const savedCallDepth = callDepth;
     memoBypass = true;
+    callDepth = 0;
     depStack.push({ props: [], members: [], vars: [] });
     try { return executeValue(ast, evalScope, evalCtx).value; }
     catch { return null; }
-    finally { depStack.pop(); memoBypass = savedBypass; }
+    finally { depStack.pop(); memoBypass = savedBypass; callDepth = savedCallDepth; }
 }
 
 // A span.expr-chip (or its .is-empty variant) with the node's provenance id and one text child.
@@ -1782,13 +1789,23 @@ let callDepth = 0;
 
 // Run a closure body, restoring its captured ambient first (null = a top-level fn → flows down to
 // the live ambient), then restoring the call site's ambient afterward.
+//
+// The increment/decrement BRACKETS the throwing check too (arch review, guard-trip leak): a naive
+// "increment, then throw before any try" leaves the THROWING frame's own increment never undone — and
+// since callDepth is a MODULE-level counter (unlike C#'s per-context field), that leak is PERMANENT:
+// each caught trip erodes the ceiling by 1 (256→255→…) until legitimate shallow renders eventually
+// throw spuriously. Bracketing the check inside the try/finally makes every exit path — return OR
+// throw — decrement exactly once. Same shape as CodeExecutor's RunBody.
 function runBody(fn: ExecFunction, callScope: ExecScope, context: ExecContext): ExecValue {
-    if (++callDepth > CALL_DEPTH_LIMIT)
-        throw new Error(`Call depth exceeded ${CALL_DEPTH_LIMIT} — runaway recursion?`);
-    const saved = context.ambient;
-    if (fn.capturedAmbient != null) context.ambient = fn.capturedAmbient;
-    try { return executeBlock(fn.fn.body, callScope, context) ?? { type: "nothing" }; }
-    finally { context.ambient = saved; callDepth--; }
+    callDepth++;
+    try {
+        if (callDepth > CALL_DEPTH_LIMIT)
+            throw new Error(`Call depth exceeded ${CALL_DEPTH_LIMIT} — runaway recursion?`);
+        const saved = context.ambient;
+        if (fn.capturedAmbient != null) context.ambient = fn.capturedAmbient;
+        try { return executeBlock(fn.fn.body, callScope, context) ?? { type: "nothing" }; }
+        finally { context.ambient = saved; }
+    } finally { callDepth--; }
 }
 
 // The live root data context provided by the framework as ambient `ctx` (writes persist; a form
@@ -2555,3 +2572,10 @@ function serializeTree(node: ExecValue): string {
 }
 
 (globalThis as any).runConformance = runConformance;
+
+// Test-only introspection hook (M12 FG, arch review — guard-trip leak proof): exposes the module-level
+// call-depth counter so a browser test can prove a caught guard trip (or a caught body error) leaves it
+// at its pre-call baseline, the same assertion ConformanceTests makes directly on ctx.CallDepth in C#
+// (TS has no ExecContext-scoped counter to inspect from outside — callDepth is module-level by design,
+// mirroring depStack/memoBypass). Mirrors runConformance's own role as a test-harness-only export.
+(globalThis as any).__callDepthForTest = () => callDepth;

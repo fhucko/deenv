@@ -1838,6 +1838,15 @@ public sealed class CodeExecutor
     // Invoke a function with already-evaluated arguments in a child of `scope`.
     // Used by the SSR renderer to call the render fn (no args) over a prepared
     // top scope (db + ui vars + functions).
+    //
+    // Call-depth zero-point note (M12 FG, arch review — noted, not restructured): this bypasses RunBody,
+    // so the render fn ITSELF runs at depth 0 (its first nested call becomes depth 1) — one off from the
+    // TS client twin, whose callFunction (ui.ts) routes the render fn THROUGH runBody too, so render()
+    // itself is depth 1 there. Immaterial at the 256 threshold (an off-by-one at a boundary 255 calls
+    // from ever mattering); making the zero-points identical would mean wrapping this raw CodeFunction in
+    // a synthetic ExecFunction just to route the ONE per-request top-level render entry through RunBody —
+    // not worth restructuring for a gap that never surfaces. The conformance harness drives executeValue
+    // directly (never InvokeFunction), so it cannot pin this asymmetry either way.
     public IExecValue InvokeFunction(CodeFunction fn, IReadOnlyList<IExecValue> args, ExecScope scope, ExecContext context)
     {
         var callScope = new ExecScope { Parent = scope };
@@ -1938,14 +1947,26 @@ public sealed class CodeExecutor
     // Run a function/closure body, restoring its captured ambient bindings first (null = a top-level
     // fn → flows down to the live ambient). Mirrors the block save/restore so the call site's ambient
     // returns afterward.
+    //
+    // The increment/decrement BRACKETS the throwing check too (arch review, guard-trip leak): a naive
+    // "increment, then throw before any try" leaves the THROWING frame's own increment never undone —
+    // latent in C# (ExecContext is discarded with the request) but a real bug the moment a context
+    // outlives a single trip (a long-lived session context, or repeated canvas re-evaluates over the
+    // same context). Bracketing the check inside the try/finally makes every exit path — return OR
+    // throw — decrement exactly once. Same shape as codeExec.ts's runBody.
     private IExecValue RunBody(ExecFunction fn, ExecScope callScope, ExecContext context)
     {
-        if (++context.CallDepth > CallDepthLimit)
-            throw new CodeRuntimeException($"Call depth exceeded {CallDepthLimit} — runaway recursion?");
-        var savedAmbient = context.Ambient;
-        if (fn.CapturedAmbient != null) context.Ambient = fn.CapturedAmbient;
-        try { return ExecuteBlock(fn.Function.Body, callScope, context) ?? new ExecNothing(); }
-        finally { context.Ambient = savedAmbient; context.CallDepth--; }
+        context.CallDepth++;
+        try
+        {
+            if (context.CallDepth > CallDepthLimit)
+                throw new CodeRuntimeException($"Call depth exceeded {CallDepthLimit} — runaway recursion?");
+            var savedAmbient = context.Ambient;
+            if (fn.CapturedAmbient != null) context.Ambient = fn.CapturedAmbient;
+            try { return ExecuteBlock(fn.Function.Body, callScope, context) ?? new ExecNothing(); }
+            finally { context.Ambient = savedAmbient; }
+        }
+        finally { context.CallDepth--; }
     }
 
     // Run `compute` as a memoized computation: capture its dependencies in a fresh

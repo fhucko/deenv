@@ -151,6 +151,44 @@ public sealed class CodeExecutorTests
         await Assert.That(caught!.Message).IsEqualTo("Call depth exceeded 256 — runaway recursion?");
     }
 
+    // The GUARD-TRIP leak proof (arch review): the test above only proves a BODY-thrown error unwinds
+    // cleanly (RunBody's own try/finally around ExecuteBlock always ran) — false assurance, since the
+    // depth-limit check ITSELF used to throw BEFORE that try, so the throwing frame's own increment was
+    // never undone. Latent in C# (a fresh ExecContext per request), but real the moment a context is
+    // REUSED (a long-lived session, or the designer canvas re-evaluating the same context repeatedly):
+    // each caught trip would erode the ceiling by 1 until a legitimate shallow call eventually throws
+    // spuriously. Trips TWICE on the SAME context/scope (`Rec` self-binds into `scope` once, reused for
+    // both calls): pre-fix the second trip would occur one call SHALLOWER than the first; post-fix both
+    // trips are identical and CallDepth returns to 0 after each.
+    [Test]
+    public async Task Tripping_the_guard_does_not_leak_call_depth()
+    {
+        var scope = new ExecScope();
+        var exec = new CodeExecutor();
+        var ctx = new ExecContext();
+        var rec = new CodeFunction
+        {
+            Name = "Rec",
+            Params = [],
+            Body = new CodeBlock { Statements = [new CodeReturn { Value = new CodeCall { Fn = Sym("Rec"), Params = [] } }] },
+        };
+
+        CodeRuntimeException? first = null;
+        try { exec.ExecuteValue(new CodeCall { Fn = rec, Params = [] }, scope, ctx); }
+        catch (CodeRuntimeException ex) { first = ex; }
+        await Assert.That(first).IsNotNull();
+        await Assert.That(ctx.CallDepth).IsEqualTo(0); // the throwing frame's own increment unwound too
+
+        // A second trip on the SAME context via the now-bound `Rec` symbol — same message/threshold as
+        // the first, proving nothing eroded between trips.
+        CodeRuntimeException? second = null;
+        try { exec.ExecuteValue(new CodeCall { Fn = Sym("Rec"), Params = [] }, scope, ctx); }
+        catch (CodeRuntimeException ex) { second = ex; }
+        await Assert.That(second).IsNotNull();
+        await Assert.That(second!.Message).IsEqualTo(first!.Message);
+        await Assert.That(ctx.CallDepth).IsEqualTo(0);
+    }
+
     // The no-false-positive proof: fn Sum(n) recurses DATA-BOUNDED to depth 100 — representative of
     // real recursion depth (e.g. the designer's own renderNodeEditor walking a design tree) — well
     // under the 256 guard threshold, and must still return the correct value untouched by the guard.

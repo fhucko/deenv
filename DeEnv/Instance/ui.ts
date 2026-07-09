@@ -37,6 +37,7 @@ function renderUi(): void {
 function buildRenderTree(speculative: boolean = false): ExecValue | null {
     const context: ExecContext = { lastId: uiStatic.lastId, ambient: rootAmbient() };
     resetSlotPath(); // a fresh render tree starts at the root slot (defensive; push/pop is balanced)
+    callDepth = 0; // same defensive reset for the call-depth guard (M12 FG) — push/pop is balanced too
     conflictSurfacedThisRender.clear(); // this render re-decides which conflicts a resolver "door" surfaces
     try {
         return callFunction(uiStatic.renderFn, context, []);
@@ -468,6 +469,11 @@ function refreshErrorBanner(): void {
 // body directly over its params bound to `args` (a view's routed object or path;
 // handlers pass none). The fn is a bare CodeFunction without a "type" discriminator,
 // so it must not be routed back through executeValue.
+//
+// Call-depth zero-point note (M12 FG, arch review — noted, not restructured): unlike the C# SSR twin
+// (CodeExecutor.InvokeFunction, which bypasses RunBody so render() itself is depth 0), this DOES route
+// through runBody, so render() itself is depth 1 here. Immaterial at the 256 threshold; see
+// InvokeFunction's matching note for why the zero-points are left asymmetric rather than restructured.
 function callFunction(fn: ExecFunction, context: ExecContext, args: ExecValue[] = []): ExecValue {
     const callScope: ExecScope = { parent: fn.scope, items: {} };
     for (let i = 0; i < args.length && i < fn.fn.params.length; i++)
