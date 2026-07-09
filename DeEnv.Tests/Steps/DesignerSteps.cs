@@ -1439,6 +1439,65 @@ public sealed class DesignerSteps(InstanceContext ctx)
             o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == name
             && o.Fields.TryGetValue("params", out var p) && p is DeEnv.Storage.TextValue pt && pt.Text == paramsText));
 
+    // ── M12 U1 — MetaUse rows: the Configurations editor + static per-configuration preview ───────
+    //
+    // A "configuration" (MetaUse) under a component card: a name input + its args (MetaAttr rows,
+    // mirroring the render tree's own attr editing — `.node-attr`/`.node-attr-name`/`.node-attr-value`
+    // reused verbatim, styling included), and a per-configuration STATIC preview panel — the component's
+    // REAL rendered content with the configuration's args bound, via the same F2 expansion the main
+    // canvas already uses (a synthesized transient invocation node fed to `sys.renderTree`). Every
+    // scenario using these steps has exactly ONE component card, so queries are unscoped by fn name —
+    // the same unscoped convention the design-level-state-var steps above use.
+
+    [When("I click the add-configuration button")]
+    public async Task WhenClickAddConfiguration() =>
+        await ctx.Page!.Locator(".components-section .fn-card .add-use").ClickAsync();
+
+    [Then("component configurations shows {int} row(s)")]
+    public async Task ThenConfigurationsShowsCount(int count) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelectorAll('.components-section .fn-card .use-row').length === {count}");
+
+    [Then("configuration {int} shows the {string} hint")]
+    public async Task ThenConfigurationShowsHint(int index, string hintText) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const rows = document.querySelectorAll('.components-section .fn-card .use-row'); " +
+            $"const r = rows[{index}]; if (r == null) return false; const h = r.querySelector('.use-name-hint'); " +
+            $"return h != null && h.textContent.includes({JsString(hintText)}); }}");
+
+    [When("I set configuration {int}'s name to {string}")]
+    public async Task WhenSetConfigurationName(int index, string name) =>
+        await ctx.Page!.Locator(".components-section .fn-card .use-row input.use-name").Nth(index).FillAsync(name);
+
+    [When("I add an arg to configuration {int}")]
+    public async Task WhenAddConfigurationArg(int index) =>
+        await ctx.Page!.Locator(".components-section .fn-card .use-row").Nth(index).Locator("button.add-attr").ClickAsync();
+
+    [When("I set configuration {int}'s arg {int} name to {string}")]
+    public async Task WhenSetConfigurationArgName(int useIndex, int argIndex, string name) =>
+        await ctx.Page!.Locator(".components-section .fn-card .use-row").Nth(useIndex)
+            .Locator("input.node-attr-name").Nth(argIndex).FillAsync(name);
+
+    [When("I set configuration {int}'s arg {int} value to {string}")]
+    public async Task WhenSetConfigurationArgValue(int useIndex, int argIndex, string value) =>
+        await ctx.Page!.Locator(".components-section .fn-card .use-row").Nth(useIndex)
+            .Locator("input.node-attr-value").Nth(argIndex).FillAsync(value);
+
+    // Scoped to THIS configuration's OWN `.use-preview` panel (not the main `.design-canvas`, and not
+    // another configuration's panel) — the independence-at-static-level proof needs per-row isolation,
+    // not just "this text appears somewhere on the page".
+    [Then("configuration {int}'s preview shows a {string} element reading {string}")]
+    public async Task ThenConfigurationPreviewShowsElement(int index, string tag, string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const rows = document.querySelectorAll('.components-section .fn-card .use-row'); " +
+            $"const r = rows[{index}]; if (r == null) return false; " +
+            $"const preview = r.querySelector('.use-preview'); if (preview == null) return false; " +
+            $"return [...preview.querySelectorAll({JsString(tag)})].some(e => e.textContent === {JsString(text)}); }}");
+
+    [When("I remove configuration {int}")]
+    public async Task WhenRemoveConfiguration(int index) =>
+        await ctx.Page!.Locator(".components-section .fn-card .use-row").Nth(index).Locator("button.remove-use").ClickAsync();
+
     // ── M12 V1 — MetaVar rows: component state + top-level ui vars ────────────────────────────────
 
     // A convertible render whose `ui` carries a REAL stateful setup/view component (`Counter()`, the

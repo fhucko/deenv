@@ -1694,3 +1694,68 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the design canvas shows an expression chip reading "greeting"
     When I click Refresh values
     Then the design canvas shows a "span" element reading "bye"
+
+  # ── M12 U1 — MetaUse rows: the Configurations editor + static per-configuration preview ─────
+  #
+  # F1 gave a component its own Components card; U1 adds a Configurations area under it — each row a
+  # stored MetaUse (name + args, the SAME MetaAttr shape an invocation's own attrs already have)
+  # rendering a STATIC per-configuration preview: the designer synthesizes a TRANSIENT invocation node
+  # (`{ kind: "", tag: fn.name, expr: "", attrs: use.args }` — no `order`, no `children`, never a real
+  # MetaNode row) and feeds it to the EXISTING F2 `sys.renderTree` expansion, so the preview shows the
+  # component's REAL rendered content with the configuration's args bound — the same mechanism the main
+  # canvas already proves, reused rather than reimplemented. The arg value is deliberately DB-ROOTED
+  # (non-literal), exercising the F2 EvaluateCtxExpr binding path an ordinary invocation's attrs already
+  # take (not just the LiteralValue tier-0 case). Two configurations bound to DIFFERENT db-rooted values
+  # render DIFFERENT content in their OWN panels (the independence-at-static-level pin — scoped per-row,
+  # not "this text appears somewhere"); removing one configuration removes its whole row.
+  @m12 @single-user
+  Scenario: A component's Configurations area previews each stored use with its own bound args, independently, and removing one clears its row
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "compme"
+    And I edit the design "compme"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I add a field "noteA" to the type "Db"
+    And I add a field "noteB" to the type "Db"
+    When I reload the design editor
+    And I retype the prop "noteA" to "Note"
+    And I retype the prop "noteB" to "Note"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              noteA: 2
+              noteB: 3
+          Note 2
+              title: "Alpha"
+          Note 3
+              title: "Beta"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a component function into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the Components area shows a component named "NoteCard" with params "note"
+    When I click the add-configuration button
+    Then component configurations shows 1 row
+    And configuration 0 shows the "name required" hint
+    When I set configuration 0's name to "empty"
+    And I add an arg to configuration 0
+    And I set configuration 0's arg 0 name to "note"
+    And I set configuration 0's arg 0 value to "db.noteA"
+    Then configuration 0's preview shows a "li" element reading "Alpha"
+    When I click the add-configuration button
+    Then component configurations shows 2 rows
+    When I set configuration 1's name to "long list"
+    And I add an arg to configuration 1
+    And I set configuration 1's arg 0 name to "note"
+    And I set configuration 1's arg 0 value to "db.noteB"
+    Then configuration 1's preview shows a "li" element reading "Beta"
+    And configuration 0's preview shows a "li" element reading "Alpha"
+    When I remove configuration 1
+    Then component configurations shows 1 row

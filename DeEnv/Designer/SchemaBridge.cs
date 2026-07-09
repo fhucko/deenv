@@ -503,6 +503,16 @@ public static class SchemaBridge
     // the walk root and at ExpandFn/expandFn, so a real design's var inits (including plain literals like
     // `0` — BindVars has no literal shortcut, unlike a param's LiteralValue tier-0) depend on this collector
     // actually shipping their sources; a hand-built conformance fixture must add its own `ctx.exprs` entries.
+    //
+    // M12 U1 — also collects every MetaUse's `args` VALUE sources (`fn.uses`, each a stored sample
+    // invocation of that component: name + args set of MetaAttr, exactly the shape an ordinary invocation
+    // row's attrs already have). The workbench's static preview feeds `use.args` DIRECTLY as the synthesized
+    // invocation node's `attrs` (SchemaBridge does not project a use anywhere — it never reaches the app
+    // document; only the canvas walk, via `sys.renderTree`, ever reads it) — so a NON-literal arg value is
+    // exactly like an ordinary attr's value: it needs an AST in `ctx.exprs` or it MISSES on first paint
+    // (tier-3, chip) until an edit re-triggers the client-side auto-live parse-op. WITHOUT this the initial
+    // ship would ALWAYS miss every non-literal use-arg — forever, until the operator edits it — so this is
+    // load-bearing, not "harmless either way" like the literal-source over-collection elsewhere in this walk.
     public static List<string> RenderExprSources(NodeValue design)
     {
         var sources = new List<string>();
@@ -515,6 +525,7 @@ public static class SchemaBridge
                 if (fn.Fields.TryGetValue("body", out var bodyField) && OrderedObjects(bodyField).FirstOrDefault() is { } bodyRoot)
                     CollectExprSources(bodyRoot, sources);
                 CollectVarInitSources(fn, sources);
+                CollectUseArgSources(fn, sources);
             }
         CollectVarInitSources(d, sources);
         return sources;
@@ -528,6 +539,17 @@ public static class SchemaBridge
             if (TextField(v, "init") is { Length: > 0 } init) into.Add(init);
     }
 
+    // The `value` source of every MetaAttr in every MetaUse's `args` set (`fn.uses`), in walk order (M12
+    // U1). Each MetaUse's args are ordinary MetaAttr rows — same shape, same collection rule as an
+    // invocation row's `attrs` — so this is a flat one-level walk, no recursion needed (a use's args never
+    // nest further).
+    private static void CollectUseArgSources(ObjectValue fn, List<string> into)
+    {
+        foreach (var use in OrderedObjects(fn.Fields.GetValueOrDefault("uses")))
+            foreach (var a in OrderedObjects(use.Fields.GetValueOrDefault("args")))
+                if (TextField(a, "value") is { Length: > 0 } value) into.Add(value);
+    }
+
     // NOTE: this is a hand-kept PARALLEL walk of one node tree (a render root OR a fn body root — the caller,
     // RenderExprSources, invokes it once per root) — its `kind` dispatch (for → collect `collection` +
     // recurse `children`; if → collect `condition` + recurse `children` AND `elseChildren`; "" → tag-non-empty
@@ -539,9 +561,14 @@ public static class SchemaBridge
     // no special case here: it is an ordinary tag-non-empty element (attrs + the — always empty, per F2 —
     // children), so its attr sources are already collected by the SAME tag branch, wherever the invocation
     // row lives (a render tree or another fn's body) — a second collector-invariant test pins that a source
-    // reachable ONLY via a fn body (never in `render`) is still collected. If the walk's shape changes, change
-    // this in the SAME slice (S6a lifted the for/if rows here in lockstep with the canvas walk; F2 pointed the
-    // caller at every `fns` body root too, in lockstep with the canvas's own expansion).
+    // reachable ONLY via a fn body (never in `render`) is still collected. A MetaUse's `args` (M12 U1) is
+    // NOT a node this walk ever visits — a use never appears IN a render/fn-body tree, it is a separate
+    // sample-invocation row fed straight to `sys.renderTree` as a synthesized node's `attrs` — so its
+    // sources are collected by the SEPARATE flat `CollectUseArgSources` above, called once per `fns` row
+    // alongside this walk (RenderExprSources), not by recursing into this function. If the walk's shape
+    // changes, change this in the SAME slice (S6a lifted the for/if rows here in lockstep with the canvas
+    // walk; F2 pointed the caller at every `fns` body root too, in lockstep with the canvas's own expansion;
+    // U1 added the sibling use-args walk for the same reason).
     private static void CollectExprSources(ObjectValue node, List<string> into)
     {
         switch (TextField(node, "kind"))

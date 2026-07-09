@@ -506,6 +506,63 @@ public sealed class DesignerSourceTests
         }
     }
 
+    // The collector invariant (M12 U1): a MetaUse's `args` (a stored sample-invocation configuration on a
+    // MetaFn, `fn.uses`) is reachable NEITHER through `render` NOR through any fn `body` — it never appears
+    // IN a tree at all, only fed straight to `sys.renderTree` as a synthesized invocation node's `attrs` by
+    // the designer's workbench UI. Pins that RenderExprSources still collects a use-arg VALUE source, since
+    // the walk in CollectExprSources never visits a MetaUse row (it is not a MetaNode) — without the
+    // dedicated CollectUseArgSources call, every non-literal use-arg would miss ctx.exprs on first paint,
+    // forever, until an edit re-triggers the client auto-live parse-op.
+    [Test]
+    public async Task RenderExprSources_collects_a_source_reachable_only_via_a_fn_use_arg()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-u1-collect-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("collectuse"), ["ui"] = new TextValue(""),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+
+            // A trivial render root, deliberately unrelated to the use's arg source.
+            var main = store.CreateObject("MetaNode", Node("main"));
+            store.AddToSet(designPath.Field("render"), main);
+
+            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("NoteCard"), ["params"] = new TextValue("note"), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(designPath.Field("fns"), fn);
+            var fnPath = designPath.Field("fns").Key(fn.ToString());
+            store.AddToSet(fnPath.Field("body"), store.CreateObject("MetaNode", Node("li")));
+
+            var use = store.CreateObject("MetaUse", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("sample"), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(fnPath.Field("uses"), use);
+            var arg = store.CreateObject("MetaAttr", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("note"), ["value"] = new TextValue("db.firstNote"), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(fnPath.Field("uses").Key(use.ToString()).Field("args"), arg);
+
+            var design = store.ReadNode(designPath)!;
+            var sources = SchemaBridge.RenderExprSources(design);
+
+            await Assert.That(sources).Contains("db.firstNote");
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
     // M12 V1 LIFTS the old refusal this test used to cover (a `ui` section carrying top-level `var`s
     // besides `fn render()`): a top-level var now imports to a Design.vars MetaVar row instead of blocking
     // the whole import. Nothing is dropped; the round-trip proof lives in StructuredRenderImport.feature +

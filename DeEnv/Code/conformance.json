@@ -2354,6 +2354,277 @@
       "comment": "A fully degraded ctx (BuildEvalContext's catch arm) ships `fns` as an EMPTY object too — a design's LIVE `fns` (3rd arg, one row \"Foo\") would otherwise look stale (0 shipped vs 1 live). But a degraded ctx SUBSUMES staleness: from the operator's seat \"Components changed\" is FALSE — nothing changed, the design is simply invalid, and the degrade notice already says fix-then-Refresh. ExecuteRenderTree/execRenderTree now check HasCtxError/ctxError FIRST and return immediately on a match, so FnsStale/fnsStale never even runs — only ONE banner (the degrade one) ever renders, its text displayed verbatim (an arbitrary \"boom\" here, proving the walk is agnostic to the message's shape/family — that scoping lives entirely in BuildEvalContext, C#-only host glue).",
       "expr": {"type": "call", "fn": {"type": "infixOp", "op": "objectProp", "left": {"type": "symbol", "name": "sys"}, "right": {"type": "symbol", "name": "renderTree"}}, "params": [{"type": "object", "props": [{"name": "tag", "value": {"type": "text", "value": "div"}}, {"name": "expr", "value": {"type": "text", "value": ""}}, {"name": "order", "value": {"type": "int", "value": 0}}, {"name": "attrs", "value": {"type": "array", "items": []}}, {"name": "children", "value": {"type": "array", "items": [{"type": "object", "props": [{"name": "tag", "value": {"type": "text", "value": ""}}, {"name": "expr", "value": {"type": "text", "value": "\"Hi\""}}, {"name": "order", "value": {"type": "int", "value": 0}}]}]}}]}, {"type": "object", "props": [{"name": "db", "value": {"type": "object", "props": []}}, {"name": "exprs", "value": {"type": "object", "props": []}}, {"name": "fns", "value": {"type": "object", "props": []}}, {"name": "error", "value": {"type": "text", "value": "boom"}}]}, {"type": "object", "props": [{"name": "fns", "value": {"type": "array", "items": [{"type": "object", "props": [{"name": "name", "value": {"type": "text", "value": "Foo"}}, {"name": "params", "value": {"type": "text", "value": ""}}, {"name": "order", "value": {"type": "int", "value": 0}}, {"name": "body", "value": {"type": "array", "items": [{"type": "object", "props": [{"name": "tag", "value": {"type": "text", "value": ""}}, {"name": "expr", "value": {"type": "text", "value": "\"fn-body\""}}, {"name": "order", "value": {"type": "int", "value": 0}}]}]}}]}]}}]}]},
       "expect": {"kind": "tag", "value": "<div class=\"eval-degrade-banner\">boom</div><div data-node=\"-5\">Hi</div>"}
+    },
+    {
+      "name": "sys.renderTree with fns — M12 U1: a hand-built synthesized invocation node (kind/tag/expr/attrs ONLY — no order, no children, the exact shape the Configurations workbench feeds renderTree) expands, binding its arg-bound param to the evaluated value (M12 U1)",
+      "comment": "Pins the U1 synthesized-invocation-node mechanism: the designer feeds sys.renderTree a TRANSIENT object literal `{ kind: \"\", tag: fn.name, expr: \"\", attrs: use.args }` — no `order`, no `children` — built fresh from a MetaUse's live `args` (MetaAttr rows), never a real MetaNode row. `fns` carries one MetaFn Badge(label) whose body is <span>{label}</span>; the invocation's one attr (label=db.greeting, a NON-literal source) binds via EvaluateCtxExpr against ctx.exprs, exactly the F2 param-binding path an ordinary invocation row already exercises — proving the existing readers (ReadNodeText/ReadNodeTextOptional/OrderedMembers) already accept this leaner literal with NO tolerance change: `kind` is present here (read via the existing ReadNodeTextOptional precedent) but `tag`/`expr`/`attrs` are simply present as ordinary required fields, and `children` is never read once the tag resolves against `fns` (ExpandFn drops an invocation row's children, matching an ordinary component call site).",
+      "expr": {
+        "type": "call",
+        "fn": {
+          "type": "infixOp",
+          "op": "objectProp",
+          "left": {
+            "type": "symbol",
+            "name": "sys"
+          },
+          "right": {
+            "type": "symbol",
+            "name": "renderTree"
+          }
+        },
+        "params": [
+          {
+            "type": "object",
+            "props": [
+              {
+                "name": "kind",
+                "value": {
+                  "type": "text",
+                  "value": ""
+                }
+              },
+              {
+                "name": "tag",
+                "value": {
+                  "type": "text",
+                  "value": "Badge"
+                }
+              },
+              {
+                "name": "expr",
+                "value": {
+                  "type": "text",
+                  "value": ""
+                }
+              },
+              {
+                "name": "attrs",
+                "value": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "object",
+                      "props": [
+                        {
+                          "name": "name",
+                          "value": {
+                            "type": "text",
+                            "value": "label"
+                          }
+                        },
+                        {
+                          "name": "value",
+                          "value": {
+                            "type": "text",
+                            "value": "db.greeting"
+                          }
+                        },
+                        {
+                          "name": "order",
+                          "value": {
+                            "type": "int",
+                            "value": 0
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "props": [
+              {
+                "name": "db",
+                "value": {
+                  "type": "object",
+                  "props": [
+                    {
+                      "name": "greeting",
+                      "value": {
+                        "type": "text",
+                        "value": "hi"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "exprs",
+                "value": {
+                  "type": "object",
+                  "props": [
+                    {
+                      "name": "db.greeting",
+                      "value": {
+                        "type": "object",
+                        "props": [
+                          {
+                            "name": "text",
+                            "value": {
+                              "type": "text",
+                              "value": "db.greeting"
+                            }
+                          },
+                          {
+                            "name": "ast",
+                            "value": {
+                              "type": "text",
+                              "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"db\"},\"right\":{\"type\":\"symbol\",\"name\":\"greeting\"}}"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "name": "label",
+                      "value": {
+                        "type": "object",
+                        "props": [
+                          {
+                            "name": "text",
+                            "value": {
+                              "type": "text",
+                              "value": "label"
+                            }
+                          },
+                          {
+                            "name": "ast",
+                            "value": {
+                              "type": "text",
+                              "value": "{\"type\":\"symbol\",\"name\":\"label\"}"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "props": [
+              {
+                "name": "fns",
+                "value": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "object",
+                      "props": [
+                        {
+                          "name": "name",
+                          "value": {
+                            "type": "text",
+                            "value": "Badge"
+                          }
+                        },
+                        {
+                          "name": "params",
+                          "value": {
+                            "type": "text",
+                            "value": "label"
+                          }
+                        },
+                        {
+                          "name": "order",
+                          "value": {
+                            "type": "int",
+                            "value": 0
+                          }
+                        },
+                        {
+                          "name": "body",
+                          "value": {
+                            "type": "array",
+                            "items": [
+                              {
+                                "type": "object",
+                                "props": [
+                                  {
+                                    "name": "tag",
+                                    "value": {
+                                      "type": "text",
+                                      "value": "span"
+                                    }
+                                  },
+                                  {
+                                    "name": "expr",
+                                    "value": {
+                                      "type": "text",
+                                      "value": ""
+                                    }
+                                  },
+                                  {
+                                    "name": "order",
+                                    "value": {
+                                      "type": "int",
+                                      "value": 0
+                                    }
+                                  },
+                                  {
+                                    "name": "attrs",
+                                    "value": {
+                                      "type": "array",
+                                      "items": []
+                                    }
+                                  },
+                                  {
+                                    "name": "children",
+                                    "value": {
+                                      "type": "array",
+                                      "items": [
+                                        {
+                                          "type": "object",
+                                          "props": [
+                                            {
+                                              "name": "tag",
+                                              "value": {
+                                                "type": "text",
+                                                "value": ""
+                                              }
+                                            },
+                                            {
+                                              "name": "expr",
+                                              "value": {
+                                                "type": "text",
+                                                "value": "label"
+                                              }
+                                            },
+                                            {
+                                              "name": "order",
+                                              "value": {
+                                                "type": "int",
+                                                "value": 0
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "kind": "tag",
+        "value": "<span data-node=\"-16\">hi</span>"
+      }
     }
   ]
 }

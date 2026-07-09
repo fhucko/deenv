@@ -40,10 +40,15 @@ types
         params text
         body set of MetaNode
         vars set of MetaVar
+        uses set of MetaUse
         order int
     MetaVar
         name text
         init text
+        order int
+    MetaUse
+        name text
+        args set of MetaAttr
         order int
     MetaType
         name text
@@ -101,6 +106,8 @@ access
     MetaFn
         * where currentUser.role == "Admin"
     MetaVar
+        * where currentUser.role == "Admin"
+    MetaUse
         * where currentUser.role == "Admin"
     User
         * where currentUser.role == "Admin"
@@ -169,7 +176,7 @@ ui
         node.attrs.add({ name: "class", value: "\"\"", order: orderForAppend(node.attrs) })
 
     fn addFn(design)
-        design.fns.add({ name: "", params: "", order: orderForAppend(design.fns), body: [], vars: [] })
+        design.fns.add({ name: "", params: "", order: orderForAppend(design.fns), body: [], vars: [], uses: [] })
 
     fn fnNameHint(design, f)
         if f.name == ""
@@ -201,6 +208,17 @@ ui
             return "duplicate name"
         if design.fns.where(f => f.name == v.name).any(f => true)
             return "same as a function name"
+        return ""
+
+    fn addUse(f)
+        f.uses.add({ name: "", args: [], order: orderForAppend(f.uses) })
+
+    fn addUseArg(u)
+        u.args.add({ name: "", value: "", order: orderForAppend(u.args) })
+
+    fn useNameHint(u)
+        if u.name == ""
+            return "name required"
         return ""
 
     fn addRow(coll)
@@ -517,6 +535,31 @@ ui
                                                 <renderNodeEditor node={r}>
                                         else
                                             addRootRow(f.body)
+                                    <div class="fn-uses">
+                                        <span class="fn-uses-heading">
+                                            "Configurations"
+                                        foreach u in f.uses
+                                            <div class="use-row">
+                                                <input class="use-name" value={u.name} placeholder={"e.g. empty, long list"}>
+                                                <button class="remove-use" onClick={() => f.uses.remove(u)}>
+                                                    "×"
+                                                if useNameHint(u) != ""
+                                                    <span class="use-name-hint">
+                                                        useNameHint(u)
+                                                foreach a in u.args.orderBy(a => a.order)
+                                                    <div class="node-attr">
+                                                        <input class="node-attr-name" value={a.name}>
+                                                        <span class="node-attr-eq">
+                                                            "="
+                                                        <input class="node-attr-value" value={a.value} placeholder={"\"value\" or expression"}>
+                                                        <button class="remove-attr" onClick={() => u.args.remove(a)}>
+                                                            "×"
+                                                <button class="add-attr" onClick={() => addUseArg(u)}>
+                                                    "+ arg"
+                                                <div class="design-canvas use-preview">
+                                                    sys.renderTree({ kind: "", tag: f.name, expr: "", attrs: u.args }, sys.evalContext(design, evalRefresh), design)
+                                        <button class="add-use" onClick={() => addUse(f)}>
+                                            "+ Configuration"
                             <button class="add-fn" onClick={() => addFn(design)}>
                                 "+ Component"
                 <details class="code-areas">
