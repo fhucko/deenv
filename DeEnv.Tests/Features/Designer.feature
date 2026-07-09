@@ -1233,6 +1233,60 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the design canvas shows a "section" element with a data-node attribute
     And the design canvas shows the evaluated leaf text "World"
 
+  # ── M12 auto-live parse-op — the canvas evaluates a NEWLY EDITED expression WITHOUT "Refresh values" ──
+  #
+  # CANVAS-EVAL-1 proved the canvas evaluates against a SHIPPED evalContext, but an edited-but-unrefreshed
+  # expression falls to an honest chip until the operator clicks "Refresh values" — the S3a-race-inversion's
+  # deliberate empty-deps law. This slice closes that last gap WITHOUT reopening the race: a NEW `parseExprs`
+  # WS request/response op (WsHandler.cs/ws.ts) parses a newly-typed expression on demand — pure, store-free,
+  # no refetch — and merges the resulting AST straight into the SAME evalContext object the canvas already
+  # holds (mutating its `exprs` map in place; never re-keying evalContext's own memo, never touching
+  # needsServerData). Because the round trip involves NO refetch, it cannot race the tree editor's own
+  # optimistic mutations by construction — a structural edit fired immediately after typing lands untouched.
+  #
+  # The proof: edit the leaf to a NEW valid expression and watch the canvas evaluate it with NO Refresh click
+  # (a plain poll — this only passes if the auto-live merge actually ran); edit to an INVALID expression and
+  # confirm the canvas falls to an honest chip while the page keeps working (no crash — proven by every
+  # subsequent step still succeeding); fix it to a DIFFERENT fresh valid expression and watch it evaluate
+  # again, still with no Refresh; then, as the RACE PIN, retype the leaf to yet another fresh valid
+  # expression and IMMEDIATELY (no wait in between) fire an unrelated structural edit (add a child to the
+  # root) — both the tree editor's own edit and the structural addition must land untouched, and the canvas
+  # must still end up evaluating the leaf's latest text.
+  @m12 @single-user
+  Scenario: The canvas evaluates a newly edited expression live without clicking Refresh, degrades honestly on invalid text, and never races a concurrent structural edit
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "treeme"
+    And I edit the design "treeme"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "greeting" to the type "Db"
+    And I add a field "greeting2" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              greeting: "Hello"
+              greeting2: "World"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a projectable nested render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows the evaluated leaf text "Hello"
+    When I edit the leaf expr input to "db.greeting2"
+    Then the design canvas shows the evaluated leaf text "World"
+    When I edit the leaf expr input to "db.greeting +"
+    Then the design canvas shows an expression chip reading "db.greeting +"
+    When I edit the leaf expr input to "db.greeting != db.greeting2 ? db.greeting2 : db.greeting"
+    Then the design canvas shows the evaluated leaf text "World"
+    When I edit the leaf expr input to "db.greeting == db.greeting ? db.greeting2 : db.greeting"
+    And I add a child element to the root node
+    Then the root node's last child is an element with tag "div"
+    And the tree editor shows a leaf expr input reading "db.greeting == db.greeting ? db.greeting2 : db.greeting"
+    And the design canvas shows the evaluated leaf text "World"
+
   # ── M12 eval-degrade-banner — an honest notice when evalContext itself fails to build ────────────
   #
   # BuildEvalContext's catch arm (an invalid design — e.g. a root type left at baseType "object" with ZERO

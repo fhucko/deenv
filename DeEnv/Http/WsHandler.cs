@@ -70,6 +70,10 @@ public sealed record WsRequest
     // version concept) — kept optional for compatibility, not a permanent bypass; every real ws.ts
     // commit supplies it.
     public int? BaseVersion { get; init; }
+    // parseExprs (M12 auto-live parse-op): the batch of edited expression source texts the client's canvas
+    // walk could not find in its shipped `sys.evalContext` exprs map (a tier-3 miss — edited-but-unrefreshed).
+    // Parsed pure/store-free (CodeParse.ParseExpression, no store, no floor, no session) — see HandleParseExprs.
+    public string[]? Texts { get; init; }
 }
 
 // Response records — one per op. Each property's camelCase (the shared `_jsonOpts`
@@ -207,6 +211,19 @@ public sealed record AckRemapResponse
 {
     public string Op => "ackRemap";
     public bool Ok => true;
+}
+
+// parseExprs (M12 auto-live parse-op): the reply to a batch parse request — a NEWLY EDITED expression's
+// source, parsed on-demand outside the `sys.evalContext` refresh cycle. `entries` maps each successfully
+// PARSED text to its AST, serialized THE SAME WIRE FORMAT `BuildEvalContext`'s `exprs` map already uses
+// (`SchemaJson.Options`) — so the client can drop the string straight in without a second format. An
+// unparseable (or capped-out — see HandleParseExprs) text is simply OMITTED: the client keeps showing its
+// chip (honest), never guesses. No `ok`/`error` distinction — a request with zero parseable texts still
+// replies with an (empty) `entries`, not a failure.
+public sealed record ParseExprsResponse
+{
+    public string Op => "parseExprsResult";
+    public required Dictionary<string, string> Entries { get; init; }
 }
 
 // login: the result of a credential check (M-auth). `ok` is the ONE bit the client acts on — a SUCCESS
@@ -439,6 +456,7 @@ public sealed class WsHandler
                 "refetch"           => HandleRefetch(pathStr, req),
                 "hostAction"        => HandleHostAction(req),
                 "ackRemap"          => HandleAckRemap(req),
+                "parseExprs"        => HandleParseExprs(req),
                 "login"             => HandleLogin(req),
                 "logout"            => HandleLogout(req),
                 _                   => Error($"Unknown op '{op}'")
@@ -1017,6 +1035,59 @@ public sealed class WsHandler
     {
         var alive = Session(req) != null;
         return Serialize(new HelloResponse { SessionAlive = alive });
+    }
+
+    // ── parseExprs (M12 auto-live parse-op) ──────────────────────────────────────
+    //
+    // On-demand parse round-trip that involves NO refetch and NO store access, so it can never race the
+    // canvas tree editor's optimistic mutations by construction (unlike S3a's removed auto-live attempt).
+    // The canvas walk (codeExec.ts) collects expression texts it can't find in its shipped `sys.evalContext`
+    // exprs map (a NEWLY EDITED, not-yet-refreshed leaf/attr/for-collection/if-condition/var-init source) and
+    // batches them here; a valid text's AST rides back so the client can evaluate it live, merged locally
+    // into the SAME evalContext object the walk already holds (never re-keying its memo, never touching
+    // needsServerData). Pure + store-free (CodeParse.ParseExpression takes no store/floor/session), so this
+    // handler needs none of them either — every session (even anonymous, even one with no bound principal)
+    // may parse expression text; nothing here reads or writes app data.
+    //
+    // Caps guard against a pathological single request (bulk-paste, a scripted client): silently truncating
+    // past them is CORRECT, not a shortcut — a text left out this round is simply still missing next render,
+    // so the client's own miss-collection re-requests it on its next debounced pass (docs/plans/canvas-eval.md
+    // companion: the auto-live parse-op design). Logged so an operator can see it happened; never surfaced as
+    // an error (a partial batch is a normal, useful reply, not a failure).
+    private const int ParseExprsMaxTexts = 200;
+    private const int ParseExprsMaxChars = 10_000;
+
+    private string HandleParseExprs(WsRequest req)
+    {
+        if (req.Texts is not { Length: > 0 } texts)
+            return Error("parseExprs requires a non-empty 'texts' array.");
+
+        var entries = new Dictionary<string, string>();
+        var totalChars = 0;
+        var seen = new HashSet<string>();
+        foreach (var text in texts)
+        {
+            if (text is null || !seen.Add(text)) continue; // dedup within one request
+            if (seen.Count > ParseExprsMaxTexts)
+            {
+                Console.Error.WriteLine($"parseExprs: request truncated at {ParseExprsMaxTexts} texts.");
+                break;
+            }
+            totalChars += text.Length;
+            if (totalChars > ParseExprsMaxChars)
+            {
+                Console.Error.WriteLine($"parseExprs: request truncated at {ParseExprsMaxChars} total chars.");
+                break;
+            }
+            try
+            {
+                Code.ICodeValue ast = Code.CodeParse.ParseExpression(text);
+                entries[text] = JsonSerializer.Serialize(ast, SchemaJson.Options);
+            }
+            catch { /* unparseable → omitted (the client keeps its chip, honest) */ }
+        }
+
+        return Serialize(new ParseExprsResponse { Entries = entries });
     }
 
     // Re-render the code UI and return authoritative client state. Called when a mutation

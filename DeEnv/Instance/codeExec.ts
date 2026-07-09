@@ -1595,7 +1595,10 @@ function branch(cls: string, label: string, body: ExecTagChild[]): ExecTag {
 // backed builtins throw → chip, IDENTICALLY to the server's bare executor), a fresh context, memo-BYPASS (so
 // where/orderBy compute directly — never the shared memoCache, avoiding the id-0 lambda memo-key collision),
 // and its OWN throwaway deps frame (the seed reads are NOT recorded as the designer render's deps; the
-// module-level slotPath is untouched since a value expr renders no tags). `bindings` (S6b) is the ROW SCOPE —
+// module-level slotPath is untouched since a value expr renders no tags) — with ONE deliberate exception:
+// a tier-3 MISS (no AST at all — see below) records a synthetic dependency into the ENCLOSING frame,
+// BEFORE the throwaway push, so the M12 auto-live parse-op's later merge can invalidate exactly this
+// canvas render. `bindings` (S6b) is the ROW SCOPE —
 // the accumulated loop-var values layered onto {db} in the isolated scope (a nested for stacks its item onto
 // the outer bindings the walk passed down), so `{note.title}` inside a `foreach note in db.notes` resolves
 // against the current item; the bindings ride the SAME parent-less isolation as db (read-only). Returns the
@@ -1604,7 +1607,23 @@ function evalCtxExpr(text: string, ctx: ExecObject, bindings?: { [name: string]:
     const exprs = ctx.props["exprs"];
     if (exprs == null || exprs.type !== "object") return null;
     const entry = exprs.props[text];
-    if (entry == null || entry.type !== "object") return null;
+    if (entry == null || entry.type !== "object") {
+        // M12 auto-live parse-op — a real evalContext exists but has no AST for this text: either it was
+        // NEWLY EDITED since this ctx shipped, or it is genuinely unparseable. Report the miss so ws.ts can
+        // ask the server on-demand (see the WsHooks.parseMiss doc above); harmless no-op when there is no
+        // live WS session (SSR, conformance, a sandboxed eval).
+        wsHooks?.parseMiss(ctx, text);
+        // Record a DEPENDENCY on this exact (ctx, text) miss into the ENCLOSING memo compute (the walk's
+        // caller — e.g. the canvas component's "comp:" entry) via the SAME generic {obj,prop} channel
+        // recordProp/invalidateProp already use, piggy-backed with a namespaced synthetic "prop" that can
+        // never collide with a real field name. This call sits BEFORE the isolated eval's OWN throwaway
+        // depStack.push below, so it lands in the OUTER walk's tracked frame, not the throwaway one — this
+        // one dependency is deliberately NOT thrown away. Without it, ws.ts's post-merge invalidateProp
+        // would have nothing to mark stale, and the canvas's memoized render would silently keep showing
+        // the pre-merge chip forever (a plain renderUi() reuses a fresh, non-stale cache entry verbatim).
+        recordProp(ctx.id, "parseMiss:" + text);
+        return null;
+    }
     const astText = entry.props["ast"];
     if (astText == null || astText.type !== "text") return null;
     let ast: CodeValue;
@@ -2755,6 +2774,16 @@ interface WsHooks {
     // progressively SHRINKS ctx.conflicts, avoiding a client-only picks collection (a refetch can't round-trip
     // component-state arrays — B4's constraint). CLIENT-only — the failed-commit edits + theirs live in ws.ts.
     resolveField(ctx: ExecCtx, object: number, field: string, take: boolean): void;
+    // M12 auto-live parse-op — CLIENT-ONLY liveness machinery, not a mutation (no journal entry, no
+    // undo/redo, no twin): the canvas walk (evalCtxExpr below) reports a tier-3 MISS — an edited expression
+    // source with no entry in the shipped `ctx.exprs` map — so ws.ts can batch/debounce an on-demand
+    // `parseExprs` round-trip and merge a successful parse straight back into `ctx` (see canvas-eval.md's
+    // companion design doc). `ctx` is the specific evalContext OBJECT the miss came from — the merge target;
+    // a later "Refresh values" mints a brand-new ctx object (a new memo key), so keying the debounce/failed
+    // state off THIS object (a WeakMap in ws.ts) makes the whole thing self-resetting on Refresh with no
+    // explicit clear. wsHooks is null (SSR, conformance, and — later — a workbench sandbox bracket, per
+    // docs/plans/component-workbench.md) ⇒ this is a no-op there, exactly like every other hook.
+    parseMiss(ctx: ExecObject, text: string): void;
 }
 let wsHooks: WsHooks | null = null;
 function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }

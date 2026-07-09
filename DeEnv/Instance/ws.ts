@@ -78,6 +78,106 @@ let nextWsMsgId = 1;
 // leaves the entry unreachable (same class as any other stale in-flight handler) — harmless.
 const hostActionCallbacks = new Map<number, ExecFunction>();
 
+// ── auto-live parse-op (M12) ────────────────────────────────────────────────────────────────────────
+//
+// The canvas evaluates a NEWLY EDITED expression WITHOUT the "Refresh values" click, via an on-demand
+// PARSE round-trip that involves NO refetch — so it can never race the tree editor's optimistic mutations
+// by construction (unlike S3a's removed auto-live attempt, which raced by keying the whole evalContext on
+// the edited subgraph). codeExec.ts's evalCtxExpr calls wsHooks.parseMiss for every canvas expression text
+// it can't find in the shipped `ctx.exprs` map; this section batches those misses, debounces one
+// `parseExprs` request, and merges a successful parse DIRECTLY into the SAME `ctx` object the walk already
+// holds — mutating its `exprs` props in place, never re-keying evalContext's own memo entry, never
+// touching needsServerData/maybeRefetch. CLIENT-ONLY liveness machinery, like reactive props: no twin, no
+// conformance case (codeExec.ts's own doc on WsHooks.parseMiss explains why).
+//
+// State is keyed PER evalContext object (a WeakMap on `ctx`'s identity), not one global set: a real
+// "Refresh values" click mints a BRAND NEW ctx (a new `evalContext:<designId>:<refreshKey>` memo key — the
+// empty-deps law, canvas-eval.md), so its WeakMap entry starts genuinely empty — the "failed" set below
+// drops its history on Refresh with NO explicit clear, and a reply for an OLD ctx simply mutates an object
+// nothing reads anymore (the stale-reply guard, "for free" via object identity — nothing to compare).
+interface ParseMissState {
+    pending: Set<string>;   // seen since the last flush, not yet sent
+    inFlight: Set<string>;  // sent, awaiting parseExprsResult
+    failed: Set<string>;    // requested, server had nothing (unparseable, or cap-truncated) — not re-asked
+    timer: ReturnType<typeof setTimeout> | null;
+}
+const parseMissStateByCtx = new WeakMap<ExecObject, ParseMissState>();
+const parseExprsDebounceMs = 300;
+// Synthetic exprs-map entry ids for locally-merged parse results — never sent to the server, never looked
+// up by id (evalCtxExpr/BuildEvalContext's exprs consumers always read by TEXT, never id — see codeExec.ts),
+// so uniqueness only needs to avoid colliding with the SAME evalContext's own (small, near-zero) negative
+// ids; a far-away counter makes that collision practically impossible without needing a registry.
+let nextParseEntryId = -1_000_000_000;
+
+interface ParseExprsRequest { ctx: ExecObject; state: ParseMissState; texts: string[]; }
+const parseExprsRequests = new Map<number, ParseExprsRequest>();
+
+function parseMissStateOf(ctx: ExecObject): ParseMissState {
+    let state = parseMissStateByCtx.get(ctx);
+    if (state == null) {
+        state = { pending: new Set(), inFlight: new Set(), failed: new Set(), timer: null };
+        parseMissStateByCtx.set(ctx, state);
+    }
+    return state;
+}
+
+// wsHooks.parseMiss: record ONE miss and (re)arm the debounce. Skips a text already in flight or already
+// known-unparseable-this-generation — no point re-asking until Refresh mints a fresh ctx or the operator
+// edits the text into a genuinely different string (a different Set member, handled fresh on its own miss).
+function recordParseMiss(ctx: ExecObject, text: string): void {
+    if (text.length === 0) return;
+    const state = parseMissStateOf(ctx);
+    if (state.inFlight.has(text) || state.failed.has(text)) return;
+    state.pending.add(text);
+    if (state.timer == null)
+        state.timer = setTimeout(() => flushParseMisses(ctx, state), parseExprsDebounceMs);
+}
+
+// Send the accumulated pending texts as ONE `parseExprs` request. Fires even while the socket isn't yet
+// open (wsSend queues); the reply, when it eventually arrives, is still matched by msgId.
+function flushParseMisses(ctx: ExecObject, state: ParseMissState): void {
+    state.timer = null;
+    const texts = Array.from(state.pending);
+    state.pending.clear();
+    if (texts.length === 0) return;
+    for (const t of texts) state.inFlight.add(t);
+    const msgId = nextWsMsgId++;
+    parseExprsRequests.set(msgId, { ctx, state, texts });
+    wsSend({ op: "parseExprs", id: msgId, texts });
+}
+
+// The parseExprsResult reply: merge every returned AST straight into ctx.exprs (mutating the LIVE memo'd
+// object in place — the "purely local" merge; nothing re-keys evalContext, nothing refetches), then
+// invalidate the EXACT (ctx, text) dependency evalCtxExpr recorded on its miss (codeExec.ts's recordProp
+// piggyback — see its doc) via the ordinary invalidateProp channel, and repaint. The invalidate step is
+// load-bearing: the canvas's rendered output sits behind a MEMOIZED component cache entry ("comp:<slot>")
+// that a bare renderUi() would otherwise reuse verbatim (nothing else marks it stale — an isolated eval's
+// OWN reads are deliberately thrown away, canvas-eval.md's empty-deps law), so the merge would be invisible
+// on screen without it. A text the server had nothing for (omitted from `entries` — unparseable, or
+// cap-truncated) joins `failed`, so it isn't re-asked until Refresh starts a fresh ctx.
+function applyParseExprsResult(msgId: number, entries: { [text: string]: string }): void {
+    const req = parseExprsRequests.get(msgId);
+    parseExprsRequests.delete(msgId);
+    if (req == null) return; // stray/duplicate reply — nothing to apply
+    const { ctx, state, texts } = req;
+    const exprsObj = ctx.props["exprs"];
+    let changed = false;
+    for (const text of texts) {
+        state.inFlight.delete(text);
+        const astJson = entries[text];
+        if (astJson === undefined) { state.failed.add(text); continue; }
+        if (exprsObj != null && exprsObj.type === "object") {
+            exprsObj.props[text] = {
+                type: "object", id: nextParseEntryId--,
+                props: { text: { type: "text", value: text }, ast: { type: "text", value: astJson } },
+            };
+            invalidateProp(ctx.id, "parseMiss:" + text);
+            changed = true;
+        }
+    }
+    if (changed) renderUi(); // the walk now finds an AST for the newly-parsed text(s) — same shape as any other repaint
+}
+
 // Correlation for a commit's staged creates (atomic-commit Step B): the draft's transient negative id → how
 // to re-key it on the ack. The ONE `commit` reply carries an idMap (negId→realId + the minted object's nested
 // collection ids); the per-op `pendingAdds` covers only live single arrayAdds, so a commit's N creates need
@@ -942,6 +1042,8 @@ function connectWs(): void {
                 renderUi();
             }
         },
+        // M12 auto-live parse-op — see the section doc above (module top) + codeExec.ts's WsHooks.parseMiss.
+        parseMiss: (ctx, text) => recordParseMiss(ctx, text),
     });
 }
 
@@ -951,6 +1053,7 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
                             newVersion?: number;
                             sessionAlive?: boolean;
                             conflicts?: WireConflict[];
+                            entries?: { [text: string]: string };
                             state?: ServerDtState; error?: string }): void {
     // Correlated accept/reject first: an error rolls the journal back, an ok commits.
     if (typeof msg.id === "number") {
@@ -1118,6 +1221,8 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
     } else if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
         const arrayId = pendingAdds.get(msg.tempId);
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }
+    } else if (msg.op === "parseExprsResult" && typeof msg.id === "number" && msg.entries != null) {
+        applyParseExprsResult(msg.id, msg.entries);
     } else if (msg.op === "refetch" && msg.state != null) {
         refetchInFlight = false;
         if (inFlightGen !== stateGen) {
