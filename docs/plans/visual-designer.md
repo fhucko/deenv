@@ -560,11 +560,11 @@ mutations the designer app performs in deenv code — that machinery already exi
   real evaluation (checks only DOM structure/hints) can still get away with a bare type
   (ledgered separately, deliberately NOT fixed here — orthogonal — **fixed 2026-07-09, see
   eval-degrade-banner below**). Deferred chip classes
-  (user-confirmed trajectory, unchanged): edited-unrefreshed (transient by design; auto-
-  live stays ledgered), store-backed builtins (dies with cache seeding, the scheduled
-  fast-follow), ambients (dies with per-use ambients), genuine errors (SHOULD chip — the
-  per-node error display), component-body references to design vars (see the safe-
-  under-approximation note above).
+  (user-confirmed trajectory): edited-unrefreshed (**BUILT same day — see auto-live
+  below**; fn-body call-position text stays banner-gated), store-backed builtins (dies
+  with cache seeding, the scheduled fast-follow), ambients (dies with per-use ambients),
+  genuine errors (SHOULD chip — the per-node error display), component-body references
+  to design vars (see the safe-under-approximation note above).
 - **eval-degrade-banner — an honest notice when evalContext itself fails to build. ✅ DONE
   2026-07-09** (branch `claude/eval-degrade-banner`; fixes the V1b-ledgered gap above; arch
   review SHIP, ux review SHIP-WITH-FIXES, all four fixes applied same day).
@@ -604,6 +604,35 @@ mutations the designer app performs in deenv code — that machinery already exi
   **Ledger:** a validator-message user-vocabulary pass (prop→field etc. across the OTHER
   validator messages) — do once, deliberately, as its own slice, not piecemeal per-message
   the way this fix touched only the one message it needed.
+- **auto-live — edited expressions evaluate WITHOUT Refresh. ✅ DONE 2026-07-09** (arch
+  review SHIP-WITH-FIXES, three applied — one promoted from an open question; suite 878
+  effective under sibling-session contention, all four fails the known flake class green
+  isolated). The RACE-FREE road (user-chosen over the refetch-race infrastructure): a new
+  WS request/response op `parseExprs` (WsHandler — pure store-free CodeParse per text,
+  SchemaJson wire = the exprs-map format; caps 200 texts / 10k total / **1k per text**,
+  the per-text cap closing an anonymous-reachability parser-StackOverflow process-death
+  risk on public instances — the FG lesson applied to parsing); client-side: evalCtxExpr's
+  tier-3 miss queues the text (wsHooks?.parseMiss — null-safe for SSR/conformance AND the
+  future W1 sandbox) + records a synthetic namespaced dep (`parseMiss:<text>` on the ctx
+  object id) into the ENCLOSING memo frame — the reviewer-verified clean reuse that lets
+  the merge repaint through the memoized canvas with ordinary invalidateProp, NO new
+  invalidation machinery; a debounced (~300ms) requester sends accumulated misses, the
+  reply merges into the LIVE ctx.exprs and repaints — no refetch, needsServerData
+  untouched, the S3a law precisely preserved (the synthetic dep lands on the canvas's
+  comp: entry, never the empty-deps evalContext memo; WeakMap-on-ctx state self-resets
+  on Refresh; late replies for a replaced ctx are harmless). Review catches: the reply's
+  correlation id routed it through the MUTATING-ack block, spuriously clearing the
+  "edits NOT saved" safety banner (dispatch moved above the block + a banner-survival
+  unit pin); the truncation-recovery comment was false (truncated = failed until Refresh
+  — honesty edit, no retry machinery); the per-text cap above. Browser-pinned: edit a
+  leaf → the new value appears with NO Refresh click; invalid → chip stays, fix →
+  evaluates; a concurrent structural add-child is untouched by an in-flight parse.
+  Covers leaf/attr/for-collection/if-condition/var-init text; fn-BODY edits keep the
+  staleness banner (ctx.fns re-projection — out of scope). The chip now shows only while
+  typing + one debounce window (~300ms); the future client parser (the hybrid-editor
+  rung) collapses it to ~a frame, with this op as its fallback. Ledger candidate
+  (builder-found, pre-existing): WhenEditLeafExpr doesn't unescape `\"` the way
+  GivenAccessRule does — a test-harness gap, fix deliberately, not per-scenario.
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —
