@@ -384,6 +384,25 @@ mutations the designer app performs in deenv code — that machinery already exi
   expansion SAME-FRAME. Reviewer-accepted without a case: empty (non-null) fns set is
   logic-proven a no-op; fn-RENAME liveness rests on the shared recordProp mechanism
   (scenario pins body-edit). NEXT: FG interpreter call-depth guard, then F3.
+- **FG — interpreter call-depth guard, both twins. ✅ DONE 2026-07-09** (arch review
+  SHIP-WITH-FIXES, all three applied; full suite 832/832 CLEAN; conformance 167 both
+  runners incl. a named-self-binding recursion case — the harnesses gained a generic
+  `"error"` expect kind, message pinned twin-identically). `RunBody`/`runBody` = the ONE
+  chokepoint every fn-body invocation funnels through (named calls, component setup+view
+  closures, where/orderBy/single/any lambdas — all traced); `CallDepthLimit = 256`,
+  "Call depth exceeded 256 — runaway recursion?", a NORMAL catchable
+  CodeRuntimeException/Error → SSR renders the error page (browser-pinned), the canvas's
+  per-node catch chips it. The F2 expansion walk stays separately bounded by its own
+  depth-32/10k budget (correct — row-walk, not fn invocation). Review catches (the
+  headroom-masks-divergence class, closed by construction pre-F3): guard-trip frame's
+  increment was unbalanced (TS's module-global counter ERODED by 1 per caught runaway —
+  legal renders would eventually throw; check moved inside the try/finally, both twins,
+  leak-tested on both incl. a TS `__callDepthForTest` accessor); TS evalCtxExpr now
+  saves/resets/restores callDepth like memoBypass (the isolated eval gets its own fresh
+  budget, matching C#'s fresh ExecContext); the SSR-vs-client zero-point 1-off is
+  documented at both entries (not worth a synthetic wrapper). Depth-100 legal recursion
+  proven green. UNBLOCKS F3: runaway designer data can no longer kill the kernel —
+  the crash-loop class is closed.
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —
