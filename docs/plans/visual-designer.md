@@ -633,6 +633,24 @@ mutations the designer app performs in deenv code — that machinery already exi
   rung) collapses it to ~a frame, with this op as its fallback. Ledger candidate
   (builder-found, pre-existing): WhenEditLeafExpr doesn't unescape `\"` the way
   GivenAccessRule does — a test-harness gap, fix deliberately, not per-scenario.
+- **U1 — MetaUse configurations + static per-configuration preview. ✅ DONE 2026-07-09**
+  (reviews arch + ux SHIP-WITH-FIXES, ui-arch SHIP; nine-item batch applied; conformance
+  191 both runners, suite 886 effective under sibling-load, flake family bisect-confirmed
+  environmental). `MetaUse {name, args set of MetaAttr, order}` on MetaFn (a configuration
+  IS a stored invocation — args reuse the attr shape + the extracted shared `attrRow` fn);
+  the Configurations area per component card (name + args rows + "no such param" hint via
+  sys.hasParam — a typo'd arg was byte-identical to no arg; caption + per-preview label;
+  remove-use gained the danger treatment; `.use-row` containment). Static preview per use
+  = a transient synthesized invocation literal `{kind:"", tag: f.name, expr:"", attrs:
+  u.args, children: []}` fed to the UNCHANGED sys.renderTree — the arch review caught the
+  absent-`children` latent crash (masked while the tag resolves; a design var shadowing
+  the component name mid-edit would send it down the literal-element arm → hard throw);
+  both walk paths now conformance-pinned (resolving expand + non-resolving literal
+  fallback). Collector: C#-only CollectUseArgSources (no TS twin exists — the client
+  heals via parseMiss; NO fingerprint change — uses never project; the workbench doc's
+  U1 wording corrected). Configuration names = display labels, deliberately non-unique.
+  Uses order by `order` (safe — uses are ctx-staged only, never import-refetch-populated,
+  the task_d7c6ed6a class needs that path). NEXT: W1a — the live-instance driver.
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —
