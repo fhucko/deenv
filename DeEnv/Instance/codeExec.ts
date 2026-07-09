@@ -1104,7 +1104,15 @@ function fnsStale(ctx: ExecObject, fns: ExecArray, context: ExecContext): boolea
     const live: { [name: string]: string } = {};
     for (const item of fns.items) {
         if (item.value.type !== "object") continue;
-        live[readNodeText(item.value, "name", context)] = fnFingerprint(item.value, context);
+        const name = readNodeText(item.value, "name", context);
+        // An UNNAMED fn (F1's "+ Component" mid-authoring mint — the NORMAL state before the operator
+        // types a name) has no call sites anywhere, so it cannot make any call result stale — skip it,
+        // symmetrically with SchemaBridge.FnFingerprints (which can never carry an unnamed entry
+        // either). WITHOUT this, a freshly-minted unnamed component would show a spurious banner that
+        // Refresh could NEVER clear (a rebuilt ctx still can't ship the unnamed row, so the mismatch
+        // persists forever) — see SchemaBridge's fuller rationale.
+        if (name.length === 0) continue;
+        live[name] = fnFingerprint(item.value, context);
     }
     const liveNames = Object.keys(live);
     const shippedNames = Object.keys(shipped.props);
@@ -1118,7 +1126,7 @@ function fnsStale(ctx: ExecObject, fns: ExecArray, context: ExecContext): boolea
     return false;
 }
 
-// A span.stale-fns-banner — the F3b affordance. No data-node (it corresponds to no MetaNode row).
+// A div.stale-fns-banner — the F3b affordance. No data-node (it corresponds to no MetaNode row).
 function staleFnsBanner(): ExecTag {
     return {
         type: "tag", name: "div",
@@ -1257,7 +1265,11 @@ const fpNodeSep = String.fromCharCode(2);
 // A MetaFn row's content fingerprint (name, params, body tree) — twin of CodeExecutor.FnFingerprint /
 // SchemaBridge.FnFingerprints (the server-ship counterpart, a PARALLEL walk over raw NodeValue rows).
 // Dep-recorded (readNodeText/orderedMembers), so an edit to any read field re-renders the comparison
-// same-frame. NOT a hash — see SchemaBridge's comment.
+// same-frame. NOT a hash — see SchemaBridge's comment. The fingerprint MUST cover every field
+// renderTreeNode itself READS on a body-tree node — a future MetaNode/MetaAttr field added to the
+// render walk but not here would make staleness silently UNDER-detect; change all three walks (here,
+// CodeExecutor.FingerprintNode, SchemaBridge.FingerprintNode) in the SAME slice as any render-walk
+// field addition (the collector-law pattern).
 function fnFingerprint(fn: ExecObject, context: ExecContext): string {
     const name = readNodeText(fn, "name", context);
     const bodyRoot = orderedMembers(fn, "body", context)[0];
@@ -1553,6 +1565,13 @@ function orderedMembers(node: ExecObject, setProp: string, context: ExecContext)
             const ord = readNodeProp(item.value, "order", context);
             objs.push({ o: item.value, order: ord.type === "int" ? ord.value : 0 });
         }
+    // Array.prototype.sort is a STABLE sort (twin of C#'s OrderBy) — an ORDER TIE keeps setV.items' own
+    // iteration order, UNLIKE SchemaBridge.OrderedObjects (the server-ship walk), which explicitly
+    // tie-breaks by Id. Not reachable today (M12 F1/F2 mint distinct `order` values, and `items` builds
+    // in id order anyway), but a future same-order pair built out of id order could disagree between
+    // this walk and SchemaBridge's — the visible symptom would be a PERSISTENT spurious M12 F3b
+    // staleness banner (the two fingerprint walks over the SAME data producing different strings).
+    // Flagged, not fixed — no reachable case exists yet.
     return objs.sort((a, b) => a.order - b.order).map(p => p.o);
 }
 

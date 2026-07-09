@@ -1925,7 +1925,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == CallEvalConvertibleRender));
     }
 
-    // The F3b staleness affordance: ONE banner (span/div.stale-fns-banner) at the canvas root when the
+    // The F3b staleness affordance: ONE banner (div.stale-fns-banner) at the canvas root when the
     // shipped ctx.fns fingerprints no longer match the LIVE fns rows (an fn body edit since evalContext
     // was last computed/refreshed).
     [Then("the design canvas shows the stale-fns banner")]

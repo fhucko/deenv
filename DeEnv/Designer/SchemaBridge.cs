@@ -483,12 +483,27 @@ public static class SchemaBridge
     // one, the SAME "must mirror" law as RenderExprSources/CollectExprSources above) and a mismatch
     // shows the "components changed" banner (M12 F3). Keyed by name (last-wins on a duplicate — every
     // other resolver in this file/the canvas walk already tie-breaks or refuses duplicates the same way).
+    // The fingerprint MUST cover every field BuildRenderTree/renderTreeNode itself READS on a body-tree
+    // node — a future MetaNode/MetaAttr field added to the render walk but not here would make the
+    // staleness comparison silently UNDER-detect (a real content change nothing would flag). Keep the
+    // three walks (here, CodeExecutor.FingerprintNode, codeExec.ts fingerprintNode) in the SAME slice as
+    // any render-walk field addition, the collector-law pattern RenderExprSources/CollectExprSources set.
     // Field/node separators for the fingerprint string — control characters that never appear in
     // authored text, so they can't be confused with real content. Twin-identical: CodeExecutor.cs /
     // codeExec.ts use the SAME two code points (1 and 2).
     private static readonly char FpFieldSep = (char)1;
     private static readonly char FpNodeSep = (char)2;
 
+    // An UNNAMED fn (F1's "+ Component" mid-authoring mint — `name:""` — the NORMAL state before the
+    // operator types a name, not an error) is SKIPPED here: it has no call sites anywhere (a call needs
+    // a name to resolve against), so it cannot make any call result stale. This must stay symmetric with
+    // the fact that ctx.fns (BuildEvalContext) can never ship an unnamed entry either — an unnamed fn
+    // also blocks the WHOLE design's projection (ProjectRenderUi's own empty-name refusal), degrading
+    // ctx to empty — and with FnsStale/fnsStale's OWN skip on the LIVE side (CodeExecutor.cs / codeExec.
+    // ts): without it, the live set would carry an entry ctx.fns structurally never can, so the
+    // comparison would mismatch on EVERY render (including right after Refresh, since a rebuilt ctx
+    // still can't ship the unnamed row) — a staleness banner Refresh can never clear, contradicting the
+    // affordance's own contract.
     public static Dictionary<string, string> FnFingerprints(NodeValue design)
     {
         var result = new Dictionary<string, string>();
@@ -496,6 +511,7 @@ public static class SchemaBridge
         foreach (var fn in OrderedObjects(d.Fields.GetValueOrDefault("fns")))
         {
             var name = TextField(fn, "name");
+            if (name.Length == 0) continue;
             var body = OrderedObjects(fn.Fields.GetValueOrDefault("body")).FirstOrDefault();
             result[name] = name + FpFieldSep + TextField(fn, "params") + FpFieldSep +
                 (body != null ? FingerprintNode(body) : "");

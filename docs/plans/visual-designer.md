@@ -404,10 +404,10 @@ mutations the designer app performs in deenv code — that machinery already exi
   proven green. UNBLOCKS F3: runaway designer data can no longer kill the kernel —
   the crash-loop class is closed.
 - **F3 — call-position evaluation of design fns, both twins. ✅ DONE 2026-07-09** (design
-  docs/plans/structured-fns.md "Call-position evaluation (F3)"; full suite 846 effective —
-  the 2 red are the two KNOWN contention flakes, CANVAS-EVAL "canvas evaluates" +
-  LoginViewSwapTests, both verified green in isolation; conformance 114 both runners, 8
-  new cases). `sys.evalContext`'s payload gains `fns` — a name → `{ast, fp}` map: `ast` is
+  docs/plans/structured-fns.md "Call-position evaluation (F3)"; arch review SHIP with one
+  REAL reachable bug + four nits, all fixed same day; full suite 848/848 CLEAN;
+  conformance 176 both runners, 9 new cases). `sys.evalContext`'s payload gains `fns` — a
+  name → `{ast, fp}` map: `ast` is
   each design fn REUSED from the F1 projection already run to build `appDoc` (not
   re-projected), serialized the SAME wire format `exprs` uses (CodeFunction IS in the
   ICodeValue union, discriminator "fn"); `fp` is a per-fn CONTENT FINGERPRINT
@@ -443,6 +443,25 @@ mutations the designer app performs in deenv code — that machinery already exi
   the two mechanisms are independently reactive); Refresh clears the banner and updates
   the value together. Ledger: lib fns stay out of `ctx.fns` (design-local only, per
   scope) — lib-fn call-position eval is the same deferred lib-expansion follow-up F2 left.
+  **Review fix (the real bug):** F1's "+ Component" mints a MetaFn with `name:""` — the
+  NORMAL mid-authoring state, not an error — but the fingerprint comparison keyed it
+  under `""` while ctx.fns (which can never ship an unnamed entry — an unnamed fn also
+  blocks the WHOLE design's projection) never had that key, so the freshly-minted
+  component showed a staleness banner Refresh could NEVER clear (a rebuilt ctx still
+  can't ship the unnamed row, so the mismatch persisted forever) — violating the
+  affordance's own contract. Fixed by the principled rule, applied SYMMETRICALLY at all
+  three comparison sites (SchemaBridge.FnFingerprints, CodeExecutor.FnsStale, codeExec.
+  ts fnsStale): an unnamed fn has no call sites, so it cannot make any call result stale
+  — skip it. Conformance-pinned (a fns set with an unnamed row alongside a matching named
+  row → no banner) + browser-pinned (click "+ Component" → no banner; name it → banner
+  appears correctly, a new callable ctx doesn't know yet; Refresh → clears). Plus four
+  nits: a cross-ref line at all three fingerprint walks (the fingerprint must cover every
+  field the render walk reads, the collector-law pattern); the banner doc-comments said
+  "span", code builds a `div` — aligned; an order-tie honesty comment at the exec-side
+  `OrderedMembers`/`orderedMembers` (stable-sort-by-order only, unlike SchemaBridge's
+  explicit `ThenBy(Id)` — not reachable today, flagged for the future); this map entry's
+  counts corrected (114 was the raw JSON case count, not the reported "conformance N"
+  convention every other M12 entry uses — the ConformanceTests total).
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —

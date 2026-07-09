@@ -803,7 +803,15 @@ public sealed class CodeExecutor
         {
             RecordScannedItem(fns, item, context);
             if (item.Value is not ExecObject fn) continue;
-            live[ReadNodeText(fn, "name", context)] = FnFingerprint(fn, context);
+            var name = ReadNodeText(fn, "name", context);
+            // An UNNAMED fn (F1's "+ Component" mid-authoring mint — the NORMAL state before the
+            // operator types a name) has no call sites anywhere, so it cannot make any call result
+            // stale — skip it, symmetrically with SchemaBridge.FnFingerprints (which can never carry
+            // an unnamed entry either). WITHOUT this, a freshly-minted unnamed component would show a
+            // spurious banner that Refresh could NEVER clear (a rebuilt ctx still can't ship the
+            // unnamed row, so the mismatch persists forever) — see SchemaBridge's fuller rationale.
+            if (name.Length == 0) continue;
+            live[name] = FnFingerprint(fn, context);
         }
         if (live.Count != shipped.Props.Count) return true;
         foreach (var (name, fp) in live)
@@ -815,7 +823,7 @@ public sealed class CodeExecutor
         return false;
     }
 
-    // A span.stale-fns-banner — the F3b affordance. No data-node (it corresponds to no MetaNode row).
+    // A div.stale-fns-banner — the F3b affordance. No data-node (it corresponds to no MetaNode row).
     private static ExecTag StaleFnsBanner() => new()
     {
         Name = "div",
@@ -1102,7 +1110,11 @@ public sealed class CodeExecutor
     // A MetaFn row's content fingerprint (name, params, body tree) — twin of SchemaBridge.FnFingerprints
     // (the server-ship counterpart, a PARALLEL walk over raw NodeValue rows) and codeExec.ts's
     // fnFingerprint. Dep-recorded (ReadNodeText/OrderedMembers), so an edit to any read field re-renders
-    // the comparison same-frame. NOT a hash — see SchemaBridge's comment.
+    // the comparison same-frame. NOT a hash — see SchemaBridge's comment. The fingerprint MUST cover
+    // every field BuildRenderTree itself READS on a body-tree node — a future MetaNode/MetaAttr field
+    // added to the render walk but not here would make staleness silently UNDER-detect; change all three
+    // walks (here, SchemaBridge.FingerprintNode, codeExec.ts fingerprintNode) in the SAME slice as any
+    // render-walk field addition (the collector-law pattern).
     private string FnFingerprint(ExecObject fn, ExecContext context)
     {
         var name = ReadNodeText(fn, "name", context);
@@ -1331,7 +1343,13 @@ public sealed class CodeExecutor
         // Read each member's `order` EXPLICITLY (not lazily inside OrderBy's key selector — a single-element
         // OrderBy can elide the selector, which would skip the `order` dep and NOT ship it, breaking the
         // client replay) — the same explicit per-member read the TS twin makes. RecordScannedItem harvests
-        // the membership. OrderBy over the precomputed keys is a STABLE sort (twin of the TS Array.sort).
+        // the membership. OrderBy over the precomputed keys is a STABLE sort (twin of the TS Array.sort) —
+        // an ORDER TIE keeps `set.Items`' own iteration order, UNLIKE SchemaBridge.OrderedObjects (the
+        // server-ship walk), which explicitly tie-breaks by Id. Not reachable today (M12 F1/F2 mint
+        // distinct `order` values, and `Items` builds in id order anyway), but a future same-order pair
+        // built out of id order could disagree between this walk and SchemaBridge's — the visible symptom
+        // would be a PERSISTENT spurious M12 F3b staleness banner (the two fingerprint walks over the
+        // SAME data producing different strings). Flagged, not fixed — no reachable case exists yet.
         var keyed = new List<(ExecObject Obj, int Order)>();
         foreach (var item in set.Items)
         {

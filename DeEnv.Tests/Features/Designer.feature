@@ -1491,3 +1491,34 @@ Feature: The operator IDE (designs library + instance design selector)
     When I click Refresh values
     Then the design canvas shows a "span" element reading "Hello World"
     And the design canvas does not show the stale-fns banner
+
+  # ── M12 F3b review fix — an UNNAMED fn (the "+ Component" mid-authoring state) is symmetrically
+  # excluded from the staleness comparison ─────────────────────────────────────────────────────
+  #
+  # F1's "+ Component" mints a MetaFn with `name:""` — the NORMAL mid-authoring state, not an error.
+  # An unnamed fn has no call sites, so it cannot make any call result stale: the staleness
+  # comparison (FnsStale/fnsStale, both twins) skips empty-named rows symmetrically with the fact
+  # that ctx.fns can never ship one either (an unnamed fn also blocks projection entirely, per F1's
+  # own refusal) — so the freshly-minted unnamed component shows NO banner. Naming it makes it a
+  # real callable the STALE ctx doesn't know about yet — the banner correctly appears — and Refresh
+  # (which rebuilds ctx over the now-valid, now-named, now-bodied fn) clears it.
+  @m12 @single-user
+  Scenario: A freshly-minted unnamed component shows no staleness banner; naming it shows the banner correctly, and Refresh clears it
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "scratchcomp"
+    And I edit the design "scratchcomp"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a bare convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-component button
+    Then a new component card appears with an empty body
+    And the design canvas does not show the stale-fns banner
+    When I add an element to the new component's body
+    And I set the new component's name to "Foo"
+    Then the design canvas shows the stale-fns banner
+    When I click Refresh values
+    Then the design canvas does not show the stale-fns banner
