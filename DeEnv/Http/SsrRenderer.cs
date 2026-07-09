@@ -1369,9 +1369,14 @@ public sealed class SsrRenderer
         catch (Exception ex)
         {
             // An invalid/unloadable design must not break the canvas — degrade to an empty context (every
-            // expr chips) and log the detail. The structural canvas still paints.
+            // expr chips) and log the detail. The structural canvas still paints. `error` carries the REAL
+            // exception message (never a paraphrase — e.g. SchemaValidationException's "Type 'X' has
+            // baseType 'object' but no props") so the canvas walk can splice an honest degrade banner
+            // instead of leaving an unexplained blank/chipped tree (M12 eval-degrade-banner). The success
+            // path never sets this prop.
             Console.Error.WriteLine($"evalContext of design {design.Id} failed: {ex}");
-            return Obj(("db", empty), ("exprs", empty), ("fns", empty), ("ambients", empty), ("params", empty));
+            return Obj(("db", empty), ("exprs", empty), ("fns", empty), ("ambients", empty), ("params", empty),
+                ("error", new ExecText { Value = ex.Message }));
         }
     }
 

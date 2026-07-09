@@ -1233,6 +1233,38 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the design canvas shows a "section" element with a data-node attribute
     And the design canvas shows the evaluated leaf text "World"
 
+  # ── M12 eval-degrade-banner — an honest notice when evalContext itself fails to build ────────────
+  #
+  # BuildEvalContext's catch arm (an invalid design — e.g. a root type left at baseType "object" with ZERO
+  # props, the legitimate mid-authoring state before the operator adds a field) degrades to an EMPTY
+  # payload silently: with no `error` signal, the canvas would just sit chipped/blank with no clue why. This
+  # slice makes the degrade carry the REAL exception message and splices ONE div.eval-degrade-banner ahead
+  # of the tree — never a paraphrase, never silence. The type card ALSO gets a small inline hint ("needs at
+  # least one field") for the same zero-props state, the fnNameHint idiom.
+  #
+  # A literal render (no `db.` reference — the leaf is a plain string) imports fine with zero types at all,
+  # so the ONLY thing making evalContext fail here is the fieldless "Db" type. Adding a field and clicking
+  # Refresh must clear the banner (the S3a-race idiom: only an explicit Refresh recomputes evalContext).
+  @m12 @single-user
+  Scenario: An invalid design (a fieldless root type) shows an honest degrade notice on the canvas, and the type card hints at the cause; fixing it and refreshing clears both
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "brokenme"
+    And I edit the design "brokenme"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    Then the just-added type shows the hint "needs at least one field"
+    When I ensure the Advanced code disclosure is open
+    And I author a literal convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows the eval-degrade notice mentioning "Type 'Db' has baseType 'object' but no props"
+    When I add a field "greeting" to the type "Db"
+    Then the just-added type shows no hint
+    When I click Refresh values
+    Then the design canvas does not show the eval-degrade notice
+    And the design canvas shows the evaluated leaf text "Hello"
+
   # ── M12 S6a — `foreach`/`if` become structured ROWS (rows + canvas template mode) ───────────────
   #
   # A `foreach` render form now imports to a `kind="for"` MetaNode row (item + collection, body under

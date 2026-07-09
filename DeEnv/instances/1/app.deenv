@@ -139,6 +139,11 @@ ui
             return "prop-row is-text-single"
         return "prop-row"
 
+    fn typeHint(type)
+        if type.baseType == "object" && type.props.any(p => true) == false
+            return "needs at least one field"
+        return ""
+
     fn orderForAppend(coll)
         var top = coll.orderBy(c => 0 - c.order).single(c => true)
         if top == null
@@ -397,6 +402,9 @@ ui
                                         sys.humanize(k)
                             <button class="remove-type" onClick={() => design.types.remove(type)}>
                                 "×"
+                        if typeHint(type) != ""
+                            <span class="type-hint">
+                                typeHint(type)
                         <div class="enum-values">
                             <label class="values-label">
                                 "Values (comma-separated)"

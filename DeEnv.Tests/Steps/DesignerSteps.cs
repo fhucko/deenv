@@ -1385,6 +1385,22 @@ public sealed class DesignerSteps(InstanceContext ctx)
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ProjectableNestedRender));
     }
 
+    // A LITERAL render (no `db.` reference at all) — imports fine regardless of the type schema's
+    // validity, so it isolates the eval-degrade-banner repro to the fieldless type alone (the render
+    // itself is never the cause of the evalContext failure). Wraps the leaf in <h1> so the existing
+    // ThenCanvasShowsEvaluatedText step (`.design-canvas h1`) can assert the post-fix evaluated text too.
+    private const string LiteralConvertibleRender =
+        "ui\n    fn render()\n        return <h1>\n            \"Hello\"\n";
+
+    [When("I author a literal convertible render into the design's UI")]
+    public async Task WhenAuthorLiteralRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(LiteralConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "brokenme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == LiteralConvertibleRender));
+    }
+
     // ── M12 F1 — structured fns: the Components editor area ───────────────────────────────────────
 
     // A convertible render whose `ui` carries a COMPONENT function (`NoteCard(note)`, single-return
@@ -2009,6 +2025,23 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             "() => document.querySelector('.design-canvas .stale-fns-banner') == null");
 
+    // ── M12 eval-degrade-banner — an honest notice when evalContext itself fails to build ──────────
+    //
+    // BuildEvalContext's catch arm ships a non-empty `error` (the REAL exception message, never a
+    // paraphrase) alongside the empty db/exprs/fns/ambients/params payload; the walk splices ONE
+    // div.eval-degrade-banner ahead of the tree, mirroring the stale-fns-banner idiom above.
+
+    [Then("the design canvas shows the eval-degrade notice mentioning {string}")]
+    public async Task ThenCanvasShowsEvalDegradeNotice(string substring) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const e = document.querySelector('.design-canvas .eval-degrade-banner'); " +
+            $"return e != null && e.textContent.includes({JsString(substring)}); }}");
+
+    [Then("the design canvas does not show the eval-degrade notice")]
+    public async Task ThenCanvasNoEvalDegradeNotice() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => document.querySelector('.design-canvas .eval-degrade-banner') == null");
+
     // ── M12 V1b — init-evaluated state in the static canvas ────────────────────────────────────────
     //
     // A top-level `ui var greeting` (design-level state, V1's import shape) referenced in its own <span>,
@@ -2248,6 +2281,19 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [Then("the just-added type shows no values field")]
     public async Task ThenJustAddedNoValuesField() =>
         await JustAddedTypeRow().Locator("input.type-values").First.WaitForAsync(Hidden);
+
+    // M12 eval-degrade-banner — the type-card hint (typeHint idiom, mirrors fnNameHint) for a baseType
+    // "object" type with zero props (the same condition that degrades evalContext).
+    [Then("the just-added type shows the hint {string}")]
+    public async Task ThenJustAddedTypeHint(string hintText) =>
+        await JustAddedTypeRow().Locator($".type-hint:has-text({CssString(hintText)})").First.WaitForAsync();
+
+    // The hint span is a structural `if` (mirroring fn-name-hint/var-name-hint) — ABSENT from the DOM
+    // when there is no hint, not merely CSS-hidden, so this polls for absence rather than Hidden.
+    [Then("the just-added type shows no hint")]
+    public async Task ThenJustAddedNoTypeHint() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelectorAll({JsString(".design-editor .type-card:has(input.type-name[value=" + CssString(_justAddedTypeName) + "]) .type-hint")}).length === 0");
 
     // ── Then: the grouped prop-type picker ───────────────────────────────────────
 
