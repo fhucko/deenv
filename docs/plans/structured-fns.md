@@ -95,8 +95,10 @@ MetaFn: name text, params text, body set of MetaNode, order int
    text until the MetaVar rung imports it properly), **or is `ServerOnly`** (grill S1 —
    MetaFn carries no serverOnly flag, so a `server fn` would project back as a plain fn
    and be SHIPPED TO THE CLIENT: a silent security downgrade of exactly the class the
-   ServerOnly marker exists to prevent; it stays text until MetaFn carries the flag).
-   `var` refusal stays. Lambda detection is a complete pre-batch pattern:
+   ServerOnly marker exists to prevent; it stays text until MetaFn carries the flag),
+   **or duplicates another fn's name** (F1 arch review — MapUi appends without dedup, so
+   without this the dup would IMPORT, clear the text, and then fail PROJECTION: a shape
+   that imports must project, and the source is already gone). `var` refusal stays. Lambda detection is a complete pre-batch pattern:
    `Statements is [CodeReturn { Value: CodeFunction }]` (return→lambda parses to exactly
    that, CodeParse.cs:219-220/:287-294). An INDIRECT closure (`return makeCounter()`)
    slips through as a leaf-root helper — no data loss (text round-trips), the canvas
@@ -108,9 +110,15 @@ MetaFn: name text, params text, body set of MetaNode, order int
 5. **Tree editor** (app.deenv): a "Components" area after the render tree — foreach fn in
    `design.fns`: name input + params input (comma-separated, one field) + its body tree
    via the existing recursive `renderNodeEditor` + remove `×` (subtree GC) + a
-   "+ Component" add (mints `MetaFn{name:"", params:"", order:append}` with a default
-   `<div>` body root — a two-step staged add, `sys.new` the MetaFn then `.body.add`,
-   since `set.add` returns nothing; both land in one ctx commit).
+   "+ Component" add (mints `MetaFn{name:"", params:"", order:append}` with an EMPTY
+   body — SUPERSEDES the earlier default-`<div>` sketch, upheld by both F1 UI reviews:
+   the empty card shows the tree editor's own root add-row (discoverable, not a strand),
+   and since a body root has no remove `×`, a defaulted `<div>` could never become a
+   HELPER (expression-leaf root) — the empty state is what keeps the element-or-expr
+   duality open. The root-position add-row offers ONLY `+ element`/`+ text/expr`
+   (a for/if body root is a projection refusal, so offering it would strand). Inline
+   client-computed name hints on the card cover the static refusal causes — empty,
+   `"render"`, duplicate — since the commit-time banner is coarse and remote).
 6. **sys.renderTree arity**: `sys.renderTree(node[, ctx[, fns]])` — the designer passes
    `design.fns`. The fns ride as a THIRD ARG (live rows), NOT inside ctx: ctx is
    refresh-gated, rows are client-live — passing rows is what makes editing a component

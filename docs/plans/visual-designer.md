@@ -342,6 +342,30 @@ mutations the designer app performs in deenv code — that machinery already exi
   Post-hoc review: SHIP (dep-recording argument verified: a skipped right side can't affect
   the result while the left gates it; the left's own deps re-trigger on flip). The deeper
   lesson → the aged-store test-harness task (real-data shapes driven through the refetch path).
+- **F1 — structured fns: rows + import + projection + editor. ✅ DONE 2026-07-09**
+  (design docs/plans/structured-fns.md, grilled ×1 SHIP-WITH-FIXES all folded; build
+  reviews arch + ui-arch + ux, all SHIP-WITH-FIXES, all five fixes applied; suite 818
+  effective — the one red is the known CANVAS-EVAL contention flake, green in isolation).
+  `MetaFn {name, params text, body set of MetaNode, order}` + `Design.fns` (additive,
+  mirrors the language's OWN `InstanceUi(Vars, Functions, Render)` split — render stays
+  distinguished); projection assembles Functions+Render with refusals (empty name,
+  `"render"` reserved, duplicates, no/multi/for-if body root; fns-require-render gate =
+  INTERIM); import lifts the S1b helper-fn refusal for single-`return` top-level fns and
+  refuses — pre-batch, all-or-nothing — lambda-returns (stateful components stay text
+  until MetaVar; no re-import means a blob would be locked in), `server fn` (MetaFn has
+  no serverOnly flag — projecting it back would ship a server fn to the client), and
+  duplicate names (a shape that imports must project). Editor: a "Components" area —
+  per-fn name input + `(params)` framed comma-text input + the SAME recursive tree editor
+  + remove `×` + "+ Component" minting an EMPTY body (upheld over the default-`<div>`
+  sketch: the root add-row is discoverable and keeps the element-or-helper duality open;
+  root-position add offers only element/text since a for/if body root is a projection
+  refusal); inline client-computed name hints (empty/reserved/duplicate) since the commit
+  banner is coarse and remote. Builder-found + chipped (task_d7c6ed6a, PRE-EXISTING):
+  `foreach` over `.orderBy(...)` in tag position hard-crashes the client when the sort-key
+  read hits a VNA race after a host-action refetch — the Components foreach ships unsorted
+  until that interpreter tolerance fix lands (projection order unaffected: OrderedObjects
+  sorts). NEXT: F2 canvas expansion → FG call-depth guard → F3 call-position eval (per
+  structured-fns.md).
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —
