@@ -558,12 +558,31 @@ mutations the designer app performs in deenv code — that machinery already exi
   fixture that exercises real evaluation must give its root type at least one field,
   matching the pattern CANVAS-EVAL-1/F3/S6b already established; a fixture that skips
   real evaluation (checks only DOM structure/hints) can still get away with a bare type
-  (ledgered separately, deliberately NOT fixed here — orthogonal). Deferred chip classes
+  (ledgered separately, deliberately NOT fixed here — orthogonal — **fixed 2026-07-09, see
+  eval-degrade-banner below**). Deferred chip classes
   (user-confirmed trajectory, unchanged): edited-unrefreshed (transient by design; auto-
   live stays ledgered), store-backed builtins (dies with cache seeding, the scheduled
   fast-follow), ambients (dies with per-use ambients), genuine errors (SHOULD chip — the
   per-node error display), component-body references to design vars (see the safe-
   under-approximation note above).
+- **eval-degrade-banner — an honest notice when evalContext itself fails to build. ✅ DONE
+  2026-07-09** (branch `claude/eval-degrade-banner`; fixes the V1b-ledgered gap above).
+  `BuildEvalContext`'s catch arm (an invalid design — e.g. the bare-root-type repro) now
+  ships a non-empty `error` prop carrying the REAL exception message (never a paraphrase)
+  alongside its empty db/exprs/fns/ambients/params payload; the success path never sets it.
+  `ExecuteRenderTree`/`execRenderTree` splice ONE `div.eval-degrade-banner` ahead of the
+  tree whenever the shipped ctx carries a non-empty error — the F3b stale-fns-banner idiom
+  reused. Decision: when BOTH a degrade AND a live-fns staleness mismatch apply (a
+  degraded ctx's empty `ctx.fns` makes any live fns row look stale too — both true
+  statements), BOTH banners render, degrade-cause first; conformance-pinned (2 new cases:
+  error-only, error+stale-fns-mismatch — every pre-existing populated-ctx case, none of
+  which carry `error`, stays byte-identical, proving no regression). The type-card editor
+  gets a matching inline hint ("needs at least one field") for a baseType "object" type
+  with zero props — the fnNameHint idiom (`typeHint` in app.deenv), so the operator sees
+  the cause before ever hitting Convert/the canvas. Browser-pinned (Designer.feature @m12):
+  a fieldless "Db" type shows the hint and, after Convert, the canvas's degrade notice with
+  the real message; adding a field and clicking Refresh clears both and the canvas
+  evaluates normally.
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —
