@@ -1056,27 +1056,41 @@ function scalarKeyPart(v: ExecValue): string {
     }
 }
 
-// renderTree(node[, ctx]): the CLIENT-COMPUTABLE canvas (M12 S4 foundation) — the twin of
+// renderTree(node[, ctx[, fns]]): the CLIENT-COMPUTABLE canvas (M12 S4 foundation) — the twin of
 // CodeExecutor.ExecuteRenderTree. Turns a MetaNode row (tag/expr/order scalars + attrs/children sets, the
 // S1a structured-render schema) into a live tag tree built from the rows. UNLIKE the server-backed reads
 // (execPublishPreview et al., revived from shipped data), this is computed by BOTH twins from row data the
 // client already holds — no memoize, no refetch. Every node-field / set read goes through the SAME
 // dep-recording paths ordinary reads use (recordProp, recordMember), so an ordinary tree-editor edit
 // (rename a tag, edit an attr, add/remove a node) invalidates the enclosing render and the canvas
-// re-renders in the same interaction with no round-trip. The optional SECOND arg is reserved for the
-// eval-context slice (ignored today) so the signature is extensible without reshaping.
+// re-renders in the same interaction with no round-trip. The optional SECOND arg is the eval context
+// ({ db, exprs, … } from sys.evalContext); the optional THIRD arg (M12 F2) is the design's `fns` ROWS
+// (`design.fns`, a LIVE set of MetaFn — not eval-context data, so editing a component body repaints every
+// expansion SAME-FRAME). Absent fns ⇒ no tag can ever resolve to a component (today's exact behavior).
 function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
-    if (codeCall.params.length !== 1 && codeCall.params.length !== 2)
-        throw new Error("renderTree(node[, ctx]) takes one or two arguments.");
+    if (codeCall.params.length < 1 || codeCall.params.length > 3)
+        throw new Error("renderTree(node[, ctx[, fns]]) takes one to three arguments.");
     const node = executeValue(codeCall.params[0], scope, context).value;
     if (node.type !== "object") throw new Error("renderTree() expects a node object as its first argument.");
     // The optional eval context (M12 CANVAS-EVAL-1): a { db, exprs, … } payload (from sys.evalContext).
     // Present ⇒ non-literal leaf/attr expressions EVALUATE against the seed graph; absent ⇒ today's exact chip
     // behavior (the no-ctx conformance case stays byte-identical). A non-object 2nd arg is ignored.
-    const ctxV = codeCall.params.length === 2 ? executeValue(codeCall.params[1], scope, context).value : null;
+    const ctxV = codeCall.params.length >= 2 ? executeValue(codeCall.params[1], scope, context).value : null;
     const ctx = ctxV != null && ctxV.type === "object" ? ctxV : null;
-    return renderTreeNode(node, context, ctx);
+    // The optional fns rows (M12 F2): a non-array 3rd arg is ignored — same as absent, no expansion.
+    const fnsV = codeCall.params.length === 3 ? executeValue(codeCall.params[2], scope, context).value : null;
+    const fns = fnsV != null && fnsV.type === "array" ? fnsV : null;
+    return renderTreeNode(node, context, ctx, undefined, fns, { depth: 0, used: 0 });
 }
+
+// The expansion cap/budget (grill E4): DEPTH bounds a self-recursive component chain, a total node BUDGET
+// bounds the whole walk's fan-out (a cap alone would still let a component looping seed data blow up
+// N^depth in node count before the cap ever fires). One instance PER top-level renderTree() call (a
+// "walk"), mutated in place, threaded through the recursion exactly like ctx/bindings/fns. Twin of
+// CodeExecutor.ExpansionState.
+interface ExpansionState { depth: number; used: number; }
+const expansionDepthCap = 32;
+const expansionNodeBudget = 10_000;
 
 // Walk one MetaNode row → its rendered node. ELEMENT (tag non-empty): a `tag` element carrying
 // data-node=<id> (the provenance spine for click-to-select — on EVERY emitted element), literal attrs
@@ -1084,8 +1098,18 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
 // recursively-rendered children (ordered by `order`). LEAF (tag empty, expr non-empty): a literal expr →
 // its unquoted value as a text child; otherwise an EXPRESSION CHIP (span.expr-chip) holding the raw source.
 // INVALID (tag AND expr empty): span.expr-chip.is-empty "(empty)" — a visible marker, never silent nothing.
-function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject | null, bindings?: { [name: string]: ExecValue }): ExecValue {
+//
+// M12 F2 — at an ELEMENT row, BEFORE the literal-element arm, a tag that resolves against `fns` EXPANDS into
+// the matched component's OWN rendered content (see expandFn) — the runtime-faithful mirror of
+// tryResolveComponent/executeComponentValue: `bindings` (the walk-local scope) SHADOWS the fns lookup
+// exactly like a scope binding stops runtime resolution.
+function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject | null,
+    bindings: { [name: string]: ExecValue } | undefined, fns: ExecArray | null, expansion: ExpansionState): ExecValue {
     const id = node.id;
+    // The node budget (M12 F2 E4) counts every node visited while ALREADY inside an expansion (depth>0) —
+    // not just the invocations themselves — so a component whose body fans out breadth-wise (not just
+    // recursively) still gets bounded. Counted here, ONCE, for every node kind (element/leaf/for/if).
+    if (expansion.depth > 0) expansion.used++;
     // S6a/S6b control-flow rows — `kind` is the authoritative discriminator, read defensively (a legacy/
     // hand-built node without it reads "" → tag/expr discrimination). WITHOUT ctx (or on ANY eval failure)
     // a for/if row renders as the S6a NO-CTX TEMPLATE; WITH ctx (S6b) buildFor/buildIf EVALUATE the
@@ -1093,11 +1117,25 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
     // the accumulated row scope (loop vars) layered onto {db} in the isolated eval — undefined at the top
     // level, extended per for-item as the walk recurses inward. Twin of CodeExecutor.BuildRenderTree.
     const kind = readNodeTextOptional(node, "kind", context);
-    if (kind === "for") return buildFor(node, id, context, ctx, bindings);
-    if (kind === "if") return buildIf(node, id, context, ctx, bindings);
+    if (kind === "for") return buildFor(node, id, context, ctx, bindings, fns, expansion);
+    if (kind === "if") return buildIf(node, id, context, ctx, bindings, fns, expansion);
     const tag = readNodeText(node, "tag", context);
     const expr = readNodeText(node, "expr", context);
     if (tag.length > 0) {
+        // M12 F2 — resolve the tag against `fns` (a dep-recorded row read, so a rename re-renders same-frame),
+        // UNLESS a walk-local binding shadows it (grill E1). A match EXPANDS, subject to the depth cap + node
+        // budget (grill E4), past which it degrades to an honest component chip.
+        if (fns != null && (bindings == null || !(tag in bindings))) {
+            const fn = resolveFn(fns, tag, context);
+            if (fn != null) {
+                if (expansion.depth >= expansionDepthCap || expansion.used >= expansionNodeBudget)
+                    return chip("component-chip", tag, id);
+                const fnName = readNodeText(fn, "name", context);
+                const bodyRoot = orderedMembers(fn, "body", context)[0];
+                if (fnName.length === 0 || bodyRoot == null) return chip("component-chip", fnName, id); // never guess
+                return expandFn(fn, bodyRoot, node, context, ctx, bindings, fns, expansion);
+            }
+        }
         const attributes: { [name: string]: ExecResult } = { "data-node": { value: { type: "text", value: String(id) } } };
         for (const attr of orderedMembers(node, "attrs", context)) {
             const name = readNodeText(attr, "name", context);
@@ -1115,7 +1153,7 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
                 if (v != null && (v.type === "text" || v.type === "int" || v.type === "bool")) attributes[name] = { value: v };
             }
         }
-        const children: ExecTagChild[] = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx, bindings));
+        const children: ExecTagChild[] = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx, bindings, fns, expansion));
         return { type: "tag", name: tag, attributes, children };
     }
     if (expr.length > 0) {
@@ -1132,6 +1170,65 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
     return chip("expr-chip is-empty", "(empty)", id);
 }
 
+// Resolve a tag NAME against the `fns` rows (ordinary dep-recorded reads — recordMember + a `name`/`order`
+// read per row, so a rename or reorder re-renders same-frame). Duplicate names tie-break to the LAST one in
+// `order` (mirrors DefineFunction's last-wins); `>=` also keeps ties on equal `order` deterministic (last in
+// iteration order wins), twin-identical since both twins iterate `fns.items` in the same shipped list order.
+function resolveFn(fns: ExecArray, tag: string, context: ExecContext): ExecObject | null {
+    recordMember(fns.id);
+    let best: ExecObject | null = null;
+    let bestOrder = -Infinity;
+    for (const item of fns.items) {
+        if (item.value.type !== "object") continue;
+        const fn = item.value;
+        if (readNodeText(fn, "name", context) !== tag) continue;
+        const ord = readNodeProp(fn, "order", context);
+        const order = ord.type === "int" ? ord.value : 0;
+        if (best == null || order >= bestOrder) { best = fn; bestOrder = order; }
+    }
+    return best;
+}
+
+// Expand a resolved MetaFn invocation — the row-walk analog of executeComponentValue/bindParams, faithful to
+// runtime scoping WITHOUT running a component's setup/view split (there are no rows for that; a fn's body
+// root is a single value/element, matching the render import shape). `invocationNode` is the tag row that
+// matched (its `attrs` are the caller-side arguments; its `children` are DROPPED — runtime never reads a
+// component tag's children either). Params bind BY NAME: a literal attr value binds even with NO ctx
+// (tier-0, literalValue); a non-literal attr evaluates via evalCtxExpr under the CALLER's current
+// `callerBindings`; a param with NO matching attr binds ExecNull (runtime truth); a param whose attr is
+// PRESENT but UNEVALUABLE (an event/lambda attr, an eval throw, an exprs-map miss, or no ctx at all for a
+// non-literal source) is left OUT of the body bindings entirely, so a body reference to it misses scope and
+// CHIPS — the one deliberate divergence from runtime (never guess a value). A param literally NAMED "key"
+// always binds ExecNull, NEVER reading a same-named attr (bindParams :2110 excludes it too — `key` is the
+// reserved slot-reset directive, not a real param). The body walks with bindings = the params ONLY — the
+// caller's own bindings do NOT leak in. The result rides an array value (kind "list", carrying the
+// INVOCATION row's id, inert) — the exact buildFor splice idiom — so every expanded element keeps its OWN
+// body-row data-node.
+function expandFn(fn: ExecObject, bodyRoot: ExecObject, invocationNode: ExecObject, context: ExecContext,
+    ctx: ExecObject | null, callerBindings: { [name: string]: ExecValue } | undefined, fns: ExecArray, expansion: ExpansionState): ExecValue {
+    const paramNames = readNodeText(fn, "params", context).split(",").map(p => p.trim()).filter(p => p.length > 0);
+    const attrs = orderedMembers(invocationNode, "attrs", context);
+    const bodyBindings: { [name: string]: ExecValue } = {};
+    for (const paramName of paramNames) {
+        if (paramName === "key") { bodyBindings[paramName] = { type: "null" }; continue; } // reserved, never bound
+        const attr = attrs.find(a => readNodeText(a, "name", context) === paramName);
+        if (attr == null) { bodyBindings[paramName] = { type: "null" }; continue; } // no attr ⇒ runtime null
+        const value = readNodeText(attr, "value", context);
+        const lit = literalValue(value);
+        if (lit != null) { bodyBindings[paramName] = lit; continue; }
+        if (ctx != null) {
+            const evaluated = evalCtxExpr(value, ctx, callerBindings);
+            if (evaluated != null) { bodyBindings[paramName] = evaluated; continue; }
+        }
+        // else: attr present but unevaluable — leave OUT of bodyBindings so a body reference chips.
+    }
+    expansion.depth++;
+    try {
+        const result = renderTreeNode(bodyRoot, context, ctx, bodyBindings, fns, expansion);
+        return { type: "array", kind: "list", items: [{ key: 0, value: result }], id: invocationNode.id };
+    } finally { expansion.depth--; }
+}
+
 // A `for` row (S6b, WITH ctx). Evaluate the `collection` source against the seed graph under the CURRENT
 // accumulated row scope (a nested for's collection may reference an outer loop var), then render the body PER
 // ITEM with the loop var bound — the instances REPLACE the template (real content: no badge, no wrapper).
@@ -1141,7 +1238,8 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
 // row's id — the S6a provenance decision). ANY failure — no source, an eval throw/miss, or a non-collection
 // result — DEGRADES to the S6a template (never guesses). A set and a list both iterate via .items. Twin of
 // CodeExecutor.BuildFor.
-function buildFor(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null, bindings?: { [name: string]: ExecValue }): ExecValue {
+function buildFor(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null,
+    bindings: { [name: string]: ExecValue } | undefined, fns: ExecArray | null, expansion: ExpansionState): ExecValue {
     if (ctx != null) {
         const collection = evalCtxExpr(readNodeText(node, "collection", context), ctx, bindings);
         if (collection != null && collection.type === "array") {
@@ -1153,12 +1251,12 @@ function buildFor(node: ExecObject, id: number, context: ExecContext, ctx: ExecO
                 const itemBindings = { ...(bindings ?? {}) };
                 if (item.length > 0) itemBindings[item] = member.value;
                 for (const b of body)
-                    instances.push({ key: key++, value: renderTreeNode(b, context, ctx, itemBindings) });
+                    instances.push({ key: key++, value: renderTreeNode(b, context, ctx, itemBindings, fns, expansion) });
             }
             return { type: "array", kind: "list", items: instances, id };
         }
     }
-    return buildForTemplate(node, id, context, ctx, bindings);
+    return buildForTemplate(node, id, context, ctx, bindings, fns, expansion);
 }
 
 // An `if` row (S6b, WITH ctx). Evaluate the `condition` under the current row scope; the result MUST be a
@@ -1167,23 +1265,25 @@ function buildFor(node: ExecObject, id: number, context: ExecContext, ctx: ExecO
 // branch. A bool renders ONLY the taken branch's children FLAT (no then/else labels), spliced into an array
 // like buildFor. A false condition with an empty elseChildren yields an empty array → nothing. Twin of
 // CodeExecutor.BuildIf.
-function buildIf(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null, bindings?: { [name: string]: ExecValue }): ExecValue {
+function buildIf(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null,
+    bindings: { [name: string]: ExecValue } | undefined, fns: ExecArray | null, expansion: ExpansionState): ExecValue {
     if (ctx != null) {
         const cond = evalCtxExpr(readNodeText(node, "condition", context), ctx, bindings);
         if (cond != null && cond.type === "bool") {
             const members = orderedMembers(node, cond.value ? "children" : "elseChildren", context);
-            const items: ExecArrayItem[] = members.map((m, i) => ({ key: i, value: renderTreeNode(m, context, ctx, bindings) }));
+            const items: ExecArrayItem[] = members.map((m, i) => ({ key: i, value: renderTreeNode(m, context, ctx, bindings, fns, expansion) }));
             return { type: "array", kind: "list", items, id };
         }
     }
-    return buildIfTemplate(node, id, context, ctx, bindings);
+    return buildIfTemplate(node, id, context, ctx, bindings, fns, expansion);
 }
 
 // A `for` row → its NO-CTX / DEGRADE TEMPLATE (S6a): a <div class="for-template" data-node=id> with a badge
 // (the loop var name + the collection SOURCE as an expr-chip, unevaluated) and the body rendered ONCE. Body
 // leaves referencing the item var chip (unbound — honest); any OUTER row-scope binding still threads through.
 // Twin of CodeExecutor.BuildForTemplate.
-function buildForTemplate(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null, bindings?: { [name: string]: ExecValue }): ExecValue {
+function buildForTemplate(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null,
+    bindings: { [name: string]: ExecValue } | undefined, fns: ExecArray | null, expansion: ExpansionState): ExecValue {
     const item = readNodeText(node, "item", context);
     const collection = readNodeText(node, "collection", context);
     const badge: ExecTag = {
@@ -1193,7 +1293,7 @@ function buildForTemplate(node: ExecObject, id: number, context: ExecContext, ct
             chip("expr-chip", collection, id),
         ],
     };
-    const children: ExecTagChild[] = [badge, ...orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx, bindings))];
+    const children: ExecTagChild[] = [badge, ...orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx, bindings, fns, expansion))];
     return {
         type: "tag", name: "div",
         attributes: { "class": { value: { type: "text", value: "for-template" } }, "data-node": { value: { type: "text", value: String(id) } } },
@@ -1205,10 +1305,11 @@ function buildForTemplate(node: ExecObject, id: number, context: ExecContext, ct
 // condition SOURCE as an expr-chip and BOTH branches, each wrapped + marked (then / else); the else branch
 // is OMITTED when `elseChildren` is empty. Never guesses a taken branch (evaluated selection is buildIf);
 // any OUTER row-scope binding still threads through. Twin of CodeExecutor.BuildIfTemplate.
-function buildIfTemplate(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null, bindings?: { [name: string]: ExecValue }): ExecValue {
+function buildIfTemplate(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null,
+    bindings: { [name: string]: ExecValue } | undefined, fns: ExecArray | null, expansion: ExpansionState): ExecValue {
     const condition = readNodeText(node, "condition", context);
-    const thenBody = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx, bindings));
-    const elseBody = orderedMembers(node, "elseChildren", context).map(c => renderTreeNode(c, context, ctx, bindings));
+    const thenBody = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx, bindings, fns, expansion));
+    const elseBody = orderedMembers(node, "elseChildren", context).map(c => renderTreeNode(c, context, ctx, bindings, fns, expansion));
     const children: ExecTagChild[] = [
         { type: "tag", name: "div", attributes: { "class": { value: { type: "text", value: "if-badge" } } }, children: [chip("expr-chip", condition, id)] },
         branch("if-branch if-then", "then", thenBody),

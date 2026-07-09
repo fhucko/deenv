@@ -448,6 +448,55 @@ public sealed class DesignerSourceTests
         }
     }
 
+    // The collector invariant (M12 F2): RenderExprSources also walks `design.fns` body roots — a component's
+    // own leaf/attr sources need ASTs for canvas EXPANSION too. Pins that a source reachable ONLY through a
+    // fn body (NEVER through `render`) is still collected — the easy-to-forget half of the F2 collector law
+    // (see CollectExprSources' cross-ref comment). The render root is deliberately trivial (a bare <main>,
+    // no reference to `note`), so `note.title` can reach the returned sources ONLY via the fn body walk.
+    [Test]
+    public async Task RenderExprSources_collects_a_source_inside_a_fn_body_reached_only_via_expansion()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f2-collect-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("collectfn"), ["ui"] = new TextValue(""),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+
+            var main = store.CreateObject("MetaNode", Node("main"));
+            store.AddToSet(designPath.Field("render"), main);
+
+            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("NoteCard"), ["params"] = new TextValue("note"), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(designPath.Field("fns"), fn);
+            var fnPath = designPath.Field("fns").Key(fn.ToString());
+
+            var fnBody = store.CreateObject("MetaNode", Node("li"));
+            store.AddToSet(fnPath.Field("body"), fnBody);
+            var fnBodyPath = fnPath.Field("body").Key(fnBody.ToString());
+
+            var fnLeaf = store.CreateObject("MetaNode", Node("", "note.title"));
+            store.AddToSet(fnBodyPath.Field("children"), fnLeaf);
+
+            var design = store.ReadNode(designPath)!;
+            var sources = SchemaBridge.RenderExprSources(design);
+
+            await Assert.That(sources).Contains("note.title");
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
     // Import REFUSES a `ui` section that carries `var`s besides `fn render()`: clearing the whole `ui` text
     // would silently DROP them, so such a design stays as text. Nothing minted, `ui` untouched. (M12 F1
     // lifted the sibling helper-FUNCTION refusal this test used to cover — see the F1 tests below; the

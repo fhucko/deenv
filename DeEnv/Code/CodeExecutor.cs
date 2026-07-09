@@ -742,7 +742,7 @@ public sealed class CodeExecutor
         _ => "",
     };
 
-    // renderTree(node[, ctx]): the CLIENT-COMPUTABLE canvas (M12 S4 foundation) — turns a MetaNode row (tag/
+    // renderTree(node[, ctx[, fns]]): the CLIENT-COMPUTABLE canvas (M12 S4 foundation) — turns a MetaNode row (tag/
     // expr/order scalars + attrs/children sets, the S1a structured-render schema) into a live tag tree built
     // from the rows. UNLIKE the server-backed reads (publishPreview et al., shipped as data), this is computed by BOTH
     // twins from row data the client already holds — no server delegate, no memo, no refetch. Every read of a
@@ -752,22 +752,27 @@ public sealed class CodeExecutor
     // harvests the node subgraph into the client state (so the client can replay it); on the client the same
     // reads record deps so an edit invalidates the enclosing render.
     //
-    // The optional SECOND arg is reserved for the eval-context slice (a context keyed by (design, state) that
-    // lets expression leaves/attrs evaluate client-side); today it is ignored so the signature is extensible
-    // without reshaping. No singleton/global state is baked into
-    // the walk. Twin of codeExec.ts's execRenderTree; the literal rules + chip/empty shapes are pinned by a
-    // conformance case.
+    // The optional SECOND arg is the eval context (a { db, exprs, … } payload from sys.evalContext) that lets
+    // expression leaves/attrs evaluate client-side (CANVAS-EVAL-1); absent ⇒ every non-literal expr chips.
+    // The optional THIRD arg (M12 F2) is the design's `fns` ROWS (`design.fns`, a live `set of MetaFn`) — NOT
+    // part of ctx: ctx is refresh-gated server-shipped data, fns are LIVE rows the client already holds, which
+    // is what makes editing a component body repaint every expansion SAME-FRAME. Absent ⇒ no tag can ever
+    // resolve to a component, so every tag renders literally (today's exact behavior, byte-identical). No
+    // singleton/global state is baked into the walk. Twin of codeExec.ts's execRenderTree; the literal rules +
+    // chip/empty shapes + expansion semantics are pinned by conformance cases.
     private IExecValue ExecuteRenderTree(CodeCall call, ExecScope scope, ExecContext context)
     {
-        if (call.Params.Length is not (1 or 2))
-            throw new CodeRuntimeException("renderTree(node[, ctx]) takes one or two arguments.");
+        if (call.Params.Length is not (1 or 2 or 3))
+            throw new CodeRuntimeException("renderTree(node[, ctx[, fns]]) takes one to three arguments.");
         if (ExecuteValue(call.Params[0], scope, context) is not ExecObject node)
             throw new CodeRuntimeException("renderTree() expects a node object as its first argument.");
         // The optional eval context (M12 CANVAS-EVAL-1): a { db, exprs, … } payload (from sys.evalContext).
         // Present ⇒ non-literal leaf/attr expressions EVALUATE against the seed graph; absent ⇒ today's exact
         // chip behavior (the no-ctx conformance case stays byte-identical). A non-object 2nd arg is ignored.
-        var ctx = call.Params.Length == 2 && ExecuteValue(call.Params[1], scope, context) is ExecObject c ? c : null;
-        return BuildRenderTree(node, context, ctx);
+        var ctx = call.Params.Length >= 2 && ExecuteValue(call.Params[1], scope, context) is ExecObject c ? c : null;
+        // The optional fns rows (M12 F2): a non-array 3rd arg is ignored — same as absent, no expansion.
+        var fns = call.Params.Length == 3 && ExecuteValue(call.Params[2], scope, context) is ExecArray f ? f : null;
+        return BuildRenderTree(node, context, ctx, null, fns, new ExpansionState());
     }
 
     // Walk one MetaNode row → its rendered node. ELEMENT (tag non-empty): a `tag` element carrying
@@ -777,9 +782,20 @@ public sealed class CodeExecutor
     // LEAF (tag empty, expr non-empty): a literal expr → its unquoted value as a text child; otherwise an
     // EXPRESSION CHIP (span.expr-chip) holding the raw source — the interim placeholder until evaluation lands.
     // INVALID (tag AND expr empty): span.expr-chip.is-empty "(empty)" — a visible marker, never silent nothing.
-    private IExecValue BuildRenderTree(ExecObject node, ExecContext context, ExecObject? ctx, Dictionary<string, IExecValue>? bindings = null)
+    //
+    // M12 F2 — at an ELEMENT row, BEFORE the literal-element arm, a tag that resolves against `fns` EXPANDS
+    // into the matched component's OWN rendered content (see ExpandFn) — the runtime-faithful mirror of
+    // TryResolveComponent/ExecuteComponentValue: `bindings` (the walk-local scope — loop vars, or an
+    // enclosing expansion's own params) SHADOWS the fns lookup exactly like a scope binding stops runtime
+    // resolution, so a tag bound in `bindings` is never looked up in `fns` at all.
+    private IExecValue BuildRenderTree(ExecObject node, ExecContext context, ExecObject? ctx,
+        Dictionary<string, IExecValue>? bindings, ExecArray? fns, ExpansionState expansion)
     {
         var id = node.Id;
+        // The node budget (M12 F2 E4) counts every node visited while ALREADY inside an expansion (Depth>0)
+        // — not just the invocations themselves — so a component whose body fans out breadth-wise (not just
+        // recursively) still gets bounded. Counted here, ONCE, for every node kind (element/leaf/for/if).
+        if (expansion.Depth > 0) expansion.Used++;
         // S6a/S6b control-flow rows. `kind` is the authoritative discriminator; it is read defensively
         // (ReadNodeTextOptional) so a legacy node predating the field — or a hand-built test node — reads
         // "" and falls to the tag/expr discrimination, never a hard miss. A real row always carries it
@@ -789,12 +805,25 @@ public sealed class CodeExecutor
         // instances (the row scope). `bindings` is the accumulated row scope (loop vars) layered onto {db}
         // in the isolated eval — null at the top level, extended per for-item as the walk recurses inward.
         var kind = ReadNodeTextOptional(node, "kind", context);
-        if (kind == "for") return BuildFor(node, id, context, ctx, bindings);
-        if (kind == "if") return BuildIf(node, id, context, ctx, bindings);
+        if (kind == "for") return BuildFor(node, id, context, ctx, bindings, fns, expansion);
+        if (kind == "if") return BuildIf(node, id, context, ctx, bindings, fns, expansion);
         var tag = ReadNodeText(node, "tag", context);
         var expr = ReadNodeText(node, "expr", context);
         if (tag.Length > 0)
         {
+            // M12 F2 — resolve the tag against `fns` (a dep-recorded row read, so a rename re-renders
+            // same-frame), UNLESS a walk-local binding shadows it (grill E1). A match EXPANDS — subject to
+            // the depth cap + node budget (grill E4), past which it degrades to an honest component chip
+            // rather than hanging either twin on a runaway recursive component.
+            if (fns != null && (bindings == null || !bindings.ContainsKey(tag)) && ResolveFn(fns, tag, context) is { } fn)
+            {
+                if (expansion.Depth >= ExpansionDepthCap || expansion.Used >= ExpansionNodeBudget)
+                    return Chip("component-chip", tag, id);
+                var fnName = ReadNodeText(fn, "name", context);
+                var bodyRoot = OrderedMembers(fn, "body", context).FirstOrDefault();
+                if (fnName.Length == 0 || bodyRoot == null) return Chip("component-chip", fnName, id); // never guess
+                return ExpandFn(fn, bodyRoot, node, context, ctx, bindings, fns, expansion);
+            }
             var attributes = new Dictionary<string, IExecValue> { ["data-node"] = new ExecText { Value = id.ToString() } };
             foreach (var attr in OrderedMembers(node, "attrs", context))
             {
@@ -812,7 +841,7 @@ public sealed class CodeExecutor
                     attributes[name] = scalar;
             }
             var children = OrderedMembers(node, "children", context)
-                .Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings))
+                .Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings, fns, expansion))
                 .ToArray();
             return new ExecTag { Name = tag, Attributes = attributes, Children = children };
         }
@@ -841,7 +870,8 @@ public sealed class CodeExecutor
     // context.LastId (determinism unchanged). ANY failure — no collection source, an eval throw/miss, or a
     // non-collection result — DEGRADES to the S6a template (never guesses). A Set and a List both iterate via
     // .Items, so a synthetic-graph set and a where/orderBy list both instantiate cleanly.
-    private IExecValue BuildFor(ExecObject node, int id, ExecContext context, ExecObject? ctx, Dictionary<string, IExecValue>? bindings)
+    private IExecValue BuildFor(ExecObject node, int id, ExecContext context, ExecObject? ctx,
+        Dictionary<string, IExecValue>? bindings, ExecArray? fns, ExpansionState expansion)
     {
         if (ctx != null && EvaluateCtxExpr(ReadNodeText(node, "collection", context), ctx, context, bindings) is ExecArray collection)
         {
@@ -854,11 +884,11 @@ public sealed class CodeExecutor
                 var itemBindings = new Dictionary<string, IExecValue>(bindings ?? []);
                 if (item.Length > 0) itemBindings[item] = member.Value;
                 foreach (var b in body)
-                    instances.Add(new ExecItem { Key = key++, Value = BuildRenderTree(b, context, ctx, itemBindings) });
+                    instances.Add(new ExecItem { Key = key++, Value = BuildRenderTree(b, context, ctx, itemBindings, fns, expansion) });
             }
             return new ExecArray { Items = instances, Id = id, Kind = ArrayKind.List };
         }
-        return BuildForTemplate(node, id, context, ctx, bindings);
+        return BuildForTemplate(node, id, context, ctx, bindings, fns, expansion);
     }
 
     // An `if` row (S6b, WITH ctx). Evaluate the `condition` under the current row scope; the result MUST be a
@@ -867,7 +897,8 @@ public sealed class CodeExecutor
     // guessing a branch. A bool renders ONLY the taken branch's children FLAT (no then/else labels — the
     // taken branch is real content), spliced into an ExecArray exactly like BuildFor. A false condition with
     // an empty elseChildren yields an empty array → nothing (correct).
-    private IExecValue BuildIf(ExecObject node, int id, ExecContext context, ExecObject? ctx, Dictionary<string, IExecValue>? bindings)
+    private IExecValue BuildIf(ExecObject node, int id, ExecContext context, ExecObject? ctx,
+        Dictionary<string, IExecValue>? bindings, ExecArray? fns, ExpansionState expansion)
     {
         if (ctx != null && EvaluateCtxExpr(ReadNodeText(node, "condition", context), ctx, context, bindings) is ExecBool cond)
         {
@@ -875,10 +906,10 @@ public sealed class CodeExecutor
             var items = new List<ExecItem>();
             var key = 0;
             foreach (var m in members)
-                items.Add(new ExecItem { Key = key++, Value = BuildRenderTree(m, context, ctx, bindings) });
+                items.Add(new ExecItem { Key = key++, Value = BuildRenderTree(m, context, ctx, bindings, fns, expansion) });
             return new ExecArray { Items = items, Id = id, Kind = ArrayKind.List };
         }
-        return BuildIfTemplate(node, id, context, ctx, bindings);
+        return BuildIfTemplate(node, id, context, ctx, bindings, fns, expansion);
     }
 
     // A `for` row → its NO-CTX / DEGRADE TEMPLATE (S6a): a <div class="for-template" data-node=id> holding a
@@ -887,7 +918,8 @@ public sealed class CodeExecutor
     // the template — honest, never a guess); any OUTER row-scope binding still threads through (a fallback
     // for nested inside an evaluated outer for). Deterministic + twin-identical (pinned by the conformance
     // case).
-    private IExecValue BuildForTemplate(ExecObject node, int id, ExecContext context, ExecObject? ctx, Dictionary<string, IExecValue>? bindings)
+    private IExecValue BuildForTemplate(ExecObject node, int id, ExecContext context, ExecObject? ctx,
+        Dictionary<string, IExecValue>? bindings, ExecArray? fns, ExpansionState expansion)
     {
         var item = ReadNodeText(node, "item", context);
         var collection = ReadNodeText(node, "collection", context);
@@ -907,7 +939,7 @@ public sealed class CodeExecutor
             },
         };
         var children = new List<IExecTagChild> { badge };
-        children.AddRange(OrderedMembers(node, "children", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings)));
+        children.AddRange(OrderedMembers(node, "children", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings, fns, expansion)));
         return new ExecTag
         {
             Name = "div",
@@ -921,11 +953,12 @@ public sealed class CodeExecutor
     // branch is OMITTED when `elseChildren` is empty. Never guesses a taken branch (evaluated taken-branch
     // selection is BuildIf); any OUTER row-scope binding still threads through the branch bodies.
     // Deterministic + twin-identical (pinned by the conformance case).
-    private IExecValue BuildIfTemplate(ExecObject node, int id, ExecContext context, ExecObject? ctx, Dictionary<string, IExecValue>? bindings)
+    private IExecValue BuildIfTemplate(ExecObject node, int id, ExecContext context, ExecObject? ctx,
+        Dictionary<string, IExecValue>? bindings, ExecArray? fns, ExpansionState expansion)
     {
         var condition = ReadNodeText(node, "condition", context);
-        var thenBody = OrderedMembers(node, "children", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings)).ToList();
-        var elseBody = OrderedMembers(node, "elseChildren", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings)).ToList();
+        var thenBody = OrderedMembers(node, "children", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings, fns, expansion)).ToList();
+        var elseBody = OrderedMembers(node, "elseChildren", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings, fns, expansion)).ToList();
         var children = new List<IExecTagChild>
         {
             new ExecTag
@@ -960,6 +993,86 @@ public sealed class CodeExecutor
         };
         children.AddRange(body);
         return new ExecTag { Name = "div", Attributes = new() { ["class"] = new ExecText { Value = cls } }, Children = children.ToArray() };
+    }
+
+    // ── M12 F2 — canvas expansion of design-component invocations ──────────────────────────────
+
+    // The expansion cap/budget (grill E4): DEPTH bounds a self-recursive component chain (a cap alone would
+    // still let a component looping seed data blow up N^depth in NODE COUNT before the cap ever fires), so a
+    // total node BUDGET bounds the whole walk too. Shared, mutable, one instance PER top-level renderTree()
+    // call (a "walk") — threaded through the recursion exactly like ctx/bindings/fns. Twin of codeExec.ts's
+    // ExpansionState.
+    private const int ExpansionDepthCap = 32;
+    private const int ExpansionNodeBudget = 10_000;
+
+    private sealed class ExpansionState
+    {
+        public int Depth;
+        public int Used;
+    }
+
+    // Resolve a tag NAME against the `fns` rows (ordinary dep-recorded reads — RecordMembership + a `name`/
+    // `order` read per row, so a rename or reorder re-renders same-frame). Duplicate names tie-break to the
+    // LAST one in `order` (mirrors DefineFunction's last-wins for the mid-edit window before projection's
+    // duplicate refusal fires); `>=` also keeps ties on equal `order` deterministic (last in iteration order
+    // wins), twin-identical since both twins iterate `fns.Items` in the same shipped list order.
+    private ExecObject? ResolveFn(ExecArray fns, string tag, ExecContext context)
+    {
+        RecordMembership(fns, context);
+        ExecObject? best = null;
+        var bestOrder = int.MinValue;
+        foreach (var item in fns.Items)
+        {
+            RecordScannedItem(fns, item, context);
+            if (item.Value is not ExecObject fn) continue;
+            if (ReadNodeText(fn, "name", context) != tag) continue;
+            var order = ReadNodeProp(fn, "order", context) is ExecInt n ? n.Value : 0;
+            if (best == null || order >= bestOrder) { best = fn; bestOrder = order; }
+        }
+        return best;
+    }
+
+    // Expand a resolved MetaFn invocation — the row-walk analog of ExecuteComponentValue/BindParams, faithful
+    // to runtime scoping WITHOUT running a component's setup/view split (there are no rows for that; a fn's
+    // body root is a single value/element, matching the render import shape). `invocationNode` is the tag row
+    // that matched (its `attrs` are the caller-side arguments; its `children` are DROPPED — runtime never
+    // reads a component tag's children either). Params bind BY NAME: a literal attr value binds even with NO
+    // ctx (tier-0, LiteralValue); a non-literal attr evaluates via EvaluateCtxExpr under the CALLER's current
+    // `callerBindings`; a param with NO matching attr binds ExecNull (runtime truth — BindParams does this
+    // too); a param whose attr is PRESENT but UNEVALUABLE (an event/lambda attr, an eval throw, an exprs-map
+    // miss, or no ctx at all for a non-literal source) is left OUT of the body bindings entirely, so a body
+    // reference to it misses scope and CHIPS — the one deliberate divergence from runtime (never guess a
+    // value). A param literally NAMED "key" always binds ExecNull, NEVER reading a same-named attr (BindParams
+    // :2334 excludes it too — `key` is the reserved slot-reset directive, not a real param). The body walks
+    // with bindings = the params ONLY — the caller's own bindings do NOT leak in (runtime scoping: a
+    // component sees its params, not the caller's locals). The result rides an ExecArray (ArrayKind.List,
+    // carrying the INVOCATION row's id, inert) — the exact BuildFor splice idiom — so every expanded element
+    // keeps its OWN body-row data-node (S4's future click-to-select spine).
+    private IExecValue ExpandFn(ExecObject fn, ExecObject bodyRoot, ExecObject invocationNode, ExecContext context,
+        ExecObject? ctx, Dictionary<string, IExecValue>? callerBindings, ExecArray fns, ExpansionState expansion)
+    {
+        var paramNames = ReadNodeText(fn, "params", context)
+            .Split(',').Select(p => p.Trim()).Where(p => p.Length > 0).ToArray();
+        var attrs = OrderedMembers(invocationNode, "attrs", context);
+        var bodyBindings = new Dictionary<string, IExecValue>();
+        foreach (var paramName in paramNames)
+        {
+            if (paramName == "key") { bodyBindings[paramName] = new ExecNull(); continue; } // reserved, never bound
+            var attr = attrs.FirstOrDefault(a => ReadNodeText(a, "name", context) == paramName);
+            if (attr == null) { bodyBindings[paramName] = new ExecNull(); continue; } // no attr ⇒ runtime null
+            var value = ReadNodeText(attr, "value", context);
+            if (LiteralValue(value) is { } literal) { bodyBindings[paramName] = literal; continue; }
+            if (ctx != null && EvaluateCtxExpr(value, ctx, context, callerBindings) is { } evaluated)
+                bodyBindings[paramName] = evaluated;
+            // else: attr present but unevaluable — leave OUT of bodyBindings so a body reference chips.
+        }
+        expansion.Depth++;
+        try
+        {
+            var result = BuildRenderTree(bodyRoot, context, ctx, bodyBindings, fns, expansion);
+            return new ExecArray { Items = [new ExecItem { Key = 0, Value = result }], Id = invocationNode.Id, Kind = ArrayKind.List };
+        }
+        finally { expansion.Depth--; }
     }
 
     // Evaluate ONE canvas expression against the eval context's seed graph (M12 CANVAS-EVAL-1). Looks the

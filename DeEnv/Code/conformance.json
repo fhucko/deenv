@@ -1988,6 +1988,230 @@
         ]
       },
       "expect": { "kind": "tag", "value": "<div class=\"for-template\" data-node=\"-4\"><div class=\"for-badge\"><span class=\"for-item\">note</span><span class=\"expr-chip\" data-node=\"-4\">db.missing</span></div><span class=\"expr-chip\" data-node=\"-2\">note.title</span></div>" }
+    },
+    {
+      "name": "sys.renderTree with fns — a bound literal param evaluates, a missing param defaults to null, and an attr present but UNEVALUABLE leaves the param UNBOUND so the body chips (M12 F2)",
+      "comment": "The F2 param-binding pivot. `fns` carries one MetaFn Badge(label) whose single-root body is the bare leaf `label` (so the expansion's rendered content IS whatever `label` binds to — no ternary needed to observe all three outcomes). A parent <div> invokes <Badge/> three times: (1) label=\"hi\" (a STRING LITERAL attr) binds via LiteralValue even though no source for it rides ctx.exprs — renders the real text \"hi\"; (2) no `label` attr at all — BindParams-style, binds ExecNull (runtime truth) — a null leaf renders as EMPTY text (ChildText's non-scalar fallback), i.e. nothing between its neighbors; (3) label={counter} — a NON-literal attr whose source \"counter\" is deliberately ABSENT from ctx.exprs (an edited-but-unrefreshed source, tier-3) — evalCtxExpr misses, so the param is left OUT of the body bindings entirely, and the body's `label` reference then MISSES SCOPE in the isolated eval and throws → chip, holding the raw source \"label\" (the body leaf's own text) — the one deliberate divergence from runtime (never guess a value). Every <Badge/> invocation drops its own children (none authored) and expands the SAME body leaf row (one MetaNode, shared id), so all three chip/text outcomes share no data-node collision with each other. `key`/extra-attr handling is unexercised here (covered by BindParams' own tests) — this case is scoped to the three param-binding outcomes.",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "tag", "value": { "type": "text", "value": "div" } },
+            { "name": "expr", "value": { "type": "text", "value": "" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "attrs", "value": { "type": "array", "items": [] } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "Badge" } },
+                { "name": "expr", "value": { "type": "text", "value": "" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } },
+                { "name": "attrs", "value": { "type": "array", "items": [
+                  { "type": "object", "props": [
+                    { "name": "name", "value": { "type": "text", "value": "label" } },
+                    { "name": "value", "value": { "type": "text", "value": "\"hi\"" } },
+                    { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+                ] } },
+                { "name": "children", "value": { "type": "array", "items": [] } } ] },
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "Badge" } },
+                { "name": "expr", "value": { "type": "text", "value": "" } },
+                { "name": "order", "value": { "type": "int", "value": 1 } },
+                { "name": "attrs", "value": { "type": "array", "items": [] } },
+                { "name": "children", "value": { "type": "array", "items": [] } } ] },
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "Badge" } },
+                { "name": "expr", "value": { "type": "text", "value": "" } },
+                { "name": "order", "value": { "type": "int", "value": 2 } },
+                { "name": "attrs", "value": { "type": "array", "items": [
+                  { "type": "object", "props": [
+                    { "name": "name", "value": { "type": "text", "value": "label" } },
+                    { "name": "value", "value": { "type": "text", "value": "counter" } },
+                    { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+                ] } },
+                { "name": "children", "value": { "type": "array", "items": [] } } ] }
+            ] } }
+          ] },
+          { "type": "object", "props": [
+            { "name": "db", "value": { "type": "object", "props": [] } },
+            { "name": "exprs", "value": { "type": "object", "props": [
+              { "name": "label", "value": { "type": "object", "props": [
+                { "name": "text", "value": { "type": "text", "value": "label" } },
+                { "name": "ast", "value": { "type": "text", "value": "{\"type\":\"symbol\",\"name\":\"label\"}" } } ] } }
+            ] } }
+          ] },
+          { "type": "array", "items": [
+            { "type": "object", "props": [
+              { "name": "name", "value": { "type": "text", "value": "Badge" } },
+              { "name": "params", "value": { "type": "text", "value": "label" } },
+              { "name": "order", "value": { "type": "int", "value": 0 } },
+              { "name": "body", "value": { "type": "array", "items": [
+                { "type": "object", "props": [
+                  { "name": "tag", "value": { "type": "text", "value": "" } },
+                  { "name": "expr", "value": { "type": "text", "value": "label" } },
+                  { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+              ] } }
+            ] }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div data-node=\"-19\">hi<span class=\"expr-chip\" data-node=\"-26\">label</span></div>" }
+    },
+    {
+      "name": "sys.renderTree with fns — a walk-local binding (a for row's loop var) SHADOWS a same-named fns row, rendering a literal element instead of expanding (M12 F2 grill E1)",
+      "comment": "Runtime resolution stops at the first scope binding, and a non-function binding makes the tag a plain element (TryResolveComponent) — the canvas must be equally honest. `fns` carries a MetaFn literally named \"note\" (its body — a <span> holding the literal \"fn-body\" — would be an unmistakable tell if it wrongly expanded). The render tree is a parent <div> wrapping a `for` row (`item`=\"note\", `collection`=\"db.notes\", one seeded item) whose body is a bare <note/> element (no attrs, no children). Because the loop var is named \"note\" — THE SAME NAME as the fns row — buildFor's itemBindings carries \"note\" as a walk-local binding, which SHADOWS the fns lookup entirely: <note/> renders as a literal empty element (data-node stamped, no children, certainly no \"fn-body\" text), never resolving against `fns` at all.",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "tag", "value": { "type": "text", "value": "div" } },
+            { "name": "expr", "value": { "type": "text", "value": "" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "attrs", "value": { "type": "array", "items": [] } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "kind", "value": { "type": "text", "value": "for" } },
+                { "name": "item", "value": { "type": "text", "value": "note" } },
+                { "name": "collection", "value": { "type": "text", "value": "db.notes" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } },
+                { "name": "children", "value": { "type": "array", "items": [
+                  { "type": "object", "props": [
+                    { "name": "tag", "value": { "type": "text", "value": "note" } },
+                    { "name": "expr", "value": { "type": "text", "value": "" } },
+                    { "name": "order", "value": { "type": "int", "value": 0 } },
+                    { "name": "attrs", "value": { "type": "array", "items": [] } },
+                    { "name": "children", "value": { "type": "array", "items": [] } } ] }
+                ] } }
+              ] }
+            ] } }
+          ] },
+          { "type": "object", "props": [
+            { "name": "db", "value": { "type": "object", "props": [
+              { "name": "notes", "value": { "type": "array", "items": [
+                { "type": "object", "props": [] }
+              ] } }
+            ] } },
+            { "name": "exprs", "value": { "type": "object", "props": [
+              { "name": "db.notes", "value": { "type": "object", "props": [
+                { "name": "text", "value": { "type": "text", "value": "db.notes" } },
+                { "name": "ast", "value": { "type": "text", "value": "{\"type\":\"infixOp\",\"op\":\"objectProp\",\"left\":{\"type\":\"symbol\",\"name\":\"db\"},\"right\":{\"type\":\"symbol\",\"name\":\"notes\"}}" } } ] } }
+            ] } }
+          ] },
+          { "type": "array", "items": [
+            { "type": "object", "props": [
+              { "name": "name", "value": { "type": "text", "value": "note" } },
+              { "name": "params", "value": { "type": "text", "value": "" } },
+              { "name": "order", "value": { "type": "int", "value": 0 } },
+              { "name": "body", "value": { "type": "array", "items": [
+                { "type": "object", "props": [
+                  { "name": "tag", "value": { "type": "text", "value": "span" } },
+                  { "name": "expr", "value": { "type": "text", "value": "" } },
+                  { "name": "order", "value": { "type": "int", "value": 0 } },
+                  { "name": "attrs", "value": { "type": "array", "items": [] } },
+                  { "name": "children", "value": { "type": "array", "items": [
+                    { "type": "object", "props": [
+                      { "name": "tag", "value": { "type": "text", "value": "" } },
+                      { "name": "expr", "value": { "type": "text", "value": "\"fn-body\"" } },
+                      { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+                  ] } } ] }
+              ] } }
+            ] }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div data-node=\"-10\"><note data-node=\"-6\"></note></div>" }
+    },
+    {
+      "name": "sys.renderTree with fns — two fns rows sharing a name tie-break to the LAST one in `order` (M12 F2, mirrors DefineFunction's last-wins)",
+      "comment": "`fns` carries TWO MetaFn rows both named \"Dup\" — order=0's body is the literal leaf \"first\", order=1's body is the literal leaf \"second\". A <div> invokes <Dup/> once. ResolveFn picks the LAST one in `order` (mirrors DefineFunction's silent last-wins for the mid-edit window before projection's duplicate refusal fires) — so the canvas shows \"second\", never \"first\".",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "tag", "value": { "type": "text", "value": "div" } },
+            { "name": "expr", "value": { "type": "text", "value": "" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "attrs", "value": { "type": "array", "items": [] } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "Dup" } },
+                { "name": "expr", "value": { "type": "text", "value": "" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } },
+                { "name": "attrs", "value": { "type": "array", "items": [] } },
+                { "name": "children", "value": { "type": "array", "items": [] } } ] }
+            ] } }
+          ] },
+          { "type": "null" },
+          { "type": "array", "items": [
+            { "type": "object", "props": [
+              { "name": "name", "value": { "type": "text", "value": "Dup" } },
+              { "name": "params", "value": { "type": "text", "value": "" } },
+              { "name": "order", "value": { "type": "int", "value": 0 } },
+              { "name": "body", "value": { "type": "array", "items": [
+                { "type": "object", "props": [
+                  { "name": "tag", "value": { "type": "text", "value": "" } },
+                  { "name": "expr", "value": { "type": "text", "value": "\"first\"" } },
+                  { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+              ] } }
+            ] },
+            { "type": "object", "props": [
+              { "name": "name", "value": { "type": "text", "value": "Dup" } },
+              { "name": "params", "value": { "type": "text", "value": "" } },
+              { "name": "order", "value": { "type": "int", "value": 1 } },
+              { "name": "body", "value": { "type": "array", "items": [
+                { "type": "object", "props": [
+                  { "name": "tag", "value": { "type": "text", "value": "" } },
+                  { "name": "expr", "value": { "type": "text", "value": "\"second\"" } },
+                  { "name": "order", "value": { "type": "int", "value": 0 } } ] }
+              ] } }
+            ] }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div data-node=\"-7\">second</div>" }
+    },
+    {
+      "name": "sys.renderTree with fns — a self-invoking component DEGRADES to a component chip past the depth cap (M12 F2 grill E4)",
+      "comment": "`fns` carries ONE MetaFn Rec() whose own single-root body IS an invocation of itself (<Rec/>, no attrs/children) — genuine unbounded tag-name recursion with no data to bound it (no ctx is even needed; the recursion is purely structural). A parent <div> invokes <Rec/> once. The expansion depth cap (32) bounds it: the walk expands 32 levels deep (each level re-resolving the SAME shared body row against `fns`), and the 33rd resolution attempt — still the SAME body row, since a fn's body is one static MetaNode re-walked every level — hits `expansion.Depth >= 32` and renders an honest `span.component-chip` (name badge \"Rec\") instead of recursing further (or hanging, or throwing a stack overflow on either twin). Every intermediate level contributes nothing to the serialized text (each is an inert array wrapper around the next), so the <div>'s entire content is exactly the one chip.",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "renderTree" } },
+        "params": [
+          { "type": "object", "props": [
+            { "name": "tag", "value": { "type": "text", "value": "div" } },
+            { "name": "expr", "value": { "type": "text", "value": "" } },
+            { "name": "order", "value": { "type": "int", "value": 0 } },
+            { "name": "attrs", "value": { "type": "array", "items": [] } },
+            { "name": "children", "value": { "type": "array", "items": [
+              { "type": "object", "props": [
+                { "name": "tag", "value": { "type": "text", "value": "Rec" } },
+                { "name": "expr", "value": { "type": "text", "value": "" } },
+                { "name": "order", "value": { "type": "int", "value": 0 } },
+                { "name": "attrs", "value": { "type": "array", "items": [] } },
+                { "name": "children", "value": { "type": "array", "items": [] } } ] }
+            ] } }
+          ] },
+          { "type": "null" },
+          { "type": "array", "items": [
+            { "type": "object", "props": [
+              { "name": "name", "value": { "type": "text", "value": "Rec" } },
+              { "name": "params", "value": { "type": "text", "value": "" } },
+              { "name": "order", "value": { "type": "int", "value": 0 } },
+              { "name": "body", "value": { "type": "array", "items": [
+                { "type": "object", "props": [
+                  { "name": "tag", "value": { "type": "text", "value": "Rec" } },
+                  { "name": "expr", "value": { "type": "text", "value": "" } },
+                  { "name": "order", "value": { "type": "int", "value": 0 } },
+                  { "name": "attrs", "value": { "type": "array", "items": [] } },
+                  { "name": "children", "value": { "type": "array", "items": [] } } ] }
+              ] } }
+            ] }
+          ] }
+        ]
+      },
+      "expect": { "kind": "tag", "value": "<div data-node=\"-7\"><span class=\"component-chip\" data-node=\"-12\">Rec</span></div>" }
     }
   ]
 }

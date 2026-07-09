@@ -1399,3 +1399,46 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the new component shows the reserved-name hint
     When I remove the new component
     Then the new component card is gone
+
+  # ── M12 F2 — canvas expansion of design-component invocations ────────────────────────────────
+  #
+  # F1 gave a design's `fn NoteCard(note)` a first-class Components row; F2 makes the canvas EXPAND an
+  # invocation of it (`<NoteCard note={n}/>`) into the component's OWN rendered content — real <li> text,
+  # not a literal <NoteCard> element and not a chip — the runtime-faithful canvas resolution S4 selection
+  # will build on. THE LIVENESS PROOF: editing the component's body leaf repaints every expansion SAME-FRAME
+  # (no Refresh) — proving expansion runs through the SAME live row-data dep-recording the element/for/if
+  # walks already prove, not a cached/refreshed snapshot.
+  @m12 @single-user
+  Scenario: The canvas expands a component invocation into its real content, and editing the component body repaints every expansion live
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "expandme"
+    And I edit the design "expandme"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I add a field "notes" to the type "Db"
+    When I reload the design editor
+    And I retype the prop "notes" to "Note"
+    And I set the prop "notes" cardinality to "set"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              notes: [2, 3]
+          Note 2
+              title: "Alpha"
+          Note 3
+              title: "Beta"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a component-invoking convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows a "li" element reading "Alpha"
+    And the design canvas shows a "li" element reading "Beta"
+    When I edit the component "NoteCard"'s body leaf to "\"Changed\""
+    Then the design canvas shows a "li" element reading "Changed"

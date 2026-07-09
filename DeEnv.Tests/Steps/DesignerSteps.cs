@@ -1423,6 +1423,36 @@ public sealed class DesignerSteps(InstanceContext ctx)
             o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == name
             && o.Fields.TryGetValue("params", out var p) && p is DeEnv.Storage.TextValue pt && pt.Text == paramsText));
 
+    // ── M12 F2 — canvas expansion of design-component invocations ─────────────────────────────────
+
+    // A convertible render that both DEFINES `fn NoteCard(note)` (single-return `<li>{note.title}</li>`)
+    // AND INVOKES it (`<NoteCard note={n}/>`, no children — component tags never carry them) inside a
+    // `foreach n in db.notes` — the exact shape F2's canvas walk expands. Same authoring plumbing as the
+    // other convertible-render fixtures (fill the `ui` textarea, poll the store).
+    private const string ComponentInvokingConvertibleRender =
+        "ui\n"
+        + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
+        + "    fn render()\n        return <ul>\n            foreach n in db.notes\n                <NoteCard note={n}>\n";
+
+    [When("I author a component-invoking convertible render into the design's UI")]
+    public async Task WhenAuthorComponentInvokingRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(ComponentInvokingConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "expandme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ComponentInvokingConvertibleRender));
+    }
+
+    // Edit the named component's body LEAF expr input (its `.fn-body` holds the SAME recursive
+    // renderNodeEditor the render tree uses) — the F2 liveness proof: every expansion of this fn shares
+    // this ONE body row, so editing it must repaint EVERY expanded instance same-frame. The feature writes
+    // inner quotes as `\"` (the Gherkin escape for a literal `"` inside the quoted argument); Reqnroll
+    // passes the backslashes through verbatim (see AccessSteps.GivenAccessRule), so unescape them first.
+    [When("I edit the component {string}'s body leaf to {string}")]
+    public async Task WhenEditComponentBodyLeaf(string name, string expr) =>
+        await ctx.Page!.Locator($".components-section .fn-card:has(input.fn-name[value=\"{name}\"]) .fn-body input.node-expr")
+            .FillAsync(expr.Replace("\\\"", "\""));
+
     // ── M12 F1 review fix (ui-arch + ux) — the from-scratch "+ Component" flow ──────────────────────
 
     // A BARE convertible render — no helper/component fn, just enough for `design.render.any()` to gate

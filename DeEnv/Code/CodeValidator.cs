@@ -81,7 +81,7 @@ public static class CodeValidator
         ["publishPreview"] = [2], // (design, targetId) — server-computed dry-run PublishReport, shipped like diffCommits
         ["mergePreview"] = [2], // (source, target) — server-computed no-write MergeReport, shipped like publishPreview
         ["evalContext"] = [1, 2], // (design) OR (design, refreshKey) — server-computed { db, exprs } eval context shipped like publishPreview; the refresh key re-keys the memo (M12 CANVAS-EVAL-1)
-        ["renderTree"] = [1, 2], // (node) OR (node, ctx) — the CLIENT-COMPUTABLE canvas: a MetaNode row → a live tag tree, both twins from row data; the 2nd arg is the eval-context from sys.evalContext (M12)
+        ["renderTree"] = [1, 2, 3], // (node) OR (node, ctx) OR (node, ctx, fns) — the CLIENT-COMPUTABLE canvas: a MetaNode row → a live tag tree, both twins from row data; the 2nd arg is the eval-context from sys.evalContext, the 3rd (M12 F2) is design.fns (live MetaFn rows) so a matching tag EXPANDS into the component's own content — a discrete SET of allowed counts, not a range (grill T2), kept in lockstep with the hand-checks in CodeExecutor.cs and codeExec.ts
         ["setRef"] = [3],
         // (design, targetId) OR (design, targetId, expectedHeadCommit, expectedTargetVersion) — the
         // preview→apply consistency guard token (M13 Track-B B3 addendum). The trailing pair is

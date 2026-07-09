@@ -403,31 +403,44 @@ public static class SchemaBridge
 
     // ── M12 CANVAS-EVAL-1: collect the render tree's expression sources ───────────
     //
-    // Walk a design's structured `render` tree (the MetaNode/MetaAttr rows) and return every leaf `expr` and
-    // attr `value` SOURCE TEXT, in walk order (deduping is the caller's job — it content-addresses by text).
-    // The eval-context compute parses + serializes each into the AST map the canvas walk consumes. This is
-    // the ProjectNode walk shape, but it COLLECTS source text instead of projecting to an AST — so a source
-    // that won't parse is still returned here (the caller drops it, and the canvas chips it) rather than
-    // throwing. Literal sources ("box"/2/true) are returned too — harmless, since the canvas walk resolves a
-    // literal leaf/attr BEFORE consulting the map, so their (unused) entries are never looked up. Empty ⇒ no
-    // structured render (a text-mode / generic-UI design) → no sources.
+    // Walk a design's structured `render` tree (the MetaNode/MetaAttr rows) AND every `fns` row's body (M12
+    // F2 — a component/helper's own leaf/attr/collection/condition sources need ASTs for expansion too, and
+    // the invocation SITE's attrs — e.g. `<NoteCard note={n}/>` — are already collected as ordinary attrs of
+    // an ordinary element row, wherever that row lives) and return every SOURCE TEXT, in walk order (deduping
+    // is the caller's job — it content-addresses by text). The eval-context compute parses + serializes each
+    // into the AST map the canvas walk consumes. This is the ProjectNode walk shape, but it COLLECTS source
+    // text instead of projecting to an AST — so a source that won't parse is still returned here (the caller
+    // drops it, and the canvas chips it) rather than throwing. Literal sources ("box"/2/true) are returned
+    // too — harmless, since the canvas walk resolves a literal leaf/attr BEFORE consulting the map, so their
+    // (unused) entries are never looked up. Empty ⇒ no structured render (a text-mode / generic-UI design) →
+    // no sources.
     public static List<string> RenderExprSources(NodeValue design)
     {
         var sources = new List<string>();
-        if (design is ObjectValue d && d.Fields.TryGetValue("render", out var r)
-            && OrderedObjects(r).FirstOrDefault() is { } root)
+        if (design is not ObjectValue d) return sources;
+        if (d.Fields.TryGetValue("render", out var r) && OrderedObjects(r).FirstOrDefault() is { } root)
             CollectExprSources(root, sources);
+        if (d.Fields.TryGetValue("fns", out var fnsField))
+            foreach (var fn in OrderedObjects(fnsField))
+                if (fn.Fields.TryGetValue("body", out var bodyField) && OrderedObjects(bodyField).FirstOrDefault() is { } bodyRoot)
+                    CollectExprSources(bodyRoot, sources);
         return sources;
     }
 
-    // NOTE: this is a hand-kept PARALLEL walk of the render tree — its `kind` dispatch (for → collect
-    // `collection` + recurse `children`; if → collect `condition` + recurse `children` AND `elseChildren`;
-    // "" → tag-non-empty element with attrs+children, else expr leaf) MUST mirror the canvas walk
-    // (CodeExecutor.BuildRenderTree / codeExec.ts renderTreeNode) so it can never UNDER-collect a source the
-    // walk will look up (over-collecting dead entries is harmless — content-addressed + parse-or-skip). The
-    // easy-to-forget branch is `elseChildren` — a collector-invariant test pins that every source the canvas
-    // evaluates (including one inside an else branch) is collected. If the walk's shape changes, change this
-    // in the SAME slice (S6a lifted the for/if rows here in lockstep with the canvas walk).
+    // NOTE: this is a hand-kept PARALLEL walk of one node tree (a render root OR a fn body root — the caller,
+    // RenderExprSources, invokes it once per root) — its `kind` dispatch (for → collect `collection` +
+    // recurse `children`; if → collect `condition` + recurse `children` AND `elseChildren`; "" → tag-non-empty
+    // element with attrs+children, else expr leaf) MUST mirror the canvas walk (CodeExecutor.BuildRenderTree /
+    // codeExec.ts renderTreeNode) so it can never UNDER-collect a source the walk will look up (over-collecting
+    // dead entries is harmless — content-addressed + parse-or-skip). The easy-to-forget branch is
+    // `elseChildren` — a collector-invariant test pins that every source the canvas evaluates (including one
+    // inside an else branch) is collected. A component INVOCATION row (`<NoteCard note={n}/>`, M12 F2) needs
+    // no special case here: it is an ordinary tag-non-empty element (attrs + the — always empty, per F2 —
+    // children), so its attr sources are already collected by the SAME tag branch, wherever the invocation
+    // row lives (a render tree or another fn's body) — a second collector-invariant test pins that a source
+    // reachable ONLY via a fn body (never in `render`) is still collected. If the walk's shape changes, change
+    // this in the SAME slice (S6a lifted the for/if rows here in lockstep with the canvas walk; F2 pointed the
+    // caller at every `fns` body root too, in lockstep with the canvas's own expansion).
     private static void CollectExprSources(ObjectValue node, List<string> into)
     {
         switch (TextField(node, "kind"))
