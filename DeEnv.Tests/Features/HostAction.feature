@@ -110,6 +110,17 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     Then the host action reply is ok
     And the target's "Item" reads "code" as "int" "0"
 
+  # An unconvertible value retyped to decimal/date/datetime must reset to the canonical UNSET form
+  # (the empty-text leaf) — never a fabricated 0/today/now, which would make an unconvertible cell
+  # masquerade as a genuine (if wrong) value instead of visibly empty.
+  @milestone-13 @single-user @persistence
+  Scenario: Apply defaults an unconvertible value on a type change to decimal to unset, not zero
+    Given a target instance whose "Item" has "price" of type "text" set to "not-a-number"
+    And a designer instance holding a design with "Item" field "price" typed "decimal"
+    When the designer publishes that design to the target's id over the WS
+    Then the host action reply is ok
+    And the target's "Item" reads "price" as "decimal" ""
+
   # An UNSET optional decimal/date/datetime is stored as the empty-text leaf (the canonical "unset"
   # form the validator accepts). It is NOT a value needing conversion — a republish/additive apply must
   # leave it empty, not clobber it to 0/today and falsely report it as unconvertible.
@@ -120,6 +131,18 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     When the designer publishes that design to the target's id over the WS
     Then the host action reply is ok
     And the target's "Item" reads "price" as "decimal" ""
+
+  # A newly added decimal/date/datetime field has no typed "empty" value, so an existing row that
+  # predates it must read the CANONICAL unset form (the empty-text leaf) — the same value a UI-cleared
+  # field stores — never a fabricated 0/today/now. An old row must not look freshly created.
+  @milestone-13 @single-user @persistence
+  Scenario: Apply defaults a newly added date field to unset, not today
+    Given a target instance holding an "Item" labelled "Keep me"
+    And a designer instance holding a design that adds a "due" field of type "date" to "Item"
+    When the designer publishes that design to the target's id over the WS
+    Then the host action reply is ok
+    And the target still holds an "Item" labelled "Keep me", with "due" defaulted to ""
+    And the target instance was restarted
 
   # A field's CARDINALITY change reshapes the stored value (same-name — no identity needed): a single
   # object reference becomes a one-member set (one -> many, lossless). The stored ref is wrapped into a

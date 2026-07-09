@@ -218,3 +218,57 @@
     When the store is opened
     Then the store opens successfully
     And reading "/motto" returns text ""
+
+  # decimal/date/datetime have no typed "empty" value (DateOnly/decimal/DateTimeOffset are
+  # non-nullable), so an ABSENT field of one of those types (a row that predates the schema field —
+  # exactly what a missing-newly-declared-prop reload is) must read the SAME canonical unset form a
+  # UI-CLEARED field stores: the empty-text leaf. NEVER a fabricated 0/today/now — that would make an
+  # old row look freshly created, and diverge absent from cleared.
+  @milestone-13 @single-user @persistence
+  Scenario: A data file missing newly declared decimal/date/datetime props reads them as unset
+    Given the app description:
+      """
+      types
+          Db
+              name text
+              price decimal
+              due date
+              seenAt datetime
+      """
+    And a stored data file containing:
+      """
+      {
+        "extents": {
+          "Db": { "1": { "type": "object", "typeName": "Db", "id": 1, "fields": {
+            "name": { "type": "text", "value": "Acme" } } } }
+        },
+        "nextId": 1,
+        "root": { "type": "object", "typeName": "Db", "id": 1 }
+      }
+      """
+    When the store is opened
+    Then the store opens successfully
+    And reading "/price" returns text ""
+    And reading "/due" returns text ""
+    And reading "/seenAt" returns text ""
+
+  # The CREATE/mint path (a brand-new object's fields, e.g. the store's own bootstrap of the root
+  # object with no initialData — the same field-building code path a real object creation uses):
+  # decimal/date/datetime scalars mint as UNSET, never a fabricated 0/today/now. A freshly created
+  # row must not look pre-filled with data nobody entered.
+  @milestone-13 @single-user @persistence
+  Scenario: A freshly minted object's decimal/date/datetime fields start unset, not today
+    Given the app description:
+      """
+      types
+          Db
+              name text
+              price decimal
+              due date
+              seenAt datetime
+      """
+    When the store is opened
+    Then the store opens successfully
+    And reading "/price" returns text ""
+    And reading "/due" returns text ""
+    And reading "/seenAt" returns text ""

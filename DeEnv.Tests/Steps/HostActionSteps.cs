@@ -281,6 +281,21 @@ public sealed class HostActionSteps
         DesignSetProp("Db", typeName.ToLowerInvariant() + "s", typeName);
     }
 
+    // Same additive-schema-change shape as GivenDesignerHoldingAdditiveDesign, but for a NON-text field
+    // type — proves a newly added decimal/date/datetime field defaults to UNSET (the empty-text leaf),
+    // not a fabricated 0/today/now (DefaultBase's absent-field read path).
+    [Given("a designer instance holding a design that adds a {string} field of type {string} to {string}")]
+    public void GivenDesignerHoldingAdditiveDesignTyped(string newField, string fieldType, string typeName)
+    {
+        OpenDesigner();
+        AddDesign(CustomUiSection);
+        DesignType("Db", "object");
+        DesignType(typeName, "object");
+        DesignProp(typeName, "label", "text");
+        DesignProp(typeName, newField, fieldType);
+        DesignSetProp("Db", typeName.ToLowerInvariant() + "s", typeName);
+    }
+
     [Given("the design adds type {string} with field {string}")]
     public void GivenDesignAddsTypeWithField(string typeName, string field)
     {

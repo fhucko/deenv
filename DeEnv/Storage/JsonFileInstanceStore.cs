@@ -2262,9 +2262,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     private static NodeValue DefaultBase(BaseType bt) => bt switch
     {
+        // Bool/Int have no "unset" form in the model — false/0 are real values, not placeholders.
         BaseType.Bool     => new BoolValue(false),
         BaseType.Int      => new IntValue(0),
-        BaseType.Decimal  => new DecimalValue(0m),
         BaseType.Text     => new TextValue(""),
         // An unset enum field defaults to empty (the decided default — NOT the first value);
         // it stores as text, so the <select> shows its empty option until a value is chosen.
@@ -2272,8 +2272,15 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // A password defaults to empty text (= "no password set"); stored as text (the hash).
         // Reachable for an absent password field on a freshly-created User (BuildFields).
         BaseType.Password => new TextValue(""),
-        BaseType.Date     => new DateValue(DateOnly.FromDateTime(DateTime.Today)),
-        BaseType.DateTime => new DateTimeValue(DateTimeOffset.Now),
+        // Decimal/Date/DateTime have no typed "empty" value (DateOnly/decimal/DateTimeOffset are
+        // non-nullable) — the canonical unset form is the empty-text leaf, exactly mirroring the
+        // enum decision above. This is the SAME value a UI-cleared field stores (WsHandler.OptionalLeaf /
+        // StoredDataValidator's optional-empty carve-out / DbBridge.ScalarToExec all round-trip it) —
+        // so an ABSENT field now reads identically to a CLEARED one, instead of fabricating a
+        // nondeterministic "today"/"now"/0 that makes an old row look freshly created.
+        BaseType.Decimal  => new TextValue(""),
+        BaseType.Date     => new TextValue(""),
+        BaseType.DateTime => new TextValue(""),
         _ => throw new InvalidOperationException($"No base default for {bt}")
     };
 

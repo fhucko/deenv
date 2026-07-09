@@ -240,6 +240,22 @@ Feature: Structural identity-diff + rename-safe forward publish
     And the publish report flags the "qty" cell as unconvertible
     And the target's published "Item" reads "qty" as "int" "0"
 
+  # A retype to decimal/date/datetime has no typed "empty" to fall back on when the value is
+  # unconvertible — the reset must land on the SAME canonical unset form (the empty-text leaf) as an
+  # unconvertible int retype lands on 0, never a fabricated 0.0/today/now. Still flagged in the report.
+  Scenario: An unconvertible cell retyped to decimal resets to unset, not zero, and is still flagged
+    Given the target holds an "Item" labelled "Keep me"
+    And the design adds a "price" field to "Item"
+    And the design is committed with message "add price as text"
+    And the designer publishes the design's head commit to the target's id over the WS
+    And the target's "Item" has "price" set to "not-a-number"
+    And the design's "Item" field "price" is retyped to "decimal"
+    And the design is committed with message "retype price to decimal"
+    When the designer publishes the design's head commit to the target's id over the WS
+    Then the publish host action reply is ok
+    And the publish report flags the "price" cell as unconvertible
+    And the target's published "Item" reads "price" defaulted to ""
+
   # ── dry-run changes nothing ───────────────────────────────────────────────────────────────────────
   Scenario: Dry-run reports the same plan and changes nothing
     Given the target holds an "Item" labelled "Keep me"
