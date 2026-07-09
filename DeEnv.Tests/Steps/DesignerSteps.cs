@@ -1483,6 +1483,29 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.Locator(".components-section .fn-card .use-row").Nth(useIndex)
             .Locator("input.node-attr-value").Nth(argIndex).FillAsync(value);
 
+    // ux review — a typo'd arg name is currently byte-identical to no arg at all (both bind ExecNull);
+    // the hint span (`.attr-name-hint`) is a SIBLING right after that specific arg's `.node-attr` row
+    // (attrRow's own markup, shared with the tree editor, carries no such hint — it is layered on only
+    // at THIS call site), so it is found via nextElementSibling off the Nth `.node-attr`, not nested
+    // inside it.
+    [Then("configuration {int}'s arg {int} shows the {string} hint")]
+    public async Task ThenConfigurationArgShowsHint(int useIndex, int argIndex, string hintText) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const rows = document.querySelectorAll('.components-section .fn-card .use-row'); " +
+            $"const r = rows[{useIndex}]; if (r == null) return false; " +
+            $"const attrs = r.querySelectorAll('.node-attr'); const a = attrs[{argIndex}]; if (a == null) return false; " +
+            $"const h = a.nextElementSibling; " +
+            $"return h != null && h.classList.contains('attr-name-hint') && h.textContent.includes({JsString(hintText)}); }}");
+
+    [Then("configuration {int}'s arg {int} shows no hint")]
+    public async Task ThenConfigurationArgShowsNoHint(int useIndex, int argIndex) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const rows = document.querySelectorAll('.components-section .fn-card .use-row'); " +
+            $"const r = rows[{useIndex}]; if (r == null) return false; " +
+            $"const attrs = r.querySelectorAll('.node-attr'); const a = attrs[{argIndex}]; if (a == null) return false; " +
+            $"const h = a.nextElementSibling; " +
+            $"return h == null || !h.classList.contains('attr-name-hint'); }}");
+
     // Scoped to THIS configuration's OWN `.use-preview` panel (not the main `.design-canvas`, and not
     // another configuration's panel) — the independence-at-static-level proof needs per-row isolation,
     // not just "this text appears somewhere on the page".

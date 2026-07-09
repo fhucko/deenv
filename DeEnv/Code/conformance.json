@@ -2625,6 +2625,217 @@
         "kind": "tag",
         "value": "<span data-node=\"-16\">hi</span>"
       }
+    },
+    {
+      "name": "sys.renderTree with fns — M12 U1 arch fix: a lean synthesized node (kind/tag/expr/attrs/children) whose tag matches NO fns row renders as a literal element, not a crash (the non-resolving path the F2 pin never exercised)",
+      "comment": "The U1 literal `{ kind: \"\", tag: fn.name, expr: \"\", attrs: use.args, children: [] }` reaches the LITERAL-ELEMENT arm (not ExpandFn) whenever its tag does not resolve against `fns` — e.g. a design var shadowing the component's name (bindings.ContainsKey(tag), F2 grill E1) sends a REAL invocation down this exact branch too. That arm reads `node.children` via the NON-optional OrderedMembers/ReadNodeProp (unlike ExpandFn, which drops an invocation's children entirely) — so a literal omitting `children` would throw \"Unknown field 'children'\" here specifically; `children: []` (present, empty is fine — it is what a use with no configured markup literally has) is REQUIRED, not merely defensive. `fns` carries one real MetaFn (\"Badge\") so ResolveFn's own comparison genuinely runs and genuinely misses (\"Missing\" != \"Badge\") rather than short-circuiting on an empty `fns`. Pins: the tag renders as a literal <Missing> element (not expanded, not chipped), its literal attr applies, and its one literal child renders as real text — the exact byte-identical-to-M12-F2 literal-element behavior, now proven reachable from the LEANER U1 node shape with no reader change.",
+      "expr": {
+        "type": "call",
+        "fn": {
+          "type": "infixOp",
+          "op": "objectProp",
+          "left": {
+            "type": "symbol",
+            "name": "sys"
+          },
+          "right": {
+            "type": "symbol",
+            "name": "renderTree"
+          }
+        },
+        "params": [
+          {
+            "type": "object",
+            "props": [
+              {
+                "name": "kind",
+                "value": {
+                  "type": "text",
+                  "value": ""
+                }
+              },
+              {
+                "name": "tag",
+                "value": {
+                  "type": "text",
+                  "value": "Missing"
+                }
+              },
+              {
+                "name": "expr",
+                "value": {
+                  "type": "text",
+                  "value": ""
+                }
+              },
+              {
+                "name": "attrs",
+                "value": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "object",
+                      "props": [
+                        {
+                          "name": "name",
+                          "value": {
+                            "type": "text",
+                            "value": "class"
+                          }
+                        },
+                        {
+                          "name": "value",
+                          "value": {
+                            "type": "text",
+                            "value": "\"widget\""
+                          }
+                        },
+                        {
+                          "name": "order",
+                          "value": {
+                            "type": "int",
+                            "value": 0
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "children",
+                "value": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "object",
+                      "props": [
+                        {
+                          "name": "tag",
+                          "value": {
+                            "type": "text",
+                            "value": ""
+                          }
+                        },
+                        {
+                          "name": "expr",
+                          "value": {
+                            "type": "text",
+                            "value": "\"hi\""
+                          }
+                        },
+                        {
+                          "name": "order",
+                          "value": {
+                            "type": "int",
+                            "value": 0
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "props": [
+              {
+                "name": "db",
+                "value": {
+                  "type": "object",
+                  "props": []
+                }
+              },
+              {
+                "name": "exprs",
+                "value": {
+                  "type": "object",
+                  "props": []
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "props": [
+              {
+                "name": "fns",
+                "value": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "type": "object",
+                      "props": [
+                        {
+                          "name": "name",
+                          "value": {
+                            "type": "text",
+                            "value": "Badge"
+                          }
+                        },
+                        {
+                          "name": "params",
+                          "value": {
+                            "type": "text",
+                            "value": "label"
+                          }
+                        },
+                        {
+                          "name": "order",
+                          "value": {
+                            "type": "int",
+                            "value": 0
+                          }
+                        },
+                        {
+                          "name": "body",
+                          "value": {
+                            "type": "array",
+                            "items": [
+                              {
+                                "type": "object",
+                                "props": [
+                                  {
+                                    "name": "tag",
+                                    "value": {
+                                      "type": "text",
+                                      "value": ""
+                                    }
+                                  },
+                                  {
+                                    "name": "expr",
+                                    "value": {
+                                      "type": "text",
+                                      "value": "\"x\""
+                                    }
+                                  },
+                                  {
+                                    "name": "order",
+                                    "value": {
+                                      "type": "int",
+                                      "value": 0
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "kind": "tag",
+        "value": "<Missing class=\"widget\" data-node=\"-7\">hi</Missing>"
+      }
     }
   ]
 }

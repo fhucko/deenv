@@ -221,6 +221,13 @@ ui
             return "name required"
         return ""
 
+    fn useArgNameHint(f, a)
+        if a.name == ""
+            return ""
+        if sys.hasParam(f.params, a.name) == false
+            return "no such param"
+        return ""
+
     fn addRow(coll)
         return <div class="node-add-row">
             <button class="add-element" onClick={() => addElement(coll)}>
@@ -238,6 +245,15 @@ ui
                 "+ element"
             <button class="add-text" onClick={() => addText(coll)}>
                 "+ text/expr"
+
+    fn attrRow(coll, a)
+        return <div class="node-attr">
+            <input class="node-attr-name" value={a.name}>
+            <span class="node-attr-eq">
+                "="
+            <input class="node-attr-value" value={a.value} placeholder={"\"value\" or expression"}>
+            <button class="remove-attr" onClick={() => coll.remove(a)}>
+                "×"
 
     fn renderNodeEditor(node, onRemove)
         if node.kind == "for"
@@ -300,13 +316,7 @@ ui
                     <button class="remove-node" onClick={onRemove}>
                         "×"
             foreach attr in node.attrs.orderBy(a => a.order)
-                <div class="node-attr">
-                    <input class="node-attr-name" value={attr.name}>
-                    <span class="node-attr-eq">
-                        "="
-                    <input class="node-attr-value" value={attr.value} placeholder={"\"value\" or expression"}>
-                    <button class="remove-attr" onClick={() => node.attrs.remove(attr)}>
-                        "×"
+                attrRow(node.attrs, attr)
             if node.children.any(c => true)
                 <div class="node-children">
                     foreach child in node.children.orderBy(c => c.order)
@@ -538,7 +548,9 @@ ui
                                     <div class="fn-uses">
                                         <span class="fn-uses-heading">
                                             "Configurations"
-                                        foreach u in f.uses
+                                        <p class="render-caption">
+                                            "Named example setups — each previews this component with its args bound against seed data."
+                                        foreach u in f.uses.orderBy(u => u.order)
                                             <div class="use-row">
                                                 <input class="use-name" value={u.name} placeholder={"e.g. empty, long list"}>
                                                 <button class="remove-use" onClick={() => f.uses.remove(u)}>
@@ -547,17 +559,17 @@ ui
                                                     <span class="use-name-hint">
                                                         useNameHint(u)
                                                 foreach a in u.args.orderBy(a => a.order)
-                                                    <div class="node-attr">
-                                                        <input class="node-attr-name" value={a.name}>
-                                                        <span class="node-attr-eq">
-                                                            "="
-                                                        <input class="node-attr-value" value={a.value} placeholder={"\"value\" or expression"}>
-                                                        <button class="remove-attr" onClick={() => u.args.remove(a)}>
-                                                            "×"
-                                                <button class="add-attr" onClick={() => addUseArg(u)}>
-                                                    "+ arg"
+                                                    attrRow(u.args, a)
+                                                    if useArgNameHint(f, a) != ""
+                                                        <span class="attr-name-hint">
+                                                            useArgNameHint(f, a)
+                                                <div class="node-add-row">
+                                                    <button class="add-attr" onClick={() => addUseArg(u)}>
+                                                        "+ arg"
+                                                <div class="use-preview-label">
+                                                    u.name != "" ? u.name : "Preview"
                                                 <div class="design-canvas use-preview">
-                                                    sys.renderTree({ kind: "", tag: f.name, expr: "", attrs: u.args }, sys.evalContext(design, evalRefresh), design)
+                                                    sys.renderTree({ kind: "", tag: f.name, expr: "", attrs: u.args, children: [] }, sys.evalContext(design, evalRefresh), design)
                                         <button class="add-use" onClick={() => addUse(f)}>
                                             "+ Configuration"
                             <button class="add-fn" onClick={() => addFn(design)}>

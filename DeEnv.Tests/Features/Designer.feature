@@ -1698,14 +1698,20 @@ Feature: The operator IDE (designs library + instance design selector)
   # ── M12 U1 — MetaUse rows: the Configurations editor + static per-configuration preview ─────
   #
   # F1 gave a component its own Components card; U1 adds a Configurations area under it — each row a
-  # stored MetaUse (name + args, the SAME MetaAttr shape an invocation's own attrs already have)
-  # rendering a STATIC per-configuration preview: the designer synthesizes a TRANSIENT invocation node
-  # (`{ kind: "", tag: fn.name, expr: "", attrs: use.args }` — no `order`, no `children`, never a real
+  # stored MetaUse (name + args, the SAME MetaAttr shape an invocation's own attrs already have,
+  # extracted into the shared `attrRow` fn the tree editor's own attrs listing now also calls) rendering
+  # a STATIC per-configuration preview: the designer synthesizes a TRANSIENT invocation node
+  # (`{ kind: "", tag: fn.name, expr: "", attrs: use.args, children: [] }` — no `order`, never a real
   # MetaNode row) and feeds it to the EXISTING F2 `sys.renderTree` expansion, so the preview shows the
   # component's REAL rendered content with the configuration's args bound — the same mechanism the main
-  # canvas already proves, reused rather than reimplemented. The arg value is deliberately DB-ROOTED
-  # (non-literal), exercising the F2 EvaluateCtxExpr binding path an ordinary invocation's attrs already
-  # take (not just the LiteralValue tier-0 case). Two configurations bound to DIFFERENT db-rooted values
+  # canvas already proves, reused rather than reimplemented. `children: []` is REQUIRED, not defensive:
+  # whenever the tag does NOT resolve against `fns` (a typo, or a design var shadowing the component's
+  # own name — F2 grill E1), the walk falls to the literal-ELEMENT arm, which reads `children` through
+  # the non-optional reader and throws on an absent field (conformance-pinned). The arg value is
+  # deliberately DB-ROOTED (non-literal), exercising the F2 EvaluateCtxExpr binding path an ordinary
+  # invocation's attrs already take (not just the LiteralValue tier-0 case). A typo'd arg name (matching
+  # no declared param) shows an inline hint and clears once corrected — a typo is otherwise byte-identical
+  # to no arg at all (both silently bind null). Two configurations bound to DIFFERENT db-rooted values
   # render DIFFERENT content in their OWN panels (the independence-at-static-level pin — scoped per-row,
   # not "this text appears somewhere"); removing one configuration removes its whole row.
   @m12 @single-user
@@ -1746,8 +1752,11 @@ Feature: The operator IDE (designs library + instance design selector)
     And configuration 0 shows the "name required" hint
     When I set configuration 0's name to "empty"
     And I add an arg to configuration 0
-    And I set configuration 0's arg 0 name to "note"
-    And I set configuration 0's arg 0 value to "db.noteA"
+    And I set configuration 0's arg 0 name to "nope"
+    Then configuration 0's arg 0 shows the "no such param" hint
+    When I set configuration 0's arg 0 name to "note"
+    Then configuration 0's arg 0 shows no hint
+    When I set configuration 0's arg 0 value to "db.noteA"
     Then configuration 0's preview shows a "li" element reading "Alpha"
     When I click the add-configuration button
     Then component configurations shows 2 rows

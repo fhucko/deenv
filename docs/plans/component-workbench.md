@@ -214,16 +214,37 @@ MetaUse:  name text, args set of MetaAttr, order int
   rows: name + init inputs). Round-trip Gherkin incl. a real stateful component
   (Counter). The collector gains var-init sources; the F3 fingerprint gains MetaVar
   fields (all three walks, same slice — the fingerprint law).
-- **U1 — MetaUse rows + Configurations editor + STATIC preview.** Storage + the
-  args-as-attrs editor + each configuration rendered via the EXISTING F2 expansion —
-  concretely (grill fix; NOT zero machinery): the designer synthesizes a transient
-  INVOCATION node per use (`{kind:"", tag: fn.name, expr:"", attrs: use.args}` — the
-  walk's readers tolerate absent children/kind) and feeds it to `sys.renderTree(node,
-  ctx, design.fns)`; PLUS the collector walks MetaUse.args values (else every
-  non-literal arg is an exprs-map miss → chips) — a small C#+TS collector change under
-  the fingerprint/collector lockstep law, in THIS slice. Conformance-pins the
-  synthesized-node walk. Display-inert, chips where honest; proves the uses schema
-  before the sandbox exists.
+- **U1 — MetaUse rows + Configurations editor + STATIC preview (BUILT 2026-07-09,
+  reviewed arch/ui-arch/ux, all fixes folded).** Storage (`MetaUse {name, args set of
+  MetaAttr, order}` on `MetaFn.uses`) + the args-as-attrs editor (extracted into the
+  shared `attrRow(coll, a)` fn the tree editor's own attrs listing now also calls) +
+  each configuration rendered via the EXISTING F2 expansion — concretely (grill fix;
+  NOT zero machinery): the designer synthesizes a transient INVOCATION node per use
+  (`{kind:"", tag: fn.name, expr:"", attrs: use.args, children: []}`) and feeds it to
+  `sys.renderTree(node, ctx, design)`. `children: []` is REQUIRED, not defensive: the
+  walk's readers tolerate an ABSENT `kind` (the existing ReadNodeTextOptional
+  precedent) but NOT an absent `children` — whenever the tag does not resolve against
+  `fns` (a typo, or a design var shadowing the component's own name, live mid-edit —
+  F2 grill E1), the walk falls to the literal-ELEMENT arm, which reads `children`
+  through the non-optional reader and throws on an absent field; the arch review
+  caught this (the original "readers tolerate absent children" claim was false —
+  masked only while the tag happened to resolve) and a conformance case now pins the
+  non-resolving path explicitly. PLUS the collector walks MetaUse.args values (else
+  every non-literal arg is an exprs-map miss → chips forever, not just until the next
+  edit) — a C#-ONLY collector change (`SchemaBridge.RenderExprSources`/
+  `CollectUseArgSources`; there is no TS twin to extend — the collector builds the
+  SERVER-computed eval-context payload, a designer-only build step the client never
+  independently repeats; a client-side miss self-heals via the already-shipped
+  auto-live parse-op, not a second collector). NO fingerprint change: a MetaUse never
+  projects into the fn's `CodeFunction` (uses are preview-only samples, invisible to
+  `ProjectRenderUi`/the app document entirely), so nothing about a use can ever make a
+  ctx.fns call-position result stale — F3b's fingerprint law is scoped to what a fn's
+  OWN behavior depends on (name/params/body/vars), and uses are not that. Configuration
+  NAMES are display labels, deliberately non-unique (unlike a fn/var name, a use name
+  is never resolved as a symbol — nothing breaks if two configurations are both called
+  "empty"). Conformance-pins the synthesized-node walk (both the resolving AND the
+  non-resolving path). Display-inert, chips/blanks where honest; proves the uses
+  schema before the sandbox exists.
 - **W1 — the live instance.** The sandbox driver (private cache, wsHooks save/null/
   restore, per-instance db deep-copy, own DOM container + opaque-container reconciler
   contract, event wiring → instance re-render), real invocation via ctx.fns, Reset.

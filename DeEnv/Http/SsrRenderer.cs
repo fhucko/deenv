@@ -742,8 +742,8 @@ public sealed class SsrRenderer
         .node-add-row button.add-element, .node-add-row button.add-text, .node-add-row button.add-attr,
         .node-add-row button.add-for, .node-add-row button.add-if {
           padding: 0.15rem 0.5rem; font-size: 0.82rem; color: var(--muted); }
-        button.remove-node, button.remove-attr { padding: 0.1rem 0.45rem; color: var(--danger); flex: 0 0 auto; }
-        button.remove-node:hover, button.remove-attr:hover { background: #fff0f0; border-color: var(--danger); }
+        button.remove-node, button.remove-attr, button.remove-use { padding: 0.1rem 0.45rem; color: var(--danger); flex: 0 0 auto; }
+        button.remove-node:hover, button.remove-attr:hover, button.remove-use:hover { background: #fff0f0; border-color: var(--danger); }
         /* S6a — for/if control-flow ROWS in the tree editor: a distinct dashed-border box (vs the
            element's solid left border) so a loop/condition row reads as structurally different from a
            plain tag, echoing the canvas's own for-template/if-template marking below. */
@@ -791,6 +791,14 @@ public sealed class SsrRenderer
         .render-section { margin: 1.6rem 0 0.4rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
         .render-heading { font-size: 1.1rem; margin: 0 0 0.2rem; }
         .render-caption { color: var(--muted); font-size: 0.86rem; margin: 0.6rem 0; }
+        /* M12 U1 — a Configurations row (a MetaUse: name + args + its own static preview) needs minimal
+           containment: each is a DISCRETE, independent unit on an otherwise-tall component card, so a
+           subtle border/background/spacing reads "two configs, two separate things" at a glance. No new
+           layout system — the same card treatment `.type-card` already uses, one notch lighter. */
+        .use-row { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+          padding: 0.7rem 0.85rem; margin: 0.5rem 0; }
+        .use-preview-label { color: var(--muted); font-size: 0.78rem; font-weight: 600;
+          text-transform: uppercase; letter-spacing: .02em; margin: 0.5rem 0 0.2rem; }
         /* Raw code areas tucked behind a disclosure so the type editor reads as just types by default. */
         details.code-areas { margin-top: 1.4rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
         details.code-areas summary.code-summary { font-weight: 600; color: var(--muted); cursor: pointer; padding: 0.3rem 0; }
