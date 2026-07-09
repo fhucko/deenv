@@ -234,13 +234,14 @@ public sealed class AgedStoreSteps(InstanceContext ctx)
         await Assert.That(SsrValue("due")).IsEqualTo(clientDue);
         // The absent int reads as the store's read-side default (JsonFileInstanceStore.DefaultBase).
         await Assert.That(clientCount).IsEqualTo("0");
-        // FOUND BY THIS HARNESS (2026-07-08, fix pending its own decision): an ABSENT date reads back
-        // as DateTime.Today via the same DefaultBase — a row predating a `due date` field displays a
-        // phantom "today" that changes every day (and would persist on Save), while a UI-CLEARED date
-        // reads "" (the WsHandler.OptionalLeaf empty-leaf model: empty means UNSET). Absent and
-        // cleared should read alike; when DefaultBase is aligned to the empty-leaf model, add
-        //     await Assert.That(clientDue).IsEqualTo("");
-        // here to red-prove it — until then the SSR/client consistency asserts above are the pin.
+        // FOUND BY THIS HARNESS (2026-07-08), FIXED on main by bac3e0c (DefaultBase aligned to the
+        // empty-leaf model): an ABSENT date used to read back as DateTime.Today — a row predating a
+        // `due date` field displayed a phantom "today" that changed every day (and a Save would
+        // persist it) — while a UI-CLEARED date reads "" (the WsHandler.OptionalLeaf model: empty
+        // means UNSET). Absent and cleared now read alike: empty. Red-proven pre-fix through the
+        // whole browser stack (this assertion saw "2026-07-08", then "2026-07-09" a day later);
+        // bac3e0c's own coverage pins the store/publish layers, this pins the rendered form.
+        await Assert.That(clientDue).IsEqualTo("");
     }
 
     [Then("the aged note form shows title {string}")]
