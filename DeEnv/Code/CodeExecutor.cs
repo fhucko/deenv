@@ -789,30 +789,31 @@ public sealed class CodeExecutor
             BindVars(OrderedMembersOptional(design, "vars", context), rootBindings, ctx, context);
         }
         var result = BuildRenderTree(node, context, ctx, rootBindings, fns, new ExpansionState());
+        // M12 eval-degrade-banner — the ctx payload itself may be DEGRADED: BuildEvalContext's catch arm
+        // (an invalid design — e.g. a bare root type with zero fields fails InstanceDescriptionLoader.
+        // Validate) ships an empty db/exprs/fns/ambients/params PLUS a non-empty `error` carrying the
+        // REAL exception message. A degraded ctx SUBSUMES staleness (ux review, MUST-FIX): from the
+        // operator's seat "Components changed" is FALSE when nothing changed and the design is simply
+        // invalid — the degrade notice already says fix-then-Refresh, so the stale-fns check below is
+        // SKIPPED ENTIRELY on this path (checked FIRST, not just spliced outermost).
+        if (ctx != null && HasCtxError(ctx, out var errorMessage))
+            return new ExecArray
+            {
+                Items = [new ExecItem { Key = 0, Value = EvalDegradeBanner(errorMessage) }, new ExecItem { Key = 1, Value = result }],
+                Id = node.Id, Kind = ArrayKind.List,
+            };
         // M12 F3b — the staleness banner: ctx.fns is a SNAPSHOT taken at evalContext build time (empty
         // deps, per CANVAS-EVAL-1's deliberate S3a-race inversion), so an edit to a `fns` row's BODY
         // changes no call-site text and a call-position expression would otherwise evaluate against the
         // STALE shipped fn silently. Compare the shipped per-fn fingerprints against the LIVE `fns` rows
         // (dep-recorded, so the banner appears/disappears SAME-FRAME as the edit) and — on ANY mismatch —
         // splice ONE banner ahead of the tree, riding the root node's own id (inert, the F2 splice idiom).
-        // Only checked when BOTH ctx and fns were passed (no fns ⇒ nothing live to compare against).
+        // Only checked when BOTH ctx and fns were passed (no fns ⇒ nothing live to compare against) AND
+        // ctx is NOT degraded (the check above already returned).
         if (ctx != null && fns != null && FnsStale(ctx, fns, context))
-            result = new ExecArray
+            return new ExecArray
             {
                 Items = [new ExecItem { Key = 0, Value = StaleFnsBanner() }, new ExecItem { Key = 1, Value = result }],
-                Id = node.Id, Kind = ArrayKind.List,
-            };
-        // M12 eval-degrade-banner — the ctx payload itself may be DEGRADED: BuildEvalContext's catch arm
-        // (an invalid design — e.g. a bare root type with zero props fails InstanceDescriptionLoader.Validate)
-        // ships an empty db/exprs/fns/ambients/params PLUS a non-empty `error` carrying the REAL exception
-        // message. Splice ONE honest banner ahead of everything (including the stale-fns banner above, if
-        // that also fired — a fully degraded ctx's shipped fns IS empty, so any live fns row is also
-        // "stale" by the same comparison; both are true statements, so both render, degrade first) instead
-        // of leaving an unexplained blank/chipped canvas.
-        if (ctx != null && HasCtxError(ctx, out var errorMessage))
-            result = new ExecArray
-            {
-                Items = [new ExecItem { Key = 0, Value = EvalDegradeBanner(errorMessage) }, new ExecItem { Key = 1, Value = result }],
                 Id = node.Id, Kind = ArrayKind.List,
             };
         return result;
@@ -820,7 +821,9 @@ public sealed class CodeExecutor
 
     // M12 eval-degrade-banner — does the shipped ctx carry a non-empty `error` (BuildEvalContext's catch
     // arm)? The success path never sets this prop, so its absence/emptiness is the byte-identical-today
-    // guard for every existing populated-ctx conformance case.
+    // guard for every existing populated-ctx conformance case. `message` is ALREADY the full banner text
+    // (BuildEvalContext.DegradeBannerText formats it server-side, scoped to the designer-facing exception
+    // family) — the walk displays it verbatim, no further wrapping.
     private static bool HasCtxError(ExecObject ctx, out string message)
     {
         if (ctx.Props.GetValueOrDefault("error") is ExecText { Value.Length: > 0 } t) { message = t.Value; return true; }
@@ -829,12 +832,12 @@ public sealed class CodeExecutor
     }
 
     // A div.eval-degrade-banner — the eval-degrade-banner affordance. No data-node (it corresponds to no
-    // MetaNode row). Carries the REAL exception message, never a paraphrase.
+    // MetaNode row). `message` is the ALREADY-FORMATTED banner text shipped by BuildEvalContext.
     private static ExecTag EvalDegradeBanner(string message) => new()
     {
         Name = "div",
         Attributes = new() { ["class"] = new ExecText { Value = "eval-degrade-banner" } },
-        Children = [new ExecText { Value = $"Preview data unavailable: {message} — fix the design, then Refresh values." }],
+        Children = [new ExecText { Value = message }],
     };
 
     // M12 F3b — do the shipped ctx.fns fingerprints (keyed by name) still match the LIVE `fns` rows?

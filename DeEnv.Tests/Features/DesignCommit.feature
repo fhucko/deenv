@@ -140,7 +140,7 @@ Feature: Design commits — Commit/Branch rows, sys.commitDesign, the authority 
   Scenario: Committing an invalid design fails cleanly
     Given a designer instance holding a design whose root is an object type with no props
     When the designer commits that design with message "broken" over the WS
-    Then the host action reply is an error mentioning "props"
+    Then the host action reply is an error mentioning "fields"
     And db.commits is empty
     And the design's main branch head is unset
 

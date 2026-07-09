@@ -1258,7 +1258,7 @@ Feature: The operator IDE (designs library + instance design selector)
     And I author a literal convertible render into the design's UI
     When I click Convert to structured
     Then the design editor eventually shows the structured render tree editor
-    And the design canvas shows the eval-degrade notice mentioning "Type 'Db' has baseType 'object' but no props"
+    And the design canvas shows the eval-degrade notice mentioning "Type 'Db' has baseType 'object' but no fields"
     When I add a field "greeting" to the type "Db"
     Then the just-added type shows no hint
     When I click Refresh values
@@ -1579,6 +1579,10 @@ Feature: The operator IDE (designs library + instance design selector)
   # own refusal) — so the freshly-minted unnamed component shows NO banner. Naming it makes it a
   # real callable the STALE ctx doesn't know about yet — the banner correctly appears — and Refresh
   # (which rebuilds ctx over the now-valid, now-named, now-bodied fn) clears it.
+  #
+  # The root type carries a field (a VALID design, unlike E2-era fixtures) so evalContext SUCCEEDS —
+  # a fieldless root would now degrade ctx and, per the eval-degrade-banner suppression fix, the
+  # degrade banner would subsume this scenario's OWN staleness banner it means to prove.
   @m12 @single-user
   Scenario: A freshly-minted unnamed component shows no staleness banner; naming it shows the banner correctly, and Refresh clears it
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
@@ -1587,6 +1591,7 @@ Feature: The operator IDE (designs library + instance design selector)
     And I edit the design "scratchcomp"
     When I add a type to the design
     And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
     When I ensure the Advanced code disclosure is open
     And I author a bare convertible render into the design's UI
     When I click Convert to structured

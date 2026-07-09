@@ -254,9 +254,9 @@ public sealed class HostActionSteps
         DesignSetProp("Db", typeName.ToLowerInvariant() + "s", typeName);
     }
 
-    // An INVALID design: its root Db is an object type with no props (SchemaBridge rejects it with a
-    // "props" error). The projection validates the WHOLE app and writes nothing, so the host action
-    // surfaces the rejection. No custom UI needed — the types are already invalid.
+    // An INVALID design: its root Db is an object type with no fields (InstanceDescriptionLoader rejects
+    // it with a "fields" error). The projection validates the WHOLE app and writes nothing, so the host
+    // action surfaces the rejection. No custom UI needed — the types are already invalid.
     [Given("a designer instance holding a design whose root is an object type with no props")]
     public void GivenDesignerHoldingInvalidDesign()
     {

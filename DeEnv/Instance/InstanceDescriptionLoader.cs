@@ -80,7 +80,7 @@ public static class InstanceDescriptionLoader
             {
                 if (type.Props == null || type.Props.Count == 0)
                     throw new SchemaValidationException(
-                        $"Type '{type.Name}' has baseType 'object' but no props.");
+                        $"Type '{type.Name}' has baseType 'object' but no fields.");
 
                 var propNames = new HashSet<string>();
                 foreach (var prop in type.Props)

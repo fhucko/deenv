@@ -566,31 +566,55 @@ mutations the designer app performs in deenv code — that machinery already exi
   per-node error display), component-body references to design vars (see the safe-
   under-approximation note above).
 - **eval-degrade-banner — an honest notice when evalContext itself fails to build. ✅ DONE
-  2026-07-09** (branch `claude/eval-degrade-banner`; fixes the V1b-ledgered gap above).
+  2026-07-09** (branch `claude/eval-degrade-banner`; fixes the V1b-ledgered gap above; arch
+  review SHIP, ux review SHIP-WITH-FIXES, all four fixes applied same day).
   `BuildEvalContext`'s catch arm (an invalid design — e.g. the bare-root-type repro) now
-  ships a non-empty `error` prop carrying the REAL exception message (never a paraphrase)
-  alongside its empty db/exprs/fns/ambients/params payload; the success path never sets it.
-  `ExecuteRenderTree`/`execRenderTree` splice ONE `div.eval-degrade-banner` ahead of the
-  tree whenever the shipped ctx carries a non-empty error — the F3b stale-fns-banner idiom
-  reused. Decision: when BOTH a degrade AND a live-fns staleness mismatch apply (a
-  degraded ctx's empty `ctx.fns` makes any live fns row look stale too — both true
-  statements), BOTH banners render, degrade-cause first; conformance-pinned (2 new cases:
-  error-only, error+stale-fns-mismatch — every pre-existing populated-ctx case, none of
-  which carry `error`, stays byte-identical, proving no regression). The type-card editor
-  gets a matching inline hint ("needs at least one field") for a baseType "object" type
-  with zero props — the fnNameHint idiom (`typeHint` in app.deenv), so the operator sees
-  the cause before ever hitting Convert/the canvas. Browser-pinned (Designer.feature @m12):
-  a fieldless "Db" type shows the hint and, after Convert, the canvas's degrade notice with
+  ships a non-empty `error` prop — the ALREADY-FORMATTED banner text, via the extracted
+  `SsrRenderer.DegradeBannerText(ex)` — alongside its empty db/exprs/fns/ambients/params
+  payload; the success path never sets it. `ExecuteRenderTree`/`execRenderTree` splice ONE
+  `div.eval-degrade-banner` ahead of the tree whenever the shipped ctx carries a non-empty
+  `error`, displayed VERBATIM (the F3b stale-fns-banner idiom reused, simplified to a plain
+  passthrough since formatting now lives entirely server-side). The type-card editor gets a
+  matching inline hint ("needs at least one field") for a baseType "object" type with zero
+  fields — the fnNameHint idiom (`typeHint` in app.deenv), so the operator sees the cause
+  before ever hitting Convert/the canvas. Browser-pinned (Designer.feature @m12): a
+  fieldless "Db" type shows the hint and, after Convert, the canvas's degrade notice with
   the real message; adding a field and clicking Refresh clears both and the canvas
   evaluates normally.
+  **ux review fixes:** (1) MUST-FIX, reverses the original both-banners decision — a
+  degraded ctx now SUBSUMES staleness: "Components changed" was FALSE when the operator
+  changed nothing and the design is simply invalid, so `HasCtxError`/`ctxError` is checked
+  FIRST and returns immediately, skipping `FnsStale`/`fnsStale` entirely on that path (only
+  ONE banner ever renders under degrade; conformance case 2 flipped/renamed to pin the
+  suppression). (2) the validator message moved to user vocabulary at its source
+  (`InstanceDescriptionLoader`: "...but no props." → "...but no fields.") so notice →
+  type-card hint → the "+ Field" button read as one thread — see the standalone
+  validator-message-vocabulary ledger line below (do NOT sweep other messages piecemeal).
+  (3) verbatim `ex.Message` is now scoped to the designer-facing family
+  (`SchemaValidationException`, `CodeParseException` — an operator's own authoring
+  mistakes); any OTHER exception ships the generic "Preview data unavailable — see the
+  server log." instead (full detail still always reaches `Console.Error`), unit-pinned
+  directly on the extracted `DegradeBannerText` helper (`EvalDegradeBannerTextTests`, no
+  host/browser needed). (4) `.eval-degrade-banner`/`.stale-fns-banner` gained a shared,
+  minimal notice treatment in `SsrRenderer`'s stylesheet beside the `.expr-chip` rules
+  (framework-emitted canvas vocabulary, not app creep) — a subtle `--warn`-toned background
+  + left border + smaller text, calm rather than alarming (`--danger`/red stays reserved
+  for destructive actions); screenshot-verified: the banner now reads as a distinct system
+  notice bar above the design's own black `<h1>` content, not indistinguishable plain text.
+  **Ledger:** a validator-message user-vocabulary pass (prop→field etc. across the OTHER
+  validator messages) — do once, deliberately, as its own slice, not piecemeal per-message
+  the way this fix touched only the one message it needed.
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —
   the one high-value reorder when composition is next touched: types → render → publish →
-  branches; (b) canvas-above-tree loses same-frame feedback on DEEP trees (the update scrolls
-  off-screen) — the concrete reason the eval-era canvas wants sticky/side-by-side, premature
-  while chips-only; (c) an empty-but-tagged root renders a blank canvas card — wants a thin
-  empty-state hint; (d) heading-size nit was resolved by the grouping fix.
+  branches (the eval-degrade-banner scenario re-confirmed this the hard way — the type-card
+  hint that explains WHY the canvas below is degraded sits a full scroll away from the
+  notice it explains, the exact page-order gap this reorder would close); (b) canvas-above-tree
+  loses same-frame feedback on DEEP trees (the update scrolls off-screen) — the concrete
+  reason the eval-era canvas wants sticky/side-by-side, premature while chips-only; (c) an
+  empty-but-tagged root renders a blank canvas card — wants a thin empty-state hint; (d)
+  heading-size nit was resolved by the grouping fix.
 - **S4 — inspector edits (first write).** Select a node → its row in a generic-UI-grade
   form (attribute slots, expression leaves as text inputs) → ordinary data commit →
   projection + preview update. Canvas v1 = the live preview itself with selection

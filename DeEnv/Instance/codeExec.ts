@@ -1112,46 +1112,47 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
         bindVars(orderedMembersOptional(design, "vars", context), rootBindings, ctx, context);
     }
     const result = renderTreeNode(node, context, ctx, rootBindings, fns, { depth: 0, used: 0 });
+    // M12 eval-degrade-banner — the ctx payload itself may be DEGRADED: BuildEvalContext's catch arm (an
+    // invalid design — e.g. a bare root type with zero fields fails InstanceDescriptionLoader.Validate)
+    // ships an empty db/exprs/fns/ambients/params PLUS a non-empty `error` carrying the REAL exception
+    // message. A degraded ctx SUBSUMES staleness (ux review, MUST-FIX): from the operator's seat
+    // "Components changed" is FALSE when nothing changed and the design is simply invalid — the degrade
+    // notice already says fix-then-Refresh, so the stale-fns check below is SKIPPED ENTIRELY on this path
+    // (checked FIRST, not just spliced outermost).
+    const errorMessage = ctx != null ? ctxError(ctx) : null;
+    if (errorMessage != null) {
+        return { type: "array", kind: "list", items: [{ key: 0, value: evalDegradeBanner(errorMessage) }, { key: 1, value: result }], id: node.id };
+    }
     // M12 F3b — the staleness banner: ctx.fns is a SNAPSHOT taken at evalContext build time (empty deps,
     // the deliberate S3a-race inversion), so an edit to a `fns` row's BODY changes no call-site text and a
     // call-position expression would otherwise evaluate against the STALE shipped fn silently. Compare the
     // shipped per-fn fingerprints against the LIVE `fns` rows (dep-recorded, so the banner appears/
     // disappears SAME-FRAME as the edit) and — on ANY mismatch — splice ONE banner ahead of the tree,
     // riding the root node's own id (inert, the F2 splice idiom). Only checked when BOTH ctx and fns were
-    // passed (no fns ⇒ nothing live to compare against).
-    let out: ExecValue = result;
+    // passed (no fns ⇒ nothing live to compare against) AND ctx is NOT degraded (handled above).
     if (ctx != null && fns != null && fnsStale(ctx, fns, context)) {
-        out = { type: "array", kind: "list", items: [{ key: 0, value: staleFnsBanner() }, { key: 1, value: out }], id: node.id };
+        return { type: "array", kind: "list", items: [{ key: 0, value: staleFnsBanner() }, { key: 1, value: result }], id: node.id };
     }
-    // M12 eval-degrade-banner — the ctx payload itself may be DEGRADED: BuildEvalContext's catch arm (an
-    // invalid design — e.g. a bare root type with zero props fails InstanceDescriptionLoader.Validate)
-    // ships an empty db/exprs/fns/ambients/params PLUS a non-empty `error` carrying the REAL exception
-    // message. Splice ONE honest banner ahead of everything (including the stale-fns banner above, if that
-    // also fired — a fully degraded ctx's shipped fns IS empty, so any live fns row is also "stale" by the
-    // same comparison; both are true statements, so both render, degrade first) instead of leaving an
-    // unexplained blank/chipped canvas.
-    const errorMessage = ctx != null ? ctxError(ctx) : null;
-    if (errorMessage != null) {
-        out = { type: "array", kind: "list", items: [{ key: 0, value: evalDegradeBanner(errorMessage) }, { key: 1, value: out }], id: node.id };
-    }
-    return out;
+    return result;
 }
 
 // M12 eval-degrade-banner — does the shipped ctx carry a non-empty `error` (BuildEvalContext's catch arm)?
 // The success path never sets this prop, so its absence/emptiness is the byte-identical-today guard for
-// every existing populated-ctx conformance case.
+// every existing populated-ctx conformance case. `message` is ALREADY the full banner text
+// (BuildEvalContext.DegradeBannerText formats it server-side, scoped to the designer-facing exception
+// family) — the walk displays it verbatim, no further wrapping.
 function ctxError(ctx: ExecObject): string | null {
     const e = ctx.props["error"];
     return e != null && e.type === "text" && e.value.length > 0 ? e.value : null;
 }
 
 // A div.eval-degrade-banner — the eval-degrade-banner affordance. No data-node (it corresponds to no
-// MetaNode row). Carries the REAL exception message, never a paraphrase.
+// MetaNode row). `message` is the ALREADY-FORMATTED banner text shipped by BuildEvalContext.
 function evalDegradeBanner(message: string): ExecTag {
     return {
         type: "tag", name: "div",
         attributes: { "class": { value: { type: "text", value: "eval-degrade-banner" } } },
-        children: [{ type: "text", value: `Preview data unavailable: ${message} — fix the design, then Refresh values.` }],
+        children: [{ type: "text", value: message }],
     };
 }
 

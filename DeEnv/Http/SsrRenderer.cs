@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DeEnv.Code;
+using DeEnv.Code.Parsing;
 using DeEnv.Designer;
 using DeEnv.Instance;
 using DeEnv.Kernel;
@@ -765,6 +766,14 @@ public sealed class SsrRenderer
         .design-canvas .expr-chip { display: inline-block; padding: 0 0.35rem; border-radius: 4px; background: #eef1f5;
           color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.85rem; }
         .design-canvas .expr-chip.is-empty { font-style: italic; background: #f6ecec; }
+        /* M12 eval-degrade-banner / F3b stale-fns-banner — the framework's OWN notice vocabulary inside
+           the canvas (same tier as .expr-chip: a client-computed marker, not app content). Unstyled plain
+           text was indistinguishable from the design's own rendered content (ux review) — a calm, subtle
+           treatment (--warn, NOT --danger/red: this is advisory, "go fix it", never a destructive/error
+           state) makes clear the TOOL is talking. */
+        .design-canvas .eval-degrade-banner, .design-canvas .stale-fns-banner {
+          background: color-mix(in srgb, var(--warn) 10%, var(--surface)); border-left: 3px solid var(--warn);
+          color: var(--warn); padding: 0.45rem 0.7rem; margin: 0 0 0.5rem; border-radius: 4px; font-size: 0.85rem; }
         /* S6a — the NO-CTX TEMPLATE mode for for/if canvas rows: a for renders its body ONCE behind a
            dashed marker card (echoing the tree editor's dashed .node-for/.node-if); an if renders BOTH
            branches, each labeled then/else — the canvas never guesses which loop iterations or which
@@ -1369,16 +1378,27 @@ public sealed class SsrRenderer
         catch (Exception ex)
         {
             // An invalid/unloadable design must not break the canvas — degrade to an empty context (every
-            // expr chips) and log the detail. The structural canvas still paints. `error` carries the REAL
-            // exception message (never a paraphrase — e.g. SchemaValidationException's "Type 'X' has
-            // baseType 'object' but no props") so the canvas walk can splice an honest degrade banner
-            // instead of leaving an unexplained blank/chipped tree (M12 eval-degrade-banner). The success
-            // path never sets this prop.
+            // expr chips) and log the FULL detail regardless of family. The structural canvas still paints.
+            // `error` carries the already-formatted banner text (M12 eval-degrade-banner) so the canvas
+            // walk (both twins) just displays it verbatim — see DegradeBannerText.
             Console.Error.WriteLine($"evalContext of design {design.Id} failed: {ex}");
             return Obj(("db", empty), ("exprs", empty), ("fns", empty), ("ambients", empty), ("params", empty),
-                ("error", new ExecText { Value = ex.Message }));
+                ("error", new ExecText { Value = DegradeBannerText(ex) }));
         }
     }
+
+    // M12 eval-degrade-banner (ux review, item 3) — scope the VERBATIM exception message to the
+    // DESIGNER-FACING family (SchemaValidationException + CodeParseException — the shapes an operator's
+    // OWN authoring mistakes throw); any OTHER exception (a genuine bug / infra failure — e.g. the "No
+    // design with id" CodeRuntimeException guard above) ships a GENERIC, calmer text instead — never leak
+    // an unrelated stack-trace-adjacent detail to the canvas. The full exception is ALWAYS logged to
+    // Console.Error regardless (see the catch above) — this only controls what reaches the client.
+    // Extracted as its own method (public, like MountUrl/StripBase — the project's own precedent for a
+    // directly-unit-testable static helper) so it is testable without needing a reachable non-validation
+    // throw path through the whole builder.
+    public static string DegradeBannerText(Exception ex) => ex is SchemaValidationException or CodeParseException
+        ? $"Preview data unavailable: {ex.Message} — fix the design, then Refresh values."
+        : "Preview data unavailable — see the server log.";
 
     // Seed the design's `initialData` into a THROWAWAY file-backed store (self-seeds when there is no data
     // file — JsonFileInstanceStore), read the graph back with DbBridge.LoadRoot (the SAME builder that binds

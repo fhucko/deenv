@@ -31,7 +31,7 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     Given a designer instance holding a design whose root is an object type with no props
     And a target instance addressed by an id
     When the designer publishes that design to the target's id over the WS
-    Then the host action reply is an error mentioning "props"
+    Then the host action reply is an error mentioning "fields"
     And the target app document is unchanged
 
   @milestone-10 @single-user
@@ -170,7 +170,7 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
   Scenario: Creating from an invalid design is rejected and spawns nothing
     Given a designer instance holding a design whose root is an object type with no props
     When the designer creates an instance named "myapp" from that design over the WS
-    Then the host action reply is an error mentioning "props"
+    Then the host action reply is an error mentioning "fields"
     And no instance was created
 
   @milestone-10 @single-user
@@ -212,7 +212,7 @@ Feature: Host-side actions — sys.create / sys.publish / sys.clone / sys.delete
     Given a designer instance holding a design whose root is an object type with no props
     And a target instance addressed by an id
     When the operator applies that design to the target's id over the WS
-    Then the host action reply is an error mentioning "props"
+    Then the host action reply is an error mentioning "fields"
     And the target app document is unchanged
 
   # rename(id, name): update an instance's display label in the registry.
