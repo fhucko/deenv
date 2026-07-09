@@ -357,7 +357,7 @@ ui
         var ctx = sys.evalContext(design, evalRefresh)
         return <div class="design-canvas">
             foreach n in design.render
-                sys.renderTree(n, ctx, design.fns)
+                sys.renderTree(n, ctx, design)
 
     fn designEditor(design)
         var state = { message: "", migration: "", revertMigration: "" }

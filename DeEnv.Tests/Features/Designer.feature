@@ -1567,3 +1567,39 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the design canvas shows the stale-fns banner
     When I click Refresh values
     Then the design canvas does not show the stale-fns banner
+
+  # ── M12 V1b — init-evaluated state in the static canvas ───────────────────────────────────────
+  #
+  # A static canvas can only ever show INITIAL state, so binding each state var's init expression IS
+  # the truth — what a fresh live instance shows at mount. V1 left a stateful component's state-var
+  # references chipped ("honestly unbound until W1's live instances"); V1b flips that: BindVars/
+  # bindVars now binds a var's init value at the walk ROOT (design.vars, top-level `ui var`s) and at
+  # ExpandFn/expandFn (a MetaFn's OWN vars, bound AFTER its params) — real content, not a placeholder
+  # chip. The proof imports a design-level var `greeting` (referenced in its own <span>) AND a real
+  # stateful Counter() component INVOKED in the render (F2's tag-expansion) — one fixture exercising
+  # both binding sites. THE RACE GUARD (the same S3a/CANVAS-EVAL-1 idiom, now for a var's init):
+  # editing the var's init text is a live row read (dep-recorded — same-frame), but the NEW init text
+  # has no `ctx.exprs` entry yet (a refresh-gated snapshot), so the var is left UNBOUND until Refresh —
+  # the referencing leaf (whose OWN source text never changed) falls to an honest chip holding its raw
+  # source "greeting", never the edited init text. Clicking "Refresh values" rebuilds ctx (which
+  # re-collects every var init source fresh, RenderExprSources' collector-law obligation) and the leaf
+  # shows the new value.
+  @m12 @single-user
+  Scenario: The canvas shows a stateful component's INITIAL state and a design-level var's init value, chipping an edited init until Refresh
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "initstate"
+    And I edit the design "initstate"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a design var and an invoked Counter component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows a "button" element reading "0"
+    And the design canvas shows a "span" element reading "hi"
+    When I edit design-level state var 0's init to "\"bye\""
+    Then the design canvas shows an expression chip reading "greeting"
+    When I click Refresh values
+    Then the design canvas shows a "span" element reading "bye"

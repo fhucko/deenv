@@ -1071,7 +1071,7 @@ function scalarKeyPart(v: ExecValue): string {
     }
 }
 
-// renderTree(node[, ctx[, fns]]): the CLIENT-COMPUTABLE canvas (M12 S4 foundation) — the twin of
+// renderTree(node[, ctx[, design]]): the CLIENT-COMPUTABLE canvas (M12 S4 foundation) — the twin of
 // CodeExecutor.ExecuteRenderTree. Turns a MetaNode row (tag/expr/order scalars + attrs/children sets, the
 // S1a structured-render schema) into a live tag tree built from the rows. UNLIKE the server-backed reads
 // (execPublishPreview et al., revived from shipped data), this is computed by BOTH twins from row data the
@@ -1079,12 +1079,17 @@ function scalarKeyPart(v: ExecValue): string {
 // dep-recording paths ordinary reads use (recordProp, recordMember), so an ordinary tree-editor edit
 // (rename a tag, edit an attr, add/remove a node) invalidates the enclosing render and the canvas
 // re-renders in the same interaction with no round-trip. The optional SECOND arg is the eval context
-// ({ db, exprs, … } from sys.evalContext); the optional THIRD arg (M12 F2) is the design's `fns` ROWS
-// (`design.fns`, a LIVE set of MetaFn — not eval-context data, so editing a component body repaints every
-// expansion SAME-FRAME). Absent fns ⇒ no tag can ever resolve to a component (today's exact behavior).
+// ({ db, exprs, … } from sys.evalContext); the optional THIRD arg is the DESIGN row (M12 V1b — was the bare
+// `fns` set, F2; a robust never-grows-again shape, since the walk now needs BOTH of a design's live sets):
+// `design.fns` (component resolution, unchanged from F2) AND `design.vars` (top-level ui vars, M12 V1b —
+// bound at the walk ROOT). NOT eval-context data — design is LIVE rows the client already holds, so editing
+// a component body / a var's init repaints every expansion SAME-FRAME. Absent design ⇒ no tag can ever
+// resolve to a component and no design var ever binds (today's exact pre-V1b behavior); an absent
+// `fns`/`vars` PROP on a present design (readNodePropOptional/orderedMembersOptional — the V1 tolerance
+// precedent) reads as "none" rather than throwing.
 function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
     if (codeCall.params.length < 1 || codeCall.params.length > 3)
-        throw new Error("renderTree(node[, ctx[, fns]]) takes one to three arguments.");
+        throw new Error("renderTree(node[, ctx[, design]]) takes one to three arguments.");
     const node = executeValue(codeCall.params[0], scope, context).value;
     if (node.type !== "object") throw new Error("renderTree() expects a node object as its first argument.");
     // The optional eval context (M12 CANVAS-EVAL-1): a { db, exprs, … } payload (from sys.evalContext).
@@ -1092,10 +1097,21 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
     // behavior (the no-ctx conformance case stays byte-identical). A non-object 2nd arg is ignored.
     const ctxV = codeCall.params.length >= 2 ? executeValue(codeCall.params[1], scope, context).value : null;
     const ctx = ctxV != null && ctxV.type === "object" ? ctxV : null;
-    // The optional fns rows (M12 F2): a non-array 3rd arg is ignored — same as absent, no expansion.
-    const fnsV = codeCall.params.length === 3 ? executeValue(codeCall.params[2], scope, context).value : null;
-    const fns = fnsV != null && fnsV.type === "array" ? fnsV : null;
-    const result = renderTreeNode(node, context, ctx, undefined, fns, { depth: 0, used: 0 });
+    // A non-object 3rd arg is ignored — same as absent, no expansion and no design-var binding.
+    const designV = codeCall.params.length === 3 ? executeValue(codeCall.params[2], scope, context).value : null;
+    const design = designV != null && designV.type === "object" ? designV : null;
+    const fnsRaw = design != null ? readNodePropOptional(design, "fns", context) : null;
+    const fns = fnsRaw != null && fnsRaw.type === "array" ? fnsRaw : null;
+    // M12 V1b — bind design.vars at the walk ROOT, seeding the top-level `bindings` every node inherits
+    // (row bindings — for/if loop vars — stack on top and SHADOW a same-named design var, same as any scope
+    // binding). Only meaningful with BOTH a design and an eval context (a var's init can't evaluate without
+    // one); no design ⇒ stays undefined (today's exact pre-V1b behavior).
+    let rootBindings: { [name: string]: ExecValue } | undefined = undefined;
+    if (ctx != null && design != null) {
+        rootBindings = {};
+        bindVars(orderedMembersOptional(design, "vars", context), rootBindings, ctx, context);
+    }
+    const result = renderTreeNode(node, context, ctx, rootBindings, fns, { depth: 0, used: 0 });
     // M12 F3b — the staleness banner: ctx.fns is a SNAPSHOT taken at evalContext build time (empty deps,
     // the deliberate S3a-race inversion), so an edit to a `fns` row's BODY changes no call-site text and a
     // call-position expression would otherwise evaluate against the STALE shipped fn silently. Compare the
@@ -1283,7 +1299,9 @@ const fpNodeSep = String.fromCharCode(2);
 // same-frame. NOT a hash — see SchemaBridge's comment.
 //
 // REWORDED (M12 V1 — the original wording scoped this to "fields renderTreeNode itself reads", which a
-// MetaFn's `vars` are NOT: renderTreeNode/expandFn's canvas expansion never reads `vars` at all). The
+// MetaFn's `vars` were NOT at the time: renderTreeNode/expandFn's canvas expansion never read `vars` at
+// all — V1b, below (expandFn/bindVars), closed that gap, so this is no longer even the narrower true fact,
+// but the broader obligation below always covered `vars` regardless). The
 // correct, broader obligation: the fingerprint MUST cover every field that affects the fn's PROJECTED/
 // EVALUATED behavior (everything SchemaBridge.ProjectRenderUi folds into the fn's assembled CodeFunction,
 // which ships as ctx.fns for F3 call-position evaluation) — not merely what the display-inert canvas walk
@@ -1352,6 +1370,18 @@ function fingerprintNode(node: ExecObject, context: ExecContext): string {
 // caller's own bindings do NOT leak in. The result rides an array value (kind "list", carrying the
 // INVOCATION row's id, inert) — the exact buildFor splice idiom — so every expanded element keeps its OWN
 // body-row data-node.
+//
+// M12 V1b — AFTER the param bindings, the MetaFn's OWN `vars` (its state, MetaVar rows) bind into the SAME
+// `bodyBindings` object, sequentially, under {db, params, earlier vars} — the runtime's setup order (a
+// component's `var` statements run after its params are bound, in the setup body). A var whose name
+// COLLIDES with a param OVERWRITES it (bindVars assigns into the same key) — the pinned canvas rule: the
+// LATER declaration in setup order wins the walk's scope. (The designer's own fnVarNameHint already warns
+// "shadows a parameter" on this collision — advisory, not a projection refusal, so it authors cleanly and
+// only needs an honest, deterministic canvas answer; a real live instance's setup fn declaring a same-named
+// `var` in the SAME function scope as its param would in fact throw "already exists" at runtime — a genuine
+// pre-existing authoring pitfall the hint is warning AGAINST, out of this slice's scope to fix.) A static
+// canvas can only ever show INITIAL state, so this binding — not a "state chip" — IS the truth of what a
+// fresh live instance shows at mount (once the var is correctly named, the slice's whole premise).
 function expandFn(fn: ExecObject, bodyRoot: ExecObject, invocationNode: ExecObject, context: ExecContext,
     ctx: ExecObject | null, callerBindings: { [name: string]: ExecValue } | undefined, fns: ExecArray, expansion: ExpansionState): ExecValue {
     const paramNames = readNodeText(fn, "params", context).split(",").map(p => p.trim()).filter(p => p.length > 0);
@@ -1370,11 +1400,40 @@ function expandFn(fn: ExecObject, bodyRoot: ExecObject, invocationNode: ExecObje
         }
         // else: attr present but unevaluable — leave OUT of bodyBindings so a body reference chips.
     }
+    bindVars(orderedMembersOptional(fn, "vars", context), bodyBindings, ctx, context);
     expansion.depth++;
     try {
         const result = renderTreeNode(bodyRoot, context, ctx, bodyBindings, fns, expansion);
         return { type: "array", kind: "list", items: [{ key: 0, value: result }], id: invocationNode.id };
     } finally { expansion.depth--; }
+}
+
+// M12 V1b — bind each MetaVar row's init value into `bindings`, SEQUENTIALLY (each init evaluates under
+// {db, ...whatever is ALREADY in `bindings`} — so a design var's init can reference an earlier design var,
+// and a component's state-var init can reference an earlier state var OR its already-bound params, since
+// `bindings` for expandFn's call already holds them). Shared by the walk ROOT (design.vars) and expandFn (a
+// MetaFn's own vars) — one binding rule, twin of CodeExecutor.BindVars.
+//   • an EMPTY init (`init.length === 0`, the bare `var x` grammar) binds ExecNull directly, no eval needed
+//     — matching the runtime (a null CodeVarDec.value defaults to a null exec value); this is a legitimate
+//     null, not an "unevaluable" miss;
+//   • a non-empty init evaluates via evalCtxExpr under the bindings accumulated SO FAR — a clean eval binds
+//     the value; `ctx == null` or any eval miss/throw leaves the var OUT of `bindings` entirely so a body/
+//     leaf reference to it misses scope and CHIPS (never guess a value — the same divergence expandFn's own
+//     param binding already documents);
+//   • assignment happens AFTER the value is computed, so a name that collides with something already in
+//     `bindings` (a param, at expandFn's call site) is OVERWRITTEN — the deliberate runtime-scoping pin.
+function bindVars(vars: ExecObject[], bindings: { [name: string]: ExecValue }, ctx: ExecObject | null, context: ExecContext): void {
+    for (const v of vars) {
+        const name = readNodeText(v, "name", context);
+        if (name.length === 0) continue; // no name to bind under — never a real row (projection refuses it)
+        const init = readNodeText(v, "init", context);
+        if (init.length === 0) { bindings[name] = { type: "null" }; continue; } // bare `var x` — legal null
+        if (ctx != null) {
+            const value = evalCtxExpr(init, ctx, bindings);
+            if (value != null) { bindings[name] = value; continue; }
+        }
+        // else: ctx==null or an eval miss/throw — leave OUT of bindings so a reference chips.
+    }
 }
 
 // A `for` row (S6b, WITH ctx). Evaluate the `collection` source against the seed graph under the CURRENT
@@ -1605,16 +1664,27 @@ function orderedMembers(node: ExecObject, setProp: string, context: ExecContext)
     return objs.sort((a, b) => a.order - b.order).map(p => p.o);
 }
 
+// Like readNodeProp, but tolerant of an ABSENT prop — returns undefined instead of throwing (the
+// readNodeTextOptional precedent, generalized to any value type). M12 V1b's ONE new caller: a `design`
+// row's `fns`/`vars` props, which a hand-built conformance fixture predating V1b may omit entirely (a real
+// Design row always carries both). orderedMembersOptional is built on top of this (its own former inline
+// duplicate, now factored out). Twin of CodeExecutor.ReadNodePropOptional.
+function readNodePropOptional(node: ExecObject, name: string, context: ExecContext): ExecValue | undefined {
+    const staged = nearestStagedValue(node, name, context);
+    if (staged != null) { recordProp(node.id, name); return staged; }
+    const value = node.props[name];
+    if (value == null) return undefined;
+    recordProp(node.id, name);
+    return value;
+}
+
 // Like orderedMembers, but tolerant of an ABSENT set prop — returns empty instead of throwing (the same
 // "kind" precedent readNodeTextOptional sets, M12 V1). A real MetaFn/Design row always carries `vars` (M5
 // defaults an empty set on load), so this only matters for a hand-built conformance fixture that predates
 // V1 and omits the field entirely — reading it as "no state vars" (not an error) is correct: a fn with no
 // declared `vars` behaves exactly as it always has. Twin of CodeExecutor.OrderedMembersOptional.
 function orderedMembersOptional(node: ExecObject, setProp: string, context: ExecContext): ExecObject[] {
-    const staged = nearestStagedValue(node, setProp, context);
-    let raw: ExecValue | undefined = staged;
-    if (staged != null) recordProp(node.id, setProp);
-    else if (node.props[setProp] != null) { recordProp(node.id, setProp); raw = node.props[setProp]; }
+    const raw = readNodePropOptional(node, setProp, context);
     if (raw == null || raw.type !== "array") return [];
     recordMember(raw.id);
     const objs: { o: ExecObject; order: number }[] = [];

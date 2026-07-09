@@ -2009,6 +2009,38 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             "() => document.querySelector('.design-canvas .stale-fns-banner') == null");
 
+    // ── M12 V1b — init-evaluated state in the static canvas ────────────────────────────────────────
+    //
+    // A top-level `ui var greeting` (design-level state, V1's import shape) referenced in its own <span>,
+    // AND a real stateful `Counter()` (V1's canonical setup/view shape) INVOKED as a tag inside the
+    // render (F2's expansion) — the ONE fixture that proves BOTH V1b binding sites at once: the walk
+    // ROOT (design.vars) and ExpandFn's own bodyBindings (a MetaFn's vars). Same authoring plumbing as
+    // the other convertible-render fixtures.
+    private const string InitStateConvertibleRender =
+        "ui\n"
+        + "    var greeting = \"hi\"\n"
+        + "    fn Counter()\n        var count = 0\n        fn render()\n            return <button onClick={() => count = count + 1}>\n                count\n        return render\n"
+        + "    fn render()\n        return <main>\n            <Counter>\n            <span>\n                greeting\n";
+
+    [When("I author a convertible render with a design var and an invoked Counter component into the design's UI")]
+    public async Task WhenAuthorInitStateRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(InitStateConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "initstate" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == InitStateConvertibleRender));
+    }
+
+    // Edit the design-level var's INIT input (`.design-state-section .var-row input.var-init`, by row
+    // index — this scenario ever imports exactly one design-level var, so index 0 is unambiguous).
+    [When("I edit design-level state var {int}'s init to {string}")]
+    // The feature writes inner quotes as `\"` (the Gherkin escape for a literal `"` inside the quoted
+    // argument); Reqnroll passes the backslashes through verbatim (see WhenEditComponentBodyLeaf /
+    // AccessSteps.GivenAccessRule), so unescape them first.
+    public async Task WhenEditDesignStateVarInit(int index, string newInit) =>
+        await ctx.Page!.Locator(".design-editor .design-state-section .var-row input.var-init").Nth(index)
+            .FillAsync(newInit.Replace("\\\"", "\""));
+
     // The Design id of the (main working-copy) design with the given label, or 0 if not yet present.
     private int DesignIdByLabel(string label)
     {

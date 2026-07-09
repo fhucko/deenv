@@ -496,10 +496,13 @@ public static class SchemaBridge
     // M12 V1 — also collects every MetaVar `init` source: `design.vars` (top-level `ui var`s) AND each
     // `fns` row's OWN `vars` (component-local state). A var's init is an ordinary expression source exactly
     // like a leaf/attr's — it needs an AST for the same reasons (F3 call-position evaluation of a stateful
-    // fn's projected body, were it ever exercised; today the canvas walk itself never reads `vars` at all,
-    // per ExpandFn's stated behavior — collecting the source is still correct and harmless either way, the
-    // same "collect broadly, the walk decides what to look up" stance the rest of this collector already
-    // takes for literal sources).
+    // fn's projected body). At V1 landing time the canvas walk itself never read `vars` at all (ExpandFn's
+    // then-stated behavior), so collecting the source was "harmless either way" — the same "collect broadly,
+    // the walk decides what to look up" stance the rest of this collector already takes for literal sources.
+    // M12 V1b made this LOAD-BEARING: BindVars/bindVars now binds each var's init to its evaluated value at
+    // the walk root and at ExpandFn/expandFn, so a real design's var inits (including plain literals like
+    // `0` — BindVars has no literal shortcut, unlike a param's LiteralValue tier-0) depend on this collector
+    // actually shipping their sources; a hand-built conformance fixture must add its own `ctx.exprs` entries.
     public static List<string> RenderExprSources(NodeValue design)
     {
         var sources = new List<string>();
@@ -581,8 +584,10 @@ public static class SchemaBridge
     // shows the "components changed" banner (M12 F3). Keyed by name (last-wins on a duplicate — every
     // other resolver in this file/the canvas walk already tie-breaks or refuses duplicates the same way).
     // REWORDED (M12 V1 — the original wording scoped this to "fields the render walk reads", which a
-    // MetaFn's `vars` are NOT: ExpandFn's canvas expansion never reads `vars` at all, per its own stated
-    // behavior). The correct, broader obligation: the fingerprint MUST cover every field that affects the
+    // MetaFn's `vars` were NOT at the time: ExpandFn's canvas expansion never read `vars` at all, per its
+    // then-stated behavior — V1b closed that gap (ExpandFn/BindVars now bind them), so this is no longer
+    // even the narrower true fact, but the broader obligation below always covered `vars` regardless).
+    // The correct, broader obligation: the fingerprint MUST cover every field that affects the
     // fn's PROJECTED/EVALUATED behavior — everything ProjectRenderUi folds into the fn's assembled
     // CodeFunction (which BuildEvalContext then serializes and ships as ctx.fns for F3 call-position
     // evaluation), not merely what the display-inert canvas walk happens to read. `vars` qualifies: a

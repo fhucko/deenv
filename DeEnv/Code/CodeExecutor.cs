@@ -742,7 +742,7 @@ public sealed class CodeExecutor
         _ => "",
     };
 
-    // renderTree(node[, ctx[, fns]]): the CLIENT-COMPUTABLE canvas (M12 S4 foundation) — turns a MetaNode row (tag/
+    // renderTree(node[, ctx[, design]]): the CLIENT-COMPUTABLE canvas (M12 S4 foundation) — turns a MetaNode row (tag/
     // expr/order scalars + attrs/children sets, the S1a structured-render schema) into a live tag tree built
     // from the rows. UNLIKE the server-backed reads (publishPreview et al., shipped as data), this is computed by BOTH
     // twins from row data the client already holds — no server delegate, no memo, no refetch. Every read of a
@@ -754,25 +754,41 @@ public sealed class CodeExecutor
     //
     // The optional SECOND arg is the eval context (a { db, exprs, … } payload from sys.evalContext) that lets
     // expression leaves/attrs evaluate client-side (CANVAS-EVAL-1); absent ⇒ every non-literal expr chips.
-    // The optional THIRD arg (M12 F2) is the design's `fns` ROWS (`design.fns`, a live `set of MetaFn`) — NOT
-    // part of ctx: ctx is refresh-gated server-shipped data, fns are LIVE rows the client already holds, which
-    // is what makes editing a component body repaint every expansion SAME-FRAME. Absent ⇒ no tag can ever
-    // resolve to a component, so every tag renders literally (today's exact behavior, byte-identical). No
-    // singleton/global state is baked into the walk. Twin of codeExec.ts's execRenderTree; the literal rules +
-    // chip/empty shapes + expansion semantics are pinned by conformance cases.
+    // The optional THIRD arg is the DESIGN row (M12 V1b — was the bare `fns` set, F2; a robust never-grows-
+    // again shape, since the walk now needs BOTH of a design's live sets): `design.fns` (component
+    // resolution, unchanged from F2) AND `design.vars` (top-level ui vars, M12 V1b — bound at the walk ROOT
+    // below). NOT part of ctx: ctx is refresh-gated server-shipped data, design is LIVE rows the client
+    // already holds, which is what makes editing a component body / a var's init repaint every expansion
+    // SAME-FRAME. Absent `design` ⇒ no tag can ever resolve to a component and no design var ever binds
+    // (today's exact pre-V1b behavior, byte-identical); an absent `fns`/`vars` PROP on a present design
+    // (ReadNodePropOptional/OrderedMembersOptional — the V1 tolerance precedent) reads as "none" rather than
+    // throwing, since a hand-built conformance fixture may omit either (a real Design row always carries
+    // both). No singleton/global state is baked into the walk. Twin of codeExec.ts's execRenderTree; the
+    // literal rules + chip/empty shapes + expansion semantics are pinned by conformance cases.
     private IExecValue ExecuteRenderTree(CodeCall call, ExecScope scope, ExecContext context)
     {
         if (call.Params.Length is not (1 or 2 or 3))
-            throw new CodeRuntimeException("renderTree(node[, ctx[, fns]]) takes one to three arguments.");
+            throw new CodeRuntimeException("renderTree(node[, ctx[, design]]) takes one to three arguments.");
         if (ExecuteValue(call.Params[0], scope, context) is not ExecObject node)
             throw new CodeRuntimeException("renderTree() expects a node object as its first argument.");
         // The optional eval context (M12 CANVAS-EVAL-1): a { db, exprs, … } payload (from sys.evalContext).
         // Present ⇒ non-literal leaf/attr expressions EVALUATE against the seed graph; absent ⇒ today's exact
         // chip behavior (the no-ctx conformance case stays byte-identical). A non-object 2nd arg is ignored.
         var ctx = call.Params.Length >= 2 && ExecuteValue(call.Params[1], scope, context) is ExecObject c ? c : null;
-        // The optional fns rows (M12 F2): a non-array 3rd arg is ignored — same as absent, no expansion.
-        var fns = call.Params.Length == 3 && ExecuteValue(call.Params[2], scope, context) is ExecArray f ? f : null;
-        var result = BuildRenderTree(node, context, ctx, null, fns, new ExpansionState());
+        // A non-object 3rd arg is ignored — same as absent, no expansion and no design-var binding.
+        var design = call.Params.Length == 3 && ExecuteValue(call.Params[2], scope, context) is ExecObject d ? d : null;
+        var fns = design != null && ReadNodePropOptional(design, "fns", context) is ExecArray f ? f : null;
+        // M12 V1b — bind design.vars at the walk ROOT, seeding the top-level `bindings` every node inherits
+        // (row bindings — for/if loop vars — stack on top and SHADOW a same-named design var, same as any
+        // scope binding). Only meaningful with BOTH a design and an eval context (a var's init can't
+        // evaluate without one); no design ⇒ stays null (today's exact pre-V1b behavior).
+        Dictionary<string, IExecValue>? rootBindings = null;
+        if (ctx != null && design != null)
+        {
+            rootBindings = new Dictionary<string, IExecValue>();
+            BindVars(OrderedMembersOptional(design, "vars", context), rootBindings, ctx, context);
+        }
+        var result = BuildRenderTree(node, context, ctx, rootBindings, fns, new ExpansionState());
         // M12 F3b — the staleness banner: ctx.fns is a SNAPSHOT taken at evalContext build time (empty
         // deps, per CANVAS-EVAL-1's deliberate S3a-race inversion), so an edit to a `fns` row's BODY
         // changes no call-site text and a call-position expression would otherwise evaluate against the
@@ -1113,7 +1129,9 @@ public sealed class CodeExecutor
     // re-renders the comparison same-frame. NOT a hash — see SchemaBridge's comment.
     //
     // REWORDED (M12 V1 — the original wording scoped this to "fields BuildRenderTree itself reads", which
-    // a MetaFn's `vars` are NOT: BuildRenderTree/ExpandFn's canvas expansion never reads `vars` at all).
+    // a MetaFn's `vars` were NOT at the time: BuildRenderTree/ExpandFn's canvas expansion never read `vars`
+    // at all — V1b (below, ExpandFn/BindVars) closed that gap, so this is no longer even the narrower true
+    // fact, but the broader obligation below always covered `vars` regardless).
     // The correct, broader obligation: the fingerprint MUST cover every field that affects the fn's
     // PROJECTED/EVALUATED behavior (everything SchemaBridge.ProjectRenderUi folds into the fn's assembled
     // CodeFunction, which ships as ctx.fns for F3 call-position evaluation) — not merely what the
@@ -1193,6 +1211,19 @@ public sealed class CodeExecutor
     // component sees its params, not the caller's locals). The result rides an ExecArray (ArrayKind.List,
     // carrying the INVOCATION row's id, inert) — the exact BuildFor splice idiom — so every expanded element
     // keeps its OWN body-row data-node (S4's future click-to-select spine).
+    //
+    // M12 V1b — AFTER the param bindings, the MetaFn's OWN `vars` (its state, MetaVar rows) bind into the
+    // SAME `bodyBindings` dictionary, sequentially, under {db, params, earlier vars} — the runtime's setup
+    // order (a component's `var` statements run after its params are bound, in the setup body). A var whose
+    // name COLLIDES with a param OVERWRITES it (BindVars assigns into the same dictionary key) — the pinned
+    // canvas rule: the LATER declaration in setup order wins the walk's scope. (The designer's own
+    // fnVarNameHint already warns "shadows a parameter" on this collision — advisory, not a projection
+    // refusal, so it authors cleanly and only needs an honest, deterministic canvas answer; a real live
+    // instance's setup fn declaring a same-named `var` in the SAME function scope as its param would in fact
+    // throw "already exists" at runtime — a genuine pre-existing authoring pitfall the hint is warning
+    // AGAINST, out of this slice's scope to fix.) A static canvas can only ever show INITIAL state, so this
+    // binding — not a "state chip" — IS the truth of what a fresh live instance shows at mount (once the var
+    // is correctly named, the slice's whole premise).
     private IExecValue ExpandFn(ExecObject fn, ExecObject bodyRoot, ExecObject invocationNode, ExecContext context,
         ExecObject? ctx, Dictionary<string, IExecValue>? callerBindings, ExecArray fns, ExpansionState expansion)
     {
@@ -1211,6 +1242,7 @@ public sealed class CodeExecutor
                 bodyBindings[paramName] = evaluated;
             // else: attr present but unevaluable — leave OUT of bodyBindings so a body reference chips.
         }
+        BindVars(OrderedMembersOptional(fn, "vars", context), bodyBindings, ctx, context);
         expansion.Depth++;
         try
         {
@@ -1218,6 +1250,34 @@ public sealed class CodeExecutor
             return new ExecArray { Items = [new ExecItem { Key = 0, Value = result }], Id = invocationNode.Id, Kind = ArrayKind.List };
         }
         finally { expansion.Depth--; }
+    }
+
+    // M12 V1b — bind each MetaVar row's init value into `bindings`, SEQUENTIALLY (each init evaluates under
+    // {db, ...whatever is ALREADY in `bindings`} — so a design var's init can reference an earlier design
+    // var, and a component's state-var init can reference an earlier state var OR its already-bound params,
+    // since `bindings` for ExpandFn's call already holds them). Shared by the walk ROOT (design.vars) and
+    // ExpandFn (a MetaFn's own vars) — one binding rule, twin of codeExec.ts's bindVars.
+    //   • an EMPTY init (`init.Length == 0`, the bare `var x` grammar) binds ExecNull directly, no eval
+    //     needed — matching the runtime's ExecuteVarDec (a null CodeVarDec.Value defaults to ExecNull); this
+    //     is a legitimate null, not an "unevaluable" miss;
+    //   • a non-empty init evaluates via EvaluateCtxExpr under the bindings accumulated SO FAR — a clean
+    //     eval binds the value; `ctx == null` or any eval miss/throw leaves the var OUT of `bindings`
+    //     entirely so a body/leaf reference to it misses scope and CHIPS (never guess a value — the same
+    //     divergence ExpandFn's own param binding already documents);
+    //   • assignment happens AFTER the value is computed, so a name that collides with something already in
+    //     `bindings` (a param, at ExpandFn's call site) is OVERWRITTEN — the deliberate runtime-scoping pin.
+    private void BindVars(List<ExecObject> vars, Dictionary<string, IExecValue> bindings, ExecObject? ctx, ExecContext context)
+    {
+        foreach (var v in vars)
+        {
+            var name = ReadNodeText(v, "name", context);
+            if (name.Length == 0) continue; // no name to bind under — never a real row (projection refuses it)
+            var init = ReadNodeText(v, "init", context);
+            if (init.Length == 0) { bindings[name] = new ExecNull(); continue; } // bare `var x` — legal null
+            if (ctx != null && EvaluateCtxExpr(init, ctx, context, bindings) is { } value)
+                bindings[name] = value;
+            // else: ctx==null or an eval miss/throw — leave OUT of bindings so a reference chips.
+        }
     }
 
     // Evaluate ONE canvas expression against the eval context's seed graph (M12 CANVAS-EVAL-1). Looks the
@@ -1346,6 +1406,22 @@ public sealed class CodeExecutor
         return value is ExecText t ? t.Value : "";
     }
 
+    // Like ReadNodeProp, but tolerant of an ABSENT prop — returns null instead of throwing (the ReadNodeTextOptional
+    // precedent, generalized to any value type). M12 V1b's ONE new caller: a `design` row's `fns`/`vars` props,
+    // which a hand-built conformance fixture predating V1b may omit entirely (a real Design row always carries
+    // both). OrderedMembersOptional is built on top of this (its own former inline duplicate, now factored out).
+    private static IExecValue? ReadNodePropOptional(ExecObject node, string name, ExecContext context)
+    {
+        if (NearestStagedValue(node, name, context) is { } staged)
+        {
+            RecordPropAccess(node, name, staged, context);
+            return staged;
+        }
+        if (!node.Props.TryGetValue(name, out var value)) return null;
+        RecordPropAccess(node, name, value, context);
+        return value;
+    }
+
     // The members of a node's `attrs`/`children` SET, ordered by each member's `order` field — observed
     // through the same reads a `node.children.orderBy(order)` foreach makes: a prop dep on the set, a
     // membership dep, and each scanned item recorded (so the server harvests the membership and the client
@@ -1381,18 +1457,7 @@ public sealed class CodeExecutor
     // a fn with no declared `vars` behaves exactly as it always has.
     private List<ExecObject> OrderedMembersOptional(ExecObject node, string setProp, ExecContext context)
     {
-        IExecValue? raw = null;
-        if (NearestStagedValue(node, setProp, context) is { } staged)
-        {
-            RecordPropAccess(node, setProp, staged, context);
-            raw = staged;
-        }
-        else if (node.Props.TryGetValue(setProp, out var value))
-        {
-            RecordPropAccess(node, setProp, value, context);
-            raw = value;
-        }
-        if (raw is not ExecArray set) return [];
+        if (ReadNodePropOptional(node, setProp, context) is not ExecArray set) return [];
         RecordMembership(set, context);
         var keyed = new List<(ExecObject Obj, int Order)>();
         foreach (var item in set.Items)
