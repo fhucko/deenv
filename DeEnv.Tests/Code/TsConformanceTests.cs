@@ -57,6 +57,11 @@ public sealed class TsConformanceTests
                 case "tag":
                     await Assert.That(result.GetProperty("value").GetString()).IsEqualTo(expect.GetProperty("value").GetString());
                     break;
+                case "error":
+                    // M12 FG: the case must THROW (a runaway-recursive fn past the call-depth guard);
+                    // runConformance catches it and reports { kind: "error", value: <message> }.
+                    await Assert.That(result.GetProperty("value").GetString()).IsEqualTo(expect.GetProperty("value").GetString());
+                    break;
                 case "nothing":
                 case "null":
                     break; // the kind comparison above is the whole assertion

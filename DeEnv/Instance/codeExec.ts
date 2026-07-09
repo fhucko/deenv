@@ -1771,13 +1771,24 @@ function invokeLambda(fn: ExecFunction, arg: ExecValue, context: ExecContext): E
     return runBody(fn, callScope, context);
 }
 
+// The call-depth guard (M12 FG, grill F3c): twin of CodeExecutor's CallDepthLimit/RunBody. Module-level
+// like depStack/memoBypass (TS is single-threaded — one synchronous walk in flight at a time), incremented
+// on entry and decremented in a finally so a caught-and-degraded eval never leaks depth. On the client this
+// is naturally catchable already (a plain thrown Error → RangeError-class); the guard's real payoff is
+// making the C# twin match it (an ordinary CodeRuntimeException instead of an unrecoverable stack overflow)
+// and giving both a twin-identical, designer-facing message instead of an engine-specific one.
+const CALL_DEPTH_LIMIT = 256;
+let callDepth = 0;
+
 // Run a closure body, restoring its captured ambient first (null = a top-level fn → flows down to
 // the live ambient), then restoring the call site's ambient afterward.
 function runBody(fn: ExecFunction, callScope: ExecScope, context: ExecContext): ExecValue {
+    if (++callDepth > CALL_DEPTH_LIMIT)
+        throw new Error(`Call depth exceeded ${CALL_DEPTH_LIMIT} — runaway recursion?`);
     const saved = context.ambient;
     if (fn.capturedAmbient != null) context.ambient = fn.capturedAmbient;
     try { return executeBlock(fn.fn.body, callScope, context) ?? { type: "nothing" }; }
-    finally { context.ambient = saved; }
+    finally { context.ambient = saved; callDepth--; }
 }
 
 // The live root data context provided by the framework as ambient `ctx` (writes persist; a form
@@ -2489,20 +2500,27 @@ function runConformance(caseJson: string): string {
     scope.items["o"] = { value: { type: "object", id: 100, props: { f: { type: "int", value: 1 } } }, isReadOnly: false };
     const context: ExecContext = { lastId: { value: 0 }, ambient: rootAmbient() };
     let result: ExecValue = { type: "nothing" };
-    if (c.renders) {
-        for (const stmt of c.setup ?? []) executeStatement(stmt, scope, context);
-        if (c.seed) {
-            const seed: { [slotKey: string]: { [varName: string]: ExecValue } } = {};
-            for (const slotKey in c.seed) {
-                seed[slotKey] = {};
-                for (const varName in c.seed[slotKey])
-                    seed[slotKey][varName] = executeValue(c.seed[slotKey][varName], scope, context).value;
+    try {
+        if (c.renders) {
+            for (const stmt of c.setup ?? []) executeStatement(stmt, scope, context);
+            if (c.seed) {
+                const seed: { [slotKey: string]: { [varName: string]: ExecValue } } = {};
+                for (const slotKey in c.seed) {
+                    seed[slotKey] = {};
+                    for (const varName in c.seed[slotKey])
+                        seed[slotKey][varName] = executeValue(c.seed[slotKey][varName], scope, context).value;
+                }
+                context.seed = seed;
             }
-            context.seed = seed;
+            for (const render of c.renders) result = executeValue(render, scope, context).value;
+        } else {
+            result = executeValue(c.expr!, scope, context).value;
         }
-        for (const render of c.renders) result = executeValue(render, scope, context).value;
-    } else {
-        result = executeValue(c.expr!, scope, context).value;
+    } catch (err) {
+        // "error" (M12 FG): a case whose expected outcome IS a throw (a runaway-recursive fn past the
+        // call-depth guard) — reported like every other kind rather than escaping to the test harness.
+        setMemoCache(null);
+        return JSON.stringify({ kind: "error", value: err instanceof Error ? err.message : String(err) });
     }
     setMemoCache(null);
     switch (result.type) {

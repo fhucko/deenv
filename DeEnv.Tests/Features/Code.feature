@@ -118,6 +118,31 @@
     When the page at "/" is rendered
     Then the rendered HTML contains "<h1>Error</h1>"
 
+  @m12 @single-user
+  Scenario: A runaway-recursive helper hits the call-depth guard and renders an SSR error page, not a crash
+    # Grill F3c (M12 FG): a self-calling helper with no base case would recurse forever pre-guard —
+    # an UNCATCHABLE StackOverflowException on the C# twin (process death), the exact blast radius
+    # that would let designer DATA crash the designer's own render in a loop once F3 evaluates helper
+    # calls during the canvas walk. The call-depth guard turns unbounded recursion into a normal,
+    # catchable CodeRuntimeException — caught by the SAME top-level SSR catch as any other runtime
+    # error (the "runtime error during first paint" scenario above), not new SSR error chrome.
+    Given the code instance:
+      """
+      types
+          Db
+              note text
+
+      ui
+          fn render()
+              return <div>
+                  Rec()
+          fn Rec()
+              return Rec()
+      """
+    When the page at "/" is rendered
+    Then the rendered HTML contains "<h1>Error</h1>"
+    And the rendered HTML contains "Call depth exceeded 256"
+
   @milestone-code @single-user
   Scenario: The self-hosted generic UI serves an app with no fn render()
     Given a generic instance with no code

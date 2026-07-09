@@ -46,6 +46,18 @@ public sealed class ConformanceTests
     [MethodDataSource(nameof(Cases))]
     public async Task Conformance_case_evaluates(Case c)
     {
+        // "error" (M12 FG) is the one non-value expectation: the case must THROW rather than
+        // produce a scalar/tag result (a runaway-recursive fn, pinning the call-depth guard).
+        // Handled separately from AssertExpectation, which only ever sees a successful result.
+        if (c.Expect.Kind == "error")
+        {
+            Exception? caught = null;
+            try { EvaluateCase(c); }
+            catch (Exception ex) { caught = ex; }
+            await Assert.That(caught).IsNotNull();
+            await Assert.That(caught!.Message).IsEqualTo(c.Expect.Value.GetString());
+            return;
+        }
         var result = EvaluateCase(c);
         await AssertExpectation(c, result);
     }

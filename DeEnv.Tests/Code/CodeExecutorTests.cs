@@ -124,6 +124,134 @@ public sealed class CodeExecutorTests
         await Assert.That(((ExecInt)r).Value).IsEqualTo(42);
     }
 
+    // ── call-depth guard (M12 FG, grill F3c) ─────────────────────────────────────────
+
+    // fn Rec() { return Rec() } — a named fn self-binds into its own defining scope at creation
+    // (ExecuteFunction), so this is genuine unbounded interpreter-level recursion with no base case.
+    // Pre-guard this blows the REAL C# call stack — an uncatchable StackOverflowException (process
+    // death) — which is exactly why this test asserts the NEW behavior rather than exercising the old
+    // one (that would kill the test host). The guard makes it a normal, catchable CodeRuntimeException
+    // at the shared twin-pinned threshold instead.
+    [Test]
+    public async Task Unbounded_self_recursion_throws_a_call_depth_error_not_a_stack_overflow()
+    {
+        var scope = new ExecScope();
+        var rec = new CodeFunction
+        {
+            Name = "Rec",
+            Params = [],
+            Body = new CodeBlock { Statements = [new CodeReturn { Value = new CodeCall { Fn = Sym("Rec"), Params = [] } }] },
+        };
+        var call = new CodeCall { Fn = rec, Params = [] };
+
+        CodeRuntimeException? caught = null;
+        try { new CodeExecutor().ExecuteValue(call, scope, new ExecContext()); }
+        catch (CodeRuntimeException ex) { caught = ex; }
+        await Assert.That(caught).IsNotNull();
+        await Assert.That(caught!.Message).IsEqualTo("Call depth exceeded 256 — runaway recursion?");
+    }
+
+    // The no-false-positive proof: fn Sum(n) recurses DATA-BOUNDED to depth 100 — representative of
+    // real recursion depth (e.g. the designer's own renderNodeEditor walking a design tree) — well
+    // under the 256 guard threshold, and must still return the correct value untouched by the guard.
+    [Test]
+    public async Task Data_bounded_recursion_well_under_the_limit_returns_correctly()
+    {
+        var scope = new ExecScope();
+        var exec = new CodeExecutor();
+        var ctx = new ExecContext();
+        Run(scope, exec, ctx, new CodeFunction
+        {
+            Name = "Sum",
+            Params = [new CodeFunctionParam { Name = "n" }],
+            Body = new CodeBlock
+            {
+                Statements =
+                [
+                    new CodeIf
+                    {
+                        Condition = Op(CodeInfixOpType.LessThanOrEqual, Sym("n"), Int(0)),
+                        Body = new CodeReturn { Value = Int(0) },
+                    },
+                    new CodeReturn
+                    {
+                        Value = Op(CodeInfixOpType.Add, Sym("n"),
+                            new CodeCall { Fn = Sym("Sum"), Params = [Op(CodeInfixOpType.Subtract, Sym("n"), Int(1))] }),
+                    },
+                ],
+            },
+        });
+
+        var result = exec.ExecuteValue(new CodeCall { Fn = Sym("Sum"), Params = [Int(100)] }, scope, ctx);
+        await Assert.That(((ExecInt)result).Value).IsEqualTo(5050); // 100+99+…+1+0
+    }
+
+    // A caught-and-degraded evaluation (RenderTree's per-node error handling, or any future canvas
+    // catch) must not LEAK call depth: RunBody's finally decrements even when the body throws, so a
+    // depth-32 recursion that fails partway through leaves the SAME context able to run a full
+    // depth-100 recursion afterward without tripping the guard early.
+    [Test]
+    public async Task A_caught_error_mid_recursion_does_not_leak_call_depth()
+    {
+        var scope = new ExecScope();
+        var exec = new CodeExecutor();
+        var ctx = new ExecContext();
+        // fn Boom(n) { if (n <= 0) throw-shaped (unknown field access); return Boom(n - 1) }
+        // 40 levels of real recursion, then a runtime error (an absent field read) that must be
+        // caught by the CALLER without leaving context.CallDepth polluted for the next call.
+        Run(scope, exec, ctx, new CodeFunction
+        {
+            Name = "Boom",
+            Params = [new CodeFunctionParam { Name = "n" }],
+            Body = new CodeBlock
+            {
+                Statements =
+                [
+                    new CodeIf
+                    {
+                        Condition = Op(CodeInfixOpType.LessThanOrEqual, Sym("n"), Int(0)),
+                        Body = new CodeReturn { Value = Prop(new CodeObject { Props = [] }, "missing") }, // throws
+                    },
+                    new CodeReturn
+                    {
+                        Value = new CodeCall { Fn = Sym("Boom"), Params = [Op(CodeInfixOpType.Subtract, Sym("n"), Int(1))] },
+                    },
+                ],
+            },
+        });
+
+        Exception? caught = null;
+        try { exec.ExecuteValue(new CodeCall { Fn = Sym("Boom"), Params = [Int(40)] }, scope, ctx); }
+        catch (CodeRuntimeException ex) { caught = ex; }
+        await Assert.That(caught).IsNotNull();
+        await Assert.That(ctx.CallDepth).IsEqualTo(0); // fully unwound, nothing leaked
+
+        // The same context can now run a full depth-100 legitimate recursion untouched.
+        Run(scope, exec, ctx, new CodeFunction
+        {
+            Name = "Sum2",
+            Params = [new CodeFunctionParam { Name = "n" }],
+            Body = new CodeBlock
+            {
+                Statements =
+                [
+                    new CodeIf
+                    {
+                        Condition = Op(CodeInfixOpType.LessThanOrEqual, Sym("n"), Int(0)),
+                        Body = new CodeReturn { Value = Int(0) },
+                    },
+                    new CodeReturn
+                    {
+                        Value = Op(CodeInfixOpType.Add, Sym("n"),
+                            new CodeCall { Fn = Sym("Sum2"), Params = [Op(CodeInfixOpType.Subtract, Sym("n"), Int(1))] }),
+                    },
+                ],
+            },
+        });
+        var result = exec.ExecuteValue(new CodeCall { Fn = Sym("Sum2"), Params = [Int(100)] }, scope, ctx);
+        await Assert.That(((ExecInt)result).Value).IsEqualTo(5050);
+    }
+
     // ── collection system-functions ────────────────────────────────────────────────
 
     // arr = [ {p:1}, {p:3}, {p:2} ]; arr.where(x => x.p > 1).orderBy(x => x.p) → p = [2, 3]

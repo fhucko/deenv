@@ -1925,15 +1925,27 @@ public sealed class CodeExecutor
         });
     }
 
+    // The call-depth guard (M12 FG, grill F3c): a runaway-recursive fn is an UNCATCHABLE
+    // StackOverflowException in C# (process death) — under F3 that's designer DATA crashing the
+    // designer's own render in a restart loop. RunBody is the ONE point every function-body
+    // invocation funnels through — CallFunction (named calls), InvokeClosure (component setup +
+    // view), and InvokeLambda (where/orderBy/single predicates) all call it, so guarding here covers
+    // every call shape uniformly. Threshold is generous: real recursion (e.g. the designer's own
+    // renderNodeEditor walking a design tree) is data-bounded well under 100; this exists to catch
+    // RUNAWAY recursion, not to constrain programs. Twin of codeExec.ts's CALL_DEPTH_LIMIT/runBody.
+    private const int CallDepthLimit = 256;
+
     // Run a function/closure body, restoring its captured ambient bindings first (null = a top-level
     // fn → flows down to the live ambient). Mirrors the block save/restore so the call site's ambient
     // returns afterward.
     private IExecValue RunBody(ExecFunction fn, ExecScope callScope, ExecContext context)
     {
+        if (++context.CallDepth > CallDepthLimit)
+            throw new CodeRuntimeException($"Call depth exceeded {CallDepthLimit} — runaway recursion?");
         var savedAmbient = context.Ambient;
         if (fn.CapturedAmbient != null) context.Ambient = fn.CapturedAmbient;
         try { return ExecuteBlock(fn.Function.Body, callScope, context) ?? new ExecNothing(); }
-        finally { context.Ambient = savedAmbient; }
+        finally { context.Ambient = savedAmbient; context.CallDepth--; }
     }
 
     // Run `compute` as a memoized computation: capture its dependencies in a fresh

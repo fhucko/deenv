@@ -2212,6 +2212,17 @@
         ]
       },
       "expect": { "kind": "tag", "value": "<div data-node=\"-7\"><span class=\"component-chip\" data-node=\"-12\">Rec</span></div>" }
+    },
+    {
+      "name": "call-depth guard: unbounded named self-recursion throws a catchable interpreter error, not a stack overflow (M12 FG)",
+      "comment": "A named fn literal self-binds its own name into the enclosing scope BEFORE its body runs (ExecuteFunction/executeFunction: `if (function.Name != null) scope.Items[Name] = fn`), so `Rec` calling `Rec()` in its own body is genuine unbounded interpreter-level recursion — no data bounds it, unlike the F2 canvas-expansion case above (which is a SEPARATE mechanism, ExpansionState.Depth, capped at 32). Pre-FG this recurses forever: an uncatchable StackOverflowException on the C# twin (process death) and an eventually-thrown, twin-DIVERGENT RangeError on the TS twin. FG's call-depth guard (RunBody, both twins) makes it a normal, twin-IDENTICAL CodeRuntimeException/Error at the shared threshold (256) — the grill F3c finding this slice exists to fix.",
+      "expr": {
+        "type": "call", "params": [],
+        "fn": { "type": "fn", "name": "Rec", "params": [], "body": { "type": "block", "statements": [
+          { "type": "return", "value": { "type": "call", "params": [], "fn": { "type": "symbol", "name": "Rec" } } }
+        ] } }
+      },
+      "expect": { "kind": "error", "value": "Call depth exceeded 256 — runaway recursion?" }
     }
   ]
 }

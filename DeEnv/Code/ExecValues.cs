@@ -294,6 +294,16 @@ public sealed class ExecContext
     // (the setup's own defaults stand), so every existing render is byte-identical. This is the
     // SEED-CONSUMPTION half; the client SHIP of state + the refetch threading are later slices.
     public IReadOnlyDictionary<string, IReadOnlyDictionary<string, IExecValue>>? Seed { get; set; }
+
+    // ── call-depth guard (M12 FG) ─────────────────────────────────────────────────
+    // Counts nested function-body invocations (RunBody) for THIS render/context. A runaway-recursive
+    // fn would otherwise blow the real C# call stack — an UNCATCHABLE StackOverflowException (process
+    // death) — with no way for the canvas walk's per-node try/catch (or SSR's top-level catch) to turn
+    // it into an ordinary error chip. RunBody increments on entry and decrements in a finally, so a
+    // caught-and-degraded eval never leaks depth into the next call. Per-context (not static/shared):
+    // concurrent server requests each get their own ExecContext, so one runaway render's depth never
+    // throttles another's.
+    public int CallDepth { get; set; }
 }
 
 // One immutable frame in the ambient chain — dynamic scoping over the call/render extent.
