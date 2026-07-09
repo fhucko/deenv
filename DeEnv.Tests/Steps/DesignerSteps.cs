@@ -1423,6 +1423,79 @@ public sealed class DesignerSteps(InstanceContext ctx)
             o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == name
             && o.Fields.TryGetValue("params", out var p) && p is DeEnv.Storage.TextValue pt && pt.Text == paramsText));
 
+    // ── M12 F1 review fix (ui-arch + ux) — the from-scratch "+ Component" flow ──────────────────────
+
+    // A BARE convertible render — no helper/component fn, just enough for `design.render.any()` to gate
+    // the render section (and its Components area) into view. Same authoring plumbing (fill the `ui`
+    // textarea, poll the store) as the other convertible-render fixtures, scoped to THIS scenario's
+    // design label ("scratchcomp").
+    private const string BareConvertibleRender =
+        "ui\n    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a bare convertible render into the design's UI")]
+    public async Task WhenAuthorBareRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(BareConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "scratchcomp" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == BareConvertibleRender));
+    }
+
+    // This scenario ever mints exactly ONE MetaFn (the "+ Component" click), so every "the new
+    // component" step addresses the sole `.fn-card` — no by-name/by-value disambiguation needed.
+    private const string NewComponentCard = ".components-section .fn-card";
+
+    [When("I click the add-component button")]
+    public async Task WhenClickAddComponent() =>
+        await ctx.Page!.Locator(".design-editor button.add-fn").ClickAsync();
+
+    // A freshly-minted MetaFn has an EMPTY `body` (the reviewed, upheld decision — see the F1 slice
+    // note): its body area shows the ROOT-position add-row, not a rendered node.
+    [Then("a new component card appears with an empty body")]
+    public async Task ThenNewComponentEmptyBody() =>
+        await ctx.Page!.WaitForSelectorAsync(NewComponentCard + " .fn-body > .node-add-row");
+
+    // The root-position add-row (addRootRow) must offer ONLY "+ element"/"+ text/expr" — NOT "+ for"/
+    // "+ if" (a for/if row can never be a fn's body root; projection refuses it, and a body root has no
+    // remove ×, so a for/if click would strand the operator).
+    [Then("the new component's body add-row offers only element and text, not for or if")]
+    public async Task ThenRootAddRowOffersOnlyElementAndText()
+    {
+        var row = ctx.Page!.Locator(NewComponentCard + " .fn-body > .node-add-row");
+        await row.Locator("button.add-element").WaitForAsync();
+        await row.Locator("button.add-text").WaitForAsync();
+        await Assert.That(await row.Locator("button.add-for").CountAsync()).IsEqualTo(0);
+        await Assert.That(await row.Locator("button.add-if").CountAsync()).IsEqualTo(0);
+    }
+
+    [When("I add an element to the new component's body")]
+    public async Task WhenAddElementToNewComponent() =>
+        await ctx.Page!.Locator(NewComponentCard + " .fn-body > .node-add-row > button.add-element").ClickAsync();
+
+    [Then("the new component's body shows an element node")]
+    public async Task ThenNewComponentBodyShowsElement() =>
+        await ctx.Page!.WaitForSelectorAsync(NewComponentCard + " .fn-body > .node-element");
+
+    [When("I set the new component's name to {string}")]
+    public async Task WhenSetNewComponentName(string name) =>
+        await ctx.Page!.Locator(NewComponentCard + " input.fn-name").FillAsync(name);
+
+    // The inline "'render' is reserved" hint (review fix 3) — client-computed, no projection/commit
+    // involved — shown the moment the name input reads "render".
+    [Then("the new component shows the reserved-name hint")]
+    public async Task ThenNewComponentShowsReservedHint() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const h = document.querySelector({JsString(NewComponentCard + " span.fn-name-hint")}); return h != null && h.textContent.includes('reserved'); }}");
+
+    [When("I remove the new component")]
+    public async Task WhenRemoveNewComponent() =>
+        await ctx.Page!.Locator(NewComponentCard + " button.remove-fn").ClickAsync();
+
+    [Then("the new component card is gone")]
+    public async Task ThenNewComponentGone() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelectorAll({JsString(NewComponentCard)}).length === 0");
+
     // The label-parameterized sibling of ThenProjectsValid (E2) — proves the design LABELED `label`
     // projects to a valid document, polled the same way (a staged ctx write lands over the WS
     // asynchronously; on timeout the LAST projection error is surfaced).

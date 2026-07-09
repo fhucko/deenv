@@ -517,6 +517,7 @@ public static class SchemaBridge
         // for EVERY fn BEFORE any create is built (the whole-import all-or-nothing law) — a design with even
         // one unsupported function stays entirely as `ui` text, never a partial import.
         var fns = ui.Functions ?? [];
+        var seenImportNames = new HashSet<string>();
         foreach (var fn in fns)
         {
             // MetaFn carries no server-only flag — projecting it back would silently SHIP a server-only
@@ -538,6 +539,16 @@ public static class SchemaBridge
                 throw new SchemaValidationException(
                     $"This design's `ui` section has a function \"{fn.Name}\" that returns a lambda (a stateful " +
                     "setup/view component), which import cannot carry to structured form yet — it stays as `ui` text.");
+            // Review fix (arch, should-fix): MapUi (CodeParse.cs) APPENDS every non-render function without
+            // deduping, so two `fn foo()` in `ui` text import fine today — minting two MetaFn rows, clearing
+            // the SOURCE text — and only THEN does projection's own seenNames check refuse them, leaving a
+            // design that imported successfully but can never project back, with the original text already
+            // gone. Refuse the WHOLE import instead (same seenNames/HashSet idiom ProjectRenderUi uses).
+            if (fn.Name != null && !seenImportNames.Add(fn.Name))
+                throw new SchemaValidationException(
+                    $"This design's `ui` section has two functions both named \"{fn.Name}\", which import " +
+                    "cannot carry to structured form (every structured function needs a unique name) — it " +
+                    "stays as `ui` text.");
         }
 
         // Build the whole changeset: a CommitCreate per MetaNode/MetaAttr keyed by a distinct NEGATIVE

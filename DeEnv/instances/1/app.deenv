@@ -158,6 +158,15 @@ ui
     fn addFn(design)
         design.fns.add({ name: "", params: "", order: orderForAppend(design.fns), body: [] })
 
+    fn fnNameHint(design, f)
+        if f.name == ""
+            return "name required"
+        if f.name == "render"
+            return "'render' is reserved"
+        if design.fns.where(o => sys.id(o) != sys.id(f) && o.name == f.name).any(o => true)
+            return "duplicate name"
+        return ""
+
     fn addRow(coll)
         return <div class="node-add-row">
             <button class="add-element" onClick={() => addElement(coll)}>
@@ -168,6 +177,13 @@ ui
                 "+ for"
             <button class="add-if" onClick={() => addIf(coll)}>
                 "+ if"
+
+    fn addRootRow(coll)
+        return <div class="node-add-row">
+            <button class="add-element" onClick={() => addElement(coll)}>
+                "+ element"
+            <button class="add-text" onClick={() => addText(coll)}>
+                "+ text/expr"
 
     fn renderNodeEditor(node, onRemove)
         if node.kind == "for"
@@ -412,15 +428,22 @@ ui
                                 <div class="fn-card">
                                     <div class="fn-head">
                                         <input class="fn-name" value={f.name} placeholder={"componentName"}>
+                                        <span class="fn-paren">
+                                            "("
                                         <input class="fn-params" value={f.params} placeholder={"param1, param2"}>
+                                        <span class="fn-paren">
+                                            ")"
                                         <button class="remove-fn" onClick={() => design.fns.remove(f)}>
                                             "×"
+                                    if fnNameHint(design, f) != ""
+                                        <span class="fn-name-hint">
+                                            fnNameHint(design, f)
                                     <div class="fn-body">
                                         if f.body.any(x => true)
                                             foreach r in f.body
                                                 <renderNodeEditor node={r}>
                                         else
-                                            addRow(f.body)
+                                            addRootRow(f.body)
                             <button class="add-fn" onClick={() => addFn(design)}>
                                 "+ Component"
                 <details class="code-areas">

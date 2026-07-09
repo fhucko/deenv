@@ -1369,3 +1369,33 @@ Feature: The operator IDE (designs library + instance design selector)
     And I edit the component "NoteCard"'s params to "note, extra"
     Then the stored component "NoteCard" has params "note, extra"
     And the stored render for "compme" projects to a valid design document
+
+  # ── M12 F1 review fix (ui-arch + ux) — the from-scratch "+ Component" flow, no import ────────────
+  #
+  # F1's OWN browser test above only exercised a component that arrived via IMPORT (already has a body
+  # root). This proves the OTHER path: "+ Component" mints a MetaFn with an EMPTY body (the reviewed,
+  # upheld decision — a true atomic two-object mint isn't reachable from a plain click handler), so the
+  # new card's body shows a ROOT-position add-row. That row must offer ONLY "+ element"/"+ text/expr" —
+  # NOT "+ for"/"+ if" (a for/if row can never be a fn's body root — projection refuses it — and a body
+  # root has no remove ×, so a for/if click would strand the operator until they delete the WHOLE
+  # component). Also proves the inline "'render' is reserved" name hint (fix 3) and that removing the
+  # component (its OWN × in the fn-head) cleanly removes the card.
+  @m12 @single-user
+  Scenario: A from-scratch component starts with a root-only add-row, gains its first body node, shows the reserved-name hint, and removes cleanly
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "scratchcomp"
+    And I edit the design "scratchcomp"
+    And I expand the Advanced code disclosure
+    And I author a bare convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-component button
+    Then a new component card appears with an empty body
+    And the new component's body add-row offers only element and text, not for or if
+    When I add an element to the new component's body
+    Then the new component's body shows an element node
+    When I set the new component's name to "render"
+    Then the new component shows the reserved-name hint
+    When I remove the new component
+    Then the new component card is gone

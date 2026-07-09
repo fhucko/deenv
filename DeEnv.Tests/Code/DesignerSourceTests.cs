@@ -634,6 +634,42 @@ public sealed class DesignerSourceTests
         }
     }
 
+    // Review fix (arch, should-fix): import refuses (imports NOTHING) when two top-level functions share a
+    // name — MapUi APPENDS without deduping, so without this check the import would mint two same-named
+    // MetaFn rows and clear the source text, and ONLY THEN would projection's own duplicate check refuse —
+    // a design that imported "successfully" but can never project back, its original text already gone.
+    [Test]
+    public async Task ImportRender_refuses_a_ui_with_two_same_named_functions()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-dupimport-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var ui = "ui\n    fn helperLabel(active)\n        return \"a\"\n"
+                   + "    fn helperLabel(active)\n        return \"b\"\n"
+                   + "    fn render()\n        return <main>\n            \"hi\"\n";
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("dupimport"), ["ui"] = new TextValue(ui),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+
+            var ex = await Assert.That(() => SchemaBridge.ImportRender(store, designId))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("helperLabel");
+
+            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+            await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0); // nothing minted
+            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);            // ui untouched
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
     // Projection refuses a structured function named "render" — MapUi routes any fn literally named
     // "render" into InstanceUi.Render, so it would silently vanish from the projected document.
     [Test]
