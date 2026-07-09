@@ -185,6 +185,8 @@ ui
             return "'render' is reserved"
         if f.vars.where(o => sys.id(o) != sys.id(v) && o.name == v.name).any(o => true)
             return "duplicate name"
+        if sys.hasParam(f.params, v.name)
+            return "shadows a parameter"
         return ""
 
     fn designVarNameHint(design, v)
@@ -458,7 +460,7 @@ ui
                                     <input class="var-name" value={v.name} placeholder={"varName"}>
                                     <span class="var-eq">
                                         "="
-                                    <input class="var-init" value={v.init} placeholder={"initial value expression"}>
+                                    <input class="var-init" value={v.init} placeholder={"\"value\" or expression"}>
                                     <button class="remove-var" onClick={() => design.vars.remove(v)}>
                                         "×"
                                     if designVarNameHint(design, v) != ""
@@ -486,19 +488,21 @@ ui
                                         <span class="fn-name-hint">
                                             fnNameHint(design, f)
                                     <div class="fn-vars">
+                                        <span class="fn-vars-heading">
+                                            "State"
                                         foreach v in f.vars
                                             <div class="var-row">
-                                                <input class="var-name" value={v.name} placeholder={"stateVarName"}>
+                                                <input class="var-name" value={v.name} placeholder={"varName"}>
                                                 <span class="var-eq">
                                                     "="
-                                                <input class="var-init" value={v.init} placeholder={"initial value expression"}>
+                                                <input class="var-init" value={v.init} placeholder={"\"value\" or expression"}>
                                                 <button class="remove-var" onClick={() => f.vars.remove(v)}>
                                                     "×"
                                                 if fnVarNameHint(f, v) != ""
                                                     <span class="var-name-hint">
                                                         fnVarNameHint(f, v)
                                         <button class="add-var" onClick={() => addVar(f.vars)}>
-                                            "+ state var"
+                                            "+ State var"
                                     <div class="fn-body">
                                         if f.body.any(x => true)
                                             foreach r in f.body

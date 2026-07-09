@@ -692,6 +692,14 @@ public static class SchemaBridge
     // `close`) — does NOT match: MetaVar has a row for a state VAR, not a nested helper FUNCTION, so there is
     // nowhere to carry it. Those specific components (a real, non-hypothetical fraction of the library) stay
     // `ui` text this slice — reported in the slice's own findings, not silently smoothed over.
+    //
+    // Review note (arch): the ZERO-var degenerate case (`fn render() return <view>` / `return render`, no
+    // `var` at all) also matches — it imports as MetaFn.vars=[] and therefore PROJECTS BACK as the plain
+    // STATELESS single-`return` shape (ProjectRenderUi's `varDecs.Count > 0` branch), not the nested-render
+    // form it was written in. So project∘import is NOT byte-identity for that one input — a behavior-
+    // preserving simplification (the nested render()/return-render indirection was inert with no vars to
+    // close over), never a data-loss one. import∘project (the law this slice's tests actually pin) still
+    // holds: re-importing the simplified stateless shape is the identity from there on.
     private static bool TryMatchStatefulShape(ICodeStatement[] statements, out List<CodeVarDec> vars, out CodeReturn viewReturn)
     {
         vars = [];

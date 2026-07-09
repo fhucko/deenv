@@ -1379,6 +1379,17 @@ Feature: The operator IDE (designs library + instance design selector)
   # idiom the render tree's leaf/attr editing already uses); editing its init persists into the MetaVar row
   # and the projected document. A design-level "State" area (Design.vars) offers the same add/remove idiom
   # for top-level state.
+  #
+  # fnVarNameHint's "'render' is reserved" check (app.deenv has NO comment syntax, so the rationale lives
+  # here): load-bearing, NOT the same "reserved name" story as the top-level fnNameHint above — a STATEFUL
+  # fn's projection (SchemaBridge.ProjectRenderUi) SYNTHESIZES a nested `fn render()` inside the
+  # component's own body, so a state var named "render" collides with that synthesized function in the
+  # SAME scope and would be silently overwritten. The server refuses this too
+  # (DesignerSourceTests.ProjectDesignDocument_refuses_a_fn_level_state_variable_named_render). Its
+  # "shadows a parameter" check (sys.hasParam) is the SAME silent-last-wins clobber class but hinted, not
+  # refused, on purpose: a directly-authored clobber the operator chose (params/vars share one function
+  # scope, whichever binds last wins), not one projection introduces — arch's call, no new permanent
+  # restriction.
   @m12 @single-user
   Scenario: A stateful component's state var shows in its card, editing its init persists, and a design-level State var can be added
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
@@ -1394,7 +1405,14 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the stored state var "count" has init "1"
     When I click the add-design-state-var button
     Then the design's State area shows 1 state var row
+    And design-level state var 0 shows the "name required" hint
+    When I click the add-design-state-var button
+    Then the design's State area shows 2 state var rows
+    When I set design-level state var 0's name to "dup"
+    And I set design-level state var 1's name to "dup"
+    Then design-level state var 1 shows the "duplicate name" hint
     When I remove the last design-level state var
+    And I remove the last design-level state var
     Then the design's State area shows 0 state var rows
 
   # ── M12 F1 review fix (ui-arch + ux) — the from-scratch "+ Component" flow, no import ────────────

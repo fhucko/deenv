@@ -645,6 +645,21 @@ function execSegment(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     return { type: "text", value: n >= 0 && n < parts.length ? parts[n] : "" };
 }
 
+// hasParam(paramsText, name): true when `name` is one of the comma-separated, TRIMMED tokens of
+// `paramsText` — mirrors the exact params-splitting idiom already used server-side for a MetaFn's
+// `params` field. Narrow and purpose-built (M12 V1 review), same class as segment/nest: the
+// framework does the string work; Code gains no general string ops. Twin of CodeExecutor.
+// ExecuteHasParam.
+function execHasParam(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    if (codeCall.params.length !== 2) throw new Error("hasParam(params, name) takes two arguments.");
+    const paramsV = executeValue(codeCall.params[0], scope, context).value;
+    if (paramsV.type !== "text") throw new Error("hasParam() expects a text params list.");
+    const nameV = executeValue(codeCall.params[1], scope, context).value;
+    if (nameV.type !== "text") throw new Error("hasParam() expects a text name.");
+    const found = paramsV.value.split(",").map(p => p.trim()).some(p => p === nameV.value);
+    return { type: "bool", value: found };
+}
+
 // toInt(text): parse `text` to an int; 0 on empty or non-numeric. Strict (an optional leading
 // "-" then digits) so this twins the C# int.TryParse exactly — "5x" is non-numeric → 0 on both
 // (parseInt would leniently yield 5 and drift from the server).
@@ -2196,6 +2211,7 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "logout": return execLogout(codeCall, scope, context);
         case "nest": return execNest(codeCall, scope, context);
         case "segment": return execSegment(codeCall, scope, context);
+        case "hasParam": return execHasParam(codeCall, scope, context);
         case "toInt": return execToInt(codeCall, scope, context);
         case "id": return execId(codeCall, scope, context);
         case "new": return execNew(codeCall, scope, context);

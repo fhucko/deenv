@@ -113,6 +113,11 @@ public static class CodeValidator
         ["logout"] = [0],  // () — the mirror of login: a client-only host effect (clear the principal)
         ["nest"] = [2],
         ["segment"] = [2],
+        // (paramsText, name) — true when `name` is one of the comma-separated, trimmed tokens of
+        // `paramsText` (M12 V1: the designer's fnVarNameHint uses this to flag a state var that
+        // shadows one of its own fn's params). Narrow and purpose-built, mirroring segment/nest:
+        // the framework does the string work; Code gains no general string ops.
+        ["hasParam"] = [2],
         ["toInt"] = [1],
         ["id"] = [1],
         ["new"] = [1],

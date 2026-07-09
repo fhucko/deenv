@@ -1480,6 +1480,20 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task WhenRemoveLastDesignStateVar() =>
         await ctx.Page!.Locator(".design-editor .design-state-section .var-row button.remove-var").Last.ClickAsync();
 
+    // ux review coverage gap: the client-computed name hint (designVarNameHint) is invisible to the
+    // unit-level SchemaBridge tests (client-only, no projection/commit involved) — prove it shows in the
+    // real DOM. `index` addresses the row by POSITION (0-based), matching insertion order (addVar appends).
+    [When("I set design-level state var {int}'s name to {string}")]
+    public async Task WhenSetDesignStateVarName(int index, string name) =>
+        await ctx.Page!.Locator(".design-editor .design-state-section .var-row input.var-name").Nth(index).FillAsync(name);
+
+    [Then("design-level state var {int} shows the {string} hint")]
+    public async Task ThenDesignStateVarShowsHint(int index, string hintText) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const rows = document.querySelectorAll('.design-editor .design-state-section .var-row'); " +
+            $"const r = rows[{index}]; if (r == null) return false; const h = r.querySelector('.var-name-hint'); " +
+            $"return h != null && h.textContent.includes({JsString(hintText)}); }}");
+
     // ── M12 F2 — canvas expansion of design-component invocations ─────────────────────────────────
 
     // A convertible render that both DEFINES `fn NoteCard(note)` (single-return `<li>{note.title}</li>`)

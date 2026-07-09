@@ -1699,6 +1699,23 @@ public sealed class CodeExecutor
         return new ExecText { Value = n >= 0 && n < parts.Length ? parts[n] : "" };
     }
 
+    // hasParam(paramsText, name): true when `name` is one of the comma-separated, TRIMMED tokens of
+    // `paramsText` — mirrors the exact params-splitting idiom already used server-side (SchemaBridge.
+    // ProjectRenderUi/ImportRender, CodeExecutor.ExpandFn) for a MetaFn's `params` field. Narrow and
+    // purpose-built (M12 V1 review), same class as segment/nest: the framework does the string work;
+    // Code gains no general string ops.
+    private IExecValue ExecuteHasParam(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 2)
+            throw new CodeRuntimeException("hasParam(params, name) takes two arguments.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecText paramsText)
+            throw new CodeRuntimeException("hasParam() expects a text params list.");
+        if (ExecuteValue(call.Params[1], scope, context) is not ExecText name)
+            throw new CodeRuntimeException("hasParam() expects a text name.");
+        var found = paramsText.Value.Split(',').Select(p => p.Trim()).Any(p => p == name.Value);
+        return new ExecBool { Value = found };
+    }
+
     // toInt(text): parse `text` to an int; 0 on empty or non-numeric (defensive, mirroring
     // existing input coercion). Strict (only an optional leading "-" then digits) so the
     // server/client twins agree exactly on every input — "5x" is non-numeric → 0 on both.
@@ -1989,6 +2006,7 @@ public sealed class CodeExecutor
         "renderTree" => ExecuteRenderTree(call, scope, context),
         "nest" => ExecuteNest(call, scope, context),
         "segment" => ExecuteSegment(call, scope, context),
+        "hasParam" => ExecuteHasParam(call, scope, context),
         "toInt" => ExecuteToInt(call, scope, context),
         "id" => ExecuteId(call, scope, context),
         "new" => ExecuteNew(call, scope, context),

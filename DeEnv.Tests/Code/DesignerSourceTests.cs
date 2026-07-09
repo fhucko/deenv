@@ -448,11 +448,13 @@ public sealed class DesignerSourceTests
         }
     }
 
-    // The collector invariant (M12 F2): RenderExprSources also walks `design.fns` body roots — a component's
-    // own leaf/attr sources need ASTs for canvas EXPANSION too. Pins that a source reachable ONLY through a
-    // fn body (NEVER through `render`) is still collected — the easy-to-forget half of the F2 collector law
-    // (see CollectExprSources' cross-ref comment). The render root is deliberately trivial (a bare <main>,
-    // no reference to `note`), so `note.title` can reach the returned sources ONLY via the fn body walk.
+    // The collector invariant (M12 F2/V1): RenderExprSources also walks `design.fns` body roots — a
+    // component's own leaf/attr sources need ASTs for canvas EXPANSION too — AND every MetaVar `init`
+    // source, both design-level (`design.vars`) and fn-level (`fn.vars`, M12 V1). Pins that a source
+    // reachable ONLY through a fn body (NEVER through `render`) is still collected — the easy-to-forget
+    // half of the F2 collector law (see CollectExprSources' cross-ref comment) — and that neither var
+    // kind is silently dropped. The render root is deliberately trivial (a bare <main>, no reference to
+    // `note`), so `note.title` can reach the returned sources ONLY via the fn body walk.
     [Test]
     public async Task RenderExprSources_collects_a_source_inside_a_fn_body_reached_only_via_expansion()
     {
@@ -486,10 +488,17 @@ public sealed class DesignerSourceTests
             var fnLeaf = store.CreateObject("MetaNode", Node("", "note.title"));
             store.AddToSet(fnBodyPath.Field("children"), fnLeaf);
 
+            // M12 V1 — a design-level var init AND a fn-level var init, each with a DISTINCT source, reached
+            // ONLY through CollectVarInitSources (never through the render/fn-body tag walk above).
+            store.AddToSet(designPath.Field("vars"), store.CreateObject("MetaVar", Var("topCount", "db.total + 1")));
+            store.AddToSet(fnPath.Field("vars"), store.CreateObject("MetaVar", Var("localFlag", "note.done == false")));
+
             var design = store.ReadNode(designPath)!;
             var sources = SchemaBridge.RenderExprSources(design);
 
             await Assert.That(sources).Contains("note.title");
+            await Assert.That(sources).Contains("db.total + 1");
+            await Assert.That(sources).Contains("note.done == false");
         }
         finally
         {
