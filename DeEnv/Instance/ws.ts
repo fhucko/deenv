@@ -1055,6 +1055,18 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
                             conflicts?: WireConflict[];
                             entries?: { [text: string]: string };
                             state?: ServerDtState; error?: string }): void {
+    // M12 auto-live parse-op — dispatched FIRST, ahead of the correlated mutating-ack block below. A
+    // parseExprsResult reply carries a (self-correlating, via parseExprsRequests) numeric `id` but is NOT a
+    // mutation ack: it stages nothing, journals nothing, and must not be routed through the ack path. Review
+    // fix: that block's success leg (no `msg.error`) unconditionally clears `uiStatic.lastError` (:1093 pre-
+    // fix) — a read-only parse reply arriving while the "your edits were NOT saved… reload" safety banner is
+    // up would silently dismiss it (plus a wasted second renderUi, since applyParseExprsResult already
+    // repaints when it merges). Returns unconditionally — a parseExprsResult reply carries no `state`/
+    // `newVersion`/`conflicts` any later branch could still act on.
+    if (msg.op === "parseExprsResult" && typeof msg.id === "number" && msg.entries != null) {
+        applyParseExprsResult(msg.id, msg.entries);
+        return;
+    }
     // Correlated accept/reject first: an error rolls the journal back, an ok commits.
     if (typeof msg.id === "number") {
         // A same-field COLLISION reply (M13 slice 6): `conflicts` present alongside `error`. Handle it BEFORE
@@ -1221,8 +1233,6 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
     } else if (msg.op === "arrayAdd" && typeof msg.tempId === "number" && typeof msg.newId === "number") {
         const arrayId = pendingAdds.get(msg.tempId);
         if (arrayId != null) { pendingAdds.delete(msg.tempId); remapAddedId(arrayId, msg.tempId, msg.newId, msg.collections); }
-    } else if (msg.op === "parseExprsResult" && typeof msg.id === "number" && msg.entries != null) {
-        applyParseExprsResult(msg.id, msg.entries);
     } else if (msg.op === "refetch" && msg.state != null) {
         refetchInFlight = false;
         if (inFlightGen !== stateGen) {

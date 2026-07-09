@@ -1049,13 +1049,28 @@ public sealed class WsHandler
     // handler needs none of them either — every session (even anonymous, even one with no bound principal)
     // may parse expression text; nothing here reads or writes app data.
     //
-    // Caps guard against a pathological single request (bulk-paste, a scripted client): silently truncating
-    // past them is CORRECT, not a shortcut — a text left out this round is simply still missing next render,
-    // so the client's own miss-collection re-requests it on its next debounced pass (docs/plans/canvas-eval.md
-    // companion: the auto-live parse-op design). Logged so an operator can see it happened; never surfaced as
-    // an error (a partial batch is a normal, useful reply, not a failure).
+    // Caps are DEFENSIVE BOUNDS against a pathological single request (bulk-paste, a scripted/hostile
+    // client) — a real single-operator edit never approaches 200 texts or 10k chars in one ~300ms debounce
+    // batch (one edited leaf at a time). CORRECTED (a prior version of this comment claimed a truncated text
+    // "simply re-requests on its next debounced pass" — FALSE): the client (ws.ts applyParseExprsResult)
+    // treats any text OMITTED from the reply — truncated exactly like genuinely unparseable — identically:
+    // it joins the per-ctx `failed` set and is NOT re-asked again this generation. The only recovery is the
+    // SAME one an unparseable text already has: an explicit "Refresh values" mints a brand-new evalContext
+    // object (a fresh memo key), which is a fresh WeakMap entry with an empty `failed` set. This is honest,
+    // not a gap: hitting the cap at all is already the pathological case the bound exists for. Truncation is
+    // logged so an operator can see it happened; never surfaced as a client-visible error (a partial batch is
+    // a normal, useful reply, not a failure).
     private const int ParseExprsMaxTexts = 200;
     private const int ParseExprsMaxChars = 10_000;
+    // A per-TEXT length cap (security posture, not a UX bound): this op is reachable ANONYMOUSLY on ANY
+    // instance's WS, including a PUBLIC one (e.g. devlog.deenv.org) — no session/floor gate (see the doc
+    // above, "pure + store-free"). CodeParse.ParseExpression is a recursive-descent parser with no depth
+    // limit of its own; a single pathological deeply-nested expression (thousands of chars of nested
+    // parens/ternaries/calls) drives that recursion toward an UNCATCHABLE StackOverflowException — the exact
+    // process-death class FG (the interpreter call-depth guard) already closed for EVALUATION. No real
+    // designer expression comes remotely close to this; an oversize text is skipped exactly like an
+    // unparseable one (omitted from the reply, warn-logged) — never attempted.
+    private const int ParseExprsMaxTextChars = 1_000;
 
     private string HandleParseExprs(WsRequest req)
     {
@@ -1078,6 +1093,16 @@ public sealed class WsHandler
             {
                 Console.Error.WriteLine($"parseExprs: request truncated at {ParseExprsMaxChars} total chars.");
                 break;
+            }
+            // The security-posture cap: never hand a pathologically long text to ParseExpression's recursive
+            // descent (see ParseExprsMaxTextChars's doc — an uncatchable StackOverflowException, not just a
+            // slow parse). Skipped like an unparseable text (omitted, warn-logged) — the REST of this batch
+            // still gets a fair try (continue, not break: one oversize text must not starve its siblings).
+            if (text.Length > ParseExprsMaxTextChars)
+            {
+                Console.Error.WriteLine(
+                    $"parseExprs: text of length {text.Length} exceeds the per-text cap ({ParseExprsMaxTextChars} chars) — skipped, never parsed.");
+                continue;
             }
             try
             {
