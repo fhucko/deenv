@@ -1,5 +1,14 @@
 # Structured fns + params (design)
 
+**STATUS 2026-07-09: BUILT — all four slices landed on main, each arch-reviewed with
+fixes folded (per-slice records in docs/plans/visual-designer.md): F1 rows+import+
+projection+editor (`96eb142`), F2 canvas expansion (`f6f310f`), FG call-depth guard
+(`1a1c8cf`), F3 call-position eval + the staleness banner (`a28343b`; suite 848/848).
+Build-time refinements that SUPERSEDE details below: "+ Component" mints an EMPTY body
+(not the default-`<div>` sketch); the F3b affordance is a per-fn ROW-DATA fingerprint
+(three lockstep walks, no printer needed) — precise, same-frame, and skipping unnamed
+fns (an unnamed fn has no call sites, so it can't stale anything).**
+
 *2026-07-08. Design pass (grounded via code-navigator trace + self-grilled + adversarial
 grill ×1, verdict SHIP-WITH-FIXES, all six fixes folded in below) for the M12
 ladder rung after S6: component/helper FUNCTIONS become designer rows, and the canvas
