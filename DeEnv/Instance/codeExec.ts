@@ -1219,7 +1219,11 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
                 const fnName = readNodeText(fn, "name", context);
                 const bodyRoot = orderedMembers(fn, "body", context)[0];
                 if (fnName.length === 0 || bodyRoot == null) return chip("component-chip", fnName, id); // never guess
-                return expandFn(fn, bodyRoot, node, context, ctx, bindings, fns, expansion);
+                // M12 V1b review fix — null means its OWN vars collided with a param (or each other): the
+                // runtime would CRASH on first mount ("already exists"), so there is no "mostly right" render
+                // to show — degrade to the SAME component chip an unnamed/bodyless/depth-capped fn already uses.
+                const expanded = expandFn(fn, bodyRoot, node, context, ctx, bindings, fns, expansion);
+                return expanded != null ? expanded : chip("component-chip", fnName, id);
             }
         }
         const attributes: { [name: string]: ExecResult } = { "data-node": { value: { type: "text", value: String(id) } } };
@@ -1373,17 +1377,20 @@ function fingerprintNode(node: ExecObject, context: ExecContext): string {
 //
 // M12 V1b — AFTER the param bindings, the MetaFn's OWN `vars` (its state, MetaVar rows) bind into the SAME
 // `bodyBindings` object, sequentially, under {db, params, earlier vars} — the runtime's setup order (a
-// component's `var` statements run after its params are bound, in the setup body). A var whose name
-// COLLIDES with a param OVERWRITES it (bindVars assigns into the same key) — the pinned canvas rule: the
-// LATER declaration in setup order wins the walk's scope. (The designer's own fnVarNameHint already warns
-// "shadows a parameter" on this collision — advisory, not a projection refusal, so it authors cleanly and
-// only needs an honest, deterministic canvas answer; a real live instance's setup fn declaring a same-named
-// `var` in the SAME function scope as its param would in fact throw "already exists" at runtime — a genuine
-// pre-existing authoring pitfall the hint is warning AGAINST, out of this slice's scope to fix.) A static
-// canvas can only ever show INITIAL state, so this binding — not a "state chip" — IS the truth of what a
-// fresh live instance shows at mount (once the var is correctly named, the slice's whole premise).
+// component's `var` statements run after its params are bound, in the setup body).
+//
+// M12 V1b review fix (arch, MUST-FIX) — a var whose name COLLIDES with a param (or an earlier var) is NOT
+// last-wins: the runtime's ExecuteVarDec throws "Variable already exists" for exactly this condition (a var
+// declared into a scope that already holds that name — a param and a `var` share ONE function-call scope),
+// so a REAL live instance would CRASH on the component's first mount. The designer's own fnVarNameHint only
+// WARNS "shadows a parameter" (advisory, not a projection refusal — arch's deliberate call, so it authors
+// cleanly), so this collision is a genuinely reachable, uncaught state — canvas-never-lies means there is no
+// "mostly right" render to show for it. bindVars signals the collision back (returns true); a collision
+// degrades the WHOLE expansion to null, and the caller (renderTreeNode's tag-resolution site) renders the
+// SAME component-chip an unnamed/bodyless/depth-capped fn already uses — never guess which binding (or the
+// crash) the runtime would actually produce.
 function expandFn(fn: ExecObject, bodyRoot: ExecObject, invocationNode: ExecObject, context: ExecContext,
-    ctx: ExecObject | null, callerBindings: { [name: string]: ExecValue } | undefined, fns: ExecArray, expansion: ExpansionState): ExecValue {
+    ctx: ExecObject | null, callerBindings: { [name: string]: ExecValue } | undefined, fns: ExecArray, expansion: ExpansionState): ExecValue | null {
     const paramNames = readNodeText(fn, "params", context).split(",").map(p => p.trim()).filter(p => p.length > 0);
     const attrs = orderedMembers(invocationNode, "attrs", context);
     const bodyBindings: { [name: string]: ExecValue } = {};
@@ -1400,7 +1407,7 @@ function expandFn(fn: ExecObject, bodyRoot: ExecObject, invocationNode: ExecObje
         }
         // else: attr present but unevaluable — leave OUT of bodyBindings so a body reference chips.
     }
-    bindVars(orderedMembersOptional(fn, "vars", context), bodyBindings, ctx, context);
+    if (bindVars(orderedMembersOptional(fn, "vars", context), bodyBindings, ctx, context)) return null; // collision — chip the whole component
     expansion.depth++;
     try {
         const result = renderTreeNode(bodyRoot, context, ctx, bodyBindings, fns, expansion);
@@ -1412,20 +1419,31 @@ function expandFn(fn: ExecObject, bodyRoot: ExecObject, invocationNode: ExecObje
 // {db, ...whatever is ALREADY in `bindings`} — so a design var's init can reference an earlier design var,
 // and a component's state-var init can reference an earlier state var OR its already-bound params, since
 // `bindings` for expandFn's call already holds them). Shared by the walk ROOT (design.vars) and expandFn (a
-// MetaFn's own vars) — one binding rule, twin of CodeExecutor.BindVars.
+// MetaFn's own vars) — one binding rule, twin of CodeExecutor.BindVars. Returns true if ANY var COLLIDED
+// (see below) — expandFn's caller checks this; the walk ROOT ignores it (a collision there already achieves
+// the correct per-name "unbound" degrade via the removal below, with no whole-scope consequence — a
+// design-level duplicate is ALSO projection-refused, SchemaBridge.ProjectRenderUi, so this only matters in
+// the live mid-edit window before that refusal fires).
 //   • an EMPTY init (`init.length === 0`, the bare `var x` grammar) binds ExecNull directly, no eval needed
 //     — matching the runtime (a null CodeVarDec.value defaults to a null exec value); this is a legitimate
 //     null, not an "unevaluable" miss;
-//   • a non-empty init evaluates via evalCtxExpr under the bindings accumulated SO FAR — a clean eval binds
-//     the value; `ctx == null` or any eval miss/throw leaves the var OUT of `bindings` entirely so a body/
-//     leaf reference to it misses scope and CHIPS (never guess a value — the same divergence expandFn's own
-//     param binding already documents);
-//   • assignment happens AFTER the value is computed, so a name that collides with something already in
-//     `bindings` (a param, at expandFn's call site) is OVERWRITTEN — the deliberate runtime-scoping pin.
-function bindVars(vars: ExecObject[], bindings: { [name: string]: ExecValue }, ctx: ExecObject | null, context: ExecContext): void {
+//   • a COLLISION — `bindings` already holds this name (a param, or an EARLIER var of the same name) — is
+//     the runtime's own "already exists" condition (ExecuteVarDec throws for it): NEVER GUESS which binding
+//     would win (or that the runtime would in fact crash) — REMOVE the existing binding (so the name reads
+//     as honestly UNBOUND, chipping every reference to it) rather than overwrite it, and mark `poisoned` so
+//     a THIRD same-named row can't silently re-bind it once the second collision clears the entry;
+//   • a non-empty, non-colliding init evaluates via evalCtxExpr under the bindings accumulated SO FAR — a
+//     clean eval binds the value; `ctx == null` or any eval miss/throw leaves the var OUT of `bindings`
+//     entirely so a body/leaf reference to it misses scope and CHIPS (never guess a value — the same
+//     divergence expandFn's own param binding already documents).
+function bindVars(vars: ExecObject[], bindings: { [name: string]: ExecValue }, ctx: ExecObject | null, context: ExecContext): boolean {
+    let collided = false;
+    const poisoned = new Set<string>();
     for (const v of vars) {
         const name = readNodeText(v, "name", context);
         if (name.length === 0) continue; // no name to bind under — never a real row (projection refuses it)
+        if (poisoned.has(name)) continue; // already flagged unbound by an earlier collision — stays unbound
+        if (Object.prototype.hasOwnProperty.call(bindings, name)) { delete bindings[name]; poisoned.add(name); collided = true; continue; }
         const init = readNodeText(v, "init", context);
         if (init.length === 0) { bindings[name] = { type: "null" }; continue; } // bare `var x` — legal null
         if (ctx != null) {
@@ -1434,6 +1452,7 @@ function bindVars(vars: ExecObject[], bindings: { [name: string]: ExecValue }, c
         }
         // else: ctx==null or an eval miss/throw — leave OUT of bindings so a reference chips.
     }
+    return collided;
 }
 
 // A `for` row (S6b, WITH ctx). Evaluate the `collection` source against the seed graph under the CURRENT

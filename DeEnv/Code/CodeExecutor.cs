@@ -894,7 +894,12 @@ public sealed class CodeExecutor
                 var fnName = ReadNodeText(fn, "name", context);
                 var bodyRoot = OrderedMembers(fn, "body", context).FirstOrDefault();
                 if (fnName.Length == 0 || bodyRoot == null) return Chip("component-chip", fnName, id); // never guess
-                return ExpandFn(fn, bodyRoot, node, context, ctx, bindings, fns, expansion);
+                // M12 V1b review fix — a null ExpandFn result means its OWN vars collided with a param (or
+                // each other): the runtime would CRASH on first mount ("already exists", ExecuteVarDec), so
+                // there is no "mostly right" render to show — degrade to the SAME component chip an unnamed/
+                // bodyless/depth-capped fn already uses (never guess).
+                return ExpandFn(fn, bodyRoot, node, context, ctx, bindings, fns, expansion) is { } expanded
+                    ? expanded : Chip("component-chip", fnName, id);
             }
             var attributes = new Dictionary<string, IExecValue> { ["data-node"] = new ExecText { Value = id.ToString() } };
             foreach (var attr in OrderedMembers(node, "attrs", context))
@@ -1214,17 +1219,19 @@ public sealed class CodeExecutor
     //
     // M12 V1b — AFTER the param bindings, the MetaFn's OWN `vars` (its state, MetaVar rows) bind into the
     // SAME `bodyBindings` dictionary, sequentially, under {db, params, earlier vars} — the runtime's setup
-    // order (a component's `var` statements run after its params are bound, in the setup body). A var whose
-    // name COLLIDES with a param OVERWRITES it (BindVars assigns into the same dictionary key) — the pinned
-    // canvas rule: the LATER declaration in setup order wins the walk's scope. (The designer's own
-    // fnVarNameHint already warns "shadows a parameter" on this collision — advisory, not a projection
-    // refusal, so it authors cleanly and only needs an honest, deterministic canvas answer; a real live
-    // instance's setup fn declaring a same-named `var` in the SAME function scope as its param would in fact
-    // throw "already exists" at runtime — a genuine pre-existing authoring pitfall the hint is warning
-    // AGAINST, out of this slice's scope to fix.) A static canvas can only ever show INITIAL state, so this
-    // binding — not a "state chip" — IS the truth of what a fresh live instance shows at mount (once the var
-    // is correctly named, the slice's whole premise).
-    private IExecValue ExpandFn(ExecObject fn, ExecObject bodyRoot, ExecObject invocationNode, ExecContext context,
+    // order (a component's `var` statements run after its params are bound, in the setup body).
+    //
+    // M12 V1b review fix (arch, MUST-FIX) — a var whose name COLLIDES with a param (or an earlier var) is
+    // NOT last-wins: the runtime's ExecuteVarDec throws "Variable already exists" for exactly this condition
+    // (a var declared into a scope that already holds that name — a param and a `var` share ONE function-
+    // call scope), so a REAL live instance would CRASH on the component's first mount. The designer's own
+    // fnVarNameHint only WARNS "shadows a parameter" (advisory, not a projection refusal — arch's deliberate
+    // call, so it authors cleanly), so this collision is a genuinely reachable, uncaught state — canvas-
+    // never-lies means there is no "mostly right" render to show for it. BindVars signals the collision back
+    // (returns true); a collision degrades the WHOLE expansion to null, and the caller (BuildRenderTree's
+    // tag-resolution site) renders the SAME component-chip an unnamed/bodyless/depth-capped fn already uses
+    // — never guess which binding (or the crash) the runtime would actually produce.
+    private IExecValue? ExpandFn(ExecObject fn, ExecObject bodyRoot, ExecObject invocationNode, ExecContext context,
         ExecObject? ctx, Dictionary<string, IExecValue>? callerBindings, ExecArray fns, ExpansionState expansion)
     {
         var paramNames = ReadNodeText(fn, "params", context)
@@ -1242,7 +1249,7 @@ public sealed class CodeExecutor
                 bodyBindings[paramName] = evaluated;
             // else: attr present but unevaluable — leave OUT of bodyBindings so a body reference chips.
         }
-        BindVars(OrderedMembersOptional(fn, "vars", context), bodyBindings, ctx, context);
+        if (BindVars(OrderedMembersOptional(fn, "vars", context), bodyBindings, ctx, context)) return null; // collision — chip the whole component
         expansion.Depth++;
         try
         {
@@ -1256,28 +1263,41 @@ public sealed class CodeExecutor
     // {db, ...whatever is ALREADY in `bindings`} — so a design var's init can reference an earlier design
     // var, and a component's state-var init can reference an earlier state var OR its already-bound params,
     // since `bindings` for ExpandFn's call already holds them). Shared by the walk ROOT (design.vars) and
-    // ExpandFn (a MetaFn's own vars) — one binding rule, twin of codeExec.ts's bindVars.
+    // ExpandFn (a MetaFn's own vars) — one binding rule, twin of codeExec.ts's bindVars. Returns true if ANY
+    // var COLLIDED (see below) — ExpandFn's caller checks this; the walk ROOT ignores it (a collision there
+    // already achieves the correct per-name "unbound" degrade via the removal below, with no whole-scope
+    // consequence — a design-level duplicate is ALSO projection-refused, SchemaBridge.ProjectRenderUi, so
+    // this only matters in the live mid-edit window before that refusal fires).
     //   • an EMPTY init (`init.Length == 0`, the bare `var x` grammar) binds ExecNull directly, no eval
     //     needed — matching the runtime's ExecuteVarDec (a null CodeVarDec.Value defaults to ExecNull); this
     //     is a legitimate null, not an "unevaluable" miss;
-    //   • a non-empty init evaluates via EvaluateCtxExpr under the bindings accumulated SO FAR — a clean
-    //     eval binds the value; `ctx == null` or any eval miss/throw leaves the var OUT of `bindings`
-    //     entirely so a body/leaf reference to it misses scope and CHIPS (never guess a value — the same
-    //     divergence ExpandFn's own param binding already documents);
-    //   • assignment happens AFTER the value is computed, so a name that collides with something already in
-    //     `bindings` (a param, at ExpandFn's call site) is OVERWRITTEN — the deliberate runtime-scoping pin.
-    private void BindVars(List<ExecObject> vars, Dictionary<string, IExecValue> bindings, ExecObject? ctx, ExecContext context)
+    //   • a COLLISION — `bindings` already holds this name (a param, or an EARLIER var of the same name) —
+    //     is the runtime's own "already exists" condition (ExecuteVarDec throws for it): NEVER GUESS which
+    //     binding would win (or that the runtime would in fact crash) — REMOVE the existing binding (so the
+    //     name reads as honestly UNBOUND, chipping every reference to it) rather than overwrite it, and mark
+    //     `poisoned` so a THIRD same-named row can't silently re-bind it once the second collision clears the
+    //     dictionary entry;
+    //   • a non-empty, non-colliding init evaluates via EvaluateCtxExpr under the bindings accumulated SO
+    //     FAR — a clean eval binds the value; `ctx == null` or any eval miss/throw leaves the var OUT of
+    //     `bindings` entirely so a body/leaf reference to it misses scope and CHIPS (never guess a value —
+    //     the same divergence ExpandFn's own param binding already documents).
+    private bool BindVars(List<ExecObject> vars, Dictionary<string, IExecValue> bindings, ExecObject? ctx, ExecContext context)
     {
+        var collided = false;
+        var poisoned = new HashSet<string>();
         foreach (var v in vars)
         {
             var name = ReadNodeText(v, "name", context);
             if (name.Length == 0) continue; // no name to bind under — never a real row (projection refuses it)
+            if (poisoned.Contains(name)) continue; // already flagged unbound by an earlier collision — stays unbound
+            if (bindings.ContainsKey(name)) { bindings.Remove(name); poisoned.Add(name); collided = true; continue; }
             var init = ReadNodeText(v, "init", context);
             if (init.Length == 0) { bindings[name] = new ExecNull(); continue; } // bare `var x` — legal null
             if (ctx != null && EvaluateCtxExpr(init, ctx, context, bindings) is { } value)
                 bindings[name] = value;
             // else: ctx==null or an eval miss/throw — leave OUT of bindings so a reference chips.
         }
+        return collided;
     }
 
     // Evaluate ONE canvas expression against the eval context's seed graph (M12 CANVAS-EVAL-1). Looks the

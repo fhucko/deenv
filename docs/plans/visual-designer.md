@@ -486,54 +486,84 @@ mutations the designer app performs in deenv code — that machinery already exi
   — MetaVar has no helper-fn row; a later rung. USER DECISION same day: state vars will
   EVALUATE in the canvas (V1b below) — the "state chips until W1" caption work was
   dropped mid-batch as instantly-obsolete.
-- **V1b — init-evaluated state in the static canvas. ✅ DONE 2026-07-09** (suite 870/870;
-  conformance 186 both runners, 6 new cases + the V1 pin flipped). A static canvas can
-  only ever show INITIAL state, so binding each var's init IS the truth (what a fresh
-  live instance shows at mount) — chips for state vars were unnecessary conservatism.
-  `sys.renderTree(node, ctx, design)` — arg 3 is now the DESIGN row (was the bare `fns`
-  set, F2): the walk reads BOTH `design.fns` (unchanged, F2) and `design.vars` (new) from
-  it, both via the V1 absent-tolerance precedent (`ReadNodePropOptional`/
-  `readNodePropOptional`, a new shared helper `OrderedMembersOptional` now sits on top
-  of), so a fixture predating V1b that omits either prop still reads as "none" rather
-  than throwing — the ONE app.deenv call site + all 9 F2/F3 conformance fixtures passing
-  `fns` as arg 3 directly migrated to wrap it in `{fns: [...]}`. `BindVars`/`bindVars` (one
-  shared routine, twin-identical) binds each MetaVar row's init value SEQUENTIALLY (each
-  init evaluated via EvaluateCtxExpr under {db, ...bindings accumulated so far} — so a
-  later var's init can reference an earlier one) at TWO sites: the walk ROOT
-  (`design.vars`, seeding the top-level bindings every node inherits — row bindings, a
-  for/if loop var, still SHADOW a same-named design var on top) and `ExpandFn`/`expandFn`
-  (a MetaFn's OWN vars, bound AFTER its params, OVERWRITING a same-named param on
-  collision — the designer's own `fnVarNameHint` "shadows a parameter" hint is advisory,
-  not a projection refusal, so this is a real reachable case, pinned). An EMPTY init
-  (bare `var x`) binds `ExecNull` directly, no eval needed (matches the runtime's
-  `ExecuteVarDec` null-default) — a legitimate null, not an unevaluable miss; a
+- **V1b — init-evaluated state in the static canvas. ✅ DONE 2026-07-09** (arch review
+  SHIP-WITH-FIXES, applied same day; suite 870/870 then re-verified green after the fix;
+  conformance 187 both runners — 7 new cases net + the V1 pin flipped + the review-fix
+  flip). A static canvas can only ever show INITIAL state, so binding each var's init IS
+  the truth (what a fresh live instance shows at mount) — chips for state vars were
+  unnecessary conservatism. `sys.renderTree(node, ctx, design)` — arg 3 is now the DESIGN
+  row (was the bare `fns` set, F2): the walk reads BOTH `design.fns` (unchanged, F2) and
+  `design.vars` (new) from it, both via the V1 absent-tolerance precedent
+  (`ReadNodePropOptional`/`readNodePropOptional`, a new shared helper
+  `OrderedMembersOptional` now sits on top of), so a fixture predating V1b that omits
+  either prop still reads as "none" rather than throwing — the ONE app.deenv call site +
+  all 9 F2/F3 conformance fixtures passing `fns` as arg 3 directly migrated to wrap it in
+  `{fns: [...]}`. `BindVars`/`bindVars` (one shared routine, twin-identical) binds each
+  MetaVar row's init value SEQUENTIALLY (each init evaluated via EvaluateCtxExpr under
+  {db, ...bindings accumulated so far} — so a later var's init can reference an earlier
+  one) at TWO sites: the walk ROOT (`design.vars`, seeding the top-level bindings every
+  node inherits — row bindings, a for/if loop var, still SHADOW a same-named design var
+  on top) and `ExpandFn`/`expandFn` (a MetaFn's OWN vars, bound AFTER its params). An
+  EMPTY init (bare `var x`) binds `ExecNull` directly, no eval needed (matches the
+  runtime's `ExecuteVarDec` null-default) — a legitimate null, not an unevaluable miss; a
   non-empty init that misses `ctx.exprs` or throws leaves the var OUT of bindings
   entirely, so its references chip (never guess) while sibling vars/leaves are
   unaffected. `SchemaBridge.RenderExprSources`' existing var-init collection (landed
   inert at V1) is now LOAD-BEARING — its own doc comment updated, since `BindVars` has NO
   literal shortcut (unlike a param's tier-0 `LiteralValue`), so even a plain literal init
-  like `0` depends on the collector shipping an AST for it. Conformance: the V1 "state
-  var chips" case FLIPPED to assert the init value evaluates instead (the slice's whole
-  purpose); six new cases pin a design-level var evaluating in a leaf, sequential
-  dependency between two design vars, var-shadows-param overwrite, bare-var→ExecNull
+  like `0` depends on the collector shipping an AST for it.
+  **Review fix (arch, MUST-FIX, canvas-never-lies):** the FIRST landing let a var
+  OVERWRITE a same-named param/earlier-var on collision ("last wins") — WRONG: the
+  runtime's `ExecuteVarDec` (CodeExecutor.cs / codeExec.ts) THROWS "already exists" for
+  exactly this condition (a param and a `var` share ONE function-call scope), so a real
+  live instance CRASHES on that component's first mount; projection does NOT refuse the
+  var-vs-param case (only var-vs-fn and var-vs-var); the designer's `fnVarNameHint` only
+  WARNS ("shadows a parameter", advisory) — so the collision passes every gate and would
+  have rendered GREEN in the canvas while being fatal at publish. Fixed: `BindVars`/
+  `bindVars` now DEGRADES on collision instead of overwriting — a name already present in
+  `bindings` (a param, or an earlier var) is REMOVED (not reassigned) and the routine
+  returns `true`; at the walk ROOT this alone achieves the correct per-name "unbound → chip"
+  degrade (siblings unaffected); at `ExpandFn`/`expandFn` (fn-level vars) a collision
+  aborts the WHOLE expansion — the caller renders the SAME `component-chip` an
+  unnamed/bodyless/depth-capped fn already uses (never guess which binding, or the crash,
+  the runtime would produce). A `poisoned`/`Set` guard makes a 3-way name collision fully
+  inert too (not just the first pair). The design-level-duplicate question the review
+  raised was checked against source: `ProjectRenderUi` (SchemaBridge.cs ~378-380) ALREADY
+  refuses two `design.vars` sharing a name (a `DesignerSourceTests` case already pinned
+  it) — the V1 report's claim was RIGHT, no new refusal needed; the walk-root degrade
+  above still matters for the LIVE mid-edit window before that refusal fires (one new
+  conformance case). Runtime-visibility check (DefineFunction + `TryFindScope`'s parent-
+  chain walk, SsrRenderer.cs:989-997/347-363): a component fn's closure Scope descends
+  from the SAME `app` scope top-level `ui var`s bind into, so a REAL runtime component
+  body LEXICALLY SEES design-level vars (ordinary parent-scope lookup) — the canvas does
+  NOT model this (`ExpandFn`'s isolated eval only ever holds {db, fns, params, own vars}),
+  so **a component body referencing a design var chips in the canvas today: a SAFE
+  under-approximation (never wrong, sometimes conservative) — candidate follow-up: seed
+  design-var bindings into `ExpandFn`'s body bindings.** Conformance: the V1 "state var
+  chips" case FLIPPED (evaluates, V1b's premise) then the "var-shadows-param" case FLIPPED
+  AGAIN (degrades to a component chip, the review fix); new cases pin a design-level var
+  evaluating in a leaf, sequential dependency between two design vars, bare-var→ExecNull
   rendering empty (not a chip), an unevaluable init leaving ONLY that var unbound
-  (siblings fine), and a for-loop var shadowing a same-named design var. Browser-pinned
-  (Designer.feature @m12): an imported design-level var + an INVOKED stateful Counter
-  component both show real evaluated content (no chips) on first render; editing the
-  var's init text chips its leaf (the leaf's own source never changed, so it falls back
-  to the stale binding's absence) until "Refresh values" re-ships `ctx.exprs` with the
-  new source and the leaf shows the new value. Real bug found + fixed en route (not a
-  V1b defect, but blocked writing its own browser proof): a bare root type with ZERO
-  props fails `InstanceDescriptionLoader.Validate` ("Type 'X' has baseType 'object' but
-  no props"), degrading `evalContext` to a PERMANENTLY EMPTY payload for that design (its
-  memo key has empty deps — only an explicit Refresh recomputes) — every browser fixture
-  that exercises real evaluation must give its root type at least one field, matching the
-  pattern CANVAS-EVAL-1/F3/S6b already established; a fixture that skips real evaluation
-  (checks only DOM structure/hints) can still get away with a bare type. Deferred chip
-  classes (user-confirmed trajectory, unchanged): edited-unrefreshed (transient by
-  design; auto-live stays ledgered), store-backed builtins (dies with cache seeding, the
-  scheduled fast-follow), ambients (dies with per-use ambients), genuine errors (SHOULD
-  chip — the per-node error display).
+  (siblings fine), a for-loop var shadowing a same-named design var, and the two collision
+  degrades (fn-level → component chip; root-level mid-edit dup → both definitions unbound).
+  Browser-pinned (Designer.feature @m12): an imported design-level var + an INVOKED
+  stateful Counter component both show real evaluated content (no chips) on first render;
+  editing the var's init text chips its leaf (the leaf's own source never changed, so it
+  falls back to the stale binding's absence) until "Refresh values" re-ships `ctx.exprs`
+  with the new source and the leaf shows the new value. Real bug found + fixed en route
+  (not a V1b defect, but blocked writing its own browser proof): a bare root type with
+  ZERO props fails `InstanceDescriptionLoader.Validate` ("Type 'X' has baseType 'object'
+  but no props"), degrading `evalContext` to a PERMANENTLY EMPTY payload for that design
+  (its memo key has empty deps — only an explicit Refresh recomputes) — every browser
+  fixture that exercises real evaluation must give its root type at least one field,
+  matching the pattern CANVAS-EVAL-1/F3/S6b already established; a fixture that skips
+  real evaluation (checks only DOM structure/hints) can still get away with a bare type
+  (ledgered separately, deliberately NOT fixed here — orthogonal). Deferred chip classes
+  (user-confirmed trajectory, unchanged): edited-unrefreshed (transient by design; auto-
+  live stays ledgered), store-backed builtins (dies with cache seeding, the scheduled
+  fast-follow), ambients (dies with per-use ambients), genuine errors (SHOULD chip — the
+  per-node error display), component-body references to design vars (see the safe-
+  under-approximation note above).
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —
