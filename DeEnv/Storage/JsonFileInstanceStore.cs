@@ -1875,17 +1875,30 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // Append one JSONL line (UTF-8, no BOM, trailing '\n') to the log file — the durable half of the WAL
     // commit. Creates the directory/file on first use (mirrors SaveRaw's Directory.CreateDirectory — a
     // freshly-created instance may not have its data dir yet).
+    //
+    // Flush(flushToDisk: true) forces the entry to PHYSICAL disk (fsync/FlushFileBuffers) before the
+    // commit is acked — without it an acked commit sits in the OS page cache and a power loss / host
+    // failure can erase it (a process crash cannot; the page cache survives those). The log is the ONLY
+    // path that needs this: the snapshot and genesis are derivable and self-repair from the log on boot
+    // (ReconcileLogOnBoot), so fsyncing them would buy nothing. Costs one disk flush per commit
+    // (~0.5-5ms); accepted per the durability audit in docs/plans/distributed-acid-design.md §5, which
+    // also names the residual gaps this deliberately does not close (directory-entry durability of a
+    // brand-new instance's first line; torn-snapshot behavior on exotic filesystems — both loud, not
+    // silent).
     private static void AppendLogEntry(string logPath, LogEntry entry)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
         var line = JsonSerializer.Serialize(entry, LogLineOpts) + "\n";
-        File.AppendAllText(logPath, line, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        var bytes = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(line);
+        using var fs = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.Read);
+        fs.Write(bytes);
+        fs.Flush(flushToDisk: true);
     }
 
     // Load every entry from the log file, repairing a torn FINAL line (the process crashed mid-append —
     // the ONLY way a line can be malformed under the WAL discipline, since every append is a single
-    // File.AppendAllText call and every entry before the last was itself completed by a PRIOR successful
-    // boot). Any OTHER unparseable line — one that isn't the last, or a last line that parses as valid
+    // write call in AppendLogEntry and every entry before the last was itself completed by a PRIOR
+    // successful boot). Any OTHER unparseable line — one that isn't the last, or a last line that parses as valid
     // JSON but not a LogEntry — is a corrupted log, not a crash artifact: loud StoredDataException.
     private List<LogEntry> LoadLog()
     {

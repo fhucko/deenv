@@ -340,8 +340,33 @@ throughput grow" property (§8's CockroachDB column, now a deenv property).
 
 ## 5. Open items (deferred to their rung, listed so they don't vanish)
 
-- Local fsync/crash-durability audit of the append path — cheap; before any
-  "backup" claim.
+- Local fsync/crash-durability audit — **DONE 2026-07-06, finding recorded:**
+  - **Process-crash durability: SOLID.** `AppendLogEntry` =
+    `File.AppendAllText` (:1843-1848), `SaveRaw` = write-tmp + `File.Move`
+    with retry (:1995-2021), genesis same pattern (:1826-1831). Once the
+    append returns, data is in the OS page cache, which survives a process
+    kill; the WAL order + `ReconcileLogOnBoot` + torn-final-line repair
+    cover every process-crash interleaving. This — the overwhelmingly common
+    failure — is handled correctly today.
+  - **Power-loss durability: NOT guaranteed.** Nothing fsyncs
+    (`Flush(flushToDisk:true)` / `FileOptions.WriteThrough` absent from both
+    paths), so on power loss / host failure an ACKED commit can vanish from
+    the page cache (Linux flushes dirty pages on a ~30s cadence). Worst
+    ordering: snapshot rename made durable while the log append wasn't →
+    boot hits the loud snapshot-ahead-of-log `StoredDataException` (:215-224)
+    → instance parks failed (per-instance boot isolation) — visible, not
+    silent, but bricked-until-operator-fix.
+  - **Minimal robust fix when wanted: fsync the LOG APPEND only** (open the
+    log via FileStream and `Flush(true)` per entry; ~0.5-5ms/commit on VPS
+    SSD). The snapshot and genesis need nothing: the log is the truth and
+    the snapshot self-repairs from it on boot (behind-log = normal repair
+    path). Residuals after that fix, accepted and named: a torn snapshot on
+    a non-ext4-like fs = loud boot failure (parks, repairable by deleting
+    the snapshot — replay rebuilds it); the very FIRST entry of a
+    freshly-created instance can still vanish (directory-entry durability —
+    .NET has no portable dir-fsync); both are edge-of-edge and visible.
+  - Status: finding only — the fix is a write-path latency change on the
+    trust floor, **user's call, not applied**.
 - Convert the two log-wipe sites (`Reset`, unversioned migrate re-baseline)
   to epoch/boundary events — prerequisite for any replication rung.
 - Log compaction (versioning backlog) must preserve the **snapshot + tail**

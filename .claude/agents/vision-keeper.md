@@ -24,7 +24,11 @@ of the ambition, not a substitute for it.
   destination; nothing in it is cut. Internalize especially: object-access with no
   server calls in user code (2), git-style schema versioning (3), data-level
   temporal versioning (4), the render-coupled storage engine (5), Code (6),
-  multi-device/distributed runtime + distributed ACID (7).
+  multi-device/distributed runtime + distributed ACID (7) — upgraded 2026-07-06
+  to full horizontal scale (intra-instance sharding, Spanner/CockroachDB class),
+  but GATED far-future (traction + team + need; DECISIONS "Distributed ACID
+  upgraded") — today its only force is the foreclosure-avoidance guard list in
+  docs/plans/distributed-acid-design.md rung 0.
 - `STAGES.md` — **central to your job.** The product-stage lens: Stage 1
   (single-operator MVP) is settled, Stage 2 (operator self-service + git-style
   versioning + safe live preview) is a draft, and the **self-hosted-image north
