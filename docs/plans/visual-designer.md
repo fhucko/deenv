@@ -462,6 +462,43 @@ mutations the designer app performs in deenv code — that machinery already exi
   explicit `ThenBy(Id)` — not reachable today, flagged for the future); this map entry's
   counts corrected (114 was the raw JSON case count, not the reported "conformance N"
   convention every other M12 entry uses — the ConformanceTests total).
+- **V1 — MetaVar rows: component state + top-level ui vars. ✅ DONE 2026-07-09** (design
+  docs/plans/component-workbench.md, grilled; reviews arch SHIP + ui-arch SHIP + ux
+  SHIP-WITH-FIXES, batch applied; suite 862 effective; conformance 180 both runners).
+  `MetaVar {name, init, order}` on MetaFn (component state) + Design (top-level ui vars);
+  import lifts the LAST two refusals — `ui var`s → Design.vars, and stateful components
+  via the CONFIRMED canonical shape `[var…*, nested fn render(), return render]` (parsed
+  from designEditor + all 12 stateful lib components; the doc's guessed return-lambda
+  form exists nowhere) → MetaFn.vars + view-tree body. Import∘project identity pinned;
+  empty init = legal bare `var x` (grammar-confirmed — the proposed refusal was wrong);
+  a zero-var setup/view fn imports as stateless (acknowledged: behavior-preserving).
+  Projection refusals: empty/duplicate var names, var-shadows-fn, fn-level var named
+  "render" (LOAD-BEARING — the stateful projection synthesizes a nested `fn render()`;
+  ui-arch called it spurious, it isn't). Collector collects inits both levels (invariant
+  test extended); fingerprint gains vars in the 3-walk lockstep with EMPTY-VARS
+  BYTE-IDENTITY (pre-V1 pins unchanged — deliberate; law comments reworded to "every
+  field affecting projected/evaluated behavior"); new `OrderedMembersOptional` twins
+  (absent-tolerant, used ONLY for vars — pre-V1 fixtures omit the prop). Editors: per-fn
+  "State" rows + a design-level State area (F1/E2 idioms; inline hints incl. the
+  ux+arch-converged param-shadow hint via a new `sys.hasParam` builtin, 5-site lockstep
+  + 2 conformance cases; hint-rendering browser-asserted). STILL TEXT-ONLY (real gap,
+  ledgered): stateful components with nested HELPER fns (ConfirmButton/KebabMenu class)
+  — MetaVar has no helper-fn row; a later rung. USER DECISION same day: state vars will
+  EVALUATE in the canvas (V1b below) — the "state chips until W1" caption work was
+  dropped mid-batch as instantly-obsolete.
+- **V1b — init-evaluated state in the static canvas (NEXT, user-decided).** A static
+  canvas can only ever show INITIAL state, so binding each var's init IS the truth (what
+  a fresh live instance shows at mount) — chips for state vars are unnecessary
+  conservatism. Expansion binds a component's vars SEQUENTIALLY after params (each init
+  via EvaluateCtxExpr under {db, params, earlier vars} — the runtime's setup order);
+  design-level vars bind at the walk root the same way; unevaluable init → that var
+  unbound → refs chip (existing tiers). Signature: `sys.renderTree(node, ctx, design)` —
+  arg 3 becomes the DESIGN row (walk reads .fns AND .vars; the robust never-grows-again
+  shape; one call site + test fixtures migrate; user-flagged, no objection). Remaining
+  chip classes after V1b (user-confirmed trajectory): edited-unrefreshed (transient by
+  design; auto-live stays ledgered), store-backed builtins (dies with cache seeding, the
+  scheduled fast-follow), ambients (dies with per-use ambients), genuine errors (SHOULD
+  chip — the per-node error display).
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —
