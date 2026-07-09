@@ -150,37 +150,16 @@ function findEvalContextEntry(designId: number): { key: string; entry: ClientCac
     return null;
 }
 
-// Build the mounted instance's DOM — a PARALLEL, INERT twin of updateChildren/applyNode (reusing their
-// own createNode/refreshAttributes/syncSelectValue/flatten/isRenderable primitives), deliberately never
-// calling wireEvents. W1a is inert DOM by design (scope boundary): a click handler captured during the
-// sandboxed render closes over the SANDBOX's scope (its fake-positive db, its private cache), but by the
-// time a user could click it the isolation bracket has long since restored the PAGE's real wsHooks —
-// wiring it live here would let a click slip a real host action / wire mutation past the sandbox (the
-// design doc's grill finding: "the isolation bracket must wrap HANDLER DISPATCH, not just the mount").
-// W1b adds that dispatch-time bracket and wires handlers through it; until then, content renders, nothing
-// is clickable. Always a fresh build (never a reconciling patch) — correct because a mount/remount always
-// starts this container's content from nothing (see mountOneWorkbenchInstance: idempotent when unchanged,
-// a full fresh build otherwise, never a partial patch).
-function mountInertChildren(parent: Node, execChildren: ExecTagChild[]): void {
-    parent.textContent = "";
-    for (const child of flatten(execChildren).filter(isRenderable)) {
-        const node = createNode(child);
-        applyInertNode(node, child);
-        parent.appendChild(node);
-    }
-}
-function applyInertNode(node: ChildNode, child: ExecValue): void {
-    if (child.type === "tag") {
-        const el = node as HTMLElement;
-        refreshAttributes(el, child); // a `fn`-typed attribute (onClick, …) is already skipped here — never becomes a DOM attribute
-        mountInertChildren(el, child.children);
-        syncSelectValue(el, child);
-    } else if (child.type === "text") {
-        node.textContent = child.value;
-    } else if (child.type === "int" || child.type === "bool") {
-        node.textContent = String(child.value);
-    }
-}
+// The W1a wiring strategy for content the driver paints: NONE (arch review fix 2 — compose the REAL
+// reconciler, updateChildren/applyNode, over the mounted content instead of forking a parallel inert
+// builder; the EventWireStrategy parameter both functions now take IS this seam). W1a is inert DOM by
+// design (scope boundary): a click handler captured during the sandboxed render closes over the SANDBOX's
+// scope (its fake-positive db, its private cache), but by the time a user could click it the isolation
+// bracket has long since restored the PAGE's real wsHooks — wiring it live here would let a click slip a
+// real host action / wire mutation past the sandbox (the design doc's grill finding: "the isolation
+// bracket must wrap HANDLER DISPATCH, not just the mount"). W1b swaps this strategy for one that dispatches
+// through that bracket; until then, content renders, nothing is clickable.
+function noWiring(): void { /* W1a: content renders, nothing is clickable */ }
 
 // A `.instance-error` node — the v1 fidelity boundary made HONEST, not silent (design doc): a component
 // whose render throws (a store-backed builtin's "Value not available" against this fresh, unseeded private
@@ -195,14 +174,25 @@ function instanceErrorTag(message: string): ExecTag {
 }
 
 // Run the REAL component invocation over a sandbox scope (already installed as the module's live globals
-// by the caller's bracket) and return either its rendered children or the real error text. A `nothing`
-// result (executeComponentValue's own VNA-swallow, since a real — non-null — private memoCache is
-// installed) always means a store-backed builtin missed against this fresh cache: `nothing` is never a
-// user-producible value, so it is an unambiguous signal, and "Value not available" is the EXACT message
-// every store-backed builtin throws for this condition — reproducing it here is not fabricating an error,
-// it is naming the one the interpreter always produces. Any OTHER thrown error (a different message —
-// "Variable not found", FG's depth guard, a genuine bug) propagates normally, uncaught by memoize, straight
-// to this try/catch — its message rides through verbatim.
+// by the caller's bracket) and return either its rendered children or the real error text.
+//
+// M12 W1a review (arch fix 1) — a `nothing` result is AMBIGUOUS, not automatically a swallowed VNA: it is
+// ALSO runBody's own honest "no value" fallback (`executeBlock(...) ?? {type:"nothing"}`, codeExec.ts) for
+// a function body that falls off the end without hitting a `return` — reachable under perfectly valid Code
+// (a bare `if` with no `else`, condition false; more generally any body whose taken path never returns).
+// ANSWERING THE REVIEWER'S OPEN QUESTION: yes, a top-level view CAN legitimately be `nothing` — confirmed
+// both by reading runBody/executeBlock and by this fix's own pin (a conditionally-empty component mounts
+// with NO error). The live page treats this exactly like an empty array: isRenderable/flatten drop it,
+// rendering nothing — so labeling EVERY `nothing` "Value not available" was a real preview≠live divergence
+// (a spurious error card where the page shows blank). The two cases are disambiguated with the ONE signal
+// that is actually load-bearing: `needsServerData`. Its ONLY setter is memoize's VNA-swallow catch
+// (codeExec.ts:452) — a legitimate no-value return never touches it. The caller (mountOneWorkbenchInstance)
+// resets it to false immediately before calling this function, so reading it HERE — still inside the
+// caller's try, before its finally restores the saved value — samples exactly THIS render's own
+// contribution: true only if some store-backed builtin actually missed somewhere in this render (top-level
+// or nested), never for an honest empty view. Any OTHER thrown error (a different message — "Variable not
+// found", FG's depth guard, a genuine bug) propagates normally, uncaught by memoize, straight to this
+// try/catch — its message rides through verbatim, unaffected by this disambiguation.
 function renderWorkbenchInstance(fn: ExecObject, use: ExecObject, ctx: ExecObject): { tags: ExecTagChild[]; errorMessage: string | null } {
     const fnName = propText(fn, "name");
     const evalScope: ExecScope = { items: {}, parent: null };
@@ -233,7 +223,11 @@ function renderWorkbenchInstance(fn: ExecObject, use: ExecObject, ctx: ExecObjec
 
     try {
         const view = executeComponentValue(tag, component, evalScope, sandboxContext);
-        if (view.type === "nothing") return { tags: [], errorMessage: "Value not available" };
+        if (view.type === "nothing") {
+            // Disambiguate: a real VNA swallow armed needsServerData (reset false by the caller just
+            // before this call) — an honest empty view never touches it. See the doc comment above.
+            return needsServerData ? { tags: [], errorMessage: "Value not available" } : { tags: [], errorMessage: null };
+        }
         return { tags: view.type === "array" ? view.items.map(i => i.value) : [view], errorMessage: null };
     } catch (e) {
         return { tags: [], errorMessage: e instanceof Error ? e.message : String(e) };
@@ -264,12 +258,17 @@ function mountOneWorkbenchInstance(useId: number, container: HTMLElement): void 
     // already run real Code, so the same safety net applies from this slice on). A private, fresh Map (not
     // reused across a remount — a remount IS a fresh mount, per the design's Reset-shaped "REMOUNTS that
     // instance") gives the real component-state persistence executeComponentValue's own memoize provides,
-    // scoped entirely to this instance.
+    // scoped entirely to this instance. memoBypass forced false (M12 W1a review, arch fix 3): saved/
+    // restored like every other global here rather than relying on the unstated "commitRender never runs
+    // with memoBypass true" invariant — evalCtxExpr's own idiom (the template this bracket extends) already
+    // saves it, and W1b's dispatch-time bracket inherits this same template, so the bracket's completeness
+    // should hold by construction, not by an assumption about its caller.
     const savedCache = memoCache;
     const savedSlotPath = slotPath.slice();
     const savedNeedsServerData = needsServerData;
     const savedCallDepth = callDepth;
     const savedWsHooks = wsHooks;
+    const savedMemoBypass = memoBypass;
     const cache = new Map<string, ClientCacheEntry>();
     memoCache = cache;
     slotPath.length = 0;
@@ -277,6 +276,7 @@ function mountOneWorkbenchInstance(useId: number, container: HTMLElement): void 
     needsServerData = false;
     callDepth = 0;
     wsHooks = null;
+    memoBypass = false;
     depStack.push({ props: [], members: [], vars: [] }); // a throwaway frame: recordProp/recordMember calls during the render land here, discarded below — never the enclosing page's frame
     let result: { tags: ExecTagChild[]; errorMessage: string | null };
     try {
@@ -289,11 +289,18 @@ function mountOneWorkbenchInstance(useId: number, container: HTMLElement): void 
         needsServerData = savedNeedsServerData; // a store-backed miss inside the sandbox must NEVER arm the PAGE's own refetch (the design doc's PERMANENT-chatter warning)
         callDepth = savedCallDepth;
         wsHooks = savedWsHooks;
+        memoBypass = savedMemoBypass;
     }
 
     workbenchInstances.set(useId, { argsSignature, ctxKey: found.key, cache });
     const children: ExecTagChild[] = result.errorMessage != null ? [instanceErrorTag(result.errorMessage)] : result.tags;
-    mountInertChildren(container, children);
+    // Compose the REAL reconciler over the mounted content (arch fix 2) — the same updateChildren/applyNode
+    // the page uses, wired with `noWiring` (W1a's inert-DOM policy) instead of forked attrs/children/text
+    // logic. This RECONCILES against whatever is currently in `container` (the U1 static pre-mount body on
+    // a first mount, or this instance's own prior live content on a remount) rather than blindly clearing
+    // it — safe because the static walk never stamps `.key` (S6a/S6b's badges/chips are all unkeyed, matched
+    // purely by tag name) and refreshAttributes always fully reconciles a reused node's attributes either way.
+    updateChildren(container, children, noWiring);
 }
 
 // The mount hook, called once at the END of commitRender (ui.ts — the syncBreadcrumbs precedent: the

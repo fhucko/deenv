@@ -487,10 +487,17 @@ function syncScopeText(name: string, apply: (v: string) => void): void {
     if (item != null && item.value.type === "text") apply(item.value.value);
 }
 
+// The event-wiring step applyNode takes for each reconciled tag — a seam (M12 W1a review, arch fix 2):
+// the page's own reconciliation always wants the real `wireEvents` (the default), but a caller composing
+// the SAME reconciler over an isolated tree — the component workbench's mounted instance (W1a: no wiring
+// at all; W1b: dispatch through the sandbox bracket instead) — swaps in its own strategy instead of
+// forking updateChildren/applyNode's attribute/child/text logic to get a different wiring policy.
+type EventWireStrategy = (el: HTMLElement, tag: ExecTag) => void;
+
 // Reconcile `parent`'s children against the rendered exec children, reusing nodes
 // (keyed by data-key when present, else positionally by tag name) and reordering them
 // to match — so a reused node keeps its focus, selection, and uncommitted input state.
-function updateChildren(parent: Node, execChildren: ExecTagChild[]): void {
+function updateChildren(parent: Node, execChildren: ExecTagChild[], wire: EventWireStrategy = wireEvents): void {
     const desired = flatten(execChildren).filter(isRenderable);
 
     // Index existing children: keyed elements by their data-key, the rest by tag name. A foreach row is
@@ -520,7 +527,7 @@ function updateChildren(parent: Node, execChildren: ExecTagChild[]): void {
         const key = child.type === "tag" && child.key != null ? String(child.key) : null;
         let node = key != null ? keyed[key]?.shift() ?? null : unkeyed[nodeName]?.shift() ?? null;
         if (node == null || node.nodeName !== nodeName) node = createNode(child);
-        applyNode(node, child);
+        applyNode(node, child, wire);
         ordered.push(node);
     }
 
@@ -535,25 +542,28 @@ function createNode(child: ExecValue): ChildNode {
     return child.type === "tag" ? document.createElement(child.name) : document.createTextNode("");
 }
 
-function applyNode(node: ChildNode, child: ExecValue): void {
+function applyNode(node: ChildNode, child: ExecValue, wire: EventWireStrategy = wireEvents): void {
     if (child.type === "tag") {
         const el = node as HTMLElement;
         if (child.key != null) el.setAttribute("data-key", String(child.key));
         refreshAttributes(el, child);
         // The component workbench's live-instance container (M12 W1a, workbench.ts): a tag carrying the
-        // reserved `instancemount` marker is OPAQUE to this reconciler from here on — the mount hook
-        // (end of commitRender) owns its children, not this walk. Attributes still refresh (e.g. the
-        // marker's own value tracking a use row across a server-ack id remap); child reconciliation and
-        // event wiring are skipped so a page render can never clobber the driver's live DOM. The container's
-        // pre-mount body (the U1 static preview this same render just computed into child.children) simply
-        // stays un-reconciled until the mount hook replaces it — never applied, never a clobber window.
+        // reserved `instancemount` marker is OPAQUE to the PAGE's own top-down reconciliation pass from
+        // here on — the mount hook (end of commitRender) owns its children, not this walk. Attributes
+        // still refresh (e.g. the marker's own value tracking a use row across a server-ack id remap);
+        // child reconciliation and event wiring are skipped so a page render can never clobber the
+        // driver's live DOM. The container's pre-mount body (the U1 static preview this same render just
+        // computed into child.children) simply stays un-reconciled until the mount hook replaces it —
+        // never applied, never a clobber window. This is orthogonal to (and composes fine with) the `wire`
+        // parameter below: the driver's OWN call to reconcile ITS content INTO the container passes the
+        // container as `parent`, never as a `child` here, so this skip never fires for it.
         if (isWorkbenchMountContainer(child)) return;
-        updateChildren(el, child.children);
+        updateChildren(el, child.children, wire);
         // A <select>'s bound value selects the matching <option>, set AFTER its options exist
         // (updateChildren above builds them) — the client half of <select> binding, symmetric to
         // the SSR `selected` marking. .value selects by the option's value attribute.
         syncSelectValue(el, child);
-        wireEvents(el, child);
+        wire(el, child);
     } else if (child.type === "text") {
         node.textContent = child.value;
     } else if (child.type === "int" || child.type === "bool") {

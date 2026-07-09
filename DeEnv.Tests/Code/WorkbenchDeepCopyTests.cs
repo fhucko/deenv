@@ -108,4 +108,57 @@ public sealed class WorkbenchDeepCopyTests
 
         await page.Context.CloseAsync();
     }
+
+    // Regression pin (M12 W1a review, arch fix 1): a component whose view is legitimately empty — a bare
+    // `if` with no `else`, condition false, so runBody's own `?? {type:"nothing"}` fallback fires with NO
+    // store-backed builtin anywhere involved — must render an EMPTY card, not a fabricated "Value not
+    // available" error. Before the fix, EVERY `nothing` was labeled an error unconditionally; this is the
+    // preview≠live divergence the fix closes (the live page renders nothing for the same code).
+    [Test]
+    public async Task RenderWorkbenchInstance_shows_no_error_for_a_component_whose_view_is_legitimately_empty()
+    {
+        var codeExecJs = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "codeExec.js"));
+        var workbenchJs = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "workbench.js"));
+
+        var page = await SharedBrowser.NewPageAsync();
+        await page.SetContentAsync("<!doctype html><html><body></body></html>");
+        await page.AddScriptTagAsync(new() { Content = codeExecJs });
+        await page.AddScriptTagAsync(new() { Content = workbenchJs });
+
+        var resultJson = await page.EvaluateAsync<string>("""
+            () => {
+                setMemoCache(new Map()); // matches production: the driver always installs a real private cache
+                // fn Empty() { if false { return <div>"never"</div> } } — the taken path (condition false)
+                // never reaches a `return`, so runBody yields {type:"nothing"} — no VNA anywhere.
+                const emptyFnAst = {
+                    type: 'fn', name: 'Empty', params: [],
+                    body: { type: 'block', statements: [
+                        { type: 'if', condition: { type: 'bool', value: false },
+                          body: { type: 'return', value: { type: 'tag', name: 'div', attributes: [], children: [ { type: 'text', value: 'never' } ] } },
+                          elseBody: null },
+                    ] },
+                };
+                const ctx = {
+                    type: 'object', id: 1,
+                    props: {
+                        db: { type: 'object', id: 2, props: {} },
+                        fns: { type: 'object', id: 3, props: { Empty: { type: 'object', id: 4, props: { ast: { type: 'text', value: JSON.stringify(emptyFnAst) } } } } },
+                        exprs: { type: 'object', id: 5, props: {} },
+                    },
+                };
+                const fn = { type: 'object', id: 6, props: { name: { type: 'text', value: 'Empty' } } };
+                const use = { type: 'object', id: 7, props: { args: { type: 'array', kind: 'set', items: [], id: 0 } } };
+                const result = renderWorkbenchInstance(fn, use, ctx);
+                return JSON.stringify({ errorMessage: result.errorMessage, tagCount: result.tags.length });
+            }
+            """);
+        var result = JsonDocument.Parse(resultJson).RootElement;
+
+        // No error — an honest empty view, exactly what the live page shows for the same code (isRenderable
+        // drops a `nothing` just like it drops anything else non-tag/text/int/bool).
+        await Assert.That(result.GetProperty("errorMessage").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(result.GetProperty("tagCount").GetInt32()).IsEqualTo(0);
+
+        await page.Context.CloseAsync();
+    }
 }
