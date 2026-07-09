@@ -1521,6 +1521,63 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task WhenRemoveConfiguration(int index) =>
         await ctx.Page!.Locator(".components-section .fn-card .use-row").Nth(index).Locator("button.remove-use").ClickAsync();
 
+    // ── M12 W1a — the live-instance driver (workbench.ts) ─────────────────────────────────────────
+    //
+    // Distinguishes a LIVE-mounted instance from U1's static row-walk preview by the marker the row-walk
+    // (renderTreeNode) stamps on EVERY element it emits ("data-node", the canvas's own click-to-select
+    // provenance attribute — codeExec.ts:1264) and the REAL runtime NEVER emits (that is canvas-only
+    // instrumentation) — so an element with the expected text AND no data-node can only have come from the
+    // real component invocation the workbench driver runs, not the static walk.
+    [Then("configuration {int}'s live instance shows a {string} element reading {string}")]
+    public async Task ThenConfigurationLiveInstanceShowsElement(int index, string tag, string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const rows = document.querySelectorAll('.components-section .fn-card .use-row'); " +
+            $"const r = rows[{index}]; if (r == null) return false; " +
+            $"const preview = r.querySelector('.use-preview'); if (preview == null) return false; " +
+            $"return [...preview.querySelectorAll({JsString(tag)})].some(e => e.textContent === {JsString(text)} && !e.hasAttribute('data-node')); }}");
+
+    // The v1 fidelity boundary made honest (design doc): a component whose render throws shows the REAL
+    // error text in the card, as `.instance-error`.
+    [Then("configuration {int}'s live instance shows the error {string}")]
+    public async Task ThenConfigurationLiveInstanceShowsError(int index, string message) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const rows = document.querySelectorAll('.components-section .fn-card .use-row'); " +
+            $"const r = rows[{index}]; if (r == null) return false; " +
+            $"const preview = r.querySelector('.use-preview'); if (preview == null) return false; " +
+            $"const e = preview.querySelector('.instance-error'); return e != null && e.textContent === {JsString(message)}; }}");
+
+    // Stamps the mounted instance's first element with a test-only marker — the opaque-container pin: an
+    // UNTOUCHED (idempotent) mount hook pass never rebuilds this element, so the marker surviving an
+    // unrelated page re-render (below) proves the page never clobbered the driver's own live DOM.
+    [When("I mark configuration {int}'s live instance node")]
+    public async Task WhenMarkConfigurationLiveInstanceNode(int index) =>
+        await ctx.Page!.EvaluateAsync(
+            $"() => {{ const rows = document.querySelectorAll('.components-section .fn-card .use-row'); " +
+            $"const r = rows[{index}]; const preview = r.querySelector('.use-preview'); " +
+            $"const el = preview.firstElementChild; el.setAttribute('data-test-marker', 'kept'); }}");
+
+    [Then("configuration {int}'s live instance node is unchanged since marking")]
+    public async Task ThenConfigurationLiveInstanceNodeUnchanged(int index) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const rows = document.querySelectorAll('.components-section .fn-card .use-row'); " +
+            $"const r = rows[{index}]; if (r == null) return false; const preview = r.querySelector('.use-preview'); if (preview == null) return false; " +
+            $"const el = preview.firstElementChild; return el != null && el.getAttribute('data-test-marker') === 'kept'; }}");
+
+    // A component that calls a STORE-BACKED builtin (sys.schema) — always a miss against the workbench's
+    // fresh, unseeded private cache (the v1 fidelity boundary), proving the driver surfaces the REAL
+    // interpreter error rather than rendering blank.
+    private const string StoreBackedComponentConvertibleRender =
+        "ui\n    fn Broken()\n        return <div>\n            sys.schema(\"Db\")\n    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a convertible render with a store-backed component into the design's UI")]
+    public async Task WhenAuthorStoreBackedComponentRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(StoreBackedComponentConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "brokencomp" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == StoreBackedComponentConvertibleRender));
+    }
+
     // ── M12 V1 — MetaVar rows: component state + top-level ui vars ────────────────────────────────
 
     // A convertible render whose `ui` carries a REAL stateful setup/view component (`Counter()`, the

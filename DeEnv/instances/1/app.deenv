@@ -568,7 +568,9 @@ ui
                                                         "+ arg"
                                                 <div class="use-preview-label">
                                                     u.name != "" ? u.name : "Preview"
-                                                <div class="design-canvas use-preview">
+                                                <p class="workbench-note">
+                                                    "Host actions and saves are disabled in preview."
+                                                <section class="design-canvas use-preview" instancemount={sys.id(u)}>
                                                     sys.renderTree({ kind: "", tag: f.name, expr: "", attrs: u.args, children: [] }, sys.evalContext(design, evalRefresh), design)
                                         <button class="add-use" onClick={() => addUse(f)}>
                                             "+ Configuration"

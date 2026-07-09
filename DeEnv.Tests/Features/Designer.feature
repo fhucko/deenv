@@ -1768,3 +1768,105 @@ Feature: The operator IDE (designs library + instance design selector)
     And configuration 0's preview shows a "li" element reading "Alpha"
     When I remove configuration 1
     Then component configurations shows 1 row
+
+  # ── M12 W1a — the live-instance driver ────────────────────────────────────────────────────────
+  #
+  # U1 gave a configuration a STATIC preview (the row-walk simulator, sys.renderTree). W1a replaces it
+  # with a REAL running instance of the previewed component — the SAME client runtime, sandboxed (its own
+  # deep-copied seed graph, its own private memo cache, wsHooks nulled) — "preview = live", not a second
+  # engine. Distinguished from the static walk by the walk's OWN provenance marker ("data-node", stamped
+  # on every element the row-walk emits — never emitted by the real runtime), so "a live element with this
+  # text" is an unambiguous, structural proof, not an inference from behavior alone. The opaque-container
+  # pin: marking the mounted node and forcing an UNRELATED page re-render (editing the design's own label)
+  # proves the mount hook is idempotent — it never rebuilds an unchanged instance's DOM.
+  @m12 @single-user
+  Scenario: A stateful component's configuration mounts a real live instance, and an unrelated page re-render never clobbers it
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "counterme"
+    And I edit the design "counterme"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a stateful Counter component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    Then component configurations shows 1 row
+    Then configuration 0's live instance shows a "button" element reading "0"
+    When I mark configuration 0's live instance node
+    And I rename the design's label to "counterme-renamed"
+    Then configuration 0's live instance node is unchanged since marking
+
+  # Independence-at-mount (two configurations, two separate sandboxes, two separate answers) AND the
+  # page-side args-signature remount (editing a use's arg text re-mounts exactly that instance, over its
+  # OWN fresh sandbox — the other configuration is untouched throughout).
+  @m12 @single-user
+  Scenario: Two configurations with different args mount independent live instances, and editing an arg remounts its own instance
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "compme"
+    And I edit the design "compme"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I add a field "noteA" to the type "Db"
+    And I add a field "noteB" to the type "Db"
+    When I reload the design editor
+    And I retype the prop "noteA" to "Note"
+    And I retype the prop "noteB" to "Note"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              noteA: 2
+              noteB: 3
+          Note 2
+              title: "Alpha"
+          Note 3
+              title: "Beta"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a component function into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    And I set configuration 0's name to "a"
+    And I add an arg to configuration 0
+    And I set configuration 0's arg 0 name to "note"
+    And I set configuration 0's arg 0 value to "db.noteA"
+    Then configuration 0's live instance shows a "li" element reading "Alpha"
+    When I click the add-configuration button
+    And I set configuration 1's name to "b"
+    And I add an arg to configuration 1
+    And I set configuration 1's arg 0 name to "note"
+    And I set configuration 1's arg 0 value to "db.noteB"
+    Then configuration 1's live instance shows a "li" element reading "Beta"
+    And configuration 0's live instance shows a "li" element reading "Alpha"
+    When I set configuration 0's arg 0 value to "db.noteB"
+    Then configuration 0's live instance shows a "li" element reading "Beta"
+
+  # The v1 fidelity boundary, made honest not silent: a component using a store-backed builtin ALWAYS
+  # misses against the workbench's fresh, unseeded private cache — the driver shows the real interpreter
+  # error rather than a blank card, and the page keeps working (a second configuration can still be added).
+  @m12 @single-user
+  Scenario: A component using a store-backed builtin shows the real error in its configuration card, and the page stays alive
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "brokencomp"
+    And I edit the design "brokencomp"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a store-backed component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    Then configuration 0's live instance shows the error "Value not available"
+    When I click the add-configuration button
+    Then component configurations shows 2 rows

@@ -768,6 +768,10 @@ function propBool(p: ExecObject, key: string): boolean {
     const v = p.props[key];
     return v != null && v.type === "bool" && v.value;
 }
+function propInt(p: ExecObject, key: string): number {
+    const v = p.props[key];
+    return v != null && v.type === "int" ? v.value : 0;
+}
 
 // Bind a URL segment within the db graph (twin of the C# FindTarget step): a set member by its
 // identity id, a dict entry by its __key, a field by name. Records the read so a re-render's deps
@@ -1587,6 +1591,49 @@ function branch(cls: string, label: string, body: ExecTagChild[]): ExecTag {
     };
 }
 
+// Look a source text up in an eval context's `exprs` map (content-addressed) and JSON.parse its shipped
+// AST — the tier-3-miss lookup shared by evalCtxExpr and the M12 W1a workbench driver (which builds a
+// synthesized invocation tag straight from these ASTs, never through evalCtxExpr's own execute step). A
+// miss reports itself exactly as evalCtxExpr always has: wsHooks.parseMiss (a harmless no-op with no live
+// WS session — SSR, conformance, or a workbench sandbox render, where wsHooks is deliberately nulled) plus
+// a dependency on this exact (ctx, text) miss into the ENCLOSING memo compute, via the same generic
+// {obj,prop} channel recordProp/invalidateProp already use — so a later auto-live parse-op reply can
+// invalidate exactly the render that missed. Returns null on a miss or a parse failure (the caller chips /
+// leaves the binding out, never guessing).
+function lookupCtxAst(ctx: ExecObject, text: string): CodeValue | null {
+    const exprs = ctx.props["exprs"];
+    if (exprs == null || exprs.type !== "object") return null;
+    const entry = exprs.props[text];
+    if (entry == null || entry.type !== "object") {
+        wsHooks?.parseMiss(ctx, text);
+        recordProp(ctx.id, "parseMiss:" + text);
+        return null;
+    }
+    const astText = entry.props["ast"];
+    if (astText == null || astText.type !== "text") return null;
+    try { return JSON.parse(astText.value) as CodeValue; } catch { return null; }
+}
+
+// Bind an eval context's `fns` map (shipped by BuildEvalContext alongside `exprs`) into `scope` as
+// callables — one ExecFunction per fn, name → value, exactly like executeFunction binds a named `fn`
+// statement, each fn's `scope` being `scope` itself so every fn name is visible to every fn's body before
+// any call runs (mutual/self recursion resolves at call time). JSON.parsed fresh on every call (no cache),
+// matching `exprs`' own per-lookup pattern. Shared by evalCtxExpr (F3 call-position evaluation) and the
+// M12 W1a workbench driver (the real component invocation's callable environment).
+function bindCtxFns(ctx: ExecObject, scope: ExecScope): void {
+    const fnsMap = ctx.props["fns"];
+    if (fnsMap == null || fnsMap.type !== "object") return;
+    for (const fnName of Object.keys(fnsMap.props)) {
+        const fnEntry = fnsMap.props[fnName];
+        if (fnEntry.type !== "object") continue;
+        const fnAstText = fnEntry.props["ast"];
+        if (fnAstText == null || fnAstText.type !== "text") continue;
+        let fn: CodeFunction;
+        try { fn = JSON.parse(fnAstText.value) as CodeFunction; } catch { continue; }
+        scope.items[fnName] = { value: { type: "fn", fn, scope }, isReadOnly: true };
+    }
+}
+
 // Evaluate ONE canvas expression against the eval context's seed graph (M12 CANVAS-EVAL-1) — the twin of
 // CodeExecutor.EvaluateCtxExpr. Looks the source text up in ctx.exprs (content-addressed) → JSON.parses the
 // shipped AST (the client executes AST JSON natively) → runs it through executeValue (the SAME dispatch the
@@ -1604,54 +1651,20 @@ function branch(cls: string, label: string, body: ExecTagChild[]): ExecTag {
 // against the current item; the bindings ride the SAME parent-less isolation as db (read-only). Returns the
 // value, or null on any miss / parse-failure / throw (the caller chips).
 function evalCtxExpr(text: string, ctx: ExecObject, bindings?: { [name: string]: ExecValue }): ExecValue | null {
-    const exprs = ctx.props["exprs"];
-    if (exprs == null || exprs.type !== "object") return null;
-    const entry = exprs.props[text];
-    if (entry == null || entry.type !== "object") {
-        // M12 auto-live parse-op — a real evalContext exists but has no AST for this text: either it was
-        // NEWLY EDITED since this ctx shipped, or it is genuinely unparseable. Report the miss so ws.ts can
-        // ask the server on-demand (see the WsHooks.parseMiss doc above); harmless no-op when there is no
-        // live WS session (SSR, conformance, a sandboxed eval).
-        wsHooks?.parseMiss(ctx, text);
-        // Record a DEPENDENCY on this exact (ctx, text) miss into the ENCLOSING memo compute (the walk's
-        // caller — e.g. the canvas component's "comp:" entry) via the SAME generic {obj,prop} channel
-        // recordProp/invalidateProp already use, piggy-backed with a namespaced synthetic "prop" that can
-        // never collide with a real field name. This call sits BEFORE the isolated eval's OWN throwaway
-        // depStack.push below, so it lands in the OUTER walk's tracked frame, not the throwaway one — this
-        // one dependency is deliberately NOT thrown away. Without it, ws.ts's post-merge invalidateProp
-        // would have nothing to mark stale, and the canvas's memoized render would silently keep showing
-        // the pre-merge chip forever (a plain renderUi() reuses a fresh, non-stale cache entry verbatim).
-        recordProp(ctx.id, "parseMiss:" + text);
-        return null;
-    }
-    const astText = entry.props["ast"];
-    if (astText == null || astText.type !== "text") return null;
-    let ast: CodeValue;
-    try { ast = JSON.parse(astText.value) as CodeValue; } catch { return null; }
+    const ast = lookupCtxAst(ctx, text);
+    if (ast == null) return null;
     const evalScope: ExecScope = { items: {}, parent: null };
     const seedDb = ctx.props["db"];
     if (seedDb != null) evalScope.items["db"] = { value: seedDb, isReadOnly: true };
     // M12 F3 — `ctx.fns` (the eval context's projected-fn map, shipped by BuildEvalContext alongside
-    // `exprs`) is JSON.parsed and bound into `evalScope` as callables — one ExecFunction per fn, name →
+    // `exprs`) is bound into `evalScope` as callables (bindCtxFns) — one ExecFunction per fn, name →
     // value, EXACTLY like executeFunction binds a named `fn` statement. Each fn's `scope` IS `evalScope`
     // itself, so ALL fn names are visible to every fn's body before any call runs — mutual/self recursion
     // resolves at CALL time through the shared scope (FG's call-depth guard catches a runaway → a normal
     // catchable error → the caller's chip). Bound BEFORE `bindings` (below) so a same-named row binding (a
     // loop var, a component param) SHADOWS a same-named fn — mirrors runtime scoping, pinned by a
-    // conformance case. Every fn is JSON.parsed on EVERY call (matching `exprs`' own per-call, no-cache
-    // pattern above).
-    const fnsMap = ctx.props["fns"];
-    if (fnsMap != null && fnsMap.type === "object") {
-        for (const fnName of Object.keys(fnsMap.props)) {
-            const fnEntry = fnsMap.props[fnName];
-            if (fnEntry.type !== "object") continue;
-            const fnAstText = fnEntry.props["ast"];
-            if (fnAstText == null || fnAstText.type !== "text") continue;
-            let fn: CodeFunction;
-            try { fn = JSON.parse(fnAstText.value) as CodeFunction; } catch { continue; }
-            evalScope.items[fnName] = { value: { type: "fn", fn, scope: evalScope }, isReadOnly: true };
-        }
-    }
+    // conformance case.
+    bindCtxFns(ctx, evalScope);
     if (bindings != null)
         for (const name of Object.keys(bindings)) evalScope.items[name] = { value: bindings[name], isReadOnly: true };
     const evalCtx: ExecContext = { lastId: { value: 0 }, ambient: null };

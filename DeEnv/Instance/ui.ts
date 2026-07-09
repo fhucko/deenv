@@ -63,6 +63,7 @@ function commitRender(result: ExecValue): void {
     refreshErrorBanner();
     consumeScrollReset(); // a forward nav whose target just painted scrolls to the top
     focusNewCreateForm(); // a just-opened create form scrolls into view and takes focus
+    mountWorkbenchInstances(); // M12 W1a (workbench.ts) — mount/remount/dispose the component-workbench's live instances
 }
 
 // Speculatively render the target and commit it ONLY if it rendered COMPLETELY from already-local data.
@@ -539,6 +540,14 @@ function applyNode(node: ChildNode, child: ExecValue): void {
         const el = node as HTMLElement;
         if (child.key != null) el.setAttribute("data-key", String(child.key));
         refreshAttributes(el, child);
+        // The component workbench's live-instance container (M12 W1a, workbench.ts): a tag carrying the
+        // reserved `instancemount` marker is OPAQUE to this reconciler from here on — the mount hook
+        // (end of commitRender) owns its children, not this walk. Attributes still refresh (e.g. the
+        // marker's own value tracking a use row across a server-ack id remap); child reconciliation and
+        // event wiring are skipped so a page render can never clobber the driver's live DOM. The container's
+        // pre-mount body (the U1 static preview this same render just computed into child.children) simply
+        // stays un-reconciled until the mount hook replaces it — never applied, never a clobber window.
+        if (isWorkbenchMountContainer(child)) return;
         updateChildren(el, child.children);
         // A <select>'s bound value selects the matching <option>, set AFTER its options exist
         // (updateChildren above builds them) — the client half of <select> binding, symmetric to

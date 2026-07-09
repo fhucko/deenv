@@ -799,6 +799,14 @@ public sealed class SsrRenderer
           padding: 0.7rem 0.85rem; margin: 0.5rem 0; }
         .use-preview-label { color: var(--muted); font-size: 0.78rem; font-weight: 600;
           text-transform: uppercase; letter-spacing: .02em; margin: 0.5rem 0 0.2rem; }
+        /* M12 W1a — the component workbench mounts a REAL running instance into .use-preview (workbench.ts);
+           .workbench-note is the static card-footer line surfacing the v1 fidelity boundary (host actions/
+           saves silently no-op under a nulled wsHooks — never silent, per the design doc); .instance-error
+           is the real thrown error a broken instance renders (a genuine failure, --danger — not the advisory
+           --warn tier the eval-degrade/stale-fns banners use). */
+        .workbench-note { color: var(--muted); font-size: 0.76rem; font-style: italic; margin: 0.3rem 0; }
+        .instance-error { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+          border-left: 3px solid var(--danger); padding: 0.45rem 0.7rem; border-radius: 4px; font-size: 0.85rem; }
         /* Raw code areas tucked behind a disclosure so the type editor reads as just types by default. */
         details.code-areas { margin-top: 1.4rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
         details.code-areas summary.code-summary { font-weight: 600; color: var(--muted); cursor: pointer; padding: 0.3rem 0; }
