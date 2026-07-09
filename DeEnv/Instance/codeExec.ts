@@ -1080,7 +1080,51 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
     // The optional fns rows (M12 F2): a non-array 3rd arg is ignored — same as absent, no expansion.
     const fnsV = codeCall.params.length === 3 ? executeValue(codeCall.params[2], scope, context).value : null;
     const fns = fnsV != null && fnsV.type === "array" ? fnsV : null;
-    return renderTreeNode(node, context, ctx, undefined, fns, { depth: 0, used: 0 });
+    const result = renderTreeNode(node, context, ctx, undefined, fns, { depth: 0, used: 0 });
+    // M12 F3b — the staleness banner: ctx.fns is a SNAPSHOT taken at evalContext build time (empty deps,
+    // the deliberate S3a-race inversion), so an edit to a `fns` row's BODY changes no call-site text and a
+    // call-position expression would otherwise evaluate against the STALE shipped fn silently. Compare the
+    // shipped per-fn fingerprints against the LIVE `fns` rows (dep-recorded, so the banner appears/
+    // disappears SAME-FRAME as the edit) and — on ANY mismatch — splice ONE banner ahead of the tree,
+    // riding the root node's own id (inert, the F2 splice idiom). Only checked when BOTH ctx and fns were
+    // passed (no fns ⇒ nothing live to compare against).
+    if (ctx != null && fns != null && fnsStale(ctx, fns, context)) {
+        return { type: "array", kind: "list", items: [{ key: 0, value: staleFnsBanner() }, { key: 1, value: result }], id: node.id };
+    }
+    return result;
+}
+
+// M12 F3b — do the shipped ctx.fns fingerprints (keyed by name) still match the LIVE `fns` rows? Compares
+// by NAME (an added/removed/renamed fn is also a mismatch — the length check below), since ctx.fns is
+// keyed by name (the same key evalCtxExpr binds callables under). Twin of CodeExecutor.FnsStale.
+function fnsStale(ctx: ExecObject, fns: ExecArray, context: ExecContext): boolean {
+    const shipped = ctx.props["fns"];
+    if (shipped == null || shipped.type !== "object") return false;
+    recordMember(fns.id);
+    const live: { [name: string]: string } = {};
+    for (const item of fns.items) {
+        if (item.value.type !== "object") continue;
+        live[readNodeText(item.value, "name", context)] = fnFingerprint(item.value, context);
+    }
+    const liveNames = Object.keys(live);
+    const shippedNames = Object.keys(shipped.props);
+    if (liveNames.length !== shippedNames.length) return true;
+    for (const name of liveNames) {
+        const entry = shipped.props[name];
+        if (entry == null || entry.type !== "object") return true;
+        const fp = entry.props["fp"];
+        if (fp == null || fp.type !== "text" || fp.value !== live[name]) return true;
+    }
+    return false;
+}
+
+// A span.stale-fns-banner — the F3b affordance. No data-node (it corresponds to no MetaNode row).
+function staleFnsBanner(): ExecTag {
+    return {
+        type: "tag", name: "div",
+        attributes: { "class": { value: { type: "text", value: "stale-fns-banner" } } },
+        children: [{ type: "text", value: "Components changed — call results may be stale. Refresh values." }],
+    };
 }
 
 // The expansion cap/budget (grill E4): DEPTH bounds a self-recursive component chain, a total node BUDGET
@@ -1164,9 +1208,22 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
         // Non-literal + an eval context: evaluate against the seed graph. A clean eval renders the value (as a
         // text child, the same scalar-to-text a rendered child takes); any throw (tier 2) or a map-miss (tier
         // 3, an edited-but-unrefreshed expr) falls to today's exact chip.
+        //
+        // M12 F3 — a call in expression position (`{fmtDate(n.at)}`, a helper, OR a COMPONENT called by plain
+        // call syntax — legal at runtime, since a component is just a fn value) can evaluate to a TAG (or an
+        // array whose items are all tags — e.g. a helper returning an array literal of tags, which the real
+        // runtime already splices generically). That result SPLICES AS CONTENT, not text: ride it on an array
+        // value carrying the LEAF row's own id (inert, the F2 splice idiom) so its provenance stays this leaf.
+        // Any OTHER non-scalar result (an object, a data collection) keeps TODAY'S EXACT behavior via
+        // scalarText (empty) — never widened.
         if (ctx != null) {
             const v = evalCtxExpr(expr, ctx, bindings);
-            if (v != null) return { type: "text", value: scalarText(v) };
+            if (v != null) {
+                if (v.type === "tag") return { type: "array", kind: "list", items: [{ key: 0, value: v }], id };
+                if (v.type === "array" && v.items.length > 0 && v.items.every(i => i.value.type === "tag"))
+                    return { type: "array", kind: "list", items: v.items, id };
+                return { type: "text", value: scalarText(v) };
+            }
         }
         return chip("expr-chip", expr, id);
     }
@@ -1190,6 +1247,52 @@ function resolveFn(fns: ExecArray, tag: string, context: ExecContext): ExecObjec
         if (best == null || order >= bestOrder) { best = fn; bestOrder = order; }
     }
     return best;
+}
+
+// M12 F3b — field/node separators for the content fingerprint (control characters that never appear in
+// authored text). Twin-identical with CodeExecutor's FpFieldSep/FpNodeSep and SchemaBridge's.
+const fpFieldSep = String.fromCharCode(1);
+const fpNodeSep = String.fromCharCode(2);
+
+// A MetaFn row's content fingerprint (name, params, body tree) — twin of CodeExecutor.FnFingerprint /
+// SchemaBridge.FnFingerprints (the server-ship counterpart, a PARALLEL walk over raw NodeValue rows).
+// Dep-recorded (readNodeText/orderedMembers), so an edit to any read field re-renders the comparison
+// same-frame. NOT a hash — see SchemaBridge's comment.
+function fnFingerprint(fn: ExecObject, context: ExecContext): string {
+    const name = readNodeText(fn, "name", context);
+    const bodyRoot = orderedMembers(fn, "body", context)[0];
+    return name + fpFieldSep + readNodeText(fn, "params", context) + fpFieldSep +
+        (bodyRoot != null ? fingerprintNode(bodyRoot, context) : "");
+}
+
+// The per-node half of fnFingerprint — twin of CodeExecutor.FingerprintNode / SchemaBridge.FingerprintNode.
+// Dispatches on `kind` FIRST (mirroring renderTreeNode's own dispatch) so it never reads a field a
+// for/if/element/leaf row doesn't carry.
+function fingerprintNode(node: ExecObject, context: ExecContext): string {
+    const kind = readNodeTextOptional(node, "kind", context);
+    if (kind === "for") {
+        let s = "for" + fpFieldSep + readNodeText(node, "item", context) + fpFieldSep + readNodeText(node, "collection", context);
+        for (const c of orderedMembers(node, "children", context)) s += fpNodeSep + "C:" + fingerprintNode(c, context);
+        return s;
+    }
+    if (kind === "if") {
+        let s = "if" + fpFieldSep + readNodeText(node, "condition", context);
+        for (const c of orderedMembers(node, "children", context)) s += fpNodeSep + "C:" + fingerprintNode(c, context);
+        for (const c of orderedMembers(node, "elseChildren", context)) s += fpNodeSep + "E:" + fingerprintNode(c, context);
+        return s;
+    }
+    const tag = readNodeText(node, "tag", context);
+    if (tag.length > 0) {
+        let s = "E:" + tag;
+        for (const a of orderedMembers(node, "attrs", context)) {
+            const ord = readNodeProp(a, "order", context);
+            s += fpNodeSep + "A:" + readNodeText(a, "name", context) + fpFieldSep + readNodeText(a, "value", context) +
+                fpFieldSep + String(ord.type === "int" ? ord.value : 0);
+        }
+        for (const c of orderedMembers(node, "children", context)) s += fpNodeSep + "C:" + fingerprintNode(c, context);
+        return s;
+    }
+    return "L:" + readNodeText(node, "expr", context);
 }
 
 // Expand a resolved MetaFn invocation — the row-walk analog of executeComponentValue/bindParams, faithful to
@@ -1358,6 +1461,27 @@ function evalCtxExpr(text: string, ctx: ExecObject, bindings?: { [name: string]:
     const evalScope: ExecScope = { items: {}, parent: null };
     const seedDb = ctx.props["db"];
     if (seedDb != null) evalScope.items["db"] = { value: seedDb, isReadOnly: true };
+    // M12 F3 — `ctx.fns` (the eval context's projected-fn map, shipped by BuildEvalContext alongside
+    // `exprs`) is JSON.parsed and bound into `evalScope` as callables — one ExecFunction per fn, name →
+    // value, EXACTLY like executeFunction binds a named `fn` statement. Each fn's `scope` IS `evalScope`
+    // itself, so ALL fn names are visible to every fn's body before any call runs — mutual/self recursion
+    // resolves at CALL time through the shared scope (FG's call-depth guard catches a runaway → a normal
+    // catchable error → the caller's chip). Bound BEFORE `bindings` (below) so a same-named row binding (a
+    // loop var, a component param) SHADOWS a same-named fn — mirrors runtime scoping, pinned by a
+    // conformance case. Every fn is JSON.parsed on EVERY call (matching `exprs`' own per-call, no-cache
+    // pattern above).
+    const fnsMap = ctx.props["fns"];
+    if (fnsMap != null && fnsMap.type === "object") {
+        for (const fnName of Object.keys(fnsMap.props)) {
+            const fnEntry = fnsMap.props[fnName];
+            if (fnEntry.type !== "object") continue;
+            const fnAstText = fnEntry.props["ast"];
+            if (fnAstText == null || fnAstText.type !== "text") continue;
+            let fn: CodeFunction;
+            try { fn = JSON.parse(fnAstText.value) as CodeFunction; } catch { continue; }
+            evalScope.items[fnName] = { value: { type: "fn", fn, scope: evalScope }, isReadOnly: true };
+        }
+    }
     if (bindings != null)
         for (const name of Object.keys(bindings)) evalScope.items[name] = { value: bindings[name], isReadOnly: true };
     const evalCtx: ExecContext = { lastId: { value: 0 }, ambient: null };
@@ -1365,8 +1489,8 @@ function evalCtxExpr(text: string, ctx: ExecObject, bindings?: { [name: string]:
     // callDepth (M12 FG, arch review — divergence closed): callDepth is module-level like memoBypass/
     // depStack, so without this save/reset/restore the isolated eval would INHERIT the outer render's
     // live depth instead of starting fresh — the C# twin gets this for free (EvaluateCtxExpr's `new
-    // ExecContext` zeroes CallDepth by construction). Undetected today (F3 doesn't call fns from ctx-expr
-    // eval yet), but F3 walks straight through this door — closing it now, not deferred to F3.
+    // ExecContext` zeroes CallDepth by construction). F3's ctx.fns calls now walk straight through this
+    // door — the guard was closed ahead of time (FG), so a runaway ctx.fns call is caught here too.
     const savedCallDepth = callDepth;
     memoBypass = true;
     callDepth = 0;
@@ -2544,7 +2668,18 @@ function runConformance(caseJson: string): string {
         case "int": return JSON.stringify({ kind: "int", value: result.value });
         case "text": return JSON.stringify({ kind: "text", value: result.value });
         case "bool": return JSON.stringify({ kind: "bool", value: result.value });
-        case "array": return JSON.stringify({ kind: "intList", value: result.items.map(i => (i.value as ExecInt).value) });
+        // M12 F3 — an ExecArray result is "intList" ONLY when every item is a plain int (a data-collection
+        // expr, e.g. `.where()`); otherwise (tags, nested arrays — sys.renderTree's F2 splice / F3
+        // tag-splice / F3b staleness-banner wrapper all return a top-level array whose items aren't ints)
+        // it's a "tag" tree like any other renderTree result — serializeTree already flattens an array
+        // child recursively, so this just routes the TOP-level array through the same path. An empty
+        // array is vacuously "every item is int" (matches the two existing empty-intList cases; C#'s
+        // equivalent AssertExpectation is driven by the case's DECLARED expect kind, not the runtime
+        // type, so it needs no equivalent branch).
+        case "array":
+            if (result.items.every(i => i.value.type === "int"))
+                return JSON.stringify({ kind: "intList", value: result.items.map(i => (i.value as ExecInt).value) });
+            return JSON.stringify({ kind: "tag", value: serializeTree(result) });
         case "tag": return JSON.stringify({ kind: "tag", value: serializeTree(result) });
         case "nothing": return JSON.stringify({ kind: "nothing", value: null });
         case "null": return JSON.stringify({ kind: "null", value: null });

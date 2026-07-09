@@ -772,8 +772,56 @@ public sealed class CodeExecutor
         var ctx = call.Params.Length >= 2 && ExecuteValue(call.Params[1], scope, context) is ExecObject c ? c : null;
         // The optional fns rows (M12 F2): a non-array 3rd arg is ignored — same as absent, no expansion.
         var fns = call.Params.Length == 3 && ExecuteValue(call.Params[2], scope, context) is ExecArray f ? f : null;
-        return BuildRenderTree(node, context, ctx, null, fns, new ExpansionState());
+        var result = BuildRenderTree(node, context, ctx, null, fns, new ExpansionState());
+        // M12 F3b — the staleness banner: ctx.fns is a SNAPSHOT taken at evalContext build time (empty
+        // deps, per CANVAS-EVAL-1's deliberate S3a-race inversion), so an edit to a `fns` row's BODY
+        // changes no call-site text and a call-position expression would otherwise evaluate against the
+        // STALE shipped fn silently. Compare the shipped per-fn fingerprints against the LIVE `fns` rows
+        // (dep-recorded, so the banner appears/disappears SAME-FRAME as the edit) and — on ANY mismatch —
+        // splice ONE banner ahead of the tree, riding the root node's own id (inert, the F2 splice idiom).
+        // Only checked when BOTH ctx and fns were passed (no fns ⇒ nothing live to compare against).
+        if (ctx != null && fns != null && FnsStale(ctx, fns, context))
+            return new ExecArray
+            {
+                Items = [new ExecItem { Key = 0, Value = StaleFnsBanner() }, new ExecItem { Key = 1, Value = result }],
+                Id = node.Id, Kind = ArrayKind.List,
+            };
+        return result;
     }
+
+    // M12 F3b — do the shipped ctx.fns fingerprints (keyed by name) still match the LIVE `fns` rows?
+    // Compares by NAME (an added/removed/renamed fn is also a mismatch — the count check below) rather
+    // than by row id, since ctx.fns is keyed by name (the same key EvaluateCtxExpr binds callables under).
+    // RecordScannedItem harvests each row for the SSR-then-ship replay (the TS twin has no equivalent —
+    // it already holds the full client data, matching ResolveFn's own asymmetry).
+    private bool FnsStale(ExecObject ctx, ExecArray fns, ExecContext context)
+    {
+        if (ctx.Props.GetValueOrDefault("fns") is not ExecObject shipped) return false;
+        RecordMembership(fns, context);
+        var live = new Dictionary<string, string>();
+        foreach (var item in fns.Items)
+        {
+            RecordScannedItem(fns, item, context);
+            if (item.Value is not ExecObject fn) continue;
+            live[ReadNodeText(fn, "name", context)] = FnFingerprint(fn, context);
+        }
+        if (live.Count != shipped.Props.Count) return true;
+        foreach (var (name, fp) in live)
+        {
+            if (shipped.Props.GetValueOrDefault(name) is not ExecObject entry) return true;
+            if (entry.Props.GetValueOrDefault("fp") is not ExecText shippedFp) return true;
+            if (shippedFp.Value != fp) return true;
+        }
+        return false;
+    }
+
+    // A span.stale-fns-banner — the F3b affordance. No data-node (it corresponds to no MetaNode row).
+    private static ExecTag StaleFnsBanner() => new()
+    {
+        Name = "div",
+        Attributes = new() { ["class"] = new ExecText { Value = "stale-fns-banner" } },
+        Children = [new ExecText { Value = "Components changed — call results may be stale. Refresh values." }],
+    };
 
     // Walk one MetaNode row → its rendered node. ELEMENT (tag non-empty): a `tag` element carrying
     // data-node=<id> (the provenance spine S4's click-to-select needs — on EVERY emitted element), its
@@ -852,8 +900,22 @@ public sealed class CodeExecutor
             // (as a text child, the same scalar-to-text a rendered child takes); any throw (tier 2) or a
             // map-miss (tier 3, an edited-but-unrefreshed expr) falls to today's exact chip — the fallback is
             // already visually defined and never guesses.
+            //
+            // M12 F3 — a call in expression position (`{fmtDate(n.at)}`, a helper, OR a COMPONENT called by
+            // plain call syntax — legal at runtime, since a component is just a fn value) can evaluate to a
+            // TAG (or an array whose items are all tags — e.g. a helper returning an array literal of tags,
+            // which the real runtime already splices generically, SerializeChild/ui.ts flatten-any-array).
+            // That result SPLICES AS CONTENT, not text: ride it on an ExecArray carrying the LEAF row's own
+            // id (inert, the F2 splice idiom) so its provenance stays this leaf. Any OTHER non-scalar result
+            // (an object, a data collection) keeps TODAY'S EXACT behavior via ChildText (empty) — never widened.
             if (ctx != null && EvaluateCtxExpr(expr, ctx, context, bindings) is { } value)
+            {
+                if (value is ExecTag tagValue)
+                    return new ExecArray { Items = [new ExecItem { Key = 0, Value = tagValue }], Id = id, Kind = ArrayKind.List };
+                if (value is ExecArray arrValue && arrValue.Items.Count > 0 && arrValue.Items.All(i => i.Value is ExecTag))
+                    return new ExecArray { Items = arrValue.Items, Id = id, Kind = ArrayKind.List };
                 return new ExecText { Value = ChildText(value) };
+            }
             return Chip("expr-chip", expr, id);                                       // an expression placeholder
         }
         return Chip("expr-chip is-empty", "(empty)", id);                            // neither tag nor expr
@@ -1032,6 +1094,63 @@ public sealed class CodeExecutor
         return best;
     }
 
+    // M12 F3b — field/node separators for the content fingerprint (control characters that never appear
+    // in authored text). Twin-identical with SchemaBridge.FpFieldSep/FpNodeSep and codeExec.ts's.
+    private const char FpFieldSep = (char)1;
+    private const char FpNodeSep = (char)2;
+
+    // A MetaFn row's content fingerprint (name, params, body tree) — twin of SchemaBridge.FnFingerprints
+    // (the server-ship counterpart, a PARALLEL walk over raw NodeValue rows) and codeExec.ts's
+    // fnFingerprint. Dep-recorded (ReadNodeText/OrderedMembers), so an edit to any read field re-renders
+    // the comparison same-frame. NOT a hash — see SchemaBridge's comment.
+    private string FnFingerprint(ExecObject fn, ExecContext context)
+    {
+        var name = ReadNodeText(fn, "name", context);
+        var body = OrderedMembers(fn, "body", context).FirstOrDefault();
+        return name + FpFieldSep + ReadNodeText(fn, "params", context) + FpFieldSep +
+            (body != null ? FingerprintNode(body, context) : "");
+    }
+
+    // The per-node half of FnFingerprint — twin of SchemaBridge.FingerprintNode / codeExec.ts
+    // fingerprintNode. Dispatches on `kind` FIRST (mirroring BuildRenderTree's own dispatch) so it never
+    // reads a field a for/if/element/leaf row doesn't carry (a hand-built conformance fixture may omit
+    // fields its shape doesn't need — exactly like BuildRenderTree itself never reads them either).
+    private string FingerprintNode(ExecObject node, ExecContext context)
+    {
+        var kind = ReadNodeTextOptional(node, "kind", context);
+        var sb = new System.Text.StringBuilder();
+        if (kind == "for")
+        {
+            sb.Append("for").Append(FpFieldSep).Append(ReadNodeText(node, "item", context)).Append(FpFieldSep)
+              .Append(ReadNodeText(node, "collection", context));
+            foreach (var c in OrderedMembers(node, "children", context))
+                sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c, context));
+            return sb.ToString();
+        }
+        if (kind == "if")
+        {
+            sb.Append("if").Append(FpFieldSep).Append(ReadNodeText(node, "condition", context));
+            foreach (var c in OrderedMembers(node, "children", context))
+                sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c, context));
+            foreach (var c in OrderedMembers(node, "elseChildren", context))
+                sb.Append(FpNodeSep).Append("E:").Append(FingerprintNode(c, context));
+            return sb.ToString();
+        }
+        var tag = ReadNodeText(node, "tag", context);
+        if (tag.Length > 0)
+        {
+            sb.Append("E:").Append(tag);
+            foreach (var a in OrderedMembers(node, "attrs", context))
+                sb.Append(FpNodeSep).Append("A:").Append(ReadNodeText(a, "name", context)).Append(FpFieldSep)
+                  .Append(ReadNodeText(a, "value", context)).Append(FpFieldSep)
+                  .Append(ReadNodeProp(a, "order", context) is ExecInt ao ? ao.Value : 0);
+            foreach (var c in OrderedMembers(node, "children", context))
+                sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c, context));
+            return sb.ToString();
+        }
+        return "L:" + ReadNodeText(node, "expr", context);
+    }
+
     // Expand a resolved MetaFn invocation — the row-walk analog of ExecuteComponentValue/BindParams, faithful
     // to runtime scoping WITHOUT running a component's setup/view split (there are no rows for that; a fn's
     // body root is a single value/element, matching the render import shape). `invocationNode` is the tag row
@@ -1095,6 +1214,17 @@ public sealed class CodeExecutor
     //     passed down), so `{note.title}` inside a `foreach note in db.notes` resolves against the current
     //     item. The bindings ride the SAME parent-less isolation as db (read-only, no pollution of the
     //     designer scope, no dep leakage — the fresh MemoBypass context owns its own DepStack).
+    //
+    // M12 F3 — `ctx.fns` (the eval context's projected-fn map, shipped by BuildEvalContext alongside
+    // `exprs`) is deserialized and bound into `evalScope` as callables — one ExecFunction per fn, name →
+    // value, EXACTLY like ExecuteFunction/DefineFunction binds a named `fn` statement. Each ExecFunction's
+    // Scope IS `evalScope` itself, so ALL fn names are visible to every fn's body before any call runs —
+    // mutual/self recursion resolves at CALL time through the shared scope (FG's call-depth guard catches
+    // a runaway → a normal catchable error → the caller's chip). Bound BEFORE `bindings` (below) so a
+    // same-named row binding (a loop var, a component param) SHADOWS a same-named fn — mirrors runtime
+    // scoping (a scope item stops resolution at the first match), pinned by a conformance case. Every fn
+    // is deserialized on EVERY call (matching `exprs`' own per-call, no-cache pattern above — this walk
+    // runs once per leaf/attr eval, so a fn call is no hotter than an ordinary expr lookup already is).
     //     Returns the value, or null on any miss/parse-failure/throw (the caller chips).
     private IExecValue? EvaluateCtxExpr(string text, ExecObject ctx, ExecContext context, Dictionary<string, IExecValue>? bindings = null)
     {
@@ -1108,6 +1238,20 @@ public sealed class CodeExecutor
         var evalScope = new ExecScope();
         if (ctx.Props.GetValueOrDefault("db") is { } seedDb)
             evalScope.Items["db"] = new ExecScopeItem { Value = seedDb, IsReadOnly = true };
+        if (ctx.Props.GetValueOrDefault("fns") is ExecObject fnsMap)
+            foreach (var (fnName, fnValue) in fnsMap.Props)
+            {
+                if (fnValue is not ExecObject fnEntry) continue;
+                if (fnEntry.Props.GetValueOrDefault("ast") is not ExecText fnAstText) continue;
+                CodeFunction fn;
+                try { fn = (CodeFunction)System.Text.Json.JsonSerializer.Deserialize<ICodeValue>(fnAstText.Value, SchemaJson.Options)!; }
+                catch { continue; }
+                evalScope.Items[fnName] = new ExecScopeItem
+                {
+                    Value = new ExecFunction { Function = fn, Scope = evalScope },
+                    IsReadOnly = true,
+                };
+            }
         if (bindings != null)
             foreach (var (name, value) in bindings)
                 evalScope.Items[name] = new ExecScopeItem { Value = value, IsReadOnly = true };

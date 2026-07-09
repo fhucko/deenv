@@ -1,3 +1,4 @@
+using System.Text;
 using DeEnv.Code;
 using DeEnv.Instance;
 using DeEnv.Storage;
@@ -468,6 +469,76 @@ public static class SchemaBridge
         }
         else if (TextField(node, "expr") is { Length: > 0 } expr)
             into.Add(expr);
+    }
+
+    // ── M12 F3b: per-fn content fingerprints (the staleness banner) ────────────────────
+    //
+    // A canonical STRING built from a MetaFn row's raw fields (name, params, and its body tree walked
+    // in canonical order: kind/tag/expr/item/collection/condition/order per node, name/value/order per
+    // attr) — NOT a hash: only ever compared for equality, so plain concatenation is sufficient and
+    // avoids implementing a hash function identically on two languages. The eval context ships one of
+    // these per fn (computed HERE, from the raw store rows, at ctx-build time — SsrRenderer.
+    // BuildEvalContext); the canvas walk recomputes the SAME fingerprint from the LIVE fns rows
+    // (CodeExecutor.FnFingerprint / codeExec.ts fnFingerprint — a dep-recorded PARALLEL walk of this
+    // one, the SAME "must mirror" law as RenderExprSources/CollectExprSources above) and a mismatch
+    // shows the "components changed" banner (M12 F3). Keyed by name (last-wins on a duplicate — every
+    // other resolver in this file/the canvas walk already tie-breaks or refuses duplicates the same way).
+    // Field/node separators for the fingerprint string — control characters that never appear in
+    // authored text, so they can't be confused with real content. Twin-identical: CodeExecutor.cs /
+    // codeExec.ts use the SAME two code points (1 and 2).
+    private static readonly char FpFieldSep = (char)1;
+    private static readonly char FpNodeSep = (char)2;
+
+    public static Dictionary<string, string> FnFingerprints(NodeValue design)
+    {
+        var result = new Dictionary<string, string>();
+        if (design is not ObjectValue d) return result;
+        foreach (var fn in OrderedObjects(d.Fields.GetValueOrDefault("fns")))
+        {
+            var name = TextField(fn, "name");
+            var body = OrderedObjects(fn.Fields.GetValueOrDefault("body")).FirstOrDefault();
+            result[name] = name + FpFieldSep + TextField(fn, "params") + FpFieldSep +
+                (body != null ? FingerprintNode(body) : "");
+        }
+        return result;
+    }
+
+    // The per-node half of FnFingerprints — twin of CodeExecutor.FingerprintNode / codeExec.ts
+    // fingerprintNode. Dispatches on `kind` FIRST (mirroring the canvas walk's own dispatch) so it never
+    // reads a field a for/if/element/leaf row doesn't carry.
+    private static string FingerprintNode(ObjectValue node)
+    {
+        var kind = TextField(node, "kind");
+        var sb = new StringBuilder();
+        if (kind == "for")
+        {
+            sb.Append("for").Append(FpFieldSep).Append(TextField(node, "item")).Append(FpFieldSep)
+              .Append(TextField(node, "collection"));
+            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children")))
+                sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c));
+            return sb.ToString();
+        }
+        if (kind == "if")
+        {
+            sb.Append("if").Append(FpFieldSep).Append(TextField(node, "condition"));
+            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children")))
+                sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c));
+            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("elseChildren")))
+                sb.Append(FpNodeSep).Append("E:").Append(FingerprintNode(c));
+            return sb.ToString();
+        }
+        var tag = TextField(node, "tag");
+        if (tag.Length > 0)
+        {
+            sb.Append("E:").Append(tag);
+            foreach (var a in OrderedObjects(node.Fields.GetValueOrDefault("attrs")))
+                sb.Append(FpNodeSep).Append("A:").Append(TextField(a, "name")).Append(FpFieldSep)
+                  .Append(TextField(a, "value")).Append(FpFieldSep).Append(IntField(a, "order"));
+            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children")))
+                sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c));
+            return sb.ToString();
+        }
+        return "L:" + TextField(node, "expr");
     }
 
     // ── M12 S1b: `ui` render text → structured MetaNode rows (the inverse of ProjectRenderUi) ─────

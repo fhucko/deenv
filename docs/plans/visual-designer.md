@@ -403,6 +403,46 @@ mutations the designer app performs in deenv code — that machinery already exi
   documented at both entries (not worth a synthetic wrapper). Depth-100 legal recursion
   proven green. UNBLOCKS F3: runaway designer data can no longer kill the kernel —
   the crash-loop class is closed.
+- **F3 — call-position evaluation of design fns, both twins. ✅ DONE 2026-07-09** (design
+  docs/plans/structured-fns.md "Call-position evaluation (F3)"; full suite 846 effective —
+  the 2 red are the two KNOWN contention flakes, CANVAS-EVAL "canvas evaluates" +
+  LoginViewSwapTests, both verified green in isolation; conformance 114 both runners, 8
+  new cases). `sys.evalContext`'s payload gains `fns` — a name → `{ast, fp}` map: `ast` is
+  each design fn REUSED from the F1 projection already run to build `appDoc` (not
+  re-projected), serialized the SAME wire format `exprs` uses (CodeFunction IS in the
+  ICodeValue union, discriminator "fn"); `fp` is a per-fn CONTENT FINGERPRINT
+  (SchemaBridge.FnFingerprints — a name/params/body-tree canonical walk over the RAW store
+  rows, NOT a hash — plain separator-joined concatenation, since it's only ever compared
+  for equality). `EvaluateCtxExpr`/`evalCtxExpr` deserialize `ctx.fns` on EVERY call
+  (matching `exprs`' own no-cache pattern — consistency over a new cache layer) and bind
+  each as an `ExecFunction`/`{type:"fn",...}` closure whose `Scope` IS the eval scope
+  itself, so ALL fn names are mutually visible before any call runs (self/mutual
+  recursion resolves at call time; FG's guard catches a runaway → a normal error → the
+  leaf's chip). Bound BEFORE the row `bindings` so a same-named loop var/param SHADOWS a
+  same-named fn — mirrors runtime scoping, pinned by a conformance case. A leaf eval
+  result that is a TAG (or an array whose items are all tags — a helper/component called
+  by plain call syntax, legal at runtime) SPLICES as content — an array riding the leaf
+  row's own id (the F2 idiom) — instead of ChildText's usual (empty) non-scalar fallback;
+  every OTHER non-scalar result is byte-identical to before (never widened). **F3b
+  staleness affordance:** ctx.fns is a snapshot (empty-deps, per CANVAS-EVAL-1's S3a-race
+  inversion), so editing a fn's BODY changes no call-site text — the canvas walk
+  recomputes the SAME per-fn fingerprint from the LIVE `fns` rows (dep-recorded — same-
+  frame) via a TWIN-IDENTICAL `FnFingerprint`/`fnFingerprint` (a PARALLEL walk of
+  SchemaBridge's, the RenderExprSources/CollectExprSources law) and, on ANY name/content
+  mismatch, splices ONE `div.stale-fns-banner` ahead of the tree (coarse — any-fn-changed
+  → one banner — never silent); "Refresh values" recomputes ctx and clears it. Deviation
+  (flagged, fixed): the TS conformance harness (`runConformance`) classified EVERY
+  top-level `ExecArray` result as `intList` — broke on the new banner/splice cases whose
+  root is now an array of tags; fixed to classify by CONTENT (every item an int →
+  intList, else → tag via `serializeTree`, which already flattens arrays recursively) —
+  a genuine pre-existing harness gap the feature exposed, not a new special case; the C#
+  side needed no change (`AssertExpectation` is driven by the case's DECLARED kind, not
+  the runtime type). Browser-pinned: a helper called in a leaf evaluates for real
+  alongside an UNRELATED F2 component expansion on the same canvas; editing the helper's
+  body shows the banner same-frame while the F2 expansion keeps updating live (proving
+  the two mechanisms are independently reactive); Refresh clears the banner and updates
+  the value together. Ledger: lib fns stay out of `ctx.fns` (design-local only, per
+  scope) — lib-fn call-position eval is the same deferred lib-expansion follow-up F2 left.
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —

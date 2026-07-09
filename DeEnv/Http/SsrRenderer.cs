@@ -1309,6 +1309,15 @@ public sealed class SsrRenderer
     //   • exprs — a content-addressed source-text → { text, ast } map: every render-tree leaf `expr` / attr
     //             `value` source that PARSES, its AST serialized to a JSON string (SchemaJson.Options — the
     //             same wire format the app render trusts). An unparseable source gets no entry (it chips).
+    //   • fns   — (M12 F3) a NAME → { ast, fp } map: each design fn's projected CodeFunction (desc.Ui.
+    //             Functions — the SAME F1 projection ProjectDesignDocument already ran to build `appDoc`,
+    //             reused rather than re-projected) serialized the SAME wire format as `exprs`' ast (CodeFunction
+    //             IS in the ICodeValue union, discriminator "fn"), plus a per-fn CONTENT FINGERPRINT
+    //             (SchemaBridge.FnFingerprints — a name/params/body-tree canonical walk over the RAW store
+    //             rows, not a hash) the canvas walk compares against the LIVE `fns` rows to show the "stale
+    //             call values" banner (F3b) when a fn body has been edited since this ctx was shipped.
+    //             EvaluateCtxExpr binds each into the eval scope as a callable, so a call-position expression
+    //             (`{fmtDate(n.at)}`) evaluates with the real interpreter.
     //   • ambients / params — reserved-empty in v1 (the uses/S6/params follow-ups fill them).
     // An INVALID design (projection/load throws) degrades to an EMPTY payload — never a thrown exception that
     // would break the whole canvas: the walk then renders every expr as its chip (honest), and the STRUCTURAL
@@ -1342,14 +1351,27 @@ public sealed class SsrRenderer
                 catch { /* unparseable → no entry (the walk chips it) */ }
             }
             var exprsObj = new ExecObject { Id = --context.LastId.Value, Constant = true, Props = exprs };
-            return Obj(("db", seedDb), ("exprs", exprsObj), ("ambients", Obj()), ("params", Obj()));
+            // fns: each design fn (already projected by ProjectDesignDocument above, reused here) → its
+            // CodeFunction AST + a raw-row content fingerprint (M12 F3 / F3b).
+            var fingerprints = SchemaBridge.FnFingerprints(designNode);
+            var fns = new Dictionary<string, IExecValue>();
+            foreach (var fn in desc.Ui?.Functions ?? [])
+            {
+                if (fn.Name is not { Length: > 0 }) continue;
+                var json = JsonSerializer.Serialize<ICodeValue>(fn, SchemaJson.Options);
+                fns[fn.Name] = Obj(
+                    ("ast", new ExecText { Value = json }),
+                    ("fp", new ExecText { Value = fingerprints.GetValueOrDefault(fn.Name, "") }));
+            }
+            var fnsObj = new ExecObject { Id = --context.LastId.Value, Constant = true, Props = fns };
+            return Obj(("db", seedDb), ("exprs", exprsObj), ("fns", fnsObj), ("ambients", Obj()), ("params", Obj()));
         }
         catch (Exception ex)
         {
             // An invalid/unloadable design must not break the canvas — degrade to an empty context (every
             // expr chips) and log the detail. The structural canvas still paints.
             Console.Error.WriteLine($"evalContext of design {design.Id} failed: {ex}");
-            return Obj(("db", empty), ("exprs", empty), ("ambients", empty), ("params", empty));
+            return Obj(("db", empty), ("exprs", empty), ("fns", empty), ("ambients", empty), ("params", empty));
         }
     }
 

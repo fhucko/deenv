@@ -1442,3 +1442,52 @@ Feature: The operator IDE (designs library + instance design selector)
     And the design canvas shows a "li" element reading "Beta"
     When I edit the component "NoteCard"'s body leaf to "\"Changed\""
     Then the design canvas shows a "li" element reading "Changed"
+
+  # ── M12 F3 — call-position evaluation of design fns ──────────────────────────────────────────
+  #
+  # F2 made the canvas EXPAND a component tag; F3 makes it EVALUATE a fn called in EXPRESSION
+  # position (`{fmtGreeting(db.greeting)}`, not a tag invocation) — ctx.fns binds the design's fns as
+  # real callables into the isolated eval scope, so the REAL interpreter computes the value (not a
+  # chip). THE STALENESS PROOF (F3b): ctx.fns is a snapshot taken when evalContext was last computed,
+  # so editing the helper's BODY changes no call-site text — the canvas shows a visible banner rather
+  # than silently keeping the stale value, while the UNRELATED F2 expansion (row-walk, not ctx-gated)
+  # keeps updating live throughout. Refresh values recomputes the ctx and clears the banner.
+  @m12 @single-user
+  Scenario: The canvas evaluates a call-position helper for real, flags staleness on a body edit without disturbing live F2 expansions, and Refresh clears it
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "calleval"
+    And I edit the design "calleval"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I add a field "greeting" to the type "Db"
+    When I add a field "notes" to the type "Db"
+    When I reload the design editor
+    And I retype the prop "notes" to "Note"
+    And I set the prop "notes" cardinality to "set"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              greeting: "World"
+              notes: [2]
+          Note 2
+              title: "Alpha"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a call-eval convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows a "span" element reading "Hi World"
+    And the design canvas shows a "li" element reading "Alpha"
+    And the design canvas does not show the stale-fns banner
+    When I edit the component "fmtGreeting"'s body leaf to "\"Hello \" + name"
+    Then the design canvas shows the stale-fns banner
+    And the design canvas shows a "li" element reading "Alpha"
+    When I click Refresh values
+    Then the design canvas shows a "span" element reading "Hello World"
+    And the design canvas does not show the stale-fns banner

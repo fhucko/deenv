@@ -1901,6 +1901,43 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             $"() => [...document.querySelectorAll('.design-editor .render-tree input.node-for-collection')].some(e => e.value === {JsString(collection)})");
 
+    // ── M12 F3 — call-position evaluation of design fns ─────────────────────────────────────────
+    //
+    // A convertible render that DEFINES a HELPER (`fmtGreeting(name)`, a scalar-returning fn — no
+    // element root) AND a COMPONENT (`NoteCard(note)`, F2's own shape) and INVOKES both: the helper by
+    // plain call syntax inside a leaf (`fmtGreeting(db.greeting)`, wrapped in its own <span> for a clean
+    // assertion target), the component via a `foreach`-driven tag invocation (the F2 fixture, proving F3
+    // and F2 coexist on one canvas). Same authoring plumbing as the other convertible-render fixtures.
+    private const string CallEvalConvertibleRender =
+        "ui\n"
+        + "    fn fmtGreeting(name)\n        return \"Hi \" + name\n"
+        + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
+        + "    fn render()\n        return <main>\n"
+        + "            <span class=\"greeting\">\n                fmtGreeting(db.greeting)\n"
+        + "            foreach n in db.notes\n                <NoteCard note={n}>\n";
+
+    [When("I author a call-eval convertible render into the design's UI")]
+    public async Task WhenAuthorCallEvalRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(CallEvalConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "calleval" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == CallEvalConvertibleRender));
+    }
+
+    // The F3b staleness affordance: ONE banner (span/div.stale-fns-banner) at the canvas root when the
+    // shipped ctx.fns fingerprints no longer match the LIVE fns rows (an fn body edit since evalContext
+    // was last computed/refreshed).
+    [Then("the design canvas shows the stale-fns banner")]
+    public async Task ThenCanvasShowsStaleBanner() =>
+        await ctx.Page!.Locator(".design-canvas .stale-fns-banner").First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
+
+    [Then("the design canvas does not show the stale-fns banner")]
+    public async Task ThenCanvasNoStaleBanner() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => document.querySelector('.design-canvas .stale-fns-banner') == null");
+
     // The Design id of the (main working-copy) design with the given label, or 0 if not yet present.
     private int DesignIdByLabel(string label)
     {
