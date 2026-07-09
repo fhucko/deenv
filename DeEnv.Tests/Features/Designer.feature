@@ -1337,3 +1337,35 @@ Feature: The operator IDE (designs library + instance design selector)
     When I edit the root node's tag input to "section"
     Then the design canvas shows a "section" element with a data-node attribute
     And the design canvas shows a "li" element reading "Alpha"
+
+  # ── M12 F1 — structured fns: rows + import + projection + editor ────────────────────────────────
+  #
+  # S1a/S1b/E1/E2 gave the render TREE structured storage + an editor; F1 does the same for named
+  # FUNCTIONS — a design's `ui` can carry a scalar HELPER (a single-return expression, e.g. a ternary)
+  # and a COMPONENT (a single-return element with a param) besides `fn render()`. Import now lifts the
+  # old helper-function refusal (SchemaBridgeTests / DesignerSourceTests cover the server-only /
+  # lambda-return / multi-statement refusals and the round-trip at the unit level); this scenario
+  # proves the DESIGNER-FACING half: the imported functions show up as an editable "Components" area
+  # (name input, comma-separated params input, its own body tree via the SAME recursive
+  # renderNodeEditor), and editing a component's params field persists — an ordinary two-way-bound
+  # ctx field write, exactly like editing a node's tag — and the projected document carries the edit.
+  @m12 @single-user
+  Scenario: The Components area shows an imported component function and editing its params persists into the projection
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "compme"
+    And I edit the design "compme"
+    And I expand the Advanced code disclosure
+    And I author a convertible render with a component function into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the Components area shows a component named "NoteCard" with params "note"
+    # A projectable app document needs a Db root type (the render/component leaves reference `db`/`note`
+    # fields, but projection only PARSES those expression sources — it does not need them to resolve — a
+    # Db type is still required for the document as a whole to load).
+    When I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "greeting" to the type "Db"
+    And I edit the component "NoteCard"'s params to "note, extra"
+    Then the stored component "NoteCard" has params "note, extra"
+    And the stored render for "compme" projects to a valid design document

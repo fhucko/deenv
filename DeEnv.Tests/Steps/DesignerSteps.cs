@@ -1385,6 +1385,69 @@ public sealed class DesignerSteps(InstanceContext ctx)
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ProjectableNestedRender));
     }
 
+    // ── M12 F1 — structured fns: the Components editor area ───────────────────────────────────────
+
+    // A convertible render whose `ui` carries a COMPONENT function (`NoteCard(note)`, single-return
+    // element) besides `fn render()` — the shape F1's import lifts the old refusal for. Same authoring
+    // plumbing as the other convertible-render fixtures (fill the `ui` textarea, poll the store).
+    private const string ComponentConvertibleRender =
+        "ui\n    fn NoteCard(note)\n        return <li>\n            note.title\n    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a convertible render with a component function into the design's UI")]
+    public async Task WhenAuthorComponentRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(ComponentConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "compme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ComponentConvertibleRender));
+    }
+
+    // The imported function shows as a `.fn-card` in the first-class "Components" area: a `name` input and
+    // a comma-separated `params` input, both two-way-bound to the MetaFn row.
+    [Then("the Components area shows a component named {string} with params {string}")]
+    public async Task ThenComponentsAreaShowsFn(string name, string paramsText) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.components-section .fn-card')].some(c => {{ " +
+            $"const n = c.querySelector('input.fn-name'), p = c.querySelector('input.fn-params'); " +
+            $"return n != null && p != null && n.value === {JsString(name)} && p.value === {JsString(paramsText)}; }})");
+
+    // Locate the fn-card by its CURRENT name input value (mirrors JustAddedTypeRow's by-value lookup).
+    [When("I edit the component {string}'s params to {string}")]
+    public async Task WhenEditComponentParams(string name, string newParams) =>
+        await ctx.Page!.Locator($".components-section .fn-card:has(input.fn-name[value=\"{name}\"]) input.fn-params")
+            .FillAsync(newParams);
+
+    [Then("the stored component {string} has params {string}")]
+    public async Task ThenStoredComponentParams(string name, string paramsText) =>
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaFn").Values.Any(o =>
+            o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == name
+            && o.Fields.TryGetValue("params", out var p) && p is DeEnv.Storage.TextValue pt && pt.Text == paramsText));
+
+    // The label-parameterized sibling of ThenProjectsValid (E2) — proves the design LABELED `label`
+    // projects to a valid document, polled the same way (a staged ctx write lands over the WS
+    // asynchronously; on timeout the LAST projection error is surfaced).
+    [Then("the stored render for {string} projects to a valid design document")]
+    public async Task ThenProjectsValidFor(string label)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        Exception? lastError = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            var designId = DesignIdByLabel(label);
+            if (designId != 0)
+            {
+                var design = _designer.Store.ReadNode(DeEnv.Storage.NodePath.Root.Field("designs").Key(designId.ToString()));
+                if (design != null)
+                {
+                    try { DeEnv.Designer.SchemaBridge.ProjectDesignDocument(design); return; }
+                    catch (Exception ex) { lastError = ex; }
+                }
+            }
+            await Task.Delay(200);
+        }
+        throw new Exception("Projection never became valid. Last error: " + lastError?.Message);
+    }
+
     // After the import host action's ack refetch re-renders the editor, the mode flips: a first-class
     // "Structured render" section (OUTSIDE the collapsing Advanced disclosure) appears, holding the
     // recursive tree editor over design.render. Plain visible wait — no fixed sleep, no disclosure dance.

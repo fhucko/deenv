@@ -31,6 +31,7 @@ public sealed class StructuredRenderImportSteps
                 common text
                 ui text
                 render set of MetaNode
+                fns set of MetaFn
                 types set of MetaType
             MetaNode
                 kind text
@@ -46,6 +47,11 @@ public sealed class StructuredRenderImportSteps
             MetaAttr
                 name text
                 value text
+                order int
+            MetaFn
+                name text
+                params text
+                body set of MetaNode
                 order int
             MetaType
                 name text
@@ -92,6 +98,30 @@ public sealed class StructuredRenderImportSteps
         "            else\n" +
         "                <p>\n" +
         "                    \"bye\"\n");
+
+    // M12 F1: a `ui` with `fn render()` + a scalar HELPER fn (single-return ternary) + a COMPONENT fn
+    // (single-return element with a param) — the load-bearing shape structured fns import.
+    [Given("a design whose `ui` text is a fn render\\(\\) plus a scalar helper function and a component function with a param")]
+    public void GivenHelperAndComponentDesign() => SeedDesign(
+        "ui\n"
+        + "    fn helperLabel(active)\n        return active ? \"Yes\" : \"No\"\n"
+        + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
+        + "    fn render()\n        return <main>\n            \"hi\"\n");
+
+    // Refusal fixtures: import must leave the design entirely UNTOUCHED (nothing minted, `ui` unchanged).
+
+    [Given("a design whose `ui` text is a fn render\\(\\) plus a server-only function")]
+    public void GivenServerOnlyDesign() => SeedDesign(
+        "ui\n    server fn secretHelper()\n        return \"shh\"\n    fn render()\n        return <main>\n            \"hi\"\n");
+
+    [Given("a design whose `ui` text is a fn render\\(\\) plus a function returning a lambda")]
+    public void GivenLambdaReturnDesign() => SeedDesign(
+        "ui\n    fn makeCounter()\n        return () => 5\n    fn render()\n        return <main>\n            \"hi\"\n");
+
+    [Given("a design whose `ui` text is a fn render\\(\\) plus a function with multiple statements")]
+    public void GivenMultiStatementDesign() => SeedDesign(
+        "ui\n    fn helperLabel(active)\n        var x = active\n        return x ? \"Yes\" : \"No\"\n"
+        + "    fn render()\n        return <main>\n            \"hi\"\n");
 
     private void SeedDesign(string uiText)
     {
@@ -190,5 +220,38 @@ public sealed class StructuredRenderImportSteps
     {
         await Assert.That(_error).IsNotNull();
         await Assert.That(_error).IsTypeOf<SchemaValidationException>();
+    }
+
+    // ── M12 F1: structured fns ──────────────────────────────────────────────────────────────────────
+
+    [Then("the design's `fns` set holds {int} structured functions")]
+    public async Task ThenFnsCount(int count)
+    {
+        var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
+        await Assert.That(((SetValue)design.Fields["fns"]).Members.Count).IsEqualTo(count);
+    }
+
+    [Then("the imported function {string} has params {string} and a body root")]
+    public async Task ThenImportedFunctionShape(string name, string paramsText)
+    {
+        var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
+        var fns = ((SetValue)design.Fields["fns"]).Members.Select(m => (ObjectValue)m.Value).ToList();
+        var fn = fns.Single(f => ((TextValue)f.Fields["name"]).Text == name);
+        await Assert.That(((TextValue)fn.Fields["params"]).Text).IsEqualTo(paramsText);
+        await Assert.That(((SetValue)fn.Fields["body"]).Members.Count).IsEqualTo(1);
+    }
+
+    [Then("the design's `render` set is empty")]
+    public async Task ThenRenderEmpty()
+    {
+        var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
+        await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0);
+    }
+
+    [Then("the design's `ui` text field is unchanged")]
+    public async Task ThenUiUnchanged()
+    {
+        var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
+        await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(_originalUi);
     }
 }

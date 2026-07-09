@@ -16,6 +16,7 @@ types
         common text
         ui text
         render set of MetaNode
+        fns set of MetaFn
         types set of MetaType
         origin int
     MetaNode
@@ -32,6 +33,11 @@ types
     MetaAttr
         name text
         value text
+        order int
+    MetaFn
+        name text
+        params text
+        body set of MetaNode
         order int
     MetaType
         name text
@@ -85,6 +91,8 @@ access
     MetaNode
         * where currentUser.role == "Admin"
     MetaAttr
+        * where currentUser.role == "Admin"
+    MetaFn
         * where currentUser.role == "Admin"
     User
         * where currentUser.role == "Admin"
@@ -146,6 +154,9 @@ ui
 
     fn addAttr(node)
         node.attrs.add({ name: "class", value: "\"\"", order: orderForAppend(node.attrs) })
+
+    fn addFn(design)
+        design.fns.add({ name: "", params: "", order: orderForAppend(design.fns), body: [] })
 
     fn addRow(coll)
         return <div class="node-add-row">
@@ -392,6 +403,26 @@ ui
                         <div class="render-tree">
                             foreach n in design.render
                                 <renderNodeEditor node={n}>
+                        <div class="components-section">
+                            <h2 class="components-heading">
+                                "Components"
+                            <p class="components-caption">
+                                "Reusable functions: a component (a body root that is an element) or a helper (a body root that is an expression). Params are comma-separated."
+                            foreach f in design.fns
+                                <div class="fn-card">
+                                    <div class="fn-head">
+                                        <input class="fn-name" value={f.name} placeholder={"componentName"}>
+                                        <input class="fn-params" value={f.params} placeholder={"param1, param2"}>
+                                        <button class="remove-fn" onClick={() => design.fns.remove(f)}>
+                                            "×"
+                                    <div class="fn-body">
+                                        if f.body.any(x => true)
+                                            foreach r in f.body
+                                                <renderNodeEditor node={r}>
+                                        else
+                                            addRow(f.body)
+                            <button class="add-fn" onClick={() => addFn(design)}>
+                                "+ Component"
                 <details class="code-areas">
                     <summary class="code-summary">
                         "Advanced (code)"

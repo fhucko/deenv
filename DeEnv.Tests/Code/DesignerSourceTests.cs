@@ -448,32 +448,307 @@ public sealed class DesignerSourceTests
         }
     }
 
-    // Import REFUSES a `ui` section that carries helper functions (or vars) besides `fn render()`: clearing
-    // the whole `ui` text would silently DROP them, so such a design stays as text. Nothing minted, `ui`
-    // untouched. (Guards real designs like todo/crm, whose `ui` carries helper fns alongside render.)
+    // Import REFUSES a `ui` section that carries `var`s besides `fn render()`: clearing the whole `ui` text
+    // would silently DROP them, so such a design stays as text. Nothing minted, `ui` untouched. (M12 F1
+    // lifted the sibling helper-FUNCTION refusal this test used to cover — see the F1 tests below; the
+    // `var` refusal STAYS, a later rung.)
     [Test]
-    public async Task ImportRender_refuses_a_ui_with_helper_functions_and_imports_nothing()
+    public async Task ImportRender_refuses_a_ui_with_vars_and_imports_nothing()
     {
         var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1b-helper-" + Guid.NewGuid().ToString("N") + ".json");
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1b-vars-" + Guid.NewGuid().ToString("N") + ".json");
         var store = new JsonFileInstanceStore(storePath, meta);
         try
         {
-            var ui = "ui\n    fn helper()\n        return \"x\"\n    fn render()\n        return <main>\n            \"hi\"\n";
+            var ui = "ui\n    var count = 0\n    fn render()\n        return <main>\n            \"hi\"\n";
             var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
             {
-                ["label"] = new TextValue("helpers"), ["ui"] = new TextValue(ui),
+                ["label"] = new TextValue("vars"), ["ui"] = new TextValue(ui),
             }));
             store.AddToSet(NodePath.Root.Field("designs"), designId);
             AddDbType(store, designId);
 
             var ex = await Assert.That(() => SchemaBridge.ImportRender(store, designId))
                 .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("helper functions");
+            await Assert.That(ex!.Message).Contains("`var`s");
 
             var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
             await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0); // nothing minted
             await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);            // ui untouched
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // ── M12 F1: structured fns (helper + component functions → MetaFn rows) ───────
+
+    // Import now LIFTS the helper/component-function refusal: a scalar helper (single-return ternary) and
+    // a component (single-return element with a param) both mint MetaFn rows, in list order, and the
+    // round-trip is the identity — the load-bearing F1 proof.
+    [Test]
+    public async Task ImportRender_converts_a_helper_and_a_component_function_to_MetaFn_rows_and_round_trips()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-fns-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var ui = "ui\n"
+                   + "    fn helperLabel(active)\n        return active ? \"Yes\" : \"No\"\n"
+                   + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
+                   + "    fn render()\n        return <main>\n            \"hi\"\n";
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("fns"), ["ui"] = new TextValue(ui),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+
+            SchemaBridge.ImportRender(store, designId);
+
+            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
+
+            var fns = OrderedByOrder((SetValue)design.Fields["fns"]).ToList();
+            await Assert.That(fns.Count).IsEqualTo(2);
+            await Assert.That(Text(fns[0], "name")).IsEqualTo("helperLabel");
+            await Assert.That(Text(fns[0], "params")).IsEqualTo("active");
+            var helperBody = OrderedByOrder((SetValue)fns[0].Fields["body"]).Single();
+            await Assert.That(Text(helperBody, "tag")).IsEqualTo("");             // a leaf: the ternary source
+            await Assert.That(Text(helperBody, "expr")).IsEqualTo("active ? \"Yes\" : \"No\"");
+
+            await Assert.That(Text(fns[1], "name")).IsEqualTo("NoteCard");
+            await Assert.That(Text(fns[1], "params")).IsEqualTo("note");
+            var cardBody = OrderedByOrder((SetValue)fns[1].Fields["body"]).Single();
+            await Assert.That(Text(cardBody, "tag")).IsEqualTo("li");
+
+            // The round-trip: projecting the imported design reproduces the canonical original — render AND
+            // both structured functions, in order.
+            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
+            await Assert.That(projected).Contains(expectedUi);
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // Import refuses (imports NOTHING) when a top-level function is server-only — projecting it back would
+    // silently ship a server-only function to the client, the security downgrade ServerOnly exists to
+    // prevent.
+    [Test]
+    public async Task ImportRender_refuses_a_ui_with_a_server_only_function()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-serveronly-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var ui = "ui\n    server fn secretHelper()\n        return \"shh\"\n    fn render()\n        return <main>\n            \"hi\"\n";
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("serveronly"), ["ui"] = new TextValue(ui),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+
+            var ex = await Assert.That(() => SchemaBridge.ImportRender(store, designId))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("server-only");
+
+            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+            await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0);
+            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // Import refuses (imports NOTHING) when a top-level function returns a lambda — a stateful setup/view
+    // component; importing it would collapse it into one opaque leaf blob with no re-import path.
+    [Test]
+    public async Task ImportRender_refuses_a_ui_with_a_lambda_returning_function()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-lambda-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var ui = "ui\n    fn makeCounter()\n        return () => 5\n    fn render()\n        return <main>\n            \"hi\"\n";
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("lambda"), ["ui"] = new TextValue(ui),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+
+            var ex = await Assert.That(() => SchemaBridge.ImportRender(store, designId))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("lambda");
+
+            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+            await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0);
+            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // Import refuses (imports NOTHING) when a top-level function's body is more than a single `return`
+    // statement — outside the structured-safe subset this slice imports.
+    [Test]
+    public async Task ImportRender_refuses_a_ui_with_a_multi_statement_function()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-multistmt-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var ui = "ui\n    fn helperLabel(active)\n        var x = active\n        return x ? \"Yes\" : \"No\"\n"
+                   + "    fn render()\n        return <main>\n            \"hi\"\n";
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("multistmt"), ["ui"] = new TextValue(ui),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+
+            var ex = await Assert.That(() => SchemaBridge.ImportRender(store, designId))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("single");
+
+            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+            await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0);
+            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // Projection refuses a structured function named "render" — MapUi routes any fn literally named
+    // "render" into InstanceUi.Render, so it would silently vanish from the projected document.
+    [Test]
+    public async Task ProjectDesignDocument_refuses_a_structured_function_named_render()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-namedrender-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("namedrender"), ["ui"] = new TextValue(""),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+
+            var main = store.CreateObject("MetaNode", Node("main"));
+            store.AddToSet(designPath.Field("render"), main);
+
+            var badFn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("render"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(designPath.Field("fns"), badFn);
+            var body = store.CreateObject("MetaNode", Node("", "\"x\""));
+            store.AddToSet(designPath.Field("fns").Key(badFn.ToString()).Field("body"), body);
+
+            var design = store.ReadNode(designPath)!;
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(design))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("\"render\"");
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // Projection refuses two structured functions sharing a name — every resolution site (function
+    // definition, validator scope, generic-UI library merge) silently keeps only the LAST one, and S1c's
+    // set-union merge will produce duplicates routinely, so this refusal is load-bearing for merge.
+    [Test]
+    public async Task ProjectDesignDocument_refuses_duplicate_structured_function_names()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-dupname-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("dupname"), ["ui"] = new TextValue(""),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+
+            var main = store.CreateObject("MetaNode", Node("main"));
+            store.AddToSet(designPath.Field("render"), main);
+
+            foreach (var order in new[] { 0, 1 })
+            {
+                var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
+                {
+                    ["name"] = new TextValue("dup"), ["params"] = new TextValue(""), ["order"] = new IntValue(order),
+                }));
+                store.AddToSet(designPath.Field("fns"), fn);
+                var body = store.CreateObject("MetaNode", Node("", "\"x\""));
+                store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"), body);
+            }
+
+            var design = store.ReadNode(designPath)!;
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(design))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("dup");
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
+
+    // Projection refuses `fns` (structured functions) alongside an EMPTY `render` set — the F1 INTERIM gate
+    // (ProjectRenderUi assembles Functions alongside Render, so fns have nowhere to project into without a
+    // render root).
+    [Test]
+    public async Task ProjectDesignDocument_refuses_fns_when_render_is_empty()
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-fnsnorender-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue("fnsnorender"), ["ui"] = new TextValue(""),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+
+            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("helper"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(designPath.Field("fns"), fn);
+            var body = store.CreateObject("MetaNode", Node("", "\"x\""));
+            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"), body);
+
+            var design = store.ReadNode(designPath)!;
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(design))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("`fns`");
         }
         finally
         {

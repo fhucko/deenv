@@ -101,6 +101,19 @@ public static class SchemaBridge
                 "A design cannot carry both a structured `render` tree and a non-empty `ui` text field — " +
                 "the render tree projects the `ui` section, so the text field must be empty.");
 
+        // M12 F1 — `fns` (structured components/helpers, Design.fns) requires a structured `render` root to
+        // project INTO: ProjectRenderUi below assembles Functions alongside Render, so a design with fns but
+        // no render has nowhere to put them. INTERIM, not law — InstanceUi legally allows Functions with
+        // Render=null (a fn-only library), and a later palette (S5) may want exactly that — revisit then.
+        // Today this state is reachable only by hand-editing storage (the "+ Component" button lives INSIDE
+        // the render section, gated the same as the render tree itself), so refusing it here is enough.
+        var fnsCount = design is ObjectValue df && df.Fields.TryGetValue("fns", out var fnsNode)
+            ? OrderedObjects(fnsNode).Count() : 0;
+        if (fnsCount > 0 && renderRoot.Count == 0)
+            throw new SchemaValidationException(
+                "A design's `fns` (structured components/helpers) require a structured `render` root to project " +
+                "into; this design has functions but no render tree.");
+
         // Validate the projected TYPES first, on the typed description — so a structural type error
         // (e.g. an object Db with no props) surfaces as its precise semantic message ("…has baseType
         // 'object' but no props") rather than the parse error that printing-then-reparsing such an
@@ -129,7 +142,7 @@ public static class SchemaBridge
                 // as the canonicalize-on-project path below does — never hand-emitting text.
                 if (name == "ui" && renderRoot.Count == 1)
                 {
-                    sections.Add(AppPrint.PrintUi(ProjectRenderUi(renderRoot[0])).TrimEnd('\n'));
+                    sections.Add(AppPrint.PrintUi(ProjectRenderUi((ObjectValue)design, renderRoot[0])).TrimEnd('\n'));
                     continue;
                 }
                 if (TextField(d, name) is { Length: > 0 } section)
@@ -227,19 +240,77 @@ public static class SchemaBridge
         return new InstanceDescription(types);
     }
 
-    // ── M12 S1a: structured render tree → `ui` section ────────────────────────────
+    // ── M12 S1a/F1: structured render tree (+ structured fns) → `ui` section ──────
     //
-    // Project the MetaNode tree rooted at `root` into an InstanceUi whose only content is `fn render()`
+    // Project the MetaNode tree rooted at `root` into an InstanceUi whose `render` is `fn render()`
     // returning the root element — the exact shape a hand-written custom-UI design carries, so it flows
     // unchanged through the existing print→parse→run pipeline (NO interpreter/grammar change). The root
     // MUST be an element (a non-empty tag) — a `render` returning a bare text/expression leaf is not a
     // page. `root`'s `children`/`attrs` sets (and every descendant's) are already resolved inline on the
     // ObjectValue — the store builds them recursively at read, exactly like `types` — so no resolver.
-    private static InstanceUi ProjectRenderUi(ObjectValue root)
+    //
+    // F1 additionally projects `design.fns` (each a MetaFn: name, comma-separated params, a single-root
+    // `body`) into InstanceUi.Functions, IN ORDER — the language's OWN InstanceUi shape distinguishes
+    // Functions from Render (InstanceDescription.cs), so this mirrors that rather than special-casing.
+    // Each MetaFn's body root projects through the SAME ProjectNode as the render tree; unlike render's
+    // root, a fn's body root may be a LEAF (a helper returning a scalar expression) — only an ELEMENT is
+    // required for render, since a page must return markup, but a helper legitimately returns a value.
+    private static InstanceUi ProjectRenderUi(ObjectValue design, ObjectValue root)
     {
         if (TextField(root, "tag") is not { Length: > 0 })
             throw new SchemaValidationException(
                 "A structured `render` root must be an element (a MetaNode with a non-empty `tag`), not a leaf expression.");
+
+        var functions = new List<CodeFunction>();
+        var seenNames = new HashSet<string>();
+        foreach (var fn in OrderedObjects(design.Fields.GetValueOrDefault("fns")))
+        {
+            var name = TextField(fn, "name");
+            if (name is not { Length: > 0 })
+                throw new SchemaValidationException("A structured function has an empty name.");
+            // Reserved: MapUi (CodeParse.cs) routes ANY fn named "render" into InstanceUi.Render, discarding
+            // whatever was already there — a structured function named "render" would silently vanish from
+            // the projected document (its slot is the page's own render fn, assembled separately below).
+            if (name == "render")
+                throw new SchemaValidationException(
+                    "A structured function cannot be named \"render\" — that name is reserved for the page's " +
+                    "render function; a function named \"render\" would be routed there and silently disappear " +
+                    "from the projected document.");
+            // Every consumer of a named-function list resolves duplicates by silent LAST-WINS (function
+            // definition, the validator's scope, the generic-UI library merge) — and S1c's set-union merge
+            // will produce duplicates routinely — so this refusal is load-bearing, exactly like type/prop
+            // name uniqueness.
+            if (!seenNames.Add(name))
+                throw new SchemaValidationException(
+                    $"Two structured functions are both named \"{name}\" — rename one; every resolution site " +
+                    "silently keeps only the last-declared function with a given name.");
+
+            var body = OrderedObjects(fn.Fields.GetValueOrDefault("body")).ToList();
+            if (body.Count == 0)
+                throw new SchemaValidationException($"Structured function \"{name}\" has no body.");
+            if (body.Count > 1)
+                throw new SchemaValidationException($"Structured function \"{name}\" has more than one body root.");
+            // A `return` statement carries a VALUE (ICodeValue) — a for/if row is control flow, not a value,
+            // so it cannot be a fn's body root (only render-tree CHILDREN may be for/if rows). Caught here
+            // with a designer-facing message rather than an InvalidCastException from the ProjectNode cast below.
+            if (TextField(body[0], "kind") is "for" or "if")
+                throw new SchemaValidationException(
+                    $"Structured function \"{name}\"'s body root cannot be a for/if row — a function body must " +
+                    "return an element or an expression.");
+
+            var parameters = TextField(fn, "params")
+                .Split(',').Select(p => p.Trim()).Where(p => p.Length > 0)
+                .Select(p => new CodeFunctionParam { Name = p }).ToArray();
+
+            functions.Add(new CodeFunction
+            {
+                Name = name,
+                Params = parameters,
+                // body[0]'s kind is "" (guarded above), so ProjectNode yields either a CodeTag or a parsed
+                // expression — both ICodeValue, the value a `return` carries.
+                Body = new CodeBlock { Statements = [new CodeReturn { Value = (ICodeValue)ProjectNode(body[0]) }] },
+            });
+        }
 
         var render = new CodeFunction
         {
@@ -249,7 +320,7 @@ public static class SchemaBridge
             // which is an ICodeValue — the value a `return` carries.
             Body = new CodeBlock { Statements = [new CodeReturn { Value = (ICodeValue)ProjectNode(root) }] },
         };
-        return new InstanceUi(Render: render);
+        return new InstanceUi(Functions: functions.Count > 0 ? functions : null, Render: render);
     }
 
     // Project one MetaNode ObjectValue → an ICodeTagChild, dispatching on `kind` (S6a): "for" → a
@@ -421,15 +492,14 @@ public static class SchemaBridge
 
         var ui = CodeParse.ParseUiSection(uiText);
 
-        // Import clears the WHOLE `ui` text but only carries the render TREE to structured form — so a `ui`
-        // section that ALSO has `var`s or helper functions besides `fn render()` cannot be imported without
-        // silently dropping them. Refuse it (import nothing); such a design stays as `ui` text until the
-        // structured tree can carry vars/helpers (a later slice). This guards real designs (e.g. todo/crm,
-        // whose `ui` carries helper fns alongside render) from losing code on import.
-        if (ui.Vars is { Count: > 0 } || ui.Functions is { Count: > 0 })
+        // Import clears the WHOLE `ui` text but only carries the render TREE (+ named functions, M12 F1) to
+        // structured form — so a `ui` section that ALSO has `var`s cannot be imported without silently
+        // dropping them. Refuse it (import nothing); such a design stays as `ui` text until the structured
+        // tree can carry vars too (a later slice — the MetaVar rung).
+        if (ui.Vars is { Count: > 0 })
             throw new SchemaValidationException(
-                "This design's `ui` section has `var`s or helper functions besides `fn render()`, which import " +
-                "cannot carry to structured form yet — it stays as `ui` text.");
+                "This design's `ui` section has `var`s besides `fn render()`, which import cannot carry to " +
+                "structured form yet — it stays as `ui` text.");
 
         var render = ui.Render
             ?? throw new SchemaValidationException(
@@ -441,6 +511,34 @@ public static class SchemaBridge
         if (render.Body.Statements is not [CodeReturn { Value: CodeTag root }])
             throw new SchemaValidationException(
                 "This design's `fn render()` is not a single `return <element>` — only a plain tag tree can be imported.");
+
+        // M12 F1 — every top-level named function (besides `render`) imports to a MetaFn row, but ONLY when
+        // it is a "structured-safe" shape: a SINGLE `return` statement, whose value is not a lambda. Checked
+        // for EVERY fn BEFORE any create is built (the whole-import all-or-nothing law) — a design with even
+        // one unsupported function stays entirely as `ui` text, never a partial import.
+        var fns = ui.Functions ?? [];
+        foreach (var fn in fns)
+        {
+            // MetaFn carries no server-only flag — projecting it back would silently SHIP a server-only
+            // function to the client, exactly the downgrade ServerOnly exists to prevent. It stays as `ui`
+            // text until MetaFn can carry the flag.
+            if (fn.ServerOnly)
+                throw new SchemaValidationException(
+                    $"This design's `ui` section has a server-only function \"{fn.Name}\", which import cannot " +
+                    "carry to structured form yet — it would ship to the client. It stays as `ui` text.");
+            if (fn.Body.Statements is not [CodeReturn ret])
+                throw new SchemaValidationException(
+                    $"This design's `ui` section has a function \"{fn.Name}\" whose body is not a single " +
+                    "`return` statement, which import cannot carry to structured form yet — it stays as `ui` text.");
+            // A lambda-returning fn (`return c => …`) is a stateful setup/view component (CodeExecutor's
+            // setup/view split is a RUNTIME check on the returned VALUE, not an AST shape). Importing it would
+            // collapse the component into one opaque leaf blob with no re-import path — it stays as `ui`
+            // text until the MetaVar rung can import it properly.
+            if (ret.Value is CodeFunction)
+                throw new SchemaValidationException(
+                    $"This design's `ui` section has a function \"{fn.Name}\" that returns a lambda (a stateful " +
+                    "setup/view component), which import cannot carry to structured form yet — it stays as `ui` text.");
+        }
 
         // Build the whole changeset: a CommitCreate per MetaNode/MetaAttr keyed by a distinct NEGATIVE
         // tempId, and mutations that link each child into its parent's `children`/`elseChildren` set, each
@@ -526,6 +624,27 @@ public static class SchemaBridge
 
         var rootTempId = ImportNode(root, order: 0);
         mutations.Add(new SetLinkByPropMutation(designId, "render", rootTempId));
+
+        // M12 F1 — each validated top-level fn mints a MetaFn (name, params joined ", ", order = list
+        // index) linked into the design's `fns`, with its RETURN VALUE imported as its `body` root via the
+        // SAME ImportNode used for the render tree (a fn's body root may be a leaf expression — ImportNode
+        // already handles a non-CodeTag child as a leaf). Top-down: the MetaFn is created before its body
+        // is linked in, same GC law as the render tree.
+        var fnOrder = 0;
+        foreach (var fn in fns)
+        {
+            var fnTempId = nextTempId--;
+            creates.Add(new CommitCreate(fnTempId, "MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue(fn.Name ?? ""),
+                ["params"] = new TextValue(string.Join(", ", fn.Params.Select(p => p.Name))),
+                ["order"] = new IntValue(fnOrder++),
+            })));
+            var ret = (CodeReturn)fn.Body.Statements[0]; // shape validated above: [CodeReturn]
+            mutations.Add(new SetLinkByPropMutation(fnTempId, "body", ImportNode(ret.Value, order: 0)));
+            mutations.Add(new SetLinkByPropMutation(designId, "fns", fnTempId));
+        }
+
         // Clear the `ui` text field so the S1a gate accepts the structured render as the authority — in the
         // SAME batch, so the rows and the cleared text land together (the atomicity that unbricks a crash).
         mutations.Add(new FieldWriteMutation(designId, "ui", new TextValue("")));
