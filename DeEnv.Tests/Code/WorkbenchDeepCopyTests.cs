@@ -69,4 +69,43 @@ public sealed class WorkbenchDeepCopyTests
 
         await page.Context.CloseAsync();
     }
+
+    // Regression pin (2026-07-09, prompted by a false-alarm investigation — see the commit message): the
+    // mount hook must be a PROVABLE no-op on a page with zero workbench containers — it must never touch
+    // page render state (uiStatic), never call renderUi/commitRender, never invalidate anything. Proven
+    // structurally, not by inference: this page loads ONLY codeExec.js + workbench.js — deliberately NOT
+    // ui.js/init.js, so `uiStatic` (and every other page-render global ui.ts defines) is genuinely
+    // UNDEFINED here. mountOneWorkbenchInstance (the only path that reads uiStatic) is called exclusively
+    // from inside the `document.querySelectorAll("[instancemount]")` forEach — with zero matching elements,
+    // that callback never runs, so calling mountWorkbenchInstances() on an empty page must complete without
+    // ever referencing the undefined `uiStatic` — a ReferenceError there is the structural proof the hook
+    // touched page state it shouldn't have on a zero-container pass.
+    [Test]
+    public async Task MountWorkbenchInstances_never_touches_page_state_on_a_zero_container_page()
+    {
+        var codeExecJs = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "codeExec.js"));
+        var workbenchJs = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "workbench.js"));
+
+        var page = await SharedBrowser.NewPageAsync();
+        // No [instancemount] elements anywhere on this page.
+        await page.SetContentAsync("<!doctype html><html><body><div>plain content</div></body></html>");
+        await page.AddScriptTagAsync(new() { Content = codeExecJs });
+        await page.AddScriptTagAsync(new() { Content = workbenchJs });
+
+        var resultJson = await page.EvaluateAsync<string>("""
+            () => {
+                let err = null;
+                try { mountWorkbenchInstances(); } catch (e) { err = (e && e.message) || String(e); }
+                return JSON.stringify({ err, uiStaticDefined: typeof uiStatic !== 'undefined' });
+            }
+            """);
+        var result = JsonDocument.Parse(resultJson).RootElement;
+
+        // uiStatic genuinely never got defined on this page (ui.js/init.js were never loaded) — the
+        // precondition that makes `err == null` a real structural proof, not a coincidence.
+        await Assert.That(result.GetProperty("uiStaticDefined").GetBoolean()).IsFalse();
+        await Assert.That(result.GetProperty("err").ValueKind).IsEqualTo(JsonValueKind.Null);
+
+        await page.Context.CloseAsync();
+    }
 }
