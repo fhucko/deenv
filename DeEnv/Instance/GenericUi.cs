@@ -63,6 +63,14 @@ namespace DeEnv.Instance;
 //     candidate list is the caller's `candidates` collection (not necessarily the full extent), labeled
 //     by `labelProp`. Use it where a form needs to bind ONE reference from a known candidate set without
 //     the full RefEditor (current-label / per-candidate buttons / create-new).
+//   • ImageInput(obj, prop) — the ONE upload primitive (assets-design.md): an `<input type="file">`
+//     two-way-bound to `sys.field(obj, prop)` like any other input, but its bind is handled SPECIALLY
+//     client-side (ui.ts wireEvents/refreshAttributes): picking a file POSTs it to the instance's blob
+//     pool (ws.ts uploadBlob) and, once that resolves, writes the returned content-hash NAME back
+//     through the SAME setValue the binding already carries — so the persist (staging/history/wire) is
+//     byte-identical to any other bound scalar edit. A PUBLIC library component (the RefSelect
+//     precedent): the generic Input()'s "image" branch composes it (thumbnail + this + a Clear
+//     button), and a custom `fn render()` can compose it directly the same way.
 //   • SetTable(set, desc, setPath, columns, rowActions, createForm, onCreate, linked) — a set table: an aligned header +
 //     member rows + a `+ New` button. A whole data row is navigable — its first cell wraps the member's
 //     identity (labelProp value) in a stretched `<a class="row-link" href=nest(setPath, m)>` (CSS
@@ -173,6 +181,15 @@ public static class GenericUi
                     return <input type="checkbox" class={desc.name} checked={sys.field(obj, desc.name)} disabled={readonly}>
                 else if desc.baseType == "password"
                     return <input type="password" class={desc.name} value={sys.field(obj, desc.name)} readonly={readonly}>
+                else if desc.baseType == "image"
+                    return <div class={"image-field " + desc.name}>
+                        if sys.field(obj, desc.name) != ""
+                            <img class="image-thumb" src={sys.assetUrl(sys.field(obj, desc.name))}>
+                        if readonly != true
+                            <ImageInput obj={obj} prop={desc.name}>
+                            if sys.field(obj, desc.name) != ""
+                                <button class="image-clear" onClick={() => sys.setField(obj, desc.name, "")}>
+                                    "Clear"
                 else if desc.baseType == "enum"
                     return <select class={desc.name} value={sys.field(obj, desc.name)} disabled={readonly}>
                         <option value="">
@@ -420,6 +437,9 @@ public static class GenericUi
                                 sys.field(c, labelProp)
                 return render
 
+            fn ImageInput(obj, prop)
+                return <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" value={sys.field(obj, prop)}>
+
             fn SetTable(set, desc, setPath, columns, rowActions, createForm, onCreate, linked)
                 var state = { draft: sys.new(desc), creating: false }
                 fn startCreate()
@@ -471,6 +491,9 @@ public static class GenericUi
                                                                 sys.field(sys.field(m, p.name), sys.schema(p.target).labelProp)
                                                         else if p.baseType == "enum"
                                                             sys.humanize(sys.field(m, p.name))
+                                                        else if p.baseType == "image"
+                                                            if sys.field(m, p.name) != ""
+                                                                <img class="thumb-cell" src={sys.assetUrl(sys.field(m, p.name))}>
                                                         else
                                                             sys.field(m, p.name)
                                     else
@@ -492,6 +515,9 @@ public static class GenericUi
                                                             sys.field(sys.field(m, p.name), sys.schema(p.target).labelProp)
                                                     else if p.baseType == "enum"
                                                         sys.humanize(sys.field(m, p.name))
+                                                    else if p.baseType == "image"
+                                                        if sys.field(m, p.name) != ""
+                                                            <img class="thumb-cell" src={sys.assetUrl(sys.field(m, p.name))}>
                                                     else
                                                         sys.field(m, p.name)
                                     if rowActions != null
@@ -568,6 +594,9 @@ public static class GenericUi
                                                     boolGlyph(sys.field(m, p.name))
                                             else if p.baseType == "enum"
                                                 sys.humanize(sys.field(m, p.name))
+                                            else if p.baseType == "image"
+                                                if sys.field(m, p.name) != ""
+                                                    <img class="thumb-cell" src={sys.assetUrl(sys.field(m, p.name))}>
                                             else
                                                 sys.field(m, p.name)
                                     if desc.isScalar
@@ -792,8 +821,11 @@ public static class GenericUi
     private static CodeObject TypeDescriptor(TypeDefinition t, InstanceDescription desc)
     {
         var scalars = Scalars(t, desc);
+        // Prefer a text prop; else the first scalar EXCEPT an image (a content hash is not a label —
+        // assets-design.md). Image stays a valid Scalars() member otherwise (a DictTable value column
+        // still shows it — only labelProp candidacy excludes it, a narrower exclusion than password's).
         var labelProp = scalars.FirstOrDefault(p => p.Type == "text")?.Name
-            ?? scalars.FirstOrDefault()?.Name ?? "";
+            ?? scalars.FirstOrDefault(p => p.Type != "image")?.Name ?? "";
         return Obj(
             ("name", Text(t.Name)),
             ("labelProp", Text(labelProp)),

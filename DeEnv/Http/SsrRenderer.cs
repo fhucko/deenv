@@ -130,7 +130,8 @@ public sealed class SsrRenderer
             // (never claim freshness the render didn't actually see), which fails toward an honest-but-
             // spurious reject on a later commit, never a silent clobber.
             var storeVersion = _store.CurrentVersion;
-            var (result, title, scope, status, trail) = ExecuteRender(urlPath, context, principalUserId: principalUserId);
+            var blobBase = BlobBase(@base, assetAuthority);
+            var (result, title, scope, status, trail) = ExecuteRender(urlPath, context, principalUserId: principalUserId, blobBase: blobBase);
             var body = new StringBuilder();
             SerializeChild(result, body, @base);
 
@@ -166,7 +167,7 @@ public sealed class SsrRenderer
             var breadcrumbs = _isGeneric ? Breadcrumbs(ParsePath(urlPath), trail, @base) : "";
 
             return (UiLayout(title, breadcrumbs, body.ToString(), ScriptSafe(initData), ScriptSafe(initUi),
-                    clientId, @base, assetAuthority, _appName, _isGeneric, storeVersion),
+                    clientId, @base, assetAuthority, _appName, _isGeneric, storeVersion, blobBase),
                 status);
         }
         catch (CodeRuntimeException ex)
@@ -226,7 +227,7 @@ public sealed class SsrRenderer
     // (which owns its own chrome) or the root page. `Title` already joins them under the root label.
     private (IExecTagChild Result, string Title, ExecScope Scope, int Status, IReadOnlyList<string> Trail) ExecuteRender(
         string urlPath, ExecContext context, IReadOnlyDictionary<string, IExecValue>? sessionVars = null,
-        ExecObject? warmDb = null, int? principalUserId = null, string? harvestAction = null)
+        ExecObject? warmDb = null, int? principalUserId = null, string? harvestAction = null, string blobBase = "")
     {
         var ui = _ui!;
         // Action-miss harvest (client data layer, slice 4): opt the render into indexing its onClick handler
@@ -244,7 +245,7 @@ public sealed class SsrRenderer
         var currentUser = LoadPrincipal(principalUserId);
         var floor = new AccessFloor(_desc.Rules ?? [], currentUser);
 
-        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor, BuildCommitDiffReport, _publishPreview, BuildMergePreviewReport, BuildEvalContext);
+        var exec = new CodeExecutor(_store, _descriptors, _resolver, floor, BuildCommitDiffReport, _publishPreview, BuildMergePreviewReport, BuildEvalContext, blobBase);
         // Ship EVERY schema descriptor on first paint (not lazily on first use), so a component
         // composing sys.schema(...) over a row that appears only after a client-side add still finds
         // its descriptor in the cache instead of missing. Descriptors are static, user-data-free.
@@ -471,19 +472,30 @@ public sealed class SsrRenderer
     // too — a custom app overrides via the cascade. (Zero-config good defaults; minimal by default.)
     private static string UiLayout(
         string title, string breadcrumbs, string body, string initData, string initUi, string clientId,
-        string @base, string assetAuthority, string appName, bool isGeneric, int storeVersion) => $$"""
+        string @base, string assetAuthority, string appName, bool isGeneric, int storeVersion, string blobBase) => $$"""
         <!DOCTYPE html>
         <html lang="en">
         <head>
           <meta charset="utf-8">
           <title>{{Escape(title)}}</title>
           <style>{{ViewChromeCss}}</style>
-          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initBase="{{JsStringSafe(@base)}}";window.initAssetAuthority="{{JsStringSafe(assetAuthority)}}";window.initAppName="{{JsStringSafe(appName)}}";window.initIsGeneric={{(isGeneric ? "true" : "false")}};window.initStoreVersion={{storeVersion}};</script>
+          <script>window.initData={{initData}};window.initUi={{initUi}};window.initClientId="{{clientId}}";window.initBase="{{JsStringSafe(@base)}}";window.initAssetAuthority="{{JsStringSafe(assetAuthority)}}";window.initAppName="{{JsStringSafe(appName)}}";window.initIsGeneric={{(isGeneric ? "true" : "false")}};window.initStoreVersion={{storeVersion}};window.initBlobBase="{{JsStringSafe(blobBase)}}";</script>
           <script>(function(){var a=window.initAssetAuthority,b=window.initBase==="/"?"":window.initBase;var s=document.createElement("script");s.src=a?location.protocol+"//"+a+b+"/js":b+"/js";document.head.appendChild(s);})();</script>
         </head>
         <body>{{breadcrumbs}}<div id="app">{{body}}</div></body>
         </html>
         """;
+
+    // The blob pool's HTTP base for THIS request (assets-design.md) — mirrors EXACTLY how /ws and /js
+    // resolve (the bootstrap script above, and ws.ts's basePrefix()/connectWs()): the same asset
+    // authority + mount-base prefix, with "/assets" as the path segment instead of "/ws"/"/js". Ships
+    // to the client as window.initBlobBase (read back, byte-identical, by sys.assetUrl on both twins —
+    // codeExec.ts's execAssetUrl), computed ONCE per page load exactly like initAssetAuthority, so a
+    // client-side render/refetch never re-derives it. Slice-1 scope (docs/plans/assets-design.md): this
+    // is the DEV shape (the shared asset-port authority) — the dedicated assets.deenv.org prod domain
+    // is a follow-up slice, not built here.
+    private static string BlobBase(string @base, string assetAuthority) =>
+        (assetAuthority.Length > 0 ? $"//{assetAuthority}" : "") + (@base == "/" ? "" : @base) + "/assets";
 
     // Escape a string for embedding inside a double-quoted JS string literal in the injected
     // bootstrap (the base + asset authority). Backslash/quote and "<" (so "</script>" can't break
@@ -627,6 +639,14 @@ public sealed class SsrRenderer
         .set-remove:focus-visible, .dict-remove:focus-visible { opacity: 1; }
         .set-remove:hover, .dict-remove:hover { color: var(--danger); background: #fff0f0; border-color: var(--danger); }
         .bool-cell { font-size: 1rem; line-height: 1; color: var(--muted); }
+
+        /* Image scalar (assets-design.md): the object-form field (thumbnail + ImageInput + Clear) and
+           the small table-cell thumbnail SetTable/DictTable show instead of a raw hash string. */
+        .image-field { display: flex; flex-direction: column; align-items: flex-start; gap: 0.4rem; }
+        .image-thumb { max-width: 160px; max-height: 160px; border-radius: 4px; border: 1px solid var(--border); }
+        .image-clear { border-color: transparent; color: var(--muted); padding: 0.15rem 0.55rem; }
+        .image-clear:hover { color: var(--danger); background: #fff0f0; border-color: var(--danger); }
+        .thumb-cell { max-width: 48px; max-height: 48px; border-radius: 3px; vertical-align: middle; }
 
         .dict-error { color: var(--danger); font-size: 0.85rem; margin-top: 0.4rem; }
         .set-empty, .dict-empty { color: var(--muted); font-size: 0.9rem; margin: 0.1rem 0 0; }

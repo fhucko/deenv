@@ -19,6 +19,10 @@ public sealed class TestInstanceServer : IAsyncDisposable
     private IServerHost? _infraHost;
 
     public string BaseUrl { get; private set; } = "";
+    // The asset port's own base URL (where /ws, /js, /session, and now /assets live) — root-mounted
+    // here (no /apps/<name> prefix; see the mount-base comment below), so a test hitting the blob pool
+    // edges directly (Assets.feature) targets "<AssetBaseUrl>/assets" / "<AssetBaseUrl>/assets/<name>".
+    public string AssetBaseUrl { get; private set; } = "";
     public IInstanceStore? Store { get; private set; }
 
     public async Task StartAsync(InstanceDescription description, string dataFilePath)
@@ -32,8 +36,9 @@ public sealed class TestInstanceServer : IAsyncDisposable
         // authority host:port). The kernel-hosted path-mounted case is exercised by Kernel.feature.
         var appPort = GetFreePort();
         var assetPort = GetFreePort();
+        var blobPool = new FileBlobPool(AppPaths.BlobsDirForDataPath(dataFilePath));
         var (appApp, assetApp) = InstanceApp.Build(Store, description, mountBase: "/", assetPort: assetPort,
-            instanceId: 0, auth: TokenAuth.ForDataHome(Path.GetDirectoryName(dataFilePath)!));
+            instanceId: 0, auth: TokenAuth.ForDataHome(Path.GetDirectoryName(dataFilePath)!), blobPool: blobPool);
 
         // Bind loopback-only (127.0.0.1), not all interfaces: tests are driven by Playwright over
         // localhost, and an all-interfaces listener trips the Windows Defender Firewall prompt — which
@@ -53,6 +58,7 @@ public sealed class TestInstanceServer : IAsyncDisposable
         await _infraHost.StartAsync();
         await _appHost.StartAsync();
         BaseUrl = $"http://localhost:{appPort}";
+        AssetBaseUrl = $"http://localhost:{assetPort}";
     }
 
     public async ValueTask DisposeAsync()

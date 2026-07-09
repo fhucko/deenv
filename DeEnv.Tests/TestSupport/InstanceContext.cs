@@ -537,6 +537,20 @@ public class InstanceContext
         Db 1
     """;
 
+    // Assets slice 1 (docs/plans/assets-design.md): a single `image` scalar on Db, rendered by the
+    // default self-hosted generic UI — the generic form's "photo" field shows the upload control +
+    // thumbnail (Assets.feature's browser scenario), and the store round-trip scenarios set/read it
+    // directly through the store, bypassing the UI.
+    public static InstanceDescription AssetsDb() =>
+        InstanceDescriptionLoader.Load("""
+        types
+            Db
+                photo image
+
+        initialData
+            Db 1
+        """);
+
     // Milestone 9 (slice 2: references). Rendered by the default self-hosted generic UI.
     // `Db.lead: Person` is a reference ROUTE (/lead → the self-hosted reference editor);
     // `Note` (title scalar + `author: Person` reference) so /notes/{id} renders an objectForm
@@ -1713,6 +1727,9 @@ public class InstanceContext
 
     public TestInstanceServer? Server { get; set; }
     public string BaseUrl => Server?.BaseUrl ?? "";
+    // The asset port's base URL — where /ws, /js, /session, and the blob pool's /assets edges live
+    // (Assets.feature drives these directly).
+    public string AssetBaseUrl => Server?.AssetBaseUrl ?? "";
 
     // ── kernel host (milestone 10) ──────────────────────────────────────────────
 
@@ -1746,16 +1763,23 @@ public class InstanceContext
     // any step that drives the page can call it (not just "I navigate to …").
     public async Task EnsureServerAndBrowserAsync()
     {
+        await EnsureServerAsync();
+
+        // A fresh isolated page on the shared browser (see SharedBrowser): the browser + driver are
+        // launched once for the whole run; each scenario just gets its own context + page.
+        Page ??= await SharedBrowser.NewPageAsync(BaseUrl);
+    }
+
+    // The server-only half of EnsureServerAndBrowserAsync — for a scenario that drives the instance
+    // by raw HTTP (Assets.feature's pool edges) and has no need of a browser page.
+    public async Task EnsureServerAsync()
+    {
         if (Server == null)
         {
             Server = new TestInstanceServer();
             await Server.StartAsync(Description!, DataFilePath);
             Store = Server.Store;
         }
-
-        // A fresh isolated page on the shared browser (see SharedBrowser): the browser + driver are
-        // launched once for the whole run; each scenario just gets its own context + page.
-        Page ??= await SharedBrowser.NewPageAsync(BaseUrl);
     }
 
     // ── kernel-backed designer browser (milestone 10: the operator IDE) ─────────

@@ -64,7 +64,7 @@ public static class InstanceApp
         IInstanceStore store, InstanceDescription description, string mountBase, int assetPort,
         LiveRegistry? registry = null, IHostActions? hostActions = null, string appName = "",
         int instanceId = 0, TokenAuth? auth = null,
-        Func<ExecObject, int, ExecContext, IExecValue>? publishPreview = null)
+        Func<ExecObject, int, ExecContext, IExecValue>? publishPreview = null, IBlobPool? blobPool = null)
     {
         var sessions = new ClientSessionStore();
         auth ??= TokenAuth.Ephemeral();
@@ -88,7 +88,10 @@ public static class InstanceApp
         var asset = Layout.Create()
             .Add("ws", websocket)
             .Add("js", new BundleHandlerBuilder())
-            .Add("session", new SessionHandler(store, description, instanceId, auth));
+            .Add("session", new SessionHandler(store, description, instanceId, auth))
+            // The blob pool's upload+serve edges (docs/plans/assets-design.md) — additive, a sibling
+            // of ws/js/session, so the app tree stays reserved-path-free.
+            .Add("assets", new AssetsHandlerBuilder(blobPool ?? new NoBlobPool()));
 
         return (app, asset);
     }

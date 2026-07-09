@@ -67,8 +67,9 @@ public sealed class HostedInstance
         var idDir = Directory.GetParent(spec.DataPath)!;
         var instancesDir = idDir.Parent!;
         var dataHome = instancesDir.Parent!.FullName;
+        var blobPool = new FileBlobPool(AppPaths.BlobsDirForId(dataHome, spec.Id));
         var (appApp, assetApp) = InstanceApp.Build(store, description, mountBase, assetPort, registry, hostActions, spec.App,
-            spec.Id, TokenAuth.ForDataHome(dataHome), publishPreview);
+            spec.Id, TokenAuth.ForDataHome(dataHome), publishPreview, blobPool);
         return new HostedInstance(spec, store, appApp.Build(), assetApp.Build());
     }
 

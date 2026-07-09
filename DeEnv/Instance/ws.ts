@@ -667,6 +667,30 @@ async function persistLogout(): Promise<void> {
     await fetch(assetUrl("/session"), { method: "DELETE", credentials: "include" });
 }
 
+// uploadBlob(file): POST a File's raw bytes to the instance's blob pool upload edge
+// (docs/plans/assets-design.md), returning the pool-assigned content-addressed name
+// (`<hash>.<ext>`), or "" on any failure (network error, non-2xx, an unexpected body) — the caller
+// (ui.ts's file-input wiring) treats "" as "nothing to write" and leaves the bound field untouched.
+// `assetUrl("/assets")` is THIS file's own idiom for reaching a non-app-tree endpoint (the /session
+// precedent above) — the same base sys.assetUrl/window.initBlobBase resolves server-side, so upload
+// and display agree on one origin without a second base computation. Dormant-instance scope (slice
+// 1): no upload ticket/credentials sent — matches the floor an unauthenticated dormant write already
+// has everywhere else.
+async function uploadBlob(file: File): Promise<string> {
+    try {
+        const res = await fetch(assetUrl("/assets"), {
+            method: "POST",
+            headers: { "Content-Type": file.type || "application/octet-stream" },
+            body: file,
+        });
+        if (!res.ok) return "";
+        const data = await res.json() as { name?: unknown };
+        return typeof data.name === "string" ? data.name : "";
+    } catch {
+        return "";
+    }
+}
+
 function connectWs(): void {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     // Asset endpoints (/ws, /js) live on a separate shared port from the app's URL space, addressed by

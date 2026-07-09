@@ -1869,6 +1869,48 @@ function execSetRef(codeCall: CodeCall, scope: ExecScope, context: ExecContext):
     return { type: "nothing" };
 }
 
+// setField(obj, name, value): the DYNAMIC write companion to sys.field(obj, name) (whose two-way
+// `value={}` binding — fieldResult's setValue below — covers the common bound-input case). Exists for
+// a control that cannot use that binding, e.g. ImageInput's Clear button (GenericUi.cs): an onClick
+// writing "" is not a bound <input>, so it reaches the SAME dynamic-by-name persist path through this
+// builtin instead. Mirrors fieldResult's setValue exactly (same staging gate, same persistFieldEdit),
+// so an image write here is identical in every downstream way (staging/history/wire) to a bound edit.
+function execSetField(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const obj = executeValue(codeCall.params[0], scope, context).value;
+    const nameV = executeValue(codeCall.params[1], scope, context).value;
+    const value = executeValue(codeCall.params[2], scope, context).value;
+    if (obj.type !== "object") throw new Error("setField() expects an object.");
+    if (nameV.type !== "text") throw new Error("setField() expects a text field name.");
+    const name = nameV.value;
+    const staging = obj.id > 0 ? nearestStagingCtx(context) : null;
+    if (staging != null) {
+        let fields = staging.staged.get(obj);
+        if (fields == null) staging.staged.set(obj, fields = new Map());
+        fields.set(name, value);
+        invalidateProp(obj.id, name);
+        return { type: "nothing" };
+    }
+    const before = obj.props[name];
+    obj.props[name] = value;
+    invalidateProp(obj.id, name);
+    persistFieldEdit(obj, name, value, before);
+    return { type: "nothing" };
+}
+
+// assetUrl(name): the URL a blob pool NAME resolves to — `<blobBase>/<name>` (assets-design.md).
+// `initBlobBase` is injected by the SSR page (window.initBlobBase, set once per page load — see
+// SsrRenderer.BlobBase); read DEFENSIVELY (the ui.ts `initAppName` precedent) because it is undefined
+// in the standalone conformance harness (codeExec.js loaded with no host page), where it defaults to
+// "" — the SAME default the C# twin's bare executor uses, so the conformance case pins the
+// CONCATENATION, not a live URL.
+declare const initBlobBase: string;
+function execAssetUrl(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
+    const nameV = executeValue(codeCall.params[0], scope, context).value;
+    if (nameV.type !== "text") throw new Error("assetUrl() expects a text name.");
+    const base = typeof initBlobBase === "string" ? initBlobBase : "";
+    return { type: "text", value: base + "/" + nameV.value };
+}
+
 // The schema object crosses the wire as its ID — the server reads the object's subtree from the
 // caller's store and projects it (no object-graph serialization). The designer passes `db`, the
 // root object (id 1). A non-object schema has no id → id 0, which the server rejects.
@@ -2348,6 +2390,8 @@ function executeCall(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         case "mergePreview": return execMergePreview(codeCall, scope, context);
         case "evalContext": return execEvalContext(codeCall, scope, context);
         case "setRef": return execSetRef(codeCall, scope, context);
+        case "setField": return execSetField(codeCall, scope, context);
+        case "assetUrl": return execAssetUrl(codeCall, scope, context);
         case "publish": return execPublish(codeCall, scope, context);
         case "create": return execCreate(codeCall, scope, context);
         case "cloneInstance": return execCloneInstance(codeCall, scope, context);

@@ -28,9 +28,10 @@ public static class InstanceDescriptionQuery
     public static BaseType? ScalarBaseOf(this InstanceDescription desc, string typeName)
     {
         if (BaseTypes.IsName(typeName))
-            // `password` coerces/validates as Text (its two chokepoints key on the prop's DECLARED
-            // type name, not on this base — so the rest of the write path sees Text and never crashes).
-            return BaseTypes.Parse(typeName) == BaseType.Password ? BaseType.Text : BaseTypes.Parse(typeName);
+            // `password`/`image` coerce/validate as Text (password's two chokepoints, and every
+            // image-aware caller, key on the prop's DECLARED type name, not on this base — so the
+            // rest of the write path sees Text and never crashes).
+            return BaseTypes.Parse(typeName) is BaseType.Password or BaseType.Image ? BaseType.Text : BaseTypes.Parse(typeName);
         return desc.FindType(typeName)?.BaseType switch
         {
             BaseType.Enum => BaseType.Text,

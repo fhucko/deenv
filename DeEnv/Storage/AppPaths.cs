@@ -39,6 +39,17 @@ public static class AppPaths
     public static string LogPathForId(string baseDir, int id) => LogPathForDataPath(DataPathForId(baseDir, id));
     public static string GenesisPathForId(string baseDir, int id) => GenesisPathForDataPath(DataPathForId(baseDir, id));
 
+    // The blob pool directory riding BESIDE a data file (assets-design.md): a flat, per-instance,
+    // append-only directory of content-addressed files, a SIBLING of the JSON store — never
+    // referenced by it (JsonFileInstanceStore.Reset/Fsck are deliberately inert to it; see their
+    // comments). Derived the same way the log/genesis siblings are (by the data file's own
+    // directory), so a bare temp-file store used directly by a test still gets a well-defined,
+    // collision-free pool. Production: "instances/<id>/app-data.json" → "instances/<id>/blobs/".
+    public static string BlobsDirForDataPath(string dataPath) =>
+        Path.Combine(Path.GetDirectoryName(dataPath) ?? "", "blobs");
+
+    public static string BlobsDirForId(string baseDir, int id) => BlobsDirForDataPath(DataPathForId(baseDir, id));
+
     // Strip the data file's own extension (usually ".json") and append the sibling's, so
     // "app-data.json" → "app-data" + suffix, not "app-data.json" + suffix.
     private static string WithSuffix(string dataPath, string suffix)

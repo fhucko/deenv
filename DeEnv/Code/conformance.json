@@ -2836,6 +2836,16 @@
         "kind": "tag",
         "value": "<Missing class=\"widget\" data-node=\"-7\">hi</Missing>"
       }
+    },
+    {
+      "name": "sys.assetUrl(name) joins the (default-empty) blob base and the name — assets-design.md",
+      "text": "sys.assetUrl(\"abc123.png\")",
+      "expr": {
+        "type": "call",
+        "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "sys" }, "right": { "type": "symbol", "name": "assetUrl" } },
+        "params": [ { "type": "text", "value": "abc123.png" } ]
+      },
+      "expect": { "kind": "text", "value": "/abc123.png" }
     }
   ]
 }

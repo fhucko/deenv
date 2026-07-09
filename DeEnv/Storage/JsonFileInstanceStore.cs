@@ -1607,9 +1607,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private static string LeafTag(string typeName, InstanceDescription desc)
     {
         var b = LeafBase(typeName, desc);
-        // Enum and Password both store on disk as text (an enum value name; a password's plaintext
-        // hash — see BaseType.Password), so their tag is "text".
-        return b is BaseType.Enum or BaseType.Password ? "text" : b.ToString().ToLowerInvariant();
+        // Enum, Password, and Image all store on disk as text (an enum value name; a password's
+        // plaintext hash; an image's pool blob NAME — see BaseType.Password/Image), so their tag is
+        // "text".
+        return b is BaseType.Enum or BaseType.Password or BaseType.Image ? "text" : b.ToString().ToLowerInvariant();
     }
 
     // An unset optional decimal/date/datetime is stored as an empty-text leaf (the validator's canonical
@@ -1708,6 +1709,11 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // StoreDoc), and the per-object version map is CLEARED — every old object id is gone/reseeded, so
     // a stale entry would be meaningless (and could wrongly flag a freshly-reseeded id that happens to
     // reuse an old integer as "changed since" a version from a document this one has replaced).
+    //
+    // The blob pool (Storage/IBlobPool.cs, AppPaths.BlobsDirFor*) is a DELIBERATE NON-PARTICIPANT
+    // here: it is a sibling directory this reset never touches. Orphaned blobs after a reseed are
+    // harmless in an append-only pool (identical in kind to any other orphan) — reclaim is
+    // compaction's job (docs/plans/assets-design.md), not Reset's.
     public void Reset()
     {
         lock (_sync)
@@ -1955,6 +1961,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // different orders, which would make a naive text-compare spuriously FAIL a correct replay. A store
     // with no genesis yet (nothing has ever mutated) trivially passes: genesis-less means log-less, so
     // "replay" is a no-op and the live doc — never touched — must already equal itself.
+    //
+    // The blob pool (Storage/IBlobPool.cs) is a DELIBERATE NON-PARTICIPANT: fsck reads only genesis +
+    // log and replays into the live doc, never the sibling blobs/ directory. A dangling image hash
+    // (erasure/GC) is a legal state, not a corruption fsck should ever flag.
     public bool Fsck()
     {
         lock (_sync)
@@ -2285,6 +2295,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // A password defaults to empty text (= "no password set"); stored as text (the hash).
         // Reachable for an absent password field on a freshly-created User (BuildFields).
         BaseType.Password => new TextValue(""),
+        // An unset image defaults to empty text (= "no blob uploaded yet"); stored as text (the pool
+        // blob name). The generic UI's Input renders the empty state instead of a thumbnail.
+        BaseType.Image    => new TextValue(""),
         // Decimal/Date/DateTime have no typed "empty" value (DateOnly/decimal/DateTimeOffset are
         // non-nullable) — the canonical unset form is the empty-text leaf, exactly mirroring the
         // enum decision above. This is the SAME value a UI-cleared field stores (WsHandler.OptionalLeaf /

@@ -581,8 +581,20 @@ function applyNode(node: ChildNode, child: ExecValue, wire: EventWireStrategy = 
 //    injection (`<div onclick={db.evil}>`).
 //  - href/src is scheme-checked AFTER mountUrl (same reasoning as the SSR edge: a mount-prefixed
 //    root-relative path never carries a scheme, so only a raw absolute value can trip it).
+// An `<input type="file">` tag — ImageInput (GenericUi.cs), the ONE upload primitive. Its "value"
+// binding (`value={sys.field(obj, prop)}`) exists so the CLEAR path and the field-write plumbing
+// work exactly like any other bound scalar, but a file input's `.value` PROPERTY cannot be assigned a
+// non-empty string from script (the browser throws) — so both refreshAttributes and wireEvents must
+// special-case it rather than fall into the generic input/textarea two-way-bind path below.
+function isFileInputTag(tag: ExecTag): boolean {
+    if (tag.name !== "input") return false;
+    const t = tag.attributes["type"]?.value;
+    return t != null && t.type === "text" && t.value === "file";
+}
+
 function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
     const want = new Set<string>();
+    const isFileInput = isFileInputTag(tag);
     for (const [name, result] of Object.entries(tag.attributes)) {
         const v = result.value;
         if (v.type === "fn" || v.type === "sysFn" || v.type === "object" || v.type === "array") continue;
@@ -594,7 +606,7 @@ function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
             if (raw) { el.setAttribute("checked", ""); want.add("checked"); } else el.removeAttribute("checked");
             continue;
         }
-        if ((tag.name === "input" || tag.name === "textarea") && name === "value") {
+        if ((tag.name === "input" || tag.name === "textarea") && name === "value" && !isFileInput) {
             const text = raw == null ? "" : String(raw);
             // Only assign when the value actually differs: the re-render that follows every
             // keystroke would otherwise reset .value unconditionally and the browser jumps the
@@ -605,6 +617,9 @@ function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
             if (tag.name === "input") { el.setAttribute("value", text); want.add("value"); }
             continue;
         }
+        // A file input's bound "value" (the pool name, once uploaded) falls through to the generic
+        // path below: setAttribute only, NEVER the .value PROPERTY (assigning it a non-empty string
+        // throws — browsers refuse to script a file input's selection).
         // A <select>'s `value` is not a real attribute (it drives option-selected); it is applied to
         // the .value property in syncSelectValue, AFTER the options exist — so skip it here.
         if (tag.name === "select" && name === "value") continue;
@@ -652,9 +667,28 @@ function syncSelectValue(el: HTMLElement, tag: ExecTag): void {
 function wireEvents(el: HTMLElement, tag: ExecTag): void {
     const checked = tag.attributes["checked"];
     const value = tag.attributes["value"];
+
+    // ImageInput (GenericUi.cs) — the ONE upload primitive: a file input's "value" binding cannot use
+    // the generic oninput/coerceInputValue path (input.value is a fake path string, and file inputs
+    // fire "input" too — that would stomp the field with garbage on every pick). Instead: on "change",
+    // upload the picked file (ws.ts's uploadBlob) and write the pool's returned name back through the
+    // SAME setValue closure a normal bound input uses (sys.field's persist path — staging/history/wire
+    // identical to any other scalar edit), once the async upload resolves.
+    if (isFileInputTag(tag)) {
+        (el as HTMLInputElement).oninput = null;
+        (el as HTMLInputElement).onchange = () => {
+            const input = el as HTMLInputElement;
+            const file = input.files && input.files[0];
+            if (!file || !value?.setValue) return;
+            uploadBlob(file).then(name => {
+                if (name) value.setValue!({ type: "text", value: name });
+                renderUi();
+            });
+        };
+    }
     // Two-way binding for <input> and <textarea> (checked is input-only; a textarea binds
     // only its value — el.value is its text either way).
-    if ((tag.name === "input" || tag.name === "textarea") && (checked?.setValue || value?.setValue)) {
+    else if ((tag.name === "input" || tag.name === "textarea") && (checked?.setValue || value?.setValue)) {
         (el as HTMLInputElement).oninput = () => {
             const input = el as HTMLInputElement;
             if (checked?.setValue) checked.setValue({ type: "bool", value: input.checked });

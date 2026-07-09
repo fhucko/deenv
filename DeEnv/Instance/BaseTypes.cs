@@ -19,6 +19,9 @@ public static class BaseTypes
         // see BaseType.Password. It is its own member (not a "text" key) so NameOf stays a
         // bijection (NameOf(Text)="text", NameOf(Password)="password").
         ["password"] = BaseType.Password,
+        // `image` — a text-shaped leaf like `password` (assets-design.md); its own BaseType member
+        // so NameOf stays a bijection, mapping to Text in every value switch (see BaseType.Image).
+        ["image"] = BaseType.Image,
     };
 
     public static IReadOnlyCollection<string> Names => ByName.Keys;

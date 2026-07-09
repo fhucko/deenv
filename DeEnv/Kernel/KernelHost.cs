@@ -880,6 +880,14 @@ public sealed class KernelHost(
                 File.Copy(source.Spec.DataPath, dataPath);
         }
 
+        // Copy the source's whole blob pool (docs/plans/assets-design.md — clone = whole-pool copy, an
+        // EXPLICIT step, NOT free composition: neither branch above copies sibling dirs on its own).
+        // Runs for BOTH branches identically — even the atSeq materialization can reference OLD hashes
+        // still sitting in the source's append-only pool, so the fork needs the whole thing, not just
+        // what the current head references. Missing-dir guarded: a pre-pool instance (or one that never
+        // received an upload) has no blobs/ dir at all.
+        CopyBlobsDir(baseDir, source.Spec.Id, id);
+
         // A unique mount name (the source's name + a free "-copy[-N]" suffix) — two instances cannot
         // share `/apps/<name>`. The id keeps storage distinct regardless; this keeps the URL distinct.
         var name = UniqueName(source.Spec.App + "-copy");
@@ -907,6 +915,19 @@ public sealed class KernelHost(
             await StampPublishedCommitAsync(id, commitId, registryPath);
 
         return created;
+    }
+
+    // Copy the WHOLE blob pool from one instance id's dir to another's (docs/plans/assets-design.md —
+    // clone's explicit whole-pool-copy step). A no-op when the source has no blobs/ dir yet (pre-pool
+    // instance, or one that never received an upload). Flat, non-recursive (the pool itself is flat).
+    private static void CopyBlobsDir(string baseDir, int sourceId, int destId)
+    {
+        var srcBlobs = AppPaths.BlobsDirForId(baseDir, sourceId);
+        if (!Directory.Exists(srcBlobs)) return;
+        var destBlobs = AppPaths.BlobsDirForId(baseDir, destId);
+        Directory.CreateDirectory(destBlobs);
+        foreach (var file in Directory.GetFiles(srcBlobs))
+            File.Copy(file, Path.Combine(destBlobs, Path.GetFileName(file)), overwrite: true);
     }
 
     // Era-schema resolution (M13 slice 7): which app document was in force at `atSeq`. The latest publish

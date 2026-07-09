@@ -17,7 +17,12 @@ namespace DeEnv.Instance;
 // every value switch maps Password → Text (mirroring Enum → Text); only those two chokepoints
 // key on BaseType.Password. It is its OWN member (not a Text alias) so NameOf stays unambiguous
 // (BaseTypes round-trips `password` ↔ Password) and AppPrint reproduces it.
-public enum BaseType { Bool, Int, Decimal, Text, Date, DateTime, Object, Enum, Password }
+// Image is a leaf base-type NAME exactly like Password (same mechanics, above): its VALUE behaves
+// like Text everywhere — parser, storage, wire, interpreter — and holds a content-addressed blob
+// pool NAME (`<sha256-hex>.<ext>`), never bytes (docs/plans/assets-design.md, Storage/IBlobPool.cs).
+// No load-boundary blanking (unlike Password) — a hash is not a secret — so it needs no chokepoint
+// of its own; every value switch simply maps Image → Text (mirroring Enum/Password → Text).
+public enum BaseType { Bool, Int, Decimal, Text, Date, DateTime, Object, Enum, Password, Image }
 
 public enum Cardinality { Single, Dictionary, Set }
 

@@ -215,18 +215,22 @@ public static class InstanceDescriptionLoader
         // is ADDRESSING: it goes in the URL (`/<dict>/<key>`, so logs/history/the address bar), ships to the
         // client as the entry label, and the WS write hash chokepoint transforms field VALUES, never keys —
         // so a `password` key would be stored, addressed, AND shipped as PLAINTEXT (worse than a value, and
-        // un-blankable since the key IS the identity). `password` (BaseType.Password) is the only secret
-        // scalar today; this is the general rule a future secret type inherits. (Checked even though
-        // `BaseTypes.IsName("password")` is true above — registering it as a base NAME is what makes this
-        // explicit forbid necessary, so it is intentional, not incidental.)
+        // un-blankable since the key IS the identity). `image` is excluded from the SAME clause for a
+        // different reason: a dict key must be a stable, meaningful IDENTIFIER, and a content hash makes an
+        // unreadable, unstable one (re-uploading the same field mints a different hash — the "key" would
+        // silently change identity). Both are VALUE-only scalars; the set is a two-member allowlist, not
+        // "the password clause" reused as-is (checked even though `BaseTypes.IsName(...)` is true above —
+        // registering these as base NAMES is what makes this explicit forbid necessary).
+        var forbiddenKeyBases = new[] { BaseType.Password, BaseType.Image };
         if (prop.Cardinality == Cardinality.Dictionary
             && prop.KeyType != null
             && BaseTypes.IsName(prop.KeyType)
-            && BaseTypes.Parse(prop.KeyType) == BaseType.Password)
+            && forbiddenKeyBases.Contains(BaseTypes.Parse(prop.KeyType)))
             throw new SchemaValidationException(
-                $"Prop '{prop.Name}' on type '{typeName}' uses a 'password' dictionary key, but a password " +
-                $"is value-only: a key is addressing (it appears in the URL and ships as a label) and cannot " +
-                $"be hashed. Use a non-secret key type.");
+                $"Prop '{prop.Name}' on type '{typeName}' uses a '{prop.KeyType}' dictionary key, but a " +
+                $"{prop.KeyType} is value-only: a key is addressing (it appears in the URL and ships as a " +
+                $"label) and {prop.KeyType} values are not stable, readable identifiers. Use a non-secret, " +
+                $"non-content-addressed key type.");
 
         // A set is a collection of object references keyed by member identity, so
         // its element type must be an object type and it carries no key fields. A base

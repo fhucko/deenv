@@ -129,7 +129,7 @@ ui
     var lastPublishFor = 0
     var lastMergeNote = ""
     var lastMergeFor = 0
-    var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime", "password"]
+    var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime", "password", "image"]
     var typeKinds = ["object", "enum"]
     var cardinalities = ["single", "set", "dictionary"]
 

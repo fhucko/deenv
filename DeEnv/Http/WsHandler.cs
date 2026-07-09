@@ -1537,6 +1537,10 @@ public sealed class WsHandler
             // store — see HashPasswordFields — so this only materializes the leaf; it never stores
             // plaintext). The two chokepoints key on the declared `password` type, not this base.
             BaseType.Password => new TextValue(el.GetString() ?? ""),
+            // An image's wire value is its pool blob NAME (the hash string the upload edge returned),
+            // or "" (cleared) — text-shaped like the rest; no bytes ever cross this wire
+            // (docs/plans/assets-design.md — uploads go through the pool's own HTTP edges, never here).
+            BaseType.Image    => new TextValue(el.GetString() ?? ""),
             // An empty date/datetime means UNSET — the empty leaf, not a force-parse of "" (which threw).
             BaseType.Date     => OptionalLeaf(el.GetString() ?? "", s => new DateValue(DateOnly.Parse(s))),
             BaseType.DateTime => OptionalLeaf(el.GetString() ?? "", s => new DateTimeValue(DateTimeOffset.Parse(s))),

@@ -88,11 +88,20 @@ public sealed class CodeExecutor
     // chips), since renderTree(node) with no ctx is the byte-identical pre-eval behavior.
     private readonly Func<ExecObject, ExecContext, IExecValue>? _evalContext;
 
+    // The blob pool's HTTP base for `sys.assetUrl(name)` (assets-design.md), injected by the renderer
+    // (SsrRenderer.BlobBase — per-request, mirroring how the ws/js asset authority is threaded) so an
+    // `<img src={sys.assetUrl(...)}>` resolves without any store/floor access (an image value is a
+    // plain text field like any other). Defaults to "" for a bare/conformance executor — BOTH twins
+    // default the same way (codeExec.ts reads `initBlobBase` defensively), so the conformance case
+    // pins the CONCATENATION, not a live URL.
+    private readonly string _blobBase;
+
     public CodeExecutor(IInstanceStore? store = null, IReadOnlyDictionary<string, CodeObject>? descriptors = null,
         TypeResolver? resolver = null, AccessFloor? floor = null, Func<ExecObject, ExecObject, ExecContext, IExecValue>? commitDiff = null,
         Func<ExecObject, int, ExecContext, IExecValue>? publishPreview = null,
         Func<ExecObject, ExecObject, ExecContext, IExecValue>? mergePreview = null,
-        Func<ExecObject, ExecContext, IExecValue>? evalContext = null)
+        Func<ExecObject, ExecContext, IExecValue>? evalContext = null,
+        string blobBase = "")
     {
         _store = store;
         _descriptors = descriptors ?? new Dictionary<string, CodeObject>();
@@ -102,6 +111,7 @@ public sealed class CodeExecutor
         _publishPreview = publishPreview;
         _mergePreview = mergePreview;
         _evalContext = evalContext;
+        _blobBase = blobBase;
     }
 
     // ── statements ──────────────────────────────────────────────────────────────
@@ -522,6 +532,19 @@ public sealed class CodeExecutor
             throw new CodeRuntimeException($"Unknown field '{name.Value}'.");
         RecordPropAccess(obj, name.Value, value, context);
         return value;
+    }
+
+    // assetUrl(name): the URL a blob pool NAME (a `<hash>.<ext>` string — the value an `image` prop
+    // holds) resolves to for display/download: `<blobBase>/<name>` (assets-design.md). Pure string
+    // join over the injected `_blobBase` (see its field comment) — no store/floor access, since an
+    // image value is a plain text field like any other (sys.field(obj, name) already reads it).
+    private IExecValue ExecuteAssetUrl(CodeCall call, ExecScope scope, ExecContext context)
+    {
+        if (call.Params.Length != 1)
+            throw new CodeRuntimeException("assetUrl(name) takes one argument.");
+        if (ExecuteValue(call.Params[0], scope, context) is not ExecText name)
+            throw new CodeRuntimeException("assetUrl() expects a text name.");
+        return new ExecText { Value = _blobBase + "/" + name.Value };
     }
 
     // humanize(text): a prop name → a human label ("companyName" → "Company name").
@@ -2131,9 +2154,17 @@ public sealed class CodeExecutor
         "id" => ExecuteId(call, scope, context),
         "new" => ExecuteNew(call, scope, context),
         "resolve" => ExecuteResolve(call, scope, context),
+        "assetUrl" => ExecuteAssetUrl(call, scope, context),
         // setRef(obj, prop, value) persists on the client (the reference editor). Server-side
         // (SSR / refetch) never runs the click handler, so it no-ops.
         "setRef" => new ExecNothing(),
+        // setField(obj, name, value) — the DYNAMIC write companion to sys.field(obj, name) (whose
+        // two-way `value={}` binding covers the common bound-input case): a handler that cannot use
+        // that binding (e.g. ImageInput's Clear button, GenericUi.cs — writing "" from an onClick, not
+        // a bound <input>) reaches the same dynamic-by-name write through this builtin instead. Same
+        // no-op-on-server shape as setRef: SSR/refetch never runs a click handler, only the client
+        // twin (codeExec.ts) actually stages/persists it.
+        "setField" => new ExecNothing(),
         // publish(schema, targetId), create(schema, name), cloneInstance(sourceId), delete(targetId),
         // setDesign(schema, targetId), rename(id, name), commitDesign(design, message, migration),
         // revertCommit(design, commit), createBranch(design, name) and mergeBranch(source, target, resolutions?) are SERVER-ONLY host
