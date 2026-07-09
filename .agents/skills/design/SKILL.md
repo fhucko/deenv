@@ -36,8 +36,15 @@ presenting it as the only option.
 
 ## 3. Self-grill it
 
-Hand the drafted position to a **fresh `Agent` call on `opus`** — not the
-same context that wrote it. Adversarial distance is the point: brief it to
+Hand the drafted position to a **fresh `Agent` call on `fable`** — not the
+same context that wrote it. The grill is the project's highest-leverage
+judgment task and runs rarely (once or twice per design), so the top tier's
+2× cost over opus is trivial next to a design flaw that gets built on for
+weeks. **Exception: security-focused designs/reviews grill on `opus`** —
+Fable's cyber-domain safety classifiers can false-positive
+(`stop_reason: refusal`) on legitimate vulnerability analysis, which is
+exactly the territory deenv security grills work in.
+Adversarial distance is the point: brief it to
 try to REFUTE the position, not bless it, and to check claims against the
 actual code rather than reasoning about them in the abstract (a grill that
 never opens a file is worth less than one that verified even two or three

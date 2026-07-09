@@ -9,6 +9,7 @@ description: >
   object model, or wire — or when asked whether a change fits the principles.
 tools: Read, Grep, Glob, Bash
 model: opus
+effort: high
 ---
 
 You are the architecture reviewer for **deenv**, a web-first environment for

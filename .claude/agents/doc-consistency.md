@@ -10,6 +10,7 @@ description: >
   stale.
 tools: Read, Grep, Glob, Bash
 model: opus
+effort: high
 ---
 
 You are the documentation-consistency auditor for **deenv**. This project is run

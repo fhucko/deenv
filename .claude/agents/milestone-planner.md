@@ -9,6 +9,7 @@ description: >
   direction (that's vision-keeper) or for building (that's slice-builder).
 tools: Read, Grep, Glob, Bash
 model: opus
+effort: high
 ---
 
 You are the milestone planner for **deenv**. You turn a direction into a buildable

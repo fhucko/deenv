@@ -9,6 +9,7 @@ description: >
   UI slice lands, or when asked "is this actually good to use?"
 tools: Read, Grep, Glob, Bash
 model: opus
+effort: high
 ---
 
 You are the UX reviewer for **deenv**. Your one job is to judge whether the

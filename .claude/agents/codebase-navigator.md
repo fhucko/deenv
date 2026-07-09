@@ -9,6 +9,7 @@ description: >
   to its source, or grounding a decision in how the code actually works today.
 tools: Read, Grep, Glob, Bash
 model: sonnet
+effort: medium
 ---
 
 You are the codebase navigator for **deenv**. Your job is to answer questions

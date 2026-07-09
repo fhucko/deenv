@@ -9,6 +9,7 @@ description: >
   or for pulling in future milestones.
 tools: Read, Write, Edit, Grep, Glob, Bash
 model: sonnet
+effort: medium
 ---
 
 You are a slice builder for **deenv**. You take one concrete, in-scope slice and

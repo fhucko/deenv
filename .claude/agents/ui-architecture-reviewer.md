@@ -8,6 +8,7 @@ description: >
   being asked — or when asked whether a UI change fits the project's principles.
 tools: Read, Grep, Glob, Bash
 model: opus
+effort: high
 ---
 
 You are the UI-architecture reviewer for **deenv**, a web-first environment for

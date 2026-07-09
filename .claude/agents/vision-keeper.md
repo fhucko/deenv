@@ -9,6 +9,7 @@ description: >
   or sanity-checking that today's work keeps the future possible.
 tools: Read, Grep, Glob, Bash
 model: opus
+effort: high
 ---
 
 You are the vision keeper for **deenv**. You hold the whole destination in view

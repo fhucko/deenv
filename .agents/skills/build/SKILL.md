@@ -1,6 +1,6 @@
 ---
 name: build
-description: Drive any code change in deenv end-to-end — isolated worktree off LOCAL main, brief a background agent, verify, review, commit, FF-merge. Use PROACTIVELY whenever a concrete change is ready to build and other Codex sessions may share the tree. Args (optional): "slice" (default — Gherkin-first, slice-builder agent), "feature" (general-purpose agent, no Gherkin gate), "ui" (general-purpose agent + ui+ux reviewers).
+description: Drive any code change in deenv end-to-end — isolated worktree off LOCAL main, brief a background agent, verify, review, commit, FF-merge. Use PROACTIVELY whenever a concrete change is ready to build and other Codex sessions may share the tree. Args (optional): "slice" (default — Gherkin-first, slice-builder agent), "feature" (feature-builder agent, no Gherkin gate), "ui" (feature-builder agent + ui+ux reviewers).
 ---
 
 # Build a change
@@ -12,11 +12,16 @@ check it, and land it.
 
 **Change type** (first arg, default `slice`):
 
-| Arg | Agent | Gherkin? | Review |
-|-----|-------|----------|--------|
-| `slice` | `slice-builder` (sonnet) | Yes — write scenario first | architecture-reviewer or ui-architecture-reviewer+ux-reviewer |
-| `feature` | general-purpose (sonnet) | No | architecture-reviewer or ui-architecture-reviewer+ux-reviewer |
-| `ui` | general-purpose (sonnet) | Optional | ui-architecture-reviewer + ux-reviewer |
+| Arg | Agent | Model @ effort | Gherkin? | Review |
+|-----|-------|----------------|----------|--------|
+| `slice` | `slice-builder` | sonnet @ medium (frontmatter-pinned) | Yes — write scenario first | architecture-reviewer or ui-architecture-reviewer+ux-reviewer |
+| `feature` | `feature-builder` | sonnet @ medium (frontmatter-pinned) | No | architecture-reviewer or ui-architecture-reviewer+ux-reviewer |
+| `ui` | `feature-builder` | sonnet @ medium (frontmatter-pinned) | Optional | ui-architecture-reviewer + ux-reviewer |
+
+Model + effort live in each agent's frontmatter — never spawn these paths on a
+general-purpose agent: the Agent tool has no effort parameter, so a
+general-purpose spawn inherits the session's effort (often xhigh) and lands
+sonnet in exactly the worst-value configuration.
 
 ## 1. Isolated worktree off LOCAL main
 
@@ -35,15 +40,16 @@ See memory `env_agent_worktree_base`, `feedback_isolate_concurrent_sessions`.
 
 ## 2. Brief the agent
 
-Point it at the worktree. **Spawn it on `model: "sonnet"`** — the design lives in
+Point it at the worktree. The builder agents (`slice-builder`, `feature-builder`)
+are **pinned to sonnet @ medium effort in their frontmatter** — the design lives in
 the brief and the suite + reviewers are a hard gate, so the builder's job is mechanical
 execution. That is exactly Sonnet 5's niche: cheap bulk work at **low/medium effort**.
 Never run sonnet at high/xhigh effort — per Anthropic's own effort/cost curve, at that
 price Opus 4.8 is both cheaper and better, and Sonnet 5's tokenizer emits ~30% more
 tokens for the same text, eating the sticker discount. If a task needs high effort,
-it's an opus task. Escalate the builder to `opus` when the change lands in subtle zones
-(twin memo cache, client reconcile, negative-id remap) where a plausible-but-wrong diff
-costs more round-trips than the tier saves.
+it's an opus task. Escalate the builder to `opus` (Agent `model` override) when the
+change lands in subtle zones (twin memo cache, client reconcile, negative-id remap)
+where a plausible-but-wrong diff costs more round-trips than the tier saves.
 
 The brief must pin:
 
@@ -76,11 +82,13 @@ Trivial mechanical edits skip review. Otherwise:
 - Interpreter/parser/storage/object-model/wire change → **`architecture-reviewer`**.
 - Rendered-UI change → **`ui-architecture-reviewer` + `ux-reviewer`** together.
 
-Reviewers run on **`opus`** (user decision 2026-07-03, reversing the same-day sonnet
-default once the effort/cost data landed: adversarial review is high-effort judgment, and
-Sonnet 5 at high/xhigh costs the same as Opus 4.8 at low/medium while performing worse —
-plus the ~30% tokenizer overhead). Sonnet is acceptable only for a routine, low-stakes
-review at medium effort. Hold every review to the bar the 2026-07-03 M13 slice-1 review
+Reviewers run on **`opus` @ `high` effort, pinned in their frontmatter** (user decision
+2026-07-03, reversing the same-day sonnet default once the effort/cost data landed:
+adversarial review is high-effort judgment, and Sonnet 5 at high/xhigh costs the same as
+Opus 4.8 at low/medium while performing worse — plus the ~30% tokenizer overhead. `high`
+not xhigh: per Opus 4.8 guidance, xhigh's payoff is in agentic *execution*, not review
+verdicts). Sonnet is acceptable only for a routine, low-stakes review at medium effort.
+Fable is NOT the review tier — it's reserved for the /design grill (see that skill). Hold every review to the bar the 2026-07-03 M13 slice-1 review
 set: built and ran empirical probes, proved a cross-restart bug, killed a doc over-claim —
 a review with no probing and ungrounded verdicts is worse than none; send it back.
 Reconcile reviewer flags against decisions already settled in the conversation before
