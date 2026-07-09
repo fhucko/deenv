@@ -651,6 +651,38 @@ mutations the designer app performs in deenv code — that machinery already exi
   U1 wording corrected). Configuration names = display labels, deliberately non-unique.
   Uses order by `order` (safe — uses are ctx-staged only, never import-refetch-populated,
   the task_d7c6ed6a class needs that path). NEXT: W1a — the live-instance driver.
+- **W1a — the live-instance driver: mount + state-init render. ✅ DONE 2026-07-10**
+  (arch review SHIP-WITH-FIXES, all three applied; suite 888 effective — residuals =
+  the chipped flake pair task_43f1c4e3 + sibling-session port collisions, rate-judged).
+  **The runtime's FIRST second render root.** New DeEnv/Instance/workbench.ts: the
+  commitRender-end mount hook (idempotent; remount keys = args-signature + ctx-generation
+  + AST-availability — the last one builder-found: a just-typed arg's AST arrives with
+  unchanged text, inside the null bracket where parseMiss no-ops, so availability itself
+  must trigger); per-instance DEEP COPY of the seed graph re-minted FAKE-POSITIVE (user
+  fork — restores staging + reactive-props semantics; wsHooks-null is the safety);
+  the REAL executeComponentValue against a PRIVATE memoCache under `workbench:<useId>`
+  (setup runs, var state persists — preview IS live); the full globals bracket
+  (memoCache/slotPath/depStack/needsServerData/callDepth/wsHooks/memoBypass, restore in
+  finally). The opaque container: `instancemount` marker (parser has no hyphenated attr
+  names — data-* is unparseable in app docs), the container is a `<section>` (the
+  reconciler pools unkeyed same-tag siblings POSITIONALLY — a div next to the dynamic
+  arg-row list would corrupt on count change), applyNode skips its children; the U1
+  static preview = the honest pre-mount placeholder the driver replaces. Review fixes:
+  `nothing` views render EMPTY not "Value not available" (reachability CONFIRMED — a
+  bare if with no else legitimately yields nothing; the real store-miss signal = the
+  needsServerData delta sampled inside the bracket; pinned); updateChildren/applyNode
+  gained an EventWireStrategy param (default wireEvents; the driver passes noWiring;
+  the parallel inert builder DELETED — **this parameter IS W1b's seam**); memoBypass
+  joined the bracket. v1 boundary surfaced: store-backed builtins → the real error card
+  (.instance-error); lib components → literal elements; "host actions and saves are
+  disabled in preview" card note. Browser-pinned: a stateful Counter's configuration
+  mounts LIVE showing initial state; two configurations independent; error card real;
+  page re-renders never clobber instances. Zero-container no-op structurally pinned.
+  Methodology note (earned twice this slice): flake attribution now requires
+  INTERLEAVED RATE differentials (N runs per variant, branch vs baseline) — my own
+  single-sample differential false-accused this slice; the builder's rates exonerated
+  it and re-attributed both failures to pre-existing signatures (the chip carries them).
+  NEXT: W1b — events + Reset through the dispatch bracket (the strategy swap).
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —
