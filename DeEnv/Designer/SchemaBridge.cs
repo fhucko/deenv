@@ -241,7 +241,7 @@ public static class SchemaBridge
         return new InstanceDescription(types);
     }
 
-    // ── M12 S1a/F1: structured render tree (+ structured fns) → `ui` section ──────
+    // ── M12 S1a/F1/V1: structured render tree (+ structured fns + vars) → `ui` section ─────
     //
     // Project the MetaNode tree rooted at `root` into an InstanceUi whose `render` is `fn render()`
     // returning the root element — the exact shape a hand-written custom-UI design carries, so it flows
@@ -256,6 +256,15 @@ public static class SchemaBridge
     // Each MetaFn's body root projects through the SAME ProjectNode as the render tree; unlike render's
     // root, a fn's body root may be a LEAF (a helper returning a scalar expression) — only an ELEMENT is
     // required for render, since a page must return markup, but a helper legitimately returns a value.
+    //
+    // M12 V1 additionally projects two kinds of MetaVar rows:
+    //   • `design.vars` (top-level `ui var`s) → InstanceUi.Vars, in `order` (the printer's canonical
+    //     vars-then-fns-then-render order already holds — AppPrint.PrintUi).
+    //   • a MetaFn's OWN `vars` (its component-local persistent state) → the STATEFUL canonical shape a
+    //     hand-written setup/view component carries (confirmed against the designer's own `designEditor`
+    //     and GenericUi's ConfirmButton/KebabMenu/… — ALL twelve stateful library components use this exact
+    //     shape): `var v1 = …` … `fn render() return <view>` `return render`. A fn with an EMPTY `vars` set
+    //     keeps projecting the plain single-`return` shape (byte-identical to before this slice).
     private static InstanceUi ProjectRenderUi(ObjectValue design, ObjectValue root)
     {
         if (TextField(root, "tag") is not { Length: > 0 })
@@ -303,14 +312,79 @@ public static class SchemaBridge
                 .Split(',').Select(p => p.Trim()).Where(p => p.Length > 0)
                 .Select(p => new CodeFunctionParam { Name = p }).ToArray();
 
-            functions.Add(new CodeFunction
+            // M12 V1 — a fn's own `vars` (component-local state). Empty ⇒ the fn stays stateless (the
+            // single-`return` shape, unchanged). Non-empty ⇒ the stateful canonical shape: each var
+            // projects to a `CodeVarDec`, in `order`, followed by a nested `fn render()` wrapping the view
+            // tree, followed by `return render` (a bare symbol reference — the setup/view split IS this
+            // shape: the render closure captures the setup scope where the vars live, CodeExecutor.cs
+            // ExecuteComponentValue). `render` is RESERVED inside a stateful fn's own scope for exactly the
+            // reason it's reserved at the top level (above): ExecuteFunction unconditionally overwrites
+            // scope.Items[Name], so a state var also named "render" would be silently clobbered when the
+            // nested view fn is defined right after it.
+            var varDecs = new List<CodeVarDec>();
+            var seenVarNames = new HashSet<string>();
+            foreach (var v in OrderedObjects(fn.Fields.GetValueOrDefault("vars")))
             {
-                Name = name,
-                Params = parameters,
-                // body[0]'s kind is "" (guarded above), so ProjectNode yields either a CodeTag or a parsed
-                // expression — both ICodeValue, the value a `return` carries.
-                Body = new CodeBlock { Statements = [new CodeReturn { Value = (ICodeValue)ProjectNode(body[0]) }] },
-            });
+                var varName = TextField(v, "name");
+                if (varName is not { Length: > 0 })
+                    throw new SchemaValidationException($"A state variable on structured function \"{name}\" has an empty name.");
+                if (varName == "render")
+                    throw new SchemaValidationException(
+                        $"A state variable on structured function \"{name}\" cannot be named \"render\" — that name " +
+                        "is reserved for the component's own projected view function; it would be silently " +
+                        "overwritten when that function is defined.");
+                if (!seenVarNames.Add(varName))
+                    throw new SchemaValidationException(
+                        $"Structured function \"{name}\" has two state variables both named \"{varName}\" — rename one.");
+                var initSrc = TextField(v, "init");
+                // An EMPTY init is legitimate — `var x` with no initializer is grammar-legal (CodeVarDec.Value
+                // is nullable; CodeExecutor.ExecuteVarDec defaults it to ExecNull, a meaningful value, not an
+                // error) — so it is NOT refused; it projects to a bare `var x` (AppPrint/CodePrint already
+                // print a null Value with no `= …`).
+                varDecs.Add(new CodeVarDec { Name = varName, Value = initSrc.Length > 0 ? CodeParse.ParseExpression(initSrc) : null });
+            }
+
+            // body[0]'s kind is "" (guarded above), so ProjectNode yields either a CodeTag or a parsed
+            // expression — both ICodeValue, the value a `return` carries.
+            var view = (ICodeValue)ProjectNode(body[0]);
+            ICodeStatement[] bodyStatements;
+            if (varDecs.Count > 0)
+            {
+                var viewFn = new CodeFunction
+                {
+                    Name = "render", Params = [],
+                    Body = new CodeBlock { Statements = [new CodeReturn { Value = view }] },
+                };
+                bodyStatements = [.. varDecs, viewFn, new CodeReturn { Value = new CodeSymbol { Name = "render" } }];
+            }
+            else
+                bodyStatements = [new CodeReturn { Value = view }];
+
+            functions.Add(new CodeFunction { Name = name, Params = parameters, Body = new CodeBlock { Statements = bodyStatements } });
+        }
+
+        // M12 V1 — `design.vars` (top-level `ui var`s) → InstanceUi.Vars, in `order`. Checked AFTER the fns
+        // loop above so `seenNames` already holds every design-level fn name: SsrRenderer defines fns into
+        // the app/lib scope FIRST, then assigns vars into the SAME scope UNCONDITIONALLY (`target.Items
+        // [v.Name] = …`, no existence check) — a top-level var sharing a fn's name would silently clobber
+        // that fn's binding, the same silent-last-wins class the fn-name-collision refusals above guard.
+        var vars = new List<UiVar>();
+        var seenTopVarNames = new HashSet<string>();
+        foreach (var v in OrderedObjects(design.Fields.GetValueOrDefault("vars")))
+        {
+            var varName = TextField(v, "name");
+            if (varName is not { Length: > 0 })
+                throw new SchemaValidationException("A design-level state variable has an empty name.");
+            if (!seenTopVarNames.Add(varName))
+                throw new SchemaValidationException(
+                    $"Two design-level state variables are both named \"{varName}\" — rename one.");
+            if (seenNames.Contains(varName))
+                throw new SchemaValidationException(
+                    $"A design-level state variable is named \"{varName}\", the same as a structured function — " +
+                    "rename one; both would land in the same top-level scope and the function's binding would be " +
+                    "silently overwritten.");
+            var initSrc = TextField(v, "init");
+            vars.Add(new UiVar(varName, initSrc.Length > 0 ? CodeParse.ParseExpression(initSrc) : null));
         }
 
         var render = new CodeFunction
@@ -321,7 +395,10 @@ public static class SchemaBridge
             // which is an ICodeValue — the value a `return` carries.
             Body = new CodeBlock { Statements = [new CodeReturn { Value = (ICodeValue)ProjectNode(root) }] },
         };
-        return new InstanceUi(Functions: functions.Count > 0 ? functions : null, Render: render);
+        return new InstanceUi(
+            Vars: vars.Count > 0 ? vars : null,
+            Functions: functions.Count > 0 ? functions : null,
+            Render: render);
     }
 
     // Project one MetaNode ObjectValue → an ICodeTagChild, dispatching on `kind` (S6a): "for" → a
@@ -415,6 +492,14 @@ public static class SchemaBridge
     // too — harmless, since the canvas walk resolves a literal leaf/attr BEFORE consulting the map, so their
     // (unused) entries are never looked up. Empty ⇒ no structured render (a text-mode / generic-UI design) →
     // no sources.
+    //
+    // M12 V1 — also collects every MetaVar `init` source: `design.vars` (top-level `ui var`s) AND each
+    // `fns` row's OWN `vars` (component-local state). A var's init is an ordinary expression source exactly
+    // like a leaf/attr's — it needs an AST for the same reasons (F3 call-position evaluation of a stateful
+    // fn's projected body, were it ever exercised; today the canvas walk itself never reads `vars` at all,
+    // per ExpandFn's stated behavior — collecting the source is still correct and harmless either way, the
+    // same "collect broadly, the walk decides what to look up" stance the rest of this collector already
+    // takes for literal sources).
     public static List<string> RenderExprSources(NodeValue design)
     {
         var sources = new List<string>();
@@ -423,9 +508,21 @@ public static class SchemaBridge
             CollectExprSources(root, sources);
         if (d.Fields.TryGetValue("fns", out var fnsField))
             foreach (var fn in OrderedObjects(fnsField))
+            {
                 if (fn.Fields.TryGetValue("body", out var bodyField) && OrderedObjects(bodyField).FirstOrDefault() is { } bodyRoot)
                     CollectExprSources(bodyRoot, sources);
+                CollectVarInitSources(fn, sources);
+            }
+        CollectVarInitSources(d, sources);
         return sources;
+    }
+
+    // The `init` source of every MetaVar in `owner.vars` (a Design or a MetaFn — both carry a `vars` set),
+    // in walk order. Shared by RenderExprSources' two call sites (design-level + per-fn).
+    private static void CollectVarInitSources(ObjectValue owner, List<string> into)
+    {
+        foreach (var v in OrderedObjects(owner.Fields.GetValueOrDefault("vars")))
+            if (TextField(v, "init") is { Length: > 0 } init) into.Add(init);
     }
 
     // NOTE: this is a hand-kept PARALLEL walk of one node tree (a render root OR a fn body root — the caller,
@@ -483,11 +580,19 @@ public static class SchemaBridge
     // one, the SAME "must mirror" law as RenderExprSources/CollectExprSources above) and a mismatch
     // shows the "components changed" banner (M12 F3). Keyed by name (last-wins on a duplicate — every
     // other resolver in this file/the canvas walk already tie-breaks or refuses duplicates the same way).
-    // The fingerprint MUST cover every field BuildRenderTree/renderTreeNode itself READS on a body-tree
-    // node — a future MetaNode/MetaAttr field added to the render walk but not here would make the
-    // staleness comparison silently UNDER-detect (a real content change nothing would flag). Keep the
-    // three walks (here, CodeExecutor.FingerprintNode, codeExec.ts fingerprintNode) in the SAME slice as
-    // any render-walk field addition, the collector-law pattern RenderExprSources/CollectExprSources set.
+    // REWORDED (M12 V1 — the original wording scoped this to "fields the render walk reads", which a
+    // MetaFn's `vars` are NOT: ExpandFn's canvas expansion never reads `vars` at all, per its own stated
+    // behavior). The correct, broader obligation: the fingerprint MUST cover every field that affects the
+    // fn's PROJECTED/EVALUATED behavior — everything ProjectRenderUi folds into the fn's assembled
+    // CodeFunction (which BuildEvalContext then serializes and ships as ctx.fns for F3 call-position
+    // evaluation), not merely what the display-inert canvas walk happens to read. `vars` qualifies: a
+    // stateful fn's vars are part of its projected body (the CodeVarDec statements), so an edited init
+    // changes what a call-position evaluation of that fn would produce, even though no canvas EXPANSION
+    // ever looks at them. A future MetaNode/MetaAttr/MetaVar field added to either the render walk OR
+    // projection but not here would make the staleness comparison silently UNDER-detect (a real content
+    // change nothing would flag). Keep the three walks (here, CodeExecutor.FnFingerprint, codeExec.ts
+    // fnFingerprint) in the SAME slice as any such field addition, the collector-law pattern
+    // RenderExprSources/CollectExprSources set.
     // Field/node separators for the fingerprint string — control characters that never appear in
     // authored text, so they can't be confused with real content. Twin-identical: CodeExecutor.cs /
     // codeExec.ts use the SAME two code points (1 and 2).
@@ -513,7 +618,14 @@ public static class SchemaBridge
             var name = TextField(fn, "name");
             if (name.Length == 0) continue;
             var body = OrderedObjects(fn.Fields.GetValueOrDefault("body")).FirstOrDefault();
-            result[name] = name + FpFieldSep + TextField(fn, "params") + FpFieldSep +
+            // M12 V1 — fold `vars` (name/init/order) in right after `params`, mirroring an element node's own
+            // attrs segment below. A fn with NO vars contributes NOTHING here, so this is byte-identical to
+            // the pre-V1 fingerprint for every existing (vars-less) fn.
+            var varsPart = new StringBuilder();
+            foreach (var v in OrderedObjects(fn.Fields.GetValueOrDefault("vars")))
+                varsPart.Append(FpNodeSep).Append("V:").Append(TextField(v, "name")).Append(FpFieldSep)
+                    .Append(TextField(v, "init")).Append(FpFieldSep).Append(IntField(v, "order"));
+            result[name] = name + FpFieldSep + TextField(fn, "params") + varsPart + FpFieldSep +
                 (body != null ? FingerprintNode(body) : "");
         }
         return result;
@@ -557,6 +669,43 @@ public static class SchemaBridge
         return "L:" + TextField(node, "expr");
     }
 
+    // ── M12 V1: detect the stateful setup/view canonical statement shape ──────────────
+    //
+    // Confirmed against reality at build time (per the slice's mandate): parsed every stateful component in
+    // the designer's OWN `designEditor` (instances/1/app.deenv) and every stateful component in GenericUi's
+    // library (ConfirmButton, KebabMenu, ConflictBar, LoginForm, … — TWELVE `return render`/`return view`
+    // sites, ALL of them) through ParseUiSection. Every one uses the IDENTICAL shape:
+    //     var v1 = …            (zero or more state vars — CodeVarDec)
+    //     fn render()           (a nested, UNPARAMETERIZED named function — CodeFunction { Name: "render" })
+    //         return <view>     (its own body is a single `return`, exactly the stateless-fn shape)
+    //     return render         (a bare symbol reference to the just-declared "render" — CodeReturn { Value:
+    //                              CodeSymbol { Name: "render" } })
+    // This is NOT an artifact of the design-doc's guess (`return c => <view>`, a lambda returned directly) —
+    // that shape parses (MultilineLambda) but is used NOWHERE in the real codebase; every stateful component
+    // instead declares a NAMED nested `render` and returns the symbol. Both are runtime-equivalent (a named
+    // function still evaluates to a closure value, CodeExecutor.ExecuteFunction binds it before the return
+    // reads it), so only the shape actually written is imported this slice — the direct-lambda-return form
+    // stays refused (as it already was pre-V1), reported rather than silently guessed at.
+    //
+    // A component with EXTRA statements beyond vars/render/return — most commonly an additional named HELPER
+    // function used as an event handler (GenericUi's ConfirmButton declares `doConfirm`, KebabMenu declares
+    // `close`) — does NOT match: MetaVar has a row for a state VAR, not a nested helper FUNCTION, so there is
+    // nowhere to carry it. Those specific components (a real, non-hypothetical fraction of the library) stay
+    // `ui` text this slice — reported in the slice's own findings, not silently smoothed over.
+    private static bool TryMatchStatefulShape(ICodeStatement[] statements, out List<CodeVarDec> vars, out CodeReturn viewReturn)
+    {
+        vars = [];
+        viewReturn = null!;
+        var i = 0;
+        while (i < statements.Length && statements[i] is CodeVarDec v) { vars.Add(v); i++; }
+        if (statements.Length - i != 2) return false;
+        if (statements[i] is not CodeFunction { Name: "render", Params.Length: 0 } viewFn) return false;
+        if (viewFn.Body.Statements is not [CodeReturn vr]) return false;
+        if (statements[i + 1] is not CodeReturn { Value: CodeSymbol { Name: "render" } }) return false;
+        viewReturn = vr;
+        return true;
+    }
+
     // ── M12 S1b: `ui` render text → structured MetaNode rows (the inverse of ProjectRenderUi) ─────
     //
     // Import a design authored as `ui` TEXT (a custom `fn render()`) INTO the structured MetaNode tree
@@ -566,9 +715,10 @@ public static class SchemaBridge
     //
     // This is a ONE-TIME FRESH MINT (AdoptInto-style — new ids, no re-import identity matching): the
     // design must currently carry a `ui` render fn and an EMPTY `render` set. `foreach`/`if` render forms
-    // now import to structured `kind="for"`/`kind="if"` rows (S6a); the helper/var refusals below STAY
-    // (a later rung). Component tags (PascalCase) and html tags are BOTH just MetaNode {tag=Name}; neither
-    // is special-cased.
+    // import to structured `kind="for"`/`kind="if"` rows (S6a); top-level `var`s and a fn's stateful
+    // var+nested-render shape both import too (M12 V1, above) — anything else (a fn with helper statements
+    // beyond that shape) still refuses the WHOLE import. Component tags (PascalCase) and html tags are BOTH
+    // just MetaNode {tag=Name}; neither is special-cased.
     //
     // ATOMIC: the whole import is ONE store.CommitBatch — all creates + links + the `ui` clear persist
     // all-or-none (the store mints, links, and Saves ONCE). A mid-import crash can therefore never leave a
@@ -592,15 +742,6 @@ public static class SchemaBridge
 
         var ui = CodeParse.ParseUiSection(uiText);
 
-        // Import clears the WHOLE `ui` text but only carries the render TREE (+ named functions, M12 F1) to
-        // structured form — so a `ui` section that ALSO has `var`s cannot be imported without silently
-        // dropping them. Refuse it (import nothing); such a design stays as `ui` text until the structured
-        // tree can carry vars too (a later slice — the MetaVar rung).
-        if (ui.Vars is { Count: > 0 })
-            throw new SchemaValidationException(
-                "This design's `ui` section has `var`s besides `fn render()`, which import cannot carry to " +
-                "structured form yet — it stays as `ui` text.");
-
         var render = ui.Render
             ?? throw new SchemaValidationException(
                 "This design's `ui` section has no `fn render()` to import (a generic-UI design has no render tree).");
@@ -612,14 +753,17 @@ public static class SchemaBridge
             throw new SchemaValidationException(
                 "This design's `fn render()` is not a single `return <element>` — only a plain tag tree can be imported.");
 
-        // M12 F1 — every top-level named function (besides `render`) imports to a MetaFn row, but ONLY when
-        // it is a "structured-safe" shape: a SINGLE `return` statement, whose value is not a lambda. Checked
-        // for EVERY fn BEFORE any create is built (the whole-import all-or-nothing law) — a design with even
+        // M12 F1/V1 — every top-level named function (besides `render`) imports to a MetaFn row, but ONLY
+        // when it is a "structured-safe" shape: either the plain single-`return` (a helper or stateless
+        // component) OR the STATEFUL setup/view shape (M12 V1 — see TryMatchStatefulShape). Checked for
+        // EVERY fn BEFORE any create is built (the whole-import all-or-nothing law) — a design with even
         // one unsupported function stays entirely as `ui` text, never a partial import.
         var fns = ui.Functions ?? [];
+        var statefulShapes = new (List<CodeVarDec> Vars, CodeReturn ViewReturn)?[fns.Count];
         var seenImportNames = new HashSet<string>();
-        foreach (var fn in fns)
+        for (var fi = 0; fi < fns.Count; fi++)
         {
+            var fn = fns[fi];
             // MetaFn carries no server-only flag — projecting it back would silently SHIP a server-only
             // function to the client, exactly the downgrade ServerOnly exists to prevent. It stays as `ui`
             // text until MetaFn can carry the flag.
@@ -627,18 +771,49 @@ public static class SchemaBridge
                 throw new SchemaValidationException(
                     $"This design's `ui` section has a server-only function \"{fn.Name}\", which import cannot " +
                     "carry to structured form yet — it would ship to the client. It stays as `ui` text.");
-            if (fn.Body.Statements is not [CodeReturn ret])
-                throw new SchemaValidationException(
-                    $"This design's `ui` section has a function \"{fn.Name}\" whose body is not a single " +
-                    "`return` statement, which import cannot carry to structured form yet — it stays as `ui` text.");
-            // A lambda-returning fn (`return c => …`) is a stateful setup/view component (CodeExecutor's
-            // setup/view split is a RUNTIME check on the returned VALUE, not an AST shape). Importing it would
-            // collapse the component into one opaque leaf blob with no re-import path — it stays as `ui`
-            // text until the MetaVar rung can import it properly.
-            if (ret.Value is CodeFunction)
-                throw new SchemaValidationException(
-                    $"This design's `ui` section has a function \"{fn.Name}\" that returns a lambda (a stateful " +
-                    "setup/view component), which import cannot carry to structured form yet — it stays as `ui` text.");
+
+            if (TryMatchStatefulShape(fn.Body.Statements, out var stateVars, out var viewReturn))
+            {
+                // M12 V1 — a state var needs a unique name (within this fn) and must not be named "render":
+                // that name is reserved for the nested view fn this shape always carries (ExecuteFunction
+                // unconditionally overwrites scope.Items[Name], so a same-named var would be silently
+                // clobbered) — the same "a shape that imports must project" symmetry the projection-side
+                // refusals (ProjectRenderUi) enforce in the other direction.
+                var seenVarNames = new HashSet<string>();
+                foreach (var v in stateVars)
+                {
+                    if (v.Name == "render")
+                        throw new SchemaValidationException(
+                            $"This design's `ui` section has a function \"{fn.Name}\" with a state variable " +
+                            "named \"render\", which import cannot carry to structured form (that name is " +
+                            "reserved for the component's own nested view function) — it stays as `ui` text.");
+                    if (!seenVarNames.Add(v.Name))
+                        throw new SchemaValidationException(
+                            $"This design's `ui` section has a function \"{fn.Name}\" with two state variables " +
+                            $"both named \"{v.Name}\", which import cannot carry to structured form — it stays " +
+                            "as `ui` text.");
+                }
+                statefulShapes[fi] = (stateVars, viewReturn);
+            }
+            else
+            {
+                if (fn.Body.Statements is not [CodeReturn ret])
+                    throw new SchemaValidationException(
+                        $"This design's `ui` section has a function \"{fn.Name}\" whose body is not a single " +
+                        "`return` statement (and not the supported var-state/nested-render() component shape), " +
+                        "which import cannot carry to structured form yet — it stays as `ui` text.");
+                // A lambda-returning fn (`return c => …`, no named nested `render()`) is a stateful setup/view
+                // component in a shape this slice does not import (only the nested-`fn render()` shape is
+                // supported — see TryMatchStatefulShape's comment for why). It stays as `ui` text.
+                if (ret.Value is CodeFunction)
+                    throw new SchemaValidationException(
+                        $"This design's `ui` section has a function \"{fn.Name}\" that returns a lambda directly " +
+                        "(a stateful setup/view component in a shape import does not support — only the " +
+                        "`var …` / `fn render()` / `return render` shape is), which import cannot carry to " +
+                        "structured form yet — it stays as `ui` text.");
+                statefulShapes[fi] = null;
+            }
+
             // Review fix (arch, should-fix): MapUi (CodeParse.cs) APPENDS every non-render function without
             // deduping, so two `fn foo()` in `ui` text import fine today — minting two MetaFn rows, clearing
             // the SOURCE text — and only THEN does projection's own seenNames check refuse them, leaving a
@@ -649,6 +824,24 @@ public static class SchemaBridge
                     $"This design's `ui` section has two functions both named \"{fn.Name}\", which import " +
                     "cannot carry to structured form (every structured function needs a unique name) — it " +
                     "stays as `ui` text.");
+        }
+
+        // M12 V1 — top-level `ui var`s import to Design.vars rows. Each needs a unique name; a name
+        // colliding with a top-level fn name would collide in the SAME scope both bind into (SsrRenderer
+        // defines fns FIRST, then assigns vars UNCONDITIONALLY into the same scope — the symmetric
+        // projection-side refusal, ProjectRenderUi, catches this in the other direction).
+        var seenImportVarNames = new HashSet<string>();
+        foreach (var v in ui.Vars ?? [])
+        {
+            if (!seenImportVarNames.Add(v.Name))
+                throw new SchemaValidationException(
+                    $"This design's `ui` section has two top-level `var`s both named \"{v.Name}\", which " +
+                    "import cannot carry to structured form — it stays as `ui` text.");
+            if (seenImportNames.Contains(v.Name))
+                throw new SchemaValidationException(
+                    $"This design's `ui` section has a top-level `var` named \"{v.Name}\", the same as a " +
+                    "function — both would land in the same top-level scope and the function's binding would " +
+                    "be silently overwritten, which import cannot carry to structured form — it stays as `ui` text.");
         }
 
         // Build the whole changeset: a CommitCreate per MetaNode/MetaAttr keyed by a distinct NEGATIVE
@@ -736,14 +929,42 @@ public static class SchemaBridge
         var rootTempId = ImportNode(root, order: 0);
         mutations.Add(new SetLinkByPropMutation(designId, "render", rootTempId));
 
-        // M12 F1 — each validated top-level fn mints a MetaFn (name, params joined ", ", order = list
-        // index) linked into the design's `fns`, with its RETURN VALUE imported as its `body` root via the
-        // SAME ImportNode used for the render tree (a fn's body root may be a leaf expression — ImportNode
-        // already handles a non-CodeTag child as a leaf). Top-down: the MetaFn is created before its body
-        // is linked in, same GC law as the render tree.
-        var fnOrder = 0;
-        foreach (var fn in fns)
+        // M12 V1 — mint a MetaVar per state var, linked into `owner.vars` in order. Shared by both the
+        // top-level `ui var`s (owner = the design) and a stateful fn's own vars (owner = its MetaFn) below.
+        void LinkVars(int owner, IEnumerable<CodeVarDec> varDecs)
         {
+            var order = 0;
+            foreach (var v in varDecs)
+            {
+                var varTempId = nextTempId--;
+                creates.Add(new CommitCreate(varTempId, "MetaVar", new ObjectValue(new Dictionary<string, NodeValue>
+                {
+                    ["name"] = new TextValue(v.Name),
+                    // An uninitialized `var x` (Value == null) is grammar-legal and meaningful (ExecuteVarDec
+                    // defaults it to ExecNull) — its init prints as "" (ProjectRenderUi's mirror: an empty
+                    // init projects back to a bare `var x`, no `= …`).
+                    ["init"] = new TextValue(v.Value != null ? CodePrint.Value(v.Value) : ""),
+                    ["order"] = new IntValue(order++),
+                })));
+                mutations.Add(new SetLinkByPropMutation(owner, "vars", varTempId));
+            }
+        }
+
+        // M12 V1 — top-level `ui var`s → Design.vars, in order (validated above).
+        LinkVars(designId, ui.Vars?.Select(v => new CodeVarDec { Name = v.Name, Value = v.Value }) ?? []);
+
+        // M12 F1/V1 — each validated top-level fn mints a MetaFn (name, params joined ", ", order = list
+        // index) linked into the design's `fns`. A STATELESS fn's RETURN VALUE imports as its `body` root
+        // via the SAME ImportNode used for the render tree (a fn's body root may be a leaf expression —
+        // ImportNode already handles a non-CodeTag child as a leaf); a STATEFUL fn (M12 V1, TryMatchStateful
+        // Shape matched) additionally mints its state vars into `vars`, and its `body` root is the NESTED
+        // render fn's view value (not the outer `return render` symbol — that symbol is a projection
+        // artifact ProjectRenderUi re-synthesizes, never stored). Top-down: the MetaFn is created before its
+        // body/vars are linked in, same GC law as the render tree.
+        var fnOrder = 0;
+        for (var fi = 0; fi < fns.Count; fi++)
+        {
+            var fn = fns[fi];
             var fnTempId = nextTempId--;
             creates.Add(new CommitCreate(fnTempId, "MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
             {
@@ -751,8 +972,17 @@ public static class SchemaBridge
                 ["params"] = new TextValue(string.Join(", ", fn.Params.Select(p => p.Name))),
                 ["order"] = new IntValue(fnOrder++),
             })));
-            var ret = (CodeReturn)fn.Body.Statements[0]; // shape validated above: [CodeReturn]
-            mutations.Add(new SetLinkByPropMutation(fnTempId, "body", ImportNode(ret.Value, order: 0)));
+
+            ICodeValue view;
+            if (statefulShapes[fi] is { } shape)
+            {
+                view = shape.ViewReturn.Value;
+                LinkVars(fnTempId, shape.Vars);
+            }
+            else
+                view = ((CodeReturn)fn.Body.Statements[0]).Value; // shape validated above: [CodeReturn]
+
+            mutations.Add(new SetLinkByPropMutation(fnTempId, "body", ImportNode(view, order: 0)));
             mutations.Add(new SetLinkByPropMutation(designId, "fns", fnTempId));
         }
 

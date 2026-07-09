@@ -65,3 +65,30 @@ Feature: Import a text-authored render into structured rows (M12 S1b, extended S
     Then the import fails with a schema validation error
     And the design's `render` set is empty
     And the design's `ui` text field is unchanged
+
+  # ── M12 V1 — MetaVar rows: component state + top-level ui vars ─────────────────────────────────────
+
+  Scenario: Import converts a top-level var, a stateless component, and a stateful component into structured rows and projects back unchanged
+    Given a design whose `ui` text has a top-level var, a stateless component, and a stateful Counter component
+    When the design's render is imported to structured rows
+    Then the design's `ui` text field is empty
+    And the design's `render` set holds the structured tree
+    And the design's `vars` set holds 1 design-level state variable(s)
+    And the design's `fns` set holds 2 structured functions
+    And the imported function "NoteCard" has 0 state variable(s)
+    And the imported function "Counter" has 1 state variable(s)
+    And projecting the design yields a `ui` section equal to the canonical form of the original render
+
+  Scenario: Import refuses a design whose ui has a stateful component with an extra helper function
+    Given a design whose `ui` text is a fn render() plus a stateful component with an extra helper function
+    When the design's render is imported to structured rows
+    Then the import fails with a schema validation error
+    And the design's `render` set is empty
+    And the design's `ui` text field is unchanged
+
+  Scenario: Import refuses a design whose ui has a function with a state var and a direct lambda return
+    Given a design whose `ui` text is a fn render() plus a function with a state var and a direct lambda return
+    When the design's render is imported to structured rows
+    Then the import fails with a schema validation error
+    And the design's `render` set is empty
+    And the design's `ui` text field is unchanged

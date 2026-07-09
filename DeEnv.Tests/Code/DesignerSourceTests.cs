@@ -497,15 +497,15 @@ public sealed class DesignerSourceTests
         }
     }
 
-    // Import REFUSES a `ui` section that carries `var`s besides `fn render()`: clearing the whole `ui` text
-    // would silently DROP them, so such a design stays as text. Nothing minted, `ui` untouched. (M12 F1
-    // lifted the sibling helper-FUNCTION refusal this test used to cover — see the F1 tests below; the
-    // `var` refusal STAYS, a later rung.)
+    // M12 V1 LIFTS the old refusal this test used to cover (a `ui` section carrying top-level `var`s
+    // besides `fn render()`): a top-level var now imports to a Design.vars MetaVar row instead of blocking
+    // the whole import. Nothing is dropped; the round-trip proof lives in StructuredRenderImport.feature +
+    // DesignerSourceTests' own V1 tests below.
     [Test]
-    public async Task ImportRender_refuses_a_ui_with_vars_and_imports_nothing()
+    public async Task ImportRender_converts_a_top_level_var_to_a_MetaVar_row_and_round_trips()
     {
         var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1b-vars-" + Guid.NewGuid().ToString("N") + ".json");
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-v1-topvar-" + Guid.NewGuid().ToString("N") + ".json");
         var store = new JsonFileInstanceStore(storePath, meta);
         try
         {
@@ -517,13 +517,19 @@ public sealed class DesignerSourceTests
             store.AddToSet(NodePath.Root.Field("designs"), designId);
             AddDbType(store, designId);
 
-            var ex = await Assert.That(() => SchemaBridge.ImportRender(store, designId))
-                .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("`var`s");
+            SchemaBridge.ImportRender(store, designId);
 
             var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0); // nothing minted
-            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);            // ui untouched
+            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
+
+            var vars = OrderedByOrder((SetValue)design.Fields["vars"]).ToList();
+            await Assert.That(vars.Count).IsEqualTo(1);
+            await Assert.That(Text(vars[0], "name")).IsEqualTo("count");
+            await Assert.That(Text(vars[0], "init")).IsEqualTo("0");
+
+            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
+            await Assert.That(projected).Contains(expectedUi);
         }
         finally
         {
@@ -839,6 +845,193 @@ public sealed class DesignerSourceTests
         {
             File.Delete(storePath);
         }
+    }
+
+    // ── M12 V1: MetaVar rows — projection-side refusals ────────────────────────────────────────────
+
+    private static ObjectValue Var(string name, string init, int order = 0) =>
+        new(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name), ["init"] = new TextValue(init), ["order"] = new IntValue(order),
+        });
+
+    // A minimal design with a valid Db type + a bare `<main>` render root, ready for a `vars`/fn-`vars`
+    // fixture to be added on top. Shared by every MetaVar refusal test below.
+    private (JsonFileInstanceStore Store, string Path, NodePath DesignPath) MinimalStructuredDesign(string label)
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-v1-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["label"] = new TextValue(label), ["ui"] = new TextValue(""),
+        }));
+        store.AddToSet(NodePath.Root.Field("designs"), designId);
+        AddDbType(store, designId);
+        var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+        var main = store.CreateObject("MetaNode", Node("main"));
+        store.AddToSet(designPath.Field("render"), main);
+        return (store, storePath, designPath);
+    }
+
+    [Test]
+    public async Task ProjectDesignDocument_refuses_a_design_level_state_variable_with_an_empty_name()
+    {
+        var (store, storePath, designPath) = MinimalStructuredDesign("emptyvarname");
+        try
+        {
+            var v = store.CreateObject("MetaVar", Var("", "0"));
+            store.AddToSet(designPath.Field("vars"), v);
+
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("empty name");
+        }
+        finally { File.Delete(storePath); }
+    }
+
+    [Test]
+    public async Task ProjectDesignDocument_refuses_duplicate_design_level_state_variable_names()
+    {
+        var (store, storePath, designPath) = MinimalStructuredDesign("dupvarname");
+        try
+        {
+            store.AddToSet(designPath.Field("vars"), store.CreateObject("MetaVar", Var("count", "0", 0)));
+            store.AddToSet(designPath.Field("vars"), store.CreateObject("MetaVar", Var("count", "1", 1)));
+
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("count");
+        }
+        finally { File.Delete(storePath); }
+    }
+
+    // A design-level state var sharing a NAME with a structured function refuses: SsrRenderer defines fns
+    // into the app/lib scope first, then assigns vars UNCONDITIONALLY into the same scope — a same-named
+    // var would silently clobber the function's binding.
+    [Test]
+    public async Task ProjectDesignDocument_refuses_a_design_level_state_variable_colliding_with_a_function_name()
+    {
+        var (store, storePath, designPath) = MinimalStructuredDesign("varfncollide");
+        try
+        {
+            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("helper"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(designPath.Field("fns"), fn);
+            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"),
+                store.CreateObject("MetaNode", Node("", "\"x\"")));
+            store.AddToSet(designPath.Field("vars"), store.CreateObject("MetaVar", Var("helper", "0")));
+
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("helper");
+        }
+        finally { File.Delete(storePath); }
+    }
+
+    [Test]
+    public async Task ProjectDesignDocument_refuses_a_fn_level_state_variable_with_an_empty_name()
+    {
+        var (store, storePath, designPath) = MinimalStructuredDesign("emptyfnvarname");
+        try
+        {
+            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(designPath.Field("fns"), fn);
+            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"),
+                store.CreateObject("MetaNode", Node("", "\"x\"")));
+            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
+                store.CreateObject("MetaVar", Var("", "0")));
+
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("empty name");
+        }
+        finally { File.Delete(storePath); }
+    }
+
+    [Test]
+    public async Task ProjectDesignDocument_refuses_duplicate_fn_level_state_variable_names()
+    {
+        var (store, storePath, designPath) = MinimalStructuredDesign("dupfnvarname");
+        try
+        {
+            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(designPath.Field("fns"), fn);
+            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"),
+                store.CreateObject("MetaNode", Node("", "\"x\"")));
+            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
+                store.CreateObject("MetaVar", Var("count", "0", 0)));
+            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
+                store.CreateObject("MetaVar", Var("count", "1", 1)));
+
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("count");
+        }
+        finally { File.Delete(storePath); }
+    }
+
+    // A fn-level state var named "render" collides with the RESERVED nested view-fn name the stateful shape
+    // always projects — ExecuteFunction unconditionally overwrites scope.Items[Name], so the var would be
+    // silently clobbered the moment the nested `fn render()` is defined right after it.
+    [Test]
+    public async Task ProjectDesignDocument_refuses_a_fn_level_state_variable_named_render()
+    {
+        var (store, storePath, designPath) = MinimalStructuredDesign("fnvarrender");
+        try
+        {
+            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(designPath.Field("fns"), fn);
+            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"),
+                store.CreateObject("MetaNode", Node("", "\"x\"")));
+            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
+                store.CreateObject("MetaVar", Var("render", "0")));
+
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!))
+                .Throws<SchemaValidationException>();
+            await Assert.That(ex!.Message).Contains("reserved");
+        }
+        finally { File.Delete(storePath); }
+    }
+
+    // The POSITIVE case: a MetaFn carrying `vars` projects the STATEFUL canonical shape (var decs, a nested
+    // `fn render()`, `return render`) — the exact shape TryMatchStatefulShape/ImportRender import FROM, so
+    // this pins the fixpoint's other half. An empty `init` projects a BARE `var x` (no `= …`) — grammar-legal
+    // and meaningful (ExecuteVarDec defaults it to null), not a refusal.
+    [Test]
+    public async Task ProjectDesignDocument_projects_a_stateful_fn_to_the_canonical_setup_view_shape()
+    {
+        var (store, storePath, designPath) = MinimalStructuredDesign("statefulproj");
+        try
+        {
+            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            }));
+            store.AddToSet(designPath.Field("fns"), fn);
+            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"),
+                store.CreateObject("MetaNode", Node("", "count")));
+            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
+                store.CreateObject("MetaVar", Var("count", "0", 0)));
+            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
+                store.CreateObject("MetaVar", Var("uninitialized", "", 1)));
+
+            var projected = SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!);
+            await Assert.That(projected).Contains(
+                "fn Counter()\n        var count = 0\n        var uninitialized\n        fn render()\n            return count\n        return render\n");
+        }
+        finally { File.Delete(storePath); }
     }
 
     // A handler attribute (`onClick={() => ...}`) round-trips losslessly: import prints the lambda source

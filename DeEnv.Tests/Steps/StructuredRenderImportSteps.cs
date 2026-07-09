@@ -32,6 +32,7 @@ public sealed class StructuredRenderImportSteps
                 ui text
                 render set of MetaNode
                 fns set of MetaFn
+                vars set of MetaVar
                 types set of MetaType
             MetaNode
                 kind text
@@ -52,6 +53,11 @@ public sealed class StructuredRenderImportSteps
                 name text
                 params text
                 body set of MetaNode
+                vars set of MetaVar
+                order int
+            MetaVar
+                name text
+                init text
                 order int
             MetaType
                 name text
@@ -108,6 +114,18 @@ public sealed class StructuredRenderImportSteps
         + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
         + "    fn render()\n        return <main>\n            \"hi\"\n");
 
+    // M12 V1: a `ui` with a TOP-LEVEL var, a stateless component (NoteCard), AND a real stateful setup/view
+    // component (Counter — the canonical shape confirmed against reality: a state var, a nested unparameterized
+    // `fn render()`, `return render`) besides `fn render()`. The load-bearing shape V1's import lifts the last
+    // two refusals for.
+    [Given("a design whose `ui` text has a top-level var, a stateless component, and a stateful Counter component")]
+    public void GivenVarsAndStatefulComponentDesign() => SeedDesign(
+        "ui\n"
+        + "    var greeting = \"hi\"\n"
+        + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
+        + "    fn Counter()\n        var count = 0\n        fn render()\n            return <button onClick={() => count = count + 1}>\n                count\n        return render\n"
+        + "    fn render()\n        return <main>\n            \"hi\"\n");
+
     // Refusal fixtures: import must leave the design entirely UNTOUCHED (nothing minted, `ui` unchanged).
 
     [Given("a design whose `ui` text is a fn render\\(\\) plus a server-only function")]
@@ -121,6 +139,24 @@ public sealed class StructuredRenderImportSteps
     [Given("a design whose `ui` text is a fn render\\(\\) plus a function with multiple statements")]
     public void GivenMultiStatementDesign() => SeedDesign(
         "ui\n    fn helperLabel(active)\n        var x = active\n        return x ? \"Yes\" : \"No\"\n"
+        + "    fn render()\n        return <main>\n            \"hi\"\n");
+
+    // M12 V1: a stateful component carrying an EXTRA named helper function (`doConfirm`, GenericUi's real
+    // ConfirmButton shape) besides its state var and nested render — outside the accepted shape (MetaVar has
+    // a row for a state VAR, not a nested helper FUNCTION), so the whole import must still refuse.
+    [Given("a design whose `ui` text is a fn render\\(\\) plus a stateful component with an extra helper function")]
+    public void GivenStatefulWithExtraHelperDesign() => SeedDesign(
+        "ui\n"
+        + "    fn ConfirmButton()\n        var confirming = false\n        fn doConfirm()\n            confirming = false\n        fn render()\n            return <span>\n                \"x\"\n        return render\n"
+        + "    fn render()\n        return <main>\n            \"hi\"\n");
+
+    // M12 V1: a stateful component whose direct return is a LAMBDA (`return () => count`, no named nested
+    // `render()`) — grammar-legal but never the shape any real code uses; V1 only imports the observed
+    // nested-`fn render()` shape (a `[var, return-lambda]` pair is neither the plain single-`return` shape
+    // nor the stateful shape), so this stays refused.
+    [Given("a design whose `ui` text is a fn render\\(\\) plus a function with a state var and a direct lambda return")]
+    public void GivenStateVarWithDirectLambdaReturnDesign() => SeedDesign(
+        "ui\n    fn Counter()\n        var count = 0\n        return () => count\n"
         + "    fn render()\n        return <main>\n            \"hi\"\n");
 
     private void SeedDesign(string uiText)
@@ -253,5 +289,23 @@ public sealed class StructuredRenderImportSteps
     {
         var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
         await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(_originalUi);
+    }
+
+    // ── M12 V1: MetaVar rows ────────────────────────────────────────────────────────────────────────
+
+    [Then("the design's `vars` set holds {int} design-level state variable\\(s\\)")]
+    public async Task ThenDesignVarsCount(int count)
+    {
+        var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
+        await Assert.That(((SetValue)design.Fields["vars"]).Members.Count).IsEqualTo(count);
+    }
+
+    [Then("the imported function {string} has {int} state variable\\(s\\)")]
+    public async Task ThenImportedFunctionVarCount(string name, int count)
+    {
+        var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
+        var fns = ((SetValue)design.Fields["fns"]).Members.Select(m => (ObjectValue)m.Value).ToList();
+        var fn = fns.Single(f => ((TextValue)f.Fields["name"]).Text == name);
+        await Assert.That(((SetValue)fn.Fields["vars"]).Members.Count).IsEqualTo(count);
     }
 }

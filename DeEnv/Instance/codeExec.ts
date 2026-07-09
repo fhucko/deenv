@@ -1262,18 +1262,33 @@ function resolveFn(fns: ExecArray, tag: string, context: ExecContext): ExecObjec
 const fpFieldSep = String.fromCharCode(1);
 const fpNodeSep = String.fromCharCode(2);
 
-// A MetaFn row's content fingerprint (name, params, body tree) — twin of CodeExecutor.FnFingerprint /
+// A MetaFn row's content fingerprint (name, params, vars, body tree) — twin of CodeExecutor.FnFingerprint /
 // SchemaBridge.FnFingerprints (the server-ship counterpart, a PARALLEL walk over raw NodeValue rows).
 // Dep-recorded (readNodeText/orderedMembers), so an edit to any read field re-renders the comparison
-// same-frame. NOT a hash — see SchemaBridge's comment. The fingerprint MUST cover every field
-// renderTreeNode itself READS on a body-tree node — a future MetaNode/MetaAttr field added to the
-// render walk but not here would make staleness silently UNDER-detect; change all three walks (here,
-// CodeExecutor.FingerprintNode, SchemaBridge.FingerprintNode) in the SAME slice as any render-walk
-// field addition (the collector-law pattern).
+// same-frame. NOT a hash — see SchemaBridge's comment.
+//
+// REWORDED (M12 V1 — the original wording scoped this to "fields renderTreeNode itself reads", which a
+// MetaFn's `vars` are NOT: renderTreeNode/expandFn's canvas expansion never reads `vars` at all). The
+// correct, broader obligation: the fingerprint MUST cover every field that affects the fn's PROJECTED/
+// EVALUATED behavior (everything SchemaBridge.ProjectRenderUi folds into the fn's assembled CodeFunction,
+// which ships as ctx.fns for F3 call-position evaluation) — not merely what the display-inert canvas walk
+// happens to read. A future MetaNode/MetaAttr/MetaVar field added to either the render walk OR projection
+// but not here would make staleness silently UNDER-detect; change all three walks (here,
+// CodeExecutor.FnFingerprint, SchemaBridge.FnFingerprints) in the SAME slice as any such field addition
+// (the collector-law pattern).
 function fnFingerprint(fn: ExecObject, context: ExecContext): string {
     const name = readNodeText(fn, "name", context);
+    // M12 V1 — fold `vars` (name/init/order) in right after `params`, mirroring an element node's own
+    // attrs segment below. A fn with NO vars contributes NOTHING here, so this is byte-identical to the
+    // pre-V1 fingerprint for every existing (vars-less) fn.
+    let varsPart = "";
+    for (const v of orderedMembersOptional(fn, "vars", context)) {
+        const ord = readNodeProp(v, "order", context);
+        varsPart += fpNodeSep + "V:" + readNodeText(v, "name", context) + fpFieldSep +
+            readNodeText(v, "init", context) + fpFieldSep + String(ord.type === "int" ? ord.value : 0);
+    }
     const bodyRoot = orderedMembers(fn, "body", context)[0];
-    return name + fpFieldSep + readNodeText(fn, "params", context) + fpFieldSep +
+    return name + fpFieldSep + readNodeText(fn, "params", context) + varsPart + fpFieldSep +
         (bodyRoot != null ? fingerprintNode(bodyRoot, context) : "");
 }
 
@@ -1572,6 +1587,27 @@ function orderedMembers(node: ExecObject, setProp: string, context: ExecContext)
     // this walk and SchemaBridge's — the visible symptom would be a PERSISTENT spurious M12 F3b
     // staleness banner (the two fingerprint walks over the SAME data producing different strings).
     // Flagged, not fixed — no reachable case exists yet.
+    return objs.sort((a, b) => a.order - b.order).map(p => p.o);
+}
+
+// Like orderedMembers, but tolerant of an ABSENT set prop — returns empty instead of throwing (the same
+// "kind" precedent readNodeTextOptional sets, M12 V1). A real MetaFn/Design row always carries `vars` (M5
+// defaults an empty set on load), so this only matters for a hand-built conformance fixture that predates
+// V1 and omits the field entirely — reading it as "no state vars" (not an error) is correct: a fn with no
+// declared `vars` behaves exactly as it always has. Twin of CodeExecutor.OrderedMembersOptional.
+function orderedMembersOptional(node: ExecObject, setProp: string, context: ExecContext): ExecObject[] {
+    const staged = nearestStagedValue(node, setProp, context);
+    let raw: ExecValue | undefined = staged;
+    if (staged != null) recordProp(node.id, setProp);
+    else if (node.props[setProp] != null) { recordProp(node.id, setProp); raw = node.props[setProp]; }
+    if (raw == null || raw.type !== "array") return [];
+    recordMember(raw.id);
+    const objs: { o: ExecObject; order: number }[] = [];
+    for (const item of raw.items)
+        if (item.value.type === "object") {
+            const ord = readNodeProp(item.value, "order", context);
+            objs.push({ o: item.value, order: ord.type === "int" ? ord.value : 0 });
+        }
     return objs.sort((a, b) => a.order - b.order).map(p => p.o);
 }
 

@@ -1107,19 +1107,33 @@ public sealed class CodeExecutor
     private const char FpFieldSep = (char)1;
     private const char FpNodeSep = (char)2;
 
-    // A MetaFn row's content fingerprint (name, params, body tree) — twin of SchemaBridge.FnFingerprints
-    // (the server-ship counterpart, a PARALLEL walk over raw NodeValue rows) and codeExec.ts's
-    // fnFingerprint. Dep-recorded (ReadNodeText/OrderedMembers), so an edit to any read field re-renders
-    // the comparison same-frame. NOT a hash — see SchemaBridge's comment. The fingerprint MUST cover
-    // every field BuildRenderTree itself READS on a body-tree node — a future MetaNode/MetaAttr field
-    // added to the render walk but not here would make staleness silently UNDER-detect; change all three
-    // walks (here, SchemaBridge.FingerprintNode, codeExec.ts fingerprintNode) in the SAME slice as any
-    // render-walk field addition (the collector-law pattern).
+    // A MetaFn row's content fingerprint (name, params, vars, body tree) — twin of SchemaBridge.
+    // FnFingerprints (the server-ship counterpart, a PARALLEL walk over raw NodeValue rows) and codeExec.
+    // ts's fnFingerprint. Dep-recorded (ReadNodeText/OrderedMembers), so an edit to any read field
+    // re-renders the comparison same-frame. NOT a hash — see SchemaBridge's comment.
+    //
+    // REWORDED (M12 V1 — the original wording scoped this to "fields BuildRenderTree itself reads", which
+    // a MetaFn's `vars` are NOT: BuildRenderTree/ExpandFn's canvas expansion never reads `vars` at all).
+    // The correct, broader obligation: the fingerprint MUST cover every field that affects the fn's
+    // PROJECTED/EVALUATED behavior (everything SchemaBridge.ProjectRenderUi folds into the fn's assembled
+    // CodeFunction, which ships as ctx.fns for F3 call-position evaluation) — not merely what the
+    // display-inert canvas walk happens to read. A future MetaNode/MetaAttr/MetaVar field added to either
+    // the render walk OR projection but not here would make staleness silently UNDER-detect; change all
+    // three walks (here, SchemaBridge.FnFingerprints, codeExec.ts fnFingerprint) in the SAME slice as any
+    // such field addition (the collector-law pattern).
     private string FnFingerprint(ExecObject fn, ExecContext context)
     {
         var name = ReadNodeText(fn, "name", context);
+        // M12 V1 — fold `vars` (name/init/order) in right after `params`, mirroring an element node's own
+        // attrs segment below. A fn with NO vars contributes NOTHING here, so this is byte-identical to
+        // the pre-V1 fingerprint for every existing (vars-less) fn.
+        var varsPart = new System.Text.StringBuilder();
+        foreach (var v in OrderedMembersOptional(fn, "vars", context))
+            varsPart.Append(FpNodeSep).Append("V:").Append(ReadNodeText(v, "name", context)).Append(FpFieldSep)
+                .Append(ReadNodeText(v, "init", context)).Append(FpFieldSep)
+                .Append(ReadNodeProp(v, "order", context) is ExecInt vo ? vo.Value : 0);
         var body = OrderedMembers(fn, "body", context).FirstOrDefault();
-        return name + FpFieldSep + ReadNodeText(fn, "params", context) + FpFieldSep +
+        return name + FpFieldSep + ReadNodeText(fn, "params", context) + varsPart + FpFieldSep +
             (body != null ? FingerprintNode(body, context) : "");
     }
 
@@ -1350,6 +1364,36 @@ public sealed class CodeExecutor
         // built out of id order could disagree between this walk and SchemaBridge's — the visible symptom
         // would be a PERSISTENT spurious M12 F3b staleness banner (the two fingerprint walks over the
         // SAME data producing different strings). Flagged, not fixed — no reachable case exists yet.
+        var keyed = new List<(ExecObject Obj, int Order)>();
+        foreach (var item in set.Items)
+        {
+            RecordScannedItem(set, item, context);
+            if (item.Value is ExecObject o)
+                keyed.Add((o, ReadNodeProp(o, "order", context) is ExecInt n ? n.Value : 0));
+        }
+        return keyed.OrderBy(p => p.Order).Select(p => p.Obj).ToList();
+    }
+
+    // Like OrderedMembers, but tolerant of an ABSENT set prop — returns empty instead of throwing (the same
+    // "kind" precedent ReadNodeTextOptional sets, M12 V1). A real MetaFn/Design row always carries `vars`
+    // (M5 defaults an empty set on load), so this only matters for a hand-built conformance fixture that
+    // predates V1 and omits the field entirely — reading it as "no state vars" (not an error) is correct:
+    // a fn with no declared `vars` behaves exactly as it always has.
+    private List<ExecObject> OrderedMembersOptional(ExecObject node, string setProp, ExecContext context)
+    {
+        IExecValue? raw = null;
+        if (NearestStagedValue(node, setProp, context) is { } staged)
+        {
+            RecordPropAccess(node, setProp, staged, context);
+            raw = staged;
+        }
+        else if (node.Props.TryGetValue(setProp, out var value))
+        {
+            RecordPropAccess(node, setProp, value, context);
+            raw = value;
+        }
+        if (raw is not ExecArray set) return [];
+        RecordMembership(set, context);
         var keyed = new List<(ExecObject Obj, int Order)>();
         foreach (var item in set.Items)
         {

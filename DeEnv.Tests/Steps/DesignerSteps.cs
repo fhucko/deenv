@@ -1423,6 +1423,63 @@ public sealed class DesignerSteps(InstanceContext ctx)
             o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == name
             && o.Fields.TryGetValue("params", out var p) && p is DeEnv.Storage.TextValue pt && pt.Text == paramsText));
 
+    // ── M12 V1 — MetaVar rows: component state + top-level ui vars ────────────────────────────────
+
+    // A convertible render whose `ui` carries a REAL stateful setup/view component (`Counter()`, the
+    // canonical shape confirmed against the designer's own designEditor + GenericUi's library: a state
+    // var, a nested `fn render()`, `return render`) besides `fn render()` — the shape V1's import lifts
+    // the lambda-return refusal for. Same authoring plumbing as the other convertible-render fixtures.
+    private const string StatefulComponentConvertibleRender =
+        "ui\n"
+        + "    fn Counter()\n        var count = 0\n        fn render()\n            return <button onClick={() => count = count + 1}>\n                count\n        return render\n"
+        + "    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a convertible render with a stateful Counter component into the design's UI")]
+    public async Task WhenAuthorStatefulComponentRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(StatefulComponentConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "counterme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == StatefulComponentConvertibleRender));
+    }
+
+    // The imported state var shows inside its component's `.fn-vars` area — a `name` input and an `init`
+    // input, both two-way-bound to the MetaVar row (the SAME shape the render tree's own leaf/attr editing
+    // already uses).
+    [Then("the Components area shows a component named {string} with a state var named {string} and init {string}")]
+    public async Task ThenComponentsAreaShowsStateVar(string fnName, string varName, string init) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.components-section .fn-card')].some(c => {{ " +
+            $"const fn = c.querySelector('input.fn-name'); if (fn == null || fn.value !== {JsString(fnName)}) return false; " +
+            $"return [...c.querySelectorAll('.fn-vars .var-row')].some(r => {{ " +
+            $"const n = r.querySelector('input.var-name'), i = r.querySelector('input.var-init'); " +
+            $"return n != null && i != null && n.value === {JsString(varName)} && i.value === {JsString(init)}; }}); }})");
+
+    [When("I edit component {string}'s state var {string} init to {string}")]
+    public async Task WhenEditStateVarInit(string fnName, string varName, string newInit) =>
+        await ctx.Page!.Locator(
+            $".components-section .fn-card:has(input.fn-name[value=\"{fnName}\"]) " +
+            $".fn-vars .var-row:has(input.var-name[value=\"{varName}\"]) input.var-init").FillAsync(newInit);
+
+    [Then("the stored state var {string} has init {string}")]
+    public async Task ThenStoredStateVarInit(string varName, string init) =>
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaVar").Values.Any(o =>
+            o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == varName
+            && o.Fields.TryGetValue("init", out var i) && i is DeEnv.Storage.TextValue it && it.Text == init));
+
+    [When("I click the add-design-state-var button")]
+    public async Task WhenClickAddDesignStateVar() =>
+        await ctx.Page!.Locator(".design-editor .design-state-section button.add-var").ClickAsync();
+
+    [Then("the design's State area shows {int} state var row(s)")]
+    public async Task ThenDesignStateAreaShowsCount(int count) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelectorAll('.design-editor .design-state-section .var-row').length === {count}");
+
+    [When("I remove the last design-level state var")]
+    public async Task WhenRemoveLastDesignStateVar() =>
+        await ctx.Page!.Locator(".design-editor .design-state-section .var-row button.remove-var").Last.ClickAsync();
+
     // ── M12 F2 — canvas expansion of design-component invocations ─────────────────────────────────
 
     // A convertible render that both DEFINES `fn NoteCard(note)` (single-return `<li>{note.title}</li>`)

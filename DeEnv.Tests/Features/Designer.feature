@@ -1370,6 +1370,33 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the stored component "NoteCard" has params "note, extra"
     And the stored render for "compme" projects to a valid design document
 
+  # ── M12 V1 — MetaVar rows: component state + top-level ui vars ───────────────────────────────────
+  #
+  # F1 imported stateless helpers/components; V1 lifts the LAST two import refusals: top-level `ui var`s
+  # AND a real stateful setup/view component (`var state`, a nested `fn render()`, `return render` — the
+  # canonical shape confirmed against the designer's own designEditor and every stateful GenericUi library
+  # component). The imported state var shows in the component's own card (name + init inputs, the SAME
+  # idiom the render tree's leaf/attr editing already uses); editing its init persists into the MetaVar row
+  # and the projected document. A design-level "State" area (Design.vars) offers the same add/remove idiom
+  # for top-level state.
+  @m12 @single-user
+  Scenario: A stateful component's state var shows in its card, editing its init persists, and a design-level State var can be added
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "counterme"
+    And I edit the design "counterme"
+    And I expand the Advanced code disclosure
+    And I author a convertible render with a stateful Counter component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the Components area shows a component named "Counter" with a state var named "count" and init "0"
+    When I edit component "Counter"'s state var "count" init to "1"
+    Then the stored state var "count" has init "1"
+    When I click the add-design-state-var button
+    Then the design's State area shows 1 state var row
+    When I remove the last design-level state var
+    Then the design's State area shows 0 state var rows
+
   # ── M12 F1 review fix (ui-arch + ux) — the from-scratch "+ Component" flow, no import ────────────
   #
   # F1's OWN browser test above only exercised a component that arrived via IMPORT (already has a body

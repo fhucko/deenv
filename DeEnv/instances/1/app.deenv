@@ -17,6 +17,7 @@ types
         ui text
         render set of MetaNode
         fns set of MetaFn
+        vars set of MetaVar
         types set of MetaType
         origin int
     MetaNode
@@ -38,6 +39,11 @@ types
         name text
         params text
         body set of MetaNode
+        vars set of MetaVar
+        order int
+    MetaVar
+        name text
+        init text
         order int
     MetaType
         name text
@@ -93,6 +99,8 @@ access
     MetaAttr
         * where currentUser.role == "Admin"
     MetaFn
+        * where currentUser.role == "Admin"
+    MetaVar
         * where currentUser.role == "Admin"
     User
         * where currentUser.role == "Admin"
@@ -156,7 +164,7 @@ ui
         node.attrs.add({ name: "class", value: "\"\"", order: orderForAppend(node.attrs) })
 
     fn addFn(design)
-        design.fns.add({ name: "", params: "", order: orderForAppend(design.fns), body: [] })
+        design.fns.add({ name: "", params: "", order: orderForAppend(design.fns), body: [], vars: [] })
 
     fn fnNameHint(design, f)
         if f.name == ""
@@ -165,6 +173,27 @@ ui
             return "'render' is reserved"
         if design.fns.where(o => sys.id(o) != sys.id(f) && o.name == f.name).any(o => true)
             return "duplicate name"
+        return ""
+
+    fn addVar(coll)
+        coll.add({ name: "", init: "", order: orderForAppend(coll) })
+
+    fn fnVarNameHint(f, v)
+        if v.name == ""
+            return "name required"
+        if v.name == "render"
+            return "'render' is reserved"
+        if f.vars.where(o => sys.id(o) != sys.id(v) && o.name == v.name).any(o => true)
+            return "duplicate name"
+        return ""
+
+    fn designVarNameHint(design, v)
+        if v.name == ""
+            return "name required"
+        if design.vars.where(o => sys.id(o) != sys.id(v) && o.name == v.name).any(o => true)
+            return "duplicate name"
+        if design.fns.where(f => f.name == v.name).any(f => true)
+            return "same as a function name"
         return ""
 
     fn addRow(coll)
@@ -419,11 +448,29 @@ ui
                         <div class="render-tree">
                             foreach n in design.render
                                 <renderNodeEditor node={n}>
+                        <div class="design-state-section">
+                            <h2 class="design-state-heading">
+                                "State"
+                            <p class="design-state-caption">
+                                "Top-level state variables, available anywhere in this design's render and components."
+                            foreach v in design.vars
+                                <div class="var-row">
+                                    <input class="var-name" value={v.name} placeholder={"varName"}>
+                                    <span class="var-eq">
+                                        "="
+                                    <input class="var-init" value={v.init} placeholder={"initial value expression"}>
+                                    <button class="remove-var" onClick={() => design.vars.remove(v)}>
+                                        "×"
+                                    if designVarNameHint(design, v) != ""
+                                        <span class="var-name-hint">
+                                            designVarNameHint(design, v)
+                            <button class="add-var" onClick={() => addVar(design.vars)}>
+                                "+ State var"
                         <div class="components-section">
                             <h2 class="components-heading">
                                 "Components"
                             <p class="components-caption">
-                                "Reusable functions: a component (a body root that is an element) or a helper (a body root that is an expression). Params are comma-separated."
+                                "Reusable functions: a component (a body root that is an element) or a helper (a body root that is an expression). Params are comma-separated. A component may also carry its own persistent state variables."
                             foreach f in design.fns
                                 <div class="fn-card">
                                     <div class="fn-head">
@@ -438,6 +485,20 @@ ui
                                     if fnNameHint(design, f) != ""
                                         <span class="fn-name-hint">
                                             fnNameHint(design, f)
+                                    <div class="fn-vars">
+                                        foreach v in f.vars
+                                            <div class="var-row">
+                                                <input class="var-name" value={v.name} placeholder={"stateVarName"}>
+                                                <span class="var-eq">
+                                                    "="
+                                                <input class="var-init" value={v.init} placeholder={"initial value expression"}>
+                                                <button class="remove-var" onClick={() => f.vars.remove(v)}>
+                                                    "×"
+                                                if fnVarNameHint(f, v) != ""
+                                                    <span class="var-name-hint">
+                                                        fnVarNameHint(f, v)
+                                        <button class="add-var" onClick={() => addVar(f.vars)}>
+                                            "+ state var"
                                     <div class="fn-body">
                                         if f.body.any(x => true)
                                             foreach r in f.body
