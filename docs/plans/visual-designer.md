@@ -366,6 +366,24 @@ mutations the designer app performs in deenv code — that machinery already exi
   until that interpreter tolerance fix lands (projection order unaffected: OrderedObjects
   sorts). NEXT: F2 canvas expansion → FG call-depth guard → F3 call-position eval (per
   structured-fns.md).
+- **F2 — canvas expansion of design-component invocations. ✅ DONE 2026-07-09** (arch
+  review SHIP-WITH-FIXES, the one fix applied: TS shadow check `in`→own-key — a component
+  named like an Object.prototype member would have twin-diverged; suite 824 effective,
+  conformance 166 both runners, 4 new cases: param-binding trio, bindings-shadow,
+  duplicate tie-break, depth-cap chip). `sys.renderTree(node[, ctx[, fns]])` (arity
+  discrete set [1,2,3], three lockstep sites); the walk resolves an element tag against
+  the fns rows — bindings SHADOW fns (E1), duplicate names tie-break last-in-`order` —
+  and EXPANDS: attrs evaluate under the CALLER's bindings, params bind BY NAME faithful
+  to runtime BindParams (missing → null; present-but-unevaluable → UNBOUND → body chips —
+  the one designed divergence; extra attrs drop; reserved `key` never binds — builder
+  caught that one itself; children dropped as runtime does), body walks with params-ONLY
+  bindings (no caller leak), splice = ExecArray w/ invocation-row id (callee-only
+  selection, decided), depth cap 32 + 10k node budget → honest component chip.
+  Collector walks fns bodies same-slice (invariant test extended). Browser-pinned: the
+  canvas shows real expanded `<li>` content and a component-body edit repaints every
+  expansion SAME-FRAME. Reviewer-accepted without a case: empty (non-null) fns set is
+  logic-proven a no-op; fn-RENAME liveness rests on the shared recordProp mechanism
+  (scenario pins body-edit). NEXT: FG interpreter call-depth guard, then F3.
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —
