@@ -1,8 +1,14 @@
-// The component workbench's live-instance driver (M12 W1a — docs/plans/component-workbench.md). The
+// The component workbench's live-instance driver (M12 W1a/W1b — docs/plans/component-workbench.md). The
 // designer's per-configuration preview card (app.deenv, the U1 `.use-preview` container) is mounted with
 // a REAL running instance of the previewed component: the SAME client runtime, in a sandbox, rather than
 // a second engine — "preview = live" (the design's own mandate). Global script, sibling to ui.ts/
 // codeExec.ts; runs entirely client-side (SSR never mounts an instance — see mountWorkbenchInstances doc).
+//
+// W1b (events + Reset): W1a mounted content INERT (noWiring) because the isolation bracket only wrapped
+// RENDER — a click fires from the DOM long after that bracket restored the page's real globals. W1b adds
+// the DISPATCH-time bracket (runInstanceHandler) every instance event routes through, a matching wiring
+// strategy (instanceWiring, mirroring wireEvents' own click/two-way-binding coverage), and Reset (a
+// framework-owned control bar the driver renders inside the container — see ensureInstanceContent).
 //
 // GROUNDED STRICTLY in the existing exported primitives the design's trace names: executeComponentValue
 // (the real component-invocation path, M11), the evalCtxExpr/bindCtxFns/lookupCtxAst idiom (the isolated-
@@ -30,6 +36,14 @@ interface WorkbenchInstance {
     argsSignature: string; // the use's current (name, value) args — an edit remounts (the page-side signature; see the design doc's grill fix)
     ctxKey: string; // the evalContext cache key this instance was built from — a Refresh mints a new one, so this doubles as the "ctx generation"
     cache: Map<string, ClientCacheEntry>; // this instance's PRIVATE memo cache — invisible to the page's uiStatic.cache, slotState shipping, and GC sweep by construction (not installed there)
+    // W1b: the sandbox's OWN id-minting counter, persisted across this instance's WHOLE lifetime (setup +
+    // every later render/dispatch), not rebuilt per pass. A handler-triggered re-render reuses the SAME
+    // `cache` (so component state / reactive-props memo entries survive) — reusing a FRESH {value:0}
+    // counter alongside that reused cache would let a later render re-mint an id (e.g. -1) already alive
+    // in state a prior render built, corrupting anything keying off object identity (foreach reconciliation
+    // keys, objectArgKey). A remount/Reset mints a fresh counter (paired with a fresh cache), matching
+    // "fresh mount" semantics exactly.
+    lastId: { value: number };
 }
 
 // Keyed by the use row's object id (the SAME id the container's instancemount attribute carries).
@@ -150,16 +164,14 @@ function findEvalContextEntry(designId: number): { key: string; entry: ClientCac
     return null;
 }
 
-// The W1a wiring strategy for content the driver paints: NONE (arch review fix 2 — compose the REAL
-// reconciler, updateChildren/applyNode, over the mounted content instead of forking a parallel inert
-// builder; the EventWireStrategy parameter both functions now take IS this seam). W1a is inert DOM by
-// design (scope boundary): a click handler captured during the sandboxed render closes over the SANDBOX's
-// scope (its fake-positive db, its private cache), but by the time a user could click it the isolation
-// bracket has long since restored the PAGE's real wsHooks — wiring it live here would let a click slip a
-// real host action / wire mutation past the sandbox (the design doc's grill finding: "the isolation
-// bracket must wrap HANDLER DISPATCH, not just the mount"). W1b swaps this strategy for one that dispatches
-// through that bracket; until then, content renders, nothing is clickable.
-function noWiring(): void { /* W1a: content renders, nothing is clickable */ }
+// The INERT wiring strategy: nothing is clickable. W1a used this for ALL mounted content (a click
+// handler captured during the sandboxed render closes over the SANDBOX's scope, but by the time a user
+// could click it the render bracket has long since restored the PAGE's real wsHooks — wiring it live
+// there would let a click slip a real host action / wire mutation past the sandbox). W1b adds
+// instanceWiring (below) — the real, DISPATCH-bracketed strategy — for a successfully-rendered instance's
+// OWN content; this stays reserved for the one case that must NEVER be interactive: an `.instance-error`
+// card (a broken render has no live scope worth wiring into, mount OR handler-triggered alike).
+function noWiring(): void { /* content renders, nothing is clickable */ }
 
 // A `.instance-error` node — the v1 fidelity boundary made HONEST, not silent (design doc): a component
 // whose render throws (a store-backed builtin's "Value not available" against this fresh, unseeded private
@@ -186,14 +198,19 @@ function instanceErrorTag(message: string): ExecTag {
 // rendering nothing — so labeling EVERY `nothing` "Value not available" was a real preview≠live divergence
 // (a spurious error card where the page shows blank). The two cases are disambiguated with the ONE signal
 // that is actually load-bearing: `needsServerData`. Its ONLY setter is memoize's VNA-swallow catch
-// (codeExec.ts:452) — a legitimate no-value return never touches it. The caller (mountOneWorkbenchInstance)
+// (codeExec.ts:452) — a legitimate no-value return never touches it. The caller (runInstanceRenderPass)
 // resets it to false immediately before calling this function, so reading it HERE — still inside the
 // caller's try, before its finally restores the saved value — samples exactly THIS render's own
 // contribution: true only if some store-backed builtin actually missed somewhere in this render (top-level
 // or nested), never for an honest empty view. Any OTHER thrown error (a different message — "Variable not
 // found", FG's depth guard, a genuine bug) propagates normally, uncaught by memoize, straight to this
 // try/catch — its message rides through verbatim, unaffected by this disambiguation.
-function renderWorkbenchInstance(fn: ExecObject, use: ExecObject, ctx: ExecObject): { tags: ExecTagChild[]; errorMessage: string | null } {
+// `lastId` (W1b): the sandbox's id-minting counter for THIS render — defaults to a fresh {value:0} (the
+// original W1a behavior, and what the unit tests below still exercise directly), but the driver always
+// passes the INSTANCE's own persisted counter (WorkbenchInstance.lastId) so a handler-triggered re-render
+// mints ids that stay unique against everything the instance's setup/prior renders already built (see the
+// WorkbenchInstance.lastId doc comment).
+function renderWorkbenchInstance(fn: ExecObject, use: ExecObject, ctx: ExecObject, lastId: { value: number } = { value: 0 }): { tags: ExecTagChild[]; errorMessage: string | null } {
     const fnName = propText(fn, "name");
     const evalScope: ExecScope = { items: {}, parent: null };
     const seedDb = ctx.props["db"];
@@ -219,7 +236,7 @@ function renderWorkbenchInstance(fn: ExecObject, use: ExecObject, ctx: ExecObjec
         if (ast != null) attributes.push({ name, value: ast });
     }
     const tag: CodeTag = { type: "tag", name: fnName, attributes, children: [] };
-    const sandboxContext: ExecContext = { lastId: { value: 0 }, ambient: null };
+    const sandboxContext: ExecContext = { lastId, ambient: null };
 
     try {
         const view = executeComponentValue(tag, component, evalScope, sandboxContext);
@@ -234,43 +251,67 @@ function renderWorkbenchInstance(fn: ExecObject, use: ExecObject, ctx: ExecObjec
     }
 }
 
-// Mount (or, on a real change, remount) ONE workbench container. Idempotent: an already-current instance
-// (same args signature, same ctx generation) is left completely alone — its live DOM subtree is the
-// driver's own, untouched by this pass, matching the opaque-container contract applyNode's skip enforces.
-function mountOneWorkbenchInstance(useId: number, container: HTMLElement): void {
+// Locate a use row's fn/use/ctx and its ctx generation key — shared by mount, Reset, and a
+// handler-triggered re-render (all three need to know "what would this instance render against RIGHT
+// NOW"). A plain lookup, no side effects; the caller decides what to do with the result.
+function locateInstanceInputs(useId: number): { fn: ExecObject; use: ExecObject; ctx: ExecObject; ctxKey: string } | null {
     const located = findUseRow(useId);
-    if (located == null) return; // the row isn't in the live graph yet (mid-edit) or was just removed — nothing to mount
-    const { design, fn, use } = located;
-    const found = findEvalContextEntry(design.id);
-    if (found == null || found.entry.result.type !== "object") return; // ctx not ready this pass — retry next render
+    if (located == null) return null; // the row isn't in the live graph yet (mid-edit) or was just removed
+    const found = findEvalContextEntry(located.design.id);
+    if (found == null || found.entry.result.type !== "object") return null; // ctx not ready this pass — retry next render
     const ctx = found.entry.result;
-    if (ctxError(ctx) != null) return; // the design itself is invalid (BuildEvalContext's degrade arm) — nothing sane to preview
+    if (ctxError(ctx) != null) return null; // the design itself is invalid (BuildEvalContext's degrade arm) — nothing sane to preview
+    return { fn: located.fn, use: located.use, ctx, ctxKey: found.key };
+}
 
-    const argsSignature = useArgsSignature(use, ctx);
-    const existing = workbenchInstances.get(useId);
-    if (existing != null && existing.argsSignature === argsSignature && existing.ctxKey === found.key) return; // unchanged — leave mounted
+// The Reset control + the reconciled-content wrapper, built ONCE per container (idempotent — the driver
+// owns this subtree from here on, per applyNode's opaque-container skip, so the SSR/U1-static pre-mount
+// body is cleared exactly once, on the instance's very first mount pass, and never rebuilt on a later
+// one). Returns the inner content element every render (mount, remount, Reset, or a handler-triggered
+// repaint) reconciles the previewed component's OWN rendered tags into — kept structurally SEPARATE from
+// the toolbar so updateChildren's positional tag-name matching can never confuse the Reset button with
+// the component's own root element (Counter's root literally IS a `<button>`).
+function ensureInstanceContent(container: HTMLElement, useId: number): HTMLElement {
+    const existing = container.querySelector(":scope > .workbench-instance-content") as HTMLElement | null;
+    if (existing != null) return existing;
+    container.textContent = ""; // replace the static pre-mount body (the U1 sys.renderTree walk / SSR) — this runs synchronously inside the SAME commitRender that painted it (see mountWorkbenchInstances), so it is never actually seen on screen
+    const toolbar = document.createElement("div");
+    toolbar.className = "workbench-instance-toolbar";
+    const resetBtn = document.createElement("button");
+    resetBtn.type = "button";
+    resetBtn.className = "workbench-instance-reset";
+    resetBtn.textContent = "Reset";
+    // Framework chrome, not app.deenv markup (app docs have no host-DOM/comment syntax to author this in
+    // anyway) — a plain DOM handler, entirely outside the reconciler/event-wiring machinery below.
+    resetBtn.onclick = () => resetWorkbenchInstance(useId, container);
+    toolbar.appendChild(resetBtn);
+    container.appendChild(toolbar);
+    const content = document.createElement("div");
+    content.className = "workbench-instance-content";
+    container.appendChild(content);
+    return content;
+}
 
+// Run ONE render pass for a mounted instance and reconcile the result into its container's content
+// wrapper. Shared by every path that (re)paints an instance — mountOneWorkbenchInstance and
+// resetWorkbenchInstance (a FRESH `instance` — new cache, new lastId) and rerenderWorkbenchInstance (the
+// SAME `instance` reused, after a handler dispatch) — so the isolation bracket is defined in exactly ONE
+// place (the M12 W1a review's own template; W1b's dispatch bracket in runInstanceHandler extends it,
+// never duplicates it).
+function runInstanceRenderPass(useId: number, fn: ExecObject, use: ExecObject, ctx: ExecObject, instance: WorkbenchInstance, container: HTMLElement): void {
     // The isolation bracket (evalCtxExpr's idiom, extended from "one expression" to "one real component
     // render"): save every module global a render touches, install the sandbox's own, restore
     // UNCONDITIONALLY (finally) so a driver render can never leak into — or inherit stale posture from —
-    // the enclosing page render. wsHooks nulled: no host action/save/login can escape the sandbox (W1a has
-    // no handlers yet, but the synthesized tag's ATTRIBUTE evaluation and the component's own render body
-    // already run real Code, so the same safety net applies from this slice on). A private, fresh Map (not
-    // reused across a remount — a remount IS a fresh mount, per the design's Reset-shaped "REMOUNTS that
-    // instance") gives the real component-state persistence executeComponentValue's own memoize provides,
-    // scoped entirely to this instance. memoBypass forced false (M12 W1a review, arch fix 3): saved/
-    // restored like every other global here rather than relying on the unstated "commitRender never runs
-    // with memoBypass true" invariant — evalCtxExpr's own idiom (the template this bracket extends) already
-    // saves it, and W1b's dispatch-time bracket inherits this same template, so the bracket's completeness
-    // should hold by construction, not by an assumption about its caller.
+    // the enclosing page render. wsHooks nulled: no host action/save/login can escape the sandbox. memoCache
+    // is the INSTANCE's own persistent Map (never a fresh one here — a fresh Map belongs only to a real
+    // mount/remount/Reset, which mints a brand-new `instance` before calling this).
     const savedCache = memoCache;
     const savedSlotPath = slotPath.slice();
     const savedNeedsServerData = needsServerData;
     const savedCallDepth = callDepth;
     const savedWsHooks = wsHooks;
     const savedMemoBypass = memoBypass;
-    const cache = new Map<string, ClientCacheEntry>();
-    memoCache = cache;
+    memoCache = instance.cache;
     slotPath.length = 0;
     slotPath.push("workbench:" + useId); // the private cache's own slot prefix — never read outside this Map
     needsServerData = false;
@@ -280,7 +321,7 @@ function mountOneWorkbenchInstance(useId: number, container: HTMLElement): void 
     depStack.push({ props: [], members: [], vars: [] }); // a throwaway frame: recordProp/recordMember calls during the render land here, discarded below — never the enclosing page's frame
     let result: { tags: ExecTagChild[]; errorMessage: string | null };
     try {
-        result = renderWorkbenchInstance(fn, use, ctx);
+        result = renderWorkbenchInstance(fn, use, ctx, instance.lastId);
     } finally {
         depStack.pop();
         memoCache = savedCache;
@@ -292,15 +333,196 @@ function mountOneWorkbenchInstance(useId: number, container: HTMLElement): void 
         memoBypass = savedMemoBypass;
     }
 
-    workbenchInstances.set(useId, { argsSignature, ctxKey: found.key, cache });
+    const content = ensureInstanceContent(container, useId);
     const children: ExecTagChild[] = result.errorMessage != null ? [instanceErrorTag(result.errorMessage)] : result.tags;
-    // Compose the REAL reconciler over the mounted content (arch fix 2) — the same updateChildren/applyNode
-    // the page uses, wired with `noWiring` (W1a's inert-DOM policy) instead of forked attrs/children/text
-    // logic. This RECONCILES against whatever is currently in `container` (the U1 static pre-mount body on
-    // a first mount, or this instance's own prior live content on a remount) rather than blindly clearing
-    // it — safe because the static walk never stamps `.key` (S6a/S6b's badges/chips are all unkeyed, matched
-    // purely by tag name) and refreshAttributes always fully reconciles a reused node's attributes either way.
-    updateChildren(container, children, noWiring);
+    // Compose the REAL reconciler over the mounted content — the same updateChildren/applyNode the page
+    // uses. An error card is never wired live (noWiring — nothing sane to click into); a real view is
+    // wired through instanceWiring (W1b), the dispatch-bracketed strategy below. This RECONCILES against
+    // whatever is currently in `content` (empty on a first mount/remount, or this instance's own prior
+    // live content on a handler-triggered repaint) rather than blindly clearing it — the reused-node
+    // machinery (data-key, refreshAttributes) is what makes an <input>'s uncommitted keystroke/focus
+    // survive its own repaint.
+    updateChildren(content, children, result.errorMessage != null ? noWiring : instanceWiring(useId, container));
+}
+
+// Mount (or, on a real change, remount) ONE workbench container. Idempotent: an already-current instance
+// (same args signature, same ctx generation) is left completely alone — its live DOM subtree is the
+// driver's own, untouched by this pass, matching the opaque-container contract applyNode's skip enforces.
+function mountOneWorkbenchInstance(useId: number, container: HTMLElement): void {
+    const inputs = locateInstanceInputs(useId);
+    if (inputs == null) return;
+    const { fn, use, ctx, ctxKey } = inputs;
+
+    const argsSignature = useArgsSignature(use, ctx);
+    const existing = workbenchInstances.get(useId);
+    if (existing != null && existing.argsSignature === argsSignature && existing.ctxKey === ctxKey) return; // unchanged — leave mounted
+
+    // A fresh sandbox: a fresh private cache (component-state persistence, scoped entirely to this
+    // instance — never reused across a remount, since a remount IS a fresh mount, per the design's
+    // Reset-shaped "REMOUNTS that instance") and a fresh id-minting counter (WorkbenchInstance.lastId).
+    const instance: WorkbenchInstance = { argsSignature, ctxKey, cache: new Map(), lastId: { value: 0 } };
+    workbenchInstances.set(useId, instance);
+    runInstanceRenderPass(useId, fn, use, ctx, instance, container);
+}
+
+// Reset (component-workbench.md's user-picked semantics): DISPOSE the whole sandbox — the private
+// memoCache entry (component state) AND, since the setup closure it lived in is what held the ONLY
+// reference to the deep-copied db graph, the db copy too — and remount fresh from the shipped context.
+// "As first rendered", predictably: identical to a first mount, because it IS one (a brand-new `instance`,
+// exactly like mountOneWorkbenchInstance mints for a real remount).
+function resetWorkbenchInstance(useId: number, container: HTMLElement): void {
+    workbenchInstances.delete(useId);
+    const inputs = locateInstanceInputs(useId);
+    if (inputs == null) return; // the row is gone — nothing to remount; the next mount pass will clean up the container
+    const { fn, use, ctx, ctxKey } = inputs;
+    const instance: WorkbenchInstance = { argsSignature: useArgsSignature(use, ctx), ctxKey, cache: new Map(), lastId: { value: 0 } };
+    workbenchInstances.set(useId, instance);
+    runInstanceRenderPass(useId, fn, use, ctx, instance, container);
+}
+
+// Re-render an ALREADY-MOUNTED instance in place, reusing its EXISTING private cache (and lastId) — the
+// driver's OWN re-render, called after a dispatched handler completes successfully (runInstanceHandler),
+// never the page's global renderUi. Reusing the same cache/lastId (as opposed to mountOneWorkbenchInstance's
+// fresh ones) is what makes a handler's state/db writes STICK across the repaint: the component's setup
+// already ran and is cache-resident (memoize hits it without re-invoking), so only its VIEW recomputes,
+// over the SAME captured scope the handler just mutated.
+function rerenderWorkbenchInstance(useId: number, container: HTMLElement): void {
+    const instance = workbenchInstances.get(useId);
+    if (instance == null) return; // torn down mid-dispatch (Reset raced the click, or the use row was removed) — nothing to repaint
+    const inputs = locateInstanceInputs(useId);
+    if (inputs == null) return;
+    runInstanceRenderPass(useId, inputs.fn, inputs.use, inputs.ctx, instance, container);
+}
+
+// The context a dispatched handler (or a select's onChange fn) runs under: the INSTANCE's own persisted
+// id-minting counter (see WorkbenchInstance.lastId), no ambient (the v1 fidelity boundary — path/
+// currentUser/ambient reads are real "Variable not found" errors until per-use ambients land, same as a
+// render's own sandboxContext).
+function instanceHandlerContext(useId: number): ExecContext {
+    const instance = workbenchInstances.get(useId);
+    return { lastId: instance?.lastId ?? { value: 0 }, ambient: null };
+}
+
+// THE dispatch bracket (M12 W1b — component-workbench.md's "grill's core fix"). Every DOM event a mounted
+// instance's content fires runs through here, never straight off the DOM: the MOUNT/render bracket
+// (runInstanceRenderPass) only wraps RENDER — it has long since restored the page's real globals by the
+// time a user could click anything — so dispatch needs its OWN install. Reuses the INSTANCE's persistent
+// cache + lastId (not fresh ones: a handler's writes must land in the SAME state graph the mounted view
+// already reads, and a fresh lastId would risk re-minting an id already alive in that graph — see the
+// WorkbenchInstance.lastId doc comment). memoBypass is forced TRUE here (unlike the render bracket's
+// false) — a handler is side-effecting, exactly like the page's own runWithMemoBypass.
+//
+// wsHooks nulled is what makes this safe for sys.login/sys.logout specifically: NEITHER is id-gated
+// (codeExec.ts execLogin/execLogout call sendLogin/sendLogout unconditionally) — a login-form component
+// mounted in a card would otherwise REALLY re-bind the page's session on a click. The fake-positive
+// sandbox db ids (the design's user fork) give staging/reactive-props FIDELITY; they provide NO isolation
+// on their own. This bracket is the isolation, and it is why it is non-optional on every dispatch, not
+// just the ones a component happens to look side-effecting.
+//
+// The sandbox's own thin transaction wrapper (component-workbench.md: instance handlers do NOT reuse
+// runHandlerTransaction, which is page-entangled five ways — the wire journal it rolls back through,
+// uiStatic.cache stale-flag snapshots, the global renderUi, and an action-miss path that would ship an
+// irreproducible `workbench:<useId>/…` slot to the server and block the GC sweep awaiting a reply). There
+// is no journal to roll back here anyway: wsHooks null means propValueChange/setRef/arrayAdd/etc. never
+// even reach a journal-pushing hook (they no-op at `wsHooks?.…`), so nothing was ever staged to undo. v1's
+// STATED divergence (design doc, not silently accepted): a throw — a genuine bug or a VNA alike, "action:
+// undefined" honesty either way — renders the REAL error into the card and leaves whatever partial writes
+// already landed in place. Reset is the recovery, not an automatic rollback.
+function runInstanceHandler(useId: number, container: HTMLElement, body: () => void): void {
+    const instance = workbenchInstances.get(useId);
+    if (instance == null) return; // torn down mid-dispatch (Reset, a removed use row, navigation away) — nothing to run
+
+    const savedCache = memoCache;
+    const savedSlotPath = slotPath.slice();
+    const savedNeedsServerData = needsServerData;
+    const savedCallDepth = callDepth;
+    const savedWsHooks = wsHooks;
+    const savedMemoBypass = memoBypass;
+    memoCache = instance.cache;
+    slotPath.length = 0;
+    slotPath.push("workbench:" + useId);
+    needsServerData = false;
+    callDepth = 0;
+    wsHooks = null;
+    memoBypass = true;
+    depStack.push({ props: [], members: [], vars: [] });
+    let errorMessage: string | null = null;
+    try {
+        body();
+    } catch (e) {
+        errorMessage = e instanceof Error ? e.message : String(e);
+    } finally {
+        depStack.pop();
+        memoCache = savedCache;
+        slotPath.length = 0;
+        slotPath.push(...savedSlotPath);
+        needsServerData = savedNeedsServerData;
+        callDepth = savedCallDepth;
+        wsHooks = savedWsHooks;
+        memoBypass = savedMemoBypass;
+    }
+
+    if (errorMessage != null) {
+        // Render the real error directly (never through a normal re-render, which — over honestly partial
+        // state — could itself throw a DIFFERENT, more confusing error, or silently succeed and hide that
+        // something went wrong this click). noWiring: an error card is never interactive.
+        const content = ensureInstanceContent(container, useId);
+        updateChildren(content, [instanceErrorTag(errorMessage)], noWiring);
+        return;
+    }
+    rerenderWorkbenchInstance(useId, container);
+}
+
+// The W1b wiring strategy for a successfully-rendered instance's content: mirrors wireEvents' OWN coverage
+// (ui.ts wireEvents — two-way input/textarea/select bindings + onClick) but dispatches every event through
+// runInstanceHandler (the sandbox bracket above) instead of the page's runHandlerTransaction/renderUi.
+// Re-render on completion is the driver's OWN (rerenderWorkbenchInstance, via runInstanceHandler) — never
+// the global renderUi, which would re-render the whole PAGE from the page's own (unrelated) state.
+function instanceWiring(useId: number, container: HTMLElement): EventWireStrategy {
+    return (el, tag) => {
+        const checked = tag.attributes["checked"];
+        const value = tag.attributes["value"];
+        // Two-way binding for <input> and <textarea>, exactly like wireEvents.
+        if ((tag.name === "input" || tag.name === "textarea") && (checked?.setValue || value?.setValue)) {
+            (el as HTMLInputElement).oninput = () => {
+                const input = el as HTMLInputElement;
+                runInstanceHandler(useId, container, () => {
+                    if (checked?.setValue) checked.setValue({ type: "bool", value: input.checked });
+                    else if (value?.setValue) value.setValue(coerceInputValue(input.value, value.value));
+                });
+            };
+        } else {
+            (el as HTMLInputElement).oninput = null;
+        }
+
+        // Two-way binding for <select>, plus its optional onChange fn (RefSelect's applyPick shape) —
+        // both run through the SAME bracket, like wireEvents' onClick/onChange do through
+        // runHandlerTransaction on the page.
+        const onChange = tag.attributes["onChange"]?.value;
+        if (tag.name === "select" && (value?.setValue || (onChange != null && onChange.type === "fn"))) {
+            const fn = onChange != null && onChange.type === "fn" ? onChange : null;
+            (el as HTMLSelectElement).onchange = () => {
+                const select = el as HTMLSelectElement;
+                runInstanceHandler(useId, container, () => {
+                    if (value?.setValue) value.setValue(coerceInputValue(select.value, value.value));
+                    if (fn != null) callFunction(fn, instanceHandlerContext(useId), []);
+                });
+            };
+        } else if (tag.name === "select") {
+            (el as HTMLSelectElement).onchange = null;
+        }
+
+        const onClick = tag.attributes["onClick"]?.value;
+        if (onClick != null && onClick.type === "fn") {
+            const fn = onClick;
+            el.onclick = (e: MouseEvent) => {
+                e.stopPropagation();
+                runInstanceHandler(useId, container, () => { callFunction(fn, instanceHandlerContext(useId), []); });
+            };
+        } else {
+            el.onclick = null;
+        }
+    };
 }
 
 // The mount hook, called once at the END of commitRender (ui.ts — the syncBreadcrumbs precedent: the

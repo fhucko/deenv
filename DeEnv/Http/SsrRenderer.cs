@@ -807,6 +807,17 @@ public sealed class SsrRenderer
         .workbench-note { color: var(--muted); font-size: 0.76rem; font-style: italic; margin: 0.3rem 0; }
         .instance-error { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface));
           border-left: 3px solid var(--danger); padding: 0.45rem 0.7rem; border-radius: 4px; font-size: 0.85rem; }
+        /* M12 W1b — the live-instance driver's OWN control bar (workbench.ts, ensureInstanceContent): a
+           Reset button rendered as plain client-runtime DOM inside the `.use-preview` container, never
+           through app.deenv markup (app docs have no host-DOM/comment syntax to author this in, and the
+           container is driver-owned after mount anyway). `.workbench-instance-content` isolates the
+           previewed component's OWN rendered tree from the toolbar, one level deeper, so the reconciler
+           can never confuse the Reset button with the component's own root element (e.g. Counter's root
+           IS a `<button>`). */
+        .workbench-instance-toolbar { display: flex; justify-content: flex-end; margin-bottom: 0.4rem; }
+        .workbench-instance-reset { font-size: 0.76rem; padding: 0.15rem 0.5rem; background: var(--surface);
+          border: 1px solid var(--border); border-radius: 4px; color: var(--muted); cursor: pointer; }
+        .workbench-instance-reset:hover { border-color: var(--muted); color: var(--text); }
         /* Raw code areas tucked behind a disclosure so the type editor reads as just types by default. */
         details.code-areas { margin-top: 1.4rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
         details.code-areas summary.code-summary { font-weight: 600; color: var(--muted); cursor: pointer; padding: 0.3rem 0; }

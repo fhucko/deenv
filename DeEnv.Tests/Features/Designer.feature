@@ -1870,3 +1870,114 @@ Feature: The operator IDE (designs library + instance design selector)
     Then configuration 0's live instance shows the error "Value not available"
     When I click the add-configuration button
     Then component configurations shows 2 rows
+
+  # ── M12 W1b — events + Reset through the dispatch bracket ────────────────────────────────────────
+  #
+  # W1a mounted a real running instance but left it INERT (noWiring — the isolation bracket only wrapped
+  # RENDER, and a click fires from the DOM long after that bracket restored the page's real globals). W1b
+  # adds the dispatch-time bracket every instance event routes through (runInstanceHandler), the matching
+  # wiring strategy (instanceWiring), and Reset — a framework-owned control bar the driver renders inside
+  # the container. The independence-at-CLICK pin is the arc's headline: two configurations, click one,
+  # only it changes.
+  @m12 @single-user
+  Scenario: An instance's own click handler only affects that instance, and Reset returns it to its initial state
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "wbcounterme"
+    And I edit the design "wbcounterme"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a reactive Counter component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    And I click the add-configuration button
+    Then component configurations shows 2 rows
+    And configuration 0's live instance shows a "button" element reading "0"
+    And configuration 1's live instance shows a "button" element reading "0"
+    When I click configuration 0's live instance button
+    And I click configuration 0's live instance button
+    Then configuration 0's live instance shows a "button" element reading "2"
+    And configuration 1's live instance shows a "button" element reading "0"
+    When I click configuration 0's live instance Reset button
+    Then configuration 0's live instance shows a "button" element reading "0"
+    And configuration 1's live instance shows a "button" element reading "0"
+
+  # Two-way binding (value= state writes) through the SAME dispatch bracket the click path uses, plus the
+  # bracket-restore proof: the page's own editing (a design rename, an admin-gated autosave) still works
+  # right after an instance's handler ran.
+  @m12 @single-user
+  Scenario: Typing into an instance's two-way-bound input repaints only that instance, and the page's own editing still works
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "twowayme"
+    And I edit the design "twowayme"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a two-way-bound TextBox component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    Then component configurations shows 1 row
+    When I type "hello" into configuration 0's live instance input
+    Then configuration 0's live instance shows a "span" element reading "hello"
+    When I rename the design's label to "twowayme-renamed"
+    Then the design editor shows the design's label "twowayme-renamed"
+
+  # THE SESSION-SAFETY PIN (component-workbench.md's "grill's core fix"): sys.login/sys.logout are NOT
+  # id-gated, so a login/logout call inside a sandboxed instance's handler could otherwise really re-bind
+  # the operator's own page session. Only the dispatch bracket's wsHooks-null stops it. Chained with a
+  # page-side rename (an admin-gated autosave) as a SECOND, stronger proof: if the real session had flipped
+  # anonymous, that write would be silently denied and the rename step's own store poll would time out.
+  @m12 @single-user
+  Scenario: A card's handler calling sys.logout never touches the page's own session
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "logoutme"
+    And I edit the design "logoutme"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a sandboxed logout button component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    Then configuration 0's live instance shows a "button" element reading "Log out (sandboxed)"
+    When I click configuration 0's live instance button
+    Then the designer's own session is still logged in
+    When I rename the design's label to "logoutme-renamed"
+    Then the design editor shows the design's label "logoutme-renamed"
+
+  # A throwing handler (a store-backed builtin miss, the same v1 fidelity boundary as render time) renders
+  # the REAL error into its own card — never a rollback, never a page-wide crash, and a SIBLING instance
+  # (a different component, in this design) stays fully interactive, proving the isolation bracket is
+  # per-dispatch, not something one broken handler can wedge for the whole page.
+  @m12 @single-user
+  Scenario: A throwing instance handler shows the real error without disabling the page or its sibling instance
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "throwme"
+    And I edit the design "throwme"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a throwing component and a Counter component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button for "Thrower"
+    And I click the add-configuration button for "Counter"
+    Then component configurations shows 2 rows
+    And configuration 0's live instance shows a "button" element reading "boom"
+    And configuration 1's live instance shows a "button" element reading "0"
+    When I click configuration 0's live instance button
+    Then configuration 0's live instance shows the error "Value not available"
+    When I click configuration 1's live instance button
+    Then configuration 1's live instance shows a "button" element reading "1"
+    When I rename the design's label to "throwme-renamed"
+    Then the design editor shows the design's label "throwme-renamed"

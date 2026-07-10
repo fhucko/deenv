@@ -161,4 +161,69 @@ public sealed class WorkbenchDeepCopyTests
 
         await page.Context.CloseAsync();
     }
+
+    // M12 W1b — the dispatch bracket's restore-on-throw (the W1a bracket test idiom, extended from render
+    // time to HANDLER time — component-workbench.md's "grill's core fix"). A handler that throws must leave
+    // every global the bracket touches (memoCache, slotPath, needsServerData, callDepth, wsHooks,
+    // memoBypass) restored to whatever the ENCLOSING page render had installed — never the sandbox's own
+    // values, and never some hardcoded default. Proven by installing distinctive PAGE-posture sentinels
+    // before the call and asserting they — the exact same references/values, not just "something sane" —
+    // are back in place after runInstanceHandler returns from a throwing body.
+    //
+    // This harness deliberately loads ONLY codeExec.js + workbench.js (the regression-pin precedent above),
+    // so ui.ts's `updateChildren` — the one thing runInstanceHandler's error path calls — does not exist
+    // here; a trivial stub stands in for it (the bracket-restore assertion below needs nothing from ui.ts;
+    // the REAL error-card rendering is proven end-to-end by the browser scenario in Designer.feature).
+    [Test]
+    public async Task RunInstanceHandler_restores_every_bracket_global_when_the_handler_throws()
+    {
+        var codeExecJs = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "codeExec.js"));
+        var workbenchJs = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "workbench.js"));
+
+        var page = await SharedBrowser.NewPageAsync();
+        await page.SetContentAsync("<!doctype html><html><body><section id=\"c\"></section></body></html>");
+        await page.AddScriptTagAsync(new() { Content = codeExecJs });
+        await page.AddScriptTagAsync(new() { Content = workbenchJs });
+
+        var resultJson = await page.EvaluateAsync<string>("""
+            () => {
+                window.updateChildren = () => {}; // stand-in for ui.ts's reconciler — not loaded in this harness
+
+                // Distinctive PAGE-posture sentinels — nothing the sandbox bracket would ever install itself,
+                // so finding them back afterward proves a genuine RESTORE, not a coincidental match.
+                const pageCache = new Map();
+                setMemoCache(pageCache);
+                slotPath.length = 0; slotPath.push('page-slot');
+                needsServerData = true;
+                callDepth = 7;
+                wsHooks = { marker: 'PAGE_HOOKS' };
+                memoBypass = false;
+
+                const useId = 42;
+                workbenchInstances.set(useId, { argsSignature: '', ctxKey: '', cache: new Map(), lastId: { value: 0 } });
+                const container = document.getElementById('c');
+
+                runInstanceHandler(useId, container, () => { throw new Error('boom'); });
+
+                return JSON.stringify({
+                    cacheRestored: memoCache === pageCache,
+                    slotPathRestored: JSON.stringify(slotPath) === JSON.stringify(['page-slot']),
+                    needsServerDataRestored: needsServerData === true,
+                    callDepthRestored: callDepth === 7,
+                    wsHooksRestored: wsHooks != null && wsHooks.marker === 'PAGE_HOOKS',
+                    memoBypassRestored: memoBypass === false,
+                });
+            }
+            """);
+        var result = JsonDocument.Parse(resultJson).RootElement;
+
+        await Assert.That(result.GetProperty("cacheRestored").GetBoolean()).IsTrue();
+        await Assert.That(result.GetProperty("slotPathRestored").GetBoolean()).IsTrue();
+        await Assert.That(result.GetProperty("needsServerDataRestored").GetBoolean()).IsTrue();
+        await Assert.That(result.GetProperty("callDepthRestored").GetBoolean()).IsTrue();
+        await Assert.That(result.GetProperty("wsHooksRestored").GetBoolean()).IsTrue();
+        await Assert.That(result.GetProperty("memoBypassRestored").GetBoolean()).IsTrue();
+
+        await page.Context.CloseAsync();
+    }
 }

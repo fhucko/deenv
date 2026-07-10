@@ -1578,6 +1578,131 @@ public sealed class DesignerSteps(InstanceContext ctx)
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == StoreBackedComponentConvertibleRender));
     }
 
+    // ── M12 W1b — the live-instance driver: events + Reset through the dispatch bracket ────────────
+
+    // A component whose handler actually CLICKS need REACTIVE local state — `var state = { count: 0 }` (an
+    // OBJECT), not a bare scalar var. This is the framework's OWN established idiom for component-local
+    // state that must re-render on change (GenericUi.cs's KebabMenu: `var state = { open: false }`,
+    // `state.open = ...`): an object-prop write invalidates by (object id, prop) regardless of scope — a
+    // PLAIN scalar var write only invalidates when the var lives in the page's TOP scope (codeExec.ts
+    // executeAssignment's symbol branch — `if (itemScope.isTop) invalidateVar(...)`), which a component's
+    // OWN local `var` never is. The EXISTING W1a fixture (StatefulComponentConvertibleRender, `var count =
+    // 0`) only asserts its INITIAL render — never clicks it — so this gap stays latent there; W1b's own
+    // scenarios click-and-observe, so they need the reactive shape. A SEPARATE fixture (not editing the
+    // existing one) keeps the already-reviewed W1a scenario untouched.
+    private const string ReactiveCounterConvertibleRender =
+        "ui\n"
+        + "    fn Counter()\n        var state = { count: 0 }\n        fn render()\n            return <button onClick={() => state.count = state.count + 1}>\n                state.count\n        return render\n"
+        + "    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a convertible render with a reactive Counter component into the design's UI")]
+    public async Task WhenAuthorReactiveCounterRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(ReactiveCounterConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "wbcounterme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ReactiveCounterConvertibleRender));
+    }
+
+    // A two-way-bound local var (`value={state.text}`) inside a stateful component — the shape wireEvents'
+    // own input/textarea binding needs, mirrored by W1b's instanceWiring. `state.text` (not a bare scalar,
+    // for the same reactivity reason as ReactiveCounterConvertibleRender above) — the echo <span> makes the
+    // REPAINT (not just the underlying model write) directly observable.
+    private const string TwoWayComponentConvertibleRender =
+        "ui\n"
+        + "    fn TextBox()\n"
+        + "        var state = { text: \"\" }\n"
+        + "        fn render()\n"
+        + "            return <div>\n"
+        + "                <input class=\"tb-input\" value={state.text}>\n"
+        + "                <span class=\"tb-echo\">\n"
+        + "                    state.text\n"
+        + "        return render\n"
+        + "    fn render()\n"
+        + "        return <main>\n"
+        + "            \"hi\"\n";
+
+    [When("I author a convertible render with a two-way-bound TextBox component into the design's UI")]
+    public async Task WhenAuthorTwoWayComponentRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(TwoWayComponentConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "twowayme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == TwoWayComponentConvertibleRender));
+    }
+
+    // A component whose handler fires sys.logout() — the session-safety pin (component-workbench.md's
+    // "grill's core fix"): sendLogout is NOT id-gated (codeExec.ts execLogout calls it unconditionally), so
+    // ONLY the dispatch bracket's wsHooks-null is what stops a card's click from really logging the
+    // operator's own page session out.
+    private const string LogoutComponentConvertibleRender =
+        "ui\n    fn LogoutButton()\n        return <button class=\"wb-logout\" onClick={() => sys.logout()}>\n            \"Log out (sandboxed)\"\n    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a convertible render with a sandboxed logout button component into the design's UI")]
+    public async Task WhenAuthorLogoutComponentRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(LogoutComponentConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "logoutme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == LogoutComponentConvertibleRender));
+    }
+
+    // A Thrower (a handler that hits a store-backed builtin — always a v1-fidelity-boundary miss, same as
+    // sys.schema at render time) alongside an ordinary REACTIVE Counter (see ReactiveCounterConvertibleRender's
+    // doc comment — `var state = { count: 0 }`, not a bare scalar), in ONE design: proves a throwing
+    // instance's handler error never touches a SIBLING instance's own liveness, nor the page's.
+    private const string ThrowerAndCounterConvertibleRender =
+        "ui\n"
+        + "    fn Thrower()\n        return <button class=\"wb-throw\" onClick={() => sys.schema(\"Db\")}>\n            \"boom\"\n"
+        + "    fn Counter()\n        var state = { count: 0 }\n        fn render()\n            return <button onClick={() => state.count = state.count + 1}>\n                state.count\n        return render\n"
+        + "    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a convertible render with a throwing component and a Counter component into the design's UI")]
+    public async Task WhenAuthorThrowerAndCounterRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(ThrowerAndCounterConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "throwme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ThrowerAndCounterConvertibleRender));
+    }
+
+    // Locate a configuration's live-instance `.use-preview` panel by GLOBAL document order — the existing
+    // convention these steps already use (`.use-row` is queried unscoped by fn-card, so index 0/1/… tracks
+    // DOCUMENT order across however many component cards a scenario has, matching authored fn order).
+    private Microsoft.Playwright.ILocator LiveInstancePreview(int index) =>
+        ctx.Page!.Locator(".components-section .fn-card .use-row").Nth(index).Locator(".use-preview");
+
+    // Scope the add-configuration click to ONE named component card — needed once a scenario has more than
+    // one `.fn-card` (the existing unscoped "I click the add-configuration button" step is deliberately
+    // unscoped, for the single-fn-card scenarios that predate multi-component designs).
+    [When("I click the add-configuration button for {string}")]
+    public async Task WhenClickAddConfigurationFor(string fnName) =>
+        await ctx.Page!.Locator($".components-section .fn-card:has(input.fn-name[value=\"{fnName}\"]) .add-use").ClickAsync();
+
+    // Click the previewed component's OWN root element — scoped to `.workbench-instance-content` so it can
+    // never hit the sibling toolbar's Reset button (`.workbench-instance-reset`), even though both live
+    // inside the same `.use-preview` container.
+    [When("I click configuration {int}'s live instance button")]
+    public async Task WhenClickConfigurationLiveInstanceButton(int index) =>
+        await LiveInstancePreview(index).Locator(".workbench-instance-content button").First.ClickAsync();
+
+    [When("I type {string} into configuration {int}'s live instance input")]
+    public async Task WhenTypeIntoConfigurationLiveInstanceInput(string text, int index) =>
+        await LiveInstancePreview(index).Locator(".workbench-instance-content input").First.FillAsync(text);
+
+    [When("I click configuration {int}'s live instance Reset button")]
+    public async Task WhenClickConfigurationLiveInstanceReset(int index) =>
+        await LiveInstancePreview(index).Locator(".workbench-instance-reset").ClickAsync();
+
+    // The session-safety pin's direct assertion: no login gate appeared (the page's OWN session is still
+    // bound). Combined, in the scenario, with a page-side write (a design rename) whose autosave is
+    // admin-gated — if the real session HAD flipped anonymous, that write would be silently denied and the
+    // rename step's own store poll would time out, so together the two are a strong proof, not just this
+    // one shallow DOM check.
+    [Then("the designer's own session is still logged in")]
+    public async Task ThenDesignerSessionStillLoggedIn() =>
+        await Assert.That(await ctx.Page!.Locator(".login-form").CountAsync()).IsEqualTo(0);
+
     // ── M12 V1 — MetaVar rows: component state + top-level ui vars ────────────────────────────────
 
     // A convertible render whose `ui` carries a REAL stateful setup/view component (`Counter()`, the
