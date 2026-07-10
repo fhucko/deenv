@@ -683,6 +683,32 @@ mutations the designer app performs in deenv code — that machinery already exi
   single-sample differential false-accused this slice; the builder's rates exonerated
   it and re-attributed both failures to pre-existing signatures (the chip carries them).
   NEXT: W1b — events + Reset through the dispatch bracket (the strategy swap).
+- **W1b — live-instance events + Reset. ✅ DONE 2026-07-10 — THE WORKBENCH END GOAL IS
+  DELIVERED** (arch review SHIP + two folds applied; the review's security verdict:
+  "airtight at the wire seam" — every send in codeExec.ts is wsHooks?-routed and the
+  dispatch bracket nulls it). `instanceWiring` mirrors wireEvents surface-for-surface
+  (input/textarea two-way, select change, onClick — the same three and only three);
+  EVERY dispatch runs inside `withSandboxGlobals` (the fold: ONE shared bracket helper,
+  render passes memoBypass:false / handlers true — parity structural, restore-on-throw
+  unit-pinned); handlers repaint THIS instance only (invalidations walk the installed
+  PRIVATE cache — cross-instance and page isolation structural); per-instance persisted
+  lastId (repaint id-collision guard); Reset = whole-sandbox disposal (private cache +
+  db copy + counter) + fresh mount, driver-owned toolbar chrome. Browser-pinned (the
+  user's end-goal pins): two Counter configurations — clicks increment ONE, the other
+  untouched; Reset restores; two-way typing isolated from the page; **a sandboxed
+  sys.logout NEVER touches the page session** (two-sided proof: form absent + a
+  subsequent admin action succeeds); a throwing handler shows its real error, siblings
+  stay interactive, page editing still works; a bare `<a href>` in a preview is
+  SWALLOWED at the container (fold 2 — it bubbled to interceptNavigation and navigated
+  the whole designer away; pre-existing since W1a, closed here). Stated divergences
+  (design-recorded): no journal rollback (a throwing preview handler keeps partial
+  writes — Reset recovers); host actions/saves silently no-op (the card note).
+  Builder-found + CHIPPED (task_074f6ccf, pre-existing INTERPRETER gap, both twins):
+  component-local SCALAR var writes don't invalidate the memoized view — only
+  object-prop writes do (var state = {…} reacts; bare var count doesn't) — on live
+  pages too, not just previews. REMAINING in the arc: the cache-seeding fast-follow
+  (schema/extent into the private cache from design rows → SetTable/ObjectForm-class +
+  lib components preview in cards) and W2 state-history scrubbing (designed, user-gated).
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —
