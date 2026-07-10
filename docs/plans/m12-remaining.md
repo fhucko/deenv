@@ -114,8 +114,35 @@ IS the palette, no registry). Lib component INSERTION is just a tag row with the
 name — no expansion machinery needed at insert time (the canvas already literal-renders
 unknowns and W1c seeds lib for workbench cards).
 
-**Slices.** S5a reorder (tree editor + selection, `order` rewrites, browser-pinned
-against the orderBy convention); S5b palette + insert-at-selection; S5c wrap/unwrap.
+**Slices.**
+- **S5a — reorder. ✅ DONE 2026-07-10** (reviews arch SHIP + ui-arch SHIP + ux
+  SHIP-WITH-FIXES, adjudicated fold applied; `0ff81e6`). ▲/▼ per row via ONE
+  `moveRow(coll, node, dir)` + isFirst/isLastSibling serving four families (render
+  children/elseChildren, node attrs + use-args via the shared attrRow, MetaUse
+  configurations); two-int `order` swap, ties = hand-edit-only (the OrderedMembers
+  precedent), no renormalization (no statement loop in the language — and a swap needs
+  none). Edge buttons DISABLE-IN-PLACE (the adjudicated ux catch: hiding ▼ at the last
+  position slid the destructive × under a chase-clicking cursor — an unconfirmed
+  subtree delete on overshoot; the onRemove-null hide precedent is STATIC and doesn't
+  transfer to a mid-interaction flip; `disabled={bool}` was already a generic idiom in
+  both renderers). fns/vars/top-level-roots deliberately SKIPPED (unsorted display
+  foreach — a control there would reorder data invisibly; tied to task_d7c6ed6a).
+  Same-frame canvas repaint pinned (order was already a dep-recorded read); three-way
+  proof (editor/canvas/store + reload). RODE ALONG (the slice's real substance per
+  ui-arch): executeAssignment's objectProp branch dropped the WS send for transient-
+  negative-id objects (`obj.id > 0` gate) — plain-assignment writes to a just-added row
+  silently didn't persist; now routed through persistFieldEdit (the proven two-way-
+  binding fallback; FIFO wire + monotonic msgId carry the ordering; blast radius
+  honestly ZERO historical loss — two-way binding covered every real path until
+  moveRow became the first statement-form caller; also unifies dict-entry statement
+  writes — broader, strictly more correct; client-only, C# untouched, no conformance
+  owed; the sandbox wire-leak question closed by structural trace — every branch
+  terminates in wsHooks?., which the dispatch bracket nulls).
+- **S5a ledger (ux find, HIGH-VALUE follow-up):** object FIELD reorder — `type.props`
+  order drives the generated form's field order (arguably worth more than node
+  reorder); needs the props display foreach sorted first (the same task_d7c6ed6a-family
+  precondition check), then the same moveRow helper applies.
+- S5b palette + insert-at-selection; S5c wrap/unwrap.
 
 **Open decisions.** Palette UX (a sidebar list vs an add-menu extension — ux review
 decides); drag-and-drop is explicitly NOT v1 (buttons/menus first, DnD is polish).
