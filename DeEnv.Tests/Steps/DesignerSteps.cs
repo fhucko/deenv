@@ -1607,7 +1607,10 @@ public sealed class DesignerSteps(InstanceContext ctx)
     // A two-way-bound local var (`value={state.text}`) inside a stateful component — the shape wireEvents'
     // own input/textarea binding needs, mirrored by W1b's instanceWiring. `state.text` (not a bare scalar,
     // for the same reactivity reason as ReactiveCounterConvertibleRender above) — the echo <span> makes the
-    // REPAINT (not just the underlying model write) directly observable.
+    // REPAINT (not just the underlying model write) directly observable. The bare `<a href>` (no onClick)
+    // is the anchor-containment pin (arch review fold): it has NO wired handler at all, so only the
+    // container-level click swallow (workbench.ts ensureInstanceContent) stops it reaching the page's
+    // document-level interceptNavigation.
     private const string TwoWayComponentConvertibleRender =
         "ui\n"
         + "    fn TextBox()\n"
@@ -1617,6 +1620,8 @@ public sealed class DesignerSteps(InstanceContext ctx)
         + "                <input class=\"tb-input\" value={state.text}>\n"
         + "                <span class=\"tb-echo\">\n"
         + "                    state.text\n"
+        + "                <a class=\"tb-link\" href=\"/designs\">\n"
+        + "                    \"Go to designs\"\n"
         + "        return render\n"
         + "    fn render()\n"
         + "        return <main>\n"
@@ -1693,6 +1698,15 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [When("I click configuration {int}'s live instance Reset button")]
     public async Task WhenClickConfigurationLiveInstanceReset(int index) =>
         await LiveInstancePreview(index).Locator(".workbench-instance-reset").ClickAsync();
+
+    // The anchor-containment pin (arch review fold): a previewed component's own in-app `<a href>` — no
+    // onClick, so nothing in instanceWiring stops it — must not navigate the page. The click's OWN
+    // completion (Playwright waits for it) is already proof the browser did not tear down this page mid-
+    // click; the scenario's own follow-up assertions (the editor still shown, the instance's state intact)
+    // are the positive proof nothing moved.
+    [When("I click configuration {int}'s live instance link")]
+    public async Task WhenClickConfigurationLiveInstanceLink(int index) =>
+        await LiveInstancePreview(index).Locator(".workbench-instance-content a").First.ClickAsync();
 
     // The session-safety pin's direct assertion: no login gate appeared (the page's OWN session is still
     // bound). Combined, in the scenario, with a page-side write (a design rename) whose autosave is

@@ -1907,7 +1907,10 @@ Feature: The operator IDE (designs library + instance design selector)
 
   # Two-way binding (value= state writes) through the SAME dispatch bracket the click path uses, plus the
   # bracket-restore proof: the page's own editing (a design rename, an admin-gated autosave) still works
-  # right after an instance's handler ran.
+  # right after an instance's handler ran. Also carries the ANCHOR-CONTAINMENT pin (arch review fold): the
+  # TextBox fixture's own `<a href>` has NO onClick — nothing in instanceWiring stops it — so only the
+  # container-level click swallow (workbench.ts ensureInstanceContent) stops it bubbling to the page's
+  # document-level interceptNavigation and navigating the whole designer away.
   @m12 @single-user
   Scenario: Typing into an instance's two-way-bound input repaints only that instance, and the page's own editing still works
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
@@ -1925,6 +1928,9 @@ Feature: The operator IDE (designs library + instance design selector)
     Then component configurations shows 1 row
     When I type "hello" into configuration 0's live instance input
     Then configuration 0's live instance shows a "span" element reading "hello"
+    When I click configuration 0's live instance link
+    Then the design editor eventually shows the structured render tree editor
+    And configuration 0's live instance shows a "span" element reading "hello"
     When I rename the design's label to "twowayme-renamed"
     Then the design editor shows the design's label "twowayme-renamed"
 

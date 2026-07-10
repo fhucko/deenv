@@ -288,23 +288,37 @@ function ensureInstanceContent(container: HTMLElement, useId: number): HTMLEleme
     container.appendChild(toolbar);
     const content = document.createElement("div");
     content.className = "workbench-instance-content";
+    // Swallow in-app anchor navigation (arch review fold): a previewed component rendering a bare
+    // `<a href>` (no onClick — instanceWiring only stops propagation for a WIRED handler, ui.ts:702) would
+    // otherwise bubble all the way to the PAGE's own document-level delegated listener
+    // (interceptNavigation, ui.ts:227, wired once in init.ts) and navigate the operator's whole designer
+    // page away from a click inside a preview card. preventDefault ALSO satisfies
+    // interceptNavigation's own bail-out check (its first line reads `e.defaultPrevented`), so either guard
+    // alone would suffice — both together make the containment airtight without relying on that coupling.
+    // Attached ONCE, on the content root itself (this function's own idempotent-build guard above), so it
+    // catches every anchor the component ever renders here, including ones added by a later remount.
+    content.addEventListener("click", (e: MouseEvent) => {
+        const anchor = (e.target as Element | null)?.closest?.("a");
+        if (anchor instanceof HTMLAnchorElement) { e.preventDefault(); e.stopPropagation(); }
+    });
     container.appendChild(content);
     return content;
 }
 
-// Run ONE render pass for a mounted instance and reconcile the result into its container's content
-// wrapper. Shared by every path that (re)paints an instance — mountOneWorkbenchInstance and
-// resetWorkbenchInstance (a FRESH `instance` — new cache, new lastId) and rerenderWorkbenchInstance (the
-// SAME `instance` reused, after a handler dispatch) — so the isolation bracket is defined in exactly ONE
-// place (the M12 W1a review's own template; W1b's dispatch bracket in runInstanceHandler extends it,
-// never duplicates it).
-function runInstanceRenderPass(useId: number, fn: ExecObject, use: ExecObject, ctx: ExecObject, instance: WorkbenchInstance, container: HTMLElement): void {
-    // The isolation bracket (evalCtxExpr's idiom, extended from "one expression" to "one real component
-    // render"): save every module global a render touches, install the sandbox's own, restore
-    // UNCONDITIONALLY (finally) so a driver render can never leak into — or inherit stale posture from —
-    // the enclosing page render. wsHooks nulled: no host action/save/login can escape the sandbox. memoCache
-    // is the INSTANCE's own persistent Map (never a fresh one here — a fresh Map belongs only to a real
-    // mount/remount/Reset, which mints a brand-new `instance` before calling this).
+// THE shared isolation bracket (evalCtxExpr's idiom, extended from "one expression" to "one real
+// component render/dispatch"): save every module global a sandboxed run touches, install the instance's
+// own, restore UNCONDITIONALLY (finally) so a driver render OR a dispatched handler can never leak into —
+// or inherit stale posture from — the enclosing page render. wsHooks nulled: no host action/save/login can
+// escape the sandbox (the session-safety pin — sendLogin/sendLogout are not id-gated, this bracket is the
+// only thing stopping them). memoCache is the INSTANCE's own persistent Map, never a fresh one here — a
+// fresh Map belongs only to a real mount/remount/Reset, minted by the caller BEFORE this runs.
+//
+// `memoBypass` is the ONE load-bearing difference between the two callers (runInstanceRenderPass: false —
+// a render must be cacheable, exactly like the page's own render; runInstanceHandler: true — a handler is
+// side-effecting, exactly like the page's own runWithMemoBypass) — an explicit PARAMETER rather than two
+// hand-copied brackets, so restore-set parity is structural (one save/restore list, used by both callers),
+// not something a future edit to one bracket could silently drift from the other.
+function withSandboxGlobals<T>(instance: WorkbenchInstance, useId: number, opts: { memoBypass: boolean }, body: () => T): T {
     const savedCache = memoCache;
     const savedSlotPath = slotPath.slice();
     const savedNeedsServerData = needsServerData;
@@ -317,11 +331,10 @@ function runInstanceRenderPass(useId: number, fn: ExecObject, use: ExecObject, c
     needsServerData = false;
     callDepth = 0;
     wsHooks = null;
-    memoBypass = false;
-    depStack.push({ props: [], members: [], vars: [] }); // a throwaway frame: recordProp/recordMember calls during the render land here, discarded below — never the enclosing page's frame
-    let result: { tags: ExecTagChild[]; errorMessage: string | null };
+    memoBypass = opts.memoBypass;
+    depStack.push({ props: [], members: [], vars: [] }); // a throwaway frame: recordProp/recordMember calls during the run land here, discarded below — never the enclosing page's frame
     try {
-        result = renderWorkbenchInstance(fn, use, ctx, instance.lastId);
+        return body();
     } finally {
         depStack.pop();
         memoCache = savedCache;
@@ -332,6 +345,17 @@ function runInstanceRenderPass(useId: number, fn: ExecObject, use: ExecObject, c
         wsHooks = savedWsHooks;
         memoBypass = savedMemoBypass;
     }
+}
+
+// Run ONE render pass for a mounted instance and reconcile the result into its container's content
+// wrapper. Shared by every path that (re)paints an instance — mountOneWorkbenchInstance and
+// resetWorkbenchInstance (a FRESH `instance` — new cache, new lastId) and rerenderWorkbenchInstance (the
+// SAME `instance` reused, after a handler dispatch) — so the isolation bracket is defined in exactly ONE
+// place (withSandboxGlobals above; W1b's dispatch bracket in runInstanceHandler is the SAME helper, not a
+// parallel one).
+function runInstanceRenderPass(useId: number, fn: ExecObject, use: ExecObject, ctx: ExecObject, instance: WorkbenchInstance, container: HTMLElement): void {
+    const result = withSandboxGlobals(instance, useId, { memoBypass: false },
+        () => renderWorkbenchInstance(fn, use, ctx, instance.lastId));
 
     const content = ensureInstanceContent(container, useId);
     const children: ExecTagChild[] = result.errorMessage != null ? [instanceErrorTag(result.errorMessage)] : result.tags;
@@ -406,11 +430,11 @@ function instanceHandlerContext(useId: number): ExecContext {
 // THE dispatch bracket (M12 W1b — component-workbench.md's "grill's core fix"). Every DOM event a mounted
 // instance's content fires runs through here, never straight off the DOM: the MOUNT/render bracket
 // (runInstanceRenderPass) only wraps RENDER — it has long since restored the page's real globals by the
-// time a user could click anything — so dispatch needs its OWN install. Reuses the INSTANCE's persistent
-// cache + lastId (not fresh ones: a handler's writes must land in the SAME state graph the mounted view
-// already reads, and a fresh lastId would risk re-minting an id already alive in that graph — see the
-// WorkbenchInstance.lastId doc comment). memoBypass is forced TRUE here (unlike the render bracket's
-// false) — a handler is side-effecting, exactly like the page's own runWithMemoBypass.
+// time a user could click anything — so dispatch needs its OWN install. withSandboxGlobals reuses the
+// INSTANCE's persistent cache + lastId (not fresh ones: a handler's writes must land in the SAME state
+// graph the mounted view already reads, and a fresh lastId would risk re-minting an id already alive in
+// that graph — see the WorkbenchInstance.lastId doc comment), with memoBypass forced TRUE (unlike the
+// render bracket's false) — a handler is side-effecting, exactly like the page's own runWithMemoBypass.
 //
 // wsHooks nulled is what makes this safe for sys.login/sys.logout specifically: NEITHER is id-gated
 // (codeExec.ts execLogin/execLogout call sendLogin/sendLogout unconditionally) — a login-form component
@@ -432,35 +456,10 @@ function runInstanceHandler(useId: number, container: HTMLElement, body: () => v
     const instance = workbenchInstances.get(useId);
     if (instance == null) return; // torn down mid-dispatch (Reset, a removed use row, navigation away) — nothing to run
 
-    const savedCache = memoCache;
-    const savedSlotPath = slotPath.slice();
-    const savedNeedsServerData = needsServerData;
-    const savedCallDepth = callDepth;
-    const savedWsHooks = wsHooks;
-    const savedMemoBypass = memoBypass;
-    memoCache = instance.cache;
-    slotPath.length = 0;
-    slotPath.push("workbench:" + useId);
-    needsServerData = false;
-    callDepth = 0;
-    wsHooks = null;
-    memoBypass = true;
-    depStack.push({ props: [], members: [], vars: [] });
     let errorMessage: string | null = null;
-    try {
-        body();
-    } catch (e) {
-        errorMessage = e instanceof Error ? e.message : String(e);
-    } finally {
-        depStack.pop();
-        memoCache = savedCache;
-        slotPath.length = 0;
-        slotPath.push(...savedSlotPath);
-        needsServerData = savedNeedsServerData;
-        callDepth = savedCallDepth;
-        wsHooks = savedWsHooks;
-        memoBypass = savedMemoBypass;
-    }
+    withSandboxGlobals(instance, useId, { memoBypass: true }, () => {
+        try { body(); } catch (e) { errorMessage = e instanceof Error ? e.message : String(e); }
+    });
 
     if (errorMessage != null) {
         // Render the real error directly (never through a normal re-render, which — over honestly partial
