@@ -17,6 +17,13 @@ namespace DeEnv.Tests.TestSupport;
 /// This hands out each port AT MOST ONCE for the lifetime of the test process (a monotonic cursor + a
 /// permanent used-set), and verifies each candidate is actually bindable right now, so no two test
 /// components ever share a port. Single-use across the run is fine: the range dwarfs the ports a run needs.
+///
+/// One residual window remains that the allocator ALONE cannot close: <see cref="Next"/> verifies a port
+/// is bindable then RELEASES it, and the real server binds it LATER — a sibling can grab it in that gap
+/// (a rare TOCTOU under parallel load, surfacing as a GenHTTP BindingException / a SocketException with
+/// <see cref="SocketError.AddressAlreadyInUse"/>). Since the bind happens outside the allocator, the fix
+/// lives at the USE site: <see cref="StartWithBindRetryAsync"/> re-runs the start with FRESH ports (the
+/// cursor never re-hands the raced port), so the retry lands on a port no sibling is holding.
 /// </summary>
 public static class PortAllocator
 {
@@ -59,5 +66,39 @@ public static class PortAllocator
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Run <paramref name="startWithFreshPorts"/> — which must allocate its port(s) via <see cref="Next"/>
+    /// and start its server(s) — retrying with FRESH ports if the bind loses the residual TOCTOU race (a
+    /// sibling grabbed a verified-bindable port in the window before this server bound it). The action MUST
+    /// clean up any partially-started host before it throws (both kernel-host start paths dispose on throw),
+    /// so no port leaks across attempts. Non-bind failures propagate immediately — only an
+    /// address-already-in-use bind race is retried, and only up to <paramref name="attempts"/> times.
+    /// </summary>
+    public static async Task StartWithBindRetryAsync(Func<Task> startWithFreshPorts, int attempts = 6)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await startWithFreshPorts();
+                return;
+            }
+            catch (Exception ex) when (attempt < attempts && IsAddressInUse(ex))
+            {
+                // A sibling won the race for one of our freshly-verified ports; loop to pick new ones.
+            }
+        }
+    }
+
+    // True when the exception (or any inner) is an OS "address already in use" — GenHTTP wraps the
+    // SocketException (WSAEADDRINUSE) in its own BindingException, so we unwrap to the SocketException.
+    private static bool IsAddressInUse(Exception ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+            if (e is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse })
+                return true;
+        return false;
     }
 }

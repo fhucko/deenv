@@ -1906,8 +1906,6 @@ public class InstanceContext
         // that label — so the dropdowns start correct. The designer itself (id 1) carries a designId too
         // (its OWN "designer" self-design). Addressing is by PATH now, so there are NO per-instance ports —
         // the two kernel-level ports go on the registry header, and each instance is served at /apps/<name>.
-        var appPort = FreePort();
-        var assetPort = FreePort();
         var designIds = DesignIdsByLabel();
         var entries = new List<string> { RegistryEntryJson(1, "designer", designIds["designer"]) };
         foreach (var (id, label) in targets)
@@ -1919,14 +1917,24 @@ public class InstanceContext
             entries.Add(RegistryEntryJson(id, label, designIds.TryGetValue(label, out var did) ? did : (int?)null));
         }
 
-        File.WriteAllText(Path.Combine(dir, "kernel.json"),
-            "{\n" +
-            $"  \"appPort\": {appPort},\n  \"assetPort\": {assetPort},\n" +
-            "  \"instances\": [\n    " + string.Join(",\n    ", entries) + "\n  ]\n}");
+        // Allocate the two kernel ports and bind under the fresh-port retry: a port PortAllocator verified
+        // bindable can still be grabbed by a sibling in the window before KernelHost binds it (the residual
+        // TOCTOU), which surfaces here as a BindingException. KernelHost.StartAsync disposes its hosts on
+        // throw, so a losing attempt leaks nothing; the retry picks fresh ports and rewrites kernel.json.
+        var appPort = 0;
+        await PortAllocator.StartWithBindRetryAsync(async () =>
+        {
+            appPort = FreePort();
+            var assetPort = FreePort();
+            File.WriteAllText(Path.Combine(dir, "kernel.json"),
+                "{\n" +
+                $"  \"appPort\": {appPort},\n  \"assetPort\": {assetPort},\n" +
+                "  \"instances\": [\n    " + string.Join(",\n    ", entries) + "\n  ]\n}");
 
-        var registry = RegistryReader.Read(Path.Combine(dir, "kernel.json"));
-        Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"), appPort, assetPort, bindLoopback: true);
-        await Kernel.StartAsync(KernelHost.SpecsFor(registry, dir));
+            var registry = RegistryReader.Read(Path.Combine(dir, "kernel.json"));
+            Kernel = new KernelHost(dir, Path.Combine(dir, "kernel.json"), appPort, assetPort, bindLoopback: true);
+            await Kernel.StartAsync(KernelHost.SpecsFor(registry, dir));
+        });
 
         var designer = Kernel.Instances.Single(i => i.Spec.Id == 1);
 
