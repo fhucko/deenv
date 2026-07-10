@@ -8,6 +8,12 @@ domain keeping app URL space completely clean (§Origin — this supersedes an e
 same-day same-port ruling). No open questions remain; ready for milestone-planner
 slicing.*
 
+**2026-07-10 revision (USER DECISION):** upload moves back to the app origin as a
+method-scoped `POST /assets` (pages are always `GET`, so no page-URL collision) so it
+can use the AMBIENT SESSION COOKIE — the slice-2 short-lived HMAC ticket is deleted and
+tombstoned. Serve is untouched (still `assets.deenv.org`, still unauthenticated). Full
+rewrite in §2/§Origin below.
+
 Companions: docs/plans/app-versioning-design.md (§0b non-temporal, §6 compaction),
 docs/plans/post-m13-backlog.md (the brief), docs/plans/login-persistence.md (the
 /session + cookie precedent), docs/plans/security-review-pre-public.md (the floor).
@@ -80,9 +86,11 @@ data log, nothing more.
   edges go on the **asset tree**.
 - There is NO multipart/binary handling anywhere today (only the /session JSON body
   read) — but none is needed, see Upload below.
-- nginx (deploy/DEPLOY.md:136-171) proxies `= /ws` and `= /js` to the asset port; the
-  new edges get their OWN `server_name assets.deenv.org` block (user-settled, §Origin)
-  so app subdomains stay path-clean, with **`client_max_body_size` raised** (absent
+- nginx (deploy/DEPLOY.md:136-171) proxies `= /ws` and `= /js` to the asset port; serve
+  gets its OWN `server_name assets.deenv.org` block (user-settled, §Origin) so app
+  subdomains stay path-clean; upload (2026-07-10 revision, §Origin/§2) is instead a
+  method-scoped `POST /assets` location on the EXISTING app-subdomain block, proxied to
+  the SAME asset-port backend, with **`client_max_body_size` raised** there (absent
   today → nginx's 1 MB default would reject uploads). The wildcard cert already covers
   `assets.deenv.org`.
 
@@ -121,21 +129,41 @@ path.
 
 ### Origin — a dedicated blob domain (user, 2026-07-06, supersedes the earlier same-port ruling)
 
-**Both edges live on a dedicated `assets.deenv.org` origin, NOT on any app subdomain.**
-The user wants app URL space completely clean — no path an app could ever want reserved
-by the framework — and is fine with a separate domain (chosen over a separate port,
-because non-standard ports get blocked by client firewalls; a domain rides 443). The
-public URL carries the instance in its PATH (there's no app subdomain to carry it):
+**SERVE lives on a dedicated `assets.deenv.org` origin, NOT on any app subdomain — this
+part of the 2026-07-06 ruling stands.** The user wants app URL space completely clean —
+no path an app could ever want reserved by the framework — and is fine with a separate
+domain (chosen over a separate port, because non-standard ports get blocked by client
+firewalls; a domain rides 443). The public URL carries the instance in its PATH (there's
+no app subdomain to carry it):
 
 - serve: `GET https://assets.deenv.org/<name>/<hash>.<ext>`
-- upload: `POST https://assets.deenv.org/<name>` (raw body)
 
-nginx: one new `server_name assets.deenv.org` block proxying `/<name>/<rest>` →
-`8081/apps/<name>/assets/<rest>` (instance from the first path segment instead of the
-subdomain). The wildcard cert already covers `assets.deenv.org` (single label under
-deenv.org) — **no new cert**. In dev the two-port setup already gives origin isolation
-for free (`localhost:8081` ≠ `localhost:8080`), so dev blobs stay on the asset port and
-`assets.deenv.org` is a prod-only rewrite.
+**UPLOAD moves back to the app origin (USER DECISION, 2026-07-10 — supersedes the
+"both edges on assets.deenv.org" part of the 2026-07-06 ruling; §2 below has the full
+rationale + auth rewrite):** `POST <app>.deenv.org/assets` (raw body). This does NOT
+reopen the app-URL-cleanliness question the same way `/ws`/`/js`/`/session` do, because
+it is **method-scoped**: pages are always fetched with `GET`, so a `POST` to any path is
+never a page load — an app is free to have its own `/assets` PAGE (a `GET`) with zero
+collision, and nginx routes only the `POST` to the asset-port backend. Serve is
+untouched by this — it stays the capability-URL GET on `assets.deenv.org` above.
+
+nginx (slice-4 prod note, 2026-07-10 revision): **two** routing rules, not one.
+1. **Serve** — one new `server_name assets.deenv.org` block proxying `/<name>/<rest>` →
+   `8081/apps/<name>/assets/<rest>` (instance from the first path segment instead of the
+   subdomain). The wildcard cert already covers `assets.deenv.org` (single label under
+   deenv.org) — **no new cert**.
+2. **Upload** — a method-scoped `location` on the EXISTING `<app>.deenv.org` block: `POST
+   /assets` proxies to `8081/apps/<name>/assets` (the SAME asset-port backend serve
+   already hits — the C# handler doesn't move, only nginx's routing does); `GET /assets`
+   (and everything else) falls through to the app's own page routing unchanged. This is
+   what makes upload "on the app origin" from the browser's POV without actually moving
+   the backend process.
+
+In dev the two-port setup already gives origin isolation for free (`localhost:8081` ≠
+`localhost:8080`), so dev blobs (both serve AND upload) stay on the asset port and
+`assets.deenv.org` / the method-scoped app-subdomain route are prod-only rewrites; dev's
+upload POST is a same-host, different-port call, handled by `credentials:'include'` +
+AssetsHandler's CORS echo (§2).
 
 **`/ws`, `/js`, `/session` do NOT move — and this is deliberate, not an oversight.**
 They must stay same-origin with the app page for auth to work: WS upgrades on the app
@@ -144,9 +172,10 @@ origin, and the `deenv_session_<id>` cookie is host-scoped to `<app>.deenv.org`
 already serves page + `/ws` + `/js` + `/session` all on `<app>.deenv.org` (same origin,
 proxied to the asset port under `/apps/<name>/...`, DEPLOY.md:153-159) — which is why
 login and live WS work on devlog now. Moving them to `assets.deenv.org` would break
-exactly that. Blobs CAN move only because they're built to not need the app cookie:
-serve is a capability GET (a plain cross-origin `<img>` load, no CORS), upload uses the
-ticket (below). So the assets change leaves js/ws/session untouched and working.
+exactly that. Serve CAN move because it's built to not need the app cookie (a capability
+GET); upload, once it needed the SAME ambient cookie `/session` does (2026-07-10 —
+below), had to come back to the app origin for the identical reason `/ws`/`/session`
+never left it.
 
 Two properties fall out for free:
 1. **App URL space is untouched by assets** — apps own 100% of `<app>.deenv.org/*`
@@ -164,10 +193,11 @@ The cost the separate origin introduces is upload auth (next).
 
 ### 2. Upload edge (bytes in)
 
-`POST https://assets.deenv.org/<name>` — **raw body, not multipart**: the browser posts
-the `File` object directly (`fetch(blobBase + '/' + name, {method:'POST', body: file})`)
-and its `Content-Type` header carries the MIME type. This deletes the entire
-multipart-parser problem — there are no other form fields to carry.
+`POST <app>.deenv.org/assets` (dev: the asset port, `POST <assetHost>/assets`) — **raw
+body, not multipart**: the browser posts the `File` object directly (`fetch(blobBase +
+'/assets', {method:'POST', body: file, credentials:'include'})`) and its `Content-Type`
+header carries the MIME type. This deletes the entire multipart-parser problem — there
+are no other form fields to carry.
 
 Response: `200 {"name": "<hash>.<ext>"}`. The client puts that string into the draft
 prop; the ordinary save path commits it. After the 200, the upload IS just a string —
@@ -178,35 +208,62 @@ An uploaded-but-never-saved blob is simply an orphan in the append-only pool —
 identical in kind to an orphan left by Reset(), reclaimed by future compaction. No
 quarantine, no reference counting, no cleanup timer.
 
-**Auth — a short-lived upload ticket (the real cost of the separate origin):** the
-HttpOnly session cookie is host-scoped to `<app>.deenv.org` and does NOT ride to
-`assets.deenv.org`, so upload can't reuse the ambient cookie the way `/session` does.
-Instead the app origin — which already resolves the principal on every GET via
-`PrincipalFromCookie` (ContentHandler.cs:61-68) — mints a short-lived HMAC **upload
-ticket** `(instanceId, userId, exp)` using the EXISTING `TokenAuth.Mint`/`Verify`
-machinery (TokenAuth.cs:30-54, same per-data-home secret both origins share). The
-client presents the ticket with the POST; the assets origin verifies it and applies the
-upload floor. Posture unchanged from the floor's own: Dormant instance
-(AccessFloor.cs:52) → no ticket required, upload open exactly as every data write is
-open on a dormant app; ruled instance (devlog) → a valid ticket for a principal is
-required. Ticket delivery (SSR-embedded like a CSRF token vs fetched over the
-authenticated WS) is a build-slice detail; either reuses TokenAuth, no new crypto.
-Rejected alternative: `Domain=.deenv.org` on the session cookie would ride cross-origin
-but then leaks the cookie to every app subdomain — breaks the per-instance cookie
-isolation the login design built; not worth it.
+**Auth — the ambient session cookie (USER DECISION, 2026-07-10, supersedes the
+short-lived upload ticket below).** The original slice-2 design put BOTH edges on
+`assets.deenv.org`, which meant the `<app>.deenv.org`-scoped `HttpOnly` session cookie
+couldn't ride to upload — hence a purpose-built, short-lived HMAC ticket
+`(instanceId, userId, exp)`, minted by the app origin over the WS and presented as an
+`X-Upload-Ticket` header. **Tombstone: the ticket existed ONLY to bridge a cross-origin
+gap that no longer exists** — once upload is method-scoped back onto the app origin (§
+Origin above), the ambient cookie already does the job, so the ticket (mint op, header,
+verify path, its own tests) was deleted whole rather than kept alongside a second
+mechanism. Upload now uses the EXACT `/session` pattern every other authenticated app
+request uses: the request carries the `deenv_session_<id>` cookie automatically (browser
+default, same-origin in prod after nginx's method-scoped routing; `credentials:'include'`
+in dev's same-host-different-port case), and `AssetsHandler` reads it via the SAME
+`PrincipalFromCookie` → `TokenAuth.Verify` two-liner `ContentHandler` already runs on
+every SSR GET (ContentHandler.cs:61-68) — no new crypto, no new wire concept, upload just
+joins the set of things the ambient cookie already authenticates. Posture unchanged from
+the floor's own: Dormant instance (AccessFloor.cs:52) → no cookie required, upload open
+exactly as every data write is open on a dormant app; ruled instance (devlog) → the
+cookie must verify to a real principal, checked BEFORE any disk IO — 401 otherwise, and
+nothing is written to the pool.
 
 Finer per-type gating is impossible at upload time (the blob isn't attached to a type
 yet) and unnecessary: an unreferenced blob is inert, and the typed WRITE that
 references it is still governed by the ordinary edit floor.
 
-**CORS:** the POST is cross-origin (app subdomain → `assets.deenv.org`), so the assets
-origin echoes `Access-Control-Allow-Origin` for same-registrable-domain (`*.deenv.org`)
-callers — a widening of the same-host `SessionHandler.Cors` check
-(ContentHandler.cs:193-206) from same-host to same-site. Serve is a plain `<img>` GET,
-not a CORS-restricted fetch, so it needs none.
+**CSRF (a cookie-authed POST is a classic CSRF surface — a new consideration the ticket
+design never had, since a ticket had to be actively fetched and couldn't ride ambiently):
+TWO independent locks, not one.**
+1. **The MIME allowlist already closes it.** A plain HTML form can only submit the three
+   CORS-safelisted content types (`text/plain`, `application/x-www-form-urlencoded`,
+   `multipart/form-data`) without triggering a preflight — every one of those is REJECTED
+   by the upload's `image/*` allowlist (415). A cross-origin `fetch`/XHR that DOES set an
+   `image/*` `Content-Type` triggers a CORS preflight (`OPTIONS`) this handler never
+   answers affirmatively for a foreign origin, so the browser blocks the real request
+   before it's ever sent. Classic CSRF (a passive HTML form, no attacker-controlled
+   response reading) cannot reach this endpoint at all.
+2. **An explicit same-host Origin check is the second, belt-and-braces lock** —
+   `AssetsHandler` rejects 403, BEFORE any other work, whenever a request carries an
+   `Origin` header that isn't same-host (the SameHostOrigin check the CORS echo already
+   used, now also load-bearing as a hard gate, not just a header-echo condition). Cheap,
+   and it turns a future relaxed-CORS accident or browser quirk into a hard 403 instead
+   of a silent bypass — defense in depth on top of an already-sufficient MIME allowlist,
+   not the sole guard.
+
+**CORS:** in prod, upload is same-origin after nginx's method-scoped routing (§ Origin
+above) — no CORS needed there at all. In dev (same-host, different port), the response
+echoes `Access-Control-Allow-Origin` + `Access-Control-Allow-Credentials: true` for the
+same-host caller, mirroring `SessionHandler.Cors` (ContentHandler.cs:193-206) exactly —
+the credentials flag is what lets a dev `fetch(..., {credentials:'include'})` actually
+have the cookie honored cross-port. Serve is a plain `<img>` GET, not a CORS-restricted
+fetch, so it needs none, unchanged.
 
 **Limits:** kernel-side size cap, default 10 MB, checked while streaming (abort + delete
-temp past the cap). Deploy: `client_max_body_size 12m;` in the `assets.deenv.org` block.
+temp past the cap). Deploy: `client_max_body_size 12m;` on the app subdomain's
+method-scoped `POST /assets` location (§ Origin above) — `GET /assets` (ordinary page
+space) and the `assets.deenv.org` serve block need no such bump.
 
 **Ceiling (slice 1 build, GenHTTP streaming spike — empirically proven, not theorized):**
 a raw-socket probe against GenHTTP.Engine.Internal 10.5.3 showed the engine buffers the
@@ -376,13 +433,13 @@ that image doesn't have. Designing it now would be scope creep on the dogfood ne
 - **Backup/deploy:** any recursive copy of `instances/` (the DEPLOY.md process) carries
   `blobs/` automatically — nothing to wire, but backups now grow with media; interacts
   with the 1 GB box ceiling below.
-- **Which instance's pool does an upload hit?** The instance named in the upload URL
-  (`assets.deenv.org/<name>`) — which the page fills from its own instance, and the
-  ticket is scoped to that instanceId, so a ticket for app A can't write app B's pool.
-  No cross-instance data-editing surface exists today (the designer edits DESIGNS; app
-  data is edited in the app's own UI), so "editing app N's data from elsewhere" has no
-  home. If such a surface ever appears, it mints a ticket for app N and POSTs to
-  `assets.deenv.org/N` — the mechanism already generalizes.
+- **Which instance's pool does an upload hit?** (2026-07-10 revision) The instance the
+  `POST /assets` landed on — nginx's method-scoped route pins each app subdomain to its
+  OWN backend the same way `/ws`/`/session` already are, and the session cookie itself
+  is per-instance-named (`deenv_session_<id>`), so a cookie minted for app A cannot even
+  PARSE as app B's cookie name, let alone verify against app B's secret. No cross-instance
+  data-editing surface exists today (the designer edits DESIGNS; app data is edited in
+  the app's own UI), so "editing app N's data from elsewhere" has no home.
 
 ### 6. Security posture
 
@@ -400,9 +457,15 @@ that image doesn't have. Designing it now would be scope creep on the dogfood ne
   app's images are protected by hash-unguessability alone, not by its subdomain's
   htpasswd gate. Named in §3; listed again as a ceiling.
 - Name-shape validation on GET (regex above) is the entire path-traversal surface.
-- Upload ticket is a short-lived signed HMAC (existing TokenAuth) — a leaked ticket
-  lets a POST until it expires, bounded to one instance's pool; an unreferenced blob is
-  inert until a floored WRITE cites it.
+- Upload auth is the ambient session cookie (2026-07-10 — supersedes the short-lived
+  ticket) — the SAME `HttpOnly`/`SameSite=Lax` cookie every other authenticated write
+  already trusts; a leaked cookie is the SAME class of exposure `/session` already
+  carries, bounded to one instance's pool. A cookie-authed POST is CSRF-checked twice
+  (the MIME allowlist + the Origin same-host 403, §2) — a strictly NARROWER attack
+  surface than the ticket had (a ticket, once minted, was a bearer credential with no
+  origin binding of its own; the cookie's `SameSite=Lax` + this handler's own Origin
+  check are two independent CSRF locks the ticket design never needed but also never
+  had). An unreferenced blob is inert until a floored WRITE cites it.
 - Upload floor: dormant-open mirrors the existing write posture (a public dormant app
   is already fully writable — blobs add disk-fill to an exposure class that already
   exists; both are capped only by the size limit). Public instances with rules (devlog)
@@ -503,8 +566,8 @@ the user and was settled same day (§3).
 | Topic | Status |
 |---|---|
 | Content-addressed per-instance append-only pool | Settled (design; grill-verified inert to store machinery) |
-| Blob domain / URL shape | Settled (USER 2026-07-06, final): dedicated `assets.deenv.org`, app URL space stays 100% clean; supersedes the same-day same-port ruling |
-| Upload edge: raw-body POST to blob domain, short-lived ticket auth, same-site CORS, 10 MB cap | Settled (design) — GenHTTP streaming = named spike |
+| Blob domain / URL shape | Settled (USER 2026-07-06 SERVE; USER 2026-07-10 revises UPLOAD back to the app origin, method-scoped POST — see §2/§Origin): serve on dedicated `assets.deenv.org`, upload on `<app>.deenv.org` POST /assets, app GET-page space stays 100% clean either way |
+| Upload edge: raw-body POST on the app origin (method-scoped), ambient session-cookie auth + Origin/MIME CSRF locks, 10 MB cap | Settled (design, slice 2b) — GenHTTP streaming = named spike; supersedes the slice-2 short-lived ticket (tombstoned in §2) |
 | Serve edge: capability-URL boundary, origin-isolated, immutable caching, SVG-less allowlist | Settled (design; default judgment calls) |
 | `image` scalar (password-template, text-shaped) | Settled (design) |
 | Generic AND custom-app upload+display+storage | Settled (design): shared upload component (RefSelect precedent) + `sys.assetUrl` builtin; storage mode-agnostic |

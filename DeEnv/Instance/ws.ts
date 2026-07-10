@@ -112,34 +112,6 @@ let nextParseEntryId = -1_000_000_000;
 interface ParseExprsRequest { ctx: ExecObject; state: ParseMissState; texts: string[]; }
 const parseExprsRequests = new Map<number, ParseExprsRequest>();
 
-// ── upload ticket (assets slice 2) ──────────────────────────────────────────────────────────────────
-//
-// Self-correlating request map, same shape as parseExprsRequests: a msgId → the Promise's resolve
-// function, so the reply (dispatched early in onWsMessage, before the generic correlated-ack block —
-// it is NOT a mutation ack) can hand the ticket back to whoever's awaiting requestUploadTicket().
-const uploadTicketRequests = new Map<number, (ticket: string | null) => void>();
-// A ticket request should never hang forever if the connection drops mid-flight (wsSend queues silently
-// when the socket isn't open) — bounded so uploadBlob always eventually proceeds (with no ticket, which
-// the ruled-instance edge will then correctly 401 on, surfacing the ordinary failure banner) rather than
-// hanging on a broken connection.
-const uploadTicketTimeoutMs = 5000;
-
-function requestUploadTicket(): Promise<string | null> {
-    return new Promise(resolve => {
-        const msgId = nextWsMsgId++;
-        let settled = false;
-        const settle = (ticket: string | null) => {
-            if (settled) return;
-            settled = true;
-            uploadTicketRequests.delete(msgId);
-            resolve(ticket);
-        };
-        uploadTicketRequests.set(msgId, settle);
-        setTimeout(() => settle(null), uploadTicketTimeoutMs);
-        wsSend({ op: "uploadTicket", id: msgId, clientId: uiStatic.clientId });
-    });
-}
-
 function parseMissStateOf(ctx: ExecObject): ParseMissState {
     let state = parseMissStateByCtx.get(ctx);
     if (state == null) {
@@ -703,12 +675,14 @@ async function persistLogout(): Promise<void> {
 // precedent above) — the same base sys.assetUrl/window.initBlobBase resolves server-side, so upload
 // and display agree on one origin without a second base computation.
 //
-// UPLOAD TICKET (assets slice 2, §2): the ambient session cookie doesn't ride to the asset origin, so a
-// ruled instance needs a ticket. The client does NOT duplicate the floor's dormant/ruled posture logic —
-// it always TRIES to fetch one over the already-authenticated WS (requestUploadTicket), and the server
-// decides whether one is needed (null back on a dormant floor or an anonymous session — see
-// HandleUploadTicket); the header is sent only when a ticket came back, which is exactly right on a
-// dormant instance too (no ticket sent, matching slice 1's behavior verbatim there).
+// UPLOAD AUTH (assets slice 2b, §2 — SUPERSEDES the slice-2 ticket): the AMBIENT SESSION COOKIE now
+// authenticates upload, the exact `credentials: "include"` idiom persistLogin/persistLogout already use
+// for /session above — no ticket round trip needed. The cookie rides automatically (same-origin in prod
+// after nginx's method-scoped POST routing; cross-port-same-host in dev, where `credentials: "include"`
+// is what makes the browser attach it and AssetsHandler's CORS echo — Access-Control-Allow-Credentials —
+// is what makes the browser accept the response). The client does not duplicate the floor's
+// dormant/ruled posture logic: it always sends the cookie (harmless on a dormant instance, which never
+// checks it); the server decides whether one is required.
 //
 // UX review fix: a failure used to just return "" with NOTHING shown — an operator hitting the
 // (tested) 10 MB cap saw a dead control. Routes into the SAME global error banner (uiStatic.lastError,
@@ -716,12 +690,10 @@ async function persistLogout(): Promise<void> {
 // a bespoke one just for images.
 async function uploadBlob(file: File): Promise<string> {
     try {
-        const ticket = await requestUploadTicket();
-        const headers: Record<string, string> = { "Content-Type": file.type || "application/octet-stream" };
-        if (ticket != null) headers["X-Upload-Ticket"] = ticket;
         const res = await fetch(assetUrl("/assets"), {
             method: "POST",
-            headers,
+            credentials: "include",
+            headers: { "Content-Type": file.type || "application/octet-stream" },
             body: file,
         });
         if (!res.ok) {
@@ -1135,7 +1107,6 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
                             sessionAlive?: boolean;
                             conflicts?: WireConflict[];
                             entries?: { [text: string]: string };
-                            ticket?: string; exp?: number;
                             state?: ServerDtState; error?: string }): void {
     // M12 auto-live parse-op — dispatched FIRST, ahead of the correlated mutating-ack block below. A
     // parseExprsResult reply carries a (self-correlating, via parseExprsRequests) numeric `id` but is NOT a
@@ -1147,15 +1118,6 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
     // `newVersion`/`conflicts` any later branch could still act on.
     if (msg.op === "parseExprsResult" && typeof msg.id === "number" && msg.entries != null) {
         applyParseExprsResult(msg.id, msg.entries);
-        return;
-    }
-    // uploadTicket (assets slice 2) — dispatched FIRST for the SAME reason as parseExprsResult: it is a
-    // self-correlating request/reply, not a mutation ack (stages nothing, journals nothing), and must not
-    // fall into the correlated ack block below (which would try to commit/rollback a non-existent journal
-    // entry for this id). A ticket is present when the server minted one; absent (undefined) otherwise —
-    // both collapse to the resolver receiving `null`.
-    if (msg.op === "uploadTicket" && typeof msg.id === "number") {
-        uploadTicketRequests.get(msg.id)?.(msg.ticket ?? null);
         return;
     }
     // Correlated accept/reject first: an error rolls the journal back, an ok commits.

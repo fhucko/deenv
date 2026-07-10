@@ -2,8 +2,10 @@ Feature: Assets — the content-addressed blob pool + the `image` scalar
   The per-instance blob pool (docs/plans/assets-design.md): a POST upload edge hashes and stores raw
   bytes content-addressed (`instances/<id>/blobs/<sha256-hex>.<ext>`), a GET serve edge streams them
   back by that name. Bytes live ONLY in the pool; the `image` scalar (a prop's value) carries only the
-  hash-name string. A DORMANT instance's upload edge stays open with no ticket; a RULED instance (any
-  access rule declared) requires a valid, unexpired upload ticket for a real principal (§2).
+  hash-name string. A DORMANT instance's upload edge stays open with no session cookie; a RULED instance
+  (any access rule declared) requires the AMBIENT SESSION COOKIE for a real principal (§2, slice 2b — the
+  exact /session mechanism, superseding the slice-2 short-lived ticket). A same-host Origin check is a
+  CSRF belt-and-braces second lock on top of the cookie.
 
   Background:
     Given the assets app is running
@@ -57,41 +59,40 @@ Feature: Assets — the content-addressed blob pool + the `image` scalar
     When I upload a real image file to the photo field
     Then the page shows "img.image-thumb"
 
-  # ── the upload ticket (assets slice 2, §2) ─────────────────────────────────────────
+  # ── the upload auth: the ambient session cookie (assets slice 2b, §2) ───────────────
 
   @assets
-  Scenario: Upload on a dormant instance succeeds with no ticket sent at all (slice 1 regression guard)
+  Scenario: Upload on a dormant instance succeeds with no cookie sent at all (slice 1 regression guard)
     When I upload 40 random bytes as "image/png"
     Then the asset response status is 200
 
   @assets
-  Scenario: An upload on a ruled instance with no ticket is rejected and leaves no blob file
+  Scenario: An upload on a ruled instance with no cookie is rejected and leaves no blob file
     Given the ruled assets app is running
-    When I upload 40 random bytes as "image/png" with no ticket
+    When I upload 40 random bytes as "image/png" with no cookie
     Then the asset response status is 401
     And no temp file remains in the pool
 
   @assets
-  Scenario: A logged-in session on a ruled instance obtains a ticket and the upload succeeds
+  Scenario: A logged-in session on a ruled instance uploads with its session cookie and the upload succeeds
     Given the ruled assets app is running
     And the seeded user has the password "secret123"
-    When the session logs in as "Alice" with password "secret123" and requests an upload ticket
-    And I upload 40 random bytes as "image/png" with the session's ticket
+    When the session logs in as "Alice" with password "secret123" via the session endpoint
+    And I upload 40 random bytes as "image/png" with the session's cookie
     Then the asset response status is 200
     When I GET the uploaded blob
     Then the asset response status is 200
     And the asset response body is the uploaded bytes
 
   @assets
-  Scenario: An expired ticket is rejected on a ruled instance and leaves no blob file
+  Scenario: A garbage cookie is rejected on a ruled instance and leaves no blob file
     Given the ruled assets app is running
-    When I upload 40 random bytes as "image/png" with an expired ticket
+    When I upload 40 random bytes as "image/png" with a garbage cookie
     Then the asset response status is 401
     And no temp file remains in the pool
 
   @assets
-  Scenario: A garbage/tampered ticket is rejected on a ruled instance and leaves no blob file
-    Given the ruled assets app is running
-    When I upload 40 random bytes as "image/png" with the ticket "not-a-real-ticket"
-    Then the asset response status is 401
+  Scenario: A cross-site Origin on the upload POST is rejected before any auth or disk work
+    When I upload 40 random bytes as "image/png" with the Origin header "http://evil.example"
+    Then the asset response status is 403
     And no temp file remains in the pool

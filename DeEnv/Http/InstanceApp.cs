@@ -69,8 +69,7 @@ public static class InstanceApp
         var sessions = new ClientSessionStore();
         auth ??= TokenAuth.Ephemeral();
         var ws = new WsHandler(store, description, sessions, registry ?? new LiveRegistry(),
-            hostActions ?? new NoHostActions(), mountBase, publishPreview: publishPreview,
-            auth: auth, instanceId: instanceId);
+            hostActions ?? new NoHostActions(), mountBase, publishPreview: publishPreview);
 
         // Native GenHTTP websocket (no Fleck). We read/write raw UTF-8 frames so the
         // JSON payload goes on the wire verbatim — no extra serialization wrapping.
@@ -91,10 +90,10 @@ public static class InstanceApp
             .Add("js", new BundleHandlerBuilder())
             .Add("session", new SessionHandler(store, description, instanceId, auth))
             // The blob pool's upload+serve edges (docs/plans/assets-design.md) — additive, a sibling
-            // of ws/js/session, so the app tree stays reserved-path-free. `auth`/`instanceId` are the
-            // SAME TokenAuth + id ContentHandler/WsHandler use, so an upload ticket minted over the WS
-            // verifies here too (assets slice 2, §2).
-            .Add("assets", new AssetsHandlerBuilder(blobPool ?? new NoBlobPool(), description, instanceId, auth));
+            // of ws/js/session, so the app tree stays reserved-path-free. `store`/`description`/
+            // `instanceId`/`auth` are the SAME values ContentHandler/SessionHandler use, so the ambient
+            // session cookie a login mints there verifies here too (assets slice 2b, §2).
+            .Add("assets", new AssetsHandlerBuilder(blobPool ?? new NoBlobPool(), store, description, instanceId, auth));
 
         return (app, asset);
     }

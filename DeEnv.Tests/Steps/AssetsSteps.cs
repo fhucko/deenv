@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DeEnv.Code;
@@ -16,9 +17,10 @@ namespace DeEnv.Tests.Steps;
 // class as StoredDataSteps' "reopened store" scenarios). "The store is opened again on the same data
 // file" is REUSED verbatim from StoredDataSteps.cs (it just rebuilds ctx.Store from ctx.DataFilePath).
 //
-// The upload-ticket scenarios (§2) mint/present the ticket the SAME way production does: a WsHandler
-// built with the RUNNING server's own TokenAuth (ctx.Server.Auth) + instanceId, so a ticket minted here
-// verifies against the exact secret AssetsHandler checks — no second, out-of-band secret.
+// The cookie-auth scenarios (§2, slice 2b — supersedes the slice-2 ticket) obtain a REAL session cookie
+// the exact way a browser does: POST /session (the SessionHandler HTTP endpoint) with a cookie-aware
+// HttpClient, then reuse that SAME client for the upload POST so its CookieContainer attaches the cookie
+// automatically — no manual header slicing, no second auth path in the test harness.
 [Binding]
 public sealed class AssetsSteps(InstanceContext ctx)
 {
@@ -26,7 +28,6 @@ public sealed class AssetsSteps(InstanceContext ctx)
     private int _lastStatus;
     private string _lastUploadedName = "";
     private readonly List<string> _uploadedNames = [];
-    private string _ticket = "";
 
     // GET-response state (headers read into plain fields — HttpResponseMessage itself is disposed
     // right after each request).
@@ -89,60 +90,69 @@ public sealed class AssetsSteps(InstanceContext ctx)
     public void GivenSeededUserPassword(string password) =>
         ctx.Store!.WriteField(InstanceContext.AssetsRuledUserId, "password", new TextValue(AuthCrypto.Hash(password)));
 
-    // Log in over a WS session bound to the RUNNING server's own TokenAuth/instanceId (ctx.Server.Auth —
-    // the exact secret AssetsHandler verifies against), then immediately ask that session for an upload
-    // ticket. The ticket (or "" on a failed login/no ticket) is captured for the next upload step.
-    [When("the session logs in as {string} with password {string} and requests an upload ticket")]
-    public void WhenLogsInAndRequestsTicket(string name, string password)
+    // A cookie-aware client for the session that just logged in — reused by the next upload step so its
+    // CookieContainer attaches the Set-Cookie'd session cookie automatically, the exact browser mechanism
+    // (assets slice 2b: upload auth is the ambient session cookie, not a minted ticket).
+    private HttpClient? _cookieClient;
+
+    // POST /session — the REAL SessionHandler HTTP endpoint (the same one the browser's persistLogin
+    // calls, ws.ts), so the cookie this captures is byte-identical to what a real login produces. A
+    // failed login still leaves `_cookieClient` set (no cookie was set, so the next upload rides none —
+    // exercised implicitly by "ruled + garbage cookie" using its OWN client instead).
+    [When("the session logs in as {string} with password {string} via the session endpoint")]
+    public async Task WhenLogsInViaSessionEndpoint(string name, string password)
     {
-        var sessions = new ClientSessionStore();
-        var session = sessions.Create();
-        var ws = new WsHandler(ctx.Store!, ctx.Description!, sessions,
-            auth: ctx.Server!.Auth, instanceId: TestInstanceServer.InstanceId);
-        ws.ProcessMessage(
-            $$"""{ "op": "login", "clientId": "{{session.Id}}", "name": "{{name}}", "password": "{{password}}" }""");
-        var reply = ws.ProcessMessage($$"""{ "op": "uploadTicket", "clientId": "{{session.Id}}" }""");
-        using var doc = JsonDocument.Parse(reply);
-        _ticket = doc.RootElement.TryGetProperty("ticket", out var t) && t.ValueKind == JsonValueKind.String
-            ? t.GetString()!
-            : "";
+        _cookieClient = new HttpClient(new HttpClientHandler
+        {
+            UseCookies = true,
+            CookieContainer = new CookieContainer(),
+        });
+        var body = JsonSerializer.Serialize(new { name, password });
+        using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+        var response = await _cookieClient.PostAsync(ctx.AssetBaseUrl + "/session", content);
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+        var replyBody = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(replyBody);
+        await Assert.That(doc.RootElement.GetProperty("ok").GetBoolean()).IsTrue();
     }
 
-    [When("I upload {int} random bytes as {string} with the session's ticket")]
-    public async Task WhenIUploadWithSessionTicket(int count, string contentType)
+    [When("I upload {int} random bytes as {string} with the session's cookie")]
+    public async Task WhenIUploadWithSessionCookie(int count, string contentType)
     {
         var bytes = new byte[count];
         new Random(4242).NextBytes(bytes);
-        await UploadAsync(bytes, contentType, _ticket);
+        await UploadAsync(bytes, contentType, client: _cookieClient);
     }
 
-    [When("I upload {int} random bytes as {string} with no ticket")]
-    public async Task WhenIUploadWithNoTicket(int count, string contentType)
+    [When("I upload {int} random bytes as {string} with no cookie")]
+    public async Task WhenIUploadWithNoCookie(int count, string contentType)
     {
         var bytes = new byte[count];
         new Random(4242).NextBytes(bytes);
-        await UploadAsync(bytes, contentType, "");
+        await UploadAsync(bytes, contentType);
     }
 
-    // A ticket minted with a `now` already past its own TTL — an easy, sleep-free way to exercise
-    // expiry (TokenAuth.MintTicket computes `exp` from the `now` it's given, so backdating `now` yields
-    // an already-expired ticket without waiting).
-    [When("I upload {int} random bytes as {string} with an expired ticket")]
-    public async Task WhenIUploadWithExpiredTicket(int count, string contentType)
+    // A garbage Cookie header under the REAL per-instance cookie name (TokenAuth.CookiePrefix +
+    // TestInstanceServer.InstanceId) — TokenAuth.Verify must reject it (wrong shape, no valid signature)
+    // exactly like it would reject a tampered real cookie.
+    [When("I upload {int} random bytes as {string} with a garbage cookie")]
+    public async Task WhenIUploadWithGarbageCookie(int count, string contentType)
     {
         var bytes = new byte[count];
         new Random(4242).NextBytes(bytes);
-        var (ticket, _) = ctx.Server!.Auth!.MintTicket(
-            TestInstanceServer.InstanceId, InstanceContext.AssetsRuledUserId, DateTimeOffset.UtcNow.AddSeconds(-120));
-        await UploadAsync(bytes, contentType, ticket);
+        var cookieHeader = $"{TokenAuth.CookiePrefix}{TestInstanceServer.InstanceId}=not-a-real-cookie";
+        await UploadAsync(bytes, contentType, rawCookieHeader: cookieHeader);
     }
 
-    [When("I upload {int} random bytes as {string} with the ticket {string}")]
-    public async Task WhenIUploadWithGivenTicket(int count, string contentType, string ticket)
+    // CSRF belt-and-braces (assets slice 2b, §2): a POST whose Origin does not match the request's own
+    // host must be rejected 403 BEFORE any auth/MIME/disk work — proven here independent of dormant/ruled
+    // posture (the Background's dormant server is enough; the Origin check runs unconditionally).
+    [When("I upload {int} random bytes as {string} with the Origin header {string}")]
+    public async Task WhenIUploadWithForeignOrigin(int count, string contentType, string origin)
     {
         var bytes = new byte[count];
         new Random(4242).NextBytes(bytes);
-        await UploadAsync(bytes, contentType, ticket);
+        await UploadAsync(bytes, contentType, originOverride: origin);
     }
 
     // Playwright sets the file directly from an in-memory buffer (FilePayload) — no real file on disk,
@@ -175,23 +185,38 @@ public sealed class AssetsSteps(InstanceContext ctx)
     [When("I upload the same bytes again as {string}")]
     public async Task WhenIUploadSameBytesAgain(string contentType) => await UploadAsync(_lastBytes, contentType);
 
-    private async Task UploadAsync(byte[] bytes, string contentType, string ticket = "")
+    // `client` — when supplied, reuse a cookie-aware HttpClient (the login flow's) so its CookieContainer
+    // attaches the session cookie automatically; null uses a fresh cookie-less client (the "no cookie"
+    // and CSRF scenarios). `rawCookieHeader` sends a LITERAL Cookie header (the garbage-cookie scenario,
+    // which needs a cookie NAME the CookieContainer would never produce on its own). `originOverride`
+    // sends an explicit Origin header (the CSRF scenario) instead of the plain same-host-implicit case
+    // (a bare HttpClient sends no Origin at all, which the handler treats as "not a browser" and allows).
+    private async Task UploadAsync(byte[] bytes, string contentType,
+        HttpClient? client = null, string? rawCookieHeader = null, string? originOverride = null)
     {
         _lastBytes = bytes;
-        using var http = new HttpClient();
-        using var content = new ByteArrayContent(bytes);
-        content.Headers.Remove("Content-Type");
-        content.Headers.TryAddWithoutValidation("Content-Type", contentType);
-        using var request = new HttpRequestMessage(HttpMethod.Post, ctx.AssetBaseUrl + "/assets") { Content = content };
-        if (ticket.Length > 0) request.Headers.TryAddWithoutValidation("X-Upload-Ticket", ticket);
-        var response = await http.SendAsync(request);
-        _lastStatus = (int)response.StatusCode;
-        if (response.IsSuccessStatusCode)
+        var http = client ?? new HttpClient();
+        try
         {
-            var body = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(body);
-            _lastUploadedName = doc.RootElement.GetProperty("name").GetString() ?? "";
-            _uploadedNames.Add(_lastUploadedName);
+            using var content = new ByteArrayContent(bytes);
+            content.Headers.Remove("Content-Type");
+            content.Headers.TryAddWithoutValidation("Content-Type", contentType);
+            using var request = new HttpRequestMessage(HttpMethod.Post, ctx.AssetBaseUrl + "/assets") { Content = content };
+            if (rawCookieHeader != null) request.Headers.TryAddWithoutValidation("Cookie", rawCookieHeader);
+            if (originOverride != null) request.Headers.TryAddWithoutValidation("Origin", originOverride);
+            var response = await http.SendAsync(request);
+            _lastStatus = (int)response.StatusCode;
+            if (response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(body);
+                _lastUploadedName = doc.RootElement.GetProperty("name").GetString() ?? "";
+                _uploadedNames.Add(_lastUploadedName);
+            }
+        }
+        finally
+        {
+            if (client == null) http.Dispose();
         }
     }
 
@@ -279,11 +304,11 @@ public sealed class AssetsSteps(InstanceContext ctx)
     // ── the size cap ──────────────────────────────────────────────────────────
 
     // Asserts the pool directory is EMPTY, not just free of `.tmp-*` names — the rejection scenarios
-    // (the 10 MB cap, and the assets-slice-2 ticket rejections) protect a "nothing touches disk" floor,
-    // not merely "no leftover temp file": a regression that moved the ticket check to AFTER the write
-    // loop (so a rejected upload still streamed bytes to a temp file, or even committed one) must fail
-    // here. A `.tmp-*`-only glob would miss a COMMITTED blob landing before the reject — this catches
-    // that too, since a rejection must never produce ANY pool file, named or not.
+    // (the 10 MB cap, and the assets-slice-2b cookie/CSRF rejections) protect a "nothing touches disk"
+    // floor, not merely "no leftover temp file": a regression that moved the auth check to AFTER the
+    // write loop (so a rejected upload still streamed bytes to a temp file, or even committed one) must
+    // fail here. A `.tmp-*`-only glob would miss a COMMITTED blob landing before the reject — this
+    // catches that too, since a rejection must never produce ANY pool file, named or not.
     [Then("no temp file remains in the pool")]
     public void ThenNoTempFileRemainsInPool()
     {
