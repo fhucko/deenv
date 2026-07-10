@@ -3329,6 +3329,76 @@ public sealed class DesignerSteps(InstanceContext ctx)
             "const before = (x, y) => !!(x.compareDocumentPosition(y) & Node.DOCUMENT_POSITION_FOLLOWING); " +
             "return before(t, r) && before(r, p) && before(p, b); }");
 
+    // ── M12 S5b — the palette + insert-at-selection ─────────────────────────────────────────────────
+    //
+    // A convertible render pairing a plain-element tree (main>h1"Hello", the SelectionConvertibleRender
+    // shape — a container element, a leaf text row) with a trivial ZERO-ARG design component (`Badge`),
+    // so palette scenarios can insert it anywhere without an unbound-param edge case muddying the proof.
+    private const string PaletteConvertibleRender =
+        "ui\n    fn Badge()\n        return <span>\n            \"Badge\"\n    fn render()\n        return <main>\n            <h1>\n                \"Hello\"\n";
+
+    [When("I author a palette-test convertible render into the design's UI")]
+    public async Task WhenAuthorPaletteRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(PaletteConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == PaletteConvertibleRender));
+    }
+
+    // The palette is a native <details> (no framework toggle state — EXPECTATIONS' minimal-by-default):
+    // clicking its own <summary> opens it, exactly like the pre-existing Advanced code disclosure.
+    [When("I open the component palette")]
+    public async Task WhenOpenComponentPalette() =>
+        await ctx.Page!.Locator(".design-editor details.component-palette summary.palette-toggle").ClickAsync();
+
+    // A named .palette-item button exists inside the group carrying this label — proves BOTH that
+    // reflection over design.fns (This design) and the shipped ctx.libNames (Library) reach the palette,
+    // with zero registry: any component that shows up here does so purely because it is IN SCOPE.
+    [Then("the component palette lists {string} in the {string} group")]
+    public async Task ThenPaletteListsInGroup(string name, string group) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const groups = [...document.querySelectorAll('.design-editor .component-palette .palette-group')]; " +
+            $"const g = groups.find(x => {{ const l = x.querySelector('.palette-group-label'); return l != null && l.textContent === {JsString(group)}; }}); " +
+            $"if (g == null) return false; return [...g.querySelectorAll('.palette-item')].some(b => b.textContent === {JsString(name)}); }}");
+
+    [When("I click the palette item {string}")]
+    public async Task WhenClickPaletteItem(string name) =>
+        await ctx.Page!.Locator($".design-editor .component-palette .palette-item:text-is({CssString(name)})").First.ClickAsync();
+
+    // Click a LEAF row (a text/expr node — no tag, no .node-tag-row) by its own expr input's exact
+    // source text — the leaf-selection half of the insert-target rules (a leaf can't hold children, so
+    // an insert there falls back to SIBLING semantics). The feature writes inner quotes as `\"` (the
+    // Gherkin escape for a literal `"` inside the quoted argument), which Reqnroll passes through
+    // verbatim — unescape first (WhenEditComponentBodyLeaf's own precedent).
+    [When("I click the tree editor's leaf row reading {string}")]
+    public async Task WhenClickTreeEditorLeafRow(string expr) =>
+        await ctx.Page!.Locator($".design-editor .render-tree .node-leaf:has(input.node-expr[value={CssString(expr.Replace("\\\"", "\""))}])")
+            .First.ClickAsync();
+
+    // The insert-into-an-element proof: the CHILD tag's row is the LAST entry inside the PARENT tag
+    // row's own `.node-children` (a direct-child scope on both sides, so a same-tag row nested deeper
+    // can never falsely satisfy this).
+    [Then("the tree editor's {string} element row is the last child of the {string} element row")]
+    public async Task ThenRowIsLastChildOf(string childTag, string parentTag) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const parents = [...document.querySelectorAll('.design-editor .render-tree .node-element')]; " +
+            $"const parent = parents.find(e => {{ const t = e.querySelector(':scope > .node-tag-row input.node-tag'); return t != null && t.value === {JsString(parentTag)}; }}); " +
+            $"if (parent == null) return false; " +
+            $"const kids = parent.querySelector(':scope > .node-children'); " +
+            $"const last = kids?.lastElementChild; if (last == null) return false; " +
+            $"const t = last.querySelector(':scope > .node-tag-row input.node-tag'); return t != null && t.value === {JsString(childTag)}; }}");
+
+    // The literal-render honesty proof (a lib name is not in design.fns, so the canvas walk's expansion
+    // check never matches it — it falls straight through to an ordinary, unstyled tag element). Waits for
+    // ATTACHMENT, not the default VISIBLE state: an unknown custom tag (the browser's own HTMLUnknownElement
+    // treatment — a literal <settable> has no styling and, empty of content, no rendered box) is legitimately
+    // a zero-area element, which Playwright's visibility check would wait on forever though the proof itself
+    // (the element exists, unexpanded) already holds.
+    [Then("the design canvas contains a literal {string} element")]
+    public async Task ThenCanvasContainsLiteralElement(string tag) =>
+        await ctx.Page!.Locator($".design-canvas {tag.ToLowerInvariant()}[data-node]").First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
+
     private static string JsString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 
     // A double-quoted CSS/Playwright string argument with quotes/backslashes escaped.

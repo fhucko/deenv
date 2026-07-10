@@ -862,6 +862,21 @@ public sealed class SsrRenderer
         .render-section { margin: 1.6rem 0 0.4rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
         .render-heading { font-size: 1.1rem; margin: 0 0 0.2rem; }
         .render-caption { color: var(--muted); font-size: 0.86rem; margin: 0.6rem 0; }
+        /* M12 S5b — the palette: an expand-on-demand <details> (native disclosure, no framework toggle state
+           needed) sitting between the canvas and the tree it inserts into — NOT a persistent sidebar, the
+           page is already long. .palette-target states the insert-at-selection rule up front, before the
+           operator picks a name. */
+        .component-palette { margin: 0.5rem 0 0.8rem; }
+        .palette-toggle { cursor: pointer; font-size: 0.86rem; color: var(--accent); padding: 0.2rem 0; }
+        .palette-target { color: var(--muted); font-size: 0.82rem; margin: 0.4rem 0; }
+        .palette-group { margin: 0.3rem 0 0.6rem; }
+        .palette-group-label { display: block; color: var(--muted); font-size: 0.78rem; text-transform: uppercase;
+          letter-spacing: 0.03em; margin: 0.2rem 0; }
+        .palette-group-caption { color: var(--muted); font-size: 0.78rem; font-style: italic; margin: 0.1rem 0 0.35rem; }
+        .palette-empty { color: var(--muted); font-size: 0.82rem; font-style: italic; }
+        .palette-item { display: inline-block; padding: 0.15rem 0.55rem; margin: 0.15rem 0.3rem 0.15rem 0;
+          font-size: 0.85rem; }
+        .palette-item:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: var(--accent); }
         /* M12 U1 — a Configurations row (a MetaUse: name + args + its own static preview) needs minimal
            containment: each is a DISCRETE, independent unit on an otherwise-tall component card, so a
            subtle border/background/spacing reads "two configs, two separate things" at a glance. No new
@@ -1425,6 +1440,9 @@ public sealed class SsrRenderer
     //             call values" banner (F3b) when a fn body has been edited since this ctx was shipped.
     //             EvaluateCtxExpr binds each into the eval scope as a callable, so a call-position expression
     //             (`{fmtDate(n.at)}`) evaluates with the real interpreter.
+    //   • libNames — (M12 S5b) a sorted plain ARRAY of `lib`'s own keys, so app Code can `foreach` over it
+    //             (the palette's Library group) — `lib` itself is a name-keyed object, and Code has no
+    //             generic key-enumeration over an object's props.
     //   • ambients / params — reserved-empty in v1 (the uses/S6/params follow-ups fill them).
     // An INVALID design (projection/load throws) degrades to an EMPTY payload — never a thrown exception that
     // would break the whole canvas: the walk then renders every expr as its chip (honest), and the STRUCTURAL
@@ -1436,6 +1454,7 @@ public sealed class SsrRenderer
         ExecObject Obj(params (string Name, IExecValue Value)[] props) =>
             new() { Id = --context.LastId.Value, Constant = true, Props = props.ToDictionary(p => p.Name, p => p.Value) };
         var empty = Obj();
+        ExecArray EmptyArr() => new() { Items = [], Id = --context.LastId.Value, Kind = ArrayKind.List };
         try
         {
             var designNode = _store.ReadNode(NodePath.Root.Field("designs").Key(design.Id.ToString())) as ObjectValue
@@ -1513,8 +1532,25 @@ public sealed class SsrRenderer
             }
             var libObj = new ExecObject { Id = --context.LastId.Value, Constant = true, Props = lib };
 
+            // libNames (M12 S5b — the palette's Library group): the SAME name set as `lib` above, reshaped
+            // into a plain sorted ARRAY the app's own deenv code can `foreach` over. `lib` is a name-keyed
+            // ExecObject and the language has no dict/keys() enumeration over an arbitrary object's props
+            // (confirmed at build time — `where`/`orderBy`/`any`/`single`/`add`/`remove` are the whole
+            // collection-method surface, all COLLECTION-shaped, not object-shaped); inventing one is out of
+            // scope for a name list already computed server-side, so this ships the reshaped list instead —
+            // zero new Code surface, one extra prop on data already built. Sorted for a stable, predictable
+            // palette order (`lib`'s dictionary enumeration order is not otherwise meaningful).
+            var libNamesArr = new ExecArray
+            {
+                Items = lib.Keys.OrderBy(n => n, StringComparer.Ordinal)
+                    .Select((n, i) => new ExecItem { Key = i, Value = new ExecText { Value = n } })
+                    .ToList(),
+                Id = --context.LastId.Value,
+                Kind = ArrayKind.List,
+            };
+
             return Obj(("db", seedDb), ("exprs", exprsObj), ("fns", fnsObj), ("types", typesObj), ("lib", libObj),
-                ("ambients", Obj()), ("params", Obj()));
+                ("libNames", libNamesArr), ("ambients", Obj()), ("params", Obj()));
         }
         catch (Exception ex)
         {
@@ -1524,7 +1560,8 @@ public sealed class SsrRenderer
             // walk (both twins) just displays it verbatim — see DegradeBannerText.
             Console.Error.WriteLine($"evalContext of design {design.Id} failed: {ex}");
             return Obj(("db", empty), ("exprs", empty), ("fns", empty), ("types", empty), ("lib", empty),
-                ("ambients", empty), ("params", empty), ("error", new ExecText { Value = DegradeBannerText(ex) }));
+                ("libNames", EmptyArr()), ("ambients", empty), ("params", empty),
+                ("error", new ExecText { Value = DegradeBannerText(ex) }));
         }
     }
 

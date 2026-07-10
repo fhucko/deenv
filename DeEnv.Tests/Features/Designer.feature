@@ -2489,3 +2489,110 @@ Feature: The operator IDE (designs library + instance design selector)
     When I click Convert to structured
     Then the design editor eventually shows the structured render tree editor
     Then the design editor's sections are ordered types, render, publish, branches
+
+  # ── M12 S5b — the palette + insert-at-selection ──────────────────────────────────────────────────
+  #
+  # "The library IS the palette" (visual-designer.md foreclosure guard): no registry, nothing needs
+  # registration to appear. This design's own component (Badge, a design.fns row) and a standard-
+  # library component (SetTable, shipped honestly via ctx.libNames — S5b's seam answer: the language
+  # has no dict/keys() enumeration, so BuildEvalContext reshapes ctx.lib's own keys into a plain array)
+  # both list, purely because they are in scope — zero classification code either side. A minimal Db
+  # type is added first: `sys.evalContext` (ctx.libNames' source) degrades to an empty payload for a
+  # typeless design (InstanceDescriptionLoader requires a root Db type), so the Library group needs one.
+  @m12 @single-user
+  Scenario: Opening the palette lists both the design's own components and the library
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "palettelist"
+    And I edit the design "palettelist"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a palette-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I open the component palette
+    Then the component palette lists "Badge" in the "This design" group
+    And the component palette lists "SetTable" in the "Library" group
+
+  @m12 @single-user
+  Scenario: Inserting a design component into a selected element adds it as the last child, selected, and the canvas expands it
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "palettechild"
+    And I edit the design "palettechild"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a palette-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the tree editor's "main" element row
+    Then the tree editor's "main" element row is selected
+    When I open the component palette
+    And I click the palette item "Badge"
+    Then the tree editor's "Badge" element row is the last child of the "main" element row
+    And the tree editor's "Badge" element row is selected
+    And the design canvas shows a "span" element reading "Badge"
+
+  # design.render conventionally holds exactly ONE root (fn render()'s single return — a designer-facing
+  # validation, "a design's render tree may have only one root"), so "nothing selected" cannot honestly
+  # fall back to design.render itself (that would mint a second root and invalidate the design). The honest
+  # fallback is the SAME rule a selected root element already gets: insert as its LAST CHILD.
+  @m12 @single-user
+  Scenario: Inserting with nothing selected falls back to the render root's children
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "palettetop"
+    And I edit the design "palettetop"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a palette-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I open the component palette
+    And I click the palette item "Badge"
+    Then the tree editor's "Badge" element row is the last child of the "main" element row
+    And the tree editor's "Badge" element row is selected
+    And the design canvas shows a "span" element reading "Badge"
+
+  @m12 @single-user
+  Scenario: Inserting a library component renders it literally on the canvas
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "palettelib"
+    And I edit the design "palettelib"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a palette-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I open the component palette
+    And I click the palette item "SetTable"
+    Then the tree editor's "SetTable" element row is the last child of the "main" element row
+    And the design canvas contains a literal "SetTable" element
+
+  @m12 @single-user
+  Scenario: Inserting into a selected leaf adds the new row as its sibling instead of nesting into it
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "paletteleaf"
+    And I edit the design "paletteleaf"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a palette-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the tree editor's leaf row reading "\"Hello\""
+    When I open the component palette
+    And I click the palette item "Badge"
+    Then the tree editor's "Badge" element row is the last child of the "h1" element row
+    And the tree editor's "Badge" element row is selected

@@ -1354,7 +1354,14 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         if (pendingAction != null) {
             const action = pendingAction;
             pendingAction = null;
-            runHandlerTransaction(action.reinvoke);
+            // action (not just action.reinvoke) must ride along: a re-run that reads a DIFFERENT un-shipped
+            // field than the first attempt did (the server harvests exactly what THAT attempt's own read
+            // touched, not a superset) needs the SAME graceful re-arm the original click got — dropping the
+            // action here left a second-round VNA with no `action` to re-arm, falling through to the "did
+            // real work" branch's unconditional re-throw and surfacing as a genuine uncaught error (M12 S5b:
+            // the palette's top-level insert reads `.order` on a row that was never rendered sorted, THEN —
+            // once merged — a second read on other rows the first attempt never reached).
+            runHandlerTransaction(action.reinvoke, action);
         }
         // Three-lens review fix 4b: this refetch's merge is the authoritative state a take-theirs asked
         // for — settle every ctx still showing "updated" back to "idle" (the confirmation has done its
@@ -1575,7 +1582,24 @@ function rekeyCreatedObject(obj: ExecObject, tempId: number, realId: number,
 function registerRemap(tempId: number, realId: number): void {
     uiStatic.state.localToServerIds[tempId] = realId;
     uiStatic.state.serverToLocalIds[realId] = tempId;
+    patchScalarVarsOnRemap(tempId, realId);
     wsSend({ op: "ackRemap", clientId: uiStatic.clientId, tempId });
+}
+
+// M12 S5b (the palette's "select what I just made" idiom, e.g. `coll.add(newRow); selectNode(newRow)`):
+// a top-level `ui var` that captured a just-added row's id BY VALUE (`selectedNode = sys.id(newRow)`)
+// synchronously — before this very remap — would otherwise go silently stale the instant it lands: the
+// var still holds the old transient (negative) number while the row itself now carries the new (real,
+// positive) one, so an `==` comparison (nodeClass's is-selected check) flips true→false with no user
+// action, undoing the selection the operator just made. Patch any WRITABLE top-scope INT var holding
+// exactly this tempId to the real id — module ui vars are the only place this idiom is used, and an id
+// is always an int, so this never touches a read-only binding, a non-scalar, or closure-local state.
+// The same "a negative id never collides with an unrelated value" invariant the id-remap machinery
+// already relies on elsewhere (arr.items keys share the same counter space) bounds the false-positive risk.
+function patchScalarVarsOnRemap(tempId: number, realId: number): void {
+    for (const item of Object.values(uiStatic.state.scope.items))
+        if (!item.isReadOnly && item.value.type === "int" && item.value.value === tempId)
+            item.value = { type: "int", value: realId };
 }
 
 // Apply an atomic-commit (Step B) `commit` ack's batch remap: for each created object the server minted, re-key
