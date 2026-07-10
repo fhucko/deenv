@@ -486,16 +486,28 @@ public sealed class SsrRenderer
         </html>
         """;
 
-    // The blob pool's HTTP base for THIS request (assets-design.md) — mirrors EXACTLY how /ws and /js
-    // resolve (the bootstrap script above, and ws.ts's basePrefix()/connectWs()): the same asset
-    // authority + mount-base prefix, with "/assets" as the path segment instead of "/ws"/"/js". Ships
-    // to the client as window.initBlobBase (read back, byte-identical, by sys.assetUrl on both twins —
-    // codeExec.ts's execAssetUrl), computed ONCE per page load exactly like initAssetAuthority, so a
-    // client-side render/refetch never re-derives it. Slice-1 scope (docs/plans/assets-design.md): this
-    // is the DEV shape (the shared asset-port authority) — the dedicated assets.deenv.org prod domain
-    // is a follow-up slice, not built here.
-    private static string BlobBase(string @base, string assetAuthority) =>
-        (assetAuthority.Length > 0 ? $"//{assetAuthority}" : "") + (@base == "/" ? "" : @base) + "/assets";
+    // The blob pool's SERVE base for THIS request (assets-design.md) — where `sys.assetUrl(name)`
+    // resolves an <img src>. Ships to the client as window.initBlobBase (read back, byte-identical,
+    // by sys.assetUrl on both twins — codeExec.ts's execAssetUrl), computed ONCE per page load exactly
+    // like initAssetAuthority. Two shapes (slice 4, assets-design.md §Origin):
+    //   • dev (no env var): derived like /ws and /js — asset authority + mount-base + "/assets".
+    //   • prod (DEENV_PUBLIC_BLOB_BASE, e.g. "https://assets.deenv.org"): the dedicated blob domain,
+    //     which carries the instance in its PATH — "<base>/<appName>" — because there is no app
+    //     subdomain on that origin to carry it. Serve-only: the UPLOAD URL is NOT this base — ws.ts's
+    //     uploadBlob posts to assetUrl("/assets") (same-origin on the app subdomain in prod, where the
+    //     session cookie rides; nginx routes the POST by method).
+    public static readonly string? PublicBlobBase =
+        Environment.GetEnvironmentVariable("DEENV_PUBLIC_BLOB_BASE") is { Length: > 0 } v
+            ? v.TrimEnd('/')
+            : null;
+
+    private string BlobBase(string @base, string assetAuthority) =>
+        BlobBase(@base, assetAuthority, _appName, PublicBlobBase);
+
+    public static string BlobBase(string @base, string assetAuthority, string appName, string? publicBlobBase) =>
+        publicBlobBase is not null
+            ? $"{publicBlobBase}/{appName}"
+            : (assetAuthority.Length > 0 ? $"//{assetAuthority}" : "") + (@base == "/" ? "" : @base) + "/assets";
 
     // Escape a string for embedding inside a double-quoted JS string literal in the injected
     // bootstrap (the base + asset authority). Backslash/quote and "<" (so "</script>" can't break

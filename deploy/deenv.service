@@ -25,6 +25,12 @@ Environment=HOME=/var/lib/deenv
 Environment=DEENV_BIND=loopback
 Environment=DEENV_PUBLIC_ASSET_PORT=0
 
+# Blob SERVE base (assets slice 4): image URLs (sys.assetUrl) resolve on the dedicated blob
+# domain — origin-isolated user content, instance carried in the path. Upload is unaffected
+# (a same-origin POST /assets on the app subdomain; nginx routes it by method). Drop for a
+# direct deployment (dev derives the base from the asset port).
+Environment=DEENV_PUBLIC_BLOB_BASE=https://assets.deenv.org
+
 # Self-contained build's own apphost (no .NET runtime needed on the box). For a
 # framework-dependent build instead: ExecStart=/usr/bin/dotnet /opt/deenv/DeEnv.dll
 ExecStart=/opt/deenv/DeEnv

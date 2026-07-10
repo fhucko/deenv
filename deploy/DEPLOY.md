@@ -158,6 +158,24 @@ server {
     }
     location = /js { proxy_pass http://127.0.0.1:8081/apps/$deenv_app/js; proxy_set_header Host $host; }
 
+    # Blob upload (assets slice 4): POST /assets — and ONLY the POST method — goes to the asset
+    # host's upload edge; the session cookie rides because this is the app's own origin. Any other
+    # method on /assets falls through to the app (GET /assets stays ordinary page URL space — the
+    # framework reserves the METHOD+path combination, not the path). 12m matches the kernel's 10 MB
+    # streaming cap with headroom.
+    location = /assets {
+        client_max_body_size 12m;
+        if ($request_method = POST) {
+            rewrite ^ /apps/$deenv_app/assets break;
+            proxy_pass http://127.0.0.1:8081;
+        }
+        proxy_pass http://127.0.0.1:8080/apps/$deenv_app$request_uri;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Prefix /;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+    }
+
     # App SSR: root-mounted at the subdomain. NOTE: X-Forwarded-Prefix is "/", not empty —
     # GenHTTP throws on an EMPTY value; "/" yields the same root base.
     location / {
@@ -168,7 +186,32 @@ server {
         proxy_http_version 1.1;
     }
 }
+
+# Blob serve (assets slice 4): the dedicated blob domain. An EXACT server_name wins over the
+# wildcard regex above, so "assets" is never treated as an app subdomain. Deliberately NO
+# auth_basic — public apps embed these images, and the capability hash (a strict-shape 64-hex
+# content name, validated kernel-side) is the sole serve boundary by design
+# (docs/plans/assets-design.md §3). The instance rides the PATH: /<name>/<hash>.<ext>.
+server {
+    listen 443 ssl; listen [::]:443 ssl; http2 on;
+    server_name assets.deenv.org;
+    ssl_certificate /etc/nginx/ssl/deenv.org.cer; ssl_certificate_key /etc/nginx/ssl/deenv.org.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    location ~ ^/(?<aname>[a-z0-9-]+)/(?<bname>[0-9a-f]{64}\.[a-z0-9]+)$ {
+        proxy_pass http://127.0.0.1:8081/apps/$aname/assets/$bname;
+        proxy_set_header Host $host;
+    }
+    location / { return 404; }
+}
 ```
+
+The kernel side of the split is one env var in `deenv.service`
+(`DEENV_PUBLIC_BLOB_BASE=https://assets.deenv.org`): image URLs (`sys.assetUrl`) then resolve on
+the blob domain (origin-isolated user content), while uploads stay a same-origin `POST /assets`
+on the app subdomain (where the session cookie rides; routed above by method). The wildcard cert
+already covers `assets.deenv.org`; no new cert. NOTE the serve URL is cross-origin from the app
+page, so blob GETs bypass the htpasswd gate by design — the capability hash is the boundary.
 
 Apply + firewall (only ssh/http/https are public; the app ports stay loopback):
 
