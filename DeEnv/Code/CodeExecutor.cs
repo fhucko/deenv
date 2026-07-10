@@ -302,12 +302,13 @@ public sealed class CodeExecutor
         // A writable NON-top (closure/component-local) scalar var — twin of codeExec.ts's
         // executeSymbol. Mint the CELL's own identity lazily, from the SAME counter that mints
         // object/array ids, so it can never collide with a real object id, and record it on the prop
-        // channel (PropDep) like an ordinary field read — the ONLY consumer is ClientState, for a
-        // value-returning (non-tag/fn) memoized computation that happens to close over this var; the
-        // reported gap's own shape (a component's `var count` read by its OWN tag-shaped view) never
-        // ships (ClientState.Serialize skips ExecTag/ExecFunction results), so this recording has no wire
-        // effect there — it exists for structural parity with the client twin, not because the
-        // write-only server ever re-renders off it (see Memoize).
+        // channel (PropDep) like an ordinary field read. This recording is twin STRUCTURAL PARITY,
+        // not a load-bearing wire consumer: even when a value-returning memoized computation ships
+        // the dep via ClientState, the client minted its OWN (different) id for the same cell, so the
+        // shipped dep is inert there — the client's real refresh for that shape comes from closureKey
+        // folding the var's VALUE into the memo key (codeExec.ts). Do not read "nothing reads it back"
+        // as "safe to delete": the symmetric mint is what keeps the twins' dep behavior aligned, and
+        // the write-only server never re-renders off it regardless (see Memoize).
         else if (!item.IsReadOnly)
         {
             item.Id ??= --context.LastId.Value;

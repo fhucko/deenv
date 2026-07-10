@@ -480,8 +480,10 @@ Feature: Self-hosted generic UI (object forms)
   # `var state = { count: 0 }` object idiom did (an object-prop write always invalidates by (object id,
   # prop), regardless of scope; a plain scalar var only invalidated when it lived in the page's TOP
   # scope, which a component's own local var never is). Two independent Counter instances (one per row)
-  # pin BOTH halves: clicking one repaints ONLY that instance (the per-item-identity fix, not a
-  # name-keyed one — the trap a naive fix would fall into by cross-invalidating every "count").
+  # prove the end-to-end behavior; note the DOM alone cannot distinguish the per-item-identity fix
+  # from a naive name-keyed one (a cross-invalidated sibling still RENDERS "0" — the extra recompute
+  # is DOM-invisible). The real isolation discriminator is ScalarVarReactivityTests' views-counter
+  # assertion (the sibling's view must never re-run); this scenario pins the user-visible half.
   @milestone-11 @single-user
   Scenario: A component's bare scalar var repaints on a handler write, and a sibling instance stays untouched
     Given the bare-scalar counter app is running
