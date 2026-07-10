@@ -2294,3 +2294,90 @@ Feature: The operator IDE (designs library + instance design selector)
     And I click the design canvas "a" element reading "Link"
     Then the tree editor's "a" element row is selected
     And the page URL is unchanged
+
+  # ── M12 S4b — bidirectional selection: a tree-row click selects too, no scroll jump ────────────────
+  #
+  # S4a made the CANVAS the click surface; S4b makes the TREE EDITOR one too — an ordinary deenv
+  # handler (`onClick={() => selectNode(node)}` on renderNodeEditor's own row div, writing the
+  # `selectedNode` ui var directly) rather than the client-side writeSelectedNode path a canvas click
+  # uses. Both sides read the SAME var reactively (nodeClass on the tree side, applySelectionChrome on
+  # the canvas side), so a row click highlights both — but since it never goes through
+  # writeSelectedNode, it never arms the S4a scroll-to-row pass: the operator is already at the row
+  # they clicked, so nothing should scroll.
+  @m12 @single-user
+  Scenario: Clicking a tree editor row selects it and highlights the matching canvas element, without scrolling the page
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "rowselect"
+    And I edit the design "rowselect"
+    When I ensure the Advanced code disclosure is open
+    And I author a selection-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows a "h1" element reading "Hello"
+    When I click the tree editor's "h1" element row
+    Then the tree editor's "h1" element row is selected
+    And the design canvas's "h1" element is selected
+    When I note the current scroll position
+    And I click the tree editor's "h1" element row
+    Then the page scroll position is unchanged
+
+  # ── M12 S4b — nested rows: the innermost row wins ────────────────────────────────────────────────
+  #
+  # Rows nest (E2's onRemove-passing recursion): renderNodeEditor's own onClick sits on EVERY row's
+  # div, including nested ones, and deenv's onClick wiring (ui.ts wireEvents) already stops propagation
+  # as the FIRST thing a handled click does — so a click that lands on a nested row's own head is
+  # handled by that row's OWN listener before the event ever reaches an ancestor row's. No extra
+  # containment logic needed; this scenario pins that the runtime's native bubble-then-stop order
+  # already gives the correct (innermost) answer.
+  @m12 @single-user
+  Scenario: Clicking a nested tree editor row selects the nested row, not its ancestor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "nestedrows"
+    And I edit the design "nestedrows"
+    When I ensure the Advanced code disclosure is open
+    And I author a selection-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows a "h1" element reading "Hello"
+    When I click the tree editor's "h1" element row
+    Then the tree editor's "h1" element row is selected
+    And the tree editor's "main" element row is not selected
+    And the design canvas's "h1" element is selected
+
+  # ── M12 S4b — Escape deselects, both sides ───────────────────────────────────────────────────────
+  @m12 @single-user
+  Scenario: Pressing Escape clears the selection on both the canvas and the tree editor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "escapeme"
+    And I edit the design "escapeme"
+    When I ensure the Advanced code disclosure is open
+    And I author a selection-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows a "h1" element reading "Hello"
+    When I click the design canvas "h1" element reading "Hello"
+    Then the tree editor's "h1" element row is selected
+    And the design canvas shows 1 selected element
+    When I press Escape
+    Then the design canvas shows 0 selected elements
+    And no tree editor row is selected
+
+  # ── M12 S4b — the page-order reorder: types → render → publish → branches ───────────────────────────
+  #
+  # The UX ledger's one high-value reorder (visual-designer.md, 2026-07-08 checkpoint): publish/branches
+  # used to split the canvas+tree authoring pair from the type editor above it. A markup move only — the
+  # section calls themselves are untouched, just reordered in designEditor.
+  @m12 @single-user
+  Scenario: The design editor's sections are ordered types, render, publish, branches
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "pageorder"
+    And I edit the design "pageorder"
+    When I ensure the Advanced code disclosure is open
+    And I author a selection-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    Then the design editor's sections are ordered types, render, publish, branches

@@ -103,6 +103,11 @@ function init(): void {
     // anchor-containment comment on resolveCanvasSelection.
     document.addEventListener("click", resolveCanvasSelection);
 
+    // M12 S4b — Escape deselects (ui.ts handleEscapeDeselect): the keyboard twin of "click empty
+    // canvas space", general like resolveCanvasSelection above (a no-op on any page without a
+    // `[selecttarget]` marker).
+    document.addEventListener("keydown", handleEscapeDeselect);
+
     // In-app links navigate CLIENT-SIDE (no full reload): one delegated listener intercepts qualifying
     // anchor clicks (same-origin, in-mount, plain left-click) and re-renders the target over the warm
     // session via the History API. Delegated on document so it also covers links OUTSIDE the #app

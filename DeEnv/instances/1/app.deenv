@@ -259,9 +259,12 @@ ui
     fn nodeClass(node, base)
         return sys.id(node) == selectedNode ? base + " is-selected" : base
 
+    fn selectNode(node)
+        selectedNode = sys.id(node)
+
     fn renderNodeEditor(node, onRemove)
         if node.kind == "for"
-            return <div class={nodeClass(node, "node-for")}>
+            return <div class={nodeClass(node, "node-for")} onClick={() => selectNode(node)}>
                 <div class="node-for-head">
                     <span class="node-keyword">
                         "for"
@@ -277,7 +280,7 @@ ui
                         <renderNodeEditor node={child} onRemove={() => node.children.remove(child)}>
                 addRow(node.children)
         if node.kind == "if"
-            return <div class={nodeClass(node, "node-if")}>
+            return <div class={nodeClass(node, "node-if")} onClick={() => selectNode(node)}>
                 <div class="node-if-head">
                     <span class="node-keyword">
                         "if"
@@ -304,14 +307,14 @@ ui
                     <button class="add-else" onClick={() => addElse(node)}>
                         "+ else"
         if node.tag == ""
-            return <div class={nodeClass(node, "node-leaf")}>
+            return <div class={nodeClass(node, "node-leaf")} onClick={() => selectNode(node)}>
                 <span class="node-leaf-anchor">
                     "->"
                 <input class="node-expr" value={node.expr} placeholder={"\"text\" or expression"}>
                 if onRemove != null
                     <button class="remove-node" onClick={onRemove}>
                         "×"
-        return <div class={nodeClass(node, "node-element")}>
+        return <div class={nodeClass(node, "node-element")} onClick={() => selectNode(node)}>
             <div class="node-tag-row">
                 <span class="node-angle">
                     "<"
@@ -473,8 +476,6 @@ ui
                                         "Multi-line text"
                             <button class="add-prop" onClick={() => addProp(type)}>
                                 "+ Field"
-                publishSection(design)
-                branchSection(design)
                 if design.render.any(x => true)
                     <section class="render-section">
                         <div class="render-head">
@@ -483,7 +484,7 @@ ui
                             <button class="refresh-eval" onClick={() => evalRefresh = evalRefresh + 1}>
                                 "Refresh values"
                         <p class="render-caption">
-                            "The canvas is a live structural view of the tree below — it repaints as you edit; expressions, loops, and conditions evaluate against the design's seed data; edited expressions show as chips until you refresh. Click any element to highlight the row that produces it below; click empty space to clear the selection. Clicking one loop item highlights all its instances — they share one template row."
+                            "The canvas is a live structural view of the tree below — it repaints as you edit; expressions, loops, and conditions evaluate against the design's seed data; edited expressions show as chips until you refresh. Click any element to highlight the row that produces it below, or click a row below to highlight it on the canvas; click empty space or press Esc to clear the selection. Clicking one loop item highlights all its instances — they share one template row."
                         <designCanvas design={design}>
                         <p class="render-caption">
                             "Edit each node's fields inline. Add and remove nodes and attributes with the controls; reordering is coming."
@@ -580,6 +581,8 @@ ui
                                             "+ Configuration"
                             <button class="add-fn" onClick={() => addFn(design)}>
                                 "+ Component"
+                publishSection(design)
+                branchSection(design)
                 <details class="code-areas">
                     <summary class="code-summary">
                         "Advanced (code)"

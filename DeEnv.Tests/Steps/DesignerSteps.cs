@@ -3023,13 +3023,15 @@ public sealed class DesignerSteps(InstanceContext ctx)
     private const string SelectionConvertibleRender =
         "ui\n    fn render()\n        return <main>\n            <h1>\n                \"Hello\"\n";
 
+    // M12 S4b reuses this fixture across several scenarios with different design names (rowselect,
+    // nestedrows-adjacent, escapeme, pageorder), so the poll checks only the `ui` field write — each
+    // scenario's kernel/store is fresh (its own Given step), so a content match is unambiguous.
     [When("I author a selection-test convertible render into the design's UI")]
     public async Task WhenAuthorSelectionRender()
     {
         await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(SelectionConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
-            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "selectme" }
-            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == SelectionConvertibleRender));
+            o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == SelectionConvertibleRender));
     }
 
     // Click a real rendered canvas element by tag + EXACT text (Playwright's :text-is, not the substring
@@ -3088,12 +3090,18 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     // The scroll-to-row proof: the tree-editor row now carrying is-selected sits within the viewport —
     // the cheap, decisive post-condition (ui.ts consumeSelectionScroll ran its scrollIntoView pass).
+    // A 1px tolerance (M12 S4b diagnosis): getBoundingClientRect is sub-pixel, and scrollIntoView's
+    // "nearest" places an edge EXACTLY at the viewport boundary — any upstream layout change (e.g. the
+    // caption paragraph above the canvas wrapping one fraction of a line differently) can leave the
+    // measured edge a HAIR (observed: 0.05px) past strict equality, forever failing a bare `<=` poll
+    // though the row is genuinely, visibly in view. This does not weaken the proof (a real miss is off
+    // by tens/hundreds of px, never a rounding hair).
     [Then("the selected tree editor row is scrolled into view")]
     public async Task ThenSelectedRowScrolledIntoView() =>
         await ctx.Page!.WaitForFunctionAsync(
             "() => { const e = document.querySelector('.render-tree .is-selected, .fn-body .is-selected'); " +
             "if (e == null) return false; const r = e.getBoundingClientRect(); " +
-            "return r.top >= 0 && r.bottom <= window.innerHeight; }");
+            "return r.top >= -1 && r.bottom <= window.innerHeight + 1; }");
 
     // ── M12 S4a review fold (ux finding 4) — anchor-containment: a literal-href canvas anchor selects
     // instead of navigating the whole designer away ──────────────────────────────────────────────────
@@ -3123,6 +3131,64 @@ public sealed class DesignerSteps(InstanceContext ctx)
     [Then("the page URL is unchanged")]
     public async Task ThenPageUrlUnchanged() =>
         await Assert.That(ctx.Page!.Url).IsEqualTo(_urlBeforeClick);
+
+    // ── M12 S4b — bidirectional selection: tree-row click, nesting, Escape, page order ──────────────
+
+    // Click a tree editor row's OWN head — `.node-tag-row` for an element, scoped by its OWN tag input's
+    // value so a click here can only land inside THIS row's div, never a nested child's (node-children
+    // is a SIBLING of node-tag-row, not its descendant) — the exact click a real operator would make on
+    // the row's `<tag>` line.
+    [When("I click the tree editor's {string} element row")]
+    public async Task WhenClickTreeEditorRow(string tag) =>
+        await ctx.Page!.Locator($".design-editor .render-tree .node-tag-row:has(input.node-tag[value={CssString(tag)}])")
+            .First.ClickAsync();
+
+    // The negative half of the innermost-wins proof: this tag's OWN row does NOT carry is-selected
+    // (scoped the same way ThenTreeEditorElementRowSelected is, by the row's own tag input).
+    [Then("the tree editor's {string} element row is not selected")]
+    public async Task ThenTreeEditorElementRowNotSelected(string tag) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.design-editor .render-tree .node-element')].every(e => {{ " +
+            $"const t = e.querySelector(':scope > .node-tag-row input.node-tag'); " +
+            $"return t == null || t.value !== {JsString(tag)} || !e.classList.contains('is-selected'); }})");
+
+    // The bidirectional-selection proof: the canvas element of this TAG (not just "something") carries
+    // is-selected — a tree-row click must highlight the matching canvas element, not merely count 1.
+    [Then("the design canvas's {string} element is selected")]
+    public async Task ThenDesignCanvasElementSelected(string tag) =>
+        await ctx.Page!.Locator($".design-canvas {tag}[data-node].is-selected").First.WaitForAsync();
+
+    private double _scrollYBeforeRowClick;
+
+    [When("I note the current scroll position")]
+    public async Task WhenNoteScrollPosition() =>
+        _scrollYBeforeRowClick = await ctx.Page!.EvaluateAsync<double>("() => window.scrollY");
+
+    // The no-scroll-jump proof: a tree-row click goes through the ORDINARY handler path (executeAssignment
+    // on the selectedNode ui var), never writeSelectedNode/armSelectionScroll — so the S4a scroll-to-row
+    // pass never arms, and the page must sit exactly where the operator left it.
+    [Then("the page scroll position is unchanged")]
+    public async Task ThenScrollPositionUnchanged() =>
+        await Assert.That(await ctx.Page!.EvaluateAsync<double>("() => window.scrollY")).IsEqualTo(_scrollYBeforeRowClick);
+
+    [When("I press Escape")]
+    public async Task WhenPressEscape() =>
+        await ctx.Page!.Keyboard.PressAsync("Escape");
+
+    // The page-order reorder pin: types (the add-type button, always present) sits above the render
+    // section, which sits above publish, which sits above branches — DOM order via
+    // compareDocumentPosition, layout-independent (works whether or not any section is scrolled into
+    // view).
+    [Then("the design editor's sections are ordered types, render, publish, branches")]
+    public async Task ThenSectionsOrdered() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const t = document.querySelector('.design-editor .add-type'); " +
+            "const r = document.querySelector('.design-editor .render-section'); " +
+            "const p = document.querySelector('.design-editor .publish-section'); " +
+            "const b = document.querySelector('.design-editor .branch-section'); " +
+            "if (!t || !r || !p || !b) return false; " +
+            "const before = (x, y) => !!(x.compareDocumentPosition(y) & Node.DOCUMENT_POSITION_FOLLOWING); " +
+            "return before(t, r) && before(r, p) && before(p, b); }");
 
     private static string JsString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 

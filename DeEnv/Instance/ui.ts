@@ -452,6 +452,23 @@ function applySelectionChrome(): void {
     });
 }
 
+// ── M12 S4b — Escape deselects ──────────────────────────────────────────────────────
+//
+// General framework infrastructure like resolveCanvasSelection/applySelectionChrome above (not
+// designer-specific): clears EVERY `[selecttarget]` container's named var, so a page without the
+// marker (every app but the designer, today) makes this listener a pure no-op, and a future
+// multi-canvas page clears all of them together. Goes through writeSelectedNode (the same
+// no-op-when-unchanged, arm-scroll-then-render path a canvas click uses) so an Escape with nothing
+// selected does nothing, and a genuine deselect repaints exactly like clicking empty canvas space
+// does today.
+function handleEscapeDeselect(e: KeyboardEvent): void {
+    if (e.key !== "Escape") return;
+    document.querySelectorAll("[selecttarget]").forEach(container => {
+        const varName = container.getAttribute("selecttarget");
+        if (varName != null && varName !== "") writeSelectedNode(varName, 0);
+    });
+}
+
 // Scroll-to-row: the armScrollReset/consumeScrollReset idiom above, for a selection CHANGE instead of a
 // forward nav. Armed only by writeSelectedNode's actual-change branch; consumed at the next commitRender
 // by finding whichever tree-editor row now carries `is-selected` (scoped to the two places
