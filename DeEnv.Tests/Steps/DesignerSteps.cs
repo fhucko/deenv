@@ -2261,23 +2261,41 @@ public sealed class DesignerSteps(InstanceContext ctx)
             "return tags.length === expected.length && tags.every((t, i) => t === expected[i]); }");
     }
 
-    // First row's ▲ / last row's ▼ are simply not RENDERED (the onRemove==null precedent for the
-    // single-root row), never shown-disabled — so "no move-up button" is a plain absence check.
-    [Then("the root node's first child has no move-up button")]
-    public async Task ThenRootFirstChildNoMoveUp() =>
+    // ux review (adjudicated over ui-arch): DISABLE-IN-PLACE at the edge, never hidden — first/last-of-
+    // siblings is DYNAMIC (it flips mid-interaction), unlike the STATIC onRemove==null root case, so hiding
+    // ▼ at the last position would slide the destructive × into the slot the operator is chase-clicking. The
+    // button is always PRESENT; only its `disabled` attribute reflects the edge.
+    [Then("the root node's first child's move-up button is disabled")]
+    public async Task ThenRootFirstChildMoveUpDisabled() =>
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const kids = [...document.querySelectorAll({JsString(RootChildren)})]; " +
-            "const first = kids[0]; return first != null && first.querySelector(':scope > .node-tag-row > button.move-up') == null; }");
+            "const first = kids[0]; const b = first?.querySelector(':scope > .node-tag-row > button.move-up'); return b != null && b.disabled; }");
 
-    [Then("the root node's last child has no move-down button")]
-    public async Task ThenRootLastChildNoMoveDown() =>
+    [Then("the root node's last child's move-down button is disabled")]
+    public async Task ThenRootLastChildMoveDownDisabled() =>
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const kids = [...document.querySelectorAll({JsString(RootChildren)})]; " +
-            "const last = kids[kids.length - 1]; return last != null && last.querySelector(':scope > .node-tag-row > button.move-down') == null; }");
+            "const last = kids[kids.length - 1]; const b = last?.querySelector(':scope > .node-tag-row > button.move-down'); return b != null && b.disabled; }");
 
     [When("I click move-down on the root node's child {int}")]
     public async Task WhenClickMoveDownOnRootChild(int index) =>
         await ctx.Page!.Locator(RootChildren).Nth(index).Locator(":scope > .node-tag-row > button.move-down").ClickAsync();
+
+    // Capture a UI-verification screenshot — the DataConflictSteps.Shot precedent, gated on DEENV_SHOTS so
+    // it costs nothing (no file, no delay) in a normal run and only fires during a deliberate capture pass.
+    [Then("I capture a screenshot named {string}")]
+    public async Task ThenCaptureScreenshot(string name)
+    {
+        var dir = Environment.GetEnvironmentVariable("DEENV_SHOTS");
+        if (string.IsNullOrEmpty(dir)) return;
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, name + ".png");
+        for (var attempt = 0; ; attempt++)
+        {
+            try { await ctx.Page!.ScreenshotAsync(new Microsoft.Playwright.PageScreenshotOptions { Path = path }); return; }
+            catch (IOException) when (attempt < 10) { await Task.Delay(100); }
+        }
+    }
 
     // ── M12 S5a — attribute reorder (the SAME attrRow(coll, a) the render tree and use-args share) ──
 

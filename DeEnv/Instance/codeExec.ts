@@ -580,6 +580,13 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
 // persists via the PATH-addressed `write` op (a scalar entry writes at its path, an object entry at
 // path/prop); a just-added set member still at its transient negative id sends by that id anyway (the
 // server resolves it through the add's own remap).
+//
+// Sandbox wire-leak note (S5a review, ui-arch Q1): every branch below ends in a `wsHooks?.` call, gated on
+// the SAME `wsHooks` the workbench dispatch bracket sets to null for a sandboxed instance's whole handler —
+// so no branch here (this pending-id fallback included) can ever leak a write out of a sandboxed click,
+// independent of which one a given assignment reaches. Traced against a real fixture in Designer.feature's
+// W1b Counter scenario (`state.count = state.count + 1` — a plain assignment on a set-less negative-id
+// object, this fallback's exact shape).
 function persistFieldEdit(obj: ExecObject, name: string, value: ExecValue, before: ExecValue): void {
     if (obj.id > 0) { propValueChange(obj, name, value, before); return; }   // server-backed extent object
     if (obj.sourcePath != null) {                                            // a dictionary entry (no extent id)

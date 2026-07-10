@@ -766,10 +766,17 @@ public sealed class SsrRenderer
         button.remove-node:hover, button.remove-attr:hover, button.remove-use:hover { background: #fff0f0; border-color: var(--danger); }
         /* S5a — reorder. Same small inline-button treatment as the × controls, anchored beside them in each
            row's own header (the E2 anchoring precedent), muted rather than danger-colored (a reorder is not
-           destructive). The first row's ▲ and the last row's ▼ are simply not rendered (the onRemove==null
-           precedent for the single-root row), rather than shown disabled. */
+           destructive). ux review (adjudicated over ui-arch): DISABLE-IN-PLACE at the first/last position,
+           never hidden. The onRemove==null precedent (no × on a root row) is STATIC — a root row never
+           reflows. First/last-of-siblings is DYNAMIC — it flips mid-interaction as rows move past it — so
+           hiding ▼ at the last position would slide the destructive × into the slot the operator is
+           chase-clicking, risking an unconfirmed subtree delete on overshoot. Disabled-in-place keeps ×
+           anchored in a fixed slot; an edge click is a native no-op (a disabled button fires no click at
+           all — moveRow's own neighbor==null no-op is defense in depth, not the primary guard). */
         button.move-up, button.move-down { padding: 0.1rem 0.4rem; color: var(--muted); flex: 0 0 auto; font-size: 0.8rem; }
         button.move-up:hover, button.move-down:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: var(--accent); }
+        button.move-up:disabled, button.move-down:disabled { color: color-mix(in srgb, var(--muted) 45%, transparent); cursor: default; }
+        button.move-up:disabled:hover, button.move-down:disabled:hover { background: none; border-color: var(--border); }
         /* S6a — for/if control-flow ROWS in the tree editor: a distinct dashed-border box (vs the
            element's solid left border) so a loop/condition row reads as structurally different from a
            plain tag, echoing the canvas's own for-template/if-template marking below. */

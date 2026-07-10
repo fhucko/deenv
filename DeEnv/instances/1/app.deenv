@@ -275,12 +275,10 @@ ui
             <span class="node-attr-eq">
                 "="
             <input class="node-attr-value" value={a.value} placeholder={"\"value\" or expression"}>
-            if isFirstSibling(coll, a) == false
-                <button class="move-up" onClick={() => moveRow(coll, a, -1)}>
-                    "▲"
-            if isLastSibling(coll, a) == false
-                <button class="move-down" onClick={() => moveRow(coll, a, 1)}>
-                    "▼"
+            <button class="move-up" disabled={isFirstSibling(coll, a)} onClick={() => moveRow(coll, a, -1)}>
+                "▲"
+            <button class="move-down" disabled={isLastSibling(coll, a)} onClick={() => moveRow(coll, a, 1)}>
+                "▼"
             <button class="remove-attr" onClick={() => coll.remove(a)}>
                 "×"
 
@@ -300,11 +298,10 @@ ui
                     <span class="node-keyword">
                         "in"
                     <input class="node-for-collection" value={node.collection} placeholder={"db.... or expression"}>
-                    if coll != null && isFirstSibling(coll, node) == false
-                        <button class="move-up" onClick={() => moveRow(coll, node, -1)}>
+                    if coll != null
+                        <button class="move-up" disabled={isFirstSibling(coll, node)} onClick={() => moveRow(coll, node, -1)}>
                             "▲"
-                    if coll != null && isLastSibling(coll, node) == false
-                        <button class="move-down" onClick={() => moveRow(coll, node, 1)}>
+                        <button class="move-down" disabled={isLastSibling(coll, node)} onClick={() => moveRow(coll, node, 1)}>
                             "▼"
                     if onRemove != null
                         <button class="remove-node" onClick={onRemove}>
@@ -319,11 +316,10 @@ ui
                     <span class="node-keyword">
                         "if"
                     <input class="node-if-condition" value={node.condition} placeholder={"expression"}>
-                    if coll != null && isFirstSibling(coll, node) == false
-                        <button class="move-up" onClick={() => moveRow(coll, node, -1)}>
+                    if coll != null
+                        <button class="move-up" disabled={isFirstSibling(coll, node)} onClick={() => moveRow(coll, node, -1)}>
                             "▲"
-                    if coll != null && isLastSibling(coll, node) == false
-                        <button class="move-down" onClick={() => moveRow(coll, node, 1)}>
+                        <button class="move-down" disabled={isLastSibling(coll, node)} onClick={() => moveRow(coll, node, 1)}>
                             "▼"
                     if onRemove != null
                         <button class="remove-node" onClick={onRemove}>
@@ -351,11 +347,10 @@ ui
                 <span class="node-leaf-anchor">
                     "->"
                 <input class="node-expr" value={node.expr} placeholder={"\"text\" or expression"}>
-                if coll != null && isFirstSibling(coll, node) == false
-                    <button class="move-up" onClick={() => moveRow(coll, node, -1)}>
+                if coll != null
+                    <button class="move-up" disabled={isFirstSibling(coll, node)} onClick={() => moveRow(coll, node, -1)}>
                         "▲"
-                if coll != null && isLastSibling(coll, node) == false
-                    <button class="move-down" onClick={() => moveRow(coll, node, 1)}>
+                    <button class="move-down" disabled={isLastSibling(coll, node)} onClick={() => moveRow(coll, node, 1)}>
                         "▼"
                 if onRemove != null
                     <button class="remove-node" onClick={onRemove}>
@@ -365,11 +360,10 @@ ui
                 <span class="node-angle">
                     "<"
                 <input class="node-tag" value={node.tag}>
-                if coll != null && isFirstSibling(coll, node) == false
-                    <button class="move-up" onClick={() => moveRow(coll, node, -1)}>
+                if coll != null
+                    <button class="move-up" disabled={isFirstSibling(coll, node)} onClick={() => moveRow(coll, node, -1)}>
                         "▲"
-                if coll != null && isLastSibling(coll, node) == false
-                    <button class="move-down" onClick={() => moveRow(coll, node, 1)}>
+                    <button class="move-down" disabled={isLastSibling(coll, node)} onClick={() => moveRow(coll, node, 1)}>
                         "▼"
                 if onRemove != null
                     <button class="remove-node" onClick={onRemove}>
@@ -610,12 +604,10 @@ ui
                                         foreach u in f.uses.orderBy(u => u.order)
                                             <div class="use-row">
                                                 <input class="use-name" value={u.name} placeholder={"e.g. empty, long list"}>
-                                                if isFirstSibling(f.uses, u) == false
-                                                    <button class="move-up" onClick={() => moveRow(f.uses, u, -1)}>
-                                                        "▲"
-                                                if isLastSibling(f.uses, u) == false
-                                                    <button class="move-down" onClick={() => moveRow(f.uses, u, 1)}>
-                                                        "▼"
+                                                <button class="move-up" disabled={isFirstSibling(f.uses, u)} onClick={() => moveRow(f.uses, u, -1)}>
+                                                    "▲"
+                                                <button class="move-down" disabled={isLastSibling(f.uses, u)} onClick={() => moveRow(f.uses, u, 1)}>
+                                                    "▼"
                                                 <button class="remove-use" onClick={() => f.uses.remove(u)}>
                                                     "×"
                                                 if useNameHint(u) != ""

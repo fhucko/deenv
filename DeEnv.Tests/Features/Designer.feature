@@ -1157,10 +1157,11 @@ Feature: The operator IDE (designs library + instance design selector)
   # The proof: convert the nested render (root <main> starts with one child, <h1>), append two more elements
   # and rename them, giving the root exactly three children (h1, second, third — test (a)'s "parent with
   # three children"); assert the tree editor AND the canvas already agree on that order; assert the first
-  # row has no ▲ and the last has no ▼ (test (b) — not rendered at all, the onRemove==null precedent, not a
-  # disabled button); click ▼ on the first row and assert BOTH surfaces show the new order with no reload
-  # (the same-frame repaint pin); reload the whole editor and assert the new order survived — proving the
-  # swap is a real persisted write, not just an optimistic client reorder (test (c)).
+  # row's ▲ and the last row's ▼ are DISABLED (test (b) — ux review: disable-in-place, not hidden — the
+  # button is always present, only its `disabled` attribute reflects the edge, so × never slides into the
+  # slot a chase-click would land on); click ▼ on the first row and assert BOTH surfaces show the new order
+  # with no reload (the same-frame repaint pin); reload the whole editor and assert the new order survived —
+  # proving the swap is a real persisted write, not just an optimistic client reorder (test (c)).
   @m12 @single-user
   Scenario: The tree editor reorders sibling nodes, the canvas repaints same-frame, and the new order survives a reload
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
@@ -1180,8 +1181,9 @@ Feature: The operator IDE (designs library + instance design selector)
     And I edit the root node's last child tag input to "third"
     Then the root node's children read, in order: "h1, second, third"
     And the design canvas shows children in order: "h1, second, third"
-    And the root node's first child has no move-up button
-    And the root node's last child has no move-down button
+    And the root node's first child's move-up button is disabled
+    And the root node's last child's move-down button is disabled
+    And I capture a screenshot named "s5a-reorder-column"
     And the stored render projects to a valid design document
     When I click move-down on the root node's child 0
     Then the root node's children read, in order: "second, h1, third"
@@ -1971,6 +1973,21 @@ Feature: The operator IDE (designs library + instance design selector)
   # wiring strategy (instanceWiring), and Reset — a framework-owned control bar the driver renders inside
   # the container. The independence-at-CLICK pin is the arc's headline: two configurations, click one,
   # only it changes.
+  #
+  # S5a review note (ui-arch Q1, the wire-leak pin): the Counter fixture's own handler body
+  # (`state.count = state.count + 1`) is a PLAIN object-field assignment on a fresh negative-id local
+  # object (executeObject always mints `id: --context.lastId.value`, never added to any set) — exactly the
+  # `executeAssignment` objectProp branch persistFieldEdit now routes through (codeExec.ts). This scenario
+  # already exercises that exact statement shape through the sandboxed dispatch bracket. The guard that
+  # actually prevents the leak is STRUCTURAL and UNCHANGED by the S5a fix: every branch persistFieldEdit can
+  # reach ends in `wsHooks?.propChange(...)` / `wsHooks?.pathWrite(...)` — optional-chained on a `wsHooks`
+  # the dispatch bracket sets to null for the click's whole duration — so nothing sends regardless of which
+  # branch (id>0, dict-entry, or S5a's newly-reachable pending-id fallback) a given write takes. The fallback
+  # branch specifically is ONLY reachable by an object like `state` here — never added to a set, so it has
+  # no server-side counterpart at all — meaning even a hypothetical wsHooks-null regression would surface as
+  # a harmless server-side "no such object" reject, not a real-store corruption (unlike a fake-positive-id
+  # DB-copy write, which stays on the UNCHANGED id>0 branch two-way binding already proved safe). No separate
+  # leak-pin scenario needed — this IS the trace.
   @m12 @single-user
   Scenario: An instance's own click handler only affects that instance, and Reset returns it to its initial state
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
