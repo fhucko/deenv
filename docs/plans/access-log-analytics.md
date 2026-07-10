@@ -2,8 +2,10 @@
 
 2026-07-07. Triggered by user request: built-in access log + analytics covering the common
 ERP/CRM audit suite. **Status: design draft, grilled ×1 (refutations folded in below), user
-decisions marked; NOT scheduled — the design queue (assets → compaction/§0b) comes first, and
-this design deliberately hands its retention knobs to the compaction pass.**
+decisions marked; amended same day (user): individual events are THE analytics data —
+aggregation happens ONLY as compaction past a threshold (P4/P6 reshaped accordingly). NOT
+scheduled — the design queue (assets → compaction/§0b) comes first, and this design
+deliberately hands its retention knobs to the compaction pass.**
 
 ## Settled by the user (before drafting — do not re-litigate)
 
@@ -12,10 +14,14 @@ this design deliberately hands its retention knobs to the compaction pass.**
 - Raw events are **kernel-owned, append-only, immutable** — explicitly NOT ordinary app
   writes ("option 2": raw events riding the store log would bloat versioning with machine
   noise).
-- Daily roll-ups ARE ordinary data, written into an **analytics app's** store; the dashboard
+- Aggregates ARE ordinary data, written into an **analytics app's** store; the dashboard
   is a deenv app built almost entirely on the generic lib (SetTable first; a chart primitive
   goes into the lib later only if needed).
 - Audit/timeline reads of raw entries = a server READ builtin (AGENTS.md rule 12 shape).
+- **Amendment (user, 2026-07-07): record individual events; compact only past data older
+  than a threshold.** Raw events are the full-fidelity analytics data — recent stats are
+  computed FROM them; aggregate rows exist only for days whose raw has been compacted away.
+  Roll-up and prune are ONE operation (compaction), not two.
 
 ## Scope — the ERP/CRM audit suite, mapped to deenv
 
@@ -152,22 +158,30 @@ stated: after session expiry, refetch-logged events have unknown visitor (the re
 renders anonymous today — the log inherits that, doesn't worsen it); a session spanning UTC
 midnight keeps its minting-day hash.
 
-## P4. Roll-ups — ordinary data, no scheduler, no config
+## P4. Compaction — aggregation and retention are ONE operation (user amendment)
 
-Daily aggregates are ordinary objects in the analytics app's store, written by the kernel
-through the caller's own `IInstanceStore` (`CreateObject`/`WriteFieldBatch`/`CommitBatch` —
-the AdminSeed shape; `Who = null`). Ordinary commits, access rules, GC.
+Raw individual events are the analytics data. Aggregate rows exist ONLY for days whose raw
+has been compacted away. `sys.compactAccessLog(sourceInstance, olderThan)` — per whole day
+older than the threshold: compute the day's aggregates from its raw events (P3's dedup
+definition; claimed views only), UPSERT them as ordinary objects into the CALLING app's
+store, then delete the day file. Aggregates are written through the caller's own
+`IInstanceStore` (`CreateObject`/`WriteFieldBatch`/`CommitBatch` — the AdminSeed shape;
+`Who = null`): ordinary commits, access rules, GC.
 
-- v1 rows: per (sourceInstance, day, path): `views`, `uniques`; per (sourceInstance, day):
-  `logins`, `loginFailures`; per (sourceInstance, day, type): `recordReads`.
-- **Idempotent by construction**: a roll-up UPSERTS the day's row keyed by
-  (source, day, path), recomputed from the deduped event set (P3's dedup definition) — never
-  incremented. Re-running is a no-op.
+- **Crash-safe order**: write aggregates first, delete the day file second. Re-run after a
+  crash recomputes the same numbers (aggregates = pure function of the day's deduped events)
+  and upserts identically, then deletes — idempotent end to end. A fully compacted day is a
+  no-op (file gone, rows stay).
+- v1 aggregate rows: per (sourceInstance, day, path): `views`, `uniques`; per
+  (sourceInstance, day): `logins`, `loginFailures`; per (sourceInstance, day, type):
+  `recordReads`.
 - **Trigger = a host action, no scheduler** (hidden-scope guard: deenv has no scheduler and
-  this design does not add one). `sys.rollupAnalytics(sourceInstance)` invoked from the
-  analytics app's UI ("Roll up now" button; success-callback confirmation line). Stated
-  ceiling: manual. A future scheduler calls the same action.
-- **No kernel.json config, no reserved names**: the roll-up writes into the CALLING
+  this design does not add one). Invoked from the analytics app's UI ("Compact now" +
+  threshold; success-callback confirmation line). Stated ceiling: manual. A future scheduler
+  calls the same action. The threshold is the explicit arg — no stored policy here (that
+  belongs to the compaction design pass, which owns the same vocabulary as the store-log
+  `sys.compact(instance, horizon)` direction — deliberate convergence).
+- **No kernel.json config, no reserved names**: compaction writes into the CALLING
   instance's store — the analytics app IS wherever the action is called from. It enumerates
   sources via the existing `sys.instances` and loops, or the action defaults to all
   instances via a new list delegate — builder names the choice up front (grill #5: today
@@ -187,31 +201,39 @@ the AdminSeed shape; `Who = null`). Ordinary commits, access rules, GC.
 
 ## P5. Reads — the rule-12 builtin
 
-`sys.accessLog(type?, id?, limit)` — C#-only compute, memoized empty-deps cache entry, TS
-twin stub throws "Value not available" → refetch (the `sys.diffCommits` shape; no conformance
-case). **Own-instance log only** — the grill (#10) caught that an `instance?` arg would
-smuggle in cross-instance render-time reads from ordinary apps, a wiring class that exists
-today only design-host-gated; dropped. The audit/timeline view lives on the instance it
-concerns; cross-instance raw access exists only inside the roll-up host action.
+Two builtins, both C#-only compute, memoized empty-deps cache entry, TS twin stub throws
+"Value not available" → refetch (the `sys.diffCommits` shape; no conformance case):
 
-Always bounded: server-capped `limit`, newest-first, served from the day files walking
-backward — cheap because of segmentation; no pagination/cursor v1 (stated ceiling). Gating:
-the app's own `access` section (the general mechanism — the settled kernel.json-identity-flag
-rejection applies).
+- `sys.accessLog(type?, id?, limit)` — raw entries, newest-first, server-capped `limit`,
+  served from the day files walking backward — cheap because of segmentation; no
+  pagination/cursor v1 (stated ceiling).
+- `sys.accessStats(fromDay?, toDay?)` — live aggregates computed from the still-raw day
+  files, **the SAME aggregate computation compaction uses** (one shared definition — the
+  no-second-engine guard; live stats and compacted rows must never disagree on what a "view"
+  is). The dashboard renders history = compacted aggregate rows (ordinary data, read
+  directly) ∪ recent = `sys.accessStats` — app Code concatenates the two same-shaped lists.
+
+**Own-instance log only** — the grill (#10) caught that an `instance?` arg would smuggle in
+cross-instance render-time reads from ordinary apps, a wiring class that exists today only
+design-host-gated; dropped. The audit/timeline view lives on the instance it concerns;
+cross-instance raw access exists only inside the compaction host action. Gating: the app's
+own `access` section (the general mechanism — the settled kernel.json-identity-flag rejection
+applies).
 
 Per-record timeline (suite item 3) = a later slice composing `sys.accessLog(type, id)` with
 commit/AppLog history for the same object at render time. A query, not a store.
 
-## P6. Retention + prune
+## P6. Retention = compaction
 
-- `sys.pruneAccessLog(instance, olderThan)` host op beside delete/cloneInstance; deletes
-  whole expired day-files. Manual v1 (same no-scheduler honesty). **No stored retention
-  default** — the draft's "default 90 days" was a phantom policy with no scheduler to apply
-  it (grill #10 trim); the explicit arg is the whole surface. A stored retention *policy*
-  belongs to the compaction design pass (same log-policy domain as assets §6 retention) —
-  handed off, not invented twice.
-- Aggregates persist past pruning (they're ordinary data) — pruning raw loses detail, never
-  history.
+There is no separate prune op — **compaction IS retention** (user amendment): raw days older
+than the threshold become aggregate rows and their files are deleted, in one operation.
+Detail (per-event audit, `touched`, visitor hashes) exists only inside the threshold window;
+beyond it, anonymous counts only — which is also the erasure story (aggregates carry no
+per-visitor data). **No stored retention default** — the explicit `olderThan` arg is the
+whole surface (grill #10 trim); a stored retention *policy* belongs to the compaction design
+pass (same log-policy domain as assets §6 retention) — handed off, not invented twice.
+Compacting a day loses per-event detail forever, never history: aggregates persist as
+ordinary data.
 
 ## P7. Privacy posture
 
@@ -229,8 +251,12 @@ commit/AppLog history for the same object at render time. A query, not a store.
 - Purely client-side navigations undercount the view count (audit record unaffected).
 - Expired-session refetches log with unknown visitor (inherits existing anonymous-refetch
   behavior).
-- Roll-up + prune are manual host actions (no scheduler exists).
-- `sys.accessLog` is bounded newest-first, no pagination; own instance only.
+- Compaction is a manual host action (no scheduler exists).
+- The threshold bounds the live-compute window: `sys.accessStats` parses every still-raw day
+  in range, so a large threshold on a busy instance makes recent-stats renders heavy — keep
+  the window modest there (day segmentation keeps each file small; the memoized entry
+  amortizes repeat renders).
+- `sys.accessLog`/`sys.accessStats` are bounded, no pagination; own instance only.
 - `touched` is type+id (no props), leaf set only.
 - Host-action events record op name only (no args) v1.
 - Volume, concretely: ~200B/event + ~15B per touched id; a public instance at ~5k events/day
@@ -280,9 +306,9 @@ Ten attacks; per-attack verdicts, all fixes folded into the sections above:
    `supplement`s, roll-up-side dedup definition; visitor hash at SSR on ClientSession.
 2. Auth events at all three points (`via` tag) + host-action op events.
 3. `touched` footprint capture (RenderState context surfacing + filter).
-4. `sys.accessLog` READ builtin + `sys.pruneAccessLog` host op.
-5. `sys.rollupAnalytics` + convention types + guard test + the analytics app (generic-lib
-   dashboard, SetTable).
+4. `sys.accessLog` + `sys.accessStats` READ builtins (one shared aggregate computation).
+5. `sys.compactAccessLog` + convention types + guard test + the analytics app (generic-lib
+   dashboard, SetTable over compacted rows ∪ live stats).
 6. Per-record timeline; host-action arg capture. (Each its own gate.)
 
 ## Deliberately out of scope (guard rails)
