@@ -1147,6 +1147,97 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the root node no longer has a child element with tag "footer"
     And the stored render projects to a valid design document
 
+  # ── M12 S5a — reorder (▲/▼ swap `order` with the neighbor sibling; the E2 add/remove idiom family) ─
+  #
+  # The one structural op E2 still lacked (visual-designer.md's E3 ledger). `moveRow(coll, node, dir)` finds
+  # the nearest sibling by strict `order` comparison and swaps the two ints — an ordinary two ctx-staged
+  # writes, no new builtins/twins (`order` is already a dep-recorded row field both the tree editor's
+  # `orderBy` and the canvas's `renderTree` walk read, so a swap repaints BOTH surfaces same-frame).
+  #
+  # The proof: convert the nested render (root <main> starts with one child, <h1>), append two more elements
+  # and rename them, giving the root exactly three children (h1, second, third — test (a)'s "parent with
+  # three children"); assert the tree editor AND the canvas already agree on that order; assert the first
+  # row has no ▲ and the last has no ▼ (test (b) — not rendered at all, the onRemove==null precedent, not a
+  # disabled button); click ▼ on the first row and assert BOTH surfaces show the new order with no reload
+  # (the same-frame repaint pin); reload the whole editor and assert the new order survived — proving the
+  # swap is a real persisted write, not just an optimistic client reorder (test (c)).
+  @m12 @single-user
+  Scenario: The tree editor reorders sibling nodes, the canvas repaints same-frame, and the new order survives a reload
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "treeme"
+    And I edit the design "treeme"
+    And I expand the Advanced code disclosure
+    And I author a projectable nested render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "greeting" to the type "Db"
+    When I add a child element to the root node
+    And I edit the root node's last child tag input to "second"
+    And I add a child element to the root node
+    And I edit the root node's last child tag input to "third"
+    Then the root node's children read, in order: "h1, second, third"
+    And the design canvas shows children in order: "h1, second, third"
+    And the root node's first child has no move-up button
+    And the root node's last child has no move-down button
+    And the stored render projects to a valid design document
+    When I click move-down on the root node's child 0
+    Then the root node's children read, in order: "second, h1, third"
+    And the design canvas shows children in order: "second, h1, third"
+    And the stored render projects to a valid design document
+    And the root node's children are persisted in order: "second, h1, third"
+    When I reload the design editor
+    Then the root node's children read, in order: "second, h1, third"
+
+  # The SAME moveRow helper reorders MetaAttr rows (attrRow(coll, a) is shared by node attrs AND use args —
+  # composes at zero marginal cost, per the spec's "same helper" guidance) — proven here on a node's own
+  # attributes; fns/vars are deliberately SKIPPED (their display foreach is still unsorted pending
+  # task_d7c6ed6a's orderBy restoration — wiring a control there would change data order invisibly, a lie).
+  @m12 @single-user
+  Scenario: A node's attributes can be reordered with the same move controls
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "treeme"
+    And I edit the design "treeme"
+    And I expand the Advanced code disclosure
+    And I author a projectable nested render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "greeting" to the type "Db"
+    When I add a child element to the root node
+    And I add an attribute to the root node's last child
+    And I set the root node's last child's attribute 0's name to "aa"
+    And I add an attribute to the root node's last child
+    And I set the root node's last child's attribute 1's name to "bb"
+    Then the root node's last child's attributes read, in order: "aa, bb"
+    When I click move-down on the root node's last child's attribute 0
+    Then the root node's last child's attributes read, in order: "bb, aa"
+
+  # ...and MetaUse configuration rows (`f.uses.orderBy(u => u.order)` — already sorted for display, unlike
+  # fns/vars), reusing the exact same helper on a different set.
+  @m12 @single-user
+  Scenario: A component's configurations can be reordered with the same move controls
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "scratchcomp"
+    And I edit the design "scratchcomp"
+    And I expand the Advanced code disclosure
+    And I author a bare convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-component button
+    And I click the add-configuration button
+    And I set configuration 0's name to "aa"
+    And I click the add-configuration button
+    And I set configuration 1's name to "bb"
+    Then configurations read, in order: "aa, bb"
+    When I click move-down on configuration 0
+    Then configurations read, in order: "bb, aa"
+
   # ── M12 CANVAS-1 — the CLIENT-COMPUTABLE canvas (sys.renderTree) ──────────────────────────────
   #
   # The tree editor (E1/E2) edits the render as DATA; the canvas is the paired VIEW of that data — a live

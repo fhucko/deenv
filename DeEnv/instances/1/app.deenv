@@ -158,6 +158,28 @@ ui
             return 0
         return top.order + 1
 
+    fn isFirstSibling(coll, node)
+        var first = coll.orderBy(c => c.order).single(c => true)
+        return first != null && sys.id(first) == sys.id(node)
+
+    fn isLastSibling(coll, node)
+        var last = coll.orderBy(c => 0 - c.order).single(c => true)
+        return last != null && sys.id(last) == sys.id(node)
+
+    fn moveRow(coll, node, dir)
+        if dir < 0
+            var neighbor = coll.where(c => c.order < node.order).orderBy(c => 0 - c.order).single(c => true)
+            if neighbor != null
+                var tmp = node.order
+                node.order = neighbor.order
+                neighbor.order = tmp
+        else
+            var neighbor = coll.where(c => c.order > node.order).orderBy(c => c.order).single(c => true)
+            if neighbor != null
+                var tmp = node.order
+                node.order = neighbor.order
+                neighbor.order = tmp
+
     fn addElement(coll)
         coll.add({ kind: "", tag: "div", expr: "", item: "", collection: "", condition: "", order: orderForAppend(coll), attrs: [], children: [], elseChildren: [] })
 
@@ -253,6 +275,12 @@ ui
             <span class="node-attr-eq">
                 "="
             <input class="node-attr-value" value={a.value} placeholder={"\"value\" or expression"}>
+            if isFirstSibling(coll, a) == false
+                <button class="move-up" onClick={() => moveRow(coll, a, -1)}>
+                    "▲"
+            if isLastSibling(coll, a) == false
+                <button class="move-down" onClick={() => moveRow(coll, a, 1)}>
+                    "▼"
             <button class="remove-attr" onClick={() => coll.remove(a)}>
                 "×"
 
@@ -262,7 +290,7 @@ ui
     fn selectNode(node)
         selectedNode = sys.id(node)
 
-    fn renderNodeEditor(node, onRemove)
+    fn renderNodeEditor(node, coll, onRemove)
         if node.kind == "for"
             return <div class={nodeClass(node, "node-for")} onClick={() => selectNode(node)}>
                 <div class="node-for-head">
@@ -272,12 +300,18 @@ ui
                     <span class="node-keyword">
                         "in"
                     <input class="node-for-collection" value={node.collection} placeholder={"db.... or expression"}>
+                    if coll != null && isFirstSibling(coll, node) == false
+                        <button class="move-up" onClick={() => moveRow(coll, node, -1)}>
+                            "▲"
+                    if coll != null && isLastSibling(coll, node) == false
+                        <button class="move-down" onClick={() => moveRow(coll, node, 1)}>
+                            "▼"
                     if onRemove != null
                         <button class="remove-node" onClick={onRemove}>
                             "×"
                 <div class="node-children">
                     foreach child in node.children.orderBy(c => c.order)
-                        <renderNodeEditor node={child} onRemove={() => node.children.remove(child)}>
+                        <renderNodeEditor node={child} coll={node.children} onRemove={() => node.children.remove(child)}>
                 addRow(node.children)
         if node.kind == "if"
             return <div class={nodeClass(node, "node-if")} onClick={() => selectNode(node)}>
@@ -285,6 +319,12 @@ ui
                     <span class="node-keyword">
                         "if"
                     <input class="node-if-condition" value={node.condition} placeholder={"expression"}>
+                    if coll != null && isFirstSibling(coll, node) == false
+                        <button class="move-up" onClick={() => moveRow(coll, node, -1)}>
+                            "▲"
+                    if coll != null && isLastSibling(coll, node) == false
+                        <button class="move-down" onClick={() => moveRow(coll, node, 1)}>
+                            "▼"
                     if onRemove != null
                         <button class="remove-node" onClick={onRemove}>
                             "×"
@@ -293,7 +333,7 @@ ui
                         "then"
                     <div class="node-children">
                         foreach child in node.children.orderBy(c => c.order)
-                            <renderNodeEditor node={child} onRemove={() => node.children.remove(child)}>
+                            <renderNodeEditor node={child} coll={node.children} onRemove={() => node.children.remove(child)}>
                     addRow(node.children)
                 if node.elseChildren.any(c => true)
                     <div class="node-branch node-else">
@@ -301,7 +341,7 @@ ui
                             "else"
                         <div class="node-children">
                             foreach child in node.elseChildren.orderBy(c => c.order)
-                                <renderNodeEditor node={child} onRemove={() => node.elseChildren.remove(child)}>
+                                <renderNodeEditor node={child} coll={node.elseChildren} onRemove={() => node.elseChildren.remove(child)}>
                         addRow(node.elseChildren)
                 else
                     <button class="add-else" onClick={() => addElse(node)}>
@@ -311,6 +351,12 @@ ui
                 <span class="node-leaf-anchor">
                     "->"
                 <input class="node-expr" value={node.expr} placeholder={"\"text\" or expression"}>
+                if coll != null && isFirstSibling(coll, node) == false
+                    <button class="move-up" onClick={() => moveRow(coll, node, -1)}>
+                        "▲"
+                if coll != null && isLastSibling(coll, node) == false
+                    <button class="move-down" onClick={() => moveRow(coll, node, 1)}>
+                        "▼"
                 if onRemove != null
                     <button class="remove-node" onClick={onRemove}>
                         "×"
@@ -319,6 +365,12 @@ ui
                 <span class="node-angle">
                     "<"
                 <input class="node-tag" value={node.tag}>
+                if coll != null && isFirstSibling(coll, node) == false
+                    <button class="move-up" onClick={() => moveRow(coll, node, -1)}>
+                        "▲"
+                if coll != null && isLastSibling(coll, node) == false
+                    <button class="move-down" onClick={() => moveRow(coll, node, 1)}>
+                        "▼"
                 if onRemove != null
                     <button class="remove-node" onClick={onRemove}>
                         "×"
@@ -327,7 +379,7 @@ ui
             if node.children.any(c => true)
                 <div class="node-children">
                     foreach child in node.children.orderBy(c => c.order)
-                        <renderNodeEditor node={child} onRemove={() => node.children.remove(child)}>
+                        <renderNodeEditor node={child} coll={node.children} onRemove={() => node.children.remove(child)}>
             <div class="node-add-row">
                 <button class="add-element" onClick={() => addElement(node.children)}>
                     "+ element"
@@ -487,7 +539,7 @@ ui
                             "The canvas is a live structural view of the tree below — it repaints as you edit; expressions, loops, and conditions evaluate against the design's seed data; edited expressions show as chips until you refresh. Click any element to highlight the row that produces it below, or click a row below to highlight it on the canvas; click empty space or press Esc to clear the selection. Clicking one loop item highlights all its instances — they share one template row."
                         <designCanvas design={design}>
                         <p class="render-caption">
-                            "Edit each node's fields inline. Add and remove nodes and attributes with the controls; reordering is coming."
+                            "Edit each node's fields inline. Add, remove, and reorder nodes and attributes with the controls."
                         <div class="render-tree">
                             foreach n in design.render
                                 <renderNodeEditor node={n}>
@@ -558,6 +610,12 @@ ui
                                         foreach u in f.uses.orderBy(u => u.order)
                                             <div class="use-row">
                                                 <input class="use-name" value={u.name} placeholder={"e.g. empty, long list"}>
+                                                if isFirstSibling(f.uses, u) == false
+                                                    <button class="move-up" onClick={() => moveRow(f.uses, u, -1)}>
+                                                        "▲"
+                                                if isLastSibling(f.uses, u) == false
+                                                    <button class="move-down" onClick={() => moveRow(f.uses, u, 1)}>
+                                                        "▼"
                                                 <button class="remove-use" onClick={() => f.uses.remove(u)}>
                                                     "×"
                                                 if useNameHint(u) != ""

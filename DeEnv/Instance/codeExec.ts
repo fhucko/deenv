@@ -226,7 +226,14 @@ function executeAssignment(assignment: CodeAssignment, scope: ExecScope, context
         const before = obj.props[prop];
         obj.props[prop] = value;
         invalidateProp(obj.id, prop);
-        if (obj.id > 0) propValueChange(obj, prop, value, before);
+        // S5a review fix: route through the SAME persist logic two-way binding uses (persistFieldEdit),
+        // not a bare `if (obj.id > 0)` — that gate silently dropped the send for a JUST-ADDED set member
+        // still at its transient negative id (the arrayAdd round-trip not yet acked), which a plain
+        // `obj.field = value` statement (moveRow's sibling-order swap; ANY future non-input-bound write)
+        // can legitimately target a half-second after an add. persistFieldEdit's own pending-id fallback
+        // (a documented, already-proven branch) sends by the transient id anyway — the server resolves it
+        // through the add's own remap — so the write is no longer silently lost.
+        persistFieldEdit(obj, prop, value, before);
         return value;
     }
     throw new Error("Invalid assignment target.");
@@ -566,9 +573,13 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
     };
 }
 
-// Persist a bound field edit: a positive id is server-backed (id-addressed objectPropChange);
-// a dictionary entry has no extent id but carries its SourcePath, so it persists via the
-// PATH-addressed `write` op (a scalar entry writes at its path, an object entry at path/prop).
+// Persist a field edit — shared by two-way binding (setValue above) AND a plain `obj.field = value`
+// assignment statement (executeAssignment's objectProp branch, S5a review fix — it used to gate on
+// `obj.id > 0` alone and silently drop the send for a pending object): a positive id is server-backed
+// (id-addressed objectPropChange); a dictionary entry has no extent id but carries its SourcePath, so it
+// persists via the PATH-addressed `write` op (a scalar entry writes at its path, an object entry at
+// path/prop); a just-added set member still at its transient negative id sends by that id anyway (the
+// server resolves it through the add's own remap).
 function persistFieldEdit(obj: ExecObject, name: string, value: ExecValue, before: ExecValue): void {
     if (obj.id > 0) { propValueChange(obj, name, value, before); return; }   // server-backed extent object
     if (obj.sourcePath != null) {                                            // a dictionary entry (no extent id)

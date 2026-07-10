@@ -764,6 +764,12 @@ public sealed class SsrRenderer
           padding: 0.15rem 0.5rem; font-size: 0.82rem; color: var(--muted); }
         button.remove-node, button.remove-attr, button.remove-use { padding: 0.1rem 0.45rem; color: var(--danger); flex: 0 0 auto; }
         button.remove-node:hover, button.remove-attr:hover, button.remove-use:hover { background: #fff0f0; border-color: var(--danger); }
+        /* S5a — reorder. Same small inline-button treatment as the × controls, anchored beside them in each
+           row's own header (the E2 anchoring precedent), muted rather than danger-colored (a reorder is not
+           destructive). The first row's ▲ and the last row's ▼ are simply not rendered (the onRemove==null
+           precedent for the single-root row), rather than shown disabled. */
+        button.move-up, button.move-down { padding: 0.1rem 0.4rem; color: var(--muted); flex: 0 0 auto; font-size: 0.8rem; }
+        button.move-up:hover, button.move-down:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: var(--accent); }
         /* S6a — for/if control-flow ROWS in the tree editor: a distinct dashed-border box (vs the
            element's solid left border) so a loop/condition row reads as structurally different from a
            plain tag, echoing the canvas's own for-template/if-template marking below. */

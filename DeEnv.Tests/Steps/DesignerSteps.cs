@@ -2200,6 +2200,121 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     private string _lastProjectError = "";
 
+    // ── M12 S5a — reorder (▲/▼ per row, swapping `order` with the neighbor sibling) ────────────────
+    //
+    // Direct children of the root under `.node-children`, in DOM order — this scenario's fixture only ever
+    // has element rows (h1 + two appended `div`s renamed via the existing tag input), so a plain
+    // `.node-element` selector suffices; a for/if-row family would need `:scope > .node-children > *`
+    // instead (the same widening `ThenRootLastChildIsForRow` uses), not needed here.
+    private const string RootChildren = RootNode + " > .node-children > .node-element";
+
+    private static string JsStringArray(IEnumerable<string> values) =>
+        "[" + string.Join(",", values.Select(JsString)) + "]";
+
+    [Then("the root node's children read, in order: {string}")]
+    public async Task ThenRootChildrenOrder(string csv)
+    {
+        var expected = JsStringArray(csv.Split(',').Select(s => s.Trim()));
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const kids = [...document.querySelectorAll({JsString(RootChildren)})]; " +
+            "const tags = kids.map(k => k.querySelector(':scope > .node-tag-row > input.node-tag').value); " +
+            $"const expected = {expected}; " +
+            "return tags.length === expected.length && tags.every((t, i) => t === expected[i]); }");
+    }
+
+    // The DOM-order assertion above only proves the tree editor's OWN optimistic client state; a move's
+    // `order` writes are ordinary ctx-staged field assignments that reach the server over the warm WS
+    // session ASYNCHRONOUSLY (the WhenRenameDesignLabel precedent) — so a reload fired right after a click
+    // can race ahead of the autosave and observe the OLD order. This polls the real SERVER STORE (not the
+    // DOM) for the swap, the same "wait for the write to land" step every persistence proof in this file
+    // takes before reloading.
+    [Then("the root node's children are persisted in order: {string}")]
+    public async Task ThenRootChildrenPersistedOrder(string csv)
+    {
+        var expected = csv.Split(',').Select(s => s.Trim()).ToArray();
+        await EventuallyAsync(() =>
+        {
+            var nodes = _designer.Store.ReadExtent("MetaNode").Values
+                .Where(o => o.Fields.TryGetValue("tag", out var tv) && tv is DeEnv.Storage.TextValue t && expected.Contains(t.Text))
+                .Select(o => (
+                    tag: ((DeEnv.Storage.TextValue)o.Fields["tag"]).Text,
+                    order: o.Fields.TryGetValue("order", out var ov) && ov is DeEnv.Storage.IntValue iv ? iv.Value : 0))
+                .ToList();
+            if (nodes.Count != expected.Length) return false;
+            var actual = nodes.OrderBy(n => n.order).Select(n => n.tag).ToArray();
+            return actual.SequenceEqual(expected);
+        });
+    }
+
+    // The canvas's root element (`<main data-node>`) holds the same children directly, rendered with their
+    // OWN edited tag as the literal DOM tag name (proven by the E2/CANVAS-1 "footer" case) — so reading
+    // `tagName` off each direct child is the canvas-side twin of the tree-editor assertion above, proving
+    // the SAME-FRAME repaint landed the new order there too, not just in the editor's own optimistic DOM.
+    [Then("the design canvas shows children in order: {string}")]
+    public async Task ThenCanvasChildrenOrder(string csv)
+    {
+        var expected = JsStringArray(csv.Split(',').Select(s => s.Trim()));
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const root = document.querySelector('.design-canvas > [data-node]'); if (root == null) return false; " +
+            "const tags = [...root.children].map(c => c.tagName.toLowerCase()); " +
+            $"const expected = {expected}; " +
+            "return tags.length === expected.length && tags.every((t, i) => t === expected[i]); }");
+    }
+
+    // First row's ▲ / last row's ▼ are simply not RENDERED (the onRemove==null precedent for the
+    // single-root row), never shown-disabled — so "no move-up button" is a plain absence check.
+    [Then("the root node's first child has no move-up button")]
+    public async Task ThenRootFirstChildNoMoveUp() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const kids = [...document.querySelectorAll({JsString(RootChildren)})]; " +
+            "const first = kids[0]; return first != null && first.querySelector(':scope > .node-tag-row > button.move-up') == null; }");
+
+    [Then("the root node's last child has no move-down button")]
+    public async Task ThenRootLastChildNoMoveDown() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const kids = [...document.querySelectorAll({JsString(RootChildren)})]; " +
+            "const last = kids[kids.length - 1]; return last != null && last.querySelector(':scope > .node-tag-row > button.move-down') == null; }");
+
+    [When("I click move-down on the root node's child {int}")]
+    public async Task WhenClickMoveDownOnRootChild(int index) =>
+        await ctx.Page!.Locator(RootChildren).Nth(index).Locator(":scope > .node-tag-row > button.move-down").ClickAsync();
+
+    // ── M12 S5a — attribute reorder (the SAME attrRow(coll, a) the render tree and use-args share) ──
+
+    [When("I set the root node's last child's attribute {int}'s name to {string}")]
+    public async Task WhenSetLastChildAttrName(int index, string name) =>
+        await ctx.Page!.Locator(RootLastChildElement + " > .node-attr input.node-attr-name").Nth(index).FillAsync(name);
+
+    [Then("the root node's last child's attributes read, in order: {string}")]
+    public async Task ThenLastChildAttrsOrder(string csv)
+    {
+        var expected = JsStringArray(csv.Split(',').Select(s => s.Trim()));
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const names = [...document.querySelectorAll({JsString(RootLastChildElement + " > .node-attr input.node-attr-name")})].map(e => e.value); " +
+            $"const expected = {expected}; " +
+            "return names.length === expected.length && names.every((n, i) => n === expected[i]); }");
+    }
+
+    [When("I click move-down on the root node's last child's attribute {int}")]
+    public async Task WhenClickMoveDownOnLastChildAttr(int index) =>
+        await ctx.Page!.Locator(RootLastChildElement + " > .node-attr").Nth(index).Locator("button.move-down").ClickAsync();
+
+    // ── M12 S5a — configuration (MetaUse) reorder ─────────────────────────────────────────────────
+
+    [Then("configurations read, in order: {string}")]
+    public async Task ThenConfigurationsOrder(string csv)
+    {
+        var expected = JsStringArray(csv.Split(',').Select(s => s.Trim()));
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const names = [...document.querySelectorAll('.components-section .fn-card .use-row input.use-name')].map(e => e.value); " +
+            $"const expected = {expected}; " +
+            "return names.length === expected.length && names.every((n, i) => n === expected[i]); }");
+    }
+
+    [When("I click move-down on configuration {int}")]
+    public async Task WhenClickMoveDownOnConfiguration(int index) =>
+        await ctx.Page!.Locator(".components-section .fn-card .use-row").Nth(index).Locator("button.move-down").ClickAsync();
+
     // ── M12 CANVAS-1 — the client-computable canvas (sys.renderTree) ────────────────────────────
     //
     // The canvas (.design-canvas) renders the design's MetaNode rows into a live tag tree via
