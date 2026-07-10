@@ -69,10 +69,30 @@ item from the original first-scope bar, and the rung S5/S7 build on.
   input focus rings but not airtight — wants its own style token at the theming pass.
   v1 boundaries stated: workbench cards + U1 previews unmarked (structural exclusion,
   zero special-case code).
-- **S4b — selection-aware editing affordances.** From a selected row: keyboard/button
-  affordances the tree editor already has (add sibling/child, remove) surfaced at the
-  selection; the page-order reorder rides here (the UX-ledger item: types → render →
-  publish → branches) since composition is being touched.
+- **S4b — bidirectional selection + the page reorder. ✅ DONE 2026-07-10** (reviews
+  ui-arch SHIP + ux SHIP-WITH-FIXES, folds applied; `4d8d8ed`; SUPERSEDED SCOPE: the
+  original "surface add/remove at the selection" was dropped as zero-value — S4a's
+  scroll-to-row already lands the operator on the row carrying those controls;
+  duplicating them = competing controls). Landed: tree-row click selects via an
+  ORDINARY deenv handler (`fn selectNode`; the innermost nested row wins NATIVELY —
+  wireEvents' stopPropagation, empirically pinned); row clicks deliberately DON'T
+  scroll (they route through executeAssignment, never the scroll-arm — pinned; the
+  asymmetry ux-affirmed: bring the OTHER surface into view, not the one you're at);
+  Escape deselects (generic client chrome, guarded to skip text-entry targets); THE
+  PAGE REORDER — types → render (canvas+tree+State+Components) → publish → branches →
+  Advanced — closing the twice-recorded UX-checkpoint item (pure markup move; the
+  type-hint↔canvas adjacency comes from the section order; State/Components between
+  render and publish = intended, authoring precedes shipping); row hover tint
+  (adjudicated fold — the faint cousin of the selected tint, no cursor lie,
+  :not(.is-selected) so selected dominates). Screenshot-verified: Publish reads as a
+  discrete next step; a selected row's tint suffices as confirmation with the canvas
+  off-screen. Named honestly (shared with the canvas's own hover, not new): nested
+  rows cascade-tint together under the pointer (ancestor boxes contain it
+  geometrically); the convert-button → content-up-page jump is real but reads
+  reasonable (the operator lands on their new content). Focus is never stolen —
+  editing a row's input highlights it (reconciler-verified bonus). One test fix:
+  ±1px scroll-assert tolerance (sub-pixel getBoundingClientRect rounding,
+  base-vs-branch verified).
 
 **Open decisions.** The scroll/focus mechanism in deenv code (may need one tiny client
 hook — flag if so); whether canvas-outline styling needs the theming seam or one chrome
