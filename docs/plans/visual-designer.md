@@ -746,6 +746,17 @@ mutations the designer app performs in deenv code — that machinery already exi
   is honest) did not. Suite 903 (898 passing, 5 known-flake-class failures — the pre-
   existing `WhenAddField` store-poll + one canvas-visibility timeout, both environmental,
   neither touching W1c logic; every W1c scenario passes in isolation).
+  **Arch review: SHIP — three recorded notes (deliberate, not gaps):** (1) the seeded
+  extent is RICHER than a live one — live LoadExtent ships scalar-only password-blanked
+  shallow members; the seed ships full db object refs (deliberate: "the seed graph's
+  collections ARE the extents"; no new exposure — the operator authored the seed data;
+  scope the "byte-identical" claim to schema/canWrite/canRead, NOT extents); (2) the
+  byte-compat pin is STRUCTURAL (both paths derive from GenericUi.Effective+MarkConstant),
+  not a live-vs-seed capture-diff — a future drift in ONE producer wouldn't be caught;
+  (3) the design-INDEPENDENT `lib` AST payload re-ships per (design, refreshKey) —
+  redundant for multi-design use; a shared/once payload is the natural later shape
+  (conscious deferral). Cheap-pin ledger: extent REMOVAL mutation-consistency
+  (db.<set>.remove → cascade) is uncovered — mechanism symmetric with the pinned add.
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —
