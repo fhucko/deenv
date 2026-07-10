@@ -14,6 +14,11 @@ can use the AMBIENT SESSION COOKIE — the slice-2 short-lived HMAC ticket is de
 tombstoned. Serve is untouched (still `assets.deenv.org`, still unauthenticated). Full
 rewrite in §2/§Origin below.
 
+**2026-07-10 reconciliation:** the "Fully clean app URL space" follow-up (bottom of
+this doc) is now fully SETTLED — `/js`+`/ws` move to `assets.deenv.org`, code-verified
+auth-clean; `/session` stays, cross-validated by the exact reasoning slice 2b already
+shipped for upload (method-scoped POST ≠ a URL-space collision). Not yet built.
+
 Companions: docs/plans/app-versioning-design.md (§0b non-temporal, §6 compaction),
 docs/plans/post-m13-backlog.md (the brief), docs/plans/login-persistence.md (the
 /session + cookie precedent), docs/plans/security-review-pre-public.md (the floor).
@@ -165,25 +170,31 @@ In dev the two-port setup already gives origin isolation for free (`localhost:80
 upload POST is a same-host, different-port call, handled by `credentials:'include'` +
 AssetsHandler's CORS echo (§2).
 
-**`/ws`, `/js`, `/session` do NOT move — and this is deliberate, not an oversight.**
-They must stay same-origin with the app page for auth to work: WS upgrades on the app
-origin, and the `deenv_session_<id>` cookie is host-scoped to `<app>.deenv.org`
-(`Path=/; HttpOnly; SameSite=Lax`) so it only rides to that subdomain. Today nginx
-already serves page + `/ws` + `/js` + `/session` all on `<app>.deenv.org` (same origin,
-proxied to the asset port under `/apps/<name>/...`, DEPLOY.md:153-159) — which is why
-login and live WS work on devlog now. Moving them to `assets.deenv.org` would break
-exactly that. Serve CAN move because it's built to not need the app cookie (a capability
-GET); upload, once it needed the SAME ambient cookie `/session` does (2026-07-10 —
-below), had to come back to the app origin for the identical reason `/ws`/`/session`
-never left it.
+**`/session` does NOT move — and this is deliberate, not an oversight.** It must stay
+same-origin with the app page for auth to work: the `deenv_session_<id>` cookie is
+host-scoped to `<app>.deenv.org` (`Path=/; HttpOnly; SameSite=Lax`) so it only rides to
+that subdomain, and the SSR GET reads it synchronously to render an authenticated first
+paint (`PrincipalFromCookie`, ContentHandler.cs:61-68) — a cookie can only ever be set
+by a response from its OWN origin, so `assets.deenv.org` could never mint one
+`app.deenv.org` would send back. Serve CAN move because it's built to not need the app
+cookie (a capability GET); upload, once it needed the SAME ambient cookie `/session`
+does (2026-07-10 — below), had to come back to the app origin for the identical reason
+`/session` never left it. **`/js` and `/ws`, by contrast, ARE designed to move** — see
+the "Fully clean app URL space" follow-up at the bottom; not built yet, but settled with
+no open questions. (Today, ahead of that follow-up landing, nginx still serves page +
+`/ws` + `/js` + `/session` all on `<app>.deenv.org`, DEPLOY.md:153-159 — which is why
+login and live WS work on devlog right now.)
 
 Two properties fall out for free:
 1. **App URL space is untouched by assets** — apps own 100% of `<app>.deenv.org/*`
-   *for the blob feature*. But it is not yet TRULY clean: `/ws`, `/js`, `/session`
-   still occupy three EXACT reserved paths on the app subdomain (pre-date this pass).
-   The user wants those gone too (2026-07-06) — see the "Fully clean app URL space"
-   follow-up at the bottom; it's a separate design pass (auth mechanism may change),
-   not part of this assets slice. Flagged here so "completely clean" isn't overclaimed.
+   *for the blob feature* (upload's method-scoped POST doesn't count against this —
+   see above). But it is not yet TRULY clean: `/ws`, `/js`, `/session` still occupy
+   three EXACT reserved paths on the app subdomain (pre-date this pass). The user
+   wants those gone too (2026-07-06) — the "Fully clean app URL space" follow-up at
+   the bottom is now fully SETTLED (no open questions), though not yet built: `/js`
+   and `/ws` move to `assets.deenv.org`; `/session` stays, for the same reason upload
+   does. Flagged here so "completely clean" isn't overclaimed for the CURRENT,
+   as-deployed state.
 2. **User content is origin-isolated** — served blobs sit on a throwaway origin with no
    app cookies and no app DOM, the `githubusercontent.com` pattern. Any residual
    content-sniffing risk that slipped past `nosniff` + the no-SVG allowlist can't reach
@@ -354,14 +365,19 @@ Follows `password` exactly as the text-shaped template:
   home, both modes, per the two-UI-modes rule (one component library both compose).
 - **`sys.assetUrl(name)` — real new plumbing the draft hand-waved (grill #1):**
   GenericUi cannot compose an `<img src>` without a builtin that knows the blob origin.
-  Both twins implement `sys.assetUrl(name)` → `<blobBase>/<instance>/<name>`. Note the
-  blob base is its OWN config, distinct from the ws/js asset authority: ws/js stay
-  app-subdomain-fronted (WS must upgrade on the app origin), while blobs live on
-  `assets.deenv.org` — so this is a NEW kernel config value (`assets.deenv.org` in prod,
-  the asset-port authority in dev where they coincide), not a reuse of the existing
-  `initAssetAuthority` global. Pure function of session-known state — no refetch
-  machinery, not a server-data builtin, so AGENTS.md rule 12 isn't in play. One
-  conformance-adjacent check that both twins emit the same URL for the same name.
+  Both twins implement `sys.assetUrl(name)` → `<blobBase>/<instance>/<name>`. This is a
+  NEW kernel config value (`assets.deenv.org` in prod, the asset-port authority in dev
+  where it coincides with everything else today) — NOT a reuse of the existing
+  `initAssetAuthority` global (`/js`/`/ws`'s base) as first drafted; the two configs
+  happen to differ today only because `/js`/`/ws` haven't moved yet. *Correction: an
+  earlier draft of this paragraph claimed WS "must" stay app-subdomain-fronted — false;
+  the follow-up below found WS auth is fully in-band and code-verified cookie-free, so
+  it's free to join `assets.deenv.org` too.* Once the follow-up ships, `initAssetAuthority`
+  and `sys.assetUrl`'s base converge onto the SAME value — collapse the two configs
+  into one at that point, don't keep them separate out of inertia. Pure function of
+  session-known state — no refetch machinery, not a server-data builtin, so AGENTS.md
+  rule 12 isn't in play. One conformance-adjacent check that both twins emit the same
+  URL for the same name.
 - **`sys.setField(obj, name, value)` — an unplanned addition, noted for inventory:** the
   Clear button (form branch, above) writes "" to a DYNAMICALLY-named prop from an
   `onClick`, and Code has no lvalue syntax for that (`sys.field(obj, name) = x` isn't
@@ -575,36 +591,75 @@ the user and was settled same day (§3).
 | Publish/revert/setDesign: no blob handling needed | Settled (grill-verified) |
 | Blob GC / retention | Deferred to compaction §6 (per the brief; handed a clean "referenced" definition) |
 | `file` scalar, thumbnails, EXIF strip, per-object blob floor | Deferred, named |
-| Fully clean app URL space (move /ws, /js, /session off the app subdomain) | Follow-up design pass (user 2026-07-06) — see below |
+| Fully clean app URL space (move /ws, /js off the app subdomain; /session stays) | Settled (design, 2026-07-06 + 2026-07-10 reconciliation), follow-up track, not yet built — see below |
 
 ## Follow-up (adjacent, NOT this slice): fully clean app URL space
 
-*User direction 2026-07-06: apps should own their subdomain URL space with ZERO
-framework-reserved paths — not just for blobs. Today three exact paths remain reserved:
-`/ws`, `/js`, `/session`. The user explicitly OKs changing the auth mechanism (away from
-the host-scoped cookie) if that's what full cleanliness needs. This is its own design
-pass; recorded here because it's the same "clean namespace" motive as the blob-domain
-decision.*
+*User direction 2026-07-06, reconciled 2026-07-10 against the landed slices: apps should
+own their subdomain URL space with as few framework-reserved paths as possible — not
+just for blobs. Today three exact paths remain reserved: `/ws`, `/js`, `/session`.
+SETTLED below, no open questions remain — the earlier "OPEN"/"crux" framing from the
+2026-07-06 draft is resolved, not just softened. Not yet built.*
 
-Rough shape (to be designed, not settled — confirmed facts cited, the rest is sketch):
+**`/js` and `/ws` both move to the blob domain, instance-scoped like assets —
+SETTLED.** Same family, same shape as the blob edges:
+- `https://assets.deenv.org/<name>/js`
+- `https://assets.deenv.org/<name>/ws`
+- `https://assets.deenv.org/<name>/<hash>.<ext>` (already the assets design, above)
 
-- **`/js` — easy.** It's a static compiled-in script (BundleHandler, ContentHandler.cs:
-  211-223), no auth. Serve it cross-origin from the blob/static domain; `<script src>`
-  cross-origin is unrestricted. The SSR page just emits the off-subdomain URL.
-- **`/ws` — likely movable.** WS-session auth is already IN-BAND (an explicit
-  login/logout WS op, not the cookie — WsHandler.cs:1300-1338), so a cross-origin WS
-  upgrade to a dedicated host is plausible if the server accepts the Origin. OPEN: does
-  the login-persistence path ALSO read the cookie on WS connect to restore state? If so,
-  that read is part of the mechanism-change the user blessed — verify before assuming
-  ws moves freely.
-- **`/session` + the SSR cookie — the crux.** The SSR GET reads the host-scoped cookie
-  to render an authenticated first paint (PrincipalFromCookie, ContentHandler.cs:61-68).
-  The GET at `/` and app paths ARE the app's own space (fine), but the `/session`
-  login/logout endpoint is a reserved path, and the cookie is what pins auth to the app
-  subdomain. Moving `/session` off-subdomain means the SSR principal must arrive by a
-  mechanism that isn't the per-subdomain cookie — a `.deenv.org`-scoped token (rejected
-  for blobs due to cross-app leak — reconsider under a real design), or a scheme that
-  carries the principal without a reserved app-subdomain path. This is the real work and
-  where the user's "other mechanism if needed" applies.
-- Net: `/js` and probably `/ws` are cheap; `/session`+SSR-auth is the design-worthy
-  piece. Sequence after assets; it touches login-persistence, so loop that design in.
+Instance-in-the-path is deliberate, not incidental: `/js` serves byte-identical compiled
+code today, but keeping the URL per-instance (rather than one flattened
+`assets.deenv.org/js`) leaves room for per-app JS bundles later — a pure server-side
+change (serve different bytes per instance) with no URL redesign needed when that day
+comes. `/ws` doesn't need per-instance CONTENT (it's a protocol channel, not bytes),
+but takes the identical path shape anyway for one consistent scheme across the family.
+
+**`/ws`'s move is code-verified clean, not just plausible.** Checked `WsHandler.cs` and
+`InstanceApp.cs` directly (2026-07-10): the WS path never reads the cookie anywhere —
+login is entirely in-band, an explicit `login`/`logout` message sent over the
+already-open socket (WsHandler.cs:1300-1338), with the code's own comment: *"no
+reserved route (login is a STATE, not a URL)."* The earlier "does WS auto-restore via
+the cookie?" open question is answered NO by inspection — `/ws` moves with zero
+mechanism change. (WS's handshake is protocol-mandated GET per RFC 6455 §4.1, not a
+deenv choice — moot once WS is off the app subdomain, since it no longer competes with
+app page routes.) A further, independent confirmation: multi-app login already works
+correctly today regardless of domain, since WS login is per-instance by PATH (the
+socket URL names the instance) and never depended on the cookie or same-origin-ness —
+moving `/ws` doesn't create or risk any new multi-app login behavior, it only relocates
+an already-domain-independent mechanism.
+
+**`/session` stays on the app subdomain — SETTLED, and this is now DIRECTLY VALIDATED
+by what actually shipped, not just argued from first principles.** `SessionHandler`
+only ever answers `POST`/`DELETE`/`OPTIONS` (ContentHandler.cs:128-207) — never a
+page-shaped GET — so it can't collide with an app's own `fn render()` routes (all GET).
+Keeping it in-app is also FORCED: the SSR GET reads the session cookie synchronously
+(`PrincipalFromCookie`, ContentHandler.cs:61-68) for an authenticated first paint, and a
+cookie can only ever be set by a response from its OWN origin — `assets.deenv.org`
+could never mint a cookie `app.deenv.org` would send back. Moving `/session` off would
+mean giving up server-rendered authenticated first paint entirely (render generic, swap
+in personalized state after a client-side WS login) — an architecture change nobody has
+asked for. **This exact reasoning — a method-scoped POST reservation is an acceptable,
+non-colliding cost, not a URL-space violation — is not hypothetical: it is precisely
+what slice 2b already shipped for asset upload** (§Origin/§2 above, "Upload is a POST →
+... never a page load"). `/session` is the same shape of reservation, arrived at
+independently and now cross-validated by real, landed code.
+
+**Known pre-existing gap, surfaced while checking this, unrelated to the design
+itself:** `deploy/DEPLOY.md`'s nginx config has exact-match blocks for `/ws` and `/js`
+proxying to the asset port (8081), but **no block for `/session` at all** — as written,
+it falls through the generic `location /` to the app port (8080), which only mounts
+`ContentHandler` (no `SessionHandler` there), so `/session` requests would currently hit
+the SSR renderer instead of the session endpoint. Confirmed still present as of
+2026-07-10 (slice 4, the deploy-config slice, hasn't landed yet). Worth fixing as part
+of whichever slice next touches DEPLOY.md's nginx block (naturally slice 4, since it's
+already rewriting that file for `/assets` routing) — not a reason to delay this
+follow-up's design, just something the build slice must not silently inherit.
+
+Net: after this follow-up ships, the app subdomain reserves exactly ONE path
+(`/session`, method-scoped, non-colliding — same shape already proven by upload);
+`/js`, `/ws`, and blobs all live under one consistent
+`assets.deenv.org/<instance>/...` family. No auth mechanism change anywhere — the
+"other mechanism if needed" the user OK'd was never actually needed for either `/ws`
+(in-band already) or `/session` (POST-only was always sufficient). Candidate to fold
+into slice 4's nginx work (same file, same trip) rather than its own slice — a
+scheduling call, not a design one.
