@@ -579,6 +579,35 @@ public class InstanceContext
     // The seeded User's id in AssetsRuledDb — for a step to bind the login/session-cookie principal.
     public const int AssetsRuledUserId = 2;
 
+    // Assets slice 3 (docs/plans/assets-design.md §4): the composition proof — a fully-custom
+    // `ui fn render()` (no ObjectForm, no generic UI) composing the PUBLIC ImageInput lib component +
+    // `sys.assetUrl` directly, exactly the way instances/2/app.deenv composes the public `Input`
+    // component. Per the design, a custom app owns DISPLAY (its own `<img src={sys.assetUrl(...)}>`)
+    // and its own CLEAR button; ImageInput is only the upload primitive. `db` (the root Db, id 1) is
+    // written directly with no ambient staging ctx — same live-write shape as instances/2's
+    // `db.users.add(...)`.
+    public static InstanceDescription AssetsCustomUiDb() =>
+        InstanceDescriptionLoader.Load("""
+        types
+            Db
+                photo image
+
+        initialData
+            Db 1
+        ui
+            fn render()
+                return <main class="custom-photo-app">
+                    if db.photo != ""
+                        <img class="custom-photo" alt="no photo" src={sys.assetUrl(db.photo)}>
+                    else
+                        <div class="custom-photo-empty">
+                            "No photo"
+                    <ImageInput obj={db} prop="photo">
+                    if db.photo != ""
+                        <button class="custom-photo-clear" onClick={() => sys.setField(db, "photo", "")}>
+                            "Clear"
+        """);
+
     // Milestone 9 (slice 2: references). Rendered by the default self-hosted generic UI.
     // `Db.lead: Person` is a reference ROUTE (/lead → the self-hosted reference editor);
     // `Note` (title scalar + `author: Person` reference) so /notes/{id} renders an objectForm

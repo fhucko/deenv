@@ -96,3 +96,18 @@ Feature: Assets — the content-addressed blob pool + the `image` scalar
     When I upload 40 random bytes as "image/png" with the Origin header "http://evil.example"
     Then the asset response status is 403
     And no temp file remains in the pool
+
+  # ── the custom-app composition proof (assets slice 3, §4) ───────────────────
+
+  @assets
+  Scenario: A fully-custom render composes the public ImageInput component and sys.assetUrl
+    Given a browser is open on the custom-photo assets app
+    When I open "/"
+    Then the page shows "input[type=file]"
+    And the page shows "div.custom-photo-empty"
+    When I upload a real image file to the photo field
+    Then the page shows "img.custom-photo"
+    And the custom photo thumbnail src matches the pool pattern for extension "png"
+    When I reload the page
+    Then the page shows "img.custom-photo"
+    And the custom photo thumbnail src matches the pool pattern for extension "png"

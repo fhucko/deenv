@@ -59,6 +59,39 @@ public sealed class AssetsSteps(InstanceContext ctx)
     [Given("a browser is open on the assets app")]
     public async Task GivenBrowserOpenOnAssetsApp() => await ctx.EnsureServerAndBrowserAsync();
 
+    // Assets slice 3 (§4, the composition proof): the same own-temp-dir reasoning as
+    // GivenAssetsAppRunning, but swaps in the custom-render fixture (AssetsCustomUiDb) instead of the
+    // dormant generic-UI one — a fully-custom `ui fn render()` composing the public ImageInput component
+    // + sys.assetUrl, no ObjectForm involved. The Background already started a server bound to the
+    // GENERIC-UI description (AssetsDb) — EnsureServerAsync is a no-op once ctx.Server is non-null (see
+    // GivenBrowserOpenOnAssetsApp's own comment), so that server must be torn down first, exactly like
+    // GivenRuledAssetsAppRunning does for the ruled fixture.
+    [Given("a browser is open on the custom-photo assets app")]
+    public async Task GivenBrowserOpenOnCustomPhotoAssetsApp()
+    {
+        if (ctx.Server != null) { await ctx.Server.DisposeAsync(); ctx.Server = null; }
+        ctx.Description = InstanceContext.AssetsCustomUiDb();
+        var dir = Path.Combine(Path.GetTempPath(), "deenv-assets-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        ctx.DataFilePath = Path.Combine(dir, "data.json");
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    [When("I reload the page")]
+    public async Task WhenIReloadThePage() => await ctx.Page!.ReloadAsync();
+
+    // Reads the hydrated <img class="custom-photo"> src directly — proving the custom render's own
+    // sys.assetUrl(db.photo) composition produced a real pool URL, not just that SOME element appeared.
+    [Then("the custom photo thumbnail src matches the pool pattern for extension {string}")]
+    public async Task ThenCustomPhotoThumbnailSrcMatchesPoolPattern(string ext)
+    {
+        var img = ctx.Page!.Locator("img.custom-photo").First;
+        await img.WaitForAsync();
+        var src = await img.GetAttributeAsync("src") ?? "";
+        var name = src.Contains('/') ? src[(src.LastIndexOf('/') + 1)..] : src;
+        await Assert.That(Regex.IsMatch(name, $"^[0-9a-f]{{64}}\\.{Regex.Escape(ext)}$")).IsTrue();
+    }
+
     // ── the ruled instance (assets slice 2, §2) ──────────────────────────────────
 
     // The Background's own "the assets app is running" already started a DORMANT server this scenario —
