@@ -35,10 +35,20 @@ public sealed class AssetsSteps(InstanceContext ctx)
     private string _lastCacheControl = "";
     private string _lastNosniff = "";
 
+    // Own unique temp DIRECTORY, not the InstanceContext default's bare Path.GetTempFileName() — see
+    // GivenRuledAssetsAppRunning's doc for why: AppPaths.BlobsDirForDataPath is "<data file's
+    // directory>/blobs", and GetTempFileName() always creates its file directly in the shared OS temp
+    // root, so every Assets scenario using the default would resolve to the SAME pool directory and
+    // pollute each other's "pool is empty" assertions under parallel execution (a committed blob from
+    // one scenario shows up in another's rejection check). Own directory ⇒ own pool, for every scenario
+    // in this feature (not just the ruled ones).
     [Given("the assets app is running")]
     public async Task GivenAssetsAppRunning()
     {
         ctx.Description = InstanceContext.AssetsDb();
+        var dir = Path.Combine(Path.GetTempPath(), "deenv-assets-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        ctx.DataFilePath = Path.Combine(dir, "data.json");
         await ctx.EnsureServerAsync();
     }
 
@@ -268,13 +278,19 @@ public sealed class AssetsSteps(InstanceContext ctx)
 
     // ── the size cap ──────────────────────────────────────────────────────────
 
+    // Asserts the pool directory is EMPTY, not just free of `.tmp-*` names — the rejection scenarios
+    // (the 10 MB cap, and the assets-slice-2 ticket rejections) protect a "nothing touches disk" floor,
+    // not merely "no leftover temp file": a regression that moved the ticket check to AFTER the write
+    // loop (so a rejected upload still streamed bytes to a temp file, or even committed one) must fail
+    // here. A `.tmp-*`-only glob would miss a COMMITTED blob landing before the reject — this catches
+    // that too, since a rejection must never produce ANY pool file, named or not.
     [Then("no temp file remains in the pool")]
     public void ThenNoTempFileRemainsInPool()
     {
         var blobsDir = AppPaths.BlobsDirForDataPath(ctx.DataFilePath);
-        if (!Directory.Exists(blobsDir)) return; // never created = trivially no temp file
-        var temps = Directory.GetFiles(blobsDir, ".tmp-*");
-        if (temps.Length > 0)
-            throw new Exception($"Expected no temp file in the pool, found: {string.Join(", ", temps)}");
+        if (!Directory.Exists(blobsDir)) return; // never created = trivially empty
+        var files = Directory.GetFiles(blobsDir);
+        if (files.Length > 0)
+            throw new Exception($"Expected the pool to be empty, found: {string.Join(", ", files)}");
     }
 }
