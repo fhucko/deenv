@@ -1345,12 +1345,18 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task WhenClickConvert()
     {
         // The convert button lives under the Advanced (code) disclosure (a text design's `ui` is "advanced
-        // code"); the authoring autosave re-render collapses it (uncontrolled DOM open state) — re-open it
-        // if closed so the button is visible and hit-testable, then click it. (The RESULT — the structured
-        // render section — is first-class, OUTSIDE this disclosure, so it needs no such dance to observe.)
-        if (await ctx.Page!.Locator(".design-editor details.code-areas[open]").CountAsync() == 0)
-            await ctx.Page!.Locator(".design-editor details.code-areas summary").ClickAsync();
-        await ctx.Page!.Locator(".design-editor button.convert-render").ClickAsync();
+        // code"); its open state is UNCONTROLLED DOM that the authoring autosave re-render — possibly still
+        // in flight from the previous step — rebuilds CLOSED, hiding the button. A normal (actionability-
+        // gated) click then RACES that re-render: whenever a collapse lands in the gap the button is hidden
+        // and the click's visibility wait runs out the clock (the 30s flake) — and a longer deadline can't
+        // cure it, the button simply keeps getting re-hidden. The button is always in the DOM though
+        // (ThenShowsConvertButton gated on it ATTACHED) and its click handler fires regardless of the
+        // disclosure's visual open state, so dispatch the click directly on the element — deterministic, no
+        // hit-testing race. This step tests the CONVERT behaviour (asserted next), not click mechanics; the
+        // RESULT — the structured render section — is first-class, OUTSIDE this disclosure.
+        await ctx.Page!.Locator(".design-editor button.convert-render")
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
+        await ctx.Page!.EvalOnSelectorAsync(".design-editor button.convert-render", "b => b.click()");
     }
 
     // ── M12 E1 — the structured-render TREE EDITOR (recursive renderNodeEditor) ──────────────────
@@ -3195,19 +3201,28 @@ public sealed class DesignerSteps(InstanceContext ctx)
     // A double-quoted CSS/Playwright string argument with quotes/backslashes escaped.
     private static string CssString(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
-    // Polls a condition (a WS round-trip / file write is async). An IOException is the test thread
-    // reading a store/app file mid-write — transient, retried. Mirrors TodoSteps.EventuallyAsync.
-    private static async Task EventuallyAsync(Func<bool> condition, int timeoutMs = 20000)
-    {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (DateTime.UtcNow < deadline)
-        {
-            try { if (condition()) return; }
-            catch (IOException) { /* file mid-write — retry */ }
-            await Task.Delay(50);
-        }
-        bool final;
-        try { final = condition(); } catch (IOException) { final = false; }
-        await Assert.That(final).IsTrue();
-    }
+    // Poll a store/DOM outcome until it holds — delegates to the shared Polling.EventuallyAsync (it returns
+    // the instant the outcome lands, so green runs pay nothing, and it catches the transient mid-write
+    // IOException the same way). These waits are ALREADY signal-based: each polls the REAL sovereign-store
+    // outcome of an autosave / WS round-trip, not a fixed guess — so the ceiling only bites a genuinely
+    // stuck wait. The condition's own source text rides along as the failure message
+    // (CallerArgumentExpression), so a real timeout names WHICH wait died. The former local copy used a
+    // too-tight 20s deadline and, on expiry, asserted a bare boolean — surfacing every under-load overrun
+    // as a contentless "AssertionException: Expected to be true", the suite's flake.
+    //
+    // The 60s default is double Polling's own 30s peak-load ceiling because the designer's WS-round-trip
+    // autosaves land on the HEAVIEST pages in the suite (the live-instance workbench + canvas eval), whose
+    // client JS thread (a continuous canvas re-eval loop) + WS handler are the first to starve when the
+    // parallel browser fleet saturates CPU and disk (the store-log append is fsync'd). A MetaProp/MetaType
+    // autosave that is milliseconds when idle was MEASURED overrunning 30s under such contention, while
+    // landing well within 60s at representative load. The wait is signal-based (it returns the moment the
+    // store reflects the write), so the wider ceiling costs nothing on a healthy run and only buys headroom
+    // for a starved one — raising it further (a 90s trial) did NOT clear the residual, because a SECOND full
+    // suite running concurrently on the same box is resource starvation no fixed deadline can outrun; that
+    // extreme is out of scope (see the pass's residual note), not a wait defect.
+    private static Task EventuallyAsync(
+        Func<bool> condition,
+        int timeoutMs = 60000,
+        [System.Runtime.CompilerServices.CallerArgumentExpression(nameof(condition))] string what = "")
+        => Polling.EventuallyAsync(condition, what, timeoutMs);
 }
