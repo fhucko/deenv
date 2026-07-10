@@ -461,8 +461,17 @@ function applySelectionChrome(): void {
 // no-op-when-unchanged, arm-scroll-then-render path a canvas click uses) so an Escape with nothing
 // selected does nothing, and a genuine deselect repaints exactly like clicking empty canvas space
 // does today.
+//
+// M12 S4b review fold: a row's own fields are ordinary text-entry controls now sitting inside a
+// selectable row, and Escape is a common "cancel/blur this edit" gesture WHILE typing in one (a
+// browser-native expectation for text inputs) — clearing the selection out from under that keystroke
+// would be a surprising, unrelated side effect. Skip while focus is in a text-entry element; Escape
+// still deselects everywhere else (empty space, a button, the page body).
 function handleEscapeDeselect(e: KeyboardEvent): void {
     if (e.key !== "Escape") return;
+    const target = e.target as Element | null;
+    const tag = target?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     document.querySelectorAll("[selecttarget]").forEach(container => {
         const varName = container.getAttribute("selecttarget");
         if (varName != null && varName !== "") writeSelectedNode(varName, 0);

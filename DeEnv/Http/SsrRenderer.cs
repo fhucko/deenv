@@ -768,6 +768,16 @@ public sealed class SsrRenderer
            element's solid left border) so a loop/condition row reads as structurally different from a
            plain tag, echoing the canvas's own for-template/if-template marking below. */
         .node-for, .node-if { border-left: 2px dashed var(--border); padding: 0.15rem 0 0.15rem 0.6rem; margin: 0.2rem 0; }
+        /* M12 S4b review fold (ux prescription, answering ui-arch's density concern): a row is now a
+           click-to-select TARGET too, but the rows are dense with inputs/buttons, so a pointer cursor
+           would lie (most of a row's area is an ordinary form control, not "click here to select"). A
+           faint accent tint on hover — half the strength of the .is-selected tint below — signals
+           "this is one actionable unit" without implying a link/button everywhere the cursor lands.
+           :not(.is-selected) makes the selected state dominate unconditionally, regardless of
+           stylesheet order (an already-selected row must never look merely hovered). */
+        .node-element:hover:not(.is-selected), .node-for:hover:not(.is-selected),
+        .node-if:hover:not(.is-selected), .node-leaf:hover:not(.is-selected) {
+          background: color-mix(in srgb, var(--accent) 5%, transparent); border-radius: 4px; }
         .node-for-head, .node-if-head { display: flex; align-items: center; gap: 0.3rem; }
         .node-keyword { color: var(--muted); font-family: ui-monospace, monospace; font-weight: 600; }
         .node-for-item, .node-for-collection, .node-if-condition { min-width: 0; }
