@@ -158,6 +158,15 @@ server {
     }
     location = /js { proxy_pass http://127.0.0.1:8081/apps/$deenv_app/js; proxy_set_header Host $host; }
 
+    # Session cookie endpoint (login persistence): sets/clears the per-instance HttpOnly session
+    # cookie after a WS login/logout. Required by cookie-authenticated uploads (POST /assets) and
+    # by login surviving a reload. (Deployed 2026-07-10 — was the missing "deploy login wiring".)
+    location = /session {
+        proxy_pass http://127.0.0.1:8081/apps/$deenv_app/session;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # Blob upload (assets slice 4): POST /assets — and ONLY the POST method — goes to the asset
     # host's upload edge; the session cookie rides because this is the app's own origin. Any other
     # method on /assets falls through to the app (GET /assets stays ordinary page URL space — the
@@ -198,7 +207,9 @@ server {
     ssl_certificate /etc/nginx/ssl/deenv.org.cer; ssl_certificate_key /etc/nginx/ssl/deenv.org.key;
     ssl_protocols TLSv1.2 TLSv1.3;
 
-    location ~ ^/(?<aname>[a-z0-9-]+)/(?<bname>[0-9a-f]{64}\.[a-z0-9]+)$ {
+    # NOTE the QUOTES around the regex — nginx otherwise parses the {64} quantifier as a config
+    # block delimiter ("pcre2_compile failed: missing closing parenthesis"; hit live 2026-07-10).
+    location ~ "^/(?<aname>[a-z0-9-]+)/(?<bname>[0-9a-f]{64}\.[a-z0-9]+)$" {
         proxy_pass http://127.0.0.1:8081/apps/$aname/assets/$bname;
         proxy_set_header Host $host;
     }
