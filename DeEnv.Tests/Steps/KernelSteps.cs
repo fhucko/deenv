@@ -59,6 +59,16 @@ public sealed class KernelSteps(InstanceContext ctx)
             title: "First"
     """;
 
+    // Assets (docs/plans/assets-design.md), a single `image` scalar on Db — a real /apps/<name>-mounted
+    // instance to prove the blob pool's HTTP edges + sys.assetUrl/BlobBase resolve correctly under a
+    // kernel PATH mount (Assets.feature's own scenarios only exercise the ROOT-mounted TestInstanceServer
+    // shape) and that the boot-time StoredDataValidator arm survives a restart.
+    private const string ImageApp = """
+    types
+        Db
+            photo image
+    """;
+
     // ── security regression: the host-action operator gate ──────────────────────
     //
     // A minimal DESIGN-HOST schema — a `Db` whose `designs` prop is a `set of Design` — the design-host
@@ -199,6 +209,10 @@ public sealed class KernelSteps(InstanceContext ctx)
     private string _oldName = "";
     private Exception? _renameError;
 
+    // The kernel-mounted image round-trip scenario (Assets, docs/plans/assets-design.md).
+    private byte[] _uploadedImageBytes = [];
+    private string _uploadedImageName = "";
+
     // ── Given ─────────────────────────────────────────────────────────────────
 
     [Given("a registry of two named instances")]
@@ -231,6 +245,14 @@ public sealed class KernelSteps(InstanceContext ctx)
     {
         var dir = NewDir();
         WriteApp(dir, 1, MountApp);
+        WriteRegistry(dir, (name, 1));
+    }
+
+    [Given("a registry of one image-capable instance named {string}")]
+    public void GivenImageCapableInstance(string name)
+    {
+        var dir = NewDir();
+        WriteApp(dir, 1, ImageApp);
         WriteRegistry(dir, (name, 1));
     }
 
@@ -493,6 +515,43 @@ public sealed class KernelSteps(InstanceContext ctx)
         var registry = RegistryReader.Read(Path.Combine(ctx.KernelDir!, "kernel.json"));
         ctx.Kernel = new KernelHost(ctx.KernelDir!, Path.Combine(ctx.KernelDir!, "kernel.json"), _appPort, _assetPort, bindLoopback: true);
         await ctx.Kernel.StartAsync(KernelHost.SpecsFor(registry, ctx.KernelDir!));
+    }
+
+    // ── Assets (docs/plans/assets-design.md): the kernel-mounted image round-trip ────────────────
+
+    [When("I upload {int} random bytes as {string} to the {string} instance")]
+    public async Task WhenUploadRandomBytesToInstanceAsync(int count, string contentType, string name)
+    {
+        _uploadedImageBytes = new byte[count];
+        new Random(7).NextBytes(_uploadedImageBytes);
+        using var http = new HttpClient();
+        using var content = new ByteArrayContent(_uploadedImageBytes);
+        content.Headers.Remove("Content-Type");
+        content.Headers.TryAddWithoutValidation("Content-Type", contentType);
+        var response = await http.PostAsync($"http://localhost:{_assetPort}{MountPath(name)}/assets", content);
+        await Assert.That((int)response.StatusCode).IsEqualTo(200);
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = System.Text.Json.JsonDocument.Parse(body);
+        _uploadedImageName = doc.RootElement.GetProperty("name").GetString() ?? "";
+    }
+
+    [When("I set the {string} instance's Db {string} field to the uploaded name")]
+    public void WhenSetInstanceDbFieldToUploadedName(string name, string field) =>
+        ctx.Kernel!.Instances.Single(i => i.Spec.App == name).Store
+            .WriteField(1, field, new TextValue(_uploadedImageName));
+
+    [Then("the kernel still hosts the {string} instance")]
+    public async Task ThenKernelStillHostsNamedInstanceAsync(string name) =>
+        await Assert.That(ctx.Kernel!.Instances.Any(i => i.Spec.App == name)).IsTrue();
+
+    [Then("the {string} instance serves the uploaded image at its mount")]
+    public async Task ThenInstanceServesUploadedImageAsync(string name)
+    {
+        using var http = new HttpClient();
+        var response = await http.GetAsync($"http://localhost:{_assetPort}{MountPath(name)}/assets/{_uploadedImageName}");
+        await Assert.That((int)response.StatusCode).IsEqualTo(200);
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+        await Assert.That(Convert.ToBase64String(bytes)).IsEqualTo(Convert.ToBase64String(_uploadedImageBytes));
     }
 
     [When("the created instance's data changes")]

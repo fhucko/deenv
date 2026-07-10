@@ -208,6 +208,18 @@ not a CORS-restricted fetch, so it needs none.
 **Limits:** kernel-side size cap, default 10 MB, checked while streaming (abort + delete
 temp past the cap). Deploy: `client_max_body_size 12m;` in the `assets.deenv.org` block.
 
+**Ceiling (slice 1 build, GenHTTP streaming spike — empirically proven, not theorized):**
+a raw-socket probe against GenHTTP.Engine.Internal 10.5.3 showed the engine buffers the
+WHOLE request body before ever invoking the handler (a Content-Length-declared body sent
+over throttled writes only reached the handler after the LAST byte arrived, already fully
+resident). So the no-RAM-streaming claim above does NOT hold on this HTTP layer today: the
+kernel-side cap is enforced POST-buffer (it bounds what we PERSIST, not what GenHTTP
+already held to get there). The real peak a client can force is whatever sits in FRONT of
+the handler — prod: nginx's `client_max_body_size` (12m, above); raw dev (no nginx):
+effectively unbounded. Revisit if GenHTTP's buffering behavior changes, or move the cap
+enforcement in front of GenHTTP (a reverse-proxy-level limit) if this ever needs a harder
+guarantee. See DeEnv/Http/AssetsHandler.cs's header comment for the full spike writeup.
+
 ### 3. Serve edge (bytes out)
 
 `GET https://assets.deenv.org/<name>/<hash>.<ext>`. Validate the name shape strictly
@@ -261,16 +273,18 @@ Follows `password` exactly as the text-shaped template:
   is a password-specific equality (`== BaseType.Password`,
   InstanceDescriptionLoader.cs:222-229) and must be WIDENED to a two-member set (grill
   #1 correction). Legal as a dict VALUE and everywhere else text is.
-- **Migration `fn` writes — grill #1 refuted the draft's "works day one":**
-  `ScalarForDeclared` (MigrationRunner.cs:128-131) switches on the DECLARED type name
-  and only accepts literal `"int"/"text"/"bool"` — an image prop is `image`-declared
-  (like password is password-declared), so a compute-`fn` writing it THROWS today.
-  Pure RENAME migrations still carry image data fine (the identity diff, no fn).
-  Resolution: add `"image"` to the accepted set in the build slice (one text-shaped
-  arm — cheap, and the correctness gap shouldn't ship as an accepted limit); decimal/
+- **Migration `fn` writes — grill #1 refuted the draft's "works day one" — DONE IN SLICE 1:**
+  `ScalarForDeclared` (MigrationRunner.cs) switches on the DECLARED type name and used to
+  only accept literal `"int"/"text"/"bool"` — an image prop is `image`-declared (like
+  password is password-declared), so a compute-`fn` writing it THREW. Pure RENAME
+  migrations still carried image data fine (the identity diff, no fn). Shipped: the
+  `"image"` arm landed in slice 1's review batch (one text-shaped arm, cheap — the
+  correctness gap doesn't ship as an accepted limit, per the project rule); decimal/
   date/datetime stay behind the existing ceiling. A migration fn writing a hash never
   uploaded to this pool yields a dangling reference → 404 placeholder; accepted, same
-  class as erasure.
+  class as erasure. Covered by DeEnv.Tests/Code/MigrationRunnerImageTests.cs (a direct
+  MigrationRunner.Run call over a hand-built StoreDoc — cheaper than a full kernel/
+  designer/WS publish scenario and exercises the exact arm).
 - Generic UI: form branch = current image thumbnail (or empty state) + the upload
   control + a clear button; table cell = small thumbnail (NOT excluded from columns
   like password — a thumbnail column is the point); excluded from labelProp candidacy
@@ -291,6 +305,15 @@ Follows `password` exactly as the text-shaped template:
   `initAssetAuthority` global. Pure function of session-known state — no refetch
   machinery, not a server-data builtin, so AGENTS.md rule 12 isn't in play. One
   conformance-adjacent check that both twins emit the same URL for the same name.
+- **`sys.setField(obj, name, value)` — an unplanned addition, noted for inventory:** the
+  Clear button (form branch, above) writes "" to a DYNAMICALLY-named prop from an
+  `onClick`, and Code has no lvalue syntax for that (`sys.field(obj, name) = x` isn't
+  assignable — only a literal `obj.member` or a bare symbol is). Added as the write
+  companion to the existing `sys.field` READ builtin, whose OWN two-way `value={}`
+  binding already covers the common bound-input case. Same shape as `sys.setRef`: a
+  CLIENT-only effect (codeExec.ts stages/persists it; the C# twin no-ops, exactly like
+  `setRef`/`login`), so — like every other host effect in this family — it carries no
+  conformance case (host effects are outside the conformance contract).
 
 **Generic AND custom apps — both fully served, storage-identical.** The two ways an app
 gets pixels on screen (fully-auto generic UI vs fully-custom `fn render()`) share ONE

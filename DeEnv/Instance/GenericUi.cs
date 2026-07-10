@@ -184,7 +184,7 @@ public static class GenericUi
                 else if desc.baseType == "image"
                     return <div class={"image-field " + desc.name}>
                         if sys.field(obj, desc.name) != ""
-                            <img class="image-thumb" src={sys.assetUrl(sys.field(obj, desc.name))}>
+                            <img class="image-thumb" alt="image unavailable" src={sys.assetUrl(sys.field(obj, desc.name))}>
                         if readonly != true
                             <ImageInput obj={obj} prop={desc.name}>
                             if sys.field(obj, desc.name) != ""
@@ -493,7 +493,7 @@ public static class GenericUi
                                                             sys.humanize(sys.field(m, p.name))
                                                         else if p.baseType == "image"
                                                             if sys.field(m, p.name) != ""
-                                                                <img class="thumb-cell" src={sys.assetUrl(sys.field(m, p.name))}>
+                                                                <img class="thumb-cell" alt="image unavailable" src={sys.assetUrl(sys.field(m, p.name))}>
                                                         else
                                                             sys.field(m, p.name)
                                     else
@@ -517,7 +517,7 @@ public static class GenericUi
                                                         sys.humanize(sys.field(m, p.name))
                                                     else if p.baseType == "image"
                                                         if sys.field(m, p.name) != ""
-                                                            <img class="thumb-cell" src={sys.assetUrl(sys.field(m, p.name))}>
+                                                            <img class="thumb-cell" alt="image unavailable" src={sys.assetUrl(sys.field(m, p.name))}>
                                                     else
                                                         sys.field(m, p.name)
                                     if rowActions != null
@@ -596,7 +596,7 @@ public static class GenericUi
                                                 sys.humanize(sys.field(m, p.name))
                                             else if p.baseType == "image"
                                                 if sys.field(m, p.name) != ""
-                                                    <img class="thumb-cell" src={sys.assetUrl(sys.field(m, p.name))}>
+                                                    <img class="thumb-cell" alt="image unavailable" src={sys.assetUrl(sys.field(m, p.name))}>
                                             else
                                                 sys.field(m, p.name)
                                     if desc.isScalar

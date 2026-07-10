@@ -676,6 +676,11 @@ async function persistLogout(): Promise<void> {
 // and display agree on one origin without a second base computation. Dormant-instance scope (slice
 // 1): no upload ticket/credentials sent — matches the floor an unauthenticated dormant write already
 // has everywhere else.
+//
+// UX review fix: a failure used to just return "" with NOTHING shown — an operator hitting the
+// (tested) 10 MB cap saw a dead control. Routes into the SAME global error banner (uiStatic.lastError,
+// rendered by ui.ts) the rejected-commit path uses (rollbackJournal above) — one failure surface, not
+// a bespoke one just for images.
 async function uploadBlob(file: File): Promise<string> {
     try {
         const res = await fetch(assetUrl("/assets"), {
@@ -683,12 +688,27 @@ async function uploadBlob(file: File): Promise<string> {
             headers: { "Content-Type": file.type || "application/octet-stream" },
             body: file,
         });
-        if (!res.ok) return "";
+        if (!res.ok) {
+            uiStatic.lastError = uploadFailureMessage(res.status);
+            renderUi();
+            return "";
+        }
         const data = await res.json() as { name?: unknown };
-        return typeof data.name === "string" ? data.name : "";
+        if (typeof data.name === "string") return data.name;
+        uiStatic.lastError = "Image upload failed — unexpected server response.";
+        renderUi();
+        return "";
     } catch {
+        uiStatic.lastError = "Image upload failed — network error.";
+        renderUi();
         return "";
     }
+}
+
+function uploadFailureMessage(status: number): string {
+    if (status === 413) return "Image upload failed — file too large.";
+    if (status === 415) return "Image upload failed — unsupported file type.";
+    return "Image upload failed — rejected by the server.";
 }
 
 function connectWs(): void {

@@ -2448,6 +2448,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // in the app document is plaintext-in-source), so this arm is defensive only; were it
         // reached, it stores as text like the value's hash would.
         BaseType.Password => new TextValue(v.GetString() ?? ""),
+        // A seeded image is a literal pool blob NAME (text-shaped like password/enum — assets-
+        // design.md). Review finding 3 (arch): this arm was missing, so an `image`-typed prop given
+        // a literal value in initialData threw "No scalar seed for Image" at store-open time.
+        BaseType.Image    => new TextValue(v.GetString() ?? ""),
         BaseType.Date     => new DateValue(DateOnly.Parse(v.GetString() ?? "")),
         BaseType.DateTime => new DateTimeValue(DateTimeOffset.Parse(v.GetString() ?? "")),
         _ => throw new InvalidOperationException($"No scalar seed for {bt}"),

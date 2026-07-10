@@ -39,7 +39,8 @@ Feature: Assets — the content-addressed blob pool + the `image` scalar
     And I set the Db "photo" field to the uploaded name
     Then the store eventually has a "Db" whose "photo" field is the uploaded name
     When the store is opened again on the same data file
-    Then the reopened store's "Db" "photo" field is the uploaded name
+    Then the store opens successfully
+    And the reopened store's "Db" "photo" field is the uploaded name
 
   @assets
   Scenario: An upload past the 10 MB cap is rejected and leaves no blob file

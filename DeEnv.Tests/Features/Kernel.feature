@@ -358,3 +358,20 @@ Feature: Kernel host (multi-instance, path-addressed)
     And the design-host's design 13 is removed from its store
     When the kernel restarts from its persisted registry
     Then the design-host still holds a design with id 13 labelled "todo"
+
+  # Covers two things nothing else exercises together: (1) the boot-crash class Review batch item 1
+  # fixed (StoredDataValidator's missing Image arm — ANY instance holding a saved image field used to
+  # throw in the store's ctor on the VERY NEXT boot, which a kernel restart is exactly), and (2) the
+  # /apps/<name>-MOUNTED BlobBase shape (SsrRenderer.BlobBase / sys.assetUrl), which Assets.feature's
+  # root-mounted TestInstanceServer scenarios never touch — a real kernel mount is the only harness that
+  # does. Upload + set the field BEFORE the restart, then prove the SAME instance still boots AND still
+  # serves that exact image AFTER, at its real /apps/<name>/assets path.
+  @assets @milestone-10 @single-user
+  Scenario: An image round-trips through a kernel-mounted instance across a restart
+    Given a registry of one image-capable instance named "gallery"
+    And the kernel has started
+    When I upload 40 random bytes as "image/png" to the "gallery" instance
+    And I set the "gallery" instance's Db "photo" field to the uploaded name
+    When the kernel restarts from its persisted registry
+    Then the kernel still hosts the "gallery" instance
+    And the "gallery" instance serves the uploaded image at its mount

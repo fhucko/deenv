@@ -29,11 +29,14 @@ namespace DeEnv.Http;
 // invoked, regardless of the streaming read loop below. That loop and the mid-stream cap check are kept
 // anyway — they are still the CORRECT behavior (never persist bytes past the cap; delete the temp; never
 // buffer the file a SECOND time in our own memory) and are forward-looking if GenHTTP's buffering
-// behavior ever changes — but they do NOT bound PEAK RAM the way the design assumed; a client can still
-// force GenHTTP to hold up to the full cap (10 MB) in ITS OWN buffer before we see a single byte. Flagged
-// loudly per the build brief; not silently absorbed. (Chunked Transfer-Encoding requests failed outright
-// against this engine version in the same probe — moot for our real client, which POSTs a File with a
-// known Content-Length, never chunked.)
+// behavior ever changes — but they do NOT bound PEAK RAM the way the design assumed: the cap is enforced
+// POST-buffer (once our loop finally gets to read it), so it caps what we PERSIST, not what GenHTTP
+// already held in memory to get there. The actual peak a client can force is whatever the layer IN FRONT
+// of this handler accepts — prod: nginx's `client_max_body_size` (12m per the design doc); raw dev (no
+// nginx): effectively unbounded, gated only by GenHTTP's own defaults, if any. Flagged loudly per the
+// build brief; not silently absorbed. (Chunked Transfer-Encoding requests failed outright against this
+// engine version in the same probe — moot for our real client, which POSTs a File with a known
+// Content-Length, never chunked.)
 public sealed class AssetsHandler(IBlobPool pool) : IHandler
 {
     private static readonly IReadOnlyDictionary<string, string> ContentTypeToExt = new Dictionary<string, string>

@@ -127,13 +127,18 @@ public static class MigrationRunner
 
     private static NodeValue ScalarForDeclared(IExecValue value, string declared, string typeName, string propName)
     {
-        if (declared is not ("int" or "text" or "bool"))
+        // `image` is text-shaped like `text` (assets-design.md — a migration fn writes a pool blob NAME,
+        // a plain string, never bytes): shipped in slice 1 (review batch item 8) rather than deferred —
+        // the doc's own §4 says this gap shouldn't ship, and the arm is a one-line, no-risk addition, the
+        // same shape as `text`. decimal/date/datetime stay behind the existing ceiling.
+        if (declared is not ("int" or "text" or "bool" or "image"))
             throw new InvalidOperationException($"Migration writes to {typeName}.{propName} type {declared} are not supported yet.");
         return (declared, value) switch
         {
             ("int", ExecInt i) => new IntValue(i.Value),
             ("text", ExecText t) => new TextValue(t.Value),
             ("bool", ExecBool b) => new BoolValue(b.Value),
+            ("image", ExecText t) => new TextValue(t.Value),
             _ => throw new InvalidOperationException(
                 $"Migration wrote {ValueName(value)} to {typeName}.{propName}, expected {declared}."),
         };

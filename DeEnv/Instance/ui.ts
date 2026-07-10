@@ -617,9 +617,19 @@ function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
             if (tag.name === "input") { el.setAttribute("value", text); want.add("value"); }
             continue;
         }
-        // A file input's bound "value" (the pool name, once uploaded) falls through to the generic
-        // path below: setAttribute only, NEVER the .value PROPERTY (assigning it a non-empty string
-        // throws — browsers refuse to script a file input's selection).
+        // A file input's bound "value" (the pool name, once uploaded, or "" after Clear): the
+        // .value PROPERTY cannot be assigned a non-empty string (the browser throws), but an EMPTY
+        // assignment IS legal — and is exactly what's needed to clear the native "chosen file"
+        // display (review fix: without this, Clear wrote "" to the pool name but the input still
+        // showed the old filename, since nothing ever told the DOM control itself to forget it).
+        if (isFileInput && name === "value") {
+            const text = raw == null ? "" : String(raw);
+            const input = el as HTMLInputElement;
+            if (text === "" && input.files && input.files.length > 0) input.value = "";
+            el.setAttribute("value", text);
+            want.add("value");
+            continue;
+        }
         // A <select>'s `value` is not a real attribute (it drives option-selected); it is applied to
         // the .value property in syncSelectValue, AFTER the options exist — so skip it here.
         if (tag.name === "select" && name === "value") continue;

@@ -211,11 +211,16 @@ public static class StoredDataValidator
 
         // The tag a scalar of this declared type is stored with ("text", "bool", …). An enum
         // value is stored as text (its value name), so its tag is "text" too; a `password` stores
-        // as text (its hash is plain text — see BaseType.Password), so its tag is "text" too.
+        // as text (its hash is plain text — see BaseType.Password), so its tag is "text" too; an
+        // `image` stores as text (its pool blob NAME — see BaseType.Image, assets-design.md), so
+        // its tag is "text" too. Review finding 1 (arch, empirically proven): this switch used to
+        // have no Image arm, so ANY instance holding a saved/cleared image field crashed on its
+        // NEXT kernel restart (the store's boot ctor calls this via Validate, and "declared 'image'
+        // but stored as 'text'" always mismatched with no arm to reconcile it).
         private string BaseTag(string typeName)
         {
             var baseType = BaseTypes.IsName(typeName)
-                ? BaseTypes.Parse(typeName) switch { BaseType.Password => BaseType.Text, var bt => bt }
+                ? BaseTypes.Parse(typeName) switch { BaseType.Password or BaseType.Image => BaseType.Text, var bt => bt }
                 : desc.FindType(typeName)?.BaseType switch
                   {
                       BaseType.Enum => BaseType.Text,
