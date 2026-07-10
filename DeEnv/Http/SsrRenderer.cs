@@ -1420,7 +1420,50 @@ public sealed class SsrRenderer
                     ("fp", new ExecText { Value = fingerprints.GetValueOrDefault(fn.Name, "") }));
             }
             var fnsObj = new ExecObject { Id = --context.LastId.Value, Constant = true, Props = fns };
-            return Obj(("db", seedDb), ("exprs", exprsObj), ("fns", fnsObj), ("ambients", Obj()), ("params", Obj()));
+
+            // types / lib (M12 W1c — the workbench sandbox's cache-seeding fast-follow, docs/plans/
+            // component-workbench.md "The v1 fidelity boundary"): a fresh private cache always misses every
+            // store-backed builtin (sys.schema/sys.extent/sys.new/sys.canWrite/sys.canRead), so a component
+            // composing the generic-pattern library (SetTable/ObjectForm/…) rendered its real error card
+            // instead of its real UI. GenericUi.Effective(desc) already builds BOTH the pure-data descriptor
+            // literals (`Descriptors`, the SAME shape ExecuteSchema/PrewarmDescriptors evaluate for a live
+            // page's `schema:*` cache) and the library's own function set (`SystemNames`, the StdlibSource
+            // components — the SAME library every app's page ships regardless of design, since Effective
+            // always synthesizes it) — reused here rather than recomputed, one call.
+            var effective = GenericUi.Effective(desc);
+
+            // types: every declared type's (and dict-prop's) descriptor, EVALUATED + Constant — byte-
+            // identical to a live page's `schema:*` entries (the same literal, the same fresh-empty-scope
+            // eval, the same MarkConstant). A bare CodeExecutor (no store/floor) evaluates each literal: a
+            // descriptor is pure schema data, reading no variables — ExecuteSchema's own invariant. The
+            // workbench driver (workbench.ts) seeds its private cache's `schema:`/`canWrite:`/`canRead:`
+            // entries straight from this map (`canWrite`/`canRead` are computed CLIENT-SIDE as an
+            // unconditional true — the sandbox has no access floor to evaluate; see workbench.ts's own
+            // comment for why that is honest, not a shortcut).
+            var typeEvaluator = new CodeExecutor();
+            var types = new Dictionary<string, IExecValue>();
+            foreach (var (name, literal) in effective.Descriptors)
+                types[name] = CodeExecutor.MarkConstant(typeEvaluator.ExecuteValue(literal, new ExecScope(), context));
+            var typesObj = new ExecObject { Id = --context.LastId.Value, Constant = true, Props = types };
+
+            // lib: the STANDARD LIBRARY's own top-level functions (SetTable/ObjectForm/Field/RefSelect/…),
+            // shaped and keyed EXACTLY like `fns` ({ast}) — the SAME bindCtxFns/EvaluateCtxExpr binder
+            // already reads. The workbench driver binds `lib` into its sandbox scope FIRST, then `fns`
+            // (design fns) — a same-named design fn shadows a library one, mirroring how a real app's own
+            // scope nests inside the library scope. `effective.SystemNames` is exactly the library's
+            // top-level names (nested helpers inside a component's own body are not separately named here,
+            // same as a live page never binds them by name either).
+            var lib = new Dictionary<string, IExecValue>();
+            foreach (var fn in effective.Ui?.Functions ?? [])
+            {
+                if (fn.Name is not { Length: > 0 } || !effective.SystemNames.Contains(fn.Name)) continue;
+                var libJson = JsonSerializer.Serialize<ICodeValue>(fn, SchemaJson.Options);
+                lib[fn.Name] = Obj(("ast", new ExecText { Value = libJson }));
+            }
+            var libObj = new ExecObject { Id = --context.LastId.Value, Constant = true, Props = lib };
+
+            return Obj(("db", seedDb), ("exprs", exprsObj), ("fns", fnsObj), ("types", typesObj), ("lib", libObj),
+                ("ambients", Obj()), ("params", Obj()));
         }
         catch (Exception ex)
         {
@@ -1429,8 +1472,8 @@ public sealed class SsrRenderer
             // `error` carries the already-formatted banner text (M12 eval-degrade-banner) so the canvas
             // walk (both twins) just displays it verbatim — see DegradeBannerText.
             Console.Error.WriteLine($"evalContext of design {design.Id} failed: {ex}");
-            return Obj(("db", empty), ("exprs", empty), ("fns", empty), ("ambients", empty), ("params", empty),
-                ("error", new ExecText { Value = DegradeBannerText(ex) }));
+            return Obj(("db", empty), ("exprs", empty), ("fns", empty), ("types", empty), ("lib", empty),
+                ("ambients", empty), ("params", empty), ("error", new ExecText { Value = DegradeBannerText(ex) }));
         }
     }
 

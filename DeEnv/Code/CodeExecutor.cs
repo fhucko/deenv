@@ -1665,7 +1665,10 @@ public sealed class CodeExecutor
     // `props`/`values`/`valueProps` must arrive full so a consumer that walks it sees every entry),
     // and — being descriptor-SPECIFIC rather than negative-id-based — it cannot ship a where/orderBy/
     // literal collection's full membership (those are never Constant). Returns its argument for chaining.
-    private static IExecValue MarkConstant(IExecValue value)
+    // internal (not private): SsrRenderer.BuildEvalContext (M12 W1c) reuses it to Constant-mark the SAME
+    // descriptor literals it evaluates for the eval-context `types` payload — the workbench sandbox's
+    // schema:/canWrite:/canRead: cache seed, byte-identical to what PrewarmDescriptors ships a live page.
+    internal static IExecValue MarkConstant(IExecValue value)
     {
         switch (value)
         {

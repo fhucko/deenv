@@ -709,6 +709,43 @@ mutations the designer app performs in deenv code — that machinery already exi
   pages too, not just previews. REMAINING in the arc: the cache-seeding fast-follow
   (schema/extent into the private cache from design rows → SetTable/ObjectForm-class +
   lib components preview in cards) and W2 state-history scrubbing (designed, user-gated).
+- **W1c — sandbox cache seeding: generic-pattern + lib components preview in cards. ✅ DONE
+  2026-07-10** (the v1-fidelity-boundary fast-follow the W1a/b ledger reserved). `sys.
+  evalContext`'s payload (SsrRenderer.BuildEvalContext) gains `types` (every declared
+  type's + dict-prop's descriptor, evaluated + Constant — byte-identical to a live page's
+  `schema:*` cache, reusing GenericUi.Effective's own literal builder + CodeExecutor.
+  MarkConstant, now `internal`) and `lib` (the standard library's own top-level function
+  ASTs — SetTable/ObjectForm/Field/RefSelect/…, shaped exactly like `fns`); CodeExecutor.cs
+  itself gains ZERO new behavior (one visibility flip, no interpreter semantics touched —
+  no conformance case needed). workbench.ts's `seedSandboxCache` (called every render pass
+  — mount/remount/Reset/handler-repaint) seeds the instance's private cache: `schema:`/
+  `canWrite:`/`canRead:` from `ctx.types` (canWrite/canRead unconditionally true — no access
+  floor to evaluate in a sandbox previewing the operator's own design; safety stays wsHooks-
+  null, unaffected); `extent:` derived CLIENT-SIDE from the instance's OWN (never re-copied
+  — see `WorkbenchInstance.db`, moved out of per-render `deepCopySeed`) db graph — "the seed
+  graph's collections ARE the extents", the per-instance/mutation-consistent choice over
+  shipping a server-computed extent. THE CORRECTNESS CATCH (builder-found, fixed before
+  shipping): re-seeding the extent VALUE alone is not enough — a component reading
+  `sys.extent(...)` has its OWN render memoized, and a cache HIT never re-invokes the body,
+  so a fresh entry sitting unread never reaches the screen; the fix threads `deps.members`
+  (every contributing set/dict array's id) onto the seeded entry so `db.<set>.add(...)`'s
+  ordinary `invalidateMember` cascades to the ENCLOSING component's own memo too — the same
+  dependency mechanism the rest of the interpreter already uses, not a shortcut. Lib
+  components bind via `bindFnMap` (bindCtxFns extracted to share it) — `ctx.lib` bound
+  BEFORE `ctx.fns` in the sandbox scope so a same-named design fn shadows a library one,
+  mirroring real app scoping; the design's rejected-parenting-to-page-scope guard stays
+  intact (lib fns close over the SANDBOX scope, never the page's). Five new browser
+  scenarios (Field-over-schema renders real UI; sys.extent lists seeded rows; typing into a
+  schema-backed Field isolates per-instance; Reset discards a handler-added extent row;
+  RefSelect — a library component — renders real `<option>`s from a seeded extent) plus a
+  unit test pinning both the byte-compatible schema seed and the mutation-consistency
+  cascade. The two pre-W1c "store-backed builtin always misses" scenarios were RETIRED-IN-
+  PLACE to the one boundary that's STILL real (an unseeded ambient, `currentUser` — per-use
+  ambients remain a later rung) — `sys.schema`/`sys.new` now revive, so their old assertions
+  would be false; the scenario NAMES/fixtures changed, their INTENT (prove the v1 boundary
+  is honest) did not. Suite 903 (898 passing, 5 known-flake-class failures — the pre-
+  existing `WhenAddField` store-poll + one canvas-visibility timeout, both environmental,
+  neither touching W1c logic; every W1c scenario passes in isolation).
 - **UX checkpoint ledger (2026-07-08, composed-page review after CANVAS-1 + the preview
   removal; the canvas↔tree divider must-fix is DONE — one `render-section` grouping):**
   (a) page order splits the authoring pair (types … render) with publish/branches between —

@@ -1614,14 +1614,15 @@ function lookupCtxAst(ctx: ExecObject, text: string): CodeValue | null {
     try { return JSON.parse(astText.value) as CodeValue; } catch { return null; }
 }
 
-// Bind an eval context's `fns` map (shipped by BuildEvalContext alongside `exprs`) into `scope` as
-// callables — one ExecFunction per fn, name → value, exactly like executeFunction binds a named `fn`
-// statement, each fn's `scope` being `scope` itself so every fn name is visible to every fn's body before
-// any call runs (mutual/self recursion resolves at call time). JSON.parsed fresh on every call (no cache),
-// matching `exprs`' own per-lookup pattern. Shared by evalCtxExpr (F3 call-position evaluation) and the
-// M12 W1a workbench driver (the real component invocation's callable environment).
-function bindCtxFns(ctx: ExecObject, scope: ExecScope): void {
-    const fnsMap = ctx.props["fns"];
+// Bind a name→{ast} map (an eval context's `fns` OR `lib`, both shipped by BuildEvalContext in the SAME
+// shape) into `scope` as callables — one ExecFunction per fn, name → value, exactly like executeFunction
+// binds a named `fn` statement, each fn's `scope` being `scope` itself so every fn name is visible to
+// every fn's body before any call runs (mutual/self recursion resolves at call time). JSON.parsed fresh on
+// every call (no cache), matching `exprs`' own per-lookup pattern. Shared by bindCtxFns (below) and the
+// M12 W1c workbench driver, which ALSO binds `ctx.lib` (the standard library's own components —
+// SetTable/ObjectForm/Field/RefSelect/…) into its sandbox scope before `ctx.fns`, so a design fn shadows a
+// same-named library one — mirroring how a real app's own scope nests inside the library scope.
+function bindFnMap(fnsMap: ExecValue | undefined, scope: ExecScope): void {
     if (fnsMap == null || fnsMap.type !== "object") return;
     for (const fnName of Object.keys(fnsMap.props)) {
         const fnEntry = fnsMap.props[fnName];
@@ -1632,6 +1633,13 @@ function bindCtxFns(ctx: ExecObject, scope: ExecScope): void {
         try { fn = JSON.parse(fnAstText.value) as CodeFunction; } catch { continue; }
         scope.items[fnName] = { value: { type: "fn", fn, scope }, isReadOnly: true };
     }
+}
+
+// Bind an eval context's `fns` map (shipped by BuildEvalContext alongside `exprs`) into `scope` as
+// callables — the design's own projected functions. Shared by evalCtxExpr (F3 call-position evaluation)
+// and the M12 W1a/c workbench driver (the real component invocation's callable environment).
+function bindCtxFns(ctx: ExecObject, scope: ExecScope): void {
+    bindFnMap(ctx.props["fns"], scope);
 }
 
 // Evaluate ONE canvas expression against the eval context's seed graph (M12 CANVAS-EVAL-1) — the twin of

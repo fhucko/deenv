@@ -44,6 +44,14 @@ interface WorkbenchInstance {
     // keys, objectArgKey). A remount/Reset mints a fresh counter (paired with a fresh cache), matching
     // "fresh mount" semantics exactly.
     lastId: { value: number };
+    // W1c: this instance's OWN deep-copied seed graph — minted ONCE at mount/Reset (deepCopySeed), never
+    // re-copied on a later render pass. A component's setup runs ONCE (memoized under its slot in `cache`
+    // above) and captures whatever `db` reference the FIRST render bound — so every LATER render/handler
+    // dispatch must keep passing that SAME reference (never a fresh copy) for a handler's db write
+    // (`db.notes.add(...)`) to be visible to the setup-scope's own later reads AND to seedSandboxCache's
+    // extent walk below. null only when the eval context shipped no seed db at all (an unusual/degraded
+    // context — the render then simply has no `db` var, matching the pre-W1c behavior).
+    db: ExecValue | null;
 }
 
 // Keyed by the use row's object id (the SAME id the container's instancemount attribute carries).
@@ -87,6 +95,118 @@ function deepCopySeed(value: ExecValue, seen: Map<ExecObject | ExecArray, ExecOb
         return copy;
     }
     return value;
+}
+
+// The ORIGINAL per-call helper (W1a): deep-copy straight from the eval context's shipped seed. The real
+// driver no longer calls this per render (see WorkbenchInstance.db) — kept for renderWorkbenchInstance's
+// no-instanceDb fallback (the direct-call unit tests below).
+function deepCopyDbFromCtx(ctx: ExecObject): ExecValue | null {
+    const seedDb = ctx.props["db"];
+    return seedDb != null ? deepCopySeed(seedDb, new Map()) : null;
+}
+
+// ── W1c cache seeding (docs/plans/component-workbench.md "The v1 fidelity boundary" — the fast-follow)
+// ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const CAPABILITY_VERBS = ["create", "edit", "delete"];
+const NO_DEPS: CacheDeps = { props: [], members: [], vars: [] };
+
+// Populate a FRESH-or-reused instance's private cache with the entries every store-backed builtin
+// (sys.schema/sys.new/sys.extent/sys.canWrite/sys.canRead) revives from (codeExec.ts execSchema/execNew/
+// execExtent/execCanWrite/execCanRead — all `memoize("<kind>:<key>", …)` lookups that THROW "Value not
+// available" on a miss, exactly what a fresh private cache always was before this). Called on EVERY render
+// pass (mount/remount/Reset/handler-triggered repaint) from runInstanceRenderPass — schema/canWrite/canRead
+// are cheap reference copies off `ctx.types` (a handful of declared types), so re-seeding them every pass
+// costs nothing and needs no separate "already seeded" bookkeeping; extent (seedExtentCache below) MUST be
+// re-derived every pass to stay mutation-consistent, so folding both into one call keeps exactly one
+// seeding path, not two with diverging cadences.
+//
+// canWrite/canRead ship UNCONDITIONALLY true: the sandbox has no session/access floor to evaluate — the
+// preview runs as "the operator previewing their own design" (the same trust level the whole designer
+// already assumes for this design's data). This is safe regardless of what it reports: wsHooks stays null
+// through every dispatch (withSandboxGlobals), so no real write can EVER escape the sandbox no matter what
+// a component's write-affordance check believes — canWrite/canRead only gate what the UI OFFERS to click,
+// never what a real floor would ALLOW, and there is no real floor here to under- or over-approximate.
+function seedSandboxCache(instance: WorkbenchInstance, ctx: ExecObject): void {
+    const typesV = ctx.props["types"];
+    if (typesV != null && typesV.type === "object") {
+        for (const key of Object.keys(typesV.props)) {
+            instance.cache.set("schema:" + key, { result: typesV.props[key], deps: NO_DEPS, stale: false });
+            if (key.includes("/")) continue; // "Type/prop" dict-prop descriptor keys carry no capability entries
+            for (const verb of CAPABILITY_VERBS)
+                instance.cache.set("canWrite:" + key + ":" + verb, { result: { type: "bool", value: true }, deps: NO_DEPS, stale: false });
+            instance.cache.set("canRead:" + key, { result: { type: "bool", value: true }, deps: NO_DEPS, stale: false });
+        }
+    }
+    seedExtentCache(instance, typesV);
+}
+
+// One type's extent-in-progress: its member objects (deduped by id — the SAME object reached two ways
+// counts once) AND the ids of every set/dict array that contributed a member — the latter is what makes
+// the seeded entry (below) genuinely REACTIVE, not just fresh-at-seed-time.
+interface ExtentBucket { members: Map<number, ExecObject>; arrayIds: number[]; }
+
+// extent: derived FRESH every render pass from the instance's OWN (mutating) db copy — "the seed graph's
+// collections ARE the extents" (the design doc's per-instance choice, preferred over shipping a server-
+// computed extent for this exact reason): a handler's `db.<set>.add(...)` writes straight into
+// `instance.db` (the SAME object every render/dispatch reuses — see WorkbenchInstance.db), so walking it
+// here on the NEXT pass sees the addition. A live page instead marks `extent:*` stale on a mutation and
+// waits for a wire REFETCH to recompute it server-side (ws.ts invalidateExtents) — the sandbox has no wire/
+// store round trip to lean on, so re-deriving directly here is the correct substitute.
+//
+// CORRECTNESS NOTE (not just freshness): re-seeding the entry alone is not enough — a COMPONENT that reads
+// `sys.extent("Note")` gets its OWN render memoized (executeComponentValue's `memoize(slotKey, …)`), and a
+// memo HIT never re-invokes the component body at all, so a fresh `extent:Note` VALUE sitting unread in the
+// cache would never reach the screen. The fix is the SAME dependency mechanism the rest of the interpreter
+// already uses everywhere else: `deps.members` on the seeded entry lists every set/dict array that fed it
+// (db.notes' own array id, etc.) — memoize's HIT path merges a cache entry's OWN `deps` into the ENCLOSING
+// computation (mergeDeps, codeExec.ts), so the component's render inherits that same member dependency the
+// FIRST time it reads the extent; `db.notes.add(...)` (addToCollection) then calls `invalidateMember(arr.id)`,
+// which marks BOTH the extent entry AND the component's own memoized render stale — exactly the ordinary
+// live-page path, just without a wire round trip. Without this, extent reads would be permanently stuck at
+// their FIRST-render value no matter how many times a handler mutated the underlying set.
+//
+// Every declared type gets an entry even with zero members found (an empty extent is a real, meaningful
+// empty list — never left absent, which would VNA-throw instead of showing "no rows").
+function seedExtentCache(instance: WorkbenchInstance, typesV: ExecValue | undefined): void {
+    if (typesV == null || typesV.type !== "object" || instance.db == null) return;
+    const byType = new Map<string, ExtentBucket>();
+    collectExtentMembers(instance.db, byType, new Set());
+    for (const key of Object.keys(typesV.props)) {
+        if (key.includes("/")) continue; // a "Type/prop" descriptor key, not a type name
+        const bucket = byType.get(key);
+        const items: ExecArrayItem[] = bucket != null ? Array.from(bucket.members.values()).map(o => ({ key: o.id, value: o })) : [];
+        const deps: CacheDeps = { props: [], members: bucket?.arrayIds ?? [], vars: [] };
+        // A fresh transient id every pass (mirrors DbBridge.LoadExtent's own `--context.LastId.Value` mint)
+        // — instance.lastId is the SAME id-minting counter renderWorkbenchInstance's sandboxContext uses,
+        // so an extent array's id can never collide with anything else this instance ever mints.
+        instance.cache.set("extent:" + key, { result: { type: "array", kind: "list", items, id: --instance.lastId.value }, deps, stale: false });
+    }
+}
+
+// Recursive walk of an instance's db graph, bucketing every set/dict member (AND every contributing
+// array's own id — see ExtentBucket) by the containing array's `elementTypeName`. `seen` guards a cyclic/
+// shared graph, mirroring deepCopySeed's own seen-map. Object members only (a scalar dict's entries are
+// wrapper objects keyed by a SCALAR elementTypeName like "text"/"int", which never matches a declared
+// object type name, so they naturally never populate any bucket a caller asks about).
+function collectExtentMembers(value: ExecValue, byType: Map<string, ExtentBucket>, seen: Set<ExecObject | ExecArray>): void {
+    if (value.type === "object") {
+        if (seen.has(value)) return;
+        seen.add(value);
+        for (const key of Object.keys(value.props)) collectExtentMembers(value.props[key], byType, seen);
+        return;
+    }
+    if (value.type === "array") {
+        if (seen.has(value)) return;
+        seen.add(value);
+        if ((value.kind === "set" || value.kind === "dict") && value.elementTypeName) {
+            let bucket = byType.get(value.elementTypeName);
+            if (bucket == null) byType.set(value.elementTypeName, bucket = { members: new Map(), arrayIds: [] });
+            bucket.arrayIds.push(value.id);
+            for (const item of value.items) if (item.value.type === "object") bucket.members.set(item.value.id, item.value);
+        }
+        for (const item of value.items) collectExtentMembers(item.value, byType, seen);
+    }
 }
 
 // Does ctx.exprs already carry a parsed AST for this source text? A cheap presence check (unlike
@@ -210,11 +330,20 @@ function instanceErrorTag(message: string): ExecTag {
 // passes the INSTANCE's own persisted counter (WorkbenchInstance.lastId) so a handler-triggered re-render
 // mints ids that stay unique against everything the instance's setup/prior renders already built (see the
 // WorkbenchInstance.lastId doc comment).
-function renderWorkbenchInstance(fn: ExecObject, use: ExecObject, ctx: ExecObject, lastId: { value: number } = { value: 0 }): { tags: ExecTagChild[]; errorMessage: string | null } {
+// `instanceDb` (W1c): the instance's OWN, ALREADY-deep-copied seed graph (WorkbenchInstance.db) — passed
+// explicitly by the driver so the SAME db reference is reused across every render/handler-dispatch of this
+// instance (a component's setup captures whatever `db` its FIRST render bound; a fresh copy on a LATER
+// render would silently orphan any handler write already made against the first copy). `undefined` (the
+// unit tests below, which call this directly with no 5th argument) falls back to the ORIGINAL per-call
+// deep-copy-from-ctx behavior — fine for a single-render test, never used by the real driver.
+function renderWorkbenchInstance(fn: ExecObject, use: ExecObject, ctx: ExecObject, lastId: { value: number } = { value: 0 }, instanceDb?: ExecValue | null): { tags: ExecTagChild[]; errorMessage: string | null } {
     const fnName = propText(fn, "name");
     const evalScope: ExecScope = { items: {}, parent: null };
-    const seedDb = ctx.props["db"];
-    if (seedDb != null) evalScope.items["db"] = { value: deepCopySeed(seedDb, new Map()), isReadOnly: true };
+    const db = instanceDb !== undefined ? instanceDb : deepCopyDbFromCtx(ctx);
+    if (db != null) evalScope.items["db"] = { value: db, isReadOnly: true };
+    // Library components (SetTable/ObjectForm/Field/RefSelect/…) bound FIRST so a same-named design fn
+    // (bindCtxFns, next) shadows one — mirrors a real app's own scope nesting inside the library scope.
+    bindFnMap(ctx.props["lib"], evalScope);
     bindCtxFns(ctx, evalScope);
     const component = evalScope.items[fnName]?.value;
     if (component == null || component.type !== "fn") return { tags: [], errorMessage: "Component not found." };
@@ -354,8 +483,11 @@ function withSandboxGlobals<T>(instance: WorkbenchInstance, useId: number, opts:
 // place (withSandboxGlobals above; W1b's dispatch bracket in runInstanceHandler is the SAME helper, not a
 // parallel one).
 function runInstanceRenderPass(useId: number, fn: ExecObject, use: ExecObject, ctx: ExecObject, instance: WorkbenchInstance, container: HTMLElement): void {
+    // W1c: re-seed schema:/extent:/canWrite:/canRead: before every render (mount, remount, Reset, OR a
+    // handler-triggered repaint) — see seedSandboxCache's own doc comment for why every pass, not just mount.
+    seedSandboxCache(instance, ctx);
     const result = withSandboxGlobals(instance, useId, { memoBypass: false },
-        () => renderWorkbenchInstance(fn, use, ctx, instance.lastId));
+        () => renderWorkbenchInstance(fn, use, ctx, instance.lastId, instance.db));
 
     const content = ensureInstanceContent(container, useId);
     const children: ExecTagChild[] = result.errorMessage != null ? [instanceErrorTag(result.errorMessage)] : result.tags;
@@ -383,10 +515,18 @@ function mountOneWorkbenchInstance(useId: number, container: HTMLElement): void 
 
     // A fresh sandbox: a fresh private cache (component-state persistence, scoped entirely to this
     // instance — never reused across a remount, since a remount IS a fresh mount, per the design's
-    // Reset-shaped "REMOUNTS that instance") and a fresh id-minting counter (WorkbenchInstance.lastId).
-    const instance: WorkbenchInstance = { argsSignature, ctxKey, cache: new Map(), lastId: { value: 0 } };
+    // Reset-shaped "REMOUNTS that instance"), a fresh id-minting counter (WorkbenchInstance.lastId), and a
+    // fresh deep-copied db graph (WorkbenchInstance.db — see newWorkbenchInstance).
+    const instance = newWorkbenchInstance(argsSignature, ctxKey, ctx);
     workbenchInstances.set(useId, instance);
     runInstanceRenderPass(useId, fn, use, ctx, instance, container);
+}
+
+// A brand-new sandbox: fresh cache, fresh id counter, and ONE deep copy of the eval context's seed db —
+// minted here (not per render — see WorkbenchInstance.db) so a handler's write and seedExtentCache's later
+// walk both see, and mutate, the SAME graph as the mounted component's own setup.
+function newWorkbenchInstance(argsSignature: string, ctxKey: string, ctx: ExecObject): WorkbenchInstance {
+    return { argsSignature, ctxKey, cache: new Map(), lastId: { value: 0 }, db: deepCopyDbFromCtx(ctx) };
 }
 
 // Reset (component-workbench.md's user-picked semantics): DISPOSE the whole sandbox — the private
@@ -399,7 +539,7 @@ function resetWorkbenchInstance(useId: number, container: HTMLElement): void {
     const inputs = locateInstanceInputs(useId);
     if (inputs == null) return; // the row is gone — nothing to remount; the next mount pass will clean up the container
     const { fn, use, ctx, ctxKey } = inputs;
-    const instance: WorkbenchInstance = { argsSignature: useArgsSignature(use, ctx), ctxKey, cache: new Map(), lastId: { value: 0 } };
+    const instance = newWorkbenchInstance(useArgsSignature(use, ctx), ctxKey, ctx);
     workbenchInstances.set(useId, instance);
     runInstanceRenderPass(useId, fn, use, ctx, instance, container);
 }

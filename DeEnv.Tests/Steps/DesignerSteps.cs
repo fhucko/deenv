@@ -1563,19 +1563,22 @@ public sealed class DesignerSteps(InstanceContext ctx)
             $"const r = rows[{index}]; if (r == null) return false; const preview = r.querySelector('.use-preview'); if (preview == null) return false; " +
             $"const el = preview.firstElementChild; return el != null && el.getAttribute('data-test-marker') === 'kept'; }}");
 
-    // A component that calls a STORE-BACKED builtin (sys.schema) — always a miss against the workbench's
-    // fresh, unseeded private cache (the v1 fidelity boundary), proving the driver surfaces the REAL
-    // interpreter error rather than rendering blank.
-    private const string StoreBackedComponentConvertibleRender =
-        "ui\n    fn Broken()\n        return <div>\n            sys.schema(\"Db\")\n    fn render()\n        return <main>\n            \"hi\"\n";
+    // A component that reads an AMBIENT (currentUser) — still a miss against the workbench sandbox's
+    // parent-less scope even after M12 W1c seeds schema:/extent:/canWrite:/canRead: (per-use ambients are a
+    // LATER rung, per component-workbench.md's stated v1 fidelity boundary), proving the driver surfaces
+    // the REAL interpreter error rather than rendering blank. (Before W1c this fixture called
+    // `sys.schema("Db")` — that builtin now REVIVES from the seeded cache, so it moved to the seeding
+    // scenarios below; this fixture keeps testing a boundary that is STILL real.)
+    private const string AmbientReadingComponentConvertibleRender =
+        "ui\n    fn Broken()\n        return <div>\n            currentUser\n    fn render()\n        return <main>\n            \"hi\"\n";
 
-    [When("I author a convertible render with a store-backed component into the design's UI")]
-    public async Task WhenAuthorStoreBackedComponentRender()
+    [When("I author a convertible render with an ambient-reading component into the design's UI")]
+    public async Task WhenAuthorAmbientReadingComponentRender()
     {
-        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(StoreBackedComponentConvertibleRender);
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(AmbientReadingComponentConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "brokencomp" }
-            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == StoreBackedComponentConvertibleRender));
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == AmbientReadingComponentConvertibleRender));
     }
 
     // ── M12 W1b — the live-instance driver: events + Reset through the dispatch bracket ────────────
@@ -1652,13 +1655,14 @@ public sealed class DesignerSteps(InstanceContext ctx)
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == LogoutComponentConvertibleRender));
     }
 
-    // A Thrower (a handler that hits a store-backed builtin — always a v1-fidelity-boundary miss, same as
-    // sys.schema at render time) alongside an ordinary REACTIVE Counter (see ReactiveCounterConvertibleRender's
-    // doc comment — `var state = { count: 0 }`, not a bare scalar), in ONE design: proves a throwing
-    // instance's handler error never touches a SIBLING instance's own liveness, nor the page's.
+    // A Thrower (a handler that reads an unseeded AMBIENT — still a v1-fidelity-boundary miss even after
+    // M12 W1c seeds schema:/extent:, same as AmbientReadingComponentConvertibleRender at render time)
+    // alongside an ordinary REACTIVE Counter (see ReactiveCounterConvertibleRender's doc comment —
+    // `var state = { count: 0 }`, not a bare scalar), in ONE design: proves a throwing instance's handler
+    // error never touches a SIBLING instance's own liveness, nor the page's.
     private const string ThrowerAndCounterConvertibleRender =
         "ui\n"
-        + "    fn Thrower()\n        return <button class=\"wb-throw\" onClick={() => sys.schema(\"Db\")}>\n            \"boom\"\n"
+        + "    fn Thrower()\n        return <button class=\"wb-throw\" onClick={() => currentUser}>\n            \"boom\"\n"
         + "    fn Counter()\n        var state = { count: 0 }\n        fn render()\n            return <button onClick={() => state.count = state.count + 1}>\n                state.count\n        return render\n"
         + "    fn render()\n        return <main>\n            \"hi\"\n";
 
@@ -1670,6 +1674,126 @@ public sealed class DesignerSteps(InstanceContext ctx)
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "throwme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ThrowerAndCounterConvertibleRender));
     }
+
+    // ── M12 W1c — sandbox cache seeding: schema:/extent:/canWrite:/canRead: + library binding ──────
+
+    // A component composing the LIBRARY's own <Field> over sys.schema/sys.new — the ObjectForm-class
+    // generic pattern the v1 boundary excluded until the private cache is seeded from the design's OWN
+    // rows (BuildEvalContext's `types` payload). No var/setup split needed (single-return, stateless).
+    private const string SchemaFieldComponentConvertibleRender =
+        "ui\n    fn Editor()\n        return <Field obj={sys.new(sys.schema(\"Note\"))} desc={sys.schema(\"Note\", \"title\")}>\n    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a convertible render with a schema-backed Field component into the design's UI")]
+    public async Task WhenAuthorSchemaFieldComponentRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(SchemaFieldComponentConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "seedschema" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == SchemaFieldComponentConvertibleRender));
+    }
+
+    // sys.extent("Note") over the seed data — the instance's OWN deep-copied "notes" set IS the extent
+    // (seedExtentCache's per-instance client-side derivation).
+    private const string ExtentListingComponentConvertibleRender =
+        "ui\n    fn Lister()\n        return <ul>\n            foreach n in sys.extent(\"Note\")\n                <li>\n                    n.title\n    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a convertible render with an extent-listing component into the design's UI")]
+    public async Task WhenAuthorExtentListingComponentRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(ExtentListingComponentConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "seedextent" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ExtentListingComponentConvertibleRender));
+    }
+
+    // A STATEFUL component holding a sys.new-minted, sys.schema-backed draft in `var state` — a real
+    // <Field> two-way-binds into it (sys.field's setValue, the SAME idiom RefEditor/ObjectForm use
+    // throughout the library), with an echo <span> making the write directly observable per instance.
+    private const string StatefulSchemaFieldComponentConvertibleRender =
+        "ui\n"
+        + "    fn Editor()\n"
+        + "        var state = { draft: sys.new(sys.schema(\"Note\")) }\n"
+        + "        fn render()\n"
+        + "            return <div>\n"
+        + "                <Field obj={state.draft} desc={sys.schema(\"Note\", \"title\")}>\n"
+        + "                <span class=\"echo\">\n"
+        + "                    sys.field(state.draft, \"title\")\n"
+        + "        return render\n"
+        + "    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a convertible render with a stateful schema-backed Editor component into the design's UI")]
+    public async Task WhenAuthorStatefulSchemaFieldComponentRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(StatefulSchemaFieldComponentConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "seedfieldtype" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == StatefulSchemaFieldComponentConvertibleRender));
+    }
+
+    // A handler that ADDS a fresh sys.new-minted row to db's own set (db.notes.add) then re-lists
+    // sys.extent("Note") — proves extent is re-derived every render pass (mutation-consistent) and Reset
+    // discards the addition along with the rest of the sandbox (component-workbench.md's whole-sandbox
+    // Reset semantics, now covering the seeded extent too). STATEFUL (var + nested render()): sys.schema
+    // is read ONCE at SETUP time into `noteDesc` — a HANDLER runs under memoBypass (codeExec.ts memoize's
+    // very first line skips the cache lookup entirely whenever memoBypass is set — a general interpreter
+    // property, not workbench-specific), so calling sys.schema(...) FRESH *inside* the onClick handler
+    // would always throw "Value not available" regardless of seeding; capturing the descriptor as a var
+    // and reading it back (a plain symbol lookup, no memoize involved) is the same idiom GenericUi's own
+    // RefEditor.closeCreate uses (`state.draft = sys.new(target)`, `target` a captured param, never a
+    // fresh sys.schema call). No separately-named helper fn (TryMatchStatefulShape's stateful shape
+    // refuses a component with an EXTRA fn alongside render() — component-workbench's own "GenericUi's
+    // ConfirmButton/KebabMenu" import gap) — the handler is an inline lambda.
+    private const string ExtentAddingComponentConvertibleRender =
+        "ui\n"
+        + "    fn AddNote()\n"
+        + "        var noteDesc = sys.schema(\"Note\")\n"
+        + "        fn render()\n"
+        + "            return <div>\n"
+        + "                <button onClick={() => db.notes.add(sys.new(noteDesc))}>\n"
+        + "                    \"Add\"\n"
+        + "                <ul>\n"
+        + "                    foreach n in sys.extent(\"Note\")\n"
+        + "                        <li>\n"
+        + "                            n.title\n"
+        + "        return render\n"
+        + "    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a convertible render with an extent-adding component into the design's UI")]
+    public async Task WhenAuthorExtentAddingComponentRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(ExtentAddingComponentConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "seedresetextent" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ExtentAddingComponentConvertibleRender));
+    }
+
+    // A LIBRARY component (RefSelect) composing sys.extent for its OWN candidates — the "lib components
+    // render as empty literal elements" v1 boundary this slice lifts (ctx.lib, bound into the sandbox
+    // scope alongside the design's own ctx.fns). Stateless wrapper (no var needed — a fresh sys.new draft
+    // per render is fine; this scenario never clicks the select).
+    private const string RefSelectComponentConvertibleRender =
+        "ui\n    fn Picker()\n        return <RefSelect parent={sys.new(sys.schema(\"Db\"))} prop=\"pick\" candidates={sys.extent(\"Note\")} labelProp=\"title\">\n    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a convertible render with a RefSelect component into the design's UI")]
+    public async Task WhenAuthorRefSelectComponentRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(RefSelectComponentConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "seedlib" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == RefSelectComponentConvertibleRender));
+    }
+
+    // The element-COUNT variant of "shows a {tag} element reading {text}" (W1a) — scoped to
+    // `.workbench-instance-content` specifically (not the whole `.use-preview`, which also holds the
+    // Reset toolbar) so a count assertion can never be thrown off by framework chrome.
+    [Then("configuration {int}'s live instance shows {int} {string} element(s)")]
+    public async Task ThenConfigurationLiveInstanceShowsElementCount(int index, int count, string tag) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const rows = document.querySelectorAll('.components-section .fn-card .use-row'); " +
+            $"const r = rows[{index}]; if (r == null) return false; " +
+            $"const preview = r.querySelector('.use-preview'); if (preview == null) return false; " +
+            $"const content = preview.querySelector('.workbench-instance-content'); if (content == null) return false; " +
+            $"return content.querySelectorAll({JsString(tag)}).length === {count}; }}");
 
     // Locate a configuration's live-instance `.use-preview` panel by GLOBAL document order — the existing
     // convention these steps already use (`.use-row` is queried unscoped by fn-card, so index 0/1/… tracks

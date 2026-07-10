@@ -1,4 +1,7 @@
 using System.Text.Json;
+using System.Linq;
+using DeEnv.Code;
+using DeEnv.Instance;
 using DeEnv.Tests.TestSupport;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -223,6 +226,148 @@ public sealed class WorkbenchDeepCopyTests
         await Assert.That(result.GetProperty("callDepthRestored").GetBoolean()).IsTrue();
         await Assert.That(result.GetProperty("wsHooksRestored").GetBoolean()).IsTrue();
         await Assert.That(result.GetProperty("memoBypassRestored").GetBoolean()).IsTrue();
+
+        await page.Context.CloseAsync();
+    }
+
+    // ── M12 W1c — sandbox cache seeding (workbench.ts seedSandboxCache/seedExtentCache) ─────────────
+    //
+    // (1) schema:/canWrite:/canRead: seeded from ctx.types are byte-compatible with what a live page's
+    // cache holds for the same type — verified structurally (seedSandboxCache copies the descriptor
+    // object VERBATIM off ctx.types, so the check is "is it the SAME reference/shape", not a live-page
+    // capture-and-diff harness, which doesn't exist for this client-only mechanism).
+    //
+    // (2) the CORRECTNESS property that matters most: sys.extent(...) inside a component's OWN memoized
+    // render must reflect a handler's db.<set>.add(...) on the VERY NEXT render pass — not just the
+    // re-seeded CACHE ENTRY (trivial), but the ENCLOSING component's render actually re-invoking (the
+    // deps.members wiring in seedExtentCache — see its own doc comment for why a naive re-seed alone is
+    // NOT enough: a memoized render never re-reads an already-cached result no matter how fresh the
+    // extent entry sitting unread in the cache is).
+    [Test]
+    public async Task SeedSandboxCache_seeds_byte_compatible_schema_and_keeps_extent_mutation_consistent_across_a_handler_rerender()
+    {
+        // The REAL parser (not hand-crafted AST) — the same CodeFunction shape BuildEvalContext ships via
+        // ctx.fns for any design fn, so this pins the SAME AST-JSON round trip production code takes.
+        // sys.schema is read ONCE at setup time into `noteDesc` (memoBypass — set during every handler
+        // dispatch — skips memoize's cache-hit path entirely, codeExec.ts memoize's own first line, so a
+        // FRESH sys.schema(...) call inside the onClick handler itself would always throw "Value not
+        // available" no matter how the cache was seeded; this pins the same idiom the DesignerSteps fixture
+        // uses, ExtentAddingComponentConvertibleRender).
+        var ui = CodeParse.ParseUiSection(
+            "ui\n"
+            + "    fn AddNote()\n"
+            + "        var noteDesc = sys.schema(\"Note\")\n"
+            + "        fn render()\n"
+            + "            return <div>\n"
+            + "                <button onClick={() => db.notes.add(sys.new(noteDesc))}>\n"
+            + "                    \"Add\"\n"
+            + "                <ul>\n"
+            + "                    foreach n in sys.extent(\"Note\")\n"
+            + "                        <li>\n"
+            + "                            n.title\n"
+            + "        return render\n"
+            + "    fn render()\n        return <main>\n            \"hi\"\n");
+        var addNote = ui.Functions!.First(f => f.Name == "AddNote");
+        var addNoteAst = JsonSerializer.Serialize<ICodeValue>(addNote, SchemaJson.Options);
+
+        var codeExecJs = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "codeExec.js"));
+        var workbenchJs = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "workbench.js"));
+
+        var page = await SharedBrowser.NewPageAsync();
+        await page.SetContentAsync("<!doctype html><html><body></body></html>");
+        await page.AddScriptTagAsync(new() { Content = codeExecJs });
+        await page.AddScriptTagAsync(new() { Content = workbenchJs });
+
+        var resultJson = await page.EvaluateAsync<string>("""
+            (addNoteAst) => {
+                setMemoCache(new Map()); // matches production: a real private cache is always installed
+
+                const noteDesc = {
+                    type: 'object', id: 100,
+                    props: {
+                        name: { type: 'text', value: 'Note' },
+                        labelProp: { type: 'text', value: 'title' },
+                        isPrincipal: { type: 'bool', value: false },
+                        props: { type: 'array', kind: 'list', id: 101, items: [
+                            { key: 0, value: { type: 'object', id: 102, props: {
+                                name: { type: 'text', value: 'title' }, baseType: { type: 'text', value: 'text' },
+                                multiline: { type: 'bool', value: false } } } },
+                        ] },
+                    },
+                };
+                const ctx = {
+                    type: 'object', id: 1,
+                    props: {
+                        db: { type: 'object', id: 2, props: {
+                            notes: { type: 'array', kind: 'set', id: 3, elementTypeName: 'Note', items: [
+                                { key: 4, value: { type: 'object', id: 4, props: { title: { type: 'text', value: 'Alpha' } } } },
+                            ] },
+                        } },
+                        fns: { type: 'object', id: 5, props: {
+                            AddNote: { type: 'object', id: 6, props: { ast: { type: 'text', value: addNoteAst } } },
+                        } },
+                        exprs: { type: 'object', id: 7, props: {} },
+                        types: { type: 'object', id: 8, props: { Note: noteDesc } },
+                    },
+                };
+                const fnObj = { type: 'object', id: 20, props: { name: { type: 'text', value: 'AddNote' } } };
+                const use = { type: 'object', id: 21, props: { args: { type: 'array', kind: 'set', items: [], id: 0 } } };
+
+                const instance = { argsSignature: '', ctxKey: '', cache: new Map(), lastId: { value: 0 },
+                    db: deepCopySeed(ctx.props['db'], new Map()) };
+
+                function renderPass() {
+                    seedSandboxCache(instance, ctx); // the driver's OWN call order (runInstanceRenderPass)
+                    return withSandboxGlobals(instance, 99, { memoBypass: false },
+                        () => renderWorkbenchInstance(fnObj, use, ctx, instance.lastId, instance.db));
+                }
+                function countTag(tags, name) {
+                    let n = 0;
+                    for (const t of tags) if (t.type === 'tag') { if (t.name === name) n++; n += countTag(t.children ?? [], name); }
+                    return n;
+                }
+                function findTag(tags, name) {
+                    for (const t of tags) {
+                        if (t.type === 'tag') {
+                            if (t.name === name) return t;
+                            const found = findTag(t.children ?? [], name);
+                            if (found != null) return found;
+                        }
+                    }
+                    return null;
+                }
+
+                // (1) byte-compatible schema seed: seedSandboxCache must copy ctx.types.Note VERBATIM into
+                // the "schema:Note" cache entry.
+                seedSandboxCache(instance, ctx);
+                const schemaEntry = instance.cache.get('schema:Note');
+                const schemaMatches = schemaEntry != null && schemaEntry.result === noteDesc && schemaEntry.stale === false;
+
+                // (2) the mutation-consistency proof.
+                const result1 = renderPass();
+                const before = countTag(result1.tags, 'li');
+
+                const btn = findTag(result1.tags, 'button');
+                const onClick = btn.attributes['onClick'] && btn.attributes['onClick'].value;
+                withSandboxGlobals(instance, 99, { memoBypass: true },
+                    () => { invokeFn(onClick, [], { lastId: instance.lastId, ambient: null }); });
+
+                const result2 = renderPass();
+                const after = countTag(result2.tags, 'li');
+
+                return JSON.stringify({
+                    schemaMatches, before, after,
+                    errorMessage1: result1.errorMessage, errorMessage2: result2.errorMessage,
+                });
+            }
+            """, addNoteAst);
+        var result = JsonDocument.Parse(resultJson).RootElement;
+
+        await Assert.That(result.GetProperty("errorMessage1").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(result.GetProperty("errorMessage2").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(result.GetProperty("schemaMatches").GetBoolean()).IsTrue();
+        await Assert.That(result.GetProperty("before").GetInt32()).IsEqualTo(1);
+        await Assert.That(result.GetProperty("after").GetInt32()).IsEqualTo(2);
 
         await page.Context.CloseAsync();
     }

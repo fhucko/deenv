@@ -1850,11 +1850,12 @@ Feature: The operator IDE (designs library + instance design selector)
     When I set configuration 0's arg 0 value to "db.noteB"
     Then configuration 0's live instance shows a "li" element reading "Beta"
 
-  # The v1 fidelity boundary, made honest not silent: a component using a store-backed builtin ALWAYS
-  # misses against the workbench's fresh, unseeded private cache — the driver shows the real interpreter
-  # error rather than a blank card, and the page keeps working (a second configuration can still be added).
+  # The v1 fidelity boundary, made honest not silent: a component reading an AMBIENT (currentUser — no
+  # per-use ambients yet, unlike schema/extent which W1c now SEEDS — see the W1c section below) ALWAYS
+  # misses against the workbench's sandbox scope — the driver shows the real interpreter error rather than
+  # a blank card, and the page keeps working (a second configuration can still be added).
   @m12 @single-user
-  Scenario: A component using a store-backed builtin shows the real error in its configuration card, and the page stays alive
+  Scenario: A component reading an unseeded ambient shows the real error in its configuration card, and the page stays alive
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
     And I create a design named "brokencomp"
@@ -1863,11 +1864,11 @@ Feature: The operator IDE (designs library + instance design selector)
     And I name the just-added type "Db"
     And I add a field "note" to the type "Db"
     When I ensure the Advanced code disclosure is open
-    And I author a convertible render with a store-backed component into the design's UI
+    And I author a convertible render with an ambient-reading component into the design's UI
     When I click Convert to structured
     Then the design editor eventually shows the structured render tree editor
     When I click the add-configuration button
-    Then configuration 0's live instance shows the error "Value not available"
+    Then configuration 0's live instance shows the error "Variable currentUser not found"
     When I click the add-configuration button
     Then component configurations shows 2 rows
 
@@ -1959,10 +1960,11 @@ Feature: The operator IDE (designs library + instance design selector)
     When I rename the design's label to "logoutme-renamed"
     Then the design editor shows the design's label "logoutme-renamed"
 
-  # A throwing handler (a store-backed builtin miss, the same v1 fidelity boundary as render time) renders
-  # the REAL error into its own card — never a rollback, never a page-wide crash, and a SIBLING instance
-  # (a different component, in this design) stays fully interactive, proving the isolation bracket is
-  # per-dispatch, not something one broken handler can wedge for the whole page.
+  # A throwing handler (an unseeded-ambient read, the same v1 fidelity boundary as render time — W1c seeds
+  # schema/extent but NOT ambients) renders the REAL error into its own card — never a rollback, never a
+  # page-wide crash, and a SIBLING instance (a different component, in this design) stays fully interactive,
+  # proving the isolation bracket is per-dispatch, not something one broken handler can wedge for the whole
+  # page.
   @m12 @single-user
   Scenario: A throwing instance handler shows the real error without disabling the page or its sibling instance
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
@@ -1982,8 +1984,182 @@ Feature: The operator IDE (designs library + instance design selector)
     And configuration 0's live instance shows a "button" element reading "boom"
     And configuration 1's live instance shows a "button" element reading "0"
     When I click configuration 0's live instance button
-    Then configuration 0's live instance shows the error "Value not available"
+    Then configuration 0's live instance shows the error "Variable currentUser not found"
     When I click configuration 1's live instance button
     Then configuration 1's live instance shows a "button" element reading "1"
     When I rename the design's label to "throwme-renamed"
     Then the design editor shows the design's label "throwme-renamed"
+
+  # ── M12 W1c — sandbox cache seeding: schema:/extent:/canWrite:/canRead: + library binding ───────
+  #
+  # W1a/W1b always missed a store-backed builtin (sys.schema/sys.new/sys.extent/sys.canWrite/sys.canRead)
+  # against the workbench's fresh, unseeded private cache — the v1 fidelity boundary, ledgered as a
+  # fast-follow (component-workbench.md). W1c seeds it FROM THE DESIGN'S OWN ROWS: `sys.evalContext`'s
+  # payload (SsrRenderer.BuildEvalContext) now ships every declared type's descriptor (`types`, the SAME
+  # shape a live page's `schema:*` cache holds) and the standard library's own function ASTs (`lib`,
+  # bound into the sandbox scope alongside the design's own `fns`) — workbench.ts seeds the instance's
+  # private cache from `types` at mount/Reset/every render pass (extent: re-derived every pass from the
+  # instance's OWN db copy, so a handler's write stays visible — see seedExtentCache's own comment).
+  # canWrite/canRead ship unconditionally true (no access floor to evaluate in a sandbox previewing the
+  # operator's own design). Ambients (currentUser/path) remain the ONE still-real fidelity gap (the two
+  # scenarios above this section).
+  @m12 @single-user
+  Scenario: A component composing Field over sys.schema renders the real field editor in its configuration card
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "seedschema"
+    And I edit the design "seedschema"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    And I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a schema-backed Field component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    Then configuration 0's live instance shows a "label" element reading "Title"
+
+  # sys.extent("Note") over the seed data — the seeded db copy's OWN "notes" set IS the extent (the design
+  # doc's chosen per-instance derivation), so the card lists exactly the two seeded rows.
+  @m12 @single-user
+  Scenario: A component using sys.extent over the seed data lists the seeded rows in its configuration card
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "seedextent"
+    And I edit the design "seedextent"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I add a field "notes" to the type "Db"
+    When I reload the design editor
+    And I retype the prop "notes" to "Note"
+    And I set the prop "notes" cardinality to "set"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              notes: [2, 3]
+          Note 2
+              title: "Alpha"
+          Note 3
+              title: "Beta"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with an extent-listing component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    Then configuration 0's live instance shows a "li" element reading "Alpha"
+    And configuration 0's live instance shows a "li" element reading "Beta"
+
+  # The isolation pins (W1a/W1b) EXTENDED to generic UI: typing into a real <Field>'s editor (sys.schema-
+  # backed, sys.new-drafted) writes only THIS instance's local draft — a sibling configuration of the SAME
+  # component, and the page's own editing, are both untouched.
+  @m12 @single-user
+  Scenario: Typing into a Field editor inside an instance updates only that instance's local draft
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "seedfieldtype"
+    And I edit the design "seedfieldtype"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    And I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a stateful schema-backed Editor component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    And I click the add-configuration button
+    Then component configurations shows 2 rows
+    When I type "hello" into configuration 0's live instance input
+    Then configuration 0's live instance shows a "span" element reading "hello"
+    And configuration 1's live instance shows a "span" element reading ""
+    When I rename the design's label to "seedfieldtype-renamed"
+    Then the design editor shows the design's label "seedfieldtype-renamed"
+
+  # Reset (the whole-sandbox disposal W1b established) now covers the SEEDED extent too: a handler-added
+  # row (db.notes.add via a freshly sys.new-minted draft, schema-backed) shows up in sys.extent immediately
+  # (mutation-consistent, per-instance derivation), and Reset discards it along with the rest of the sandbox.
+  @m12 @single-user
+  Scenario: Reset returns an instance's seeded extent to its initial rows after a handler mutates it
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "seedresetextent"
+    And I edit the design "seedresetextent"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I add a field "notes" to the type "Db"
+    When I reload the design editor
+    And I retype the prop "notes" to "Note"
+    And I set the prop "notes" cardinality to "set"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              notes: [2]
+          Note 2
+              title: "Alpha"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with an extent-adding component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    Then configuration 0's live instance shows 1 "li" element
+    When I click configuration 0's live instance button
+    Then configuration 0's live instance shows 2 "li" elements
+    When I click configuration 0's live instance Reset button
+    Then configuration 0's live instance shows 1 "li" element
+
+  # A LIBRARY component (RefSelect, one of the sys.schema-dependent components the v1 boundary excluded —
+  # "lib components render as empty literal elements") composing sys.extent for its own candidates — bound
+  # into the sandbox scope alongside the design's own fns (ctx.lib, BuildEvalContext), never the page's own
+  # scope (the design's rejected-parenting guard stays intact). Renders its REAL <select>/<option> UI.
+  @m12 @single-user
+  Scenario: A library component composing sys.extent renders its real UI in the configuration card
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "seedlib"
+    And I edit the design "seedlib"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I add a field "notes" to the type "Db"
+    And I add a field "pick" to the type "Db"
+    When I reload the design editor
+    And I retype the prop "notes" to "Note"
+    And I set the prop "notes" cardinality to "set"
+    And I retype the prop "pick" to "Note"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              notes: [2, 3]
+          Note 2
+              title: "Alpha"
+          Note 3
+              title: "Beta"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a RefSelect component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    Then configuration 0's live instance shows a "option" element reading "Alpha"
+    And configuration 0's live instance shows a "option" element reading "Beta"
