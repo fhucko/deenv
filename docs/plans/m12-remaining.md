@@ -50,11 +50,25 @@ item from the original first-scope bar, and the rung S5/S7 build on.
   map's S4 note says canvas v1 = the live preview with selection handles, one renderer.
 
 **Slices.**
-- **S4a — click→select→highlight.** The canvas click resolver + selected-row ui var +
-  both-side highlighting + scroll-to-row. Browser pins: click a leaf's rendered text →
-  its row highlights + scrolls into view; click a loop instance → the template row
-  highlights (N:1 pinned); click inside an expansion → the COMPONENT's body row
-  highlights (callee-only pinned); click empty canvas → deselect.
+- **S4a — click→select→highlight. ✅ DONE 2026-07-10** (reviews arch SHIP + ui-arch
+  SHIP + ux SHIP-WITH-FIXES, folds applied; `0e8655d`). As specced: the general
+  `selecttarget="<uiVarName>"` marker (instancemount family — ui-arch affirmed it
+  against both alternatives), one delegated resolver stopping at the container
+  boundary, `writeSelectedNode` = the popstate/path write precedent (nonexistent/
+  read-only var no-ops; selection SURVIVES refetch via the scalar-divergence guard —
+  desirable), canvas chrome = a commitRender post-pass (twins untouched), editor
+  highlight = reactive `nodeClass` (O(rows)/click — the noted deliberate asymmetry).
+  N:1 + callee-only needed ZERO new plumbing — the landed provenance was already
+  right. Folds: cursor+hover affordance scoped to the marker (doubles as the boundary
+  signal vs the look-alike previews) + caption clauses (click/clear/N:1); anchor
+  clicks inside the container SELECT instead of navigating (W1b containment + a
+  listener registration-order fix so preventDefault lands before interceptNavigation's
+  defaultPrevented check); both id-invariants CONFIRMED + comment-pinned (sys.id ≥ 1;
+  one global per-instance NextId — a stale cross-design selection matches nothing).
+  Screenshot-verified; honest caveat for S7: the selection outline is distinct from
+  input focus rings but not airtight — wants its own style token at the theming pass.
+  v1 boundaries stated: workbench cards + U1 previews unmarked (structural exclusion,
+  zero special-case code).
 - **S4b — selection-aware editing affordances.** From a selected row: keyboard/button
   affordances the tree editor already has (add sibling/child, remove) surfaced at the
   selection; the page-order reorder rides here (the UX-ledger item: types → render →
