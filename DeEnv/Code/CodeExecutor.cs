@@ -178,6 +178,12 @@ public sealed class CodeExecutor
                 if (item.IsReadOnly)
                     throw new CodeRuntimeException($"Symbol '{sym.Name}' is read only.");
                 item.Value = value;
+                // No invalidation call here, top-scope OR closure-scope alike: the server renders ONCE
+                // (Memoize is write-only — see its own doc comment), so there is no second pass for an
+                // invalidation to matter to. codeExec.ts's twin DOES invalidate (its memo cache is read
+                // back across renders in the browser) — this is the one place the twins' WRITE behavior
+                // intentionally diverges, and it already held before this fix (a top-scope var write
+                // never invalidated here either).
                 break;
             }
             case CodeInfixOp { Op: CodeInfixOpType.ObjectProp, Left: var left, Right: CodeSymbol member }:
@@ -292,6 +298,21 @@ public sealed class CodeExecutor
             if (!item.IsReadOnly && context.DepStack.Count > 0)
                 context.DepStack.Peek().Vars.Add(new VarDep(codeSymbol.Name));
             OnValueAccessed(context, item.Value);
+        }
+        // A writable NON-top (closure/component-local) scalar var — twin of codeExec.ts's
+        // executeSymbol. Mint the CELL's own identity lazily, from the SAME counter that mints
+        // object/array ids, so it can never collide with a real object id, and record it on the prop
+        // channel (PropDep) like an ordinary field read — the ONLY consumer is ClientState, for a
+        // value-returning (non-tag/fn) memoized computation that happens to close over this var; the
+        // reported gap's own shape (a component's `var count` read by its OWN tag-shaped view) never
+        // ships (ClientState.Serialize skips ExecTag/ExecFunction results), so this recording has no wire
+        // effect there — it exists for structural parity with the client twin, not because the
+        // write-only server ever re-renders off it (see Memoize).
+        else if (!item.IsReadOnly)
+        {
+            item.Id ??= --context.LastId.Value;
+            if (context.DepStack.Count > 0)
+                context.DepStack.Peek().Props.Add(new PropDep(item.Id.Value, "value"));
         }
         return item.Value;
     }

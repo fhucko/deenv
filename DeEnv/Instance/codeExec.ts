@@ -119,7 +119,15 @@ interface ExecTag { type: "tag"; name: string; attributes: { [name: string]: Exe
 // whose writable vars are reactive — read in a computation they are deps, assigned they
 // invalidate the memo cache. Transient local scopes (fn calls, blocks, foreach) leave it unset.
 interface ExecScope { items: { [name: string]: ExecScopeItem }; parent: ExecScope | null; isTop?: boolean; }
-interface ExecScopeItem { value: ExecValue; isReadOnly: boolean; }
+// `id` (component-local scalar-var reactivity fix): a NON-top writable item's own identity, minted
+// lazily on its first reactive read (see executeSymbol) — the storage CELL's identity, not its value.
+// A component's `var count = 0` survives across renders as a closure over this SAME ExecScopeItem (the
+// setup memo entry is a cache HIT on every re-invocation), so a handler write to it must invalidate
+// precisely the memo entries that read THIS instance's cell — never a same-named cell in a sibling
+// component instance (name-keying would cross-collide two instances, since "count" is not unique).
+// Undefined until first read; a write before any read needs no invalidation (nothing could have
+// cached a dependency on it yet).
+interface ExecScopeItem { value: ExecValue; isReadOnly: boolean; id?: number; }
 // `seed` (client data layer, slice 1a) — twin of C# ExecContext.Seed: a map from a component's
 // render-slot (`comp:<slotpath>`) to its setup-scope locals (`state`), applied right after that
 // component's setup runs so a render reproduces the client's exact component view-state. Undefined =
@@ -189,6 +197,11 @@ function executeAssignment(assignment: CodeAssignment, scope: ExecScope, context
         item.value = value;
         // Assigning a top-scope UI-state var invalidates every cached computation that read it.
         if (itemScope.isTop) invalidateVar(target.name);
+        // A component-local scalar var (`var count = 0` in a setup, reassigned from a handler): the SAME
+        // dep channel object props use, keyed by this ExecScopeItem's OWN minted id (never present ⇒
+        // nothing ever read it reactively ⇒ nothing to invalidate). Fixes the gap where a bare-scalar
+        // `var` never repainted (only `var state = {...}` did, via the object-prop path above).
+        else if (item.id != null) invalidateProp(item.id, "value");
         return value;
     }
     // An object-field lvalue (`obj.member = …`): set in place, the same write path two-way
@@ -280,11 +293,29 @@ function executeSymbol(codeSymbol: CodeSymbol, scope: ExecScope, context: ExecCo
     // the var must invalidate the cached result. (Read-only items — db, functions —
     // can never be reassigned, so they are not deps.)
     if (itemScope.isTop && !item.isReadOnly) recordVar(codeSymbol.name);
+    // A writable NON-top (closure/component-local) scalar var read inside a computation is ALSO a
+    // dependency — the gap this fix closes (`var count = 0` in a setup, read by its view). Mint the
+    // CELL's own identity lazily, on this first reactive read, from the SAME counter that mints
+    // object/array ids (executeObject/executeArray) — one shared monotonic negative-id space, so a
+    // scope-item id can never collide with a real object's id, with no separate discipline needed.
+    // Stable thereafter (the `if` guard): every later read/write of THIS item reuses the SAME id, and a
+    // sibling component instance's own same-named var gets its OWN id — no cross-instance collision, the
+    // trap a name-keyed dep would fall into. Reuses the prop channel (recordProp/invalidateProp) rather
+    // than adding a new dep kind — the same "no new channel" move as the parseMiss/synthetic-dep idiom
+    // elsewhere in this file.
+    else if (!itemScope.isTop && !item.isReadOnly) {
+        if (item.id == null) item.id = --context.lastId.value;
+        recordProp(item.id, "value");
+    }
     return {
         value: item.value,
         setValue: p => {
             item.value = p;
             if (itemScope.isTop) invalidateVar(codeSymbol.name);
+            // Two-way binding (`<input value={count}>`) writes back through THIS closure, bypassing
+            // executeAssignment entirely — mirror its invalidation so a directly-bound bare scalar var
+            // repaints too, not just one reassigned via a handler statement.
+            else if (item.id != null) invalidateProp(item.id, "value");
         },
     };
 }

@@ -1123,6 +1123,49 @@ public class InstanceContext
             return <rootForm desc={getNewNote()}>
     """;
 
+    // Component-local scalar-var reactivity fix: `Counter(item)` keeps its count in a BARE scalar
+    // `var count = 0` (not the `var state = { count: 0 }` object idiom every OTHER fixture above uses to
+    // work around the gap) — the natural form an app author would reach for first. Two rows (two
+    // component INSTANCES, keyed by their row's member identity via foreach) so the browser scenario can
+    // prove per-instance isolation: incrementing one must never repaint the other.
+    public static InstanceDescription BareScalarCounterDb() =>
+        InstanceDescriptionLoader.Load(BareScalarCounterApp);
+
+    private const string BareScalarCounterApp = """
+    types
+        Db
+            items set of Item
+        Item
+            label text
+
+    initialData
+        Db 1
+            items: [2, 3]
+        Item 2
+            label: "A"
+        Item 3
+            label: "B"
+
+    ui
+
+        fn Counter(item)
+            var count = 0
+            fn render()
+                return <div class="counter-row">
+                    <span class="row-label">
+                        item.label
+                    <span class="count">
+                        count
+                    <button class="increment" onClick={() => count = count + 1}>
+                        "+"
+            return render
+
+        fn render()
+            return <main>
+                foreach it in db.items
+                    <Counter item={it}>
+    """;
+
     // Milestone 11 (generic-UI collapse, increment 1): a HAND-WRITTEN `fn render()` that calls the
     // new `sys.resolve(path)` builtin and renders its fields as text — the probe that proves
     // resolve binds a URL to its view-kind + objects IDENTICALLY on both twins (server resolves for

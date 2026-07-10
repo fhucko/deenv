@@ -1047,6 +1047,28 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task WhenRekeyComponent() =>
         await ctx.Page!.Locator("button.rekey").ClickAsync();
 
+    // ── component-local scalar-var reactivity (the bare `var count = 0` gap) ─────────
+
+    [Given("the bare-scalar counter app is running")]
+    public async Task GivenBareScalarCounterAppRunning()
+    {
+        ctx.Description = InstanceContext.BareScalarCounterDb();
+        await ctx.EnsureServerAndBrowserAsync();
+    }
+
+    // Locate a row by its label text (robust to row order) and click its OWN increment button.
+    [When("I click the increment button for the row labeled {string}")]
+    public async Task WhenClickIncrementForRow(string label) =>
+        await ctx.Page!.Locator(".counter-row").Filter(new() { HasText = label })
+            .Locator("button.increment").ClickAsync();
+
+    [Then("the count for the row labeled {string} is {string}")]
+    public async Task ThenCountForRowIs(string label, string value) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const r = [...document.querySelectorAll('.counter-row')]" +
+            $".find(e => e.querySelector('.row-label')?.textContent.includes({JsString(label)}));" +
+            $" return r?.querySelector('.count')?.textContent === {JsString(value)}; }}");
+
     // ── references (slice 2) ───────────────────────────────────────────────────────
 
     [Given("the self-hosted reference app is running")]

@@ -474,6 +474,24 @@ Feature: Self-hosted generic UI (object forms)
     Then the note list eventually shows "Buy mi"
     And the draft title is empty
 
+  # ── component-local scalar var reactivity (the bare `var count = 0` gap) ────
+  # A component's local var survives across renders (the setup memo entry is a cache hit), but until
+  # this fix a WRITE to a bare scalar var (`count = count + 1`) never invalidated the view — only the
+  # `var state = { count: 0 }` object idiom did (an object-prop write always invalidates by (object id,
+  # prop), regardless of scope; a plain scalar var only invalidated when it lived in the page's TOP
+  # scope, which a component's own local var never is). Two independent Counter instances (one per row)
+  # pin BOTH halves: clicking one repaints ONLY that instance (the per-item-identity fix, not a
+  # name-keyed one — the trap a naive fix would fall into by cross-invalidating every "count").
+  @milestone-11 @single-user
+  Scenario: A component's bare scalar var repaints on a handler write, and a sibling instance stays untouched
+    Given the bare-scalar counter app is running
+    When I open "/"
+    Then the count for the row labeled "A" is "0"
+    And the count for the row labeled "B" is "0"
+    When I click the increment button for the row labeled "A"
+    Then the count for the row labeled "A" is "1"
+    And the count for the row labeled "B" is "0"
+
   # ── empty-state for a zero-member collection (UX review, 2026-06-24) ────────
   # A set/dict with no members rendered a bare header-only table (column header, no body rows, no
   # message) — which reads as broken or still-loading. It now renders a "No <Element> yet" line under

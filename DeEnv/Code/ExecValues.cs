@@ -196,6 +196,15 @@ public sealed class ExecScopeItem
 {
     public required IExecValue Value { get; set; }
     public required bool IsReadOnly { get; set; }
+
+    // Twin of codeExec.ts's ExecScopeItem.id (component-local scalar-var reactivity fix): a NON-top
+    // writable item's own identity, minted lazily on its first reactive read (ExecuteSymbol) — so the
+    // client's shipped Deps for a var it captures never cross-collide two component instances that both
+    // declare a same-named local. Structural parity only here: the server never re-renders (Memoize is
+    // write-only — see CodeExecutor.Memoize), so nothing server-side ever reads this back for
+    // invalidation; it exists only to populate PropDep entries a value-returning (non-tag/fn) memoized
+    // computation ships, matching what the client twin would record for the SAME read.
+    public int? Id { get; set; }
 }
 
 // ── execution context ─────────────────────────────────────────────────────────────
