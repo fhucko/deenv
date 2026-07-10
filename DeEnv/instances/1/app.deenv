@@ -126,6 +126,7 @@ ui
     var mergePicks = []
     var evalRefresh = 0
     var selectedNode = 0
+    var revealSelected = 0
     var lastPublishNote = ""
     var lastPublishFor = 0
     var lastMergeNote = ""
@@ -421,62 +422,90 @@ ui
         return nodeInList(owner.body, id)
 
     fn nodeLabel(node)
-        if node.kind == "for"
-            return "the for loop"
-        if node.kind == "if"
-            return "the if"
         if node.tag == ""
             return "the text/expr row"
         return "<" + node.tag + ">"
 
-    fn rootElementContext(design)
-        var root = design.render.single(n => true)
-        if root != null && root.kind == "" && root.tag != ""
-            return { node: root, coll: design.render }
-        return null
-
-    fn paletteTarget(design)
-        var ctx = nodeContext(design, selectedNode)
-        if ctx != null
-            return ctx
-        return rootElementContext(design)
-
-    fn paletteTargetCaption(design)
-        var ctx = paletteTarget(design)
-        if ctx == null
-            return "Inserts at the top level."
-        if ctx.node.kind == "" && ctx.node.tag != ""
-            return "Inserts into " + nodeLabel(ctx.node) + "."
-        return "Inserts next to " + nodeLabel(ctx.node) + " — it can't hold children."
-
-    fn insertComponent(design, tag)
-        var ctx = paletteTarget(design)
-        if ctx != null && ctx.node.kind == "" && ctx.node.tag != ""
-            var newRow = { kind: "", tag: tag, expr: "", item: "", collection: "", condition: "", order: orderForAppend(ctx.node.children), attrs: [], children: [], elseChildren: [] }
-            ctx.node.children.add(newRow)
-            selectNode(newRow)
-        else
-            var target = ctx == null ? design.render : ctx.coll
-            var newRow = { kind: "", tag: tag, expr: "", item: "", collection: "", condition: "", order: orderForAppend(target), attrs: [], children: [], elseChildren: [] }
-            target.add(newRow)
-            selectNode(newRow)
-
     fn libComponentNames(design)
         return sys.evalContext(design, evalRefresh).libNames
 
+    fn isComponentCall(design, node)
+        if design.fns.any(f => f.name != "" && f.name == node.tag)
+            return true
+        return libComponentNames(design).any(n => n == node.tag)
+
+    fn isContainerNode(design, node)
+        if node.kind == "for"
+            return true
+        if node.kind == "if"
+            return false
+        if node.tag == ""
+            return false
+        return isComponentCall(design, node) == false
+
+    fn isTopLevelRoot(design, node)
+        return design.render.any(n => sys.id(n) == sys.id(node))
+
+    fn selectionTarget(design)
+        var ctx = nodeContext(design, selectedNode)
+        if ctx == null
+            return null
+        if isContainerNode(design, ctx.node)
+            return { mode: "into", node: ctx.node, coll: ctx.node.children }
+        if isTopLevelRoot(design, ctx.node)
+            return { mode: "none", node: ctx.node, coll: null }
+        return { mode: "sibling", node: ctx.node, coll: ctx.coll }
+
+    fn rootFallbackTarget(design)
+        var root = design.render.single(n => true)
+        if root == null
+            return { mode: "into", node: null, coll: design.render }
+        if isContainerNode(design, root)
+            return { mode: "into", node: root, coll: root.children }
+        return { mode: "none", node: root, coll: null }
+
+    fn paletteTarget(design)
+        var sel = selectionTarget(design)
+        if sel != null
+            return sel
+        return rootFallbackTarget(design)
+
+    fn paletteTargetCaption(target)
+        if target == null || target.mode == "none"
+            return "Select an element to insert into — the render root can't hold children."
+        if target.mode == "into"
+            if target.node == null
+                return "Inserts at the top level."
+            if target.node.kind == "for"
+                return "Inserts into the loop body."
+            return "Inserts into " + nodeLabel(target.node) + "."
+        if target.node.kind == "if"
+            return "Inserts next to the condition (choose a branch row to insert inside)."
+        return "Inserts next to " + nodeLabel(target.node) + "."
+
+    fn insertComponent(target, tag)
+        if target == null || target.mode == "none"
+            return null
+        var newRow = { kind: "", tag: tag, expr: "", item: "", collection: "", condition: "", order: orderForAppend(target.coll), attrs: [], children: [], elseChildren: [] }
+        target.coll.add(newRow)
+        selectNode(newRow)
+        revealSelected = revealSelected + 1
+
     fn componentPalette(design)
+        var target = paletteTarget(design)
+        var canInsert = target != null && target.mode != "none"
         return <details class="component-palette">
             <summary class="palette-toggle">
                 "+ Component"
             <p class="palette-target">
-                paletteTargetCaption(design)
+                paletteTargetCaption(target)
             <div class="palette-group">
                 <span class="palette-group-label">
                     "This design"
                 if design.fns.any(f => f.name != "")
                     foreach f in design.fns
                         if f.name != ""
-                            <button class="palette-item" onClick={() => insertComponent(design, f.name)}>
+                            <button class="palette-item" disabled={!canInsert} onClick={() => insertComponent(target, f.name)}>
                                 f.name
                 else
                     <p class="palette-empty">
@@ -487,7 +516,7 @@ ui
                 <p class="palette-group-caption">
                     "Library components render literally here; they preview live in each component's own Configurations."
                 foreach n in libComponentNames(design)
-                    <button class="palette-item" onClick={() => insertComponent(design, n)}>
+                    <button class="palette-item" disabled={!canInsert} onClick={() => insertComponent(target, n)}>
                         n
 
     fn startRename(i)

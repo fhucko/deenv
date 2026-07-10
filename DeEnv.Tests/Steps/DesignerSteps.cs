@@ -3399,6 +3399,131 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.Locator($".design-canvas {tag.ToLowerInvariant()}[data-node]").First
             .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
 
+    // ── M12 S5b review fold — the palette-vs-component-call rule, for/if targeting, the second-root
+    // edge, and reveal-scroll ─────────────────────────────────────────────────────────────────────
+
+    [Then("the component palette is still open")]
+    public async Task ThenPaletteStillOpen() =>
+        await ctx.Page!.Locator(".design-editor details.component-palette[open]").First.WaitForAsync();
+
+    [When("I click the tree editor's for row")]
+    public async Task WhenClickTreeEditorForRow() =>
+        await ctx.Page!.Locator(".design-editor .render-tree .node-for > .node-for-head").First.ClickAsync();
+
+    [When("I click the tree editor's if row")]
+    public async Task WhenClickTreeEditorIfRow() =>
+        await ctx.Page!.Locator(".design-editor .render-tree .node-if > .node-if-head").First.ClickAsync();
+
+    [Then("the tree editor's for row is selected")]
+    public async Task ThenForRowSelected() =>
+        await ctx.Page!.Locator(".design-editor .render-tree .node-for.is-selected").First.WaitForAsync();
+
+    [Then("the tree editor's if row is selected")]
+    public async Task ThenIfRowSelected() =>
+        await ctx.Page!.Locator(".design-editor .render-tree .node-if.is-selected").First.WaitForAsync();
+
+    [Then("the palette target caption reads {string}")]
+    public async Task ThenPaletteCaptionReads(string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const p = document.querySelector('.design-editor .component-palette .palette-target'); " +
+            $"return p != null && p.textContent === {JsString(text)}; }}");
+
+    // The for-body proof: the child's row is the LAST entry inside the FOR row's OWN `.node-children` —
+    // the same direct-child scoping ThenRowIsLastChildOf uses for an element parent.
+    [Then("the tree editor's {string} element row is the last child of the for row")]
+    public async Task ThenRowIsLastChildOfFor(string childTag) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const parent = document.querySelector('.design-editor .render-tree .node-for'); " +
+            $"if (parent == null) return false; const kids = parent.querySelector(':scope > .node-children'); " +
+            $"const last = kids?.lastElementChild; if (last == null) return false; " +
+            $"const t = last.querySelector(':scope > .node-tag-row input.node-tag'); return t != null && t.value === {JsString(childTag)}; }}");
+
+    [Then("the palette insert buttons are disabled")]
+    public async Task ThenPaletteButtonsDisabled() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const items = [...document.querySelectorAll('.design-editor .component-palette .palette-item')]; " +
+            "return items.length > 0 && items.every(b => b.disabled); }");
+
+    // Seed a design's render tree with a SINGLE bare-leaf root directly through the store (IInstanceStore,
+    // the model's-terms seam — never a flat file write), bypassing the UI: today's UI has no path that can
+    // reach this shape (ImportRender itself refuses a non-element render root — SchemaBridge.cs "must be an
+    // element ... not a leaf expression" — and the tree editor has no top-level add control at all), so it
+    // is a genuine edge case only reachable this way. A leaf MetaNode's set-typed props (attrs/children/
+    // elseChildren) auto-mint empty (JsonFileInstanceStore.BuildFields) — only the scalars are supplied.
+    // ALSO seeds a bare "Badge" MetaFn (empty body — irrelevant here, nothing renders it) so the palette's
+    // "This design" group has a REAL button to assert `disabled` on: a bare-leaf root also degrades
+    // `sys.evalContext` (the same "must be an element" refusal), so the Library group ships zero names —
+    // without a design fn too, there would be no `.palette-item` anywhere to check.
+    [When("the design {string}'s render root is seeded as a bare leaf, bypassing the UI")]
+    public async Task WhenSeedBareLeafRoot(string designLabel)
+    {
+        var designEntry = _designer.Store.ReadExtent("Design")
+            .First(kv => kv.Value.Fields.TryGetValue("label", out var v) && v is DeEnv.Storage.TextValue t && t.Text == designLabel);
+        var leafId = _designer.Store.CreateObject("MetaNode", new DeEnv.Storage.ObjectValue(
+            new Dictionary<string, DeEnv.Storage.NodeValue>
+            {
+                ["kind"] = new DeEnv.Storage.TextValue(""),
+                ["tag"] = new DeEnv.Storage.TextValue(""),
+                ["expr"] = new DeEnv.Storage.TextValue("\"Hello\""),
+                ["item"] = new DeEnv.Storage.TextValue(""),
+                ["collection"] = new DeEnv.Storage.TextValue(""),
+                ["condition"] = new DeEnv.Storage.TextValue(""),
+                ["order"] = new DeEnv.Storage.IntValue(0),
+            }));
+        var renderPath = DeEnv.Storage.NodePath.Root.Field("designs").Key(designEntry.Key.ToString()).Field("render");
+        _designer.Store.AddToSet(renderPath, leafId);
+
+        var fnId = _designer.Store.CreateObject("MetaFn", new DeEnv.Storage.ObjectValue(
+            new Dictionary<string, DeEnv.Storage.NodeValue>
+            {
+                ["name"] = new DeEnv.Storage.TextValue("Badge"),
+                ["params"] = new DeEnv.Storage.TextValue(""),
+                ["order"] = new DeEnv.Storage.IntValue(0),
+            }));
+        var fnsPath = DeEnv.Storage.NodePath.Root.Field("designs").Key(designEntry.Key.ToString()).Field("fns");
+        _designer.Store.AddToSet(fnsPath, fnId);
+    }
+
+    // Invokes the button's onclick handler DIRECTLY (bypassing Playwright's actionability check, which
+    // already refuses to click a genuinely `disabled` button — a real browser suppresses even a
+    // programmatic `.click()` on one too) — the point is proving the DATA-LAYER guard inside
+    // insertComponent itself (target.mode == "none" → no-op) independently of the UI affordance, defense
+    // in depth against a future change that drops the `disabled` attribute but not the guard.
+    [When("I force-invoke the palette item {string}'s click handler")]
+    public async Task WhenForceInvokePaletteItem(string name) =>
+        await ctx.Page!.EvalOnSelectorAsync(
+            $".design-editor .component-palette .palette-item:text-is({CssString(name)})",
+            "el => { if (el.onclick) el.onclick(new MouseEvent('click')); }");
+
+    [Then("the tree editor's top-level render row count is {int}")]
+    public async Task ThenTopLevelRowCount(int count) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelectorAll('.design-editor .render-tree > .node-element, " +
+            $".design-editor .render-tree > .node-leaf, .design-editor .render-tree > .node-for, " +
+            $".design-editor .render-tree > .node-if').length === {count}");
+
+    // A long fixture (Badge + 40 sibling <p> rows under <main>) so a root-fallback insert — which appends
+    // LAST under main's children — reliably lands off the initial viewport, making the reveal-scroll pin
+    // decisive rather than a no-op that happened to already be in view.
+    private static readonly string LongPaletteConvertibleRender = BuildLongPaletteConvertibleRender();
+
+    private static string BuildLongPaletteConvertibleRender()
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("ui\n    fn Badge()\n        return <span>\n            \"Badge\"\n    fn render()\n        return <main>\n");
+        for (var i = 1; i <= 40; i++)
+            sb.Append($"            <p>\n                \"row{i}\"\n");
+        return sb.ToString();
+    }
+
+    [When("I author a long palette-test convertible render into the design's UI")]
+    public async Task WhenAuthorLongPaletteRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(LongPaletteConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == LongPaletteConvertibleRender));
+    }
+
     private static string JsString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 
     // A double-quoted CSS/Playwright string argument with quotes/backslashes escaped.

@@ -2494,11 +2494,16 @@ Feature: The operator IDE (designs library + instance design selector)
   #
   # "The library IS the palette" (visual-designer.md foreclosure guard): no registry, nothing needs
   # registration to appear. This design's own component (Badge, a design.fns row) and a standard-
-  # library component (SetTable, shipped honestly via ctx.libNames — S5b's seam answer: the language
+  # library component (ConfirmButton, shipped honestly via ctx.libNames — S5b's seam answer: the language
   # has no dict/keys() enumeration, so BuildEvalContext reshapes ctx.lib's own keys into a plain array)
-  # both list, purely because they are in scope — zero classification code either side. A minimal Db
-  # type is added first: `sys.evalContext` (ctx.libNames' source) degrades to an empty payload for a
-  # typeless design (InstanceDescriptionLoader requires a root Db type), so the Library group needs one.
+  # both list, purely because they are in scope. The Library group is further filtered by AST SHAPE
+  # (ComponentReturnsElement, SsrRenderer.cs — review fold #4): a lib fn appears only when its own body
+  # provably returns an element (a plain single `return <tag>`, or the stateful setup/view idiom's
+  # nested `fn render(){ return <tag> }`) — reflection over the code itself, not a registry; a name whose
+  # shape is ambiguous (route/boolGlyph/InputType's scalar returns, or SetTable/ObjectForm's branchier
+  # view logic) honestly drops out rather than being guessed at. A minimal Db type is added first:
+  # `sys.evalContext` (ctx.libNames' source) degrades to an empty payload for a typeless design
+  # (InstanceDescriptionLoader requires a root Db type), so the Library group needs one.
   @m12 @single-user
   Scenario: Opening the palette lists both the design's own components and the library
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
@@ -2514,7 +2519,7 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the design editor eventually shows the structured render tree editor
     When I open the component palette
     Then the component palette lists "Badge" in the "This design" group
-    And the component palette lists "SetTable" in the "Library" group
+    And the component palette lists "ConfirmButton" in the "Library" group
 
   @m12 @single-user
   Scenario: Inserting a design component into a selected element adds it as the last child, selected, and the canvas expands it
@@ -2574,9 +2579,9 @@ Feature: The operator IDE (designs library + instance design selector)
     When I click Convert to structured
     Then the design editor eventually shows the structured render tree editor
     When I open the component palette
-    And I click the palette item "SetTable"
-    Then the tree editor's "SetTable" element row is the last child of the "main" element row
-    And the design canvas contains a literal "SetTable" element
+    And I click the palette item "ConfirmButton"
+    Then the tree editor's "ConfirmButton" element row is the last child of the "main" element row
+    And the design canvas contains a literal "ConfirmButton" element
 
   @m12 @single-user
   Scenario: Inserting into a selected leaf adds the new row as its sibling instead of nesting into it
@@ -2596,3 +2601,127 @@ Feature: The operator IDE (designs library + instance design selector)
     And I click the palette item "Badge"
     Then the tree editor's "Badge" element row is the last child of the "h1" element row
     And the tree editor's "Badge" element row is selected
+
+  # ── M12 S5b review fold — the chain-nest trap ────────────────────────────────────────────────────
+  #
+  # A component-call row (Badge, a design fn) never becomes an "into" target — inserting into it would
+  # silently drop the next insert (Badge's own render has no rows the tree editor can reach). Item 1's
+  # pin: two inserts from the same starting selection land as SIBLINGS, both visible on the canvas —
+  # and the palette stays open across both (item 7's pin rides along, no re-opening needed).
+  @m12 @single-user
+  Scenario: Repeated inserts from the same starting selection build siblings, not a nested chain
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "palettechain"
+    And I edit the design "palettechain"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a palette-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the tree editor's "main" element row
+    Then the tree editor's "main" element row is selected
+    When I open the component palette
+    And I click the palette item "Badge"
+    Then the tree editor's "Badge" element row is the last child of the "main" element row
+    And the tree editor's "Badge" element row is selected
+    And the component palette is still open
+    When I click the palette item "ConfirmButton"
+    Then the tree editor's "ConfirmButton" element row is the last child of the "main" element row
+    And the design canvas shows a "span" element reading "Badge"
+    And the design canvas contains a literal "ConfirmButton" element
+
+  # ── M12 S5b review fold — for/if targeting + the honest caption ─────────────────────────────────
+  #
+  # A selected `for` row is unambiguous — its body IS the obvious insert target. Reuses the S6b
+  # for-and-if fixture (a <main> holding one `for` row and one `if` row as siblings).
+  @m12 @single-user
+  Scenario: Inserting into a selected for row targets its loop body
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "loopme"
+    And I edit the design "loopme"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a for-and-if convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the tree editor's for row
+    Then the tree editor's for row is selected
+    When I open the component palette
+    Then the palette target caption reads "Inserts into the loop body."
+    When I click the palette item "ConfirmButton"
+    Then the tree editor's "ConfirmButton" element row is the last child of the for row
+
+  # A selected `if` stays a sibling insert (then/else is genuinely ambiguous — punt honestly), but the
+  # caption must not claim it "can't hold children" (false — both branches can).
+  @m12 @single-user
+  Scenario: Inserting with a selected if row targets its sibling position with an honest caption
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "loopme"
+    And I edit the design "loopme"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a for-and-if convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the tree editor's if row
+    Then the tree editor's if row is selected
+    When I open the component palette
+    Then the palette target caption reads "Inserts next to the condition (choose a branch row to insert inside)."
+    When I click the palette item "ConfirmButton"
+    Then the tree editor's "ConfirmButton" element row is the last child of the "main" element row
+
+  # ── M12 S5b review fold — the second-root edge ───────────────────────────────────────────────────
+  #
+  # Nothing selected + the design's sole render root is a bare leaf (unreachable via any existing UI
+  # path — seeded directly through the store): there is no element anywhere to insert into, so the
+  # honest outcome is a disabled palette, not a silently-minted invalid second root. Pins BOTH the UI
+  # affordance (disabled buttons, an honest caption) and the DATA-LAYER guard underneath it (a forced
+  # handler invocation still no-ops).
+  @m12 @single-user
+  Scenario: A bare-leaf render root disables the insert honestly instead of minting an invalid second root
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "paletteleafroot"
+    And I edit the design "paletteleafroot"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a field "note" to the type "Db"
+    When the design "paletteleafroot"'s render root is seeded as a bare leaf, bypassing the UI
+    And I reload the design editor
+    Then the tree editor's top-level render row count is 1
+    When I open the component palette
+    Then the palette target caption reads "Select an element to insert into — the render root can't hold children."
+    And the palette insert buttons are disabled
+    When I force-invoke the palette item "Badge"'s click handler
+    Then the tree editor's top-level render row count is 1
+
+  # ── M12 S5b review fold — reveal-scroll for a remote insert ──────────────────────────────────────
+  #
+  # A root-fallback insert (nothing selected) can land far below the fold on a long tree with zero
+  # visible confirmation otherwise. Reuses the existing S4a/S4b scroll-into-view proof.
+  @m12 @single-user
+  Scenario: A root-fallback insert on a long tree scrolls the new row into view
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "palettescroll"
+    And I edit the design "palettescroll"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a long palette-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I open the component palette
+    And I click the palette item "Badge"
+    Then the tree editor's "Badge" element row is selected
+    And the selected tree editor row is scrolled into view

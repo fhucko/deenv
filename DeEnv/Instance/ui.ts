@@ -65,6 +65,7 @@ function commitRender(result: ExecValue): void {
     focusNewCreateForm(); // a just-opened create form scrolls into view and takes focus
     mountWorkbenchInstances(); // M12 W1a (workbench.ts) — mount/remount/dispose the component-workbench's live instances
     applySelectionChrome(); // M12 S4a — re-derive canvas is-selected chrome from the current selection every commit
+    checkRevealSelected(); // M12 S5b — arm a scroll-to-row on a REMOTE selection change (a palette insert)
     consumeSelectionScroll(); // M12 S4a — scroll the selected editor row into view, armed only on a real change
 }
 
@@ -490,6 +491,21 @@ function consumeSelectionScroll(): void {
     pendingSelectionScroll = false;
     const el = document.querySelector(".render-tree .is-selected, .fn-body .is-selected");
     el?.scrollIntoView({ block: "nearest" });
+}
+
+// M12 S5b review fold #5 — reveal-scroll for a REMOTE selection change (a palette insert): S4b's row-
+// click deliberately does NOT scroll (the operator is already at the row they clicked — see
+// writeSelectedNode/that rule's own comment), but a palette click is the case that rule named as
+// excluded: the new row can land anywhere in a long tree with zero visible confirmation otherwise.
+// General framework chrome, not designer-specific (the precedent every other selection/Escape pass here
+// sets): the app bumps its own `revealSelected` int ui var on each remote-selecting action; a transition
+// arms the SAME scroll-to-row pass S4a/S4b already consume at the next commit. A page without that var
+// reads a steady 0 here and this is a permanent no-op.
+let lastRevealSelected = 0;
+function checkRevealSelected(): void {
+    const item = uiStatic.state.scope.items["revealSelected"];
+    const v = item != null && item.value.type === "int" ? item.value.value : 0;
+    if (v !== lastRevealSelected) { lastRevealSelected = v; armSelectionScroll(); }
 }
 
 // ── focus a newly-opened create form ────────────────────────────────────────────────

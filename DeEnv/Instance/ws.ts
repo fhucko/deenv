@@ -1594,8 +1594,13 @@ function registerRemap(tempId: number, realId: number): void {
 // action, undoing the selection the operator just made. Patch any WRITABLE top-scope INT var holding
 // exactly this tempId to the real id — module ui vars are the only place this idiom is used, and an id
 // is always an int, so this never touches a read-only binding, a non-scalar, or closure-local state.
-// The same "a negative id never collides with an unrelated value" invariant the id-remap machinery
-// already relies on elsewhere (arr.items keys share the same counter space) bounds the false-positive risk.
+// The false-positive bound (arch nit, reworded — this is NOT an invariant, don't trust it as one): by the
+// time any handler runs, `uiStatic.lastId` has already been driven deep negative by every id the page's
+// OWN render shipped (evalContext alone mints a handful of transient ids per call — seedDb/exprs/fns/
+// types/lib/…), and a fresh tempId decrements further from there — so a coincidental collision with a
+// plausible small-int app value (a -1/-2 sentinel) is NEGLIGIBLE-PROBABILISTIC, not impossible by
+// construction (unlike, say, "0 is never a real row id" elsewhere in this file, which IS a hard
+// invariant). A future reader extending this must not assume tempId space is exclusive.
 function patchScalarVarsOnRemap(tempId: number, realId: number): void {
     for (const item of Object.values(uiStatic.state.scope.items))
         if (!item.isReadOnly && item.value.type === "int" && item.value.value === tempId)

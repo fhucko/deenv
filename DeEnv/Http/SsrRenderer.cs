@@ -1455,6 +1455,30 @@ public sealed class SsrRenderer
             new() { Id = --context.LastId.Value, Constant = true, Props = props.ToDictionary(p => p.Name, p => p.Value) };
         var empty = Obj();
         ExecArray EmptyArr() => new() { Items = [], Id = --context.LastId.Value, Kind = ArrayKind.List };
+        // M12 S5b review fold #4 — the Library group's OWN shape filter (ui-arch's open question,
+        // adjudicated): include a lib fn only when INVOKING it as a tag would render an element,
+        // determined purely by reflecting on its own AST — nothing registers, a component simply looks
+        // like one (the foreclosure guard's spirit exactly). Two shapes, mirroring the same two shapes
+        // SchemaBridge.TryMatchStatefulShape recognizes for import (a plain single `return <element>`, or
+        // the stateful `var…; fn render(){ return <element> }; return render` setup/view idiom) — but
+        // WITHOUT import's extra "no other statements" constraint: import needs to represent the fn as
+        // MetaFn rows (a real storage shape, so a named helper genuinely has nowhere to go), while this
+        // only needs "does calling this fn produce an element" — a helper fn elsewhere in the body
+        // (ConfirmButton's doConfirm, RefEditor's startCreate, …) never changes what the fn eventually
+        // RETURNS. The nested render() itself must still be a bare single return (mirroring
+        // TryMatchStatefulShape's OWN nested check exactly) — a component whose view logic needs local
+        // vars/branching in the nested render (ObjectForm, SetTable, UserMenu) is therefore honestly
+        // AMBIGUOUS under this simple a rule and drops out, same as a plain multi-statement non-stateful
+        // fn (Input's baseType branch, route(), NotFoundForm's status-then-return) or a scalar return
+        // (InputType, boolGlyph) — the palette lists what this rule can PROVE renders, not a guess.
+        static bool ComponentReturnsElement(CodeFunction fn)
+        {
+            var statements = fn.Body.Statements;
+            if (statements is [CodeReturn { Value: CodeTag }]) return true;
+            if (statements is not [.., CodeReturn { Value: CodeSymbol { Name: "render" } }]) return false;
+            return statements.Any(s => s is CodeFunction
+                { Name: "render", Params.Length: 0, Body.Statements: [CodeReturn { Value: CodeTag }] });
+        }
         try
         {
             var designNode = _store.ReadNode(NodePath.Root.Field("designs").Key(design.Id.ToString())) as ObjectValue
@@ -1532,17 +1556,22 @@ public sealed class SsrRenderer
             }
             var libObj = new ExecObject { Id = --context.LastId.Value, Constant = true, Props = lib };
 
-            // libNames (M12 S5b — the palette's Library group): the SAME name set as `lib` above, reshaped
-            // into a plain sorted ARRAY the app's own deenv code can `foreach` over. `lib` is a name-keyed
-            // ExecObject and the language has no dict/keys() enumeration over an arbitrary object's props
-            // (confirmed at build time — `where`/`orderBy`/`any`/`single`/`add`/`remove` are the whole
-            // collection-method surface, all COLLECTION-shaped, not object-shaped); inventing one is out of
-            // scope for a name list already computed server-side, so this ships the reshaped list instead —
-            // zero new Code surface, one extra prop on data already built. Sorted for a stable, predictable
-            // palette order (`lib`'s dictionary enumeration order is not otherwise meaningful).
+            // libNames (M12 S5b — the palette's Library group): NOT every name in `lib` (which stays the
+            // full callable set — any design's own code may call boolGlyph/InputType/route… by name) — a
+            // STRUCTURALLY FILTERED subset (ComponentReturnsElement, above), reshaped into a plain sorted
+            // ARRAY the app's own deenv code can `foreach` over. `lib` itself is a name-keyed ExecObject and
+            // the language has no dict/keys() enumeration over an arbitrary object's props (confirmed at
+            // build time — `where`/`orderBy`/`any`/`single`/`add`/`remove` is the whole collection-method
+            // surface, all COLLECTION-shaped, not object-shaped); inventing one is out of scope for a name
+            // list already computable server-side, so this ships the reshaped list instead — zero new Code
+            // surface. Sorted for a stable, predictable palette order.
             var libNamesArr = new ExecArray
             {
-                Items = lib.Keys.OrderBy(n => n, StringComparer.Ordinal)
+                Items = (effective.Ui?.Functions ?? [])
+                    .Where(fn => fn.Name is { Length: > 0 } && effective.SystemNames.Contains(fn.Name)
+                        && ComponentReturnsElement(fn))
+                    .Select(fn => fn.Name!)
+                    .OrderBy(n => n, StringComparer.Ordinal)
                     .Select((n, i) => new ExecItem { Key = i, Value = new ExecText { Value = n } })
                     .ToList(),
                 Id = --context.LastId.Value,
