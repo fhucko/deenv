@@ -551,6 +551,34 @@ public class InstanceContext
             Db 1
         """);
 
+    // Assets slice 2 (docs/plans/assets-design.md §2): the SAME `photo image` shape, plus a `User` type
+    // (a `password`-typed credential + the login-identifier `name`) and ONE access rule — enough to make
+    // the floor RULED (AccessFloor.Dormant == false), which is the ONLY thing the upload-ticket check
+    // reads (any rule at all, on any type, flips it — see AssetsHandler's `_dormant`). The rule itself
+    // targets `Db edit` (thematically "protect writes"), not `photo` specifically — the ticket floor is
+    // per-INSTANCE posture, not per-field, matching the design's "no finer per-type gating" call.
+    public static InstanceDescription AssetsRuledDb() =>
+        InstanceDescriptionLoader.Load("""
+        types
+            Db
+                photo image
+            User
+                name text
+                password password
+
+        initialData
+            Db 1
+            User 2
+                name: "Alice"
+
+        access
+            Db
+                edit where currentUser != null
+        """);
+
+    // The seeded User's id in AssetsRuledDb — for a step to bind the login/ticket-mint principal.
+    public const int AssetsRuledUserId = 2;
+
     // Milestone 9 (slice 2: references). Rendered by the default self-hosted generic UI.
     // `Db.lead: Person` is a reference ROUTE (/lead → the self-hosted reference editor);
     // `Note` (title scalar + `author: Person` reference) so /notes/{id} renders an objectForm

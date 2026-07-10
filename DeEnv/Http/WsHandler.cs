@@ -244,6 +244,16 @@ public sealed record LogoutResponse
     public bool Ok => true;
 }
 
+// uploadTicket (assets slice 2): a short-lived HMAC ticket for the blob pool's upload edge, or both
+// fields omitted (WhenWritingNull) when none applies — see HandleUploadTicket's doc for the two reasons
+// (dormant floor, anonymous session) that collapse to the same "no ticket" shape on the wire.
+public sealed record UploadTicketResponse
+{
+    public string Op => "uploadTicket";
+    public string? Ticket { get; init; }
+    public long? Exp { get; init; }
+}
+
 public sealed record ErrorResponse
 {
     public required string Error { get; init; }
@@ -307,6 +317,14 @@ public sealed class WsHandler
     // so `sys.publishPreview` recomputes on a client-side toggle→refetch exactly as it did on first paint.
     // Null for a non-design-host / non-kernel instance (sys.publishPreview then isn't reachable there).
     private readonly Func<Code.ExecObject, int, Code.ExecContext, Code.IExecValue>? _publishPreview;
+    // Upload-ticket minting (assets slice 2, docs/plans/assets-design.md §2): the SAME TokenAuth +
+    // instanceId InstanceApp wires into ContentHandler/AssetsHandler, so a ticket minted here verifies
+    // there. `_auth` defaults to an ephemeral (per-process, never persisted) secret when unset — every
+    // real instance always supplies its own — so the many test-only WsHandler constructions across the
+    // suite that never pass `auth` keep compiling/working (an ephemeral secret is harmless there: those
+    // callers don't drive the asset edge in the same process, or don't exercise uploadTicket at all).
+    private readonly TokenAuth _auth;
+    private readonly int _instanceId;
     private readonly JsonSerializerOptions _jsonOpts = new()
     {
         WriteIndented = false,
@@ -317,7 +335,8 @@ public sealed class WsHandler
     public WsHandler(IInstanceStore store, InstanceDescription desc, ClientSessionStore? sessions = null,
         LiveRegistry? registry = null, IHostActions? hostActions = null, string mountBase = "/",
         Func<string, string, bool>? verifyPassword = null,
-        Func<Code.ExecObject, int, Code.ExecContext, Code.IExecValue>? publishPreview = null)
+        Func<Code.ExecObject, int, Code.ExecContext, Code.IExecValue>? publishPreview = null,
+        TokenAuth? auth = null, int instanceId = 0)
     {
         _store = store;
         _desc = desc;
@@ -328,6 +347,8 @@ public sealed class WsHandler
         _mountBase = mountBase;
         _verifyPassword = verifyPassword ?? Code.AuthCrypto.Verify;
         _publishPreview = publishPreview;
+        _auth = auth ?? TokenAuth.Ephemeral();
+        _instanceId = instanceId;
     }
 
     // The warm per-client session a code-UI message addresses (clientId minted at SSR).
@@ -459,6 +480,7 @@ public sealed class WsHandler
                 "parseExprs"        => HandleParseExprs(req),
                 "login"             => HandleLogin(req),
                 "logout"            => HandleLogout(req),
+                "uploadTicket"      => HandleUploadTicket(req),
                 _                   => Error($"Unknown op '{op}'")
             };
             return WithId(result, id);
@@ -1434,6 +1456,23 @@ public sealed class WsHandler
         return Serialize(new LogoutResponse());
     }
 
+    // uploadTicket (assets slice 2, docs/plans/assets-design.md §2): mint a short-lived HMAC ticket the
+    // client presents to the asset origin's upload edge, which cannot see this WS session or its cookie.
+    // Ticket = null (both fields omitted) when the client doesn't need one OR can't have one — a DORMANT
+    // floor (no access rules) leaves upload open with no ticket at all (mirrors AssetsHandler's own
+    // check, Floor(req).Dormant is the SAME AccessFloor.Dormant definition), and an ANONYMOUS session has
+    // no principal to mint a ticket FOR. The client does not need to know WHICH reason applied — it just
+    // sends the header when it has one (see ws.ts uploadBlob) and omits it otherwise, which is exactly
+    // right on a dormant instance too.
+    private string HandleUploadTicket(WsRequest req)
+    {
+        if (!Floor(req).Dormant && Session(req)?.PrincipalUserId is { } userId)
+        {
+            var (ticket, exp) = _auth.MintTicket(_instanceId, userId, DateTimeOffset.UtcNow);
+            return Serialize(new UploadTicketResponse { Ticket = ticket, Exp = exp });
+        }
+        return Serialize(new UploadTicketResponse { Ticket = null, Exp = null });
+    }
 
     // Resolve a User by its `name` field through the store seam (an extent scan). Returns the matching
     // object's intrinsic id + its RAW stored fields (so the caller reads the real hash in the User's

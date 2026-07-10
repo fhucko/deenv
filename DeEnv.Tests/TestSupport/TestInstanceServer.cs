@@ -24,6 +24,11 @@ public sealed class TestInstanceServer : IAsyncDisposable
     // edges directly (Assets.feature) targets "<AssetBaseUrl>/assets" / "<AssetBaseUrl>/assets/<name>".
     public string AssetBaseUrl { get; private set; } = "";
     public IInstanceStore? Store { get; private set; }
+    // The SAME TokenAuth (and instanceId, always 0 for this single-instance test host) InstanceApp.Build
+    // wired into WsHandler/AssetsHandler — exposed so a step can mint/verify a ticket the exact same way
+    // the running server does (Assets.feature's upload-ticket scenarios), without a second secret.
+    public TokenAuth? Auth { get; private set; }
+    public const int InstanceId = 0;
 
     public async Task StartAsync(InstanceDescription description, string dataFilePath)
     {
@@ -37,8 +42,9 @@ public sealed class TestInstanceServer : IAsyncDisposable
         var appPort = GetFreePort();
         var assetPort = GetFreePort();
         var blobPool = new FileBlobPool(AppPaths.BlobsDirForDataPath(dataFilePath));
+        Auth = TokenAuth.ForDataHome(Path.GetDirectoryName(dataFilePath)!);
         var (appApp, assetApp) = InstanceApp.Build(Store, description, mountBase: "/", assetPort: assetPort,
-            instanceId: 0, auth: TokenAuth.ForDataHome(Path.GetDirectoryName(dataFilePath)!), blobPool: blobPool);
+            instanceId: InstanceId, auth: Auth, blobPool: blobPool);
 
         // Bind loopback-only (127.0.0.1), not all interfaces: tests are driven by Playwright over
         // localhost, and an all-interfaces listener trips the Windows Defender Firewall prompt — which

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using DeEnv.Code;
 using DeEnv.Instance;
 using DeEnv.Storage;
 using GenHTTP.Api.Content;
@@ -12,11 +13,17 @@ namespace DeEnv.Http;
 // The per-instance blob pool's two HTTP edges (docs/plans/assets-design.md): POST uploads raw bytes
 // in (returns the content-hash name), GET serves them back out by that name. Lives on the ASSET tree
 // (InstanceApp — a sibling of /ws, /js, /session), never the app tree, so the app URL space stays
-// reserved-path-free. DORMANT-OPEN in this slice — no upload ticket/auth (that is slice 2's job per
-// the design doc's §2; today's upload floor mirrors every other dormant-app write, which is already
-// fully open). Speaks to disk ONLY through IBlobPool — never File.* directly (the distributed-ACID
-// rung-H IO-seam guard, docs/plans/distributed-acid-design.md rung H: new storage IO goes behind a
-// seam).
+// reserved-path-free. Speaks to disk ONLY through IBlobPool — never File.* directly (the
+// distributed-ACID rung-H IO-seam guard, docs/plans/distributed-acid-design.md rung H: new storage IO
+// goes behind a seam).
+//
+// UPLOAD AUTH (assets slice 2, docs/plans/assets-design.md §2): a DORMANT instance (no access rules —
+// AccessFloor.Dormant) leaves upload OPEN with no ticket, mirroring every other dormant-app write, which
+// is already fully open. A RULED instance (any access rule declared, e.g. devlog) requires a valid,
+// unexpired `X-Upload-Ticket` header for a real principal — minted on demand by WsHandler's `uploadTicket`
+// op (the WS session already knows who is logged in) and verified here via TokenAuth.VerifyTicket, the
+// SAME per-data-home secret the session cookie uses (no new crypto). The check runs BEFORE any disk IO —
+// a rejected upload never touches the pool. Serve stays a pure capability GET with NO auth, unchanged.
 //
 // GenHTTP STREAMING FINDING (Task 0 spike, assets slice 1 build — recorded here, not in a committed
 // test, per the build brief): a raw-socket probe (a throttled, delayed multi-write POST against a
@@ -37,7 +44,7 @@ namespace DeEnv.Http;
 // build brief; not silently absorbed. (Chunked Transfer-Encoding requests failed outright against this
 // engine version in the same probe — moot for our real client, which POSTs a File with a known
 // Content-Length, never chunked.)
-public sealed class AssetsHandler(IBlobPool pool) : IHandler
+public sealed class AssetsHandler(IBlobPool pool, InstanceDescription description, int instanceId, TokenAuth auth) : IHandler
 {
     private static readonly IReadOnlyDictionary<string, string> ContentTypeToExt = new Dictionary<string, string>
     {
@@ -59,6 +66,11 @@ public sealed class AssetsHandler(IBlobPool pool) : IHandler
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB (assets-design.md §2)
     private const int ReadBufferSize = 64 * 1024;
+
+    // "Ruled" = the app declares ANY access rule (AccessFloor.Dormant, the exact same definition the
+    // write/read floors use — one chokepoint for what "dormant" means, not a second ad-hoc check here).
+    // Computed once: it depends only on the schema's `access` section, never on a request.
+    private readonly bool _dormant = new AccessFloor(description.Rules ?? [], new ExecNull()).Dormant;
 
     public ValueTask PrepareAsync() => ValueTask.CompletedTask;
 
@@ -89,6 +101,16 @@ public sealed class AssetsHandler(IBlobPool pool) : IHandler
         // SessionHandler) treats this the same defensive way.
         if (request.Content is null)
             return Cors(request, request.Respond().Status(ResponseStatus.BadRequest)).Build();
+
+        // The upload floor (assets-design.md §2): on a RULED instance, a valid, unexpired ticket for a
+        // real principal is required — checked BEFORE any disk IO, so a rejected upload never touches
+        // the pool. Dormant stays open (no ticket needed), matching every other dormant-app write.
+        if (!_dormant)
+        {
+            var ticket = request.Headers.TryGetValue("X-Upload-Ticket", out var t) ? t : null;
+            if (auth.VerifyTicket(ticket, instanceId, DateTimeOffset.UtcNow) is null)
+                return Cors(request, request.Respond().Status(ResponseStatus.Unauthorized)).Build();
+        }
 
         var tempName = ".tmp-" + Guid.NewGuid().ToString("N");
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -170,7 +192,9 @@ public sealed class AssetsHandler(IBlobPool pool) : IHandler
             ? response
                 .Header("Access-Control-Allow-Origin", origin)
                 .Header("Access-Control-Allow-Methods", "POST, OPTIONS")
-                .Header("Access-Control-Allow-Headers", "Content-Type")
+                // X-Upload-Ticket (assets slice 2): the ruled-instance upload floor's ticket rides as a
+                // custom header, so it must be allowlisted in the preflight response like Content-Type is.
+                .Header("Access-Control-Allow-Headers", "Content-Type, X-Upload-Ticket")
             : response;
 
     private static bool SameHostOrigin(string origin, string host) =>
@@ -178,7 +202,7 @@ public sealed class AssetsHandler(IBlobPool pool) : IHandler
         && string.Equals(uri.Host, host.Split(':')[0], StringComparison.OrdinalIgnoreCase);
 }
 
-public sealed class AssetsHandlerBuilder(IBlobPool pool) : IHandlerBuilder
+public sealed class AssetsHandlerBuilder(IBlobPool pool, InstanceDescription description, int instanceId, TokenAuth auth) : IHandlerBuilder
 {
-    public IHandler Build() => new AssetsHandler(pool);
+    public IHandler Build() => new AssetsHandler(pool, description, instanceId, auth);
 }

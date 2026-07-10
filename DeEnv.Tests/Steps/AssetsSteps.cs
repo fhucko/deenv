@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using DeEnv.Code;
+using DeEnv.Http;
 using DeEnv.Storage;
 using DeEnv.Tests.TestSupport;
 using Reqnroll;
@@ -13,6 +15,10 @@ namespace DeEnv.Tests.Steps;
 // store round-trip via ctx.Store directly (no WS, no browser — a plain data-layer check, the same
 // class as StoredDataSteps' "reopened store" scenarios). "The store is opened again on the same data
 // file" is REUSED verbatim from StoredDataSteps.cs (it just rebuilds ctx.Store from ctx.DataFilePath).
+//
+// The upload-ticket scenarios (§2) mint/present the ticket the SAME way production does: a WsHandler
+// built with the RUNNING server's own TokenAuth (ctx.Server.Auth) + instanceId, so a ticket minted here
+// verifies against the exact secret AssetsHandler checks — no second, out-of-band secret.
 [Binding]
 public sealed class AssetsSteps(InstanceContext ctx)
 {
@@ -20,6 +26,7 @@ public sealed class AssetsSteps(InstanceContext ctx)
     private int _lastStatus;
     private string _lastUploadedName = "";
     private readonly List<string> _uploadedNames = [];
+    private string _ticket = "";
 
     // GET-response state (headers read into plain fields — HttpResponseMessage itself is disposed
     // right after each request).
@@ -40,6 +47,93 @@ public sealed class AssetsSteps(InstanceContext ctx)
     // whatever server EnsureServerAsync already started.
     [Given("a browser is open on the assets app")]
     public async Task GivenBrowserOpenOnAssetsApp() => await ctx.EnsureServerAndBrowserAsync();
+
+    // ── the ruled instance (assets slice 2, §2) ──────────────────────────────────
+
+    // The Background's own "the assets app is running" already started a DORMANT server this scenario —
+    // EnsureServerAsync is a no-op once Server is non-null, and AssetsHandler bakes its dormant/ruled
+    // posture in at construction (from the description it was BUILT with), so swapping ctx.Description
+    // alone would not change the running server's posture. This tears that server down and starts a
+    // fresh one bound to the RULED fixture instead.
+    //
+    // The fresh data file lives in its OWN unique temp DIRECTORY, not a bare Path.GetTempFileName() —
+    // AppPaths.BlobsDirForDataPath derives the pool dir as "<data file's directory>/blobs", and
+    // GetTempFileName() always creates its file directly in the shared OS temp root, so two scenarios
+    // using the default pattern would resolve to the SAME "<temp>/blobs" directory and pollute each
+    // other's "no temp file remains" assertion under parallel execution (caught by a real, non-flaky
+    // full-suite failure — a leftover .tmp- file from a sibling scenario). Own directory ⇒ own pool.
+    [Given("the ruled assets app is running")]
+    public async Task GivenRuledAssetsAppRunning()
+    {
+        if (ctx.Server != null) { await ctx.Server.DisposeAsync(); ctx.Server = null; }
+        ctx.Description = InstanceContext.AssetsRuledDb();
+        var dir = Path.Combine(Path.GetTempPath(), "deenv-assets-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        ctx.DataFilePath = Path.Combine(dir, "data.json");
+        await ctx.EnsureServerAsync();
+    }
+
+    // Seed the fixture's User (id 2, "Alice") with a real PBKDF2 hash — the same pre-hashed-write
+    // pattern LoginSteps' "the admin user has the password" uses, written raw through the store seam.
+    [Given("the seeded user has the password {string}")]
+    public void GivenSeededUserPassword(string password) =>
+        ctx.Store!.WriteField(InstanceContext.AssetsRuledUserId, "password", new TextValue(AuthCrypto.Hash(password)));
+
+    // Log in over a WS session bound to the RUNNING server's own TokenAuth/instanceId (ctx.Server.Auth —
+    // the exact secret AssetsHandler verifies against), then immediately ask that session for an upload
+    // ticket. The ticket (or "" on a failed login/no ticket) is captured for the next upload step.
+    [When("the session logs in as {string} with password {string} and requests an upload ticket")]
+    public void WhenLogsInAndRequestsTicket(string name, string password)
+    {
+        var sessions = new ClientSessionStore();
+        var session = sessions.Create();
+        var ws = new WsHandler(ctx.Store!, ctx.Description!, sessions,
+            auth: ctx.Server!.Auth, instanceId: TestInstanceServer.InstanceId);
+        ws.ProcessMessage(
+            $$"""{ "op": "login", "clientId": "{{session.Id}}", "name": "{{name}}", "password": "{{password}}" }""");
+        var reply = ws.ProcessMessage($$"""{ "op": "uploadTicket", "clientId": "{{session.Id}}" }""");
+        using var doc = JsonDocument.Parse(reply);
+        _ticket = doc.RootElement.TryGetProperty("ticket", out var t) && t.ValueKind == JsonValueKind.String
+            ? t.GetString()!
+            : "";
+    }
+
+    [When("I upload {int} random bytes as {string} with the session's ticket")]
+    public async Task WhenIUploadWithSessionTicket(int count, string contentType)
+    {
+        var bytes = new byte[count];
+        new Random(4242).NextBytes(bytes);
+        await UploadAsync(bytes, contentType, _ticket);
+    }
+
+    [When("I upload {int} random bytes as {string} with no ticket")]
+    public async Task WhenIUploadWithNoTicket(int count, string contentType)
+    {
+        var bytes = new byte[count];
+        new Random(4242).NextBytes(bytes);
+        await UploadAsync(bytes, contentType, "");
+    }
+
+    // A ticket minted with a `now` already past its own TTL — an easy, sleep-free way to exercise
+    // expiry (TokenAuth.MintTicket computes `exp` from the `now` it's given, so backdating `now` yields
+    // an already-expired ticket without waiting).
+    [When("I upload {int} random bytes as {string} with an expired ticket")]
+    public async Task WhenIUploadWithExpiredTicket(int count, string contentType)
+    {
+        var bytes = new byte[count];
+        new Random(4242).NextBytes(bytes);
+        var (ticket, _) = ctx.Server!.Auth!.MintTicket(
+            TestInstanceServer.InstanceId, InstanceContext.AssetsRuledUserId, DateTimeOffset.UtcNow.AddSeconds(-120));
+        await UploadAsync(bytes, contentType, ticket);
+    }
+
+    [When("I upload {int} random bytes as {string} with the ticket {string}")]
+    public async Task WhenIUploadWithGivenTicket(int count, string contentType, string ticket)
+    {
+        var bytes = new byte[count];
+        new Random(4242).NextBytes(bytes);
+        await UploadAsync(bytes, contentType, ticket);
+    }
 
     // Playwright sets the file directly from an in-memory buffer (FilePayload) — no real file on disk,
     // no OS file-picker dialog — which fires the SAME input+change events wireEvents (ui.ts) listens for
@@ -71,14 +165,16 @@ public sealed class AssetsSteps(InstanceContext ctx)
     [When("I upload the same bytes again as {string}")]
     public async Task WhenIUploadSameBytesAgain(string contentType) => await UploadAsync(_lastBytes, contentType);
 
-    private async Task UploadAsync(byte[] bytes, string contentType)
+    private async Task UploadAsync(byte[] bytes, string contentType, string ticket = "")
     {
         _lastBytes = bytes;
         using var http = new HttpClient();
         using var content = new ByteArrayContent(bytes);
         content.Headers.Remove("Content-Type");
         content.Headers.TryAddWithoutValidation("Content-Type", contentType);
-        var response = await http.PostAsync(ctx.AssetBaseUrl + "/assets", content);
+        using var request = new HttpRequestMessage(HttpMethod.Post, ctx.AssetBaseUrl + "/assets") { Content = content };
+        if (ticket.Length > 0) request.Headers.TryAddWithoutValidation("X-Upload-Ticket", ticket);
+        var response = await http.SendAsync(request);
         _lastStatus = (int)response.StatusCode;
         if (response.IsSuccessStatusCode)
         {
