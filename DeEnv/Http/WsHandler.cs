@@ -1339,11 +1339,23 @@ public sealed class WsHandler
         // minting, so a denied create leaves no orphan object in the extent. id 0 = no identity yet.
         RequireWrite(Floor(req), "create", typeName, Code.AccessFloor.ScalarObject(typeName, 0, value, _desc));
 
-        // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store.
-        var id = _store.CreateObject(typeName, HashPasswordFields(typeName, value));
-        // AddToSet is the LAST mutation; its under-lock version is the reply's newVersion (finding 3). The
-        // ReadById below is a pure read (no bump), so this stays the post-write version at reply time.
-        var newVersion = _store.AddToSet(setId, id);
+        // Mint + link as ONE atomic store mutation (ONE Save()/physical fsync), through the SAME
+        // all-or-none multi-mutation path ctx.commit() already uses (CommitBatch) — not two separate
+        // public-method calls (the former CreateObject then AddToSet), each its OWN WAL commit. A "create
+        // a set member" is one logical write; splitting it cost this op DOUBLE the durable-write latency
+        // of every other live edit — measurably the dominant contributor to the "add a field" store-poll
+        // flake under load (that step mints THEN immediately field-edits the same object: 2 fsyncs here
+        // plus 1 more for the name write, vs 1 for a plain field edit). -1 is a batch-local scratch tempId
+        // for this single call only — unrelated to the CLIENT's own tempId space (req.TempId, resolved via
+        // session below), which CommitBatch never sees.
+        const int localTempId = -1;
+        var result = _store.CommitBatch(
+            [new CommitCreate(localTempId, typeName, HashPasswordFields(typeName, value))],
+            [new SetLinkMutation(setId, localTempId)]);
+        var created = result.Creates[0];
+        var id = created.RealId;
+        // The whole batch's post-write version (finding 3) — unchanged as the reply's newVersion.
+        var newVersion = result.Version;
 
         // Record the negative→real mapping so the client's follow-up ops (a field edit, a remove) that
         // still address this object by its transient id resolve to the real one — even if they arrive
@@ -1351,15 +1363,12 @@ public sealed class WsHandler
         if (req.TempId is { } tempId)
             session?.MapTransientId(tempId, id);
 
-        // The store minted the new object's collection props with their own intrinsic
-        // ids; echo them so the client re-keys its transient arrays (else later adds
+        // The store minted the new object's collection props with their own intrinsic ids; CommitBatch
+        // already computed this exact map (the same typeDef.Props walk) as part of minting — reuse it
+        // instead of a second store read, so the client can re-key its transient arrays (else later adds
         // into them would silently not persist).
-        var minted = _store.ReadById(id);
-        var collections = new Dictionary<string, CollectionInfo>();
-        foreach (var prop in typeDef.Props ?? [])
-            if (prop.Cardinality == Cardinality.Set
-                && minted?.Fields.Fields.GetValueOrDefault(prop.Name) is SetValue sv)
-                collections[prop.Name] = new CollectionInfo { Id = sv.Id, ElementTypeName = prop.Type };
+        var collections = created.Collections.ToDictionary(
+            kv => kv.Key, kv => new CollectionInfo { Id = kv.Value.Id, ElementTypeName = kv.Value.ElementTypeName });
 
         // `newId`, not `id` — the reply's `id` slot is the request correlation id.
         // tempId is echoed only when the request carried one (omitted otherwise).

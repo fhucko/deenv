@@ -731,9 +731,23 @@ function isFileInputTag(tag: ExecTag): boolean {
     return t != null && t.type === "text" && t.value === "file";
 }
 
+// A <details> element's `open` is native, browser-toggled UI state (clicking its <summary> flips it)
+// that the app almost never binds — no deenv app in this codebase authors `<details open={...}>`. Left
+// to the generic diff below, EVERY reconcile of that (reused, unkeyed-but-positionally-matched) node would
+// strip it straight back off, since the desired tag never declares it — collapsing the disclosure shut on
+// the very next unrelated re-render (an autosave ack, a sibling field's edit) while the operator is mid-use.
+// That is a real UX bug, not just a test race: type into an Advanced textarea, an autosave lands, the
+// disclosure slams shut under you. Treat `open` like `data-key` — owned by the DOM, never touched here —
+// UNLESS the app explicitly declares it, in which case the normal per-attribute loop below sets/clears it
+// like any other bound attribute (a future controlled `<details open={expr}>` still works).
+function preservesOpenAttr(el: HTMLElement, tag: ExecTag): boolean {
+    return el.tagName === "DETAILS" && !("open" in tag.attributes);
+}
+
 function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
     const want = new Set<string>();
     const isFileInput = isFileInputTag(tag);
+    const preserveOpen = preservesOpenAttr(el, tag);
     for (const [name, result] of Object.entries(tag.attributes)) {
         const v = result.value;
         if (v.type === "fn" || v.type === "sysFn" || v.type === "object" || v.type === "array") continue;
@@ -783,7 +797,8 @@ function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
         want.add(name);
     }
     for (const attr of Array.from(el.attributes))
-        if (attr.name !== "data-key" && !want.has(attr.name)) el.removeAttribute(attr.name);
+        if (attr.name !== "data-key" && !(preserveOpen && attr.name === "open") && !want.has(attr.name))
+            el.removeAttribute(attr.name);
 }
 
 // A text input's value is always a string; coerce it back to the bound value's type so binding an
