@@ -94,6 +94,15 @@ function init(): void {
         maybeRefetch();
     });
 
+    // M12 S4a — canvas click → selection: a delegated listener (ui.ts resolveCanvasSelection). No-op
+    // everywhere except a page carrying a `[selecttarget]` marker (the designer's canvas today) — see
+    // ui.ts's own comment for the mechanism. REGISTERED BEFORE interceptNavigation below (order matters,
+    // not just convention): when the click resolves to a literal in-canvas `<a href>`, this listener
+    // calls preventDefault FIRST, so interceptNavigation's own `e.defaultPrevented` bail-out (its first
+    // line) correctly no-ops instead of navigating the designer's whole page away — see ui.ts's
+    // anchor-containment comment on resolveCanvasSelection.
+    document.addEventListener("click", resolveCanvasSelection);
+
     // In-app links navigate CLIENT-SIDE (no full reload): one delegated listener intercepts qualifying
     // anchor clicks (same-origin, in-mount, plain left-click) and re-renders the target over the warm
     // session via the History API. Delegated on document so it also covers links OUTSIDE the #app

@@ -805,6 +805,22 @@ public sealed class SsrRenderer
         .design-canvas .for-item { font-family: ui-monospace, monospace; font-weight: 600; }
         .design-canvas .if-branch { margin: 0.2rem 0; }
         .design-canvas .if-branch .branch-label { font-size: 0.72rem; }
+        /* M12 S4a — canvas selection chrome. Discoverability (ux review fold): a [selecttarget] canvas
+           element gets a pointer cursor and a faint hover outline — the ONLY signal, before any click, that
+           the canvas is a selection surface at all. This doubles as the boundary signal for the LOOK-ALIKE
+           surfaces that never carry [selecttarget] (a workbench card's static .design-canvas.use-preview
+           preview): they simply never get the pointer/hover, so their click no-op reads as "not
+           interactive" rather than "broken". `is-selected` marks BOTH sides of a click-to-select pair: any
+           canvas element sharing the clicked data-node (a client post-pass, ui.ts applySelectionChrome —
+           scoped to any [selecttarget] container, so this rule fires only where that marker exists) gets a
+           calm accent outline (NOT --danger — this is a neutral "here" marker, not an error); the mirrored
+           tree-editor row (renderNodeEditor's own reactive class, app.deenv nodeClass) is a full-width block
+           rather than a thin element, so a soft accent-tinted background reads better there than an outline. */
+        [selecttarget] [data-node] { cursor: pointer; }
+        [selecttarget] [data-node]:hover { outline: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 1px; border-radius: 2px; }
+        [selecttarget] [data-node].is-selected { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
+        .render-tree .is-selected, .fn-body .is-selected {
+          background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 4px; }
         /* The render group: the CANVAS (live structural view) + the TREE EDITOR it mirrors are ONE
            authoring pair under one heading/divider — the divider must sit ABOVE the pair, never between
            them (a border between the canvas and its own tree visually cut the pair apart — ux review). */

@@ -37,6 +37,10 @@ public sealed class DesignerSteps(InstanceContext ctx)
     // display label AND its mount, since addressing is by path now; there are no per-instance ports).
     private string _newInstanceName = "";
 
+    // M12 S4a review fold — the page URL captured before a canvas click that must NOT navigate (a
+    // literal-href anchor rendered inside a [selecttarget] canvas; the anchor-containment proof).
+    private string _urlBeforeClick = "";
+
     // The kernel id minted for an instance created via a direct host-action step (Slice 2 store assertions).
     private int _lastCreatedInstanceId;
 
@@ -3009,6 +3013,116 @@ public sealed class DesignerSteps(InstanceContext ctx)
     // and only flip visibility, so "shows no X" means hidden, not detached.
     private static readonly Microsoft.Playwright.LocatorWaitForOptions Hidden =
         new() { State = Microsoft.Playwright.WaitForSelectorState.Hidden };
+
+    // ── M12 S4a — canvas selection: click → select → highlight → scroll-to-row ───────────────────────
+
+    // A simple two-element convertible render (<main><h1>"Hello"</h1></main>) dedicated to the selection
+    // scenario: a literal leaf (no schema/initialData needed) wrapped in a real element, so the h1's own
+    // row is unambiguously the thing a click on its text should select. Same authoring plumbing as the
+    // other convertible-render fixtures (fill the `ui` textarea, poll the store for the write).
+    private const string SelectionConvertibleRender =
+        "ui\n    fn render()\n        return <main>\n            <h1>\n                \"Hello\"\n";
+
+    [When("I author a selection-test convertible render into the design's UI")]
+    public async Task WhenAuthorSelectionRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(SelectionConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "selectme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == SelectionConvertibleRender));
+    }
+
+    // Click a real rendered canvas element by tag + EXACT text (Playwright's :text-is, not the substring
+    // :has-text other steps use — a loop scenario renders several same-tag siblings with distinct text,
+    // and an exact match is what a real click on that specific instance's visible content resolves to).
+    [When("I click the design canvas {string} element reading {string}")]
+    public async Task WhenClickCanvasElementReading(string tag, string text) =>
+        await ctx.Page!.Locator($".design-canvas {tag}:text-is({CssString(text)})").First.ClickAsync();
+
+    // A click in the canvas container's own padding (top-left corner, off any rendered content) — the
+    // deselect case: no data-node ancestor is found within the [selecttarget] container.
+    [When("I click empty canvas space")]
+    public async Task WhenClickEmptyCanvas() =>
+        await ctx.Page!.Locator(".design-canvas").First.ClickAsync(new() { Position = new() { X = 4, Y = 4 } });
+
+    // The tree editor's `.node-element` row whose OWN tag input reads `tag` carries `is-selected`
+    // (renderNodeEditor's nodeClass, reactive on the selectedNode ui var). `:scope > .node-tag-row` scopes
+    // to THIS row's own tag input, not a nested child's, so a wrapping element (e.g. main containing h1)
+    // is never confused with the element actually selected.
+    [Then("the tree editor's {string} element row is selected")]
+    public async Task ThenTreeEditorElementRowSelected(string tag) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => [...document.querySelectorAll('.design-editor .render-tree .node-element')].some(e => {{ " +
+            $"const t = e.querySelector(':scope > .node-tag-row input.node-tag'); " +
+            $"return t != null && t.value === {JsString(tag)} && e.classList.contains('is-selected'); }})");
+
+    // Nothing in the design's MAIN render tree (as opposed to a component's own .fn-body) carries
+    // is-selected — the CALLEE-ONLY proof's negative half.
+    [Then("no tree editor row is selected")]
+    public async Task ThenNoTreeEditorRowSelected() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => document.querySelector('.design-editor .render-tree .is-selected, .design-editor .fn-body .is-selected') == null");
+
+    [Then("no tree editor row is selected in the main render tree")]
+    public async Task ThenNoMainTreeRowSelected() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => document.querySelector('.design-editor .render-tree .is-selected') == null");
+
+    // The named component's OWN body row (inside its `.fn-body`, the SAME recursive renderNodeEditor the
+    // main render tree uses) carries is-selected — the CALLEE-ONLY proof's positive half: an expanded
+    // invocation's click resolves to the component's body row, never the caller's tag in the main tree.
+    [Then("the component {string}'s body row is selected")]
+    public async Task ThenComponentBodyRowSelected(string name) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const card = [...document.querySelectorAll('.components-section .fn-card')].find(c => " +
+            $"{{ const n = c.querySelector('input.fn-name'); return n != null && n.value === {JsString(name)}; }}); " +
+            $"return card != null && card.querySelector('.fn-body .is-selected') != null; }}");
+
+    // The count of canvas elements currently carrying is-selected — 0 (nothing selected), 1 (an ordinary
+    // element), or N (a loop selection's shared template row outlining every instance together, the N:1
+    // proof: S6a's provenance decision surfacing as a real multi-element highlight).
+    [Then("the design canvas shows {int} selected element(s)")]
+    public async Task ThenCanvasSelectedCount(int count) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => document.querySelectorAll('.design-canvas [data-node].is-selected').length === {count}");
+
+    // The scroll-to-row proof: the tree-editor row now carrying is-selected sits within the viewport —
+    // the cheap, decisive post-condition (ui.ts consumeSelectionScroll ran its scrollIntoView pass).
+    [Then("the selected tree editor row is scrolled into view")]
+    public async Task ThenSelectedRowScrolledIntoView() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const e = document.querySelector('.render-tree .is-selected, .fn-body .is-selected'); " +
+            "if (e == null) return false; const r = e.getBoundingClientRect(); " +
+            "return r.top >= 0 && r.bottom <= window.innerHeight; }");
+
+    // ── M12 S4a review fold (ux finding 4) — anchor-containment: a literal-href canvas anchor selects
+    // instead of navigating the whole designer away ──────────────────────────────────────────────────
+
+    // A convertible render whose root holds a literal `<a href>` — the exact shape a click-to-select
+    // canvas must NOT let escape into a real (or client-side SPA) navigation. Same authoring plumbing as
+    // the other convertible-render fixtures.
+    private const string AnchorConvertibleRender =
+        "ui\n    fn render()\n        return <main>\n            <a href=\"/somewhere\">\n                \"Link\"\n";
+
+    [When("I author an anchor convertible render into the design's UI")]
+    public async Task WhenAuthorAnchorRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(AnchorConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "selectanchor" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == AnchorConvertibleRender));
+    }
+
+    [When("I note the current page URL")]
+    public Task WhenNoteCurrentUrl()
+    {
+        _urlBeforeClick = ctx.Page!.Url;
+        return Task.CompletedTask;
+    }
+
+    [Then("the page URL is unchanged")]
+    public async Task ThenPageUrlUnchanged() =>
+        await Assert.That(ctx.Page!.Url).IsEqualTo(_urlBeforeClick);
 
     private static string JsString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 

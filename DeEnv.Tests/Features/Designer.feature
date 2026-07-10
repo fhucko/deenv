@@ -2163,3 +2163,134 @@ Feature: The operator IDE (designs library + instance design selector)
     When I click the add-configuration button
     Then configuration 0's live instance shows a "option" element reading "Alpha"
     And configuration 0's live instance shows a "option" element reading "Beta"
+
+  # ── M12 S4a — canvas selection: click → select → highlight → scroll-to-row ───────────────────────
+  #
+  # The canvas becomes the editor's selection surface: every element sys.renderTree emits carries
+  # `data-node` (CANVAS-1); a click resolves the nearest one and writes it into the `selectedNode` ui
+  # var, which BOTH sides read — the canvas (a client chrome post-pass toggling `is-selected` on every
+  # matching [data-node] element) and the tree editor (renderNodeEditor's own reactive class). A click on
+  # the SAME element twice, or an unrelated structural edit, must never disturb an existing selection;
+  # clicking empty canvas space (off any data-node element) deselects.
+  @m12 @single-user
+  Scenario: Clicking a canvas element selects its row, highlights both sides, scrolls it into view, survives an unrelated edit, and clicking empty canvas deselects
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "selectme"
+    And I edit the design "selectme"
+    When I ensure the Advanced code disclosure is open
+    And I author a selection-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows a "h1" element reading "Hello"
+    When I click the design canvas "h1" element reading "Hello"
+    Then the tree editor's "h1" element row is selected
+    And the design canvas shows 1 selected element
+    And the selected tree editor row is scrolled into view
+    When I edit the root node's tag input to "section"
+    Then the design canvas shows a "section" element with a data-node attribute
+    And the tree editor's "h1" element row is selected
+    When I click empty canvas space
+    Then the design canvas shows 0 selected elements
+    And no tree editor row is selected
+
+  # N:1 — a loop's rendered instances all share the ONE body row's data-node (S6a), so clicking ANY
+  # instance selects that shared template row, and EVERY instance sharing it outlines together.
+  @m12 @single-user
+  Scenario: Clicking a loop instance in the canvas selects the shared template row, and every instance outlines together
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "loopme"
+    And I edit the design "loopme"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I add a field "notes" to the type "Db"
+    And I add a field "flag" to the type "Db"
+    When I reload the design editor
+    And I retype the prop "notes" to "Note"
+    And I set the prop "notes" cardinality to "set"
+    And I retype the prop "flag" to "bool"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              notes: [2, 3]
+              flag: true
+          Note 2
+              title: "Alpha"
+          Note 3
+              title: "Beta"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a for-and-if convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows a "li" element reading "Alpha"
+    And the design canvas shows a "li" element reading "Beta"
+    When I click the design canvas "li" element reading "Alpha"
+    Then the tree editor's "li" element row is selected
+    And the design canvas shows 2 selected elements
+
+  # CALLEE-ONLY — clicking inside an EXPANDED component invocation selects the COMPONENT's own body row
+  # (its .fn-body, not the caller's row in the main render tree), matching F2's provenance decision: every
+  # expanded element carries its own body-row data-node, never the invocation row's.
+  @m12 @single-user
+  Scenario: Clicking inside an expanded component's content in the canvas selects the component's own body row, not the caller's
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "expandme"
+    And I edit the design "expandme"
+    When I add a type to the design
+    And I name the just-added type "Db"
+    When I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I add a field "notes" to the type "Db"
+    When I reload the design editor
+    And I retype the prop "notes" to "Note"
+    And I set the prop "notes" cardinality to "set"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              notes: [2, 3]
+          Note 2
+              title: "Alpha"
+          Note 3
+              title: "Beta"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a component-invoking convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows a "li" element reading "Alpha"
+    When I click the design canvas "li" element reading "Alpha"
+    Then the component "NoteCard"'s body row is selected
+    And no tree editor row is selected in the main render tree
+
+  # ── M12 S4a review fold (ux finding 4) — anchor-containment ───────────────────────────────────────
+  #
+  # S4a made a canvas click first-class (a document-level delegated listener), so a literal `<a href>`
+  # rendered inside the canvas — legal content, the walk never strips a real href — must not let that
+  # click escape into interceptNavigation's own document-level listener and take the whole designer
+  # page away. The click should SELECT the anchor's own row instead, exactly like any other element.
+  @m12 @single-user
+  Scenario: Clicking a literal-href anchor in the canvas selects its row instead of navigating the designer away
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "selectanchor"
+    And I edit the design "selectanchor"
+    When I ensure the Advanced code disclosure is open
+    And I author an anchor convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the design canvas shows a "a" element reading "Link"
+    When I note the current page URL
+    And I click the design canvas "a" element reading "Link"
+    Then the tree editor's "a" element row is selected
+    And the page URL is unchanged

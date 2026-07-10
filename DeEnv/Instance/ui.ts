@@ -64,6 +64,8 @@ function commitRender(result: ExecValue): void {
     consumeScrollReset(); // a forward nav whose target just painted scrolls to the top
     focusNewCreateForm(); // a just-opened create form scrolls into view and takes focus
     mountWorkbenchInstances(); // M12 W1a (workbench.ts) — mount/remount/dispose the component-workbench's live instances
+    applySelectionChrome(); // M12 S4a — re-derive canvas is-selected chrome from the current selection every commit
+    consumeSelectionScroll(); // M12 S4a — scroll the selected editor row into view, armed only on a real change
 }
 
 // Speculatively render the target and commit it ONLY if it rendered COMPLETELY from already-local data.
@@ -351,6 +353,117 @@ function consumeScrollReset(): void {
     if (!pendingScrollReset) return;
     pendingScrollReset = false;
     window.scrollTo(0, 0);
+}
+
+// ── M12 S4a — canvas click → selection ────────────────────────────────────────────────
+//
+// sys.renderTree stamps every canvas element with `data-node={rowId}` (CANVAS-1's provenance spine); a
+// container opts a whole subtree INTO click-to-select by carrying `selecttarget="<uiVarName>"`, naming
+// the top-scope ui var the resolved row id is written into. This is GENERAL framework infrastructure —
+// any renderTree consumer can opt in — not designer-specific; an app that never emits the marker (every
+// app but the designer, today) makes this listener a pure no-op on every click. A workbench card's live
+// instance is a structurally separate container that never carries the marker (docs/plans/
+// m12-remaining.md §1's v1 boundary), so it's excluded with no special-casing here.
+//
+// Delegated on document (the interceptNavigation precedent — one listener, works for content added by
+// any future render). Resolves the nearest data-node ancestor of the click target, WITHIN the marked
+// container only (the walk stops at the container, never past it, so a data-node elsewhere on the page
+// can't leak in); a click that lands inside the container but off any data-node element (empty canvas
+// padding) resolves to 0 — deselect.
+//
+// Swallow in-app anchor navigation inside a selection surface — the W1b anchor-containment pattern
+// (workbench.ts:429-431) verbatim: a canvas element that happens to be a literal `<a href>` (or wraps
+// one) would otherwise bubble to the PAGE's own document-level interceptNavigation listener and
+// navigate the operator's whole designer away from a click meant to SELECT, not follow the link — S4a
+// just made a canvas click first-class, so this containment is now load-bearing here too, exactly as it
+// already is for a workbench preview card. preventDefault alone would suffice (interceptNavigation's own
+// first line bails on `e.defaultPrevented` — but only if THIS listener runs first; see the registration
+// order note in init.ts) — stopPropagation is kept for the verbatim parity and belt-and-braces. The
+// selection resolution below still runs regardless (this is the SAME handler, not a second listener) —
+// the click still SELECTS the anchor's own row, it just never navigates.
+function resolveCanvasSelection(e: MouseEvent): void {
+    const start = e.target as Element | null;
+    if (start == null) return;
+    const container = start.closest("[selecttarget]");
+    if (container == null) return;
+    const anchor = start.closest("a");
+    if (anchor instanceof HTMLAnchorElement && container.contains(anchor)) { e.preventDefault(); e.stopPropagation(); }
+    const varName = container.getAttribute("selecttarget");
+    if (varName == null || varName === "") return;
+
+    let nodeId = "";
+    for (let el: Element | null = start; el != null; el = el.parentElement) {
+        if (el.hasAttribute("data-node")) { nodeId = el.getAttribute("data-node") ?? ""; break; }
+        if (el === container) break;
+    }
+    writeSelectedNode(varName, nodeId === "" ? 0 : (parseInt(nodeId, 10) || 0));
+}
+
+// Write a resolved selection id into the named top-scope var and repaint. This write happens OUTSIDE
+// any Code execution (a raw DOM click, not a handler call — there's no assignment node to run it
+// through), so it does directly what executeAssignment does for a top-scope symbol (codeExec.ts
+// executeAssignment ~191: item.value = …; itemScope.isTop → invalidateVar), then renders. No-ops when
+// the id is unchanged — a re-click, or a call reached from an unrelated repaint — so the scroll pass
+// only ever arms on a genuine change (an unrelated re-render must not steal or drop the selection, nor
+// re-trigger a scroll).
+//
+// TWO ASSUMPTIONS the 0-as-"nothing-selected" sentinel relies on (ui-arch review, both confirmed against
+// the store, not just asserted):
+//  (1) sys.id() never returns 0 for a real object. Every id comes from one store-wide monotonic counter
+//      that starts at 1 (JsonFileInstanceStore.cs BuildInitialDoc: "the root is id 1 ... starts at 1, so
+//      they mint 2, 3, …"; BuildSeededDoc seeds doc.NextId from the authored ids' own max), and every
+//      write path that could introduce a literal id rejects a non-positive one outright
+//      (InstanceDescriptionLoader.cs:137-139 "initialData id ... is not a positive integer";
+//      JsonFileInstanceStore.cs:2103 "A literal object id must be positive"). 0 is unreachable as a real
+//      row id, so it can never collide with an actual selection.
+//  (2) ids never restart per design. The whole designer instance is ONE store with ONE global NextId
+//      counter shared by every extent (Design, MetaNode, MetaFn, … all mint from it) — there is no
+//      per-type or per-design counter — so two different designs' MetaNode rows can never share an id.
+//      A stale `selectedNode` left over from a design the operator has since navigated away from
+//      therefore matches nothing on the design now showing (applySelectionChrome's querySelectorAll
+//      simply finds no [data-node] equal to it) rather than spuriously highlighting an unrelated row.
+function writeSelectedNode(varName: string, id: number): void {
+    const item = uiStatic.state.scope.items[varName];
+    if (item == null || item.isReadOnly) return;
+    const current = item.value.type === "int" ? item.value.value : null;
+    if (current === id) return;
+    item.value = { type: "int", value: id };
+    invalidateVar(varName);
+    armSelectionScroll();
+    renderUi();
+}
+
+// Canvas highlight chrome — a commitRender-end post-pass (the mountWorkbenchInstances precedent), run on
+// EVERY commit, not just a selection change: for every `[selecttarget]` container, re-derive which of
+// its `[data-node]` descendants should carry `is-selected` from the named var's CURRENT value, never
+// from stale DOM state. This is what makes selection SURVIVE an unrelated structural re-render (elements
+// get reconciled/replaced; the class is reapplied fresh every time) and what gives a loop selection its
+// N:1 group outline (every instance sharing the template row's data-node matches together). The
+// tree-editor side highlights itself — ordinary reactive deenv code (renderNodeEditor's nodeClass) — so
+// this pass only ever touches canvas-side chrome.
+function applySelectionChrome(): void {
+    document.querySelectorAll("[selecttarget]").forEach(container => {
+        const varName = container.getAttribute("selecttarget");
+        const item = varName != null ? uiStatic.state.scope.items[varName] : undefined;
+        const selected = item != null && item.value.type === "int" ? item.value.value : 0;
+        container.querySelectorAll("[data-node]").forEach(el => {
+            el.classList.toggle("is-selected", selected !== 0 && el.getAttribute("data-node") === String(selected));
+        });
+    });
+}
+
+// Scroll-to-row: the armScrollReset/consumeScrollReset idiom above, for a selection CHANGE instead of a
+// forward nav. Armed only by writeSelectedNode's actual-change branch; consumed at the next commitRender
+// by finding whichever tree-editor row now carries `is-selected` (scoped to the two places
+// renderNodeEditor runs — the main render tree and a component's own body) and scrolling it into view.
+// "nearest" avoids yanking the page when the row is already visible.
+let pendingSelectionScroll = false;
+function armSelectionScroll(): void { pendingSelectionScroll = true; }
+function consumeSelectionScroll(): void {
+    if (!pendingSelectionScroll) return;
+    pendingSelectionScroll = false;
+    const el = document.querySelector(".render-tree .is-selected, .fn-body .is-selected");
+    el?.scrollIntoView({ block: "nearest" });
 }
 
 // ── focus a newly-opened create form ────────────────────────────────────────────────
