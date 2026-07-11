@@ -2441,6 +2441,60 @@ public sealed class DesignerSteps(InstanceContext ctx)
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const b = document.querySelector({JsString(RootLastChildElement + " > .node-tag-row > button.unwrap-node")}); return b != null && b.title === {JsString(text)}; }}");
 
+    // ── M12 S5c review fold — the tie-scramble regression ────────────────────────────────────────
+    //
+    // A reorder (moveRow swaps `order` values, not ids) done BEFORE an unwrap must survive splicing. The
+    // live client's stable sort tie-breaks by array-insertion order (masking a shared-order tie), but the
+    // DURABLE paths (SchemaBridge.OrderedMembers, the store reload) tie-break by intrinsic id — so without
+    // renumbering after the splice, the published/projected document silently reverts the reorder even
+    // though the live tree editor and canvas still show it correctly. These steps reach one level deeper
+    // than RootChildren (a grandchild of the root — the wrapped element's OWN children) and read the
+    // DURABLE projected document text directly (SchemaBridge.ProjectDesignDocument), not just the DOM.
+
+    [When("I click move-down on the root node's child {int}'s child {int}")]
+    public async Task WhenClickMoveDownOnGrandchild(int parentIndex, int childIndex) =>
+        await ctx.Page!.Locator(RootChildren).Nth(parentIndex)
+            .Locator(":scope > .node-children > .node-element").Nth(childIndex)
+            .Locator(":scope > .node-tag-row > button.move-down").ClickAsync();
+
+    [Then("the root node's child {int}'s children read, in order: {string}")]
+    public async Task ThenGrandchildrenOrder(int parentIndex, string csv)
+    {
+        var expected = JsStringArray(csv.Split(',').Select(s => s.Trim()));
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const parents = [...document.querySelectorAll({JsString(RootChildren)})]; " +
+            $"const parent = parents[{parentIndex}]; if (parent == null) return false; " +
+            "const kids = [...parent.querySelectorAll(':scope > .node-children > .node-element')]; " +
+            "const tags = kids.map(k => k.querySelector(':scope > .node-tag-row > input.node-tag').value); " +
+            $"const expected = {expected}; " +
+            "return tags.length === expected.length && tags.every((t, i) => t === expected[i]); }");
+    }
+
+    // The DURABLE-projection assertion (the one that catches the tie-scramble without the renumber fix):
+    // reads the design fresh from the store and runs the REAL SchemaBridge.ProjectDesignDocument — the same
+    // walk `sys.publish`/Commit use — then checks the printed source has `first`'s opening tag textually
+    // BEFORE `second`'s. A shared-order tie that SchemaBridge tie-breaks by id (not the operator's intended
+    // visual order) would print them in the WRONG sequence even though the live tree editor/canvas agree
+    // with each other (both client-side, both order-tie-tolerant the same way) — only this text-level check
+    // on the SERVER-SIDE canonical projection sees the divergence.
+    [Then("the projected document shows {string} before {string} in the render")]
+    public async Task ThenProjectedOrder(string first, string second) =>
+        await EventuallyAsync(() =>
+        {
+            var designId = DesignIdByLabel("unwrapme");
+            if (designId == 0) return false;
+            var design = _designer.Store.ReadNode(DeEnv.Storage.NodePath.Root.Field("designs").Key(designId.ToString()));
+            if (design == null) return false;
+            try
+            {
+                var projected = DeEnv.Designer.SchemaBridge.ProjectDesignDocument(design);
+                var i1 = projected.IndexOf("<" + first, StringComparison.Ordinal);
+                var i2 = projected.IndexOf("<" + second, StringComparison.Ordinal);
+                return i1 >= 0 && i2 >= 0 && i1 < i2;
+            }
+            catch { return false; }
+        });
+
     // ── M12 CANVAS-1 — the client-computable canvas (sys.renderTree) ────────────────────────────
     //
     // The canvas (.design-canvas) renders the design's MetaNode rows into a live tag tree via

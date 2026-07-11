@@ -1322,6 +1322,38 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the root node's last child's unwrap button is disabled
     And the root node's last child's unwrap button's title reads "a component call's children are its body — unwrap doesn't apply"
 
+  # The tie-scramble regression (arch review fold): a reorder INSIDE the wrapped element (moveRow swaps
+  # `order` values, not ids) must survive splicing. The live client's stable sort masks a shared-order tie
+  # by array-insertion order, but the DURABLE paths (SchemaBridge.OrderedMembers — the commit/publish
+  # projection walk — and the store reload) tie-break by intrinsic id instead, silently reverting the
+  # reorder in the published document even though the live tree editor and canvas still agree with each
+  # other. Fixed by densely renumbering the parent collection (0..n-1 by current visual order) right after
+  # splicing — restoring the distinct-order invariant unwrap's tie briefly broke.
+  @m12 @single-user
+  Scenario: A reorder inside the wrapped element survives unwrap through a reload and the projected document
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "unwrapme"
+    And I edit the design "unwrapme"
+    And I expand the Advanced code disclosure
+    And I author an unwrap-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "greeting" to the type "Db"
+    Then the root node's child 0's children read, in order: "h1, p"
+    When I click move-down on the root node's child 0's child 0
+    Then the root node's child 0's children read, in order: "p, h1"
+    When I click unwrap on the root node's child 0
+    Then the root node's children read, in order: "p, h1, footer"
+    And the design canvas shows children in order: "p, h1, footer"
+    And the root node's children are persisted in order: "p, h1, footer"
+    And no MetaNode has tag "section"
+    When I reload the design editor
+    Then the root node's children read, in order: "p, h1, footer"
+    And the projected document shows "p" before "h1" in the render
+
   # ── M12 CANVAS-1 — the CLIENT-COMPUTABLE canvas (sys.renderTree) ──────────────────────────────
   #
   # The tree editor (E1/E2) edits the render as DATA; the canvas is the paired VIEW of that data — a live

@@ -490,6 +490,12 @@ ui
             spliceChild(coll, node, next)
             spliceChildren(coll, node, kids.where(c => sys.id(c) != sys.id(next)))
 
+    fn renumberFrom(sorted, index)
+        var next = sorted.single(c => true)
+        if next != null
+            next.order = index
+            renumberFrom(sorted.where(c => sys.id(c) != sys.id(next)), index + 1)
+
     fn unwrapNode(design, node)
         var ctx = nodeContext(design, sys.id(node))
         if ctx == null
@@ -498,6 +504,7 @@ ui
         var first = kids.single(c => true)
         spliceChildren(ctx.coll, ctx.node, kids)
         ctx.coll.remove(ctx.node)
+        renumberFrom(ctx.coll.orderBy(c => c.order), 0)
         if first != null
             selectNode(first)
         revealSelected = revealSelected + 1

@@ -1795,11 +1795,16 @@ function orderedMembers(node: ExecObject, setProp: string, context: ExecContext)
         }
     // Array.prototype.sort is a STABLE sort (twin of C#'s OrderBy) — an ORDER TIE keeps setV.items' own
     // iteration order, UNLIKE SchemaBridge.OrderedObjects (the server-ship walk), which explicitly
-    // tie-breaks by Id. Not reachable today (M12 F1/F2 mint distinct `order` values, and `items` builds
-    // in id order anyway), but a future same-order pair built out of id order could disagree between
-    // this walk and SchemaBridge's — the visible symptom would be a PERSISTENT spurious M12 F3b
+    // tie-breaks by Id. Not reachable today — M12 F1/F2 mint distinct `order` values, `items` builds in
+    // id order anyway, and the ONE app-level op that COULD mint a same-order tie (M12 S5c unwrap's
+    // spliceChild, which gives every spliced child the wrapped element's own order) immediately
+    // renumbers the whole parent collection densely (0..n-1 by current visual order) right after
+    // splicing — restoring the distinct-order invariant before any read of this walk could observe the
+    // tie. A future same-order pair built out of id order (bypassing that renumber) could still disagree
+    // between this walk and SchemaBridge's — the visible symptom would be a PERSISTENT spurious M12 F3b
     // staleness banner (the two fingerprint walks over the SAME data producing different strings).
-    // Flagged, not fixed — no reachable case exists yet.
+    // Flagged, not fixed — no reachable case exists yet (the renumber is the guard, not a proof no
+    // future op can reintroduce this).
     return objs.sort((a, b) => a.order - b.order).map(p => p.o);
 }
 
