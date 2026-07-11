@@ -2553,6 +2553,14 @@ public sealed class CodeExecutor
         // READ-ONLY (client data layer, slice 4 — a planning re-invoke): the in-memory add still happens (so
         // a later read in the handler sees it + harvests) but the STORE is left untouched — the graph is
         // discarded after harvesting, so this is the one store-touching effect the read-only invoke suppresses.
+        //
+        // VERIFIED IN LOCKSTEP (M12 S5c, the move primitive): an EXISTING object (`obj.Id >= 0`) skips the
+        // mint and goes straight to `_store.AddToSet` — a pure LINK, exactly the semantics the client wire
+        // now carries (WsHandler.HandleArrayAdd's `refId` branch; codeExec.ts/ws.ts send `refId` instead of
+        // minting). This branch was already correct before this slice — it is presently DEAD in production
+        // (the only live server-side CodeExecutor with a real store runs exclusively via
+        // InvokeHandlerForHarvest, which forces context.ReadOnly = true), kept here only so the AST-level
+        // semantics stay honest with the client twin if a future server-side live-execution path reaches it.
         if (coll is { Kind: ArrayKind.Set, ElementTypeName: { } elemType } && _store != null
             && !context.ReadOnly && value is ExecObject obj)
         {

@@ -820,16 +820,29 @@ function connectWs(): void {
         },
         arrayAdd: (arr, item, typeName) => {
             const msgId = nextWsMsgId++;
-            pendingAdds.set(item.key, arr.id);
+            // The MOVE primitive (M12 S5c wrap/unwrap): an EXISTING object (id>0) is a LINK, not a mint —
+            // `.add(existingNode)` must reuse its sys.id, not mint a duplicate and abandon the original.
+            // Send `refId` instead of `value`/`typeName`/`tempId`: the server links it (HandleArrayAdd's
+            // `refId` branch) and the reply carries the SAME id back, so no negId→realId remap is ever
+            // needed — deliberately no tempId, so pendingAdds/remapAddedId never see this add (the
+            // onWsMessage arrayAdd-remap branch is gated on `typeof msg.tempId === "number"`, which this
+            // reply never sets). A NEW draft (id<0, not caught by the staging branch upstream) still mints
+            // — the pendingAdds/tempId path below is unchanged for it.
+            const existingObj = item.value.type === "object" && item.value.id > 0 ? item.value : null;
+            if (existingObj == null) pendingAdds.set(item.key, arr.id);
             recordMutation({
                 msgId,
                 undo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
                 redo: () => { arr.items.push(item); invalidateMember(arr.id); },
-                onReject: () => pendingAdds.delete(item.key),
+                onReject: () => { if (existingObj == null) pendingAdds.delete(item.key); },
                 roots: [arr, item.value],
             });
-            wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
-                setId: arr.id, tempId: item.key, typeName, value: objectOf(item.value) });
+            if (existingObj != null)
+                wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
+                    setId: arr.id, refId: existingObj.id });
+            else
+                wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
+                    setId: arr.id, tempId: item.key, typeName, value: objectOf(item.value) });
         },
         arrayRemove: (arr, item, index) => {
             const msgId = nextWsMsgId++;

@@ -1384,6 +1384,48 @@ public sealed class WsHandler
         if (req.SetId is not { } setIdRaw)
             return Error("arrayAdd requires a numeric 'setId'.");
         var setId = Resolve(session, setIdRaw);
+
+        // The MOVE primitive (M12 S5c wrap/unwrap; grounded 2026-07-10/11): `refId` links an object that
+        // ALREADY has an identity into this set — no mint, no CommitBatch. Mirrors HandleAddSetMember's
+        // link-existing branch exactly (the same op create-forms use to pick an existing object), just
+        // reachable here from an id-addressed RUNTIME set (`coll.add(existingNode)`) instead of only a
+        // path-addressed one. The write floor is the SAME decision as the mint path below — linking a
+        // member is a `create` of the element type, decided over the linked object's CURRENT fields.
+        //
+        // Composing this with a SUBSEQUENT arrayRemove on the object's PREVIOUS set is how a Code-level
+        // "move" is built: link into the NEW set first, unlink from the OLD set second. RemoveFromSet
+        // runs CollectGarbage() synchronously and IMMEDIATELY (JsonFileInstanceStore), so the object must
+        // be reachable via the new set BEFORE the old link drops — reversing the order (remove then add)
+        // would sweep it. Two round-trips, not one atomic op: the HONEST RESIDUAL is a one-round-trip
+        // window where the object is a member of BOTH sets — provably harmless single-operator (this
+        // session's own writes are FIFO-ordered with monotonic msgIds, so no interleaving is possible),
+        // but a real gap a multi-user merge would need to close with a genuine atomic move op — not
+        // built here, named as the upgrade point.
+        if (req.RefId is { } refId)
+        {
+            var linkElementType = _store.SetElementType(setId);
+            if (linkElementType is null)
+                return Error($"No set with id {setId}.");
+            if (_store.ReadById(refId) is not { } linked)
+                return Error($"No object with id {refId}.");
+            if (linked.TypeName != linkElementType)
+                return Error($"Set {setId} holds '{linkElementType}' members, not '{linked.TypeName}'.");
+
+            RequireWrite(Floor(req), "create", linked.TypeName,
+                Code.AccessFloor.ScalarObject(linked.TypeName, refId, linked.Fields, _desc));
+            var linkVersion = _store.AddToSet(setId, refId);
+            // `newId` = the SAME id the client already knows (a link mints nothing) — TempId is echoed
+            // only when the request carried one, which a link deliberately never does (see ws.ts): no
+            // remap is ever needed, so the client's tempId/newId remap branch never fires for this reply.
+            return Serialize(new ArrayAddResponse
+            {
+                NewId = refId,
+                Collections = new Dictionary<string, CollectionInfo>(),
+                TempId = req.TempId,
+                NewVersion = linkVersion,
+            });
+        }
+
         if (req.TypeName is not { } typeName)
             return Error("arrayAdd requires 'typeName'.");
         if (_desc.FindType(typeName) is not { } typeDef)
