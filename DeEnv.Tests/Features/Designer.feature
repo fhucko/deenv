@@ -1354,6 +1354,29 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the root node's children read, in order: "p, h1, footer"
     And the projected document shows "p" before "h1" in the render
 
+  @m12 @single-user
+  Scenario: Wrapping an existing node preserves its identity and survives reload
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "unwrapme"
+    And I edit the design "unwrapme"
+    And I expand the Advanced code disclosure
+    And I author an unwrap-test convertible render into the design's UI
+    And I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "greeting" to the type "Db"
+    When I capture the stored id of the MetaNode with tag "footer"
+    And I click wrap on the root node's child 1
+    Then the root node's children read, in order: "section, div"
+    And the root node's child 1's children read, in order: "footer"
+    And the MetaNode with tag "footer" still carries its captured id
+    When I reload the design editor
+    Then the root node's children read, in order: "section, div"
+    And the root node's child 1's children read, in order: "footer"
+    And the projected document shows "div" before "footer" in the render
+
   # ── M12 CANVAS-1 — the CLIENT-COMPUTABLE canvas (sys.renderTree) ──────────────────────────────
   #
   # The tree editor (E1/E2) edits the render as DATA; the canvas is the paired VIEW of that data — a live

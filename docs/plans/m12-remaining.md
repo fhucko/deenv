@@ -175,10 +175,19 @@ unknowns and W1c seeds lib for workbench cards).
   monotonically). PLUS a third find in the fold: resolving the insert target inside
   the handler ran evalContext under memoBypass = every insert a guaranteed multi-round
   action-miss; target now resolves at render time into the button closures.
-- S5c wrap/unwrap (the remaining structure op).
+- **S5c — wrap/unwrap. ✅ DONE 2026-07-11.** MOVE links an existing object into a set;
+  unwrap splices children and densely renumbers the parent; wrap mints a `<div>` whose
+  nested `children` payload carries the selected row as `{refId}`. The server validates
+  the referenced object's existence/type/write floor and commits wrapper creation,
+  nested adoption, and parent link in one existing `CommitBatch` (one fsync, no
+  storage-interface change); the old parent membership is then removed by the existing
+  MOVE-style second FIFO commit. The brief double-membership window is the accepted
+  single-user ceiling; make unlink part of the batch only when multi-user observation
+  matters. Tests pin identity preservation, rejection without an orphan, reload, and
+  canonical projection.
 
-**Open decisions.** Drag-and-drop is explicitly NOT v1 (buttons/menus first, DnD is
-polish).
+**Open decisions.** None for S5. Drag-and-drop is explicitly NOT v1 (buttons/menus
+first, DnD is polish).
 
 ## 3. Per-use ambients (closes the last preview boundary)
 

@@ -1718,6 +1718,9 @@ function objectOf(value: ExecValue): object {
     if (value.type === "object")
         for (const [name, v] of Object.entries(value.props))
             if (v.type === "int" || v.type === "bool" || v.type === "text") props[name] = scalarOf(v);
+            else if (v.type === "array") props[name] = { type: "array", items: v.items
+                .filter(i => i.value.type === "object" && i.value.id > 0)
+                .map(i => ({ refId: (i.value as ExecObject).id })) };
     return { props };
 }
 

@@ -1439,7 +1439,7 @@ public sealed class WsHandler
             return Error($"Set {setId} holds '{elementType}' members, not '{typeName}'.");
 
         var value = req.Value is { } valEl
-            ? ExecObjectValue(valEl, typeDef)
+            ? ExecObjectValue(valEl, typeDef, allowSets: true)
             : new ObjectValue(new Dictionary<string, NodeValue>());
 
         // The write floor: adding a set member is a `create` of the element type, decided over the NEW
@@ -1457,9 +1457,12 @@ public sealed class WsHandler
         // for this single call only — unrelated to the CLIENT's own tempId space (req.TempId, resolved via
         // session below), which CommitBatch never sees.
         const int localTempId = -1;
+        var nestedLinks = req.Value is { } nestedValue
+            ? NestedSetLinks(nestedValue, typeDef, localTempId, Floor(req))
+            : [];
         var result = _store.CommitBatch(
             [new CommitCreate(localTempId, typeName, HashPasswordFields(typeName, value))],
-            [new SetLinkMutation(setId, localTempId)]);
+            [new SetLinkMutation(setId, localTempId), .. nestedLinks]);
         var created = result.Creates[0];
         var id = created.RealId;
         // The whole batch's post-write version (finding 3) — unchanged as the reply's newVersion.
@@ -1590,7 +1593,7 @@ public sealed class WsHandler
     // A new object's scalar props as the client ships them ({ "props": { name: leaf } }),
     // validated against the declared type: unknown or non-scalar fields are rejected,
     // and each value must fit its prop's declared base type.
-    private ObjectValue ExecObjectValue(JsonElement el, TypeDefinition type)
+    private ObjectValue ExecObjectValue(JsonElement el, TypeDefinition type, bool allowSets = false)
     {
         var fields = new Dictionary<string, NodeValue>();
         if (el.TryGetProperty("props", out var props) && props.ValueKind == JsonValueKind.Object)
@@ -1598,6 +1601,9 @@ public sealed class WsHandler
             {
                 var propDef = type.Props?.FirstOrDefault(d => d.Name == p.Name)
                     ?? throw new InvalidOperationException($"Type '{type.Name}' has no field '{p.Name}'.");
+                if (allowSets && propDef.Cardinality == Cardinality.Set && p.Value.ValueKind == JsonValueKind.Object
+                    && p.Value.TryGetProperty("type", out var setType) && setType.GetString() == "array")
+                    continue;
                 if (propDef.Cardinality != Cardinality.Single || _desc.ScalarBaseOf(propDef.Type) is not { } baseType)
                     throw new InvalidOperationException($"Field '{p.Name}' on '{type.Name}' is not a scalar field.");
                 var leaf = LeafForType(p.Value, baseType);
@@ -1606,6 +1612,35 @@ public sealed class WsHandler
                 fields[p.Name] = leaf;
             }
         return new ObjectValue(fields);
+    }
+
+    private List<CommitMutation> NestedSetLinks(JsonElement el, TypeDefinition ownerType, int ownerRef, Code.AccessFloor floor)
+    {
+        var links = new List<CommitMutation>();
+        if (!el.TryGetProperty("props", out var props) || props.ValueKind != JsonValueKind.Object)
+            return links;
+        foreach (var p in props.EnumerateObject())
+        {
+            var prop = ownerType.Props?.FirstOrDefault(d => d.Name == p.Name);
+            if (prop?.Cardinality != Cardinality.Set || p.Value.ValueKind != JsonValueKind.Object
+                || !p.Value.TryGetProperty("type", out var type) || type.GetString() != "array")
+                continue;
+            if (!p.Value.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException($"Set field '{p.Name}' requires an items array.");
+            foreach (var item in items.EnumerateArray())
+            {
+                if (!item.TryGetProperty("refId", out var refEl) || refEl.ValueKind != JsonValueKind.Number)
+                    throw new InvalidOperationException($"Set field '{p.Name}' accepts existing-object refId entries only.");
+                var refId = refEl.GetInt32();
+                var linked = _store.ReadById(refId) ?? throw new InvalidOperationException($"No object with id {refId}.");
+                if (linked.TypeName != prop.Type)
+                    throw new InvalidOperationException($"Set field '{p.Name}' holds '{prop.Type}' members, not '{linked.TypeName}'.");
+                RequireWrite(floor, "create", linked.TypeName,
+                    Code.AccessFloor.ScalarObject(linked.TypeName, refId, linked.Fields, _desc));
+                links.Add(new SetLinkByPropMutation(ownerRef, p.Name, refId));
+            }
+        }
+        return links;
     }
 
     // Convert a wire scalar ({ type, value }) to the prop's DECLARED base type. The

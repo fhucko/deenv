@@ -2417,6 +2417,10 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task WhenClickUnwrapOnRootChild(int index) =>
         await ctx.Page!.Locator(RootChildren).Nth(index).Locator(":scope > .node-tag-row > button.unwrap-node").ClickAsync();
 
+    [When("I click wrap on the root node's child {int}")]
+    public async Task WhenClickWrapOnRootChild(int index) =>
+        await ctx.Page!.Locator(RootChildren).Nth(index).Locator(":scope > .node-tag-row > button.wrap-node").ClickAsync();
+
     [When("I click unwrap on the root node")]
     public async Task WhenClickUnwrapOnRoot() =>
         await ctx.Page!.Locator(RootNode + " > .node-tag-row > button.unwrap-node").ClickAsync();

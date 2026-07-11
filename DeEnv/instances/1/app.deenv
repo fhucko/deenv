@@ -368,6 +368,8 @@ ui
                         "▼"
                 <button class="unwrap-node" disabled={!canUnwrap(design, node)} title={unwrapHint(design, node)} onClick={() => unwrapNode(design, node)}>
                     "unwrap"
+                <button class="wrap-node" disabled={!canWrap(design, node)} title={wrapHint(design, node)} onClick={() => wrapNode(design, node)}>
+                    "wrap"
                 if onRemove != null
                     <button class="remove-node" onClick={onRemove}>
                         "×"
@@ -468,6 +470,24 @@ ui
             return true
         var only = onlyChild(node.children)
         return only != null && only.kind == "" && only.tag != ""
+
+    fn canWrap(design, node)
+        return nodeContext(design, sys.id(node)) != null
+
+    fn wrapHint(design, node)
+        if canWrap(design, node) == false
+            return "only a node in this design can be wrapped"
+        return "wrap this node in a <div>"
+
+    fn wrapNode(design, node)
+        var ctx = nodeContext(design, sys.id(node))
+        if ctx == null
+            return null
+        var wrapper = { kind: "", tag: "div", expr: "", item: "", collection: "", condition: "", order: ctx.node.order, attrs: [], children: [ctx.node], elseChildren: [] }
+        ctx.coll.add(wrapper)
+        ctx.coll.remove(ctx.node)
+        selectNode(wrapper)
+        revealSelected = revealSelected + 1
 
     fn unwrapHint(design, node)
         if isComponentCall(design, node)
