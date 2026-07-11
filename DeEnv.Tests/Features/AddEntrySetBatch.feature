@@ -29,3 +29,20 @@ Feature: addEntry set-value mint+link batching (the orphan-atomicity + fsync-cou
     And the Child extent has exactly 1 object
     And the parent's children set has exactly 1 member, the one addEntry reported
     And the store version advanced by exactly 2
+
+  @single-user
+  Scenario: A crafted path naming a real but non-member id is rejected, nothing linked
+    Given an item "Parent" already in the set
+    And a second item that exists but is NOT in the set
+    When the client addEntry a new child named "Ghost" into the second item's children path over the WS
+    Then the WS addEntry reply is an error
+    And the items set still has exactly 1 member
+
+  @single-user
+  Scenario: A value-branch add through a single-reference chain resolves its owner correctly
+    Given the root's "lead" reference points at a Lead
+    When the client addEntry a new note named "Followed up" into the lead's notes path over the WS
+    Then the WS addEntry reply is ok
+    And the Note extent has exactly 1 object
+    And the lead's notes set has exactly 1 member, the one addEntry reported
+    And the store version advanced by exactly 2

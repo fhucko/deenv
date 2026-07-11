@@ -676,8 +676,24 @@ public sealed class WsHandler
         if (objPath.IsRoot) return Code.DbBridge.RootId;
         var parent = NodePath.FromSegments(objPath.Segments.Take(objPath.Segments.Count - 1));
         var lastSeg = objPath.Segments[^1];
-        if (_resolver.ResolveType(parent) is { Cardinality: Cardinality.Set } && int.TryParse(lastSeg, out var memberId))
-            return memberId;
+        if (_resolver.ResolveType(parent) is { Cardinality: Cardinality.Set })
+        {
+            // A set member's own path segment IS its extent id — but ONLY when it genuinely names a member
+            // of THIS set. The store walk this decomposition replaces (WalkToObject, reached via AddToSet's
+            // EnsureSet) reads StoredSet.Members and REJECTS an id that is shaped like a member but isn't
+            // actually linked — the decomposition must never be MORE PERMISSIVE than the resolution it
+            // replaces, or a crafted `/items/<real-id-not-in-items>/…` path would succeed where the old
+            // two-call path threw. Read the set through the existing interface (ReadNode, same as every
+            // other read here — no store-interface change) and check membership before trusting the segment.
+            // A mismatch resolves to null: the caller's fallback then runs the OLD two-call path, which
+            // throws exactly as before (nothing linked) — this branch commits to the set-member reading
+            // once the parent is known to be a Set, rather than falling through to the reference-chain
+            // branch below (which cannot possibly match a Set parent's shape anyway).
+            return int.TryParse(lastSeg, out var memberId)
+                && _store.ReadNode(parent) is SetValue setVal && setVal.Members.ContainsKey(memberId)
+                ? memberId
+                : null;
+        }
         if (OwnerIdAt(parent) is not { } parentId || _store.ReadById(parentId) is not { } parentHit) return null;
         return parentHit.Fields.Fields.GetValueOrDefault(lastSeg) is ReferenceValue { TargetId: { } tid } ? tid : null;
     }
