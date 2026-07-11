@@ -1455,30 +1455,64 @@ public sealed class SsrRenderer
             new() { Id = --context.LastId.Value, Constant = true, Props = props.ToDictionary(p => p.Name, p => p.Value) };
         var empty = Obj();
         ExecArray EmptyArr() => new() { Items = [], Id = --context.LastId.Value, Kind = ArrayKind.List };
-        // M12 S5b review fold #4 — the Library group's OWN shape filter (ui-arch's open question,
-        // adjudicated): include a lib fn only when INVOKING it as a tag would render an element,
-        // determined purely by reflecting on its own AST — nothing registers, a component simply looks
-        // like one (the foreclosure guard's spirit exactly). Two shapes, mirroring the same two shapes
-        // SchemaBridge.TryMatchStatefulShape recognizes for import (a plain single `return <element>`, or
-        // the stateful `var…; fn render(){ return <element> }; return render` setup/view idiom) — but
-        // WITHOUT import's extra "no other statements" constraint: import needs to represent the fn as
-        // MetaFn rows (a real storage shape, so a named helper genuinely has nowhere to go), while this
-        // only needs "does calling this fn produce an element" — a helper fn elsewhere in the body
-        // (ConfirmButton's doConfirm, RefEditor's startCreate, …) never changes what the fn eventually
-        // RETURNS. The nested render() itself must still be a bare single return (mirroring
-        // TryMatchStatefulShape's OWN nested check exactly) — a component whose view logic needs local
-        // vars/branching in the nested render (ObjectForm, SetTable, UserMenu) is therefore honestly
-        // AMBIGUOUS under this simple a rule and drops out, same as a plain multi-statement non-stateful
-        // fn (Input's baseType branch, route(), NotFoundForm's status-then-return) or a scalar return
-        // (InputType, boolGlyph) — the palette lists what this rule can PROVE renders, not a guess.
+        // M12 S5b review fold #4, widened — the Library group's OWN shape filter (ui-arch's open
+        // question, adjudicated, then the "bare single return" predicate widened once it excluded the
+        // library's own flagship components): include a lib fn when EVERY return path of the relevant
+        // body provably yields an element — pure structural reflection over its own AST, nothing
+        // registers, a component simply looks like one (the foreclosure guard's spirit). The relevant
+        // body: the fn's own, OR — for the stateful `var…; fn render(){…}; return render` setup/view
+        // idiom (the same shape SchemaBridge.TryMatchStatefulShape recognizes for import, minus import's
+        // extra "no other statements" constraint: a helper fn elsewhere in the body, e.g. ConfirmButton's
+        // doConfirm, never changes what the fn eventually returns) — the nested render()'s own body.
+        // CollectReturnPaths walks that body IGNORING var/fn/assign/call/ambient statements (they don't
+        // return) and RECURSING into every if/else-if chain (a statement-level CodeIf, not the tag-child
+        // CodeTagIf a JSX children list uses — those live INSIDE an already-found CodeTag's Children and
+        // are never visited as separate statements) to collect every reachable `return`. Zero returns, or
+        // ANY return whose value is not a literal CodeTag (or a ternary whose own arms all recursively
+        // qualify) → excluded: a `return someSymbol` (the library's own top router: `return view`) or a
+        // `return someCall()` (route()'s `return NotFoundForm()`) is NOT structurally provable without
+        // tracing INTO that symbol/call — exactly the interprocedural reasoning this fn-local, per-fn
+        // rule deliberately does not do. A scalar return (InputType/boolGlyph) fails outright.
         static bool ComponentReturnsElement(CodeFunction fn)
         {
-            var statements = fn.Body.Statements;
-            if (statements is [CodeReturn { Value: CodeTag }]) return true;
-            if (statements is not [.., CodeReturn { Value: CodeSymbol { Name: "render" } }]) return false;
-            return statements.Any(s => s is CodeFunction
-                { Name: "render", Params.Length: 0, Body.Statements: [CodeReturn { Value: CodeTag }] });
+            var nestedRender = fn.Body.Statements.OfType<CodeFunction>()
+                .FirstOrDefault(f => f.Name == "render" && f.Params.Length == 0);
+            var bodyToJudge = nestedRender != null
+                && fn.Body.Statements is [.., CodeReturn { Value: CodeSymbol { Name: "render" } }]
+                ? nestedRender.Body.Statements
+                : fn.Body.Statements;
+
+            var returns = new List<CodeReturn>();
+            CollectReturnPathsAll(bodyToJudge, returns);
+            return returns.Count > 0 && returns.All(r => ReturnValueIsElement(r.Value));
         }
+
+        static void CollectReturnPathsAll(IEnumerable<ICodeStatement> statements, List<CodeReturn> into)
+        {
+            foreach (var statement in statements) CollectReturnPathsOne(statement, into);
+        }
+
+        static void CollectReturnPathsOne(ICodeStatement statement, List<CodeReturn> into)
+        {
+            switch (statement)
+            {
+                case CodeReturn r: into.Add(r); break;
+                case CodeBlock b: CollectReturnPathsAll(b.Statements, into); break;
+                case CodeIf i:
+                    CollectReturnPathsOne(i.Body, into);
+                    if (i.ElseBody != null) CollectReturnPathsOne(i.ElseBody, into);
+                    break;
+                // CodeFunction (a nested helper decl — its OWN returns belong to IT, not this walk),
+                // CodeVarDec, CodeAssignment, CodeCall, CodeAmbient: none of these return a value here.
+            }
+        }
+
+        static bool ReturnValueIsElement(ICodeValue value) => value switch
+        {
+            CodeTag => true,
+            CodeTernary t => ReturnValueIsElement(t.Then) && ReturnValueIsElement(t.Else),
+            _ => false,
+        };
         try
         {
             var designNode = _store.ReadNode(NodePath.Root.Field("designs").Key(design.Id.ToString())) as ObjectValue

@@ -2493,17 +2493,21 @@ Feature: The operator IDE (designs library + instance design selector)
   # ── M12 S5b — the palette + insert-at-selection ──────────────────────────────────────────────────
   #
   # "The library IS the palette" (visual-designer.md foreclosure guard): no registry, nothing needs
-  # registration to appear. This design's own component (Badge, a design.fns row) and a standard-
-  # library component (ConfirmButton, shipped honestly via ctx.libNames — S5b's seam answer: the language
-  # has no dict/keys() enumeration, so BuildEvalContext reshapes ctx.lib's own keys into a plain array)
-  # both list, purely because they are in scope. The Library group is further filtered by AST SHAPE
-  # (ComponentReturnsElement, SsrRenderer.cs — review fold #4): a lib fn appears only when its own body
-  # provably returns an element (a plain single `return <tag>`, or the stateful setup/view idiom's
-  # nested `fn render(){ return <tag> }`) — reflection over the code itself, not a registry; a name whose
-  # shape is ambiguous (route/boolGlyph/InputType's scalar returns, or SetTable/ObjectForm's branchier
-  # view logic) honestly drops out rather than being guessed at. A minimal Db type is added first:
-  # `sys.evalContext` (ctx.libNames' source) degrades to an empty payload for a typeless design
-  # (InstanceDescriptionLoader requires a root Db type), so the Library group needs one.
+  # registration to appear. This design's own component (Badge, a design.fns row) and standard-library
+  # components (shipped honestly via ctx.libNames — S5b's seam answer: the language has no dict/keys()
+  # enumeration, so BuildEvalContext reshapes ctx.lib's own keys into a plain array) both list, purely
+  # because they are in scope. The Library group is further filtered by AST SHAPE
+  # (ComponentReturnsElement, SsrRenderer.cs — review fold #4, then WIDENED once the first cut's "bare
+  # single return" predicate excluded the library's own flagship components): a lib fn appears only when
+  # EVERY return path of its own body (or, for the stateful setup/view idiom, its nested `fn render()`'s
+  # body) provably yields an element — reflection over the code itself, not a registry; local vars and
+  # helper fn decls are ignored, every if/else-if branch is walked. A name whose own return is not
+  # provably a literal element — a bare symbol (the library's own top router: `return view`) or a call
+  # expression (route()'s `return NotFoundForm()` — tracing INTO it is exactly the interprocedural
+  # reasoning this per-fn rule does not do) or a scalar (InputType/boolGlyph) — honestly drops out. A
+  # minimal Db type is added first: `sys.evalContext` (ctx.libNames' source) degrades to an empty payload
+  # for a typeless design (InstanceDescriptionLoader requires a root Db type), so the Library group needs
+  # one.
   @m12 @single-user
   Scenario: Opening the palette lists both the design's own components and the library
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
@@ -2519,6 +2523,7 @@ Feature: The operator IDE (designs library + instance design selector)
     Then the design editor eventually shows the structured render tree editor
     When I open the component palette
     Then the component palette lists "Badge" in the "This design" group
+    And the component palette lists "SetTable" in the "Library" group
     And the component palette lists "ConfirmButton" in the "Library" group
 
   @m12 @single-user
@@ -2579,9 +2584,9 @@ Feature: The operator IDE (designs library + instance design selector)
     When I click Convert to structured
     Then the design editor eventually shows the structured render tree editor
     When I open the component palette
-    And I click the palette item "ConfirmButton"
-    Then the tree editor's "ConfirmButton" element row is the last child of the "main" element row
-    And the design canvas contains a literal "ConfirmButton" element
+    And I click the palette item "SetTable"
+    Then the tree editor's "SetTable" element row is the last child of the "main" element row
+    And the design canvas contains a literal "SetTable" element
 
   @m12 @single-user
   Scenario: Inserting into a selected leaf adds the new row as its sibling instead of nesting into it
