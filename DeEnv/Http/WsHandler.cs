@@ -659,6 +659,29 @@ public sealed class WsHandler
 
     // ── set members + references (object model) ─────────────────────────────────
 
+    // The intrinsic id of the object AT `objPath` — resolved purely from the schema/store surface the
+    // handler already has, with NO store-interface change (the addEntry mint+link batching fix, below):
+    // the Db root is always extent id 1 (DbBridge.RootId, M5's settled convention — every Db is minted at
+    // that id, seeded or not), a SET MEMBER's own path segment IS its extent id (a set keys members by id
+    // — mirrors SetMemberOwnerId, above), and anything else is a plain single-reference field, resolved by
+    // reading the (recursively resolved) parent's fields for a ReferenceValue — the exact shape ReadById /
+    // BuildObject already expose for a reference prop. Covers every shape a routable page's NodePath can
+    // take (root-owned, set-member-owned, or reached through a chain of single-ref pages), so a "set of
+    // set" nested arbitrarily deep still resolves. Null only for a shape none of these cover (e.g. a set
+    // nested on an object-valued DICTIONARY entry, whose owner id isn't recoverable from a dict KEY) — no
+    // addEntry call site produces that path today; the caller below falls back to the old two-call path
+    // rather than mis-link.
+    private int? OwnerIdAt(NodePath objPath)
+    {
+        if (objPath.IsRoot) return Code.DbBridge.RootId;
+        var parent = NodePath.FromSegments(objPath.Segments.Take(objPath.Segments.Count - 1));
+        var lastSeg = objPath.Segments[^1];
+        if (_resolver.ResolveType(parent) is { Cardinality: Cardinality.Set } && int.TryParse(lastSeg, out var memberId))
+            return memberId;
+        if (OwnerIdAt(parent) is not { } parentId || _store.ReadById(parentId) is not { } parentHit) return null;
+        return parentHit.Fields.Fields.GetValueOrDefault(lastSeg) is ReferenceValue { TargetId: { } tid } ? tid : null;
+    }
+
     private string HandleAddSetMember(NodePath path, string pathStr, ResolvedTypeInfo typeInfo, WsRequest req)
     {
         // The write floor: adding a set member is a `create` of the element type — whether minting a new
@@ -680,8 +703,35 @@ public sealed class WsHandler
             var obj = (ObjectValue)DeserializeValue(valueEl, typeInfo.Type);
             RequireWrite(floor, "create", typeName, Code.AccessFloor.ScalarObject(typeName, 0, obj, _desc));
             // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store.
-            id = _store.CreateObject(typeName, HashPasswordFields(typeName, obj)); // mint a new object…
-            newVersion = _store.AddToSet(path, id);             // …then link it (its version is the reported one)
+            var hashed = HashPasswordFields(typeName, obj);
+
+            // Mint + link as ONE atomic store mutation (ONE Save()/physical fsync) through CommitBatch —
+            // the SAME fix HandleArrayAdd already applies (61c9330): the former two separate public-method
+            // calls (CreateObject then AddToSet) each took their own WAL commit — DOUBLE the durable-write
+            // latency of a plain edit, and left a crash window where a committed CreateObject with a
+            // FAILING AddToSet right after it persists an unreachable (orphaned) object. `path` is the
+            // set's own NodePath (decomposed in the HANDLER, not the store — no store-interface change);
+            // OwnerIdAt resolves its parent's intrinsic id so the link can address the set by (owner, prop)
+            // — SetLinkByPropMutation — the same mutation SchemaBridge already uses to link a fresh child
+            // into a fresh parent within one batch. -1 is a batch-local scratch tempId, like arrayAdd's.
+            const int localTempId = -1;
+            var parentPath = NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1));
+            if (OwnerIdAt(parentPath) is { } ownerId)
+            {
+                var propName = path.Segments[^1];
+                var result = _store.CommitBatch(
+                    [new CommitCreate(localTempId, typeName, hashed)],
+                    [new SetLinkByPropMutation(ownerId, propName, localTempId)]);
+                id = result.Creates[0].RealId;
+                newVersion = result.Version; // the batch's post-write version (finding 3) — same as the link's own
+            }
+            else
+            {
+                // No path shape reaches here today (see OwnerIdAt's doc) — kept as a correctness fallback
+                // (still correct, just not batched into one fsync) rather than a silent gap.
+                id = _store.CreateObject(typeName, hashed); // mint a new object…
+                newVersion = _store.AddToSet(path, id);     // …then link it (its version is the reported one)
+            }
         }
         else
         {

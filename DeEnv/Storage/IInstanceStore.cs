@@ -215,8 +215,11 @@ public sealed record DictWriteMutation(int OwnerRef, string Prop, NodeValue Key,
 // single-ref prop). OwnerRef/MemberRef are object references (positive real id, or a negative tempId resolved
 // to a create's just-minted real id). Unlike SetLinkMutation (raw SetId), this addresses the set by (owner,
 // prop) — so a child can link into a just-created parent's set within ONE batch (the parent's nested set id
-// isn't known until minted). SERVER-SIDE ONLY (like DictWriteMutation): constructed by SchemaBridge.ImportRender,
-// never from a wire `commit` message. Owner's `Prop` must be a set prop (pre-validated by the caller).
+// isn't known until minted). SERVER-SIDE ONLY (like DictWriteMutation): constructed by SchemaBridge.ImportRender
+// and WsHandler.HandleAddSetMember (the addEntry mint+link batching fix — an EXISTING owner there, not a
+// fresh one, but every extent object already carries a StoredSet for each set prop its type declares —
+// BuildFields' own invariant), never from a wire `commit` message (that op builds SetLinkMutation instead,
+// by raw setId). Owner's `Prop` must be a set prop (pre-validated by the caller).
 public sealed record SetLinkByPropMutation(int OwnerRef, string Prop, int MemberRef) : CommitMutation;
 
 // The result of minting one create in a commit batch: the tempId→realId mapping plus the minted object's
