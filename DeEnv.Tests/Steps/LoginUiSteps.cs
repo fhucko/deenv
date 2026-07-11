@@ -139,6 +139,22 @@ public sealed class LoginUiSteps(InstanceContext ctx)
             new PageWaitForFunctionOptions { Timeout = 10000 });
     }
 
+    // A wrong password now surfaces on the SAME global rejection banner (uiStatic.lastError, id="__error")
+    // the rejected-commit/upload-failure paths already use. Waits for it (the login reply is async) — no
+    // fixed sleep.
+    [Then("a login failure message is shown")]
+    public async Task ThenLoginFailureShown()
+    {
+        await ctx.Page!.Locator("#__error").WaitForAsync();
+        await Assert.That(await ctx.Page.Locator("#__error").InnerTextAsync()).Contains("Wrong name or password");
+    }
+
+    // Guards the stale-banner trap: once a later successful login lands, the earlier failure banner must
+    // be gone (not just stale text left behind).
+    [Then("no login failure message is shown")]
+    public async Task ThenNoLoginFailureShown() =>
+        await Assert.That(await ctx.Page!.Locator("#__error").CountAsync()).IsEqualTo(0);
+
     // Log out THROUGH the UserMenu (sub-slice 1e-2): click the Log out button the generic render shows once
     // logged in. The button fires sys.logout → a `logout` WS op whose reply refetches as anonymous, so the
     // same URL re-renders with the ruled data denied and the gate back.

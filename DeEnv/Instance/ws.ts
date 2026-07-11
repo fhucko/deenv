@@ -1218,7 +1218,21 @@ function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: n
         // resetViewState drops the `comp:` slot-cache (the SAME helper a navigation uses, ui.ts) and forces
         // the refetch, so the data view re-runs fresh at the root slot and the DOM swaps. (A navigation
         // doesn't hit this because it already calls resetViewState; login is the other same-slot-swap edge.)
-        if (msg.ok) { stateGen++; resetViewState(); maybeRefetch(); }
+        //
+        // A rejected login (ok:false) now surfaces on the SAME global banner (uiStatic.lastError) the
+        // rejected-commit/upload-failure paths already use — a wrong password was previously silent (cost a
+        // full prod debugging session). login is uncorrelated (no msgId — see the hook above), so it never
+        // passes through the id-numeric ack block that would otherwise set/clear lastError; both branches here
+        // must do it explicitly. On ok:true, clear a STALE banner from an earlier failed attempt — without
+        // this, a wrong-password banner would survive into the freshly-rendered post-login view (the exact
+        // stale-banner trap this fix must not introduce).
+        if (msg.ok) {
+            if (uiStatic.lastError != null) uiStatic.lastError = null;
+            stateGen++; resetViewState(); maybeRefetch();
+        } else {
+            uiStatic.lastError = "Wrong name or password.";
+            renderUi();
+        }
     } else if (msg.op === "logout") {
         // The MIRROR of the login reply (M-auth login UI 1e-2). The WS session is now anonymous again, so
         // refetch: the re-render runs with NO principal, the access floor denies the now-unreadable data,

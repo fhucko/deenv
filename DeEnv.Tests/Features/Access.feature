@@ -319,6 +319,29 @@ Feature: The access floor (read enforcement by principal)
     Then "Gate #3" eventually appears
     And the URL is still "/"
 
+  # A wrong password on the login form was previously SILENT — the button appeared dead
+  # (cost a full prod debugging session). It now routes through the SAME global rejection
+  # banner (uiStatic.lastError) the rejected-commit/upload-failure paths already use: a
+  # visible, dismissable message instead of nothing happening. The gate stays up (the
+  # session never binds), so the login form is still there to retry.
+  Scenario: A wrong password on the login form shows a visible failure message
+    Given the access-fixture app is served with the admin password "hunter2"
+    And an anonymous visitor opens "/"
+    When the visitor logs in through the form as "Ada" with password "wrongpass"
+    Then a login failure message is shown
+    And the login form is shown and "Gate #3" is not
+
+  # Guards the stale-banner trap: a failure banner from an earlier wrong attempt must not
+  # survive into the freshly-rendered post-login view once the visitor gets it right.
+  Scenario: A successful login after a failed attempt clears the failure message
+    Given the access-fixture app is served with the admin password "hunter2"
+    And an anonymous visitor opens "/"
+    When the visitor logs in through the form as "Ada" with password "wrongpass"
+    Then a login failure message is shown
+    When the visitor logs in through the form as "Ada" with password "hunter2"
+    Then "Gate #3" eventually appears
+    And no login failure message is shown
+
   # ── logout from the UI (sub-slice 1e-2) ──────────────────────────────────────
   # The mirror of login. Once logged in, the synthesized generic render also shows a <UserMenu>
   # (the user's name + a Log out button). Clicking Log out fires sys.logout over the WS; the reply
