@@ -2333,6 +2333,114 @@ public sealed class DesignerSteps(InstanceContext ctx)
     public async Task WhenClickMoveDownOnConfiguration(int index) =>
         await ctx.Page!.Locator(".components-section .fn-card .use-row").Nth(index).Locator("button.move-down").ClickAsync();
 
+    // ── M12 S5c — unwrap (splice a plain element's children into its own parent collection) ────────
+    //
+    // Root <main> with two children: <section> (itself holding <h1>"Title" and <p>"Body") and <footer>"Bye".
+    // Unwrapping <section> must splice h1+p into <main>'s children at section's old position (between
+    // nothing-before and footer), section itself must be GC'd, and h1/p must keep their EXACT stored ids —
+    // the identity pin. Same shape also covers the "root with more than one child" disabled case (main
+    // itself has two children, so its own unwrap stays disabled).
+    private const string UnwrapTestRender =
+        "ui\n    fn render()\n        return <main>\n            <section>\n                <h1>\n"
+        + "                    \"Title\"\n                <p>\n                    \"Body\"\n"
+        + "            <footer>\n                \"Bye\"\n";
+
+    [When("I author an unwrap-test convertible render into the design's UI")]
+    public async Task WhenAuthorUnwrapTestRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(UnwrapTestRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "unwrapme" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == UnwrapTestRender));
+    }
+
+    // A root that IS the wrapped shape a hand-built wrap would have produced: <div><button>"Click"</button></div>.
+    // The root has exactly ONE element child, so unwrapping the ROOT is legal — <button> becomes the new
+    // sole root, keeping its own stored id.
+    private const string WrappedRootRender =
+        "ui\n    fn render()\n        return <div>\n            <button>\n                \"Click\"\n";
+
+    [When("I author a wrapped-root convertible render into the design's UI")]
+    public async Task WhenAuthorWrappedRootRender()
+    {
+        await ctx.Page!.Locator(".design-editor textarea.design-ui").FillAsync(WrappedRootRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "unwraproot" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == WrappedRootRender));
+    }
+
+    // The stored id of the (first, by extent scan order — every fixture in this section uses distinct tag
+    // names) MetaNode carrying `tag`, captured for a later identity comparison. Polls first (the row may
+    // still be mid-import/mid-add) — a bare extent read right after a click could race the write.
+    private readonly Dictionary<string, int> _capturedNodeIds = new();
+
+    [When("I capture the stored id of the MetaNode with tag {string}")]
+    public async Task WhenCaptureNodeId(string tag)
+    {
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaNode").Values.Any(o =>
+            o.Fields.TryGetValue("tag", out var tv) && tv is DeEnv.Storage.TextValue t && t.Text == tag));
+        _capturedNodeIds[tag] = _designer.Store.ReadExtent("MetaNode")
+            .First(kv => kv.Value.Fields.TryGetValue("tag", out var tv) && tv is DeEnv.Storage.TextValue t && t.Text == tag).Key;
+    }
+
+    // The identity pin: the MetaNode now carrying `tag` is the SAME OBJECT (same intrinsic id) as the one
+    // captured earlier — proving a move (link-then-unlink), not a mint-a-copy-and-abandon-the-original.
+    [Then("the MetaNode with tag {string} still carries its captured id")]
+    public async Task ThenNodeIdUnchanged(string tag)
+    {
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaNode").Values.Any(o =>
+            o.Fields.TryGetValue("tag", out var tv) && tv is DeEnv.Storage.TextValue t && t.Text == tag));
+        var nowId = _designer.Store.ReadExtent("MetaNode")
+            .First(kv => kv.Value.Fields.TryGetValue("tag", out var tv) && tv is DeEnv.Storage.TextValue t && t.Text == tag).Key;
+        await Assert.That(nowId).IsEqualTo(_capturedNodeIds[tag]);
+    }
+
+    // No MetaNode anywhere carries this tag any more — the unwrapped-away wrapper's subtree was reclaimed
+    // (GC), same check ThenNoChildWithTag already performs, reused under a name that also fits a root case.
+    [Then("no MetaNode has tag {string}")]
+    public async Task ThenNoMetaNodeWithTag(string tag) => await ThenNoChildWithTag(tag);
+
+    // The design's sole render root now carries the id captured earlier under `tag` — proving the promoted
+    // child became the SOLE root (Members.Count == 1) with its OWN identity intact, not a re-mint.
+    [Then("the design {string}'s render root has the captured id of tag {string}")]
+    public async Task ThenRenderRootHasCapturedId(string label, string tag) =>
+        await EventuallyAsync(() =>
+        {
+            var designId = DesignIdByLabel(label);
+            if (designId == 0) return false;
+            var render = _designer.Store.ReadNode(DeEnv.Storage.NodePath.Root.Field("designs")
+                .Key(designId.ToString()).Field("render")) as DeEnv.Storage.SetValue;
+            return render != null && render.Members.Count == 1 && render.Members.ContainsKey(_capturedNodeIds[tag]);
+        });
+
+    [When("I click unwrap on the root node's child {int}")]
+    public async Task WhenClickUnwrapOnRootChild(int index) =>
+        await ctx.Page!.Locator(RootChildren).Nth(index).Locator(":scope > .node-tag-row > button.unwrap-node").ClickAsync();
+
+    [When("I click unwrap on the root node")]
+    public async Task WhenClickUnwrapOnRoot() =>
+        await ctx.Page!.Locator(RootNode + " > .node-tag-row > button.unwrap-node").ClickAsync();
+
+    [Then("the root node's unwrap button is disabled")]
+    public async Task ThenRootUnwrapDisabled() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const b = document.querySelector({JsString(RootNode + " > .node-tag-row > button.unwrap-node")}); return b != null && b.disabled; }}");
+
+    [Then("the root node's unwrap button's title reads {string}")]
+    public async Task ThenRootUnwrapTitle(string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const b = document.querySelector({JsString(RootNode + " > .node-tag-row > button.unwrap-node")}); return b != null && b.title === {JsString(text)}; }}");
+
+    [Then("the root node's last child's unwrap button is disabled")]
+    public async Task ThenRootLastChildUnwrapDisabled() =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const b = document.querySelector({JsString(RootLastChildElement + " > .node-tag-row > button.unwrap-node")}); return b != null && b.disabled; }}");
+
+    [Then("the root node's last child's unwrap button's title reads {string}")]
+    public async Task ThenRootLastChildUnwrapTitle(string text) =>
+        await ctx.Page!.WaitForFunctionAsync(
+            $"() => {{ const b = document.querySelector({JsString(RootLastChildElement + " > .node-tag-row > button.unwrap-node")}); return b != null && b.title === {JsString(text)}; }}");
+
     // ── M12 CANVAS-1 — the client-computable canvas (sys.renderTree) ────────────────────────────
     //
     // The canvas (.design-canvas) renders the design's MetaNode rows into a live tag tree via

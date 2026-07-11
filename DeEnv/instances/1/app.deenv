@@ -289,7 +289,7 @@ ui
     fn selectNode(node)
         selectedNode = sys.id(node)
 
-    fn renderNodeEditor(node, coll, onRemove)
+    fn renderNodeEditor(node, design, coll, onRemove)
         if node.kind == "for"
             return <div class={nodeClass(node, "node-for")} onClick={() => selectNode(node)}>
                 <div class="node-for-head">
@@ -309,7 +309,7 @@ ui
                             "×"
                 <div class="node-children">
                     foreach child in node.children.orderBy(c => c.order)
-                        <renderNodeEditor node={child} coll={node.children} onRemove={() => node.children.remove(child)}>
+                        <renderNodeEditor node={child} design={design} coll={node.children} onRemove={() => node.children.remove(child)}>
                 addRow(node.children)
         if node.kind == "if"
             return <div class={nodeClass(node, "node-if")} onClick={() => selectNode(node)}>
@@ -330,7 +330,7 @@ ui
                         "then"
                     <div class="node-children">
                         foreach child in node.children.orderBy(c => c.order)
-                            <renderNodeEditor node={child} coll={node.children} onRemove={() => node.children.remove(child)}>
+                            <renderNodeEditor node={child} design={design} coll={node.children} onRemove={() => node.children.remove(child)}>
                     addRow(node.children)
                 if node.elseChildren.any(c => true)
                     <div class="node-branch node-else">
@@ -338,7 +338,7 @@ ui
                             "else"
                         <div class="node-children">
                             foreach child in node.elseChildren.orderBy(c => c.order)
-                                <renderNodeEditor node={child} coll={node.elseChildren} onRemove={() => node.elseChildren.remove(child)}>
+                                <renderNodeEditor node={child} design={design} coll={node.elseChildren} onRemove={() => node.elseChildren.remove(child)}>
                         addRow(node.elseChildren)
                 else
                     <button class="add-else" onClick={() => addElse(node)}>
@@ -366,6 +366,8 @@ ui
                         "▲"
                     <button class="move-down" disabled={isLastSibling(coll, node)} onClick={() => moveRow(coll, node, 1)}>
                         "▼"
+                <button class="unwrap-node" disabled={!canUnwrap(design, node)} title={unwrapHint(design, node)} onClick={() => unwrapNode(design, node)}>
+                    "unwrap"
                 if onRemove != null
                     <button class="remove-node" onClick={onRemove}>
                         "×"
@@ -374,7 +376,7 @@ ui
             if node.children.any(c => true)
                 <div class="node-children">
                     foreach child in node.children.orderBy(c => c.order)
-                        <renderNodeEditor node={child} coll={node.children} onRemove={() => node.children.remove(child)}>
+                        <renderNodeEditor node={child} design={design} coll={node.children} onRemove={() => node.children.remove(child)}>
             <div class="node-add-row">
                 <button class="add-element" onClick={() => addElement(node.children)}>
                     "+ element"
@@ -445,6 +447,60 @@ ui
 
     fn isTopLevelRoot(design, node)
         return design.render.any(n => sys.id(n) == sys.id(node))
+
+    fn onlyChild(coll)
+        var first = coll.single(c => true)
+        if first == null
+            return null
+        if coll.where(c => sys.id(c) != sys.id(first)).any(c => true)
+            return null
+        return first
+
+    fn isPlainElement(design, node)
+        return node.kind == "" && node.tag != "" && isComponentCall(design, node) == false
+
+    fn canUnwrap(design, node)
+        if isPlainElement(design, node) == false
+            return false
+        if node.children.any(c => true) == false
+            return false
+        if isTopLevelRoot(design, node) == false
+            return true
+        var only = onlyChild(node.children)
+        return only != null && only.kind == "" && only.tag != ""
+
+    fn unwrapHint(design, node)
+        if isComponentCall(design, node)
+            return "a component call's children are its body — unwrap doesn't apply"
+        if node.kind != "" || node.tag == ""
+            return "only a plain element can be unwrapped"
+        if node.children.any(c => true) == false
+            return "no children to splice — remove this element instead"
+        if isTopLevelRoot(design, node) && onlyChild(node.children) == null
+            return "the root can only unwrap with exactly one element child"
+        return "unwrap: splice this element's children into its place"
+
+    fn spliceChild(coll, node, child)
+        child.order = node.order
+        coll.add(child)
+
+    fn spliceChildren(coll, node, kids)
+        var next = kids.single(c => true)
+        if next != null
+            spliceChild(coll, node, next)
+            spliceChildren(coll, node, kids.where(c => sys.id(c) != sys.id(next)))
+
+    fn unwrapNode(design, node)
+        var ctx = nodeContext(design, sys.id(node))
+        if ctx == null
+            return null
+        var kids = ctx.node.children.orderBy(c => c.order)
+        var first = kids.single(c => true)
+        spliceChildren(ctx.coll, ctx.node, kids)
+        ctx.coll.remove(ctx.node)
+        if first != null
+            selectNode(first)
+        revealSelected = revealSelected + 1
 
     fn selectionTarget(design)
         var ctx = nodeContext(design, selectedNode)
@@ -670,7 +726,7 @@ ui
                         <componentPalette design={design}>
                         <div class="render-tree">
                             foreach n in design.render
-                                <renderNodeEditor node={n}>
+                                <renderNodeEditor node={n} design={design}>
                         <div class="design-state-section">
                             <h2 class="design-state-heading">
                                 "State"
@@ -727,7 +783,7 @@ ui
                                     <div class="fn-body">
                                         if f.body.any(x => true)
                                             foreach r in f.body
-                                                <renderNodeEditor node={r}>
+                                                <renderNodeEditor node={r} design={design}>
                                         else
                                             addRootRow(f.body)
                                     <div class="fn-uses">

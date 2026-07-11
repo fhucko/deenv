@@ -1240,6 +1240,88 @@ Feature: The operator IDE (designs library + instance design selector)
     When I click move-down on configuration 0
     Then configurations read, in order: "bb, aa"
 
+  # ── M12 S5c — unwrap (splice a plain element's children into its own parent collection) ────────
+  #
+  # The half of wrap/unwrap that composes cleanly on the MOVE primitive (link an existing object into an
+  # ALREADY-EXISTING set, then unlink it from its old one — grounded + landed as the "arrayAdd refId"
+  # branch): unwrap's children and its target parent collection both already exist, so nothing is ever
+  # minted. (WRAP needs the opposite — mint a brand-new container and populate ITS OWN nested set in the
+  # same handler — which the object model cannot do synchronously today: a just-minted set-typed prop has
+  # no real backing id until its OWN owner's create round-trip returns, so anything added to it before
+  # then is silently dropped, never reaching the wire at all. Wrap is deliberately NOT built this slice —
+  # it needs its own wire-surface decision.)
+  #
+  # The proof: <main><section><h1>"Title"<p>"Body"</section><footer>"Bye"</footer></main>. Unwrapping
+  # <section> must splice h1+p into <main>'s own children at section's former position (section itself is
+  # discarded), the tree editor AND the canvas repaint same-frame with the new flat order, h1/p keep their
+  # EXACT stored ids (the identity pin — a move, never a mint-a-copy-and-abandon-the-original), and the
+  # new shape survives a reload.
+  @m12 @single-user
+  Scenario: Unwrapping a mid-tree element splices its children into the parent, preserves their identity, repaints same-frame, and survives a reload
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "unwrapme"
+    And I edit the design "unwrapme"
+    And I expand the Advanced code disclosure
+    And I author an unwrap-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    And the root node's children read, in order: "section, footer"
+    When I capture the stored id of the MetaNode with tag "h1"
+    And I capture the stored id of the MetaNode with tag "p"
+    And I click unwrap on the root node's child 0
+    Then the root node's children read, in order: "h1, p, footer"
+    And the design canvas shows children in order: "h1, p, footer"
+    And no MetaNode has tag "section"
+    And the MetaNode with tag "h1" still carries its captured id
+    And the MetaNode with tag "p" still carries its captured id
+    When I reload the design editor
+    Then the root node's children read, in order: "h1, p, footer"
+
+  # The ROOT case: a root whose exactly-one child is an ELEMENT can unwrap — that child becomes the new
+  # sole root, keeping its OWN id (the shape a hand-authored "undo my wrap" needs, since wrap itself isn't
+  # built — the fixture stands in for what wrap would have produced).
+  @m12 @single-user
+  Scenario: Unwrapping the sole root replaces it with its one element child as the new root, keeping its identity
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "unwraproot"
+    And I edit the design "unwraproot"
+    And I expand the Advanced code disclosure
+    And I author a wrapped-root convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I capture the stored id of the MetaNode with tag "button"
+    And I click unwrap on the root node
+    Then no MetaNode has tag "div"
+    And the design "unwraproot"'s render root has the captured id of tag "button"
+
+  # Unwrap is disabled — with an honest reason surfaced as its title — for: a root with MORE than one
+  # child (no unambiguous replacement), an empty element (nothing to splice — remove instead), and a
+  # component-call row (its children are a render-prop body, not structural content).
+  @m12 @single-user
+  Scenario: Unwrap is disabled for a multi-child root, an empty element, and a component-call row, with an honest reason
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "unwrapme"
+    And I edit the design "unwrapme"
+    And I expand the Advanced code disclosure
+    And I author an unwrap-test convertible render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "greeting" to the type "Db"
+    Then the root node's unwrap button is disabled
+    And the root node's unwrap button's title reads "the root can only unwrap with exactly one element child"
+    When I add a child element to the root node
+    Then the root node's last child's unwrap button is disabled
+    And the root node's last child's unwrap button's title reads "no children to splice — remove this element instead"
+    When I edit the root node's last child tag input to "ConfirmButton"
+    And I click Refresh values
+    Then the root node's last child's unwrap button is disabled
+    And the root node's last child's unwrap button's title reads "a component call's children are its body — unwrap doesn't apply"
+
   # ── M12 CANVAS-1 — the CLIENT-COMPUTABLE canvas (sys.renderTree) ──────────────────────────────
   #
   # The tree editor (E1/E2) edits the render as DATA; the canvas is the paired VIEW of that data — a live
