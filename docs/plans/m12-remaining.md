@@ -142,10 +142,43 @@ unknowns and W1c seeds lib for workbench cards).
   order drives the generated form's field order (arguably worth more than node
   reorder); needs the props display foreach sorted first (the same task_d7c6ed6a-family
   precondition check), then the same moveRow helper applies.
-- S5b palette + insert-at-selection; S5c wrap/unwrap.
+- **S5b — palette + insert-at-selection. ✅ DONE 2026-07-11** (reviews arch SHIP +
+  ui-arch/ux SHIP-WITH-FIXES; seven-fold + a widening round; `80e410d`-family, three
+  commits). The seam: the language has NO dict enumeration, so `ctx.libNames` ships from
+  BuildEvalContext (rule-12 shape — data already built, reshaped; zero new Code
+  surface), FILTERED BY STRUCTURAL SHAPE: `ComponentReturnsElement` = every reachable
+  return path of the relevant body (own body or the nested `fn render()`) yields a
+  literal tag (var/fn decs ignored; if-chains + tag ternaries recursed) — reflection
+  over the code itself, NO registry/denylist (the foreclosure guard's spirit; 16 lib
+  fns list incl. SetTable/ObjectForm/Input/UserMenu; route/render/InputType/boolGlyph
+  excluded for provable reasons). The palette: a native `<details>` (the details-open
+  reconciler rule covers its post-insert survival — pinned) with This design / Library
+  groups + a TARGET CAPTION ("Inserts into <main>") — the ux-praised standout. Insert
+  rules: "into" ONLY for PLAIN elements (the chain-nest trap fix — component-call rows
+  take sibling insert, so repeated palette clicks build SIBLINGS and nothing vanishes
+  into a children-dropping component); a selected `for` inserts INTO its body; `if` =
+  sibling (branch ambiguity, honest caption — the false "can't hold children" reason
+  killed); nothing-selected → the sole element root's children, a `for` root's
+  children, a bare-leaf root = honest no-target caption (the second-root invalid-design
+  edge closed BOTH ways — the builder self-caught the element case via live tracing,
+  the reviews caught the non-element case); complete-row minting; the new row becomes
+  the selection + REVEAL-SCROLLS into view (a `revealSelected` bump var + ~15 client
+  lines reusing S4a's scroll consumer — the S4b no-scroll rule stays for row clicks;
+  remote inserts are the case it deliberately excluded). RODE ALONG (two pre-existing
+  client bugs the palette's insert-select-synchronously shape hit first, arch-affirmed):
+  (1) registerRemap now patches writable top-scope int vars holding a just-remapped
+  transient id — the collision fear was DEFUSED mechanically (the shared page counter
+  is deep-negative before any handler runs; -1/-2 sentinels are never live tempIds;
+  comment states the real probabilistic bound, not a false invariant); (2) the
+  action-miss REINVOKE now re-arms graceful VNA recovery (a second un-shipped field
+  was an uncaught JS error; termination proven — the shipped-field set grows
+  monotonically). PLUS a third find in the fold: resolving the insert target inside
+  the handler ran evalContext under memoBypass = every insert a guaranteed multi-round
+  action-miss; target now resolves at render time into the button closures.
+- S5c wrap/unwrap (the remaining structure op).
 
-**Open decisions.** Palette UX (a sidebar list vs an add-menu extension — ux review
-decides); drag-and-drop is explicitly NOT v1 (buttons/menus first, DnD is polish).
+**Open decisions.** Drag-and-drop is explicitly NOT v1 (buttons/menus first, DnD is
+polish).
 
 ## 3. Per-use ambients (closes the last preview boundary)
 
