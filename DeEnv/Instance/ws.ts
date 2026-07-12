@@ -69,6 +69,24 @@ let commitEdits: CommitEdit[] | null = null;
 // create/relation AND the journal undo (drop the created object) + the ack re-key (negId→realId).
 interface CommitCreate { draft: ExecObject; join: CreateJoin }
 let commitCreates: CommitCreate[] | null = null;
+// The SET LINK/UNLINK intents accumulated while inside a commit bracket (ctx.commit, ObjectForm Save)
+// OR a handler transaction (runHandlerTransaction — designer handlers like wrapNode/unwrapNode). The
+// arrayAdd/arrayRemove hooks buffer here instead of sending individual arrayAdd/arrayRemove frames; the
+// closer (endCommit for a form-commit, flushHandlerTx for a handler) folds them into ONE `commit` message's
+// `relations` (T3 — the "real gap": a handler that links/unlinks N members used to flush N separate frames
+// inside runHandlerTransaction). null = no bracket is open (set ops fire arrayAdd/arrayRemove directly,
+// unchanged). Each entry carries the wire relation ({kind, setId, childId} — mirroring the existing
+// commitCreates join shape) PLUS the capture the journal needs (undo/redo/roots) so the closer can build one
+// consolidated journal entry, and `journalMsgId` — the id the hook's recordMutation already used, so the
+// closer can splice those per-op entries out (the consolidated entry replaces them, acked by the ONE commit).
+interface CommitRelation {
+    wire: object;          // the wire relation ({ kind: "set", setId, childId } | { kind: "setUnlink", setId, childId })
+    journalMsgId: number;  // the id recordMutation used in the hook (retired at flush — the commit's ack owns it)
+    undo: () => void;
+    redo: () => void;
+    roots: ExecValue[];
+}
+let commitRelations: CommitRelation[] | null = null;
 const journal: JournalEntry[] = [];
 let nextWsMsgId = 1;
 // Host-action success callbacks (docs/plans/host-action-success-signal.md), keyed by the SENT op's
@@ -448,6 +466,11 @@ function runHandlerTransaction(body: () => void, action?: PendingAction): void {
     txJournalMark = journal.length;
     txStartGen = stateGen;
     txSendBuffer = [];
+    // Open the set link/unlink buffer (T3): arrayAdd/arrayRemove of EXISTING members + removes now buffer
+    // into ONE `commit` frame (flushed by flushHandlerTx) instead of N standalone arrayAdd/arrayRemove
+    // frames. A designer handler (wrapNode/unwrapNode) runs HERE, so this is the bracket that closes the gap.
+    // A nested begin is impossible (single-level handlers), so just open unconditionally.
+    commitRelations = [];
     // Capture the out-of-journal client state (see the note above): the refetch flag and a snapshot of
     // every cache entry's stale flag, so an abort can restore the EXACT pre-handler state.
     txStartNeedsServerData = needsServerData;
@@ -512,6 +535,19 @@ function abortHandlerTx(): void {
     txStaleSnapshot = null;
     txSendBuffer = null;
     txDepth = 0;
+    commitRelations = null;   // discard buffered set intents on a handler abort (T3)
+}
+
+// Remove the given journal entries (by their msgId) without undoing them — used by the T3 set-link
+// aggregation: the arrayAdd/arrayRemove hooks recordMutation each buffered intent (so a handler-tx abort
+// can still roll the local array mutation back), but on a CLEAN flush the closer emits ONE `commit` whose
+// single consolidated journal entry replaces them; the per-op entries would otherwise be orphaned (their
+// msgIds never get a wire frame, so their acks never arrive). Replaying their undo would be wrong (the
+// consolidated entry already owns it), so splice them out by identity, never by undo.
+function spliceJournalEntries(ids: Set<number>): void {
+    if (ids.size === 0) return;
+    for (let i = journal.length - 1; i >= 0; i--)
+        if (ids.has(journal[i].msgId)) journal.splice(i, 1);
 }
 
 // Flush + clear the current handler transaction's buffered sends (in handler order), then leave the
@@ -522,6 +558,26 @@ function flushHandlerTx(): void {
     txStaleSnapshot = null;   // not an abort: keep the staling the handler/undo did, just drop the snapshot
     txDepth = 0;
     for (const text of buffered) wsSendText(text);
+    // T3: any set link/unlink intents buffered during this handler collapse into ONE `commit` frame (instead
+    // of the N standalone arrayAdd/arrayRemove frames they would otherwise have been). The consolidated entry
+    // replaces the per-op journal entries the hooks already pushed (spliced out by id) and is acked by this
+    // commit's reply. Edits/creates never reach here (a pure handler doesn't stage a form-commit), so they are
+    // empty. baseVersion is omitted (as a live arrayAdd carried none) — the server applies the links/unlinks.
+    const relations = commitRelations;
+    commitRelations = null;
+    if (relations != null && relations.length > 0) {
+        spliceJournalEntries(new Set(relations.map(r => r.journalMsgId)));
+        const msgId = nextWsMsgId++;
+        const wireRels = relations.map(r => r.wire);
+        recordMutation({
+            msgId,
+            undo: () => { for (const r of relations) r.undo(); },
+            redo: () => { for (const r of relations) r.redo(); },
+            roots: relations.flatMap(r => r.roots),
+        });
+        wsSend({ op: "commit", id: msgId, clientId: uiStatic.clientId, baseVersion: undefined,
+            edits: [], creates: [], relations: wireRels });
+    }
 }
 
 // ── action-miss pending action (client data layer, slice 4) ────────────────────────────────────────────
@@ -830,12 +886,28 @@ function connectWs(): void {
             // — the pendingAdds/tempId path below is unchanged for it.
             const existingObj = item.value.type === "object" && item.value.id > 0 ? item.value : null;
             if (existingObj == null) pendingAdds.set(item.key, arr.id);
+            const undo = () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); };
+            const redo = () => { arr.items.push(item); invalidateMember(arr.id); };
+            const roots: ExecValue[] = [arr, item.value];
+            // T3: inside a commit bracket / handler transaction, a LINK to an EXISTING member (no mint) buffers
+            // into one consolidated `commit` frame instead of a standalone arrayAdd — the designer handler
+            // wrapNode/unwrapNode gap. recordMutation still runs (so a handler-tx abort can roll the local
+            // array back); the closer (endCommit / flushHandlerTx) splices these per-op entries out and emits
+            // the ONE commit carrying all the relations. A NEW (tempId) member is a mint, not a pure link, so
+            // it keeps the live arrayAdd path (it needs the tempId→realId remap, not a bare relation) — never
+            // double-emitted.
+            if (commitRelations != null && existingObj != null) {
+                recordMutation({ msgId, undo, redo, roots });
+                commitRelations.push({ wire: { kind: "set", setId: arr.id, childId: existingObj.id },
+                    journalMsgId: msgId, undo, redo, roots });
+                return;
+            }
             recordMutation({
                 msgId,
-                undo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
-                redo: () => { arr.items.push(item); invalidateMember(arr.id); },
+                undo,
+                redo,
                 onReject: () => { if (existingObj == null) pendingAdds.delete(item.key); },
-                roots: [arr, item.value],
+                roots,
             });
             if (existingObj != null)
                 wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
@@ -846,13 +918,25 @@ function connectWs(): void {
         },
         arrayRemove: (arr, item, index) => {
             const msgId = nextWsMsgId++;
+            const undo = () => { arr.items.splice(Math.min(index, arr.items.length), 0, item); invalidateMember(arr.id); };
+            const redo = () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); };
+            // item.value is DETACHED (already spliced out of arr.items) — reachable ONLY through here, so
+            // marking it is what keeps a removed-then-rolled-back member from being false-swept.
+            const roots: ExecValue[] = [arr, item.value];
+            // T3: inside a commit bracket / handler transaction, an UNLINK buffers into the ONE consolidated
+            // `commit` frame (parallels the existing-member arrayAdd above). recordMutation still runs for
+            // handler-tx abort rollback; the closer splices these entries out and emits the commit.
+            if (commitRelations != null) {
+                recordMutation({ msgId, undo, redo, roots });
+                commitRelations.push({ wire: { kind: "setUnlink", setId: arr.id, childId: item.key },
+                    journalMsgId: msgId, undo, redo, roots });
+                return;
+            }
             recordMutation({
                 msgId,
-                undo: () => { arr.items.splice(Math.min(index, arr.items.length), 0, item); invalidateMember(arr.id); },
-                redo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
-                // item.value is DETACHED (already spliced out of arr.items) — reachable ONLY through here, so
-                // marking it is what keeps a removed-then-rolled-back member from being false-swept.
-                roots: [arr, item.value],
+                undo,
+                redo,
+                roots,
             });
             wsSend({ op: "arrayRemove", id: msgId, clientId: uiStatic.clientId,
                 setId: arr.id, objectId: item.key });
@@ -932,6 +1016,7 @@ function connectWs(): void {
             committingCtx = ctx;
             commitEdits = [];     // open the edit buffer — propChange hooks into it from now on
             commitCreates = [];   // open the create buffer — commitCreate hooks into it from now on
+            commitRelations = []; // open the set-link/unlink buffer (T3) — arrayAdd/arrayRemove hook into it
             // Anti-clobber: pin this ctx's baseVersion the FIRST time it commits (its "first stages" —
             // there is no earlier client-side hook point; ctx.new()/staging writes fire no wsHook — see the
             // ctxBaseVersion doc above for why this stays correct in practice). A LATER commit from the
@@ -947,13 +1032,15 @@ function connectWs(): void {
         endCommit: () => {
             const edits = commitEdits ?? [];
             const creates = commitCreates ?? [];
-            commitEdits = null; commitCreates = null; // close the buffers — later mutations go the live path
-            if (edits.length === 0 && creates.length === 0) { committingCtx = null; return; } // nothing staged
+            const relations = commitRelations ?? [];   // T3: buffered set links/unlinks
+            commitEdits = null; commitCreates = null; commitRelations = null; // close the buffers
+            if (edits.length === 0 && creates.length === 0 && relations.length === 0) { committingCtx = null; return; } // nothing staged
             // Edits: the per-edit (obj, prop, before/value) captured by propChange at the moment each write
             // landed (Step A). Creates: each draft's transient id correlated for the ack's batch remap, plus
-            // the wire create (its scalar props) and relation (set/ref). ONE journal entry → ONE ack commits
-            // all (remapping every created id), ONE reject rolls all back atomically (edits reverted AND
-            // created rows dropped). Roots = every edited object + every created object (kept alive for undo).
+            // the wire create (its scalar props) and relation (set/ref). The T3 `relations` are set links/
+            // unlinks the arrayAdd/arrayRemove hooks buffered. ONE journal entry → ONE ack commits all
+            // (remapping every created id), ONE reject rolls all back atomically. Roots = every edited object
+            // + every created object + every linked/unlinked array (kept alive for undo).
             const editSnapshots = edits.map(e => ({ obj: e.obj, prop: e.prop, before: e.before, after: e.value }));
             const wireCreates: object[] = [];
             const wireRelations: object[] = [];
@@ -967,6 +1054,12 @@ function connectWs(): void {
                 else
                     wireRelations.push({ kind: "ref", parentId: c.join.parent.id, prop: c.join.prop, childId: c.draft.id });
             }
+            // T3: the buffered set links/unlinks fold into the SAME wire `relations` the creates' joins use
+            // (the server's commit handler already supports "set" + "setUnlink" relations from T1/T2). The
+            // arrayAdd/arrayRemove hooks already recordMutation'd each intent; splice those per-op entries out
+            // — the consolidated commit entry below (which replays every relation's undo/redo) replaces them.
+            for (const r of relations) wireRelations.push(r.wire);
+            spliceJournalEntries(new Set(relations.map(r => r.journalMsgId)));
             // The committing ctx (form-Save lifecycle + M13 slice 6 conflict resolution). Read BEFORE clearing
             // committingCtx (the only reference to which ctx this bracket belongs to).
             const ctx = committingCtx;
@@ -984,17 +1077,20 @@ function connectWs(): void {
                     undo: () => {
                         for (const s of editSnapshots) { s.obj.props[s.prop] = s.before; invalidateProp(s.obj.id, s.prop); }
                         for (const c of creates) dropStagedCreate(c);
+                        for (const r of relations) r.undo();   // T3: unlink/relink the buffered set members
                     },
                     redo: () => {
                         for (const s of editSnapshots) { s.obj.props[s.prop] = s.after; invalidateProp(s.obj.id, s.prop); }
                         for (const c of creates) restageCreate(c);
+                        for (const r of relations) r.redo();    // T3: relink the buffered set members
                     },
                     // The created objects are reachable through their join's set/parent (listed below), but a ref
                     // create's object sits in a field, so list each draft explicitly too — the reachability GC
                     // marks it alive until this entry retires (it must survive for the undo to drop it).
                     onReject: () => { for (const c of creates) pendingCommitCreates.delete(c.draft.id); },
                     roots: [...edits.map(e => e.obj), ...creates.map(c => c.draft),
-                            ...creates.map(c => c.join.kind === "set" ? c.join.set : c.join.parent)],
+                            ...creates.map(c => c.join.kind === "set" ? c.join.set : c.join.parent),
+                            ...relations.flatMap(r => r.roots)],   // T3: keep linked/unlinked arrays alive for undo
                 });
                 committingCtx = prevCommitting;
                 // Register how to resolve a conflict on THIS send (M13 slice 6): keep-mine re-fires at the
