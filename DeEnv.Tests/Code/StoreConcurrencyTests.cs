@@ -308,4 +308,89 @@ public sealed class StoreConcurrencyTests
             if (File.Exists(genesisPath)) File.Delete(genesisPath);
         }
     }
+
+    // T2.6 (transparent-client-mutations.md): an UNLINK of a member NOT currently in the target set must be
+    // REJECTED loudly (InvalidOperationException), not silently ignored by the apply loop's set.Members.Remove
+    // no-op. Proven at the store level: seed one item in db.nodes, then try to unlink a DIFFERENT (absent)
+    // item id. The batch must throw with the store UNTOUCHED — the seeded item still present, version intact.
+    [Test]
+    public async Task An_unlink_of_a_non_member_is_rejected_with_the_store_untouched()
+    {
+        var dataFile = Path.Combine(Path.GetTempPath(), "deenv-unlinknonmember-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var desc = InstanceDescriptionLoader.Load("""
+                types
+                    Db
+                        nodes set of Item
+                    Item
+                        label text
+                """);
+            var store = new JsonFileInstanceStore(dataFile, desc);
+            var nodesSetId = ((SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!).Id;
+
+            // Seed one item (real id 1) into db.nodes, remember the version.
+            store.CommitBatch(
+                [new CommitCreate(-1, "Item", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("a") }))],
+                [new SetLinkMutation(nodesSetId, -1)]);
+            var verBefore = store.CurrentVersion;
+
+            // Try to unlink item 2, which was NEVER linked into db.nodes → must throw, store untouched.
+            await Assert.That(() => store.CommitBatch([], [new SetUnlinkMutation(nodesSetId, 2)]))
+                .Throws<InvalidOperationException>();
+            await Assert.That(store.CurrentVersion).IsEqualTo(verBefore);
+            var nodes = (SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!;
+            await Assert.That(nodes.Members.Count).IsEqualTo(1);
+        }
+        finally
+        {
+            if (File.Exists(dataFile)) File.Delete(dataFile);
+            var logPath = AppPaths.LogPathForDataPath(dataFile);
+            var genesisPath = AppPaths.GenesisPathForDataPath(dataFile);
+            if (File.Exists(logPath)) File.Delete(logPath);
+            if (File.Exists(genesisPath)) File.Delete(genesisPath);
+        }
+    }
+
+    // T2.6 regression guard: a VALID unlink (member IS in the set at batch start) still SUCCEEDS — the new
+    // pre-validation must not reject a legitimate remove. Seeds an item into db.nodes, unlinks it, asserts
+    // the member is gone and the store version advanced by exactly one commit.
+    [Test]
+    public async Task A_valid_unlink_of_a_present_member_still_succeeds()
+    {
+        var dataFile = Path.Combine(Path.GetTempPath(), "deenv-validunlink-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var desc = InstanceDescriptionLoader.Load("""
+                types
+                    Db
+                        nodes set of Item
+                    Item
+                        label text
+                """);
+            var store = new JsonFileInstanceStore(dataFile, desc);
+            var nodesSetId = ((SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!).Id;
+
+            store.CommitBatch(
+                [new CommitCreate(-1, "Item", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("a") }))],
+                [new SetLinkMutation(nodesSetId, -1)]);
+            var itemId = store.ReadExtent("Item").Keys.Single();
+            var verBefore = store.CurrentVersion;
+
+            // The item IS in db.nodes → unlink must succeed.
+            store.CommitBatch([], [new SetUnlinkMutation(nodesSetId, itemId)]);
+            await Assert.That(store.CurrentVersion).IsEqualTo(verBefore + 1);
+            var nodes = (SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!;
+            await Assert.That(nodes.Members.ContainsKey(itemId)).IsFalse();
+            await Assert.That(nodes.Members.Count).IsEqualTo(0);
+        }
+        finally
+        {
+            if (File.Exists(dataFile)) File.Delete(dataFile);
+            var logPath = AppPaths.LogPathForDataPath(dataFile);
+            var genesisPath = AppPaths.GenesisPathForDataPath(dataFile);
+            if (File.Exists(logPath)) File.Delete(logPath);
+            if (File.Exists(genesisPath)) File.Delete(genesisPath);
+        }
+    }
 }

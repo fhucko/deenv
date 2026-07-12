@@ -701,6 +701,40 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 BumpVersion(realId); // a create's own first version (so a later stale-base check sees it if edited)
             }
 
+            // PRE-VALIDATE set membership for UNLINK mutations BEFORE any apply: the apply loop's
+            // set.Members.Remove is a SILENT no-op on a miss, hiding invalid unlinks. Reject loudly here,
+            // with the store UNTOUCHED. Runs after the creates loop so every temp create's real id is in
+            // idMap (mirrors how the apply arms resolve temp refs via ResolveRefId). The set-prop gate for
+            // SetUnlinkByProp already ran in the earlier pre-validation pass above.
+            foreach (var mutation in mutations)
+                switch (mutation)
+                {
+                    case SetUnlinkMutation(var setId, var memberRef):
+                    {
+                        var set = FindSetNode(setId)
+                            ?? throw new InvalidOperationException($"No set with id {setId}.");
+                        var memberId = ResolveRefId(memberRef);
+                        if (!set.Members.ContainsKey(memberId))
+                            throw new InvalidOperationException($"member {memberId} not in set {setId}.");
+                        break;
+                    }
+                    case SetUnlinkByPropMutation(var ownerRef, var prop, var memberRef):
+                    {
+                        var ownerId = ResolveRefId(ownerRef);
+                        var ownerType = ownerRef < 0
+                            ? creates.First(c => c.TempId == ownerRef).TypeName
+                            : ExtentEntryById(ownerId)!.TypeName;
+                        var owner = ExtentEntryById(ownerId)
+                            ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
+                        if (owner.Fields.GetValueOrDefault(prop) is not StoredSet set)
+                            throw new InvalidOperationException($"'{ownerType}' has no set prop '{prop}'.");
+                        var memberId = ResolveRefId(memberRef);
+                        if (!set.Members.ContainsKey(memberId))
+                            throw new InvalidOperationException($"member {memberId} not in set of '{ownerType}'.{prop}.");
+                        break;
+                    }
+                }
+
             // A reference id: a positive real id passes through; a negative tempId resolves to the create it
             // introduced (a ref to an un-minted tempId is a caller bug — fail loudly, never persist a dangle).
             int ResolveRefId(int idRef) => idRef >= 0 ? idRef
