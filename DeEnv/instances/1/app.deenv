@@ -403,7 +403,7 @@ ui
     fn nodeInList(coll, id)
         var direct = coll.single(n => sys.id(n) == id)
         if direct != null
-            return { node: direct, coll: coll }
+            return { node: direct, parentSet: coll }
         var owner = coll.single(n => containsId(n, id))
         if owner == null
             return null
@@ -414,7 +414,7 @@ ui
             return nodeInList(owner.elseChildren, id)
         return null
 
-    fn nodeContext(design, id)
+    fn locateNode(design, id)
         if id == 0
             return null
         var inRender = nodeInList(design.render, id)
@@ -472,7 +472,7 @@ ui
         return only != null && only.kind == "" && only.tag != ""
 
     fn canWrap(design, node)
-        return nodeContext(design, sys.id(node)) != null
+        return locateNode(design, sys.id(node)) != null
 
     fn wrapHint(design, node)
         if canWrap(design, node) == false
@@ -480,12 +480,12 @@ ui
         return "wrap this node in a <div>"
 
     fn wrapNode(design, node)
-        var ctx = nodeContext(design, sys.id(node))
-        if ctx == null
+        var site = locateNode(design, sys.id(node))
+        if site == null
             return null
-        var wrapper = { kind: "", tag: "div", expr: "", item: "", collection: "", condition: "", order: ctx.node.order, attrs: [], children: [ctx.node], elseChildren: [] }
-        ctx.coll.add(wrapper)
-        ctx.coll.remove(ctx.node)
+        var wrapper = { kind: "", tag: "div", expr: "", item: "", collection: "", condition: "", order: site.node.order, attrs: [], children: [site.node], elseChildren: [] }
+        site.parentSet.add(wrapper)
+        site.parentSet.remove(site.node)
         selectNode(wrapper)
         revealSelected = revealSelected + 1
 
@@ -517,35 +517,35 @@ ui
             renumberFrom(sorted.where(c => sys.id(c) != sys.id(next)), index + 1)
 
     fn unwrapNode(design, node)
-        var ctx = nodeContext(design, sys.id(node))
-        if ctx == null
+        var site = locateNode(design, sys.id(node))
+        if site == null
             return null
-        var kids = ctx.node.children.orderBy(c => c.order)
+        var kids = site.node.children.orderBy(c => c.order)
         var first = kids.single(c => true)
-        spliceChildren(ctx.coll, ctx.node, kids)
-        ctx.coll.remove(ctx.node)
-        renumberFrom(ctx.coll.orderBy(c => c.order), 0)
+        spliceChildren(site.parentSet, site.node, kids)
+        site.parentSet.remove(site.node)
+        renumberFrom(site.parentSet.orderBy(c => c.order), 0)
         if first != null
             selectNode(first)
         revealSelected = revealSelected + 1
 
     fn selectionTarget(design)
-        var ctx = nodeContext(design, selectedNode)
-        if ctx == null
+        var site = locateNode(design, selectedNode)
+        if site == null
             return null
-        if isContainerNode(design, ctx.node)
-            return { mode: "into", node: ctx.node, coll: ctx.node.children }
-        if isTopLevelRoot(design, ctx.node)
-            return { mode: "none", node: ctx.node, coll: null }
-        return { mode: "sibling", node: ctx.node, coll: ctx.coll }
+        if isContainerNode(design, site.node)
+            return { mode: "into", node: site.node, intoSet: site.node.children }
+        if isTopLevelRoot(design, site.node)
+            return { mode: "none", node: site.node, intoSet: null }
+        return { mode: "sibling", node: site.node, intoSet: site.parentSet }
 
     fn rootFallbackTarget(design)
         var root = design.render.single(n => true)
         if root == null
-            return { mode: "into", node: null, coll: design.render }
+            return { mode: "into", node: null, intoSet: design.render }
         if isContainerNode(design, root)
-            return { mode: "into", node: root, coll: root.children }
-        return { mode: "none", node: root, coll: null }
+            return { mode: "into", node: root, intoSet: root.children }
+        return { mode: "none", node: root, intoSet: null }
 
     fn paletteTarget(design)
         var sel = selectionTarget(design)
@@ -569,8 +569,8 @@ ui
     fn insertComponent(target, tag)
         if target == null || target.mode == "none"
             return null
-        var newRow = { kind: "", tag: tag, expr: "", item: "", collection: "", condition: "", order: orderForAppend(target.coll), attrs: [], children: [], elseChildren: [] }
-        target.coll.add(newRow)
+        var newRow = { kind: "", tag: tag, expr: "", item: "", collection: "", condition: "", order: orderForAppend(target.intoSet), attrs: [], children: [], elseChildren: [] }
+        target.intoSet.add(newRow)
         selectNode(newRow)
         revealSelected = revealSelected + 1
 
