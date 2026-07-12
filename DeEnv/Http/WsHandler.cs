@@ -984,6 +984,15 @@ public sealed class WsHandler
                 kv => kv.Key, kv => new CollectionInfo { Id = kv.Value.Id, ElementTypeName = kv.Value.ElementTypeName }),
         }).ToList();
 
+        // Record every minted object's transient (negative) id → real id in the session so the client's
+        // follow-up ops (a field edit, a remove) that still address a just-created object by its temp id
+        // resolve to the real one — even if they arrive before the client has applied this reply's remap.
+        // Mirrors HandleArrayAdd (L1475). Without it a post-commit added object addressed by temp id would
+        // fail to resolve (the applyCommitRemap path on the client reconciles, but server-side resolution
+        // for the next inbound op would not).
+        foreach (var r in result.Creates)
+            session?.MapTransientId(r.TempId, r.RealId);
+
         return Serialize(new CommitResponse { IdMap = idMap.Count > 0 ? idMap : null, NewVersion = result.Version });
     }
 
