@@ -153,8 +153,8 @@ public sealed class KernelHost(
             // create projects the caller's schema into a NEW instance via the kernel's own create
             // mechanism, fed the kernel's boot baseDir/registryPath. The new instance is addressed by
             // its NAME (the mount path derives from it) — no ports, since addressing is by path now.
-            createInstance: (appDoc, name, designId) =>
-                CreateAsync(appDoc, name, baseDir, registryPath, designId),
+            createInstance: (appDb, name, designId) =>
+                CreateAsync(appDb, name, baseDir, registryPath, designId),
             // delete + clone resolve the id → the live hosted instance, then run the kernel's own
             // DeleteAsync/CloneAsync (fed the same boot baseDir/registryPath as create).
             deleteInstance: id => DeleteAsyncById(id, registryPath),
@@ -776,14 +776,14 @@ public sealed class KernelHost(
     // since every instance is served under the kernel's shared app + asset ports. `designId` is the id
     // of the IDE design this instance was spawned from (null when none), recorded on the new entry.
     public Task<HostedInstance> CreateAsync(
-        string appDoc, string name, string baseDir, string registryPath, int? designId = null)
+        string appDb, string name, string baseDir, string registryPath, int? designId = null)
     {
         // Mint a unique id (max over the live set AND on-disk id-dirs + 1). Its id-dir is
         // instances/<id>/, so it survives a restart and never reuses a directory — even a ghost one.
         var id = NextInstanceId(baseDir);
         var schemaPath = AppPaths.SchemaPathForId(baseDir, id);
         Directory.CreateDirectory(AppPaths.IdDirFor(baseDir, id));
-        File.WriteAllText(schemaPath, appDoc);
+        File.WriteAllText(schemaPath, appDb);
 
         var spec = new InstanceSpec(id, name, schemaPath, AppPaths.DataPathForId(baseDir, id), designId);
 
@@ -820,7 +820,7 @@ public sealed class KernelHost(
     // `atSeq` (M13 slice 7, OPTIONAL) — omitted (null) is BYTE-IDENTICAL to the pre-slice-7 clone (a plain
     // file copy of the source's CURRENT head, below). When given, the clone gets the source's data as it
     // stood at that log seq instead — "the app as of Tuesday" (design doc §0) — under the SCHEMA that was
-    // in force at that moment (era resolution, see ResolveEraDoc), one fresh fork, no history carried (its
+    // in force at that moment (era resolution, see ResolveEraDb), one fresh fork, no history carried (its
     // own log starts genesis-less — the FIRST real mutation freezes its OWN genesis from the materialized
     // state, exactly like any new instance under slice-1's rules; the design's "fork forever" line).
     public async Task<HostedInstance> CloneAsync(
@@ -850,7 +850,7 @@ public sealed class KernelHost(
             var sourceStore = (JsonFileInstanceStore)source.Store;
             var materialized = sourceStore.MaterializeAtSeq(seq); // throws on an out-of-range/pre-genesis seq
 
-            var (eraDocText, eraDesc, resolvedCommitId) = ResolveEraDoc(sourceStore, sourceDesc, source.Spec.SchemaPath, seq);
+            var (eraDocText, eraDesc, resolvedCommitId) = ResolveEraDb(sourceStore, sourceDesc, source.Spec.SchemaPath, seq);
             eraCommitId = resolvedCommitId;
 
             // Validate the materialized store against the ERA schema BEFORE writing anything — a mismatch
@@ -974,7 +974,7 @@ public sealed class KernelHost(
     // promoted per-commit checkpoints exist, a pre-horizon boundary whose commit has been compacted away
     // becomes resolvable again through the checkpoint instead of the live Commit row — this unresolvable
     // path is the recorded residual until then, not a permanent ceiling.
-    private (string Text, InstanceDescription Desc, int? CommitId) ResolveEraDoc(
+    private (string Text, InstanceDescription Desc, int? CommitId) ResolveEraDb(
         JsonFileInstanceStore sourceStore, InstanceDescription currentDesc, string currentSchemaPath, int atSeq)
     {
         var designHostStore = DesignHostStore;
@@ -1009,7 +1009,7 @@ public sealed class KernelHost(
 
     // A Commit row's cached `text`, read off the given design-host store by its own intrinsic id. Null
     // when the store is absent, the id does not resolve to a Commit row, or its cached text is empty —
-    // every one of these is a genuine "cannot resolve" the caller must fail loudly on (see ResolveEraDoc),
+    // every one of these is a genuine "cannot resolve" the caller must fail loudly on (see ResolveEraDb),
     // never silently substitute for. No longer returns a `parent` id (M13 slice 7 review fix — era
     // resolution reads BoundaryMarker.BaseCommitId directly now, never walks the design DAG).
     private static string? TryReadCommitText(IInstanceStore? designHostStore, int commitId)

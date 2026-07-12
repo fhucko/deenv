@@ -45,7 +45,7 @@ public sealed record LogEntry(
 // the head across an ARBITRARY commit distance (KernelHostActions.Publish), so a reader cannot recover
 // "which commit was live immediately before this boundary" by walking `CommitId`'s own `parent` — that
 // walks the design's ONE-STEP-AT-A-TIME DAG, not the actual (possibly multi-commit) span this publish
-// crossed. Time-travel era resolution (KernelHost.ResolveEraDoc) reads this directly instead of guessing.
+// crossed. Time-travel era resolution (KernelHost.ResolveEraDb) reads this directly instead of guessing.
 public sealed record BoundaryMarker(int DesignId, int CommitId, int? BaseCommitId = null);
 
 // The outcome of JsonFileInstanceStore.ApplyPublishBoundary: whether it wrote anything (an empty diff is a

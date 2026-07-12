@@ -10,8 +10,8 @@ public static class MigrationRunner
 {
     public static MigrationRunReport Run(
         string source, int commitId, string message,
-        Db oldDoc, InstanceDescription oldDesc,
-        Db newDoc, InstanceDescription newDesc,
+        Db oldDb, InstanceDescription oldDesc,
+        Db newDb, InstanceDescription newDesc,
         List<LogWrite> writes)
     {
         var fns = Parse.Run(CodeParse.Section("migration"), "migration\n" + IndentForSection(source))
@@ -25,8 +25,8 @@ public static class MigrationRunner
                 throw new InvalidOperationException("dictionary migration not supported yet");
 
         var context = new ExecContext();
-        var oldRoot = DbBridge.LoadRoot(new JsonFileInstanceStore(oldDoc, oldDesc), oldDesc, context);
-        var newRoot = DbBridge.LoadRoot(new JsonFileInstanceStore(newDoc, newDesc), newDesc, context);
+        var oldRoot = DbBridge.LoadRoot(new JsonFileInstanceStore(oldDb, oldDesc), oldDesc, context);
+        var newRoot = DbBridge.LoadRoot(new JsonFileInstanceStore(newDb, newDesc), newDesc, context);
         var oldById = Index(oldRoot);
         var newById = Index(newRoot);
         var executor = new CodeExecutor();
@@ -35,7 +35,7 @@ public static class MigrationRunner
         foreach (var fn in fns)
         {
             var typeName = fn.Name ?? throw new InvalidOperationException("Migration function must be named.");
-            if (!newDoc.Extents.TryGetValue(typeName, out var extent)) continue;
+            if (!newDb.Extents.TryGetValue(typeName, out var extent)) continue;
             var type = newDesc.FindType(typeName)
                 ?? throw new InvalidOperationException($"Migration type '{typeName}' is not in the target schema.");
 
@@ -61,7 +61,7 @@ public static class MigrationRunner
                 {
                     throw new InvalidOperationException($"migration {commitId} failed: {ex.Message}", ex);
                 }
-                Harvest(type, id, before, newObj, newDoc, writes);
+                Harvest(type, id, before, newObj, newDb, writes);
                 migrated++;
             }
         }

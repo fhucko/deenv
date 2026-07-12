@@ -6,7 +6,7 @@ using DeEnv.Storage;
 namespace DeEnv.Designer;
 
 // The INVERSE of SchemaBridge's forward projection: build the operator IDE's `db.designs` seed from a
-// set of committed app documents. Where SchemaBridge.ProjectDesignDocument turns a `Design` node back
+// set of committed app documents. Where SchemaBridge.ProjectDesignDb turns a `Design` node back
 // INTO an app document (publish), this turns an app document INTO a `Design` — parsing its `types`
 // section into the structured MetaType/MetaProp the type editor edits, and carrying its
 // initialData/common/ui sections as VERBATIM source text (the exact representation SchemaBridge's three
@@ -14,7 +14,7 @@ namespace DeEnv.Designer;
 //
 // It produces an InstanceInitialData (the friendly normalized extents the store seeds from on first
 // run) so the kernel can seed the design-host's store through the normal seeding path
-// (JsonFileInstanceStore's BuildSeededDoc), with NO new storage write path — the seed is plain
+// (JsonFileInstanceStore's BuildSeededDb), with NO new storage write path — the seed is plain
 // model-terms data, honoring the storage seam.
 //
 // CRITICAL: each Design's id is the caller-supplied designId (the instance's kernel.json `designId`),
@@ -223,7 +223,7 @@ public static class DesignerSeed
             {
                 ["label"] = label,
                 // The other sections VERBATIM (keyword + body, "" when absent) — exactly what
-                // SchemaBridge's Design text fields expect and ProjectDesignDocument reassembles. `access`
+                // SchemaBridge's Design text fields expect and ProjectDesignDb reassembles. `access`
                 // (the M-auth ruleset, incl. the host-action `sys` subject) is carried like the other text
                 // sections so a design round-trips its access rules (else a published design silently
                 // dropped them — the designer's own `sys` rule included).

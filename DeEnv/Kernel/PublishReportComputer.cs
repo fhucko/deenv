@@ -57,7 +57,7 @@ public static class PublishReportComputer
             // project the CURRENT working copy and apply by name. Not reported as a "fallback" (that term
             // is reserved for an unstamped TARGET against a design that DOES have commits) — there is no
             // identity diff possible here at all.
-            var workingDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
+            var workingDoc = SchemaBridge.ProjectDesignDb(design); // throws on an invalid design
             var noHeadReport = new PublishReport
             {
                 Applied = !dryRun, DryRun = dryRun, BaseCommit = null, TargetCommit = 0,
@@ -183,7 +183,7 @@ public static class PublishReportComputer
         foreach (var stepId in steps)
         {
             var stepFields = FindCommitOrThrow(store, stepId);
-            var oldDoc = JsonFileInstanceStore.CloneDb(doc);
+            var oldDb = JsonFileInstanceStore.CloneDb(doc);
             var prevDesc = InstanceDescriptionLoader.Load(KernelHostActions.TextOf(prevFields, "text"));
             var stepDesc = InstanceDescriptionLoader.Load(KernelHostActions.TextOf(stepFields, "text"));
             var stepDiff = DesignDiffer.Compute(Snapshot(prevFields), Snapshot(stepFields));
@@ -192,7 +192,7 @@ public static class PublishReportComputer
             unsupported.AddRange(transformed.UnsupportedReshapes);
             migrationReports.Add(MigrationRunner.Run(
                 KernelHostActions.TextOf(stepFields, "migration"), stepId,
-                KernelHostActions.TextOf(stepFields, "message"), oldDoc, prevDesc, doc, stepDesc, writes));
+                KernelHostActions.TextOf(stepFields, "message"), oldDb, prevDesc, doc, stepDesc, writes));
             prevId = stepId;
             prevFields = stepFields;
         }

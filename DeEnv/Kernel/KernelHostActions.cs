@@ -304,9 +304,9 @@ public sealed class KernelHostActions(
             ?? throw new InvalidOperationException(
                 $"No instance with id {targetId} to set a design on.");
 
-        var appDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
+        var appDb = SchemaBridge.ProjectDesignDb(design); // throws on an invalid design
         recordDesign(targetId, designId).GetAwaiter().GetResult();
-        SchemaBridge.WriteDocument(appDoc, target.SchemaPath, target.DataPath);
+        SchemaBridge.WriteDocument(appDb, target.SchemaPath, target.DataPath);
         _ = restartInstance(targetId);
         return null;
     }
@@ -314,7 +314,7 @@ public sealed class KernelHostActions(
     // create(design, name): project the PASSED design into a NEW instance with the given display NAME —
     // the sibling of publish (spawn rather than replace). arg 0 is the design object id, arg 1 the
     // display name (which ALSO becomes the mount path `/apps/<name>` — addressing is by path now, so
-    // there are NO port args). ProjectDesignDocument validates the design first (throws, spawning
+    // there are NO port args). ProjectDesignDb validates the design first (throws, spawning
     // nothing, on an invalid one); then the kernel create delegate writes + loads it, recording the
     // design's id on the new instance's registry entry (so its dropdown pre-selects that design). The
     // delegate is async; we block on it (the WS dispatch is synchronous, no synchronization context to
@@ -325,8 +325,8 @@ public sealed class KernelHostActions(
         var design = ResolveDesign(designId);
         var name = ArgText(args, 1);
 
-        var appDoc = SchemaBridge.ProjectDesignDocument(design); // throws on an invalid design
-        createInstance(appDoc, name, designId).GetAwaiter().GetResult();
+        var appDb = SchemaBridge.ProjectDesignDb(design); // throws on an invalid design
+        createInstance(appDb, name, designId).GetAwaiter().GetResult();
         return null;
     }
 

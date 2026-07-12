@@ -2102,7 +2102,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // boundary entry exists at or before atSeq (the instance predates its first publish, or was never
     // published) — the caller falls back to the instance's CURRENT app.deenv ONLY when EarliestBoundary
     // (below) is ALSO null (no publish exists anywhere in the log, ever); otherwise it must walk to the
-    // earliest boundary's commit's PARENT for the pre-that-publish schema (see KernelHost.ResolveEraDoc).
+    // earliest boundary's commit's PARENT for the pre-that-publish schema (see KernelHost.ResolveEraDb).
     public BoundaryMarker? LatestBoundaryAtOrBefore(int atSeq)
     {
         lock (_sync)
@@ -2422,7 +2422,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     private Db BuildInitialDb()
     {
         if (_desc.InitialData?.Extents is { } seed)
-            return BuildSeededDoc(seed);
+            return BuildSeededDb(seed);
 
         var doc = new Db { NextId = 1, Root = InitialRootValue() };
         var db = _desc.Db();
@@ -2443,7 +2443,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // plain scalars, sets as arrays of member ids, refs as bare ids — already validated by
     // the loader). nextId starts above every authored id, so the set/dict ids minted here,
     // and everything created later, never collide.
-    private Db BuildSeededDoc(
+    private Db BuildSeededDb(
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, JsonElement>> seed)
     {
         var doc = new Db();

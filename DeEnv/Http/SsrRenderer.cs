@@ -1432,7 +1432,7 @@ public sealed class SsrRenderer
     //             `value` source that PARSES, its AST serialized to a JSON string (SchemaJson.Options — the
     //             same wire format the app render trusts). An unparseable source gets no entry (it chips).
     //   • fns   — (M12 F3) a NAME → { ast, fp } map: each design fn's projected CodeFunction (desc.Ui.
-    //             Functions — the SAME F1 projection ProjectDesignDocument already ran to build `appDoc`,
+    //             Functions — the SAME F1 projection ProjectDesignDb already ran to build `appDb`,
     //             reused rather than re-projected) serialized the SAME wire format as `exprs`' ast (CodeFunction
     //             IS in the ICodeValue union, discriminator "fn"), plus a per-fn CONTENT FINGERPRINT
     //             (SchemaBridge.FnFingerprints — a name/params/body-tree canonical walk over the RAW store
@@ -1518,8 +1518,8 @@ public sealed class SsrRenderer
             var designNode = _store.ReadNode(NodePath.Root.Field("designs").Key(design.Id.ToString())) as ObjectValue
                 ?? throw new CodeRuntimeException($"No design with id {design.Id}.");
             // Project (validates — throws SchemaValidationException on an invalid design) → load → seed graph.
-            var appDoc = SchemaBridge.ProjectDesignDocument(designNode);
-            var desc = InstanceDescriptionLoader.Load(appDoc);
+            var appDb = SchemaBridge.ProjectDesignDb(designNode);
+            var desc = InstanceDescriptionLoader.Load(appDb);
             var seedDb = LoadSeedGraph(desc, context);
             // exprs: every parseable render-tree leaf/attr source → { text, ast:serialized-JSON }.
             var exprs = new Dictionary<string, IExecValue>();
@@ -1535,7 +1535,7 @@ public sealed class SsrRenderer
                 catch { /* unparseable → no entry (the walk chips it) */ }
             }
             var exprsObj = new ExecObject { Id = --context.LastId.Value, Constant = true, Props = exprs };
-            // fns: each design fn (already projected by ProjectDesignDocument above, reused here) → its
+            // fns: each design fn (already projected by ProjectDesignDb above, reused here) → its
             // CodeFunction AST + a raw-row content fingerprint (M12 F3 / F3b).
             var fingerprints = SchemaBridge.FnFingerprints(designNode);
             var fns = new Dictionary<string, IExecValue>();

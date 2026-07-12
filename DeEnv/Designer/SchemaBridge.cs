@@ -11,7 +11,7 @@ namespace DeEnv.Designer;
 // `Design` node: a `types` set of MetaType (each holding a `props` set of MetaProp)
 // — the STRUCTURED part — plus four `initialData`/`access`/`common`/`ui` TEXT fields
 // that carry the other app-document sections verbatim. `Project` turns the structured
-// `types` into TypeDefinitions; `ProjectDesignDocument` assembles the whole app
+// `types` into TypeDefinitions; `ProjectDesignDb` assembles the whole app
 // document (printed types + the verbatim sections), validates it with the normal
 // loader, and returns it as text. A publish writes that text onto a target and
 // resets the target's data; a create hands it to the kernel to spawn a new instance.
@@ -34,7 +34,7 @@ namespace DeEnv.Designer;
 // map over its types and props. Text alone is names-only (insufficient for rename-aware diff); the id
 // map re-attaches the M5 identity a by-name projection otherwise drops. IdMap keys are "TypeName" (the
 // type's MetaType row id) and "TypeName.propName" (the prop's MetaProp row id) — dotted name-paths,
-// unambiguous because ProjectDesignDocument's own validation already requires unique names. The map keys
+// unambiguous because ProjectDesignDb's own validation already requires unique names. The map keys
 // EXACTLY what the projected document shows, nothing more — so an enum type contributes only its own type
 // entry and NO prop entries, even if leftover MetaProp members linger in its `props` set after an
 // object→enum base-type flip (Project's enum branch hardcodes Props: null; its values live in a single
@@ -46,8 +46,8 @@ public sealed record DesignSnapshot(string Text, IReadOnlyDictionary<string, int
 public static class SchemaBridge
 {
     // Build a design's per-commit snapshot: the canonical printed app document, then a name-path→id map
-    // walked over the SAME structure ProjectDesignDocument prints (types, each type's props), keeping the
-    // member ids OrderedObjects/Project discard. Text is computed FIRST — ProjectDesignDocument validates
+    // walked over the SAME structure ProjectDesignDb prints (types, each type's props), keeping the
+    // member ids OrderedObjects/Project discard. Text is computed FIRST — ProjectDesignDb validates
     // (types, then the whole assembled document) and THROWS SchemaValidationException on an invalid
     // design — so an invalid design yields no snapshot at all, not a partial id map. (Snapshot inherits
     // that validate-or-throw behavior; how a future sys.commitDesign surfaces "can't commit an invalid
@@ -55,7 +55,7 @@ public static class SchemaBridge
     // Text on every call: the printer is canonical and the verbatim sections are passed through unchanged.
     public static DesignSnapshot Snapshot(NodeValue design)
     {
-        var text = ProjectDesignDocument(design); // throws on an invalid design — before the map is built
+        var text = ProjectDesignDb(design); // throws on an invalid design — before the map is built
         var idMap = new Dictionary<string, int>();
 
         if (design is ObjectValue d && d.Fields.TryGetValue("types", out var typesNode))
@@ -84,7 +84,7 @@ public static class SchemaBridge
     // published/created instance keeps its custom UI (`fn render()`), seed data, and shared
     // functions. Throws SchemaValidationException on an invalid design (the same validation
     // pipeline as any hand-written document), so a bad design yields no document.
-    public static string ProjectDesignDocument(NodeValue design)
+    public static string ProjectDesignDb(NodeValue design)
     {
         // M12 S1a — a structured render tree (Design.render, a `set of MetaNode` holding exactly one root)
         // projects to a canonical `ui` section, the same authority-inversion the `types` set already uses
@@ -170,7 +170,7 @@ public static class SchemaBridge
     }
 
     // Pure projection: a Design (or legacy Db) node's `types` set → the typed description (types
-    // only). Shared by ProjectDesignDocument (which adds the other sections) and the M4 tests.
+    // only). Shared by ProjectDesignDb (which adds the other sections) and the M4 tests.
     public static InstanceDescription Project(NodeValue designerDb)
     {
         var types = new List<TypeDefinition>();
@@ -751,7 +751,7 @@ public static class SchemaBridge
     // Import a design authored as `ui` TEXT (a custom `fn render()`) INTO the structured MetaNode tree
     // (Design.render), then CLEAR the `ui` text field so the S1a precedence gate passes and the design
     // now projects its `ui` section FROM `render`. Import then project is the IDENTITY on the render
-    // (modulo canonical formatting): ProjectDesignDocument(after import) ≡ canonicalize(original `ui`).
+    // (modulo canonical formatting): ProjectDesignDb(after import) ≡ canonicalize(original `ui`).
     //
     // This is a ONE-TIME FRESH MINT (AdoptInto-style — new ids, no re-import identity matching): the
     // design must currently carry a `ui` render fn and an EMPTY `render` set. `foreach`/`if` render forms
@@ -762,7 +762,7 @@ public static class SchemaBridge
     //
     // ATOMIC: the whole import is ONE store.CommitBatch — all creates + links + the `ui` clear persist
     // all-or-none (the store mints, links, and Saves ONCE). A mid-import crash can therefore never leave a
-    // design with partial `render` rows AND a non-empty `ui` (the bricked state ProjectDesignDocument's S1a
+    // design with partial `render` rows AND a non-empty `ui` (the bricked state ProjectDesignDb's S1a
     // precedence gate refuses). Every refusal below is checked BEFORE the batch is built, so a refusal
     // builds and commits NOTHING. Behind IInstanceStore in the model's terms — never a flat kv or file write.
     public static void ImportRender(IInstanceStore store, int designId)
