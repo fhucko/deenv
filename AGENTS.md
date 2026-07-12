@@ -113,6 +113,15 @@ where developers design data visually and use it as objects. Full mission in
     cannot be a render-time return. Host actions (`sys.publish`, `sys.commitDesign`,
     …) remain fire-and-effect and return nothing; reads return values.
 
+13. **Client/server mutation model — the `commit` is the only persistence op.** Every
+    server-side save goes through `ctx commit`; the client never persists via a live op.
+    User Code sees ONLY plain `commit` (the form's `ctx.commit`), never `beginCommit`/
+    `endCommit` (runtime-internal bracket primitives). `remove` detaches; deletion is
+    GC's call, never guaranteed — there is no `delete` operation. Every wire op mirrors a
+    model op (no parallel vocabulary). Full ground rules + rationale: **DECISIONS.md
+    "Client/server mutation model — ground rules"**. (Enforced by the unified-commit slice;
+    plan `docs/plans/2026-07-12_220000-unified-commit-all-ops.md`.)
+
 ## Testing approach
 
 Behavior is specced in Gherkin `.feature` files in `DeEnv.Tests\Features`.

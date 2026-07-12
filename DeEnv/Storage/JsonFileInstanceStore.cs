@@ -597,6 +597,19 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                             is not { Cardinality: Cardinality.Set })
                             throw new InvalidOperationException($"'{unlinkOwnerType}' has no set prop '{prop}'.");
                         break;
+                    case DictRemoveMutation(var ownerRef, var prop, _):
+                        RequireResolvable(ownerRef);
+                        // Same dictionary-prop gate as the set-prop gates above (SetLinkByPropMutation /
+                        // SetUnlinkByPropMutation), flipped to Cardinality.Dictionary: a bad prop throws
+                        // pre-apply with the store UNTOUCHED. RequireResolvable above already proved the
+                        // owner resolves, so the type lookup is known-good.
+                        var dictOwnerType = ownerRef < 0
+                            ? creates.First(c => c.TempId == ownerRef).TypeName
+                            : ExtentEntryById(ownerRef)!.TypeName;
+                        if (_desc.FindType(dictOwnerType)?.Props?.FirstOrDefault(p => p.Name == prop)
+                            is not { Cardinality: Cardinality.Dictionary })
+                            throw new InvalidOperationException($"'{dictOwnerType}' has no dictionary prop '{prop}'.");
+                        break;
                 }
 
             // The FIELD-LEVEL overlap check (M13 slice 6 — DECISIONS.md / app-versioning-design.md §2 + §0's
@@ -854,16 +867,42 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         BumpVersion(ownerId);
                         break;
                     }
+                    case DictRemoveMutation(var ownerRef, var prop, var key):
+                    {
+                        // Remove ONE dict entry on the owner's `prop` dictionary field, by id (the owner
+                        // may be a fresh create just minted above, unreachable by any NodePath yet). Same
+                        // DictRemove log-write + owner-version bump RemoveDictionaryEntry emits, so
+                        // fsck/replay stay total. Mirror RemoveDictionaryEntry's GC-after-unlink so a value
+                        // reference now orphaned is swept (consistent with that standalone path).
+                        var ownerId = ResolveRefId(ownerRef);
+                        var owner = ExtentEntryById(ownerId)
+                            ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
+                        if (owner.Fields.GetValueOrDefault(prop) is StoredDict dict)
+                        {
+                            var keyStr = KeyToString(key);
+                            if (dict.Entries.TryGetValue(keyStr, out var old))
+                                _pending.Add(new DictRemove(dict.Id, keyStr, old));
+                            dict.Entries.Remove(keyStr);
+                            BumpVersion(ownerId);
+                        }
+                        break;
+                    }
                 }
 
-            // GC once, at the very end — but ONLY when this batch actually moved something (an unlink
-            // present). A pure-add commit (creates + links) can orphan nothing, so it mimics clean-main
-            // behavior (CommitBatch never GC'd before) and stays safe for callers that build a batch whose
-            // created objects are reached only by references the GC would not yet see as reachable (e.g. a
-            // branch clone). When an unlink IS present (the re-parent move), the single end-of-batch GC
-            // means a moved member (still reachable via its new link) is never swept, and a now-orphan
-            // (unlinked, linked nowhere) is collected exactly once, after all links landed.
-            if (mutations.Any(m => m is SetUnlinkMutation or SetUnlinkByPropMutation))
+            // GC once, at the very end of the commit, and ONLY when this batch actually detached something
+            // (an unlink/dict-remove present). A pure-add commit (creates + links) can orphan
+            // nothing, so it mimics clean-main behavior (CommitBatch never GC'd before) and stays safe for
+            // not yet see as reachable (e.g. a branch clone). When a detach IS present, the single
+            // end-of-batch GC means a moved/re-parented member (still reachable via its new link) is never
+            // swept, and a now-orphan (unlinked, linked nowhere) is collected exactly once, after every
+            // link landed. Exactly ONE sweep per batch — the mid-apply arms deliberately do NOT call GC,
+            // so a batch containing both a remove and an unlink still sweeps just once here.
+            // TEMPORARY: GC is synchronous + inline at end-of-commit because milestone-1 storage is a plain
+            // JSON rewrite (AGENTS.md ground rule #5) with no engine to schedule a background sweep safely.
+            // When the storage-engine milestone lands (AGENTS.md ground rule #8 / VISION pillar 5), promote
+            // this to a background/scheduled sweep — this single call site is the only place to move.
+            if (mutations.Any(m => m is SetUnlinkMutation or SetUnlinkByPropMutation
+                                  or DictRemoveMutation))
                 CollectGarbage();
 
             Save(); // one atomic file write for the whole changeset
@@ -1160,7 +1199,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             var map = new Dictionary<int, ObjectValue>();
             if (_db.Extents.GetValueOrDefault(typeName) is { } pool && _desc.FindType(typeName) is { } type)
                 foreach (var (id, entry) in pool)
+                {
                     map[id] = BuildObject(entry, type);
+                }
             return map;
         }
     }

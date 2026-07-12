@@ -309,6 +309,58 @@ plaintext ever reaches the store), and the access floor is un-widenable (a forge
 over the *resulting* state, with `db` in scope) and sequential-ids (server allocation under the commit lock).
 Full design + the long context-model dialogue: `docs/plans/atomic-commit.md`; memory `project_persistence_modes`.
 
+## Client/server mutation model — ground rules (adopted 2026-07-12)
+
+The unified `commit` slice (plan `2026-07-12_220000-unified-commit-all-ops.md`) collapsed the seven
+live mutating wire ops into a single `commit` frame. These four rules are the **permanent ground rules**
+that slice enforces — they are not slice-local; they govern every future client/server mutation.
+(Naming cleanup such as the client `CommitCreate`→`StagedCreate` rename is a one-time action under these
+rules, not a standing rule in itself.)
+
+1. **Every wire/commit operation MIRRORS a model data operation — no parallel vocabulary.** The client never
+   invents an op the store lacks. Each `commit` op maps 1:1 onto an `IInstanceStore` method (edit → `WriteField`,
+   ref → `WriteReference`, set link → `AddToSet`, create → `CreateObject`, dict → `CreateEntry`/`RemoveDictionaryEntry`,
+   remove → detach). A new capability is a new model op FIRST, then its wire form — never a bespoke wire op
+   bolted on beside the model.
+
+2. **`remove` is the verb; `delete` is NOT an operation.** Removing/unlinking *detaches* an object via targeted
+   unlinks (`RefLink`→null, `SetUnlink`/`SetUnlinkByProp`, `DictRemove`) — there is NO bulk "detach-from-every-edge"
+   op, mirroring C#/JS where you drop individual references and let GC collect the orphan. Actual deletion is the
+   store's GC's call and is **NOT guaranteed** — an orphaned object may still be retained (e.g. `AppLog`'s `Remove`
+   record keeps the full prior object for history-resurrection). The union has `DictRemoveMutation` but NO
+   `RemoveMutation`; `remove` semantics = targeted unlinks + GC. The ACL `delete` verb maps onto these unlinks.
+
+3. **To save ANY data on the server, `ctx commit` MUST be called.** No operation may persist outside a `commit`
+   frame. `commit` is the SOLE server persistence path (`HandleCommit`); every other mutating wire op was deleted
+   (client never sends it, server rejects it as `Unknown op`). Non-mutating ops survive (`hello`, `refetch`,
+   `hostAction`, `ackRemap`, `parseExprs`, `login`, `logout`). *(Design persistence — `setDesign`/`commitDesign`/
+   `publish` — is M13's separate authority; it is the one remaining non-`commit` path, deliberately out of scope.)*
+
+4. **User Code sees ONLY plain `commit` — never `beginCommit`/`endCommit`.** The form Save calls `ctx.commit`
+   (one verb). A handler just mutates the model and the RUNTIME auto-wraps it in a commit on success
+   (`runHandlerTransaction`, which calls the internal `beginCommit`/`endCommit` + its handler-specific
+   atomic-rollback + action-miss logic). A top-level edit is auto-wrapped by the runtime (micro-commit). User
+   Code's persistence vocabulary is exactly one word: `commit`. Bracketing is an implementation detail hidden
+   inside the runtime. *(Verified: `app.deenv` already calls no `beginCommit`/`endCommit` — only `ctx.commit`
+   on the form path.)* The three scopes stage differently but all reach the server as `commit`:
+   - **Form ctx** — explicit bracket (`ctx.commit`), UNCHANGED.
+   - **Handler ctx** — runtime wrapper; keeps ONLY atomic-rollback + action-miss (not buffer-opening, which is
+     the shared `beginCommit`/`endCommit` primitive).
+   - **Top-level ctx** — no bracket today; must **commit immediately per mutation** via a runtime micro-bracket
+     (`beginCommit` → stage one → `endCommit`), sending ONE `commit` at a time because there is no larger scope
+     to batch into.
+
+5. **Garbage collection runs at the END of each `commit` — synchronously and TEMPORARILY.** A targeted unlink
+   detaches an object; the actual drop of now-orphaned objects is `CollectGarbage()`, called ONCE at the close
+   of `CommitBatch` (gated on any detach-style mutation: `SetUnlink*`, `DictRemoveMutation`),
+   never mid-apply. There is NO bulk "detach-from-every-edge" op (mirrors C#/JS) — "remove" is expressed as
+   targeted unlinks + this single end-of-commit sweep. This is **temporary**: milestone-1 storage is a plain JSON rewrite (AGENTS.md ground rule #5)
+   with no engine to schedule a background sweep safely, so GC stays inline. When the storage-engine milestone
+   lands (AGENTS.md ground rule #8 / VISION pillar 5), promote this single end-of-commit `CollectGarbage()`
+   call to a **background / scheduled sweep** — it is the one call site to move. Until then, exactly one synchronous
+   sweep per detaching commit is the contract (the store's `AppLog` `Remove` record retains the full prior object,
+   so a still-referenced object is never collected — remove ≠ delete, rule #2).
+
 ## Data must survive schema changes (non-destructive apply) — MVP-critical, ahead of full versioning
 
 **Decided 2026-06-19.** For DeEnv to be *useful*, existing data must survive a schema

@@ -708,6 +708,55 @@ public sealed class CodeClientTests
         });
     }
 
+    // ── T4: the client `CommitRelation.wire` union RECOGNIZES the `dictRemove` shape ───────────────────
+    //
+    // A `dictRemove` relation carries exactly { kind: "dictRemove", ownerRef, prop, key } — drop ONE dict
+    // entry (mirrors dict.Remove(k), a targeted unlink, not a bulk detach). The server already accepts it
+    // (T3); this task extends only the CLIENT union's awareness of the shape. Client dict-write support is
+    // DEFERRED (no ctx.commit dict hook exists yet), so there is NO client call site that buffers a
+    // dictRemove — this test drives the EXISTING commit-flush path (flushHandlerTx maps each r.wire
+    // verbatim into the `commit` frame's `relations`) with a hand-built `dictRemove` CommitRelation and
+    // proves the emitted wire carries the shape UNCHANGED (no field dropped, no name remapped). This is the
+    // green half of the TDD red→green: the union comment in ws.ts is what makes the shape legitimate here.
+    [Test]
+    public async Task A_dictRemove_commit_relation_is_emitted_verbatim()
+    {
+        await WithPageAsync(InstanceContext.InteractiveUiDb(), s => { SeedItem(s, "a"); }, async page =>
+        {
+            await page.WaitReadyAsync();
+
+            // Hand a `dictRemove` CommitRelation to the production flush path and capture the `commit`
+            // frame's `relations` off the wire. undo/redo are no-ops; roots empty (no model effects to
+            // keep alive — a dict entry carries no extent id). flushHandlerTx + the wire map are unchanged
+            // by T4; only the union comment is updated, so the dictRemove shape must pass through verbatim.
+            var diag = await page.EvaluateAsync<string>(
+                """
+                () => {
+                    let relationsWire = null;
+                    const orig = codeWs.send.bind(codeWs);
+                    codeWs.send = (text) => {
+                        try { const m = JSON.parse(text); if (m.op === "commit") relationsWire = m.relations; } catch {}
+                        return orig(text);
+                    };
+
+                    commitRelations = [{
+                        wire: { kind: "dictRemove", ownerRef: 1, prop: "meta", key: "fav" },
+                        journalMsgId: nextWsMsgId++,
+                        undo: () => {}, redo: () => {}, roots: [],
+                    }];
+                    flushHandlerTx();
+
+                    return JSON.stringify(relationsWire);
+                }
+                """);
+
+            // The flushed commit carries EXACTLY the dictRemove relation — verified verbatim, proving the
+            // client union now includes it and the flush path forwards it without alteration.
+            await Assert.That(diag).IsEqualTo(
+                "[{\"kind\":\"dictRemove\",\"ownerRef\":1,\"prop\":\"meta\",\"key\":\"fav\"}]");
+        });
+    }
+
     // ── atomic-commit Step B: the generic create DEFERS / persists IMMEDIATELY by context ──────────────
     //
     // A generic create under an OBJECT's form (a nested inline set) STAGES into that form's ctx — it does NOT

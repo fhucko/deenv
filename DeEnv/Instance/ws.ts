@@ -80,7 +80,9 @@ let commitCreates: CommitCreate[] | null = null;
 // consolidated journal entry, and `journalMsgId` — the id the hook's recordMutation already used, so the
 // closer can splice those per-op entries out (the consolidated entry replaces them, acked by the ONE commit).
 interface CommitRelation {
-    wire: object;          // the wire relation ({ kind: "set", setId, childId } | { kind: "setUnlink", setId, childId })
+    wire: object;          // the wire relation: { kind: "set", setId, childId } | { kind: "setUnlink", setId, childId }
+                            //   | { kind: "setByProp", parentId, prop, childId } | { kind: "setUnlinkByProp", parentId, prop, childId }
+                            //   | { kind: "dictRemove", ownerRef, prop, key }  (drop ONE dict entry; server-accepted from T3)
     journalMsgId: number;  // the id recordMutation used in the hook (retired at flush — the commit's ack owns it)
     undo: () => void;
     redo: () => void;

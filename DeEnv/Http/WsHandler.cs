@@ -836,7 +836,7 @@ public sealed class WsHandler
                 // (kept out of the ParsedRelation union on purpose — unlinks have no typed child). Skip them
                 // here so ParseRelation (which only knows "set"/"ref") does not reject them as malformed.
                 if (relEl.TryGetProperty("kind", out var skipKindEl) && skipKindEl.GetString() is
-                    "setByProp" or "setUnlink" or "setUnlinkByProp")
+                    "setByProp" or "setUnlink" or "setUnlinkByProp" or "dictRemove")
                     continue;
                 if (ParseRelation(relEl, session) is not { } rel)
                     return Error("commit relation is malformed.");
@@ -868,6 +868,35 @@ public sealed class WsHandler
             foreach (var relEl in relsEl2.EnumerateArray())
             {
                 var tpKind = relEl.TryGetProperty("kind", out var tpKindEl) ? tpKindEl.GetString() : null;
+
+                // T3: `dictRemove` (drop ONE dict entry) carries NO `childId` — parse + emit it here and
+                // continue. It is a commit-internal mutation routed through CommitBatch, never a live op,
+                // and mirrors `dict.Remove(k)` (a targeted unlink, not a bulk detach).
+                if (tpKind == "dictRemove")
+                {
+                    if ((relEl.TryGetProperty("prop", out var drPropEl) ? drPropEl.GetString() : null) is not { } drProp)
+                        return Error("commit relation is malformed.");
+                    if (!relEl.TryGetProperty("owner", out var drOwnerEl) || drOwnerEl.ValueKind != JsonValueKind.Number)
+                        return Error("commit relation is malformed.");
+                    if ((relEl.TryGetProperty("key", out var drKeyEl) ? drKeyEl.GetString() : null) is not { } drKeyStr
+                        || drKeyStr.Length == 0)
+                        return Error("commit relation is malformed.");
+                    var drOwnerRaw = drOwnerEl.GetInt32();
+                    var drOwnerRef = drOwnerRaw < 0 ? drOwnerRaw : Resolve(session, drOwnerRaw);
+                    // The dict key is a NodeValue, parsed against the owner prop's declared keyType — mirrors
+                    // HandleAddEntry's `ParseKey(keyStr, KeyTypeName ?? "text")`. Owner's type is unknown for a
+                    // fresh (negative) owner; default to text (the store's apply arm re-keys under its schema).
+                    var drKeyType = drOwnerRef >= 0 && _store.ReadById(drOwnerRef) is { } drOwner
+                        ? _desc.FindType(drOwner.TypeName)?.Props?.FirstOrDefault(p => p.Name == drProp)?.KeyType ?? "text"
+                        : "text";
+                    // Access floor: a dict edit is an `edit` of the owner (mirrors RequireDictWrite's edit floor).
+                    if (drOwnerRef >= 0 && _store.ReadById(drOwnerRef) is { } drOwnerObj)
+                        RequireWrite(floor, "edit", drOwnerObj.TypeName,
+                            Code.AccessFloor.ScalarObject(drOwnerObj.TypeName, drOwnerRef, drOwnerObj.Fields, _desc));
+                    extraMutations.Add(new DictRemoveMutation(drOwnerRef, drProp, ParseKey(drKeyStr, drKeyType)));
+                    continue;
+                }
+
                 if (tpKind is not ("setByProp" or "setUnlink" or "setUnlinkByProp")) continue;
 
                 if (!relEl.TryGetProperty("childId", out var childEl) || childEl.ValueKind != JsonValueKind.Number)

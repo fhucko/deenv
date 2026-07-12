@@ -236,6 +236,14 @@ public sealed record SetUnlinkMutation(int SetId, int MemberRef) : CommitMutatio
 // id). SERVER-SIDE ONLY like SetLinkByPropMutation: constructed by SchemaBridge / WsHandler, never yet
 // from a raw wire message (the wire carries SetUnlinkMutation by raw setId — T2 wires the (owner,prop) form).
 public sealed record SetUnlinkByPropMutation(int OwnerRef, string Prop, int MemberRef) : CommitMutation;
+// Remove a SCALAR dictionary entry (Key) from the `Prop` dictionary field of the object with intrinsic id
+// OwnerRef — the removal counterpart of DictWriteMutation (same shape, minus Value). SERVER-SIDE VOCABULARY
+// ONLY like DictWriteMutation: constructed by WsHandler in T3; the wire `commit` op carries it from clients
+// there. OwnerRef is an object reference (positive real id, or a negative tempId resolved to a create's
+// just-minted real id). Owner's `Prop` must be a dictionary prop (pre-validated by the caller, see the
+// DictRemoveMutation arm in CommitBatch's prevalidation pass). The apply arm lands in T2; here it is only
+// declared + pre-validated.
+public sealed record DictRemoveMutation(int OwnerRef, string Prop, NodeValue Key) : CommitMutation;
 
 // The result of minting one create in a commit batch: the tempId→realId mapping plus the minted object's
 // nested COLLECTION props (their own intrinsic ids + element types), so the caller re-keys the client's

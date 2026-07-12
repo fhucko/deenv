@@ -352,6 +352,57 @@ public sealed class StoreConcurrencyTests
         }
     }
 
+    // T2 (unified-commit): `DictRemoveMutation` removes ONE dict entry (by key) on the owner's dictionary
+    // prop, mirroring DictWriteMutation's owner/prop addressing. Proven at the store level: upsert two dict
+    // entries, remove one, assert it is gone and the other survives.
+    [Test]
+    public async Task A_dict_remove_mutation_drops_one_dict_entry_and_keeps_the_rest()
+    {
+        var dataFile = Path.Combine(Path.GetTempPath(), "deenv-dictremove-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var desc = InstanceDescriptionLoader.Load("""
+                types
+                    Db
+                        boxes set of Box
+                    Box
+                        tags dict of int by text
+                """);
+
+            var store = new JsonFileInstanceStore(dataFile, desc);
+            var boxesSetId = ((SetValue)store.ReadNode(NodePath.Root.Field("boxes"))!).Id;
+
+            // Mint a Box, link into db.boxes, upsert two `tags` entries on it in one batch.
+            const int boxTemp = -1;
+            store.CommitBatch(
+                [new CommitCreate(boxTemp, "Box", new ObjectValue(new Dictionary<string, NodeValue>()))],
+                [
+                    new SetLinkMutation(boxesSetId, boxTemp),
+                    new DictWriteMutation(boxTemp, "tags", new TextValue("a"), new IntValue(11)),
+                    new DictWriteMutation(boxTemp, "tags", new TextValue("b"), new IntValue(22)),
+                ]);
+            var boxId = store.ReadExtent("Box").Keys.Single();
+
+            // Remove the "a" entry.
+            store.CommitBatch([], [new DictRemoveMutation(boxId, "tags", new TextValue("a"))]);
+
+            var tags = (DictionaryValue)store.ReadExtent("Box")[boxId].Fields["tags"];
+            await Assert.That(tags.Entries.ContainsKey(new TextValue("a"))).IsFalse();   // removed
+            await Assert.That(tags.Entries.ContainsKey(new TextValue("b"))).IsTrue();    // kept
+            await Assert.That(((IntValue)tags.Entries[new TextValue("b")]).Value).IsEqualTo(22);
+
+            await Assert.That(((JsonFileInstanceStore)store).Fsck()).IsTrue();
+        }
+        finally
+        {
+            if (File.Exists(dataFile)) File.Delete(dataFile);
+            var logPath = AppPaths.LogPathForDataPath(dataFile);
+            var genesisPath = AppPaths.GenesisPathForDataPath(dataFile);
+            if (File.Exists(logPath)) File.Delete(logPath);
+            if (File.Exists(genesisPath)) File.Delete(genesisPath);
+        }
+    }
+
     // T2.6 regression guard: a VALID unlink (member IS in the set at batch start) still SUCCEEDS — the new
     // pre-validation must not reject a legitimate remove. Seeds an item into db.nodes, unlinks it, asserts
     // the member is gone and the store version advanced by exactly one commit.
