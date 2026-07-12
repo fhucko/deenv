@@ -159,6 +159,9 @@ ui
             return 0
         return top.order + 1
 
+    fn newNode(kind, tag, order)
+        return { kind: kind, tag: tag, expr: "", item: "", collection: "", condition: "", order: order, attrs: [], children: [], elseChildren: [] }
+
     fn isFirstSibling(coll, node)
         var first = coll.orderBy(c => c.order).single(c => true)
         return first != null && sys.id(first) == sys.id(node)
@@ -182,16 +185,20 @@ ui
                 neighbor.order = tmp
 
     fn addElement(coll)
-        coll.add({ kind: "", tag: "div", expr: "", item: "", collection: "", condition: "", order: orderForAppend(coll), attrs: [], children: [], elseChildren: [] })
+        coll.add(newNode("", "div", orderForAppend(coll)))
 
     fn addText(coll)
-        coll.add({ kind: "", tag: "", expr: "\"\"", item: "", collection: "", condition: "", order: orderForAppend(coll), attrs: [], children: [], elseChildren: [] })
+        coll.add(newNode("", "", orderForAppend(coll)))
 
     fn addFor(coll)
-        coll.add({ kind: "for", tag: "", expr: "", item: "row", collection: "", condition: "", order: orderForAppend(coll), attrs: [], children: [], elseChildren: [] })
+        var node = newNode("for", "", orderForAppend(coll))
+        node.item = "row"
+        coll.add(node)
 
     fn addIf(coll)
-        coll.add({ kind: "if", tag: "", expr: "", item: "", collection: "", condition: "true", order: orderForAppend(coll), attrs: [], children: [], elseChildren: [] })
+        var node = newNode("if", "", orderForAppend(coll))
+        node.condition = "true"
+        coll.add(node)
 
     fn addElse(node)
         addText(node.elseChildren)
@@ -483,7 +490,8 @@ ui
         var site = locateNode(design, sys.id(node))
         if site == null
             return null
-        var wrapper = { kind: "", tag: "div", expr: "", item: "", collection: "", condition: "", order: site.node.order, attrs: [], children: [site.node], elseChildren: [] }
+        var wrapper = newNode("", "div", site.node.order)
+        wrapper.children = [site.node]
         site.parentSet.add(wrapper)
         site.parentSet.remove(site.node)
         selectNode(wrapper)
@@ -569,7 +577,7 @@ ui
     fn insertComponent(target, tag)
         if target == null || target.mode == "none"
             return null
-        var newRow = { kind: "", tag: tag, expr: "", item: "", collection: "", condition: "", order: orderForAppend(target.intoSet), attrs: [], children: [], elseChildren: [] }
+        var newRow = newNode("", tag, orderForAppend(target.intoSet))
         target.intoSet.add(newRow)
         selectNode(newRow)
         revealSelected = revealSelected + 1
