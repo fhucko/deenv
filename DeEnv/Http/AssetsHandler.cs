@@ -116,7 +116,7 @@ public sealed class AssetsHandler(
         if (request.Headers.TryGetValue("Origin", out var reqOrigin) && !SameHostOrigin(reqOrigin, request.Host ?? ""))
             return request.Respond().Status(ResponseStatus.Forbidden).Build();
 
-        var contentType = request.ContentType.RawType;
+        var contentType = request.ContentType?.RawType;
         if (contentType is null || !ContentTypeToExt.TryGetValue(contentType, out var ext))
             return Cors(request, request.Respond().Status(ResponseStatus.UnsupportedMediaType)).Build();
         // A body-less POST (no Content stream at all) — the /session precedent (ContentHandler

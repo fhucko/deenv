@@ -10,22 +10,22 @@ public static class AppLogReplay
     // Apply one entry's writes to doc IN PLACE (Db/StoredObject/StoredSet/StoredDict all hold
     // mutable dictionaries — the same in-place-edit style JsonFileInstanceStore itself uses) and stamp the
     // entry's own Seq/NextId, then return doc (so callers can Aggregate/fold entry after entry).
-    public static Db Apply(Db doc, LogEntry entry)
+    public static Db Apply(Db db, LogEntry entry)
     {
         foreach (var write in entry.Writes)
-            ApplyWrite(doc, write);
-        doc.Version = entry.Seq;
-        doc.NextId = entry.NextId;
-        return doc;
+            ApplyWrite(db, write);
+        db.Version = entry.Seq;
+        db.NextId = entry.NextId;
+        return db;
     }
 
-    private static void ApplyWrite(Db doc, LogWrite write)
+    private static void ApplyWrite(Db db, LogWrite write)
     {
         switch (write)
         {
             case FieldWrite(var objectId, var prop, _, var @new):
             {
-                var obj = ExtentEntryById(doc, objectId)
+                var obj = ExtentEntryById(db, objectId)
                     ?? throw new StoredDataException(
                         $"Replay: FieldWrite targets object {objectId}, which does not exist.");
                 if (@new is null) obj.Fields.Remove(prop);
@@ -34,23 +34,23 @@ public static class AppLogReplay
             }
             case Create(var id, var typeName, var fields):
             {
-                if (!doc.Extents.TryGetValue(typeName, out var pool))
-                    doc.Extents[typeName] = pool = new();
+                if (!db.Extents.TryGetValue(typeName, out var pool))
+                    db.Extents[typeName] = pool = new();
                 pool[id] = new StoredObject(typeName, id, new Dictionary<string, StoredValue>(fields));
                 break;
             }
             case Remove(var id, var old):
             {
-                if (doc.Extents.TryGetValue(old.TypeName, out var pool))
+                if (db.Extents.TryGetValue(old.TypeName, out var pool))
                     pool.Remove(id);
                 break;
             }
             case SetLink(var setId, var memberId):
             {
-                var set = FindSetNode(doc, setId)
+                var set = FindSetNode(db, setId)
                     ?? throw new StoredDataException(
                         $"Replay: SetLink targets set {setId}, which does not exist.");
-                var member = ExtentEntryById(doc, memberId)
+                var member = ExtentEntryById(db, memberId)
                     ?? throw new StoredDataException(
                         $"Replay: SetLink targets member {memberId}, which does not exist.");
                 set.Members[memberId] = new StoredRef(member.TypeName, memberId);
@@ -58,12 +58,12 @@ public static class AppLogReplay
             }
             case SetUnlink(var setId, var memberId):
             {
-                if (FindSetNode(doc, setId) is { } set) set.Members.Remove(memberId);
+                if (FindSetNode(db, setId) is { } set) set.Members.Remove(memberId);
                 break;
             }
             case DictSet(var dictId, var key, _, var @new):
             {
-                var dict = FindDictNode(doc, dictId)
+                var dict = FindDictNode(db, dictId)
                     ?? throw new StoredDataException(
                         $"Replay: DictSet targets dictionary {dictId}, which does not exist.");
                 if (@new is null) dict.Entries.Remove(key);
@@ -72,12 +72,12 @@ public static class AppLogReplay
             }
             case DictRemove(var dictId, var key, _):
             {
-                if (FindDictNode(doc, dictId) is { } dict) dict.Entries.Remove(key);
+                if (FindDictNode(db, dictId) is { } dict) dict.Entries.Remove(key);
                 break;
             }
             case RootWrite(_, var @new):
             {
-                doc.Root = @new;
+                db.Root = @new;
                 break;
             }
             default:
@@ -87,17 +87,17 @@ public static class AppLogReplay
 
     // ── lookups (mirror JsonFileInstanceStore's own private helpers — replay walks a doc the same way) ──
 
-    private static StoredObject? ExtentEntryById(Db doc, int id)
+    private static StoredObject? ExtentEntryById(Db db, int id)
     {
-        foreach (var pool in doc.Extents.Values)
+        foreach (var pool in db.Extents.Values)
             if (pool.GetValueOrDefault(id) is { } entry)
                 return entry;
         return null;
     }
 
-    private static StoredSet? FindSetNode(Db doc, int setId)
+    private static StoredSet? FindSetNode(Db db, int setId)
     {
-        foreach (var pool in doc.Extents.Values)
+        foreach (var pool in db.Extents.Values)
             foreach (var entry in pool.Values)
                 foreach (var fv in entry.Fields.Values)
                     if (fv is StoredSet set && set.Id == setId)
@@ -105,9 +105,9 @@ public static class AppLogReplay
         return null;
     }
 
-    private static StoredDict? FindDictNode(Db doc, int dictId)
+    private static StoredDict? FindDictNode(Db db, int dictId)
     {
-        foreach (var pool in doc.Extents.Values)
+        foreach (var pool in db.Extents.Values)
             foreach (var entry in pool.Values)
                 foreach (var fv in entry.Fields.Values)
                     if (fv is StoredDict dict && dict.Id == dictId)

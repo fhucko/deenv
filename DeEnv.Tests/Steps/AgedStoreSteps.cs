@@ -200,7 +200,7 @@ public sealed class AgedStoreSteps(InstanceContext ctx)
     {
         // The set table's count/due/author columns read the absent fields on every row (SSR side).
         await ctx.Page!.GotoReadyAsync(ctx.BaseUrl + "/notes");
-        await ctx.Page.Locator(".set-row").First.WaitForAsync();
+        await ctx.Page!.Locator(".set-row").First.WaitForAsync();
     }
 
     [When("I click into the aged note {string}")]

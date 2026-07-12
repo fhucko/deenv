@@ -20,8 +20,8 @@ namespace DeEnv.Storage;
 // existing file; the error names the remedy and leaves the decision to the user.
 public static class StoredDataValidator
 {
-    public static void Validate(Db doc, InstanceDescription desc, string filePath) =>
-        new Walk(desc, filePath).Validate(doc);
+    public static void Validate(Db db, InstanceDescription desc, string filePath) =>
+        new Walk(desc, filePath).Validate(db);
 
     private sealed class Walk(InstanceDescription desc, string filePath)
     {
@@ -32,26 +32,26 @@ public static class StoredDataValidator
             $"Data file '{filePath}' does not match the running app: {detail} " +
             "Delete or move the file to reseed it from the app's initialData.");
 
-        public void Validate(Db doc)
+        public void Validate(Db db)
         {
-            CollectExtentIds(doc);
+            CollectExtentIds(db);
 
-            foreach (var (typeName, pool) in doc.Extents)
+            foreach (var (typeName, pool) in db.Extents)
             {
                 var type = desc.FindType(typeName)!; // known: CollectExtentIds checked
                 foreach (var (idText, entry) in pool)
                     Fields(typeName, idText.ToString(), entry.Fields, type);
             }
 
-            Root(doc);
+            Root(db);
         }
 
         // First pass over the extents: every type must be a declared object type, and
         // every entry envelope well-formed (id matches the key, typeName matches the
         // extent); collect ids for the reference checks.
-        private void CollectExtentIds(Db doc)
+        private void CollectExtentIds(Db db)
         {
-            foreach (var (typeName, pool) in doc.Extents)
+            foreach (var (typeName, pool) in db.Extents)
             {
                 var type = desc.FindType(typeName);
                 if (type is null)
@@ -171,19 +171,19 @@ public static class StoredDataValidator
                 Fail($"{where} holds '{text.Text}', which is not a value of enum '{declaredType}'.");
         }
 
-        private void Root(Db doc)
+        private void Root(Db db)
         {
-            var db = desc.Db()!;
-            if (doc.Root is null)
+            var rootType = desc.Db()!; // the schema's root type definition
+            if (db.Root is null)
             {
                 Fail("the document has no root.");
                 return;
             }
 
-            if (db.BaseType == BaseType.Object)
-                Reference(doc.Root, db.Name, "the root");
+            if (rootType.BaseType == BaseType.Object)
+                Reference(db.Root, rootType.Name, "the root");
             else
-                Scalar(doc.Root, db.Name, "the root");
+                Scalar(db.Root, rootType.Name, "the root");
         }
 
         // The structural kind word a stored value reports — for the same "stored as 'X'"

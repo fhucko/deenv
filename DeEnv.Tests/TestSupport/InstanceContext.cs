@@ -1936,7 +1936,7 @@ public class InstanceContext
             await Kernel.StartAsync(KernelHost.SpecsFor(registry, dir));
         });
 
-        var designer = Kernel.Instances.Single(i => i.Spec.Id == 1);
+        var designer = Kernel!.Instances.Single(i => i.Spec.Id == 1);
 
         // The designer is mounted at /apps/designer; the browser BaseURL is the app port, and steps
         // navigate to DesignerUrl(route) (the designer's emitted links already carry the mount prefix).

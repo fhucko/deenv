@@ -172,14 +172,14 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
     }
 
-    internal JsonFileInstanceStore(Db doc, InstanceDescription desc)
+    internal JsonFileInstanceStore(Db db, InstanceDescription desc)
     {
         _filePath = "";
         _desc = desc;
         _resolver = new TypeResolver(desc);
         _logPath = "";
         _genesisPath = "";
-        _db = Normalize(CloneDb(doc));
+        _db = Normalize(CloneDb(db));
         _versionAtOpStart = _db.Version;
         _inMemory = true;
         StoredDataValidator.Validate(_db, desc, "<memory>");
@@ -1162,12 +1162,12 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     internal static IReadOnlyList<string> MigrateTowardSchema(string dataPath, InstanceDescription desc)
     {
         var unconvertible = new List<string>();
-        Db doc;
-        try { doc = LoadRaw(dataPath); }
+        Db db;
+        try { db = LoadRaw(dataPath); }
         catch (StoredDataException) { return unconvertible; } // unreadable → leave for the caller to reseed
 
         var changed = false;
-        foreach (var (typeName, pool) in doc.Extents)
+        foreach (var (typeName, pool) in db.Extents)
         {
             if (desc.FindType(typeName) is not { } type) continue; // removed type → leave (→ reseed)
             var props = (type.Props ?? []).ToDictionary(p => p.Name);
@@ -1203,7 +1203,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                              && desc.IsObjectType(prop.Type)
                              && obj.Fields[name] is StoredRef objRef)
                     {
-                        obj.Fields[name] = new StoredSet(MintCollectionId(doc),
+                        obj.Fields[name] = new StoredSet(MintCollectionId(db),
                             new Dictionary<int, StoredValue> { [objRef.Id] = objRef });
                         changed = true;
                     }
@@ -1219,7 +1219,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // leaves an untouched data file's siblings untouched too (nothing to re-baseline).
         if (changed)
         {
-            SaveRaw(dataPath, doc);
+            SaveRaw(dataPath, db);
             var logPath = AppPaths.LogPathForDataPath(dataPath);
             var genesisPath = AppPaths.GenesisPathForDataPath(dataPath);
             if (File.Exists(logPath)) File.Delete(logPath);
@@ -1230,11 +1230,11 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     // Mint a fresh intrinsic id on a doc being migrated (a reshaped collection needs one). Mirrors the
     // instance MintId: bump NextId, falling back to the max extent id for a counter-less legacy doc.
-    private static int MintCollectionId(Db doc)
+    private static int MintCollectionId(Db db)
     {
-        var basis = doc.NextId != 0 ? doc.NextId : MaxExtentId(doc);
-        doc.NextId = basis + 1;
-        return doc.NextId;
+        var basis = db.NextId != 0 ? db.NextId : MaxExtentId(db);
+        db.NextId = basis + 1;
+        return db.NextId;
     }
 
     // ── the versioned publish boundary entry (M13 slice 4) ───────────────────────────
@@ -1296,15 +1296,15 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     }
 
     internal static BoundaryApplyResult TransformDb(
-        Db doc, DesignDiff diff, InstanceDescription targetDesc, List<LogWrite> writes,
+        Db db, DesignDiff diff, InstanceDescription targetDesc, List<LogWrite> writes,
         RestorationPlan? restorations = null)
     {
         var startWriteCount = writes.Count;
         // ── type renames first (so every ref-refresh below sees the re-keyed extent) ──
         foreach (var rename in diff.TypeRenames)
         {
-            if (!doc.Extents.TryGetValue(rename.FromName, out var pool)) continue; // no data of this type — nothing to carry
-            var newPool = doc.Extents.TryGetValue(rename.ToName, out var existing) ? existing : new Dictionary<int, StoredObject>();
+            if (!db.Extents.TryGetValue(rename.FromName, out var pool)) continue; // no data of this type — nothing to carry
+            var newPool = db.Extents.TryGetValue(rename.ToName, out var existing) ? existing : new Dictionary<int, StoredObject>();
             foreach (var (id, obj) in pool.ToList())
             {
                 writes.Add(new Remove(id, obj));
@@ -1312,15 +1312,15 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 writes.Add(new Create(id, rename.ToName, new Dictionary<string, StoredValue>(renamed.Fields)));
                 newPool[id] = renamed;
             }
-            doc.Extents.Remove(rename.FromName);
-            doc.Extents[rename.ToName] = newPool;
+            db.Extents.Remove(rename.FromName);
+            db.Extents[rename.ToName] = newPool;
         }
 
         // ── prop renames: per object of the (possibly just-renamed) owning type, drop the old key + set
         //    the new one, carrying the SAME stored value across (identity — the whole point of this slice).
         foreach (var rename in diff.PropRenames)
         {
-            if (!doc.Extents.TryGetValue(rename.TypeName, out var pool)) continue;
+            if (!db.Extents.TryGetValue(rename.TypeName, out var pool)) continue;
             foreach (var obj in pool.Values)
             {
                 if (!obj.Fields.TryGetValue(rename.FromProp, out var value)) continue; // nothing stored under the old name
@@ -1338,7 +1338,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         var unconvertibleCells = new List<string>();
         foreach (var conv in diff.Conversions)
         {
-            if (!doc.Extents.TryGetValue(conv.TypeName, out var pool)) continue;
+            if (!db.Extents.TryGetValue(conv.TypeName, out var pool)) continue;
             foreach (var obj in pool.Values)
             {
                 if (obj.Fields.GetValueOrDefault(conv.PropName) is not StoredLeaf leaf) continue;
@@ -1365,13 +1365,13 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         var unsupportedReshapes = new List<string>();
         foreach (var card in diff.CardinalityChanges)
         {
-            if (!doc.Extents.TryGetValue(card.TypeName, out var pool)) continue;
+            if (!db.Extents.TryGetValue(card.TypeName, out var pool)) continue;
             foreach (var obj in pool.Values)
             {
                 if (card.FromCardinality == Cardinality.Single && card.ToCardinality == Cardinality.Set
                     && obj.Fields.GetValueOrDefault(card.PropName) is StoredRef objRef)
                 {
-                    var setId = MintCollectionId(doc);
+                    var setId = MintCollectionId(db);
                     var newSet = new StoredSet(setId, new Dictionary<int, StoredValue> { [objRef.Id] = objRef });
                     writes.Add(new FieldWrite(obj.Id, card.PropName, objRef, newSet));
                     obj.Fields[card.PropName] = newSet;
@@ -1382,7 +1382,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     // Set/Dict with a fresh id, an unset single object ref = absent, a scalar single's
                     // default leaf), so the remount's startup guard passes. Logged as a FieldWrite carrying
                     // the OLD value (recoverable), and flagged as a destructive drop.
-                    var newDefault = NewShapeDefault(card.PropName, card.ToCardinality, card.TypeName, targetDesc, doc);
+                    var newDefault = NewShapeDefault(card.PropName, card.ToCardinality, card.TypeName, targetDesc, db);
                     writes.Add(new FieldWrite(obj.Id, card.PropName, oldValue, newDefault));
                     if (newDefault is null) obj.Fields.Remove(card.PropName);
                     else obj.Fields[card.PropName] = newDefault;
@@ -1394,7 +1394,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // ── removed props / types: drop the stored value (destructive — reported, still applied loudly) ──
         foreach (var rem in diff.Removes)
         {
-            if (!doc.Extents.TryGetValue(rem.TypeName, out var pool)) continue;
+            if (!db.Extents.TryGetValue(rem.TypeName, out var pool)) continue;
             foreach (var obj in pool.Values)
             {
                 if (!obj.Fields.TryGetValue(rem.PropName, out var old)) continue;
@@ -1404,10 +1404,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
         foreach (var typeRem in diff.TypeRemoves)
         {
-            if (!doc.Extents.TryGetValue(typeRem.TypeName, out var pool)) continue;
+            if (!db.Extents.TryGetValue(typeRem.TypeName, out var pool)) continue;
             foreach (var (id, obj) in pool.ToList())
                 writes.Add(new Remove(id, obj));
-            doc.Extents.Remove(typeRem.TypeName);
+            db.Extents.Remove(typeRem.TypeName);
         }
 
         var restoredCells = new List<string>();
@@ -1419,18 +1419,18 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             var targetType = targetDesc.FindType(add.TypeName);
             if (targetType is null || targetType.BaseType != BaseType.Object) continue;
             if (!reachableRestoredRefs.TryGetValue(add.TypeName, out var reachableIds)) continue;
-            if (!doc.Extents.TryGetValue(add.TypeName, out var pool))
-                doc.Extents[add.TypeName] = pool = new();
+            if (!db.Extents.TryGetValue(add.TypeName, out var pool))
+                db.Extents[add.TypeName] = pool = new();
             foreach (var old in objects)
             {
                 if (!reachableIds.Contains(old.Id)) continue;
                 if (pool.ContainsKey(old.Id)) continue;
-                if (doc.Extents.Values.Any(p => p.ContainsKey(old.Id)))
+                if (db.Extents.Values.Any(p => p.ContainsKey(old.Id)))
                     throw new InvalidOperationException($"Cannot resurrect id {old.Id}: the id is already in use.");
-                var fields = RestoredObjectFields(old, targetType, add.TypeName, targetDesc, doc, plannedRefs);
+                var fields = RestoredObjectFields(old, targetType, add.TypeName, targetDesc, db, plannedRefs);
                 var restored = new StoredObject(add.TypeName, old.Id, fields);
                 pool[old.Id] = restored;
-                if (doc.NextId <= old.Id) doc.NextId = old.Id + 1;
+                if (db.NextId <= old.Id) db.NextId = old.Id + 1;
                 writes.Add(new Create(old.Id, add.TypeName, fields));
                 restoredCells.Add($"{add.TypeName}/{old.Id}");
             }
@@ -1438,14 +1438,14 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         foreach (var add in diff.Adds)
         {
             if (restorations is null || !restorations.PropValues.TryGetValue(add.PropId, out var values)) continue;
-            if (!doc.Extents.TryGetValue(add.TypeName, out var pool)) continue;
+            if (!db.Extents.TryGetValue(add.TypeName, out var pool)) continue;
             var prop = targetDesc.FindType(add.TypeName)?.Props?.FirstOrDefault(p => p.Name == add.PropName);
             if (prop is null) continue;
             foreach (var obj in pool.Values)
             {
                 if (obj.Fields.ContainsKey(add.PropName)) continue;
                 if (!values.TryGetValue(obj.Id, out var oldValue)) continue;
-                var restored = ConvertRestoredValue(oldValue, prop, targetDesc, doc, plannedRefs);
+                var restored = ConvertRestoredValue(oldValue, prop, targetDesc, db, plannedRefs);
                 if (restored is null) continue;
                 writes.Add(new FieldWrite(obj.Id, add.PropName, null, restored));
                 obj.Fields[add.PropName] = restored;
@@ -1458,14 +1458,14 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         var renameMap = diff.TypeRenames.ToDictionary(r => r.FromName, r => r.ToName);
         if (renameMap.Count > 0)
         {
-            if (doc.Root is StoredRef rootRef && renameMap.TryGetValue(rootRef.TypeName, out var newRootType))
+            if (db.Root is StoredRef rootRef && renameMap.TryGetValue(rootRef.TypeName, out var newRootType))
             {
                 var newRoot = rootRef with { TypeName = newRootType };
                 writes.Add(new RootWrite(rootRef, newRoot));
-                doc.Root = newRoot;
+                db.Root = newRoot;
             }
 
-            foreach (var pool in doc.Extents.Values)
+            foreach (var pool in db.Extents.Values)
                 foreach (var obj in pool.Values)
                     foreach (var name in obj.Fields.Keys.ToList())
                         switch (obj.Fields[name])
@@ -1559,34 +1559,34 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     }
 
     private static Dictionary<string, StoredValue> RestoredObjectFields(
-        StoredObject old, TypeDefinition targetType, string typeName, InstanceDescription targetDesc, Db doc,
+        StoredObject old, TypeDefinition targetType, string typeName, InstanceDescription targetDesc, Db db,
         IReadOnlyDictionary<string, HashSet<int>> plannedRefs)
     {
         var fields = new Dictionary<string, StoredValue>();
         foreach (var prop in targetType.Props ?? [])
         {
             if (old.Fields.TryGetValue(prop.Name, out var oldValue)
-                && ConvertRestoredValue(oldValue, prop, targetDesc, doc, plannedRefs) is { } restored)
+                && ConvertRestoredValue(oldValue, prop, targetDesc, db, plannedRefs) is { } restored)
             {
                 fields[prop.Name] = restored;
                 continue;
             }
-            if (NewShapeDefault(prop.Name, prop.Cardinality, typeName, targetDesc, doc) is { } def)
+            if (NewShapeDefault(prop.Name, prop.Cardinality, typeName, targetDesc, db) is { } def)
                 fields[prop.Name] = def;
         }
         return fields;
     }
 
     private static StoredValue? ConvertRestoredValue(
-        StoredValue oldValue, PropDefinition prop, InstanceDescription targetDesc, Db doc,
+        StoredValue oldValue, PropDefinition prop, InstanceDescription targetDesc, Db db,
         IReadOnlyDictionary<string, HashSet<int>> plannedRefs)
     {
         if (prop.Cardinality == Cardinality.Set && oldValue is StoredSet oldSet && targetDesc.IsObjectType(prop.Type))
         {
             var members = oldSet.Members.Values.OfType<StoredRef>()
-                .Where(setRef => RefReachable(setRef, prop.Type, doc, plannedRefs))
+                .Where(setRef => RefReachable(setRef, prop.Type, db, plannedRefs))
                 .ToDictionary(setRef => setRef.Id, setRef => (StoredValue)(setRef with { TypeName = prop.Type }));
-            return new StoredSet(MintCollectionId(doc), members);
+            return new StoredSet(MintCollectionId(db), members);
         }
         if (prop.Cardinality == Cardinality.Dictionary && oldValue is StoredDict oldDict)
         {
@@ -1595,7 +1595,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             {
                 if (targetDesc.IsObjectType(prop.Type))
                 {
-                    if (value is StoredRef dictRef && RefReachable(dictRef, prop.Type, doc, plannedRefs))
+                    if (value is StoredRef dictRef && RefReachable(dictRef, prop.Type, db, plannedRefs))
                         entries[key] = dictRef with { TypeName = prop.Type };
                 }
                 else if (value is StoredLeaf dictLeaf)
@@ -1604,7 +1604,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     entries[key] = new StoredLeaf(converted ?? DefaultBase(LeafBase(prop.Type, targetDesc)));
                 }
             }
-            return new StoredDict(MintCollectionId(doc), entries);
+            return new StoredDict(MintCollectionId(db), entries);
         }
         if (prop.Cardinality != Cardinality.Single) return null;
         if (oldValue is StoredLeaf leaf && !targetDesc.IsObjectType(prop.Type))
@@ -1613,18 +1613,18 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             return new StoredLeaf(converted ?? DefaultBase(LeafBase(prop.Type, targetDesc)));
         }
         if (oldValue is StoredRef r && targetDesc.IsObjectType(prop.Type)
-            && RefReachable(r, prop.Type, doc, plannedRefs))
+            && RefReachable(r, prop.Type, db, plannedRefs))
             return r with { TypeName = prop.Type };
         return null;
     }
 
     private static bool RefReachable(
-        StoredRef r, string typeName, Db doc, IReadOnlyDictionary<string, HashSet<int>> plannedRefs) =>
-        doc.Extents.GetValueOrDefault(typeName)?.ContainsKey(r.Id) == true
+        StoredRef r, string typeName, Db db, IReadOnlyDictionary<string, HashSet<int>> plannedRefs) =>
+        db.Extents.GetValueOrDefault(typeName)?.ContainsKey(r.Id) == true
         || plannedRefs.GetValueOrDefault(typeName)?.Contains(r.Id) == true;
 
     internal static void SaveBoundary(
-        string dataPath, Db doc, int startVersion, List<LogWrite> writes, BoundaryMarker boundary)
+        string dataPath, Db db, int startVersion, List<LogWrite> writes, BoundaryMarker boundary)
     {
         // WAL ORDER (the slice-1 law): append the log entry FIRST, THEN rewrite the snapshot — the SAME
         // fixed order the live Save() uses (append THEN SaveRaw), never the inverse. A crash BETWEEN the two
@@ -1632,11 +1632,11 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         // the post-publish state), never AHEAD of it (which ReconcileLogOnBoot rejects with a loud
         // StoredDataException — "snapshot is AHEAD of its own log" — bricking the published instance). So
         // the entry has to be on disk before the snapshot that describes the same version is.
-        doc.Version = startVersion + 1;
+        db.Version = startVersion + 1;
         var (who, msgId) = StoreWriteContext.Get();
-        var entry = new LogEntry(doc.Version, DateTimeOffset.UtcNow, who, msgId, doc.NextId, writes, boundary);
+        var entry = new LogEntry(db.Version, DateTimeOffset.UtcNow, who, msgId, db.NextId, writes, boundary);
         AppendLogEntry(AppPaths.LogPathForDataPath(dataPath), entry);
-        SaveRaw(dataPath, doc);
+        SaveRaw(dataPath, db);
     }
 
     // The value a freshly-created object would carry for `propName` under its NEW cardinality (mirrors
@@ -1645,20 +1645,20 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // default leaf for a single scalar. Used when a boundary apply must drop an un-carriable reshape's
     // old value to the new shape so the remount's startup guard passes (fix 2).
     private static StoredValue? NewShapeDefault(
-        string propName, Cardinality toCardinality, string typeName, InstanceDescription targetDesc, Db doc)
+        string propName, Cardinality toCardinality, string typeName, InstanceDescription targetDesc, Db db)
     {
-        if (toCardinality == Cardinality.Set) return new StoredSet(MintCollectionId(doc), new());
-        if (toCardinality == Cardinality.Dictionary) return new StoredDict(MintCollectionId(doc), new());
+        if (toCardinality == Cardinality.Set) return new StoredSet(MintCollectionId(db), new());
+        if (toCardinality == Cardinality.Dictionary) return new StoredDict(MintCollectionId(db), new());
         // Single: an object ref is absent (null → the caller removes the key); a scalar gets its default.
         var propType = targetDesc.FindType(typeName)?.Props?.FirstOrDefault(p => p.Name == propName)?.Type;
         if (propType is null || targetDesc.IsObjectType(propType)) return null;
         return new StoredLeaf(DefaultBase(LeafBase(propType, targetDesc)));
     }
 
-    private static int MaxExtentId(Db doc)
+    private static int MaxExtentId(Db db)
     {
         var max = 0;
-        foreach (var pool in doc.Extents.Values)
+        foreach (var pool in db.Extents.Values)
             foreach (var id in pool.Keys)
                 if (id > max) max = id;
         return max;
@@ -1893,11 +1893,11 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // ── helpers: doc + extents ──────────────────────────────────────────────────
 
     // Patch in the structural slots a hand-seeded or legacy document may omit.
-    private Db Normalize(Db doc)
+    private Db Normalize(Db db)
     {
-        doc.Extents ??= new();
-        doc.Root ??= InitialRootValue();
-        return doc;
+        db.Extents ??= new();
+        db.Root ??= InitialRootValue();
+        return db;
     }
 
     // The store's ONE commit chokepoint — called exactly where it always was, by every mutating method,
@@ -1950,8 +1950,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // A snapshot of doc, independent of the live _db reference (genesis must not silently track later
     // mutations — it round-trips through the same Opts the rest of the store already uses, so this is
     // exactly what a fresh LoadRaw of the just-serialized bytes would produce).
-    internal static Db CloneDb(Db doc) =>
-        JsonSerializer.Deserialize<Db>(JsonSerializer.Serialize(doc, Opts), Opts)!;
+    internal static Db CloneDb(Db db) =>
+        JsonSerializer.Deserialize<Db>(JsonSerializer.Serialize(db, Opts), Opts)!;
 
     // Append one JSONL line (UTF-8, no BOM, trailing '\n') to the log file — the durable half of the WAL
     // commit. Creates the directory/file on first use (mirrors SaveRaw's Directory.CreateDirectory — a
@@ -2125,14 +2125,14 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // migrate pass, and the time-travel clone's materialized-doc write (KernelHost.CloneAsync) — `internal`
     // (not `private`) is this method's ONE approved widening for M13 slice 7, mirroring ApplyPublishBoundary's
     // own `internal` visibility for the same reason (an offline write onto a NOT-YET-LIVE store's files).
-    internal static void SaveRaw(string path, Db doc)
+    internal static void SaveRaw(string path, Db db)
     {
         var tmp = path + ".tmp";
         // Ensure the target directory exists before the temp write. A freshly-created instance
         // (sys.create) may not have its data dir yet, and File.WriteAllText would otherwise throw
         // "Could not find a part of the path …app-data.json.tmp" — the host-action deploy race.
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(tmp, JsonSerializer.Serialize(doc, Opts));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(db, Opts));
         // Atomically replace the data file, retrying through a transient sharing violation. On Windows the
         // overwriting move must replace `path`, which fails ("Access to the path is denied" /
         // "used by another process") whenever ANOTHER handle is briefly open on it — a virus scanner,

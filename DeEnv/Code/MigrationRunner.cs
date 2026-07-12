@@ -95,7 +95,7 @@ public static class MigrationRunner
 
     private static void Harvest(
         TypeDefinition type, int id, Dictionary<string, IExecValue> before,
-        ExecObject obj, Db doc, List<LogWrite> writes)
+        ExecObject obj, Db db, List<LogWrite> writes)
     {
         foreach (var (name, after) in obj.Props)
         {
@@ -109,7 +109,7 @@ public static class MigrationRunner
 
             var scalar = ScalarForDeclared(after, prop.Type, type.Name, name);
             var leaf = new StoredLeaf(scalar);
-            var stored = doc.Extents[type.Name][id];
+            var stored = db.Extents[type.Name][id];
             var oldStored = stored.Fields.GetValueOrDefault(name);
             writes.Add(new FieldWrite(id, name, oldStored, leaf));
             stored.Fields[name] = leaf;
