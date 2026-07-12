@@ -25,7 +25,7 @@ namespace DeEnv.Storage;
 // The whole document. A mutable class (minting and writes edit it in place). Property
 // names map to the on-disk keys (extents/root/nextId/version) via the store's camelCase
 // PropertyNamingPolicy — no per-property name attributes.
-public sealed class StoreDoc
+public sealed class Db
 {
     public Dictionary<string, Dictionary<int, StoredObject>> Extents { get; set; } = new();
 

@@ -183,11 +183,11 @@ public static class PublishReportComputer
         foreach (var stepId in steps)
         {
             var stepFields = FindCommitOrThrow(store, stepId);
-            var oldDoc = JsonFileInstanceStore.CloneDoc(doc);
+            var oldDoc = JsonFileInstanceStore.CloneDb(doc);
             var prevDesc = InstanceDescriptionLoader.Load(KernelHostActions.TextOf(prevFields, "text"));
             var stepDesc = InstanceDescriptionLoader.Load(KernelHostActions.TextOf(stepFields, "text"));
             var stepDiff = DesignDiffer.Compute(Snapshot(prevFields), Snapshot(stepFields));
-            var transformed = JsonFileInstanceStore.TransformDoc(doc, stepDiff, stepDesc, writes);
+            var transformed = JsonFileInstanceStore.TransformDb(doc, stepDiff, stepDesc, writes);
             unconvertible.AddRange(transformed.UnconvertibleCells);
             unsupported.AddRange(transformed.UnsupportedReshapes);
             migrationReports.Add(MigrationRunner.Run(
@@ -198,7 +198,7 @@ public static class PublishReportComputer
         }
 
         var finalDiff = DesignDiffer.Compute(Snapshot(prevFields), Snapshot(headFields));
-        var final = JsonFileInstanceStore.TransformDoc(
+        var final = JsonFileInstanceStore.TransformDb(
             doc, finalDiff, headDesc, writes, BuildRestorationPlan(store, targetDataPath, finalDiff));
         unconvertible.AddRange(final.UnconvertibleCells);
         unsupported.AddRange(final.UnsupportedReshapes);

@@ -769,8 +769,8 @@ public sealed class PublishSteps
         var genesis = JsonSerializer.Deserialize<GenesisFile>(File.ReadAllText(_targetGenesisPath), StoreOpts)!;
         var entries = File.ReadAllLines(_targetLogPath)
             .Select(l => JsonSerializer.Deserialize<LogEntry>(l, StoreOpts)!).ToList();
-        var replayed = entries.Aggregate(genesis.Doc, AppLogReplay.Apply);
-        var live = JsonSerializer.Deserialize<StoreDoc>(File.ReadAllText(_targetDataPath), StoreOpts)!;
+        var replayed = entries.Aggregate(genesis.Db, AppLogReplay.Apply);
+        var live = JsonSerializer.Deserialize<Db>(File.ReadAllText(_targetDataPath), StoreOpts)!;
         await Assert.That(AppLogReplay.Equivalent(replayed, live)).IsTrue();
     }
 
@@ -790,7 +790,7 @@ public sealed class PublishSteps
             .Select(l => JsonSerializer.Deserialize<LogEntry>(l, StoreOpts)!).ToList();
         // Reconstruct the doc as it stood BEFORE the last (boundary) entry, and write THAT over the
         // caught-up snapshot — exactly a crash that appended the entry but died before SaveRaw.
-        var rolledBack = entries.Take(entries.Count - 1).Aggregate(genesis.Doc, AppLogReplay.Apply);
+        var rolledBack = entries.Take(entries.Count - 1).Aggregate(genesis.Db, AppLogReplay.Apply);
         File.WriteAllText(_targetDataPath, JsonSerializer.Serialize(rolledBack, StoreOpts));
     }
 

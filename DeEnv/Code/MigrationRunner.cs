@@ -10,8 +10,8 @@ public static class MigrationRunner
 {
     public static MigrationRunReport Run(
         string source, int commitId, string message,
-        StoreDoc oldDoc, InstanceDescription oldDesc,
-        StoreDoc newDoc, InstanceDescription newDesc,
+        Db oldDoc, InstanceDescription oldDesc,
+        Db newDoc, InstanceDescription newDesc,
         List<LogWrite> writes)
     {
         var fns = Parse.Run(CodeParse.Section("migration"), "migration\n" + IndentForSection(source))
@@ -95,7 +95,7 @@ public static class MigrationRunner
 
     private static void Harvest(
         TypeDefinition type, int id, Dictionary<string, IExecValue> before,
-        ExecObject obj, StoreDoc doc, List<LogWrite> writes)
+        ExecObject obj, Db doc, List<LogWrite> writes)
     {
         foreach (var (name, after) in obj.Props)
         {

@@ -411,7 +411,7 @@ function resolveCanvasSelection(e: MouseEvent): void {
 // TWO ASSUMPTIONS the 0-as-"nothing-selected" sentinel relies on (ui-arch review, both confirmed against
 // the store, not just asserted):
 //  (1) sys.id() never returns 0 for a real object. Every id comes from one store-wide monotonic counter
-//      that starts at 1 (JsonFileInstanceStore.cs BuildInitialDoc: "the root is id 1 ... starts at 1, so
+//      that starts at 1 (JsonFileInstanceStore.cs BuildInitialDb: "the root is id 1 ... starts at 1, so
 //      they mint 2, 3, …"; BuildSeededDoc seeds doc.NextId from the authored ids' own max), and every
 //      write path that could introduce a literal id rejects a non-positive one outright
 //      (InstanceDescriptionLoader.cs:137-139 "initialData id ... is not a positive integer";

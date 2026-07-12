@@ -223,7 +223,7 @@ public sealed class AppLogSteps(InstanceContext ctx)
         // its snapshot rewrite (the WAL's fixed append-then-snapshot order — see JsonFileInstanceStore.Save).
         var logEntries = ReadRawLogEntries();
         var genesis = JsonSerializer.Deserialize<GenesisFile>(File.ReadAllText(_genesisPath), StoreOpts)!;
-        var rolledBackDoc = logEntries.Take(logEntries.Count - 1).Aggregate(genesis.Doc, AppLogReplay.Apply);
+        var rolledBackDoc = logEntries.Take(logEntries.Count - 1).Aggregate(genesis.Db, AppLogReplay.Apply);
         File.WriteAllText(_dataPath, JsonSerializer.Serialize(rolledBackDoc, StoreOpts));
     }
 
@@ -252,7 +252,7 @@ public sealed class AppLogSteps(InstanceContext ctx)
         var genesis = JsonSerializer.Deserialize<GenesisFile>(File.ReadAllText(_genesisPath), StoreOpts)!;
         var id = AliasId(alias);
         StoredObject? entry = null;
-        foreach (var pool in genesis.Doc.Extents.Values)
+        foreach (var pool in genesis.Db.Extents.Values)
             if (pool.TryGetValue(id, out var e)) entry = e;
         await Assert.That(entry).IsNotNull();
         var title = entry!.Fields["title"];
@@ -315,19 +315,19 @@ public sealed class AppLogSteps(InstanceContext ctx)
         return set.Id;
     }
 
-    private StoreDoc? _replayed;
+    private Db? _replayed;
 
     [When("the log is replayed from genesis to head")]
     public void WhenReplayed()
     {
         var genesis = JsonSerializer.Deserialize<GenesisFile>(File.ReadAllText(_genesisPath), StoreOpts)!;
-        _replayed = ReadRawLogEntries().Aggregate(genesis.Doc, AppLogReplay.Apply);
+        _replayed = ReadRawLogEntries().Aggregate(genesis.Db, AppLogReplay.Apply);
     }
 
     [Then("the replayed data equals the live snapshot on disk")]
     public async Task ThenReplayedEqualsLive()
     {
-        var live = JsonSerializer.Deserialize<StoreDoc>(File.ReadAllText(_dataPath), StoreOpts)!;
+        var live = JsonSerializer.Deserialize<Db>(File.ReadAllText(_dataPath), StoreOpts)!;
         await Assert.That(AppLogReplay.Equivalent(_replayed!, live)).IsTrue();
         // Also the store's own fsck over the SAME live files — the exact invariant JsonFileInstanceStore
         // exposes as its public API (Fsck()), not just this step's own hand-rolled replay above.

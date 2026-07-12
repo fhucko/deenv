@@ -1,16 +1,16 @@
 namespace DeEnv.Storage;
 
 // The ONE apply implementation shared by boot-replay (JsonFileInstanceStore.ReconcileLogOnBoot) and fsck
-// (JsonFileInstanceStore.Fsck) — literally applies a LogEntry's writes to a StoreDoc, stored-level, with
+// (JsonFileInstanceStore.Fsck) — literally applies a LogEntry's writes to a Db, stored-level, with
 // ZERO schema resolution, no GC, and no re-minting: exactly what the live write did, nothing derived. A
 // durable log must reproduce the past exactly even if today's GC/resolver code later changes behavior, so
 // replay never calls back into either.
 public static class AppLogReplay
 {
-    // Apply one entry's writes to doc IN PLACE (StoreDoc/StoredObject/StoredSet/StoredDict all hold
+    // Apply one entry's writes to doc IN PLACE (Db/StoredObject/StoredSet/StoredDict all hold
     // mutable dictionaries — the same in-place-edit style JsonFileInstanceStore itself uses) and stamp the
     // entry's own Seq/NextId, then return doc (so callers can Aggregate/fold entry after entry).
-    public static StoreDoc Apply(StoreDoc doc, LogEntry entry)
+    public static Db Apply(Db doc, LogEntry entry)
     {
         foreach (var write in entry.Writes)
             ApplyWrite(doc, write);
@@ -19,7 +19,7 @@ public static class AppLogReplay
         return doc;
     }
 
-    private static void ApplyWrite(StoreDoc doc, LogWrite write)
+    private static void ApplyWrite(Db doc, LogWrite write)
     {
         switch (write)
         {
@@ -87,7 +87,7 @@ public static class AppLogReplay
 
     // ── lookups (mirror JsonFileInstanceStore's own private helpers — replay walks a doc the same way) ──
 
-    private static StoredObject? ExtentEntryById(StoreDoc doc, int id)
+    private static StoredObject? ExtentEntryById(Db doc, int id)
     {
         foreach (var pool in doc.Extents.Values)
             if (pool.GetValueOrDefault(id) is { } entry)
@@ -95,7 +95,7 @@ public static class AppLogReplay
         return null;
     }
 
-    private static StoredSet? FindSetNode(StoreDoc doc, int setId)
+    private static StoredSet? FindSetNode(Db doc, int setId)
     {
         foreach (var pool in doc.Extents.Values)
             foreach (var entry in pool.Values)
@@ -105,7 +105,7 @@ public static class AppLogReplay
         return null;
     }
 
-    private static StoredDict? FindDictNode(StoreDoc doc, int dictId)
+    private static StoredDict? FindDictNode(Db doc, int dictId)
     {
         foreach (var pool in doc.Extents.Values)
             foreach (var entry in pool.Values)
@@ -117,7 +117,7 @@ public static class AppLogReplay
 
     // ── deep content equality (the fsck invariant's actual check) ──────────────────────────────────
     //
-    // A genuine structural compare, NOT a serialized-text compare: StoreDoc's Extents/Fields/Members/
+    // A genuine structural compare, NOT a serialized-text compare: Db's Extents/Fields/Members/
     // Entries are all plain Dictionary<,>, which has no value Equals (and .NET does not promise
     // enumeration order matches insertion order across two independently-built dictionaries that
     // happen to hold the same entries) — so two docs holding IDENTICAL data could serialize to
@@ -125,7 +125,7 @@ public static class AppLogReplay
     // FAIL a genuinely-correct replay. Comparing key-by-key (order-independent) is the only check that
     // actually verifies "genesis replayed to head reproduces the current data," which is the entire
     // point of fsck.
-    public static bool Equivalent(StoreDoc a, StoreDoc b)
+    public static bool Equivalent(Db a, Db b)
     {
         if (a.Version != b.Version || a.NextId != b.NextId) return false;
         if (!ValueEqual(a.Root, b.Root)) return false;

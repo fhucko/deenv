@@ -15,10 +15,10 @@ namespace DeEnv.Storage;
 // uses for the on-disk document) — literal old/new values, zero schema resolution, so replay never needs
 // the app's TYPE information and can never drift from what the schema-aware write actually did. This is
 // deliberately a LOWER layer than IInstanceStore's own model-terms API (paths/nodes): the log records what
-// the store did to StoreDoc, not what the caller asked for.
+// the store did to Db, not what the caller asked for.
 
 // One append-only entry: everything one store commit did, plus who/when/why. Seq is the store's HEAD
-// version AFTER this entry's writes (StoreDoc.Version, the same monotonic number CommitBatch's baseVersion
+// version AFTER this entry's writes (Db.Version, the same monotonic number CommitBatch's baseVersion
 // guard already stamps) — so the log's seq and the store's version are the same counter by construction; a
 // batch that bumps Version by more than one still emits exactly one entry (its final seq), which is why
 // entry seqs are monotonic but may have GAPS relative to a naive per-write count.
@@ -68,7 +68,7 @@ public sealed record RestorationPlan(
 // first time any mutating store method runs. GenesisSeq is the store version genesis was taken at (0 for a
 // store whose very first mutation is what freezes it) — replay starts here and walks every log entry with
 // Seq > GenesisSeq forward to reproduce the live document (the fsck invariant).
-public sealed record GenesisFile(int GenesisSeq, StoreDoc Doc);
+public sealed record GenesisFile(int GenesisSeq, Db Db);
 
 // A single write inside an entry — a closed union, stored-level and literal (replay applies these with
 // ZERO schema resolution, no GC, no re-minting: exactly what happened, nothing derived). The `kind`
@@ -100,10 +100,10 @@ public sealed record DictSet(int DictId, string Key, StoredValue? Old, StoredVal
 public sealed record DictRemove(int DictId, string Key, StoredValue Old) : LogWrite;
 
 // A write that targets the DOCUMENT ROOT directly — reachable only for a scalar-typed Db (WriteLeafCore's
-// `path.IsRoot` branch: `_doc.Root = new StoredLeaf(value)`). An object-typed Db's root is a StoredRef, and
+// `path.IsRoot` branch: `_db.Root = new StoredLeaf(value)`). An object-typed Db's root is a StoredRef, and
 // every write that could target it (WriteObjectCore's WalkToObject-on-root) actually writes the ROOT
 // OBJECT's fields — which is a FieldWrite on that object's id, never a RootWrite (verified against
-// JsonFileInstanceStore: WriteObjectCore never assigns `_doc.Root`).
+// JsonFileInstanceStore: WriteObjectCore never assigns `_db.Root`).
 public sealed record RootWrite(StoredValue? Old, StoredValue? New) : LogWrite;
 
 // The ONE place LogEntry/LogWrite are read and written — mirrors StoredValueConverter exactly: a `kind`

@@ -71,7 +71,7 @@ public interface IInstanceStore
     CommitResult CommitBatch(
         IReadOnlyList<CommitCreate> creates, IReadOnlyList<CommitMutation> mutations, int? baseVersion = null);
 
-    // The store's current HEAD version (StoreDoc.Version) — bumped on every mutating write. Shipped to the
+    // The store's current HEAD version (Db.Version) — bumped on every mutating write. Shipped to the
     // client (SSR first paint + refetch) so it can remember "the version I last saw" and stamp a ctx's
     // baseVersion from it. Read-only; taking the lock so a reader never observes a version bumped mid-write.
     int CurrentVersion { get; }

@@ -11,7 +11,7 @@ namespace DeEnv.Tests.Code;
 // docs/plans/assets-design.md §4) — a cheap, kernel/designer/WS-free alternative to Publish.feature's
 // full end-to-end migration scenarios (which need a running kernel + designer + a real publish round
 // trip to exercise a migration fn at all). Calls MigrationRunner.Run directly over a hand-built
-// StoreDoc: `Db` itself is the migrated extent (JsonFileInstanceStore.BuildInitialDoc seeds Db into
+// Db: `Db` itself is the migrated extent (JsonFileInstanceStore.BuildInitialDoc seeds Db into
 // Extents too), so no nested object type/set/collection wiring is needed — the smallest document that
 // can carry an `image` field through a migration.
 public sealed class MigrationRunnerImageTests
@@ -52,7 +52,7 @@ public sealed class MigrationRunnerImageTests
             .IsEqualTo("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png");
     }
 
-    private static StoreDoc DbWithPhoto(string hash) => new()
+    private static Db DbWithPhoto(string hash) => new()
     {
         NextId = 2,
         Root = new StoredRef("Db", 1),

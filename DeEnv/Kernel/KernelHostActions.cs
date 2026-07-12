@@ -61,7 +61,7 @@ public sealed class KernelHostActions(
     // fresh `new JsonFileInstanceStore` per call over the same file — safe ONLY because nothing else wrote
     // between open and use, which the design host constantly violated (a fresh-store commit followed by the
     // boot-cached store's mirror write clobbered the snapshot AND collided WAL seqs). Now all five actions
-    // share the ONE live store the kernel already hosts this instance on, so its `_sync`/`_doc`/version/WAL
+    // share the ONE live store the kernel already hosts this instance on, so its `_sync`/`_db`/version/WAL
     // are the single authority again. Resolved via a Func (not a field) because the HostedInstance — and
     // thus its Store — is built AFTER this seam is constructed (see KernelHost.HostActionsFor).
     Func<IInstanceStore> resolveStore,
@@ -220,7 +220,7 @@ public sealed class KernelHostActions(
 
                 // ONE-STORE-PER-FILE invariant for the TARGET (mirror-clobber fix): ApplyPublishBoundary just
                 // rewrote target.DataPath OFFLINE — directly on the file, NOT through the target's live hosted
-                // store, whose in-memory `_doc` is now stale. Safe because (a) publish is one SYNCHRONOUS
+                // store, whose in-memory `_db` is now stale. Safe because (a) publish is one SYNCHRONOUS
                 // host-action step (single-operator — no concurrent writer to the target between the offline
                 // rewrite and the restart), and (b) restartInstance re-OPENS the target's store fresh from the
                 // rewritten file and hot-swaps it in, discarding the now-stale one. So the offline writer and a
@@ -656,7 +656,7 @@ public sealed class KernelHostActions(
     // NOT into db.designs (the app list stays main working copies only); its GC-reachability instead rides
     // Branch.workingCopy, with the Branch itself linked into db.branches (a root set) — verified below by
     // the Gherkin's "clone renders / stays alive" scenario, since GC walks the root Db's own fields
-    // (JsonFileInstanceStore.CollectGarbage marks from _doc.Root, and db.branches is one of Db's own set
+    // (JsonFileInstanceStore.CollectGarbage marks from _db.Root, and db.branches is one of Db's own set
     // props) exactly the same as it walks db.designs.
     private object? CreateBranch(JsonElement args)
     {

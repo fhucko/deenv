@@ -36,7 +36,7 @@ public sealed class StoreModelTests
         var doc = SampleDoc();
 
         var json = JsonSerializer.Serialize(doc, Opts);
-        var back = JsonSerializer.Deserialize<StoreDoc>(json, Opts)!;
+        var back = JsonSerializer.Deserialize<Db>(json, Opts)!;
 
         // Re-serializing the deserialized doc yields identical JSON (shape + keys + scalars).
         var json2 = JsonSerializer.Serialize(back, Opts);
@@ -86,7 +86,7 @@ public sealed class StoreModelTests
         }
         """;
 
-        var doc = JsonSerializer.Deserialize<StoreDoc>(onDisk, Opts)!;
+        var doc = JsonSerializer.Deserialize<Db>(onDisk, Opts)!;
 
         await Assert.That(doc.NextId).IsEqualTo(5);
         await Assert.That(doc.Root).IsTypeOf<StoredRef>();
@@ -133,7 +133,7 @@ public sealed class StoreModelTests
         var path = TempPath();
         try
         {
-            var seedDoc = new StoreDoc
+            var seedDoc = new Db
             {
                 NextId = 9,
                 Root = new StoredRef("Db", 1),
@@ -185,7 +185,7 @@ public sealed class StoreModelTests
         var path = TempPath();
         try
         {
-            var seedDoc = new StoreDoc
+            var seedDoc = new Db
             {
                 NextId = 9,
                 Root = new StoredRef("Db", 1),
@@ -225,7 +225,7 @@ public sealed class StoreModelTests
 
     // ── sample data + helpers ─────────────────────────────────────────────────────
 
-    private static StoreDoc SampleDoc() => new()
+    private static Db SampleDoc() => new()
     {
         NextId = 42,
         Root = new StoredRef("Db", 1),

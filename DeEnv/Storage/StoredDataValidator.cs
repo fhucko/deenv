@@ -10,7 +10,7 @@ namespace DeEnv.Storage;
 // file and the offending detail named, instead of half-working over stale data
 // (mutations silently rejected, reloads losing changes).
 //
-// Validation runs over the TYPED StoreDoc (node kinds are a closed union), so the walk
+// Validation runs over the TYPED Db (node kinds are a closed union), so the walk
 // pattern-matches on the value subtype and never sniffs a string key — the dictionary /
 // object ambiguity that produced the old "must be of type 'JsonValue'" GC bug cannot
 // arise here either.
@@ -20,7 +20,7 @@ namespace DeEnv.Storage;
 // existing file; the error names the remedy and leaves the decision to the user.
 public static class StoredDataValidator
 {
-    public static void Validate(StoreDoc doc, InstanceDescription desc, string filePath) =>
+    public static void Validate(Db doc, InstanceDescription desc, string filePath) =>
         new Walk(desc, filePath).Document(doc);
 
     private sealed class Walk(InstanceDescription desc, string filePath)
@@ -32,7 +32,7 @@ public static class StoredDataValidator
             $"Data file '{filePath}' does not match the running app: {detail} " +
             "Delete or move the file to reseed it from the app's initialData.");
 
-        public void Document(StoreDoc doc)
+        public void Document(Db doc)
         {
             CollectExtentIds(doc);
 
@@ -49,7 +49,7 @@ public static class StoredDataValidator
         // First pass over the extents: every type must be a declared object type, and
         // every entry envelope well-formed (id matches the key, typeName matches the
         // extent); collect ids for the reference checks.
-        private void CollectExtentIds(StoreDoc doc)
+        private void CollectExtentIds(Db doc)
         {
             foreach (var (typeName, pool) in doc.Extents)
             {
@@ -171,7 +171,7 @@ public static class StoredDataValidator
                 Fail($"{where} holds '{text.Text}', which is not a value of enum '{declaredType}'.");
         }
 
-        private void Root(StoreDoc doc)
+        private void Root(Db doc)
         {
             var db = desc.Db()!;
             if (doc.Root is null)

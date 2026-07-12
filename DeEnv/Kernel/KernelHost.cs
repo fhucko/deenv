@@ -89,10 +89,10 @@ public sealed class KernelHost(
     // instance per data file). Every mirror write (create/delete/rename/clone/setDesign keeping db.instances
     // in lockstep) and the boot design-library sync go through THIS one live store, the SAME instance
     // KernelHostActions now uses (via HostActionsFor's resolveStore) and the live WS session serves from — so
-    // a commit through a host action and a mirror write can never be two different in-memory `_doc`s racing
+    // a commit through a host action and a mirror write can never be two different in-memory `_db`s racing
     // one file. Was a field cached ONCE at boot: that copy went stale the moment any post-boot commit landed
     // through a (then-fresh) host-action store, and its next mirror `Save()` rewrote the snapshot from the
-    // stale `_doc` — silently deleting the commit AND colliding WAL seqs. Re-resolving live each call (a
+    // stale `_db` — silently deleting the commit AND colliding WAL seqs. Re-resolving live each call (a
     // cheap dictionary lookup) removes the staleness by construction, and stays correct across a design-host
     // restart (which swaps in a re-opened store). Null when no design-host is present (rare in practice).
     private IInstanceStore? DesignHostStore =>
@@ -141,7 +141,7 @@ public sealed class KernelHost(
             // per data file). Was `new JsonFileInstanceStore(spec.SchemaPath, spec.DataPath)` per call inside
             // KernelHostActions; now every action shares the SAME live store the kernel hosts this instance
             // on — so a commit and the db.instances mirror write (below) can no longer be two different
-            // in-memory `_doc`s racing one file. Lazy because the HostedInstance is registered AFTER this
+            // in-memory `_db`s racing one file. Lazy because the HostedInstance is registered AFTER this
             // seam is built (boot/create/clone all call HostActionsFor before Register); by action time it is
             // live. The store instance is re-resolved each action, so a rename/restart that swaps the hosted
             // instance's store hands back the CURRENT one. Fresh-store fallback only if the instance somehow
