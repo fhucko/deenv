@@ -581,6 +581,22 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                             is not { Cardinality: Cardinality.Set })
                             throw new InvalidOperationException($"'{ownerType}' has no set prop '{prop}'.");
                         break;
+                    case SetUnlinkMutation(var setId, var memberRef):
+                        if (FindSetNode(setId) is null) throw new InvalidOperationException($"No set with id {setId}.");
+                        RequireResolvable(memberRef);
+                        break;
+                    case SetUnlinkByPropMutation(var ownerRef, var prop, var memberRef):
+                        RequireResolvable(ownerRef);
+                        RequireResolvable(memberRef);
+                        // Same set-prop gate as SetLinkByPropMutation (see its arm): a bad prop throws
+                        // pre-apply with the store UNTOUCHED.
+                        var unlinkOwnerType = ownerRef < 0
+                            ? creates.First(c => c.TempId == ownerRef).TypeName
+                            : ExtentEntryById(ownerRef)!.TypeName;
+                        if (_desc.FindType(unlinkOwnerType)?.Props?.FirstOrDefault(p => p.Name == prop)
+                            is not { Cardinality: Cardinality.Set })
+                            throw new InvalidOperationException($"'{unlinkOwnerType}' has no set prop '{prop}'.");
+                        break;
                 }
 
             // The FIELD-LEVEL overlap check (M13 slice 6 — DECISIONS.md / app-versioning-design.md §2 + §0's
@@ -691,6 +707,18 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 : idMap.TryGetValue(idRef, out var real) ? real
                 : throw new InvalidOperationException($"Commit references unknown temp id {idRef}.");
 
+            // APPLY in TWO passes so the link-before-unlink invariant holds regardless of the caller's
+            // mutation order. Pass 1 links (every member is attached before anything is detached), pass 2
+            // unlinks (and applies the non-set field writes). A MOVE (link into B, unlink from A) then never
+            // briefly orphans the member: A's unlink runs AFTER B's link, so between the two the member is
+            // reachable from both only if it was ALREADY in A at batch start (the intended steady state),
+            // never from neither. A SetUnlinkByProp owner resolved to a just-minted create is safe in pass 1
+            // because the creates loop above already minted every create, so its nested set exists.
+            // The standalone RemoveFromSet path GCs per-call; here we GC ONCE at the end so a moved member
+            // (still reachable via B) is never swept, and a now-orphan (unlinked, linked nowhere) is
+            // collected exactly once, after every link landed.
+
+            // Pass 1 — all LINK mutations (attach members).
             foreach (var mutation in mutations)
                 switch (mutation)
                 {
@@ -703,6 +731,59 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                             ?? throw new InvalidOperationException($"No object with id {memberId}.");
                         set.Members[memberId] = new StoredRef(typeName, memberId);
                         _pending.Add(new SetLink(setId, memberId));
+                        BumpVersion(memberId);
+                        break;
+                    }
+                    case SetLinkByPropMutation(var ownerRef, var prop, var memberRef):
+                    {
+                        // Link a member into the owner's `prop` SET, addressed by (owner, prop) rather than a
+                        // raw set id — so the owner may be a fresh create just minted above (its nested set ids
+                        // are on the extent entry BuildFields minted, unreachable by any NodePath yet). Resolve
+                        // the owner (tempId→real like RefLinkMutation), read its `prop` StoredSet, then apply the
+                        // SAME in-memory add + SetLink log-write + member-version bump the SetLinkMutation arm does.
+                        var ownerId = ResolveRefId(ownerRef);
+                        var owner = ExtentEntryById(ownerId)
+                            ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
+                        if (owner.Fields.GetValueOrDefault(prop) is not StoredSet set)
+                            throw new InvalidOperationException($"'{owner.TypeName}' has no set prop '{prop}'.");
+                        var memberId = ResolveRefId(memberRef);
+                        var typeName = ExtentEntryById(memberId)?.TypeName
+                            ?? throw new InvalidOperationException($"No object with id {memberId}.");
+                        set.Members[memberId] = new StoredRef(typeName, memberId);
+                        _pending.Add(new SetLink(set.Id, memberId));
+                        BumpVersion(memberId);
+                        break;
+                    }
+                }
+
+            // Pass 2 — every UNLINK + non-set field write (detach members, write fields, write dicts).
+            foreach (var mutation in mutations)
+                switch (mutation)
+                {
+                    case SetUnlinkMutation(var setId, var memberRef):
+                    {
+                        var memberId = ResolveRefId(memberRef);
+                        var set = FindSetNode(setId)
+                            ?? throw new InvalidOperationException($"No set with id {setId}.");
+                        _pending.Add(new SetUnlink(setId, memberId));
+                        set.Members.Remove(memberId);
+                        BumpVersion(memberId);
+                        break;
+                    }
+                    case SetUnlinkByPropMutation(var ownerRef, var prop, var memberRef):
+                    {
+                        // Unlink a member from the owner's `prop` SET, addressed by (owner, prop) — the set
+                        // analog of SetLinkByPropMutation. Resolve the owner (tempId→real), read its `prop`
+                        // StoredSet, then apply the SAME in-memory remove + SetUnlink log-write + member-version
+                        // bump the SetUnlinkMutation arm does.
+                        var ownerId = ResolveRefId(ownerRef);
+                        var owner = ExtentEntryById(ownerId)
+                            ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
+                        if (owner.Fields.GetValueOrDefault(prop) is not StoredSet set)
+                            throw new InvalidOperationException($"'{owner.TypeName}' has no set prop '{prop}'.");
+                        var memberId = ResolveRefId(memberRef);
+                        _pending.Add(new SetUnlink(set.Id, memberId));
+                        set.Members.Remove(memberId);
                         BumpVersion(memberId);
                         break;
                     }
@@ -747,27 +828,17 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         BumpVersion(ownerId);
                         break;
                     }
-                    case SetLinkByPropMutation(var ownerRef, var prop, var memberRef):
-                    {
-                        // Link a member into the owner's `prop` SET, addressed by (owner, prop) rather than a
-                        // raw set id — so the owner may be a fresh create just minted above (its nested set ids
-                        // are on the extent entry BuildFields minted, unreachable by any NodePath yet). Resolve
-                        // the owner (tempId→real like RefLinkMutation), read its `prop` StoredSet, then apply the
-                        // SAME in-memory add + SetLink log-write + member-version bump the SetLinkMutation arm does.
-                        var ownerId = ResolveRefId(ownerRef);
-                        var owner = ExtentEntryById(ownerId)
-                            ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
-                        if (owner.Fields.GetValueOrDefault(prop) is not StoredSet set)
-                            throw new InvalidOperationException($"'{owner.TypeName}' has no set prop '{prop}'.");
-                        var memberId = ResolveRefId(memberRef);
-                        var typeName = ExtentEntryById(memberId)?.TypeName
-                            ?? throw new InvalidOperationException($"No object with id {memberId}.");
-                        set.Members[memberId] = new StoredRef(typeName, memberId);
-                        _pending.Add(new SetLink(set.Id, memberId));
-                        BumpVersion(memberId);
-                        break;
-                    }
                 }
+
+            // GC once, at the very end — but ONLY when this batch actually moved something (an unlink
+            // present). A pure-add commit (creates + links) can orphan nothing, so it mimics clean-main
+            // behavior (CommitBatch never GC'd before) and stays safe for callers that build a batch whose
+            // created objects are reached only by references the GC would not yet see as reachable (e.g. a
+            // branch clone). When an unlink IS present (the re-parent move), the single end-of-batch GC
+            // means a moved member (still reachable via its new link) is never swept, and a now-orphan
+            // (unlinked, linked nowhere) is collected exactly once, after all links landed.
+            if (mutations.Any(m => m is SetUnlinkMutation or SetUnlinkByPropMutation))
+                CollectGarbage();
 
             Save(); // one atomic file write for the whole changeset
             // _doc.Version, read under this same lock, is the exact version this batch produced (or the

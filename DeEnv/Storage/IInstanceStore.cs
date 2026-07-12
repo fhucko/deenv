@@ -221,6 +221,21 @@ public sealed record DictWriteMutation(int OwnerRef, string Prop, NodeValue Key,
 // BuildFields' own invariant), never from a wire `commit` message (that op builds SetLinkMutation instead,
 // by raw setId). Owner's `Prop` must be a set prop (pre-validated by the caller).
 public sealed record SetLinkByPropMutation(int OwnerRef, string Prop, int MemberRef) : CommitMutation;
+// Remove a member (MemberRef) from the set with intrinsic id SetId. The batch-analog of
+// RemoveFromSet(setId, id) — so a MOVE (re-parent) can UNLINK from the old set and LINK into the new in
+// ONE changeset, instead of a standalone GC'd unlink that (a) runs its own Save + GC and (b) leaves a
+// transient double-removal window between the two saves. MemberRef is an OBJECT REFERENCE (positive real
+// id, or a negative tempId resolved to a create's just-minted real id — a move targets EXISTING members,
+// so usually positive). Symmetric to SetLinkMutation (raw setId). SERVER-CONSTRUCTED today (WsHandler
+// builds it from the wire in T2); the wire op that carries it lands there.
+public sealed record SetUnlinkMutation(int SetId, int MemberRef) : CommitMutation;
+// Unlink MemberRef from OwnerRef's `Prop` SET, addressed by (owner, prop) — the set analog of
+// SetLinkByPropMutation (which links by the same key). So a child can be unlinked from a JUST-CREATED
+// parent's set within ONE batch (the parent's nested set id isn't known until minted). OwnerRef/MemberRef
+// are object references (positive real id, or a negative tempId resolved to a create's just-minted real
+// id). SERVER-SIDE ONLY like SetLinkByPropMutation: constructed by SchemaBridge / WsHandler, never yet
+// from a raw wire message (the wire carries SetUnlinkMutation by raw setId — T2 wires the (owner,prop) form).
+public sealed record SetUnlinkByPropMutation(int OwnerRef, string Prop, int MemberRef) : CommitMutation;
 
 // The result of minting one create in a commit batch: the tempId→realId mapping plus the minted object's
 // nested COLLECTION props (their own intrinsic ids + element types), so the caller re-keys the client's

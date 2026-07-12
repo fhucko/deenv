@@ -219,4 +219,93 @@ public sealed class StoreConcurrencyTests
             if (File.Exists(genesisPath)) File.Delete(genesisPath);
         }
     }
+
+    // T1 (transparent-client-mutations.md): an atomic set MOVE via CommitBatch — link an existing member
+    // into set B and unlink it from set A in ONE batch, with link-before-unlink ordering + a single GC at
+    // the end. After a clean apply the member is reachable ONLY from B (the double-membership window is
+    // gone); the whole move is ONE log entry; and a malformed later mutation (an unlink from a non-existent
+    // set) leaves the store document + version UNCHANGED (CommitBatch's all-or-none pre-validation guard,
+    // independent of the new unlink arms). Proven at the store level, no client change.
+    [Test]
+    public async Task A_commit_batch_atomic_set_move_links_into_b_and_unlinks_from_a_in_one_commit()
+    {
+        var dataFile = Path.Combine(Path.GetTempPath(), "deenv-setmove-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var desc = InstanceDescriptionLoader.Load("""
+                types
+                    Db
+                        nodes set of Item
+                    Item
+                        label text
+                        children set of Item
+                """);
+            var store = new JsonFileInstanceStore(dataFile, desc);
+            var logPath = AppPaths.LogPathForDataPath(dataFile);
+            var linesBefore = File.Exists(logPath) ? File.ReadAllLines(logPath).Length : 0;
+
+            // Seed two items in db.nodes.
+            var nodesSetId = ((SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!).Id;
+            store.CommitBatch(
+                [
+                    new CommitCreate(-1, "Item", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("a") })),
+                    new CommitCreate(-2, "Item", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("b") })),
+                ],
+                [
+                    new SetLinkMutation(nodesSetId, -1),
+                    new SetLinkMutation(nodesSetId, -2),
+                ]);
+
+            var ids = store.ReadExtent("Item").Keys.OrderBy(k => k).ToList();
+            var aId = ids[0];
+            var bId = ids[1];
+
+            // ── THE WRAP (one batch, mirroring the designer re-parent flow): create a wrapper Item,
+            //    link it into db.nodes (so it is reachable + not GC'd), AND re-parent 'a' from db.nodes
+            //    into the wrapper's `children` set (unlink from nodes + link into wrapper.children). All
+            //    in ONE CommitBatch with link-before-unlink ordering + a single end-of-batch GC. ──
+            store.CommitBatch(
+                [new CommitCreate(-3, "Item", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("wrapper") }))],
+                [
+                    new SetLinkMutation(nodesSetId, -3),          // wrapper → db.nodes (reachable)
+                    new SetUnlinkMutation(nodesSetId, aId),       // 'a' leaves db.nodes  (unlink, pass 2)
+                    new SetLinkByPropMutation(-3, "children", aId), // 'a' enters wrapper.children (link, pass 1)
+                ]);
+
+            // Resolve the minted wrapper id + its `children` set id.
+            var wrapperId = store.ReadExtent("Item").Keys.Single(id => id != aId && id != bId);
+            var wrapperChildrenSetId = ((SetValue)store.ReadExtent("Item")[wrapperId].Fields["children"]).Id;
+
+            // After: 'a' is reachable ONLY from wrapper.children, not from db.nodes; 'b' still in db.nodes;
+            // the wrapper itself is in db.nodes. No transient double-membership of 'a'.
+            var nodesAfter = (SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!;
+            await Assert.That(nodesAfter.Members.ContainsKey(aId)).IsFalse();
+            await Assert.That(nodesAfter.Members.ContainsKey(bId)).IsTrue();
+            await Assert.That(nodesAfter.Members.ContainsKey(wrapperId)).IsTrue();
+            var wrapperChildrenAfter = (SetValue)store.ReadExtent("Item")[wrapperId].Fields["children"];
+            await Assert.That(wrapperChildrenAfter.Members.ContainsKey(aId)).IsTrue();
+
+            // The move is ONE log entry; fsck holds (replay(genesis→head) reproduces the snapshot).
+            await Assert.That(File.ReadAllLines(logPath).Length).IsEqualTo(linesBefore + 2); // seed + wrap
+            await Assert.That(((JsonFileInstanceStore)store).Fsck()).IsTrue();
+            await Assert.That(new JsonFileInstanceStore(dataFile, desc).Fsck()).IsTrue();
+
+            // ── malformed-followup guard: an unlink from a non-existent set throws, leaves store untouched ──
+            var verAfterMove = store.CurrentVersion;
+            await Assert.That(() => store.CommitBatch(
+                [],
+                [new SetUnlinkMutation(999999, aId)]))
+                .Throws<InvalidOperationException>();
+            await Assert.That(store.CurrentVersion).IsEqualTo(verAfterMove); // version unchanged
+            await Assert.That(((SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!).Members.ContainsKey(bId)).IsTrue();
+        }
+        finally
+        {
+            if (File.Exists(dataFile)) File.Delete(dataFile);
+            var logPath = AppPaths.LogPathForDataPath(dataFile);
+            var genesisPath = AppPaths.GenesisPathForDataPath(dataFile);
+            if (File.Exists(logPath)) File.Delete(logPath);
+            if (File.Exists(genesisPath)) File.Delete(genesisPath);
+        }
+    }
 }
