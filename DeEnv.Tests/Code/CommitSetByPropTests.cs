@@ -274,6 +274,86 @@ public sealed class CommitSetByPropTests
         }
     }
 
+    // T2.5: end-to-end proof that a commit can create a FRESH owner (a NEGATIVE temp id) AND link an
+    // EXISTING object into that owner's SET property via a `setByProp` relation whose `ownerId` is the
+    // negative temp id — passed through VERBATIM (HandleCommit does NOT resolve a negative owner server-side;
+    // the store's apply arm resolves it against the in-batch `creates`). This exercises the exact path the
+    // designer re-parent flow relies on: a freshly-minted wrapper receives an existing node as a child within
+    // the SAME commit. Mirrors the T1 StoreConcurrencyTests "wrap" (atomic set move) scenario, but driven
+    // through WsHandler/HandleCommit so the wire → session → store hop is covered, not just the store batch.
+    [Test]
+    public async Task A_commit_with_a_negative_owner_setByProp_links_an_existing_member_into_a_fresh_wrapper()
+    {
+        var desc = InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    nodes set of Item
+                Item
+                    label text
+                    children set of Item
+            """);
+        var dataPath = Path.GetTempFileName();
+        try
+        {
+            var store = new JsonFileInstanceStore(dataPath, desc);
+            var sessions = new ClientSessionStore();
+            var session = sessions.Create();
+            var ws = new WsHandler(store, desc, sessions);
+
+            // Seed an EXISTING member N into Db.nodes (so it has a real id AND a previous parent set).
+            var nodesSetId = ((SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!).Id;
+            store.CommitBatch(
+                [ new CommitCreate(-1, "Item", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("existingChild") })) ],
+                [ new SetLinkMutation(nodesSetId, -1) ]);
+            var nId = store.ReadExtent("Item").Single().Key;
+
+            // ONE commit through the WS handler:
+            //   • creates a FRESH wrapper `w` (temp id -1, type Item), typed by the `set` link into Db.nodes;
+            //   • setByProp with ownerId:-1 (the FRESH wrapper, a NEGATIVE temp id) links N into w.children;
+            //   • setUnlink pulls N out of its previous parent (Db.nodes) so the re-parent is observable.
+            var replyText = ws.ProcessMessage($$"""
+                {
+                  "op": "commit",
+                  "clientId": "{{session.Id}}",
+                  "edits": [],
+                  "creates": [
+                    { "tempId": -1, "value": { "props": { "label": { "type": "text", "value": "wrapper" } } } }
+                  ],
+                  "relations": [
+                    { "kind": "setByProp", "parentId": -1, "prop": "children", "childId": {{nId}} },
+                    { "kind": "setUnlink", "setId": {{nodesSetId}}, "childId": {{nId}} },
+                    { "kind": "set", "setId": {{nodesSetId}}, "childId": -1 }
+                  ]
+                }
+                """);
+
+            using var reply = JsonDocument.Parse(replyText);
+            await Assert.That(reply.RootElement.TryGetProperty("error", out _)).IsFalse();
+
+            // The FRESH wrapper resolved to a real (positive) id and is the only other Item besides N.
+            var wrapperId = store.ReadExtent("Item")
+                .Single(kv => ((TextValue)kv.Value.Fields["label"]).Text == "wrapper").Key;
+            await Assert.That(wrapperId).IsGreaterThan(0); // temp id -1 was resolved to a real id
+
+            // N is reachable via the FRESH wrapper's `children` set — the NEGATIVE owner ref worked end-to-end.
+            var wrapperChildren = (SetValue)store.ReadExtent("Item")[wrapperId].Fields["children"];
+            await Assert.That(wrapperChildren.Members.ContainsKey(nId)).IsTrue();
+
+            // N is NO LONGER in its previous parent (Db.nodes); the wrapper took its place there.
+            var nodesAfter = (SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!;
+            await Assert.That(nodesAfter.Members.ContainsKey(nId)).IsFalse();
+            await Assert.That(nodesAfter.Members.ContainsKey(wrapperId)).IsTrue();
+
+            // The whole re-parent is one consistent changeset.
+            await Assert.That(((JsonFileInstanceStore)store).Fsck()).IsTrue();
+        }
+        finally
+        {
+            if (File.Exists(dataPath)) File.Delete(dataPath);
+            CleanupLogGenesis(dataPath);
+        }
+    }
+
     private static void CleanupLogGenesis(string dataPath)
     {
         var logPath = AppPaths.LogPathForDataPath(dataPath);
