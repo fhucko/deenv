@@ -850,7 +850,7 @@ public sealed class KernelHost(
             var sourceStore = (JsonFileInstanceStore)source.Store;
             var materialized = sourceStore.MaterializeAtSeq(seq); // throws on an out-of-range/pre-genesis seq
 
-            var (eraDocText, eraDesc, resolvedCommitId) = ResolveEraDb(sourceStore, sourceDesc, source.Spec.SchemaPath, seq);
+            var (eraDesignText, eraDesc, resolvedCommitId) = ResolveEraDb(sourceStore, sourceDesc, source.Spec.SchemaPath, seq);
             eraCommitId = resolvedCommitId;
 
             // Validate the materialized store against the ERA schema BEFORE writing anything — a mismatch
@@ -861,7 +861,7 @@ public sealed class KernelHost(
 
             // Every check above passed — now, and only now, does anything touch the filesystem.
             Directory.CreateDirectory(AppPaths.IdDirFor(baseDir, id));
-            File.WriteAllText(schemaPath, eraDocText);
+            File.WriteAllText(schemaPath, eraDesignText);
             JsonFileInstanceStore.SaveRaw(dataPath, materialized);
             // Deliberately NOT copying the source's log/genesis — a time-travel clone is a FRESH fork with
             // its own history (design doc §6): its first mutation freezes ITS OWN genesis from this

@@ -373,14 +373,14 @@ public static class CodeParse
     // Raw sections only — mapping (and its errors) happens AFTER Run has chosen the
     // parse that consumes the whole input. Mapping inside the combine would throw on
     // partial candidates mid-backtracking (Many1 yields shorter matches first).
-    private static Parser<(ICodeStatement[]? Common, ICodeStatement[] Ui)> Document =>
+    private static Parser<(ICodeStatement[]? Common, ICodeStatement[] Ui)> Design =>
         Seq(Optional(Section("common")), Section("ui"), (common, ui) => (common, ui))
             .SkipEmptyLinesAfter();
 
     // Parse a whole code file into the sections the schema's JSON form used to carry.
-    public static (InstanceCommon? Common, InstanceUi Ui) ParseDocument(string source)
+    public static (InstanceCommon? Common, InstanceUi Ui) ParseDesign(string source)
     {
-        var (common, ui) = Run(Seq(Document, Ws0, (doc, _) => doc), source);
+        var (common, ui) = Run(Seq(Design, Ws0, (doc, _) => doc), source);
         return (MapCommon(common), MapUi(ui));
     }
 

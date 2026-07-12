@@ -12,7 +12,7 @@ namespace DeEnv.Tests.Code;
 // Stage 2 of the text-syntax milestone: statements, indentation blocks, tags, and the
 // common/ui document grammar. As in CodeParseTests, parsed ASTs are compared against
 // the JSON the hand-written form would declare.
-public sealed class CodeParseDocumentTests
+public sealed class CodeParseDesignTests
 {
     private static async Task AssertJson<T>(T actualNode, string expectedJson)
     {
@@ -169,7 +169,7 @@ public sealed class CodeParseDocumentTests
     [Test]
     public async Task A_document_maps_common_and_ui_onto_the_schema_sections()
     {
-        var (common, ui) = CodeParse.ParseDocument(
+        var (common, ui) = CodeParse.ParseDesign(
             "common\n" +
             "    server fn hash(p)\n" +
             "        return p\n" +
@@ -219,7 +219,7 @@ public sealed class CodeParseDocumentTests
     [Test]
     public async Task A_document_parse_error_reports_its_line()
     {
-        var ex = await Assert.That(() => CodeParse.ParseDocument(
+        var ex = await Assert.That(() => CodeParse.ParseDesign(
             "ui\n" +
             "    var path = \"/\"\n" +
             "    fn render()\n" +

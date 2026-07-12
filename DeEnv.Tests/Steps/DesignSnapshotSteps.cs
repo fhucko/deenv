@@ -18,7 +18,7 @@ public sealed class DesignSnapshotSteps
 {
     // The designer meta-schema: a Db holding a set of whole-app Designs, each a structured `types` set
     // (of MetaType, each holding a `props` set of MetaProp) + the other app-document sections as text —
-    // exactly the shape SchemaBridge.ProjectDesignDocument/Snapshot project. Test-local, isolated from the
+    // exactly the shape SchemaBridge.ProjectDesignDb/Snapshot project. Test-local, isolated from the
     // live designer instance (the same isolation HostActionSteps/BridgeSteps use).
     private const string MetaSchema =
         """

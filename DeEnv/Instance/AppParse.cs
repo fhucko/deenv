@@ -260,7 +260,7 @@ public static class AppParse
                            (string, string, JsonObject)[]? Seeds,
                            AccessRule[]? Rules,
                            ICodeStatement[]? Common,
-                           ICodeStatement[]? Ui)> Document =>
+                           ICodeStatement[]? Ui)> Design =>
         Seq(TypesSection,
             Optional(InitialDataSection),
             Optional(AccessSection),
@@ -273,7 +273,7 @@ public static class AppParse
     // semantic mapping errors throw SchemaValidationException.
     public static InstanceDescription Parse(string source)
     {
-        var (types, seeds, rules, common, ui) = Run(Seq(Document, Ws0, (d, _) => d), source);
+        var (types, seeds, rules, common, ui) = Run(Seq(Design, Ws0, (d, _) => d), source);
         return new InstanceDescription(
             Types: ResolveLeaves(types),
             Ui: ui == null ? null : CodeParse.MapUi(ui),

@@ -10,7 +10,7 @@ using TUnit.Assertions.Extensions;
 namespace DeEnv.Tests.Steps;
 
 // StructuredRender.feature — M12 S1a. The designer stores render code as a MetaNode tag tree owned by
-// Design.render (a `set of MetaNode` holding exactly one root); SchemaBridge.ProjectDesignDocument
+// Design.render (a `set of MetaNode` holding exactly one root); SchemaBridge.ProjectDesignDb
 // projects it to the canonical `fn render()` text. This drives the projection over a REAL designer store
 // (the real instances/1 meta-schema, so the new `render`/MetaNode/MetaAttr types are declared) and proves
 // the artifact by the SAME server-side path a hand-written UI takes (InstanceDescriptionLoader.Load +
@@ -85,7 +85,7 @@ public sealed class StructuredRenderSteps
         var design = _designer.ReadNode(DesignPath)!;
         // ReadNode resolves `render` (now a set) recursively, along with every descendant's children/attrs
         // sets — exactly like `types` — so no resolver is needed.
-        _projected = SchemaBridge.ProjectDesignDocument(design);
+        _projected = SchemaBridge.ProjectDesignDb(design);
     }
 
     // The `()` in `fn render()` is escaped (`\(\)`) — Cucumber Expressions treat `(…)` as an optional group.

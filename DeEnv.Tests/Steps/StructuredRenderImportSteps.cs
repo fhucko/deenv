@@ -12,7 +12,7 @@ namespace DeEnv.Tests.Steps;
 // `ui` TEXT (a custom `fn render()`) INTO the structured MetaNode tree, then clear the `ui` field. Drives
 // ImportRender directly over a REAL designer store (the same test-local meta-schema shape
 // DesignSnapshotSteps uses, extended with `render set of MetaNode` + MetaNode/MetaAttr), then proves the
-// lossless round-trip through the real ProjectDesignDocument. No wire, no WS, no interpreter change.
+// lossless round-trip through the real ProjectDesignDb. No wire, no WS, no interpreter change.
 [Binding]
 public sealed class StructuredRenderImportSteps
 {
@@ -246,7 +246,7 @@ public sealed class StructuredRenderImportSteps
     public async Task ThenProjectsToCanonicalOriginal()
     {
         var design = _designer.ReadNode(DesignPath)!;
-        var projected = SchemaBridge.ProjectDesignDocument(design);
+        var projected = SchemaBridge.ProjectDesignDb(design);
         var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(_originalUi)).TrimEnd('\n');
         await Assert.That(projected).Contains(expectedUi);
     }

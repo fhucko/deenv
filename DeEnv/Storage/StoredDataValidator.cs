@@ -21,7 +21,7 @@ namespace DeEnv.Storage;
 public static class StoredDataValidator
 {
     public static void Validate(Db doc, InstanceDescription desc, string filePath) =>
-        new Walk(desc, filePath).Document(doc);
+        new Walk(desc, filePath).Validate(doc);
 
     private sealed class Walk(InstanceDescription desc, string filePath)
     {
@@ -32,7 +32,7 @@ public static class StoredDataValidator
             $"Data file '{filePath}' does not match the running app: {detail} " +
             "Delete or move the file to reseed it from the app's initialData.");
 
-        public void Document(Db doc)
+        public void Validate(Db doc)
         {
             CollectExtentIds(doc);
 

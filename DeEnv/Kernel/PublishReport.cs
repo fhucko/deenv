@@ -27,7 +27,7 @@ using DeEnv.Code;
 // value to the new shape's default so the instance still loads; the old value survives in the log).
 //
 // `FallbackNameMatched`: true when the target had no prior stamp (a pre-versioning instance) and this
-// publish ran the EXISTING by-name apply (SchemaBridge.WriteDocument) instead of the identity diff — the
+// publish ran the EXISTING by-name apply (SchemaBridge.WriteDesign) instead of the identity diff — the
 // one-time fallback the design doc names; the NEXT publish (once stamped) is rename-safe.
 public sealed record PublishReport
 {

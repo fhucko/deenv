@@ -7,7 +7,7 @@ namespace DeEnv.Kernel;
 
 // Which of the three publish legs a plan resolved to — so the caller (KernelHostActions.Publish) knows
 // which side effects to perform, WITHOUT re-deciding the leg (the leg is decided once, in Compute).
-//   • NoHead        — the design has zero commits: project the CURRENT working copy by name (WorkingDoc).
+//   • NoHead        — the design has zero commits: project the CURRENT working copy by name (WorkingDesign).
 //   • Fallback      — the design has commits but the target was never stamped: one-time by-name apply of
 //                     the head text (HeadText), then stamp.
 //   • Versioned     — the identity-diff path: the boundary plan is already computed (dryRun-safe), the
@@ -25,7 +25,7 @@ public enum PublishLeg { NoHead, Fallback, Versioned }
 // `Diff` let Publish carry out the leg-specific writes (the boundary itself is already applied inside
 // Compute on a real run — see the note there).
 public sealed record PublishPlan(
-    PublishReport Report, PublishLeg Leg, string WorkingDoc, string HeadText, int HeadCommitId);
+    PublishReport Report, PublishLeg Leg, string WorkingDesign, string HeadText, int HeadCommitId);
 
 // The report-computing core behind BOTH `sys.publish` (KernelHostActions.Publish) and `sys.publishPreview`
 // (the kernel-wired preview delegate). Extracted from KernelHostActions.Publish so the two never diverge:
@@ -57,14 +57,14 @@ public static class PublishReportComputer
             // project the CURRENT working copy and apply by name. Not reported as a "fallback" (that term
             // is reserved for an unstamped TARGET against a design that DOES have commits) — there is no
             // identity diff possible here at all.
-            var workingDoc = SchemaBridge.ProjectDesignDb(design); // throws on an invalid design
+            var workingDesign = SchemaBridge.ProjectDesignDb(design); // throws on an invalid design
             var noHeadReport = new PublishReport
             {
                 Applied = !dryRun, DryRun = dryRun, BaseCommit = null, TargetCommit = 0,
                 UncommittedDrift = false, Renames = [], Adds = [], Removes = [], Conversions = [],
                 Cardinality = [], FallbackNameMatched = false,
             };
-            return new PublishPlan(noHeadReport, PublishLeg.NoHead, workingDoc, "", 0);
+            return new PublishPlan(noHeadReport, PublishLeg.NoHead, workingDesign, "", 0);
         }
 
         var (headCommitId, headFields) = head.Value;
@@ -83,7 +83,7 @@ public static class PublishReportComputer
         if (stampedFields is null)
         {
             // Unstamped (or a stamp naming a commit this store no longer has — defensive): the one-time
-            // name-match fallback — the pre-slice-4 by-name apply (WriteDocument), carrying whatever a
+            // name-match fallback — the pre-slice-4 by-name apply (WriteDesign), carrying whatever a
             // by-name apply can, then stamping so the NEXT publish is identity-diffed and rename-safe.
             var fallbackReport = new PublishReport
             {

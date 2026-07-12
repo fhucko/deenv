@@ -759,7 +759,7 @@ public static class GenericUi
         // Parse the library FRESH (distinct CodeFunction instances each call, so concurrent
         // renderers never share mutable Ids). StdlibSource defines the library functions plus a
         // `fn render()` (the generic router) — MapUi pulls the latter into libUi.Render.
-        var (_, libUi) = CodeParse.ParseDocument(StdlibSource);
+        var (_, libUi) = CodeParse.ParseDesign(StdlibSource);
         var library = libUi.Functions ?? [];
         var genericRender = libUi.Render
             ?? throw new InvalidOperationException("The generic library must define `fn render()`.");

@@ -2041,7 +2041,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
                 var design = _designer.Store.ReadNode(DeEnv.Storage.NodePath.Root.Field("designs").Key(designId.ToString()));
                 if (design != null)
                 {
-                    try { DeEnv.Designer.SchemaBridge.ProjectDesignDocument(design); return; }
+                    try { DeEnv.Designer.SchemaBridge.ProjectDesignDb(design); return; }
                     catch (Exception ex) { lastError = ex; }
                 }
             }
@@ -2161,7 +2161,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
 
     // The whole point of a structured render: after every structural edit it must still PROJECT to a valid
     // app document. Read the "treeme" Design node (resolved recursively) from the store and run the real
-    // SchemaBridge.ProjectDesignDocument — an un-projectable node (an empty-nothing node, or an attribute
+    // SchemaBridge.ProjectDesignDb — an un-projectable node (an empty-nothing node, or an attribute
     // with an empty value expression) throws a SchemaValidationException here. Polled (the add is a staged
     // ctx mutation flushed over the WS, so there is a brief async window); on timeout the LAST projection
     // error is surfaced (a bare EventuallyAsync would only say "expected true").
@@ -2186,13 +2186,13 @@ public sealed class DesignerSteps(InstanceContext ctx)
         if (design is null) { _lastProjectError = "design node null"; return false; }
         try
         {
-            // ProjectDesignDocument builds + validates the whole document, including the render tree: an
+            // ProjectDesignDb builds + validates the whole document, including the render tree: an
             // un-projectable node (an empty-nothing node, or an attribute with an empty value expression)
             // throws a SchemaValidationException here. That is the E2 correctness bar — the STRUCTURAL
             // projectability of the edited render. (We deliberately do NOT then interpreter-LOAD the doc:
             // the imported fixture render references a bare symbol `leaf` that a running app has no binding
             // for — a symbol-resolution concern orthogonal to whether the render tree projects.)
-            var doc = DeEnv.Designer.SchemaBridge.ProjectDesignDocument(design);
+            var doc = DeEnv.Designer.SchemaBridge.ProjectDesignDb(design);
             return doc.Contains("fn render()");
         }
         catch (Exception ex) { _lastProjectError = ex.Message; return false; }
@@ -2453,7 +2453,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
     // renumbering after the splice, the published/projected document silently reverts the reorder even
     // though the live tree editor and canvas still show it correctly. These steps reach one level deeper
     // than RootChildren (a grandchild of the root — the wrapped element's OWN children) and read the
-    // DURABLE projected document text directly (SchemaBridge.ProjectDesignDocument), not just the DOM.
+    // DURABLE projected document text directly (SchemaBridge.ProjectDesignDb), not just the DOM.
 
     [When("I click move-down on the root node's child {int}'s child {int}")]
     public async Task WhenClickMoveDownOnGrandchild(int parentIndex, int childIndex) =>
@@ -2475,7 +2475,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
     }
 
     // The DURABLE-projection assertion (the one that catches the tie-scramble without the renumber fix):
-    // reads the design fresh from the store and runs the REAL SchemaBridge.ProjectDesignDocument — the same
+    // reads the design fresh from the store and runs the REAL SchemaBridge.ProjectDesignDb — the same
     // walk `sys.publish`/Commit use — then checks the printed source has `first`'s opening tag textually
     // BEFORE `second`'s. A shared-order tie that SchemaBridge tie-breaks by id (not the operator's intended
     // visual order) would print them in the WRONG sequence even though the live tree editor/canvas agree
@@ -2491,7 +2491,7 @@ public sealed class DesignerSteps(InstanceContext ctx)
             if (design == null) return false;
             try
             {
-                var projected = DeEnv.Designer.SchemaBridge.ProjectDesignDocument(design);
+                var projected = DeEnv.Designer.SchemaBridge.ProjectDesignDb(design);
                 var i1 = projected.IndexOf("<" + first, StringComparison.Ordinal);
                 var i2 = projected.IndexOf("<" + second, StringComparison.Ordinal);
                 return i1 >= 0 && i2 >= 0 && i1 < i2;

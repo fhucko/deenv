@@ -132,7 +132,7 @@ public static class SchemaBridge
         // before their keyword, so the spacing is cosmetic / canonical). ORDER MATTERS — it must match
         // the document grammar (types, initialData, access, common, ui) so the reassembled text parses;
         // `access` (the M-auth ruleset, incl. the host-action `sys` subject) sits between initialData and
-        // common, exactly as AppParse.Document expects.
+        // common, exactly as AppParse.Design expects.
         var sections = new List<string> { typesSection.TrimEnd('\n') };
         if (design is ObjectValue d)
             foreach (var name in new[] { "initialData", "access", "common", "ui" })
@@ -1046,7 +1046,7 @@ public static class SchemaBridge
     //     type/cardinality change, a wholesale different app) → reseed the new schema's initial
     //     document. Carrying those forward (value conversion, rename remap) is the follow-up slices that
     //     progressively replace this reseed; until then such an apply still resets, as it always has.
-    public static void WriteDocument(string documentText, string targetAppPath, string targetDataPath)
+    public static void WriteDesign(string documentText, string targetAppPath, string targetDataPath)
     {
         var newDesc = InstanceDescriptionLoader.Load(documentText);
         File.WriteAllText(targetAppPath, documentText);

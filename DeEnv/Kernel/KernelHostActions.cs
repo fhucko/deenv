@@ -16,7 +16,7 @@ namespace DeEnv.Kernel;
 //     — see DesignDiff), materializes the changeset as ONE boundary-marked log entry (history preserved),
 //     stamps the target to the new head, and returns a structured PublishReport. UNVERSIONED fallback when
 //     the design has no commits yet, or the target was never stamped (one-time name-match apply, then
-//     stamped) — the pre-slice-4 by-name apply (SchemaBridge.WriteDocument).
+//     stamped) — the pre-slice-4 by-name apply (SchemaBridge.WriteDesign).
 //   • create(design, name) — project the design into a NEW instance with the given display NAME, via
 //     the kernel create delegate (the C# create mechanism: write the doc, load, append the registry,
 //     refresh the live set). NO ports — addressing is by path (`/apps/<name>` derives from the name).
@@ -198,14 +198,14 @@ public sealed class KernelHostActions(
         {
             case PublishLeg.NoHead:
                 // No commit yet — project the CURRENT working copy and apply by name (pre-slice-4 behavior).
-                SchemaBridge.WriteDocument(plan.WorkingDoc, target.SchemaPath, target.DataPath);
+                SchemaBridge.WriteDesign(plan.WorkingDesign, target.SchemaPath, target.DataPath);
                 _ = restartInstance(targetId);
                 break;
 
             case PublishLeg.Fallback:
                 // One-time by-name apply of the head text (carrying whatever a by-name apply can), then stamp
                 // so the NEXT publish is identity-diffed and rename-safe.
-                SchemaBridge.WriteDocument(plan.HeadText, target.SchemaPath, target.DataPath);
+                SchemaBridge.WriteDesign(plan.HeadText, target.SchemaPath, target.DataPath);
                 stampPublishedCommit(targetId, plan.HeadCommitId).GetAwaiter().GetResult();
                 _ = restartInstance(targetId);
                 break;
@@ -306,7 +306,7 @@ public sealed class KernelHostActions(
 
         var appDb = SchemaBridge.ProjectDesignDb(design); // throws on an invalid design
         recordDesign(targetId, designId).GetAwaiter().GetResult();
-        SchemaBridge.WriteDocument(appDb, target.SchemaPath, target.DataPath);
+        SchemaBridge.WriteDesign(appDb, target.SchemaPath, target.DataPath);
         _ = restartInstance(targetId);
         return null;
     }

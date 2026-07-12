@@ -68,7 +68,7 @@ public sealed class DesignerSourceTests
     }
 
     // Every committed app reverse-projects (DesignerSeed — the kernel's first-boot path) into a Design
-    // that forward-projects (SchemaBridge.ProjectDesignDocument — the publish path) back to the SAME app
+    // that forward-projects (SchemaBridge.ProjectDesignDb — the publish path) back to the SAME app
     // document. This inherits the intent of the deleted DesignerSeedGenerator consistency guard ("editing
     // crm in the IDE edits the REAL crm, and Publish re-publishes the REAL crm") — but now WITHOUT its
     // self-reference exception: the designer's own app (id 1) carries an empty initialData, so its
@@ -97,7 +97,7 @@ public sealed class DesignerSourceTests
             try
             {
                 var design = store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-                var projected = SchemaBridge.ProjectDesignDocument(design);
+                var projected = SchemaBridge.ProjectDesignDb(design);
                 await Assert.That(Canonical(projected)).IsEqualTo(Canonical(committed));
             }
             finally
@@ -114,9 +114,9 @@ public sealed class DesignerSourceTests
 
     // A structured render (Design.render, a MetaNode tree) projects to the CANONICAL `fn render()` text —
     // the same text the equivalent hand-written custom UI would print. Proven at the projection boundary
-    // (ProjectDesignDocument output contains the canonical render fn), beside the round-trip guards.
+    // (ProjectDesignDb output contains the canonical render fn), beside the round-trip guards.
     [Test]
-    public async Task ProjectDesignDocument_projects_a_structured_render_to_a_canonical_render_fn()
+    public async Task ProjectDesignDb_projects_a_structured_render_to_a_canonical_render_fn()
     {
         var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
         var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1a-" + Guid.NewGuid().ToString("N") + ".json");
@@ -149,7 +149,7 @@ public sealed class DesignerSourceTests
             store.AddToSet(mainPath.Field("children").Key(h1.ToString()).Field("children"), hi);
 
             var design = store.ReadNode(designPath)!;
-            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var projected = SchemaBridge.ProjectDesignDb(design);
 
             // The exact canonical render fn the printer produces for the equivalent hand-written UI.
             var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(
@@ -162,11 +162,11 @@ public sealed class DesignerSourceTests
         }
     }
 
-    // ProjectDesignDocument REFUSES a design carrying both a structured render tree AND a non-empty `ui`
+    // ProjectDesignDb REFUSES a design carrying both a structured render tree AND a non-empty `ui`
     // text field — the user-decided precedence (the render tree owns the `ui` section, so the text must be
     // empty), surfaced as a SchemaValidationException rather than silently picking one.
     [Test]
-    public async Task ProjectDesignDocument_refuses_a_render_tree_alongside_a_non_empty_ui_text()
+    public async Task ProjectDesignDb_refuses_a_render_tree_alongside_a_non_empty_ui_text()
     {
         var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
         var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1a-both-" + Guid.NewGuid().ToString("N") + ".json");
@@ -183,7 +183,7 @@ public sealed class DesignerSourceTests
             store.AddToSet(NodePath.Root.Field("designs").Key(designId.ToString()).Field("render"), main);
 
             var design = store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(design))
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
                 .Throws<SchemaValidationException>();
             await Assert.That(ex!.Message).Contains("both a structured `render`");
         }
@@ -247,7 +247,7 @@ public sealed class DesignerSourceTests
             await Assert.That(Text(children[1], "expr")).IsEqualTo("db.greeting");
 
             // The round-trip: projecting the imported design yields the canonical form of the original render.
-            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var projected = SchemaBridge.ProjectDesignDb(design);
             var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
             await Assert.That(projected).Contains(expectedUi);
         }
@@ -310,7 +310,7 @@ public sealed class DesignerSourceTests
             await Assert.That(Text(elseBody, "tag")).IsEqualTo("p");
 
             // The round-trip: projecting the imported design yields the canonical form of the original render.
-            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var projected = SchemaBridge.ProjectDesignDb(design);
             var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
             await Assert.That(projected).Contains(expectedUi);
         }
@@ -374,7 +374,7 @@ public sealed class DesignerSourceTests
             // The round-trip: projecting the imported design yields the canonical form of the original
             // render — the nested rows collapse back through CodePrint.TagIf to `else if`, not a nested
             // `else` block wrapping an `if`.
-            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var projected = SchemaBridge.ProjectDesignDb(design);
             var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
             await Assert.That(projected).Contains(expectedUi);
             await Assert.That(expectedUi).Contains("else if"); // the fixture actually exercises the collapse
@@ -593,7 +593,7 @@ public sealed class DesignerSourceTests
             await Assert.That(Text(vars[0], "name")).IsEqualTo("count");
             await Assert.That(Text(vars[0], "init")).IsEqualTo("0");
 
-            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var projected = SchemaBridge.ProjectDesignDb(design);
             var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
             await Assert.That(projected).Contains(expectedUi);
         }
@@ -647,7 +647,7 @@ public sealed class DesignerSourceTests
 
             // The round-trip: projecting the imported design reproduces the canonical original — render AND
             // both structured functions, in order.
-            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var projected = SchemaBridge.ProjectDesignDb(design);
             var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
             await Assert.That(projected).Contains(expectedUi);
         }
@@ -794,7 +794,7 @@ public sealed class DesignerSourceTests
     // Projection refuses a structured function named "render" — MapUi routes any fn literally named
     // "render" into InstanceUi.Render, so it would silently vanish from the projected document.
     [Test]
-    public async Task ProjectDesignDocument_refuses_a_structured_function_named_render()
+    public async Task ProjectDesignDb_refuses_a_structured_function_named_render()
     {
         var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
         var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-namedrender-" + Guid.NewGuid().ToString("N") + ".json");
@@ -821,7 +821,7 @@ public sealed class DesignerSourceTests
             store.AddToSet(designPath.Field("fns").Key(badFn.ToString()).Field("body"), body);
 
             var design = store.ReadNode(designPath)!;
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(design))
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
                 .Throws<SchemaValidationException>();
             await Assert.That(ex!.Message).Contains("\"render\"");
         }
@@ -835,7 +835,7 @@ public sealed class DesignerSourceTests
     // definition, validator scope, generic-UI library merge) silently keeps only the LAST one, and S1c's
     // set-union merge will produce duplicates routinely, so this refusal is load-bearing for merge.
     [Test]
-    public async Task ProjectDesignDocument_refuses_duplicate_structured_function_names()
+    public async Task ProjectDesignDb_refuses_duplicate_structured_function_names()
     {
         var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
         var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-dupname-" + Guid.NewGuid().ToString("N") + ".json");
@@ -865,7 +865,7 @@ public sealed class DesignerSourceTests
             }
 
             var design = store.ReadNode(designPath)!;
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(design))
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
                 .Throws<SchemaValidationException>();
             await Assert.That(ex!.Message).Contains("dup");
         }
@@ -879,7 +879,7 @@ public sealed class DesignerSourceTests
     // (ProjectRenderUi assembles Functions alongside Render, so fns have nowhere to project into without a
     // render root).
     [Test]
-    public async Task ProjectDesignDocument_refuses_fns_when_render_is_empty()
+    public async Task ProjectDesignDb_refuses_fns_when_render_is_empty()
     {
         var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
         var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-fnsnorender-" + Guid.NewGuid().ToString("N") + ".json");
@@ -903,7 +903,7 @@ public sealed class DesignerSourceTests
             store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"), body);
 
             var design = store.ReadNode(designPath)!;
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(design))
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
                 .Throws<SchemaValidationException>();
             await Assert.That(ex!.Message).Contains("`fns`");
         }
@@ -941,7 +941,7 @@ public sealed class DesignerSourceTests
     }
 
     [Test]
-    public async Task ProjectDesignDocument_refuses_a_design_level_state_variable_with_an_empty_name()
+    public async Task ProjectDesignDb_refuses_a_design_level_state_variable_with_an_empty_name()
     {
         var (store, storePath, designPath) = MinimalStructuredDesign("emptyvarname");
         try
@@ -949,7 +949,7 @@ public sealed class DesignerSourceTests
             var v = store.CreateObject("MetaVar", Var("", "0"));
             store.AddToSet(designPath.Field("vars"), v);
 
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!))
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!))
                 .Throws<SchemaValidationException>();
             await Assert.That(ex!.Message).Contains("empty name");
         }
@@ -957,7 +957,7 @@ public sealed class DesignerSourceTests
     }
 
     [Test]
-    public async Task ProjectDesignDocument_refuses_duplicate_design_level_state_variable_names()
+    public async Task ProjectDesignDb_refuses_duplicate_design_level_state_variable_names()
     {
         var (store, storePath, designPath) = MinimalStructuredDesign("dupvarname");
         try
@@ -965,7 +965,7 @@ public sealed class DesignerSourceTests
             store.AddToSet(designPath.Field("vars"), store.CreateObject("MetaVar", Var("count", "0", 0)));
             store.AddToSet(designPath.Field("vars"), store.CreateObject("MetaVar", Var("count", "1", 1)));
 
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!))
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!))
                 .Throws<SchemaValidationException>();
             await Assert.That(ex!.Message).Contains("count");
         }
@@ -976,7 +976,7 @@ public sealed class DesignerSourceTests
     // into the app/lib scope first, then assigns vars UNCONDITIONALLY into the same scope — a same-named
     // var would silently clobber the function's binding.
     [Test]
-    public async Task ProjectDesignDocument_refuses_a_design_level_state_variable_colliding_with_a_function_name()
+    public async Task ProjectDesignDb_refuses_a_design_level_state_variable_colliding_with_a_function_name()
     {
         var (store, storePath, designPath) = MinimalStructuredDesign("varfncollide");
         try
@@ -990,7 +990,7 @@ public sealed class DesignerSourceTests
                 store.CreateObject("MetaNode", Node("", "\"x\"")));
             store.AddToSet(designPath.Field("vars"), store.CreateObject("MetaVar", Var("helper", "0")));
 
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!))
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!))
                 .Throws<SchemaValidationException>();
             await Assert.That(ex!.Message).Contains("helper");
         }
@@ -998,7 +998,7 @@ public sealed class DesignerSourceTests
     }
 
     [Test]
-    public async Task ProjectDesignDocument_refuses_a_fn_level_state_variable_with_an_empty_name()
+    public async Task ProjectDesignDb_refuses_a_fn_level_state_variable_with_an_empty_name()
     {
         var (store, storePath, designPath) = MinimalStructuredDesign("emptyfnvarname");
         try
@@ -1013,7 +1013,7 @@ public sealed class DesignerSourceTests
             store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
                 store.CreateObject("MetaVar", Var("", "0")));
 
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!))
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!))
                 .Throws<SchemaValidationException>();
             await Assert.That(ex!.Message).Contains("empty name");
         }
@@ -1021,7 +1021,7 @@ public sealed class DesignerSourceTests
     }
 
     [Test]
-    public async Task ProjectDesignDocument_refuses_duplicate_fn_level_state_variable_names()
+    public async Task ProjectDesignDb_refuses_duplicate_fn_level_state_variable_names()
     {
         var (store, storePath, designPath) = MinimalStructuredDesign("dupfnvarname");
         try
@@ -1038,7 +1038,7 @@ public sealed class DesignerSourceTests
             store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
                 store.CreateObject("MetaVar", Var("count", "1", 1)));
 
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!))
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!))
                 .Throws<SchemaValidationException>();
             await Assert.That(ex!.Message).Contains("count");
         }
@@ -1049,7 +1049,7 @@ public sealed class DesignerSourceTests
     // always projects — ExecuteFunction unconditionally overwrites scope.Items[Name], so the var would be
     // silently clobbered the moment the nested `fn render()` is defined right after it.
     [Test]
-    public async Task ProjectDesignDocument_refuses_a_fn_level_state_variable_named_render()
+    public async Task ProjectDesignDb_refuses_a_fn_level_state_variable_named_render()
     {
         var (store, storePath, designPath) = MinimalStructuredDesign("fnvarrender");
         try
@@ -1064,7 +1064,7 @@ public sealed class DesignerSourceTests
             store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
                 store.CreateObject("MetaVar", Var("render", "0")));
 
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!))
+            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!))
                 .Throws<SchemaValidationException>();
             await Assert.That(ex!.Message).Contains("reserved");
         }
@@ -1076,7 +1076,7 @@ public sealed class DesignerSourceTests
     // this pins the fixpoint's other half. An empty `init` projects a BARE `var x` (no `= …`) — grammar-legal
     // and meaningful (ExecuteVarDec defaults it to null), not a refusal.
     [Test]
-    public async Task ProjectDesignDocument_projects_a_stateful_fn_to_the_canonical_setup_view_shape()
+    public async Task ProjectDesignDb_projects_a_stateful_fn_to_the_canonical_setup_view_shape()
     {
         var (store, storePath, designPath) = MinimalStructuredDesign("statefulproj");
         try
@@ -1093,7 +1093,7 @@ public sealed class DesignerSourceTests
             store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
                 store.CreateObject("MetaVar", Var("uninitialized", "", 1)));
 
-            var projected = SchemaBridge.ProjectDesignDocument(store.ReadNode(designPath)!);
+            var projected = SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!);
             await Assert.That(projected).Contains(
                 "fn Counter()\n        var count = 0\n        var uninitialized\n        fn render()\n            return count\n        return render\n");
         }
@@ -1128,7 +1128,7 @@ public sealed class DesignerSourceTests
 
             // The lossless proof: projecting the imported design reproduces the canonical original render,
             // handler and all.
-            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var projected = SchemaBridge.ProjectDesignDb(design);
             var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
             await Assert.That(projected).Contains(expectedUi);
         }
@@ -1170,7 +1170,7 @@ public sealed class DesignerSourceTests
 
     // The `ui` canonicalization primitive: a non-canonically-formatted section round-trips through
     // parse∘print to the printer's canonical form, and canonicalizing again is the identity (the
-    // fixpoint). This is exactly what ProjectDesignDocument uses to keep the commit/publish artifact
+    // fixpoint). This is exactly what ProjectDesignDb uses to keep the commit/publish artifact
     // stable regardless of how the render code was typed.
     [Test]
     public async Task A_ui_section_canonicalizes_through_parse_then_print()
@@ -1184,12 +1184,12 @@ public sealed class DesignerSourceTests
         await Assert.That(AppPrint.PrintUi(CodeParse.ParseUiSection(canonical))).IsEqualTo(canonical);
     }
 
-    // ProjectDesignDocument emits a CANONICAL `ui` section even when the design carries a
+    // ProjectDesignDb emits a CANONICAL `ui` section even when the design carries a
     // non-canonically-formatted one (DesignerSeed carries `ui` verbatim, so this reverse→forward path
     // would otherwise reproduce the messy form). Only `ui` is re-printed; the wiring is what makes the
     // commit/publish artifact stable across authoring formatting (M12 S0).
     [Test]
-    public async Task ProjectDesignDocument_canonicalizes_the_ui_section()
+    public async Task ProjectDesignDb_canonicalizes_the_ui_section()
     {
         var messyUi = "ui\n  fn render()\n    return <main class=\"x\">\n      \"hi\"\n";
         var appDoc = "types\n    Db\n        greeting text\n\n" + messyUi;
@@ -1203,7 +1203,7 @@ public sealed class DesignerSourceTests
         try
         {
             var design = store.ReadNode(NodePath.Root.Field("designs").Key("71"))!;
-            var projected = SchemaBridge.ProjectDesignDocument(design);
+            var projected = SchemaBridge.ProjectDesignDb(design);
             await Assert.That(projected).Contains("\n    fn render()");     // canonical 4-space indent
             await Assert.That(projected).DoesNotContain("\n  fn render()");  // the verbatim 2-space form is gone
         }

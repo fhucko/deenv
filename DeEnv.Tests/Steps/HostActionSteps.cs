@@ -1067,7 +1067,7 @@ public sealed class HostActionSteps
         var commit = CommitByMessage(_lastCommitMessage);
         var text = ((TextValue)commit.Fields.Fields["text"]).Text;
         var design = _designer.ReadNode(NodePath.Root.Field("designs").Key(_designId.ToString()))!;
-        var expected = SchemaBridge.ProjectDesignDocument(design);
+        var expected = SchemaBridge.ProjectDesignDb(design);
         await Assert.That(text).IsEqualTo(expected);
     }
 

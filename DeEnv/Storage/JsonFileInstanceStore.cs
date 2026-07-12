@@ -1243,9 +1243,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // file, then append ONE new LogEntry (boundary-marked) to the target's EXISTING log — genesis
     // untouched, prior history preserved (replacing slice-1's delete-log-on-migrate re-baseline for this
     // VERSIONED path only; the unversioned hand-edit boot path — an unstamped instance's one-time
-    // name-match fallback, or the M4 designer/export bridge — keeps its current WriteDocument/
+    // name-match fallback, or the M4 designer/export bridge — keeps its current WriteDesign/
     // MigrateTowardSchema re-baseline behavior). This is the ONLY apply the versioned publish path runs —
-    // deliberately NOT layered on top of a separate by-name WriteDocument pass: the diff is computed BY
+    // deliberately NOT layered on top of a separate by-name WriteDesign pass: the diff is computed BY
     // IDENTITY between the two commits, so it already covers every add/remove/convert/reshape whose id was
     // present in both commits, renamed or not (a same-id, same-name prop with a changed type/cardinality is
     // reported in Conversions/CardinalityChanges exactly like a renamed one is in Renames) — running a
