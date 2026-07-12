@@ -570,7 +570,7 @@ public sealed class CodeClientTests
             await Assert.That(before).IsEqualTo("a=0 journal=0 gen=0 pending=none");
 
             // Spy on the live WS send: record every sent frame's `op` AND whether it carries a `handlerFn`
-            // (the action-miss intent). The pass case sends an objectPropChange (the real write) and NO
+            // The pass case sends an objectPropChange (the real write, buffered then flushed by the VNA branch) and NO
             // action-carrying refetch; the fail-before case sends a `refetch` WITH handlerFn and NO
             // objectPropChange. codeWs is the production module global; the page has settled so this send is
             // the real one.

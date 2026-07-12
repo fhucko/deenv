@@ -80,7 +80,10 @@ interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
 // a `{ field: text }` ExecObject the generic form's coarse banner iterates; empty = no conflict (the common
 // case). Read via `ctx.conflicts` (records a `ctxConflicts:<id>` var dep so the banner re-renders when a
 // reply populates it), written by setCtxConflicts from ws.ts on a conflict reply / a resolution.
-interface ExecCtx { type: "ctx"; id: number; staged: Map<ExecObject, Map<string, ExecValue>>; creates: StagedCreate[]; parent: ExecCtx | null; live: boolean; status: string; pending: number; conflicts: ExecValue[]; }
+interface ExecCtx { type: "ctx"; id: number; staged: Map<ExecObject, Map<string, ExecValue>>; creates: StagedCreate[]; parent: ExecCtx | null; live: boolean; status: string; pending: number; conflicts: ExecValue[]; notifyChange?: () => void; }
+// The ExecCtx currently executing (root ambient, or a ctx.new() child) — set in rootAmbient/ctx.new so the
+// mutation hooks can drive the top-level micro-bracket via ctx.notifyChange (ws.ts reads this; same program).
+let currentExecCtx: ExecCtx | null = null;
 // A staged create (atomic-commit Step B): a transient (id<0) draft `set.add`/`setRef`'d under a staging
 // ctx. The draft is held BY REFERENCE — its fields are read at commit time, never snapshotted, so a later
 // `draft.x = …` (an edit landing on the draft's own live props, since id<0 bypasses staging) is included.
@@ -2261,7 +2264,9 @@ function runBody(fn: ExecFunction, callScope: ExecScope, context: ExecContext): 
 // The live root data context provided by the framework as ambient `ctx` (writes persist; a form
 // opens a staging child via ctx.new()). Fresh per render — the root is a stateless live sentinel.
 function rootAmbient(): AmbientFrame {
-    return { name: "ctx", value: { type: "ctx", id: nextCtxId++, staged: new Map(), creates: [], parent: null, live: true, status: "idle", pending: 0, conflicts: [] }, parent: null };
+    const rootCtx: ExecCtx = { type: "ctx", id: nextCtxId++, staged: new Map(), creates: [], parent: null, live: true, status: "idle", pending: 0, conflicts: [], notifyChange: () => wsHooks.topLevelChange?.() };
+    currentExecCtx = rootCtx;
+    return { name: "ctx", value: rootCtx, parent: null };
 }
 
 function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext): void {
@@ -2767,7 +2772,11 @@ function nearestStagedValue(obj: ExecObject, prop: string, context: ExecContext)
 function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
     switch (m.method) {
         // ctx.new(autosave): autosave=true → the live parent (writes persist); else a staging child.
-        case "new": return args.length > 0 && args[0].type === "bool" && args[0].value ? m.ctx : { type: "ctx", id: nextCtxId++, staged: new Map(), creates: [], parent: m.ctx, live: false, status: "idle", pending: 0, conflicts: [] };
+        case "new": {
+            const child: ExecCtx = args.length > 0 && args[0].type === "bool" && args[0].value ? m.ctx : { type: "ctx", id: nextCtxId++, staged: new Map(), creates: [], parent: m.ctx, live: false, status: "idle", pending: 0, conflicts: [], notifyChange: () => {} };
+            currentExecCtx = child;
+            return child;
+        }
         case "discard":
             for (const [obj, fields] of m.ctx.staged)
                 for (const prop of fields.keys()) invalidateProp(obj.id, prop);   // re-render the reverted fields
@@ -2903,6 +2912,10 @@ interface WsHooks {
     // explicit clear. wsHooks is null (SSR, conformance, and — later — a workbench sandbox bracket, per
     // docs/plans/component-workbench.md) ⇒ this is a no-op there, exactly like every other hook.
     parseMiss(ctx: ExecObject, text: string): void;
+    // Top-level data-change notification (the ExecCtx.notifyChange impl for the ROOT ctx). ws.ts flushes the
+    // open top-level commit bracket (micro-bracket) so a top-level mutation flows through ONE `commit`. No-op
+    // for sub-ctxs (their notifyChange is empty — they stage into a form's own bracket). CLIENT-only.
+    topLevelChange?(): void;
 }
 let wsHooks: WsHooks | null = null;
 function setWsHooks(hooks: WsHooks): void { wsHooks = hooks; }

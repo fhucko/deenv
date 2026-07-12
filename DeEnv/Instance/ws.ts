@@ -57,6 +57,23 @@ interface JournalEntry {
 // which form ctx an entry belongs to. Per-ctx (not a global counter) because a live collection edit can
 // interleave with a form's pending commit and must NOT decrement the form's count.
 let committingCtx: ExecCtx | null = null;
+// The ExecCtx currently executing (root ambient or a ctx.new() child), declared in codeExec.ts and read
+// here (same program). Used for the TOP-LEVEL micro-bracket: when no commit bracket is open, a mutation
+// opens beginCommit(currentExecCtx), stages one change, then currentExecCtx.notifyChange() flushes it
+// (root ctx → wsHooks.topLevelChange → endCommit; sub-ctx → empty no-op, already staging its own bracket).
+function stageTopLevel(stage: () => void, liveSend: () => void): void {
+    // Only open a micro-bracket when NO bracket is already open (form commit OR handler tx). If one is open,
+    // fall back to liveSend — the surrounding bracket captures it (form-commit buffers edits via commitEdits
+    // before this point; handler tx captures live sends via txSendBuffer). Opening a nested bracket here would
+    // clobber the surrounding buffer (beginCommit resets commitEdits/relations/creates).
+    if (currentExecCtx == null || commitEdits != null || commitRelations != null || commitCreates != null) { liveSend(); return; }
+    // Open a micro-bracket on the active ctx, stage one change, flush ONE commit. Only called when no bracket
+    // is already open (the hooks return early otherwise), so flushing here is always safe — covers top-level
+    // page mutations AND save-less-container creates (whose sub-ctx has no enclosing commit to stage into).
+    wsHooks.beginCommit(currentExecCtx);
+    stage();
+    wsHooks.endCommit();
+}
 // The edits accumulated during a commit bracket (beginCommit..endCommit). The propChange hook buffers
 // here instead of sending individual objectPropChange messages; endCommit flushes ONE `commit` message.
 // null = no commit bracket is open (live edits fire objectPropChange directly, unchanged).
@@ -830,16 +847,20 @@ function connectWs(): void {
                     wire: { objectId: obj.id, prop, value: scalarOf(value) } });
                 return;
             }
-            // Live edit (autosave, path-write, live collection op) — send immediately, unchanged.
-            const msgId = nextWsMsgId++;
-            recordMutation({
-                msgId,
-                undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
-                redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
-                roots: [obj],
-            });
-            wsSend({ op: "objectPropChange", id: msgId, clientId: uiStatic.clientId,
-                objectId: obj.id, prop, value: scalarOf(value) });
+            // Top-level (no bracket open): micro-bracket into ONE commit (rule #3) — server accepts the edit.
+            stageTopLevel(
+                () => { commitEdits!.push({ obj, prop, value, before, wire: { objectId: obj.id, prop, value: scalarOf(value) } }); },
+                () => {
+                    const msgId = nextWsMsgId++;
+                    recordMutation({
+                        msgId,
+                        undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
+                        redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
+                        roots: [obj],
+                    });
+                    wsSend({ op: "objectPropChange", id: msgId, clientId: uiStatic.clientId,
+                        objectId: obj.id, prop, value: scalarOf(value) });
+                });
         },
         pathWrite: (obj, prop, path, value, before) => {
             // A dictionary entry's field has no extent id, so it persists by PATH: the `write`
@@ -856,21 +877,38 @@ function connectWs(): void {
         },
         setRef: (obj, prop, value, before) => {
             const msgId = nextWsMsgId++;
-            recordMutation({
-                msgId,
-                undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
-                redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
-                // obj, plus the referenced objects on both sides of the swap (a clear's `before` holds the
-                // previously-pointed object that undo restores; a pick's `value` the newly-pointed one).
-                roots: [obj, value, before],
+            const undo = () => { obj.props[prop] = before; invalidateProp(obj.id, prop); };
+            const redo = () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); };
+            // obj, plus the referenced objects on both sides of the swap.
+            const roots: ExecValue[] = [obj, value, before];
+            const bracketOpen = commitRelations != null || commitCreates != null;
+            const stageRef = () => {
+                if (value.type === "object" && value.id > 0)
+                    commitRelations!.push({ wire: { kind: "ref", parentId: obj.id, prop, childId: value.id },
+                        journalMsgId: msgId, undo, redo, roots });
+                else if (value.type === "object")
+                    wsHooks.commitCreate(value as ExecObject, { kind: "ref", parent: obj, prop });
+                else
+                    commitRelations!.push({ wire: { kind: "ref", parentId: obj.id, prop },
+                        journalMsgId: msgId, undo, redo, roots });
+            };
+            if (bracketOpen) {
+                recordMutation({ msgId, undo, redo, roots });
+                stageRef();
+                return;
+            }
+            // Top-level (no bracket open): micro-bracket a `ref` relation (server-supported RefLinkMutation;
+            // clear = relation without childId). A mint buffers a staged create + `ref` join.
+            stageTopLevel(stageRef, () => {
+                recordMutation({ msgId, undo, redo, roots });
+                const base = { op: "setReferenceField", id: msgId, clientId: uiStatic.clientId, objectId: obj.id, prop };
+                if (value.type === "object" && value.id > 0)
+                    wsSend({ ...base, refId: value.id });
+                else if (value.type === "object")
+                    wsSend({ ...base, value: objectOf(value) });
+                else
+                    wsSend({ ...base, clear: true });
             });
-            const base = { op: "setReferenceField", id: msgId, clientId: uiStatic.clientId, objectId: obj.id, prop };
-            if (value.type === "object" && value.id > 0)
-                wsSend({ ...base, refId: value.id });                 // point at an existing extent object
-            else if (value.type === "object")
-                wsSend({ ...base, value: objectOf(value) });          // mint a new object + point
-            else
-                wsSend({ ...base, clear: true });                     // unset
             // A pick/create can change a type's extent and the referenced object's data the
             // client never had: stale extents and refetch for the authoritative state.
             invalidateExtents();
@@ -904,6 +942,25 @@ function connectWs(): void {
                     journalMsgId: msgId, undo, redo, roots });
                 return;
             }
+            // Top-level (no bracket open): an existing-member LINK micro-brackets into ONE commit (server-supported
+            // `set` relation). A NEW (tempId) member is a mint, not a pure link — it keeps the LIVE arrayAdd path
+            // (tempId→realId remap), deferred from the commit pipeline per the unified-commit plan.
+            if (existingObj != null) {
+                stageTopLevel(
+                    () => { commitRelations!.push({ wire: { kind: "set", setId: arr.id, childId: existingObj.id },
+                        journalMsgId: msgId, undo, redo, roots }); },
+                    () => {
+                        recordMutation({
+                            msgId,
+                            undo,
+                            redo,
+                            roots,
+                        });
+                        wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
+                            setId: arr.id, refId: existingObj.id });
+                    });
+                return;
+            }
             recordMutation({
                 msgId,
                 undo,
@@ -911,12 +968,8 @@ function connectWs(): void {
                 onReject: () => { if (existingObj == null) pendingAdds.delete(item.key); },
                 roots,
             });
-            if (existingObj != null)
-                wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
-                    setId: arr.id, refId: existingObj.id });
-            else
-                wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
-                    setId: arr.id, tempId: item.key, typeName, value: objectOf(item.value) });
+            wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
+                setId: arr.id, tempId: item.key, typeName, value: objectOf(item.value) });
         },
         arrayRemove: (arr, item, index) => {
             const msgId = nextWsMsgId++;
@@ -934,14 +987,15 @@ function connectWs(): void {
                     journalMsgId: msgId, undo, redo, roots });
                 return;
             }
-            recordMutation({
-                msgId,
-                undo,
-                redo,
-                roots,
-            });
-            wsSend({ op: "arrayRemove", id: msgId, clientId: uiStatic.clientId,
-                setId: arr.id, objectId: item.key });
+            // Top-level (no bracket open): an UNLINK micro-brackets into ONE commit (server-supported `setUnlink` relation).
+            stageTopLevel(
+                () => { commitRelations!.push({ wire: { kind: "setUnlink", setId: arr.id, childId: item.key },
+                    journalMsgId: msgId, undo, redo, roots }); },
+                () => {
+                    recordMutation({ msgId, undo, redo, roots });
+                    wsSend({ op: "arrayRemove", id: msgId, clientId: uiStatic.clientId,
+                        setId: arr.id, objectId: item.key });
+                });
         },
         // A dictionary entry persists through the PATH-addressed addEntry/removeEntry ops
         // (the dict carries its sourcePath). addEntry's CreateEntry rejects a duplicate key
@@ -1208,6 +1262,10 @@ function connectWs(): void {
         },
         // M12 auto-live parse-op — see the section doc above (module top) + codeExec.ts's WsHooks.parseMiss.
         parseMiss: (ctx, text) => recordParseMiss(ctx, text),
+        // Top-level data-change flush: the root ctx's notifyChange impl. If a top-level micro-bracket bracket
+        // is open (committingCtx === the root ctx), close it — endCommit emits ONE `commit`. Called by the
+        // mutation hooks via currentExecCtx.notifyChange(); a no-op unless that bracket is open.
+        topLevelChange: () => { if (committingCtx != null) wsHooks.endCommit(); },
     });
 }
 
