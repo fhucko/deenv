@@ -904,6 +904,16 @@ public sealed class WsHandler
                                     return Error($"Commit create {childRef} has more than one relation.");
                             }
                         }
+                        // Access floor (mirrors the first-pass set/ref link): the OWNER is edited (its set
+                        // prop changes) and a real (positive-id) MEMBER being linked is a `create` (forgery +
+                        // denial — you must be able to read the object you attach). A transient (<0) member
+                        // already passed the create gate in the createBatch path above.
+                        if (_store.ReadById(ownerRef) is { } setByPropOwner)
+                            RequireWrite(floor, "edit", setByPropOwner.TypeName,
+                                Code.AccessFloor.ScalarObject(setByPropOwner.TypeName, ownerRef, setByPropOwner.Fields, _desc));
+                        if (childRef >= 0 && _store.ReadById(childRef) is { } setByPropLinked)
+                            RequireWrite(floor, "create", setByPropLinked.TypeName,
+                                Code.AccessFloor.ScalarObject(setByPropLinked.TypeName, childRef, setByPropLinked.Fields, _desc));
                         extraMutations.Add(new SetLinkByPropMutation(ownerRef, prop, childRef));
                         break;
                     }
@@ -912,6 +922,11 @@ public sealed class WsHandler
                         if (!relEl.TryGetProperty("setId", out var setEl) || setEl.ValueKind != JsonValueKind.Number)
                             return Error("commit relation is malformed.");
                         var setId = Resolve(session, setEl.GetInt32());
+                        // Access floor: you must be able to read the object you detach (forgery + denial).
+                        // No owner handle here — the member floor alone is the guard (like a plain `set` link).
+                        if (childRef >= 0 && _store.ReadById(childRef) is { } setUnlinked)
+                            RequireWrite(floor, "create", setUnlinked.TypeName,
+                                Code.AccessFloor.ScalarObject(setUnlinked.TypeName, childRef, setUnlinked.Fields, _desc));
                         extraMutations.Add(new SetUnlinkMutation(setId, childRef));
                         break;
                     }
@@ -923,6 +938,14 @@ public sealed class WsHandler
                             return Error("commit relation is malformed.");
                         var ownerRaw = pEl.GetInt32();
                         var ownerRef = ownerRaw < 0 ? ownerRaw : Resolve(session, ownerRaw);
+                        // Access floor: you must be able to read the object you detach (forgery + denial), and
+                        // the OWNER is edited (its set prop changes) — mirrors the setByProp link side.
+                        if (_store.ReadById(ownerRef) is { } setUnlinkByPropOwner)
+                            RequireWrite(floor, "edit", setUnlinkByPropOwner.TypeName,
+                                Code.AccessFloor.ScalarObject(setUnlinkByPropOwner.TypeName, ownerRef, setUnlinkByPropOwner.Fields, _desc));
+                        if (childRef >= 0 && _store.ReadById(childRef) is { } setUnlinked)
+                            RequireWrite(floor, "create", setUnlinked.TypeName,
+                                Code.AccessFloor.ScalarObject(setUnlinked.TypeName, childRef, setUnlinked.Fields, _desc));
                         extraMutations.Add(new SetUnlinkByPropMutation(ownerRef, prop, childRef));
                         break;
                     }

@@ -134,6 +134,146 @@ public sealed class CommitSetByPropTests
         }
     }
 
+    // T2.3: the set link/unlink commit ops must honor the access floor. A real (positive-id) member being
+    // linked{or detached} is floor-checked as a `create` — so an UNREADABLE (write-denied) member is
+    // REJECTED (the whole commit returns an {error}, nothing applied), exactly as the first-pass set/ref
+    // link. Here we rule Node's `create` to false and prove every op that touches an existing Node member
+    // is denied, while the floor stays quiet for the unruled owner (Db) edit.
+    [Test]
+    public async Task A_setByProp_or_unlink_link_of_an_unreadable_member_is_rejected()
+    {
+        var desc = InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    children set of Node
+                Node
+                    label text
+            access
+                Node
+                    create where false
+            """);
+        var dataPath = Path.GetTempFileName();
+        try
+        {
+            var store = new JsonFileInstanceStore(dataPath, desc);
+            var sessions = new ClientSessionStore();
+            var session = sessions.Create(); // anonymous — no principal to satisfy any condition
+            var ws = new WsHandler(store, desc, sessions);
+
+            var childrenSetId = ((SetValue)store.ReadNode(NodePath.Root.Field("children"))!).Id;
+            store.CommitBatch(
+                [
+                    new CommitCreate(-1, "Node", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("memberA") })),
+                ],
+                [ new SetLinkMutation(childrenSetId, -1) ]);
+            var aId = store.ReadExtent("Node").First(kv => ((TextValue)kv.Value.Fields["label"]).Text == "memberA").Key;
+
+            // setByProp link of the existing (unreadable) member → denied (member `create` floor fails).
+            var linkReply = ws.ProcessMessage($$"""
+                {
+                  "op": "commit",
+                  "clientId": "{{session.Id}}",
+                  "edits": [],
+                  "creates": [],
+                  "relations": [
+                    { "kind": "setByProp", "parentId": 1, "prop": "children", "childId": {{aId}} }
+                  ]
+                }
+                """);
+            using var linkJson = JsonDocument.Parse(linkReply);
+            await Assert.That(linkJson.RootElement.TryGetProperty("error", out _)).IsTrue();
+
+            // setUnlink of the existing member → denied (member `create` floor fails; no owner handle).
+            var unlinkReply = ws.ProcessMessage($$"""
+                {
+                  "op": "commit",
+                  "clientId": "{{session.Id}}",
+                  "edits": [],
+                  "creates": [],
+                  "relations": [
+                    { "kind": "setUnlink", "setId": {{childrenSetId}}, "childId": {{aId}} }
+                  ]
+                }
+                """);
+            using var unlinkJson = JsonDocument.Parse(unlinkReply);
+            await Assert.That(unlinkJson.RootElement.TryGetProperty("error", out _)).IsTrue();
+
+            // setUnlinkByProp of the existing member → denied (member `create` floor fails; owner edit of
+            // the unruled Db passes, but the member gate still rejects the whole commit).
+            var unlinkByPropReply = ws.ProcessMessage($$"""
+                {
+                  "op": "commit",
+                  "clientId": "{{session.Id}}",
+                  "edits": [],
+                  "creates": [],
+                  "relations": [
+                    { "kind": "setUnlinkByProp", "parentId": 1, "prop": "children", "childId": {{aId}} }
+                  ]
+                }
+                """);
+            using var unlinkByPropJson = JsonDocument.Parse(unlinkByPropReply);
+            await Assert.That(unlinkByPropJson.RootElement.TryGetProperty("error", out _)).IsTrue();
+
+            // Nothing was applied: memberA is STILL linked in Db.children.
+            var children = (SetValue)store.ReadNode(NodePath.Root.Field("children"))!;
+            await Assert.That(children.Members.ContainsKey(aId)).IsTrue();
+        }
+        finally
+        {
+            if (File.Exists(dataPath)) File.Delete(dataPath);
+            CleanupLogGenesis(dataPath);
+        }
+    }
+
+    [Test]
+    public async Task A_setByProp_link_of_a_readable_existing_member_is_allowed()
+    {
+        var desc = InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    children set of Node
+                Node
+                    label text
+            """);
+        var dataPath = Path.GetTempFileName();
+        try
+        {
+            var store = new JsonFileInstanceStore(dataPath, desc);
+            var sessions = new ClientSessionStore();
+            var session = sessions.Create();
+            var ws = new WsHandler(store, desc, sessions);
+
+            var childrenSetId = ((SetValue)store.ReadNode(NodePath.Root.Field("children"))!).Id;
+            store.CommitBatch(
+                [
+                    new CommitCreate(-1, "Node", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("memberA") })),
+                ],
+                [ new SetLinkMutation(childrenSetId, -1) ]);
+            var aId = store.ReadExtent("Node").First(kv => ((TextValue)kv.Value.Fields["label"]).Text == "memberA").Key;
+
+            // Dormant floor (no rules): linking an existing, readable member via setByProp succeeds.
+            var replyText = ws.ProcessMessage($$"""
+                {
+                  "op": "commit",
+                  "clientId": "{{session.Id}}",
+                  "edits": [],
+                  "creates": [],
+                  "relations": [
+                    { "kind": "setByProp", "parentId": 1, "prop": "children", "childId": {{aId}} }
+                  ]
+                }
+                """);
+
+            using var reply = JsonDocument.Parse(replyText);
+            await Assert.That(reply.RootElement.TryGetProperty("error", out _)).IsFalse();
+        }
+        finally
+        {
+            if (File.Exists(dataPath)) File.Delete(dataPath);
+            CleanupLogGenesis(dataPath);
+        }
+    }
+
     private static void CleanupLogGenesis(string dataPath)
     {
         var logPath = AppPaths.LogPathForDataPath(dataPath);
