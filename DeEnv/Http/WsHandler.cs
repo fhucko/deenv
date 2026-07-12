@@ -832,6 +832,12 @@ public sealed class WsHandler
         if (req.Relations is { ValueKind: JsonValueKind.Array } relsEl)
             foreach (var relEl in relsEl.EnumerateArray())
             {
+                // T2.2: the (owner,prop) set-link + set-unlink kinds are parsed in the SECOND pass below
+                // (kept out of the ParsedRelation union on purpose — unlinks have no typed child). Skip them
+                // here so ParseRelation (which only knows "set"/"ref") does not reject them as malformed.
+                if (relEl.TryGetProperty("kind", out var skipKindEl) && skipKindEl.GetString() is
+                    "setByProp" or "setUnlink" or "setUnlinkByProp")
+                    continue;
                 if (ParseRelation(relEl, session) is not { } rel)
                     return Error("commit relation is malformed.");
                 relations.Add(rel);
@@ -847,6 +853,79 @@ public sealed class WsHandler
                 {
                     if (!createTypeByTempId.TryAdd(rel.ChildRef, ct))
                         return Error($"Commit create {rel.ChildRef} has more than one relation.");
+                }
+            }
+
+        // ── second pass: the T2.2 (owner,prop) set-link + set-unlink relations. Kept OUT of the
+        //    ParsedRelation union on purpose (D2): unlinks have no typed child, and the (owner,prop) link is
+        //    a fresh shape. We parse them here, register a transient child's TYPE so a just-created member is
+        //    typed from its link (mirroring the set/ref child-type wiring above, before the creates loop below
+        //    consumes createTypeByTempId), and emit the matching CommitMutation — every id resolved through the
+        //    session like the set/ref ops, so the store can remap temp ids. Built into `extraMutations` and
+        //    merged into `mutations` once that list is declared.
+        var extraMutations = new List<CommitMutation>();
+        if (req.Relations is { ValueKind: JsonValueKind.Array } relsEl2)
+            foreach (var relEl in relsEl2.EnumerateArray())
+            {
+                var tpKind = relEl.TryGetProperty("kind", out var tpKindEl) ? tpKindEl.GetString() : null;
+                if (tpKind is not ("setByProp" or "setUnlink" or "setUnlinkByProp")) continue;
+
+                if (!relEl.TryGetProperty("childId", out var childEl) || childEl.ValueKind != JsonValueKind.Number)
+                    return Error("commit relation is malformed.");
+                var childRaw = childEl.GetInt32();
+                var childRef = childRaw < 0 ? childRaw : Resolve(session, childRaw);
+
+                switch (relEl.TryGetProperty("kind", out var kindEl) ? kindEl.GetString() : null)
+                {
+                    case "setByProp":
+                    {
+                        if ((relEl.TryGetProperty("prop", out var propEl) ? propEl.GetString() : null) is not { } prop)
+                            return Error("commit relation is malformed.");
+                        if (!relEl.TryGetProperty("parentId", out var pEl) || pEl.ValueKind != JsonValueKind.Number)
+                            return Error("commit relation is malformed.");
+                        var ownerRaw = pEl.GetInt32();
+                        var ownerRef = ownerRaw < 0 ? ownerRaw : Resolve(session, ownerRaw);
+
+                        // A transient (negative) child is typed from the owner's SET prop — the wire asserts no
+                        // type a client could forge. An owner whose type isn't yet known (a tempId not yet seen
+                        // by the first pass) is left untyped here; SetLinkByPropMutation's own pre-validation in
+                        // the store covers that case (errors before applying). One-join-per-create still holds:
+                        // two relations naming the same transient child fail the whole commit.
+                        if (childRef < 0)
+                        {
+                            var ownerType = ownerRef < 0
+                                ? (createTypeByTempId.TryGetValue(ownerRef, out var t) ? t : null)
+                                : _store.ReadById(ownerRef)?.TypeName;
+                            if (ownerType is { } ot
+                                && _desc.FindType(ot)?.Props?.FirstOrDefault(p => p.Name == prop)
+                                    is { Cardinality: Cardinality.Set } setProp)
+                            {
+                                if (!createTypeByTempId.TryAdd(childRef, setProp.Type))
+                                    return Error($"Commit create {childRef} has more than one relation.");
+                            }
+                        }
+                        extraMutations.Add(new SetLinkByPropMutation(ownerRef, prop, childRef));
+                        break;
+                    }
+                    case "setUnlink":
+                    {
+                        if (!relEl.TryGetProperty("setId", out var setEl) || setEl.ValueKind != JsonValueKind.Number)
+                            return Error("commit relation is malformed.");
+                        var setId = Resolve(session, setEl.GetInt32());
+                        extraMutations.Add(new SetUnlinkMutation(setId, childRef));
+                        break;
+                    }
+                    case "setUnlinkByProp":
+                    {
+                        if ((relEl.TryGetProperty("prop", out var propEl) ? propEl.GetString() : null) is not { } prop)
+                            return Error("commit relation is malformed.");
+                        if (!relEl.TryGetProperty("parentId", out var pEl) || pEl.ValueKind != JsonValueKind.Number)
+                            return Error("commit relation is malformed.");
+                        var ownerRaw = pEl.GetInt32();
+                        var ownerRef = ownerRaw < 0 ? ownerRaw : Resolve(session, ownerRaw);
+                        extraMutations.Add(new SetUnlinkByPropMutation(ownerRef, prop, childRef));
+                        break;
+                    }
                 }
             }
 
@@ -880,6 +959,7 @@ public sealed class WsHandler
 
         // ── edits: validate each exactly as Step A / HandleObjectPropChange (an edit of an EXISTING object).
         var mutations = new List<CommitMutation>();
+        mutations.AddRange(extraMutations); // the T2.2 (owner,prop) set-link / set-unlink ops
         foreach (var editEl in editsEl.EnumerateArray())
         {
             if (!editEl.TryGetProperty("objectId", out var idEl) || idEl.ValueKind != JsonValueKind.Number)
