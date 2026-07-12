@@ -729,9 +729,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                             ?? throw new InvalidOperationException($"No set with id {setId}.");
                         var typeName = ExtentEntryById(memberId)?.TypeName
                             ?? throw new InvalidOperationException($"No object with id {memberId}.");
-                        set.Members[memberId] = new StoredRef(typeName, memberId);
-                        _pending.Add(new SetLink(setId, memberId));
-                        BumpVersion(memberId);
+                        LinkMember(set, memberId, typeName);
                         break;
                     }
                     case SetLinkByPropMutation(var ownerRef, var prop, var memberRef):
@@ -739,8 +737,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         // Link a member into the owner's `prop` SET, addressed by (owner, prop) rather than a
                         // raw set id — so the owner may be a fresh create just minted above (its nested set ids
                         // are on the extent entry BuildFields minted, unreachable by any NodePath yet). Resolve
-                        // the owner (tempId→real like RefLinkMutation), read its `prop` StoredSet, then apply the
-                        // SAME in-memory add + SetLink log-write + member-version bump the SetLinkMutation arm does.
+                        // the owner (tempId→real like RefLinkMutation), read its `prop` StoredSet, then link
+                        // through the SAME shared core the SetLinkMutation arm and the standalone AddToSet use.
                         var ownerId = ResolveRefId(ownerRef);
                         var owner = ExtentEntryById(ownerId)
                             ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
@@ -749,9 +747,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         var memberId = ResolveRefId(memberRef);
                         var typeName = ExtentEntryById(memberId)?.TypeName
                             ?? throw new InvalidOperationException($"No object with id {memberId}.");
-                        set.Members[memberId] = new StoredRef(typeName, memberId);
-                        _pending.Add(new SetLink(set.Id, memberId));
-                        BumpVersion(memberId);
+                        LinkMember(set, memberId, typeName);
                         break;
                     }
                 }
@@ -765,26 +761,22 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         var memberId = ResolveRefId(memberRef);
                         var set = FindSetNode(setId)
                             ?? throw new InvalidOperationException($"No set with id {setId}.");
-                        _pending.Add(new SetUnlink(setId, memberId));
-                        set.Members.Remove(memberId);
-                        BumpVersion(memberId);
+                        UnlinkMember(set, memberId);
                         break;
                     }
                     case SetUnlinkByPropMutation(var ownerRef, var prop, var memberRef):
                     {
                         // Unlink a member from the owner's `prop` SET, addressed by (owner, prop) — the set
                         // analog of SetLinkByPropMutation. Resolve the owner (tempId→real), read its `prop`
-                        // StoredSet, then apply the SAME in-memory remove + SetUnlink log-write + member-version
-                        // bump the SetUnlinkMutation arm does.
+                        // StoredSet, then unlink through the SAME shared core the SetUnlinkMutation arm and the
+                        // standalone RemoveFromSet use.
                         var ownerId = ResolveRefId(ownerRef);
                         var owner = ExtentEntryById(ownerId)
                             ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
                         if (owner.Fields.GetValueOrDefault(prop) is not StoredSet set)
                             throw new InvalidOperationException($"'{owner.TypeName}' has no set prop '{prop}'.");
                         var memberId = ResolveRefId(memberRef);
-                        _pending.Add(new SetUnlink(set.Id, memberId));
-                        set.Members.Remove(memberId);
-                        BumpVersion(memberId);
+                        UnlinkMember(set, memberId);
                         break;
                     }
                     case RefLinkMutation(var ownerRef, var prop, var targetRef, var targetType):
@@ -958,9 +950,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             var typeName = _resolver.ResolveType(setPath)?.Type.Name
                 ?? throw new InvalidOperationException($"{setPath} does not resolve.");
             var set = EnsureSet(setPath);
-            set.Members[id] = new StoredRef(typeName, id);
-            _pending.Add(new SetLink(set.Id, id));
-            var ver = BumpVersion(id);
+            LinkMember(set, id, typeName);
+            var ver = _doc.Version;
             Save();
             return ver;
         }
@@ -972,12 +963,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         {
             BeginMutation();
             if (SetNodeAt(setPath) is { } set)
-            {
-                _pending.Add(new SetUnlink(set.Id, id));
-                set.Members.Remove(id);
-            }
+                UnlinkMember(set, id);
             CollectGarbage();
-            var ver = BumpVersion(id);
+            var ver = _doc.Version;
             Save();
             return ver;
         }
@@ -994,9 +982,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 ?? throw new InvalidOperationException($"No set with id {setId}.");
             var typeName = ExtentEntryById(objectId)?.TypeName
                 ?? throw new InvalidOperationException($"No object with id {objectId}.");
-            set.Members[objectId] = new StoredRef(typeName, objectId);
-            _pending.Add(new SetLink(setId, objectId));
-            var ver = BumpVersion(objectId);
+            LinkMember(set, objectId, typeName); // bumps + returns the version
+            var ver = _doc.Version;              // the version LinkMember just produced
             Save();
             return ver;
         }
@@ -1008,12 +995,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         {
             BeginMutation();
             if (FindSetNode(setId) is { } set)
-            {
-                _pending.Add(new SetUnlink(setId, objectId));
-                set.Members.Remove(objectId);
-            }
+                UnlinkMember(set, objectId); // bumps the member version
             CollectGarbage();
-            var ver = BumpVersion(objectId);
+            var ver = _doc.Version; // the version UnlinkMember produced (GC adds no version bump)
             Save();
             return ver;
         }
@@ -1062,6 +1046,26 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     if (fv is StoredSet set && set.Id == setId)
                         return set;
         return null;
+    }
+
+    // The shared set-membership core, used by BOTH the standalone AddToSet/RemoveFromSet (by id) and the
+    // CommitBatch apply arms — so the in-memory write, its SetLink/SetUnlink log entry, and the member's
+    // version bump live in exactly one place. The caller resolves + validates the set node and the member
+    // (FindSetNode / ExtentEntryById) before calling; the helpers then mutate under the already-held _sync
+    // lock and record the LogWrite into the CURRENT _pending (so it rides whatever Save the caller owns —
+    // a standalone op's own Save, or CommitBatch's single end-of-batch Save).
+    private void LinkMember(StoredSet set, int memberId, string memberTypeName)
+    {
+        set.Members[memberId] = new StoredRef(memberTypeName, memberId);
+        _pending.Add(new SetLink(set.Id, memberId));
+        BumpVersion(memberId);
+    }
+
+    private void UnlinkMember(StoredSet set, int memberId)
+    {
+        _pending.Add(new SetUnlink(set.Id, memberId));
+        set.Members.Remove(memberId);
+        BumpVersion(memberId);
     }
 
     public int WriteReference(int objectId, string prop, int? targetId, string targetTypeName)
