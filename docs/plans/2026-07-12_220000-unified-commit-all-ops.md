@@ -260,14 +260,13 @@ Split into parts:
   the merged dict array, so optimistic edits before a refetch are addressable. **No behavior change**
   — purely extra wire fields; the 3 dict live ops (`addEntry`/`removeEntry`/`write`) still fire.
   `CodeExecutorTests` asserts the model-level addressing for both scalar and object dicts.
-- **T6b-4c (TODO):** client dict hooks → commit ops: `entryAdd`→`dictAdd`, `entryRemove`→`dictRemove`,
+- **T6b-4c (DONE 2026-07-13):** client dict hooks → commit ops: `entryAdd`→`dictAdd`, `entryRemove`→`dictRemove`,
   `pathWrite`→`dictAdd` whole-entry (decision flagged + accepted: object-entry field edit = whole-entry rewrite).
-- **T6b-4d (TODO):** delete `HandleWrite`/`HandleAddEntry`/`HandleRemoveEntry` + response records + case arms;
-  add `write`/`addEntry`/`removeEntry` reject tests; rewrite `AddEntrySetBatchTests`.
+- **T6b-4d (DONE 2026-07-13):** delete `HandleWrite`/`HandleAddEntry`/`HandleRemoveEntry` + response records + case arms;
+  add `write`/`addEntry`/`removeEntry` reject tests (WsWireShapeTests); client-side routing landed.
 
-Plan T6b as-originally-written (delete all 4 handlers in one go) is therefore HALF-done: array side deleted,
-dict side deferred. The "commit is the SOLE persistence op" goal is reached for sets; dicts still use path-addressed
-live ops until T6b-4b/4c/4d.
+Plan T6b as-originally-written is now complete for both array and dict sides. The "commit is the SOLE persistence op" goal
+is reached across sets and dicts. (Array side in prior commits; dict side in ad03944 + supporting client addressing.)
 
 > Why split: T6a is the hard, testable engineering (new `commit` op + draft discovery). T6b is mechanical
 > deletion that is ONLY safe once T6a is green — doing them together risks a half-cutover (client sends a
