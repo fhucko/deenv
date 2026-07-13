@@ -26,6 +26,9 @@ interface JournalEntry {
 let committingCtx: ExecCtx | null = null;
 
 function stageTopLevel(stage: () => void, liveSend: () => void): void {
+    // Top-level implicit micro-commit path. All mutations (scalars via edits[], structural via relations)
+    // must flow through ambient ctx (root live ctx here) + a commit frame. If a bracket (explicit ctx.commit
+    // or handler tx) is already open, the caller buffers directly; else we open a micro one.
     if (currentExecCtx == null || commitEdits != null || commitRelations != null || commitCreates != null) { liveSend(); return; }
     wsHooks.beginCommit(currentExecCtx);
     stage();
@@ -33,20 +36,18 @@ function stageTopLevel(stage: () => void, liveSend: () => void): void {
 }
 interface CommitEdit { obj: ExecObject; prop: string; value: ExecValue; before: ExecValue; wire: object }
 let commitEdits: CommitEdit[] | null = null;
-// The CREATES accumulated during a commit bracket (atomic-commit Step B). The commitCreate hook buffers each
-// staged create here; endCommit folds them into the ONE `commit` message's creates+relations. null = no commit
-// bracket open (parallel to commitEdits). Each carries the draft + join so endCommit can build the wire
-// create/relation AND the journal undo (drop the created object) + the ack re-key (negId→realId).
 interface StagedCreate { draft: ExecObject; join: CreateJoin }
+// `edits` array in the commit wire: the scalar field changes on existing objects (objectId + prop + value).
+// Populated by propChange hook (for normal object scalars) when a bracket is open. Distinct from
+// `relations` (structural links).
 let commitCreates: StagedCreate[] | null = null;
-// The SET LINK/UNLINK intents accumulated while inside a commit bracket (ctx.commit, ObjectForm Save)
-// OR a handler transaction (runHandlerTransaction — designer handlers like wrapNode/unwrapNode). The
-// arrayAdd/arrayRemove hooks buffer here instead of sending individual arrayAdd/arrayRemove frames; the
-// closer (endCommit for a form-commit, flushHandlerTx for a handler) folds them into ONE `commit` message's
-// `relations` (T3 — the "real gap": a handler that links/unlinks N members used to flush N separate frames
-// inside runHandlerTransaction). null = no bracket is open (set ops fire arrayAdd/arrayRemove directly,
-// unchanged). Each entry carries the wire relation ({kind, setId, childId} — mirroring the existing
-// commitCreates join shape) PLUS the capture the journal needs (undo/redo/roots) so the closer can build one
+// `creates` + their `join`s: when creating a fresh draft (id<0) and linking it in same op (add to set or
+// setRef), we buffer as StagedCreate {draft, join: CreateJoin}. CreateJoin tells the server how/where to
+// attach the new object on apply (so it also infers type). endCommit emits creates[] (the scalar props of
+// draft) + a matching relation (setAdd/refSet using the tempId). This keeps create+link atomic in one commit.
+// The `relations` array in the commit wire: structural mutations (setAdd/setRemove, refSet, dictAdd/dictRemove,
+// remove). Used for links/unlinks of existing, dict entry writes (which carry scalar or object values), and
+// the join half of creates. Populated by array*/entry*/setRef hooks + create joins.
 interface CommitRelation {
     wire: object;
     journalMsgId: number;
@@ -526,8 +527,8 @@ function flushHandlerTx(): void {
     if (creates != null) for (const c of creates) {
         pendingCommitCreates.set(c.draft.id, { join: c.join, obj: c.draft });
         wireCreates.push({ tempId: c.draft.id, value: objectOf(c.draft) });
-        if (c.join.kind === "set") wireRelations.push({ kind: "set", setId: c.join.set.id, childId: c.draft.id });
-        else wireRelations.push({ kind: "ref", parentId: c.join.parent.id, prop: c.join.prop, childId: c.draft.id });
+        if (c.join.kind === "setAdd") wireRelations.push({ kind: "setAdd", setId: c.join.set.id, childId: c.draft.id });
+        else wireRelations.push({ kind: "refSet", parentId: c.join.parent.id, prop: c.join.prop, childId: c.draft.id });
     }
     if (relations != null) for (const r of relations) wireRelations.push(r.wire);
     const msgId = nextWsMsgId++;
@@ -548,7 +549,7 @@ function flushHandlerTx(): void {
         onReject: () => { if (creates != null) for (const c of creates) pendingCommitCreates.delete(c.draft.id); },
         roots: [...(edits ?? []).map(e => e.obj),
                 ...(creates != null ? creates.map(c => c.draft) : []),
-                ...(creates != null ? creates.map(c => c.join.kind === "set" ? c.join.set : c.join.parent) : []),
+                ...(creates != null ? creates.map(c => c.join.kind === "setAdd" ? c.join.set : c.join.parent) : []),
                 ...(relations != null ? relations.flatMap(r => r.roots) : [])],
     });
     committingCtx = prevCommitting;
@@ -622,7 +623,7 @@ const pendingAdds = new Map<number, number>();
 // it on a server reject — remove the draft from the set it was added to (set join) or unset the reference
 // it was pointed at (ref join), so a denied changeset leaves NO orphan row. invalidateMember/Prop re-renders.
 function dropStagedCreate(c: StagedCreate): void {
-    if (c.join.kind === "set") {
+    if (c.join.kind === "setAdd") {
         const i = c.join.set.items.findIndex(it => it.value === c.draft);
         if (i >= 0) c.join.set.items.splice(i, 1);
         invalidateMember(c.join.set.id);
@@ -635,7 +636,7 @@ function dropStagedCreate(c: StagedCreate): void {
 // Re-apply a staged create's optimistic row (atomic-commit Step B): the commit journal entry's redo, used
 // when an EARLIER entry's rollback reverse-replayed this one. The mirror of dropStagedCreate.
 function restageCreate(c: StagedCreate): void {
-    if (c.join.kind === "set") {
+    if (c.join.kind === "setAdd") {
         if (!c.join.set.items.some(it => it.value === c.draft))
             c.join.set.items.push({ key: c.draft.id, value: c.draft });
         invalidateMember(c.join.set.id);
@@ -796,10 +797,10 @@ function connectWs(): void {
             // IS sent: the server resolves the transient id through the add's remap, so a field edited
             // before the round-trip returns still saves.
             if (obj.id <= 0 && !pendingAdds.has(obj.id)) return;
-            // Inside a commit bracket (beginCommit..endCommit): buffer the edit into the batch instead of
-            // sending an individual objectPropChange. The local optimistic write (obj.props[prop] = val) and
-            // the cache invalidation have already happened in codeExec.ts before this hook fires, so the
-            // render is already correct; only the server send is deferred. endCommit flushes ONE `commit`.
+            // Inside a commit bracket (beginCommit..endCommit): buffer the edit into the batch.
+            // The local optimistic write (obj.props[prop] = val) and the cache invalidation have
+            // already happened in codeExec.ts before this hook fires, so the render is already correct;
+            // only the server send is deferred. endCommit flushes ONE `commit`.
             if (commitEdits != null) {
                 commitEdits.push({ obj, prop, value, before,
                     wire: { objectId: obj.id, prop, value: scalarOf(value) } });
@@ -809,23 +810,21 @@ function connectWs(): void {
             stageTopLevel(
                 () => { commitEdits!.push({ obj, prop, value, before, wire: { objectId: obj.id, prop, value: scalarOf(value) } }); },
                 () => {
-                    const msgId = nextWsMsgId++;
-                    recordMutation({
-                        msgId,
-                        undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
-                        redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
-                        roots: [obj],
-                    });
-                    wsSend({ op: "objectPropChange", id: msgId, clientId: uiStatic.clientId,
-                        objectId: obj.id, prop, value: scalarOf(value) });
+                    // Top-level scalar edit: implicit micro-commit (all top-level mutations go through
+                    // a commit wire frame via ambient root ctx's topLevelChange / stage path).
+                    const had = commitEdits != null;
+                    if (currentExecCtx && !had) wsHooks.beginCommit(currentExecCtx);
+                    if (commitEdits != null) {
+                        commitEdits.push({ obj, prop, value, before, wire: { objectId: obj.id, prop, value: scalarOf(value) } });
+                    }
+                    if (currentExecCtx && !had) wsHooks.endCommit();
                 });
         },
         pathWrite: (obj, prop, path, value, before) => {
-            // T6b-4c: a dictionary entry's field edit is a WHOLE-ENTRY `dictAdd` rewrite (the entry IS a
-            // value — model-faithful). owner/prop/key come from the entry's R7 addressing (T6b-4b). An object
-            // entry ships { props: {...} } (dictEntryWireValue); a scalar entry ships the tagged scalar. The
-            // local optimistic update (obj.props[prop] = value) still runs in undo/redo so the UI reflects the
-            // edit before the commit round-trips. The live `write` op is retired.
+            // A dictionary entry's field edit (scalar or object) is a WHOLE-ENTRY `dictAdd` rewrite
+            // (the entry IS the value). owner/prop/key come from the entry's addressing. An object
+            // entry ships { props: {...} }; a scalar entry ships the tagged scalar. The local
+            // optimistic update still runs in undo/redo. All via commit relations (no separate live write).
             const msgId = nextWsMsgId++;
             const undo = () => { obj.props[prop] = before; invalidateProp(obj.id, prop); };
             const redo = () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); };
@@ -852,12 +851,12 @@ function connectWs(): void {
             const bracketOpen = commitRelations != null || commitCreates != null;
             const stageRef = () => {
                 if (value.type === "object" && value.id > 0)
-                    commitRelations!.push({ wire: { kind: "ref", parentId: obj.id, prop, childId: value.id },
+                    commitRelations!.push({ wire: { kind: "refSet", parentId: obj.id, prop, childId: value.id },
                         journalMsgId: msgId, undo, redo, roots });
                 else if (value.type === "object")
-                    wsHooks.commitCreate(value as ExecObject, { kind: "ref", parent: obj, prop });
+                    wsHooks.commitCreate(value as ExecObject, { kind: "refSet", parent: obj, prop });
                 else
-                    commitRelations!.push({ wire: { kind: "ref", parentId: obj.id, prop },
+                    commitRelations!.push({ wire: { kind: "refSet", parentId: obj.id, prop },
                         journalMsgId: msgId, undo, redo, roots });
             };
             if (bracketOpen) {
@@ -865,17 +864,14 @@ function connectWs(): void {
                 stageRef();
                 return;
             }
-            // Top-level (no bracket open): micro-bracket a `ref` relation (server-supported RefLinkMutation;
-            // clear = relation without childId). A mint buffers a staged create + `ref` join.
+            // Top-level (no bracket open): implicit micro-commit for the refSet via ambient ctx.
+            // (clear = relation without childId). A mint buffers a staged create + `refSet` join.
             stageTopLevel(stageRef, () => {
-                recordMutation({ msgId, undo, redo, roots });
-                const base = { op: "setReferenceField", id: msgId, clientId: uiStatic.clientId, objectId: obj.id, prop };
-                if (value.type === "object" && value.id > 0)
-                    wsSend({ ...base, refId: value.id });
-                else if (value.type === "object")
-                    wsSend({ ...base, value: objectOf(value) });
-                else
-                    wsSend({ ...base, clear: true });
+                // Force micro-commit for top-level ref mutation.
+                const had = commitRelations != null || commitCreates != null;
+                if (currentExecCtx && !had) wsHooks.beginCommit(currentExecCtx);
+                stageRef();
+                if (currentExecCtx && !had) wsHooks.endCommit();
             });
             // A pick/create can change a type's extent and the referenced object's data the
             // client never had: stale extents and refetch for the authoritative state.
@@ -897,23 +893,20 @@ function connectWs(): void {
             const undo = () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); };
             const redo = () => { arr.items.push(item); invalidateMember(arr.id); };
             const roots: ExecValue[] = [arr, item.value];
-            // T3: inside a commit bracket / handler transaction, a LINK to an EXISTING member (no mint) buffers
-            // into one consolidated `commit` frame instead of a standalone arrayAdd — the designer handler
-            // wrapNode/unwrapNode gap. recordMutation still runs (so a handler-tx abort can roll the local
-            // array back); the closer (endCommit / flushHandlerTx) splices these per-op entries out and emits
-            // the ONE commit carrying all the relations. A NEW (tempId) member is a mint, not a pure link, so
-            // it keeps the live arrayAdd path (it needs the tempId→realId remap, not a bare relation) — never
-            // double-emitted.
+            // Inside a commit bracket / handler transaction, a LINK to an EXISTING member (no mint) buffers
+            // into one consolidated `commit` frame's relations. recordMutation still runs (so a handler-tx
+            // abort can roll the local array back); the closer splices per-op entries and emits the ONE
+            // commit. A NEW (tempId) member is a mint (uses commitCreate for remap), not a bare link.
             if (commitRelations != null && existingObj != null) {
                 recordMutation({ msgId, undo, redo, roots });
-                commitRelations.push({ wire: { kind: "set", setId: arr.id, childId: existingObj.id },
+                commitRelations.push({ wire: { kind: "setAdd", setId: arr.id, childId: existingObj.id },
                     journalMsgId: msgId, undo, redo, roots });
                 return;
             }
-            // Existing member (id>0): a LINK, not a mint. Buffer the `set` relation into a commit bracket
-            // when one is open, else a one-shot commit. (The live `arrayAdd` op is retired — T6b.)
+            // Existing member (id>0): a LINK, not a mint. Buffer the `setAdd` relation into a commit bracket
+            // when one is open, else a one-shot (micro) commit via ambient top-level ctx.
             if (existingObj != null) {
-                const link = () => commitRelations!.push({ wire: { kind: "set", setId: arr.id, childId: existingObj.id },
+                const link = () => commitRelations!.push({ wire: { kind: "setAdd", setId: arr.id, childId: existingObj.id },
                     journalMsgId: msgId, undo, redo, roots });
                 if (commitRelations != null) {
                     recordMutation({ msgId, undo, redo, roots });
@@ -927,11 +920,11 @@ function connectWs(): void {
             }
             // A NEW draft (id<0) is a MINT. `addToCollection` already staged drafts added under a staging
             // context into that ctx's creates (so a nested create under an object form defers to the form's
-            // `ctx.commit()` — see A_create_under_an_object_form_defers_to_that_forms_save). `wsHooks.arrayAdd`
-            // is therefore only reached for a REAL set (arr.id > 0) here. Route the mint through `commitCreate`
-            // so it lands via the `commit` pipeline (the live `arrayAdd` op is retired in T6b), mirroring the
-            // existing-member LINK branch above: buffer into an open bracket, else micro-bracket ONE commit.
-            const mintCreate = () => { wsHooks.commitCreate(item.value as ExecObject, { kind: "set", set: arr }); };
+            // `ctx.commit()`). `wsHooks.arrayAdd` is therefore only reached for a REAL set (arr.id > 0) here.
+            // Route the mint through `commitCreate` so it lands via the `commit` pipeline, mirroring the
+            // existing-member LINK branch above: buffer into an open bracket, else micro-bracket ONE commit
+            // (all top-level via ambient ctx).
+            const mintCreate = () => { wsHooks.commitCreate(item.value as ExecObject, { kind: "setAdd", set: arr }); };
             if (commitCreates != null) {
                 recordMutation({ msgId, undo, redo, onReject: () => pendingAdds.delete(item.key), roots });
                 mintCreate();
@@ -953,22 +946,16 @@ function connectWs(): void {
             // handler-tx abort rollback; the closer splices these entries out and emits the commit.
             if (commitRelations != null) {
                 recordMutation({ msgId, undo, redo, roots });
-                commitRelations.push({ wire: { kind: "setUnlink", setId: arr.id, childId: item.key },
+                commitRelations.push({ wire: { kind: "setRemove", setId: arr.id, childId: item.key },
                     journalMsgId: msgId, undo, redo, roots });
                 return;
             }
             // Top-level (no bracket open): an UNLINK micro-brackets into ONE commit (server-supported
-            // `setUnlink` relation). The live `arrayRemove` op is retired — T6b.
-            if (commitRelations != null) {
-                recordMutation({ msgId, undo, redo, roots });
-                commitRelations.push({ wire: { kind: "setUnlink", setId: arr.id, childId: item.key },
-                    journalMsgId: msgId, undo, redo, roots });
-                return;
-            }
+            // `setRemove` relation) via the ambient root ctx.
             recordMutation({ msgId, undo, redo, roots });
             wsHooks.beginCommit(currentExecCtx);
             try {
-                commitRelations!.push({ wire: { kind: "setUnlink", setId: arr.id, childId: item.key },
+                commitRelations!.push({ wire: { kind: "setRemove", setId: arr.id, childId: item.key },
                     journalMsgId: msgId, undo, redo, roots });
             } finally { wsHooks.endCommit(); }
         },
@@ -980,8 +967,8 @@ function connectWs(): void {
             const undo = () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); };
             const redo = () => { if (!arr.items.includes(item)) arr.items.push(item); invalidateMember(arr.id); };
             const roots: ExecValue[] = [arr, item.value];
-            // T6b-4c: route to the id-addressed `dictAdd` commit relation (owner/prop from the dict array's
-            // R7 addressing, set in T6b-4b). Object entries ship as { props: {...} } (objectOf); scalar entries
+            // Route to the id-addressed `dictAdd` commit relation (owner/prop from the dict array's
+            // addressing). Object entries ship as { props: {...} } (objectOf); scalar entries
             // ship tagged { type, value } (scalarOf) — the shape dictAdd's parse expects.
             const wireValue = value.type === "object" ? objectOf(value) : scalarOf(value);
             const dictAdd = () => ({ kind: "dictAdd", owner: arr.ownerRef, prop: arr.dictProp, key, value: wireValue });
@@ -1001,8 +988,7 @@ function connectWs(): void {
             const undo = () => { arr.items.splice(Math.min(index, arr.items.length), 0, item); invalidateMember(arr.id); };
             const redo = () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); };
             const roots: ExecValue[] = [arr, item.value];
-            // T6b-4c: route to the id-addressed `dictRemove` commit relation (R7 addressing). The live
-            // `removeEntry` op is retired.
+            // Route to the id-addressed `dictRemove` commit relation. All via commit (no live removeEntry).
             const dictRemove = () => ({ kind: "dictRemove", owner: arr.ownerRef, prop: arr.dictProp, key });
             if (commitRelations != null) {
                 recordMutation({ msgId, undo, redo, roots });
@@ -1050,9 +1036,9 @@ function connectWs(): void {
                 wsSend({ op: "logout", clientId: uiStatic.clientId }));
         },
         // Form-Save feedback + atomic-commit batch: open the commit bracket so the propChange hook buffers
-        // edits (Step A) and the commitCreate hook buffers creates (Step B) instead of firing individual
-        // objectPropChange / arrayAdd / setReferenceField messages. endCommit flushes the whole changeset as
-        // ONE `commit` message (ONE journal entry, ONE stateGen bump) the server applies all-or-none.
+        // edits (scalars) and the commitCreate hook buffers creates (Step B). array* hooks buffer into
+        // relations. endCommit flushes the whole changeset as ONE `commit` message (ONE journal entry)
+        // the server applies all-or-none. All mutations use the ambient ctx + commit wire.
         beginCommit: ctx => {
             // ponytail: single-level only — a commit never nests inside a commit (the staged-walk never
             // calls commit()), so the buffers are reset unconditionally with no txDepth guard. Step B
@@ -1094,14 +1080,13 @@ function connectWs(): void {
                 // `value` carries the draft's scalar props in the SAME tagged { props: { name: leaf } } shape
                 // an arrayAdd ships (objectOf), so the server reads it with the SAME ExecObjectValue.
                 wireCreates.push({ tempId: c.draft.id, value: objectOf(c.draft) });
-                if (c.join.kind === "set")
-                    wireRelations.push({ kind: "set", setId: c.join.set.id, childId: c.draft.id });
+                if (c.join.kind === "setAdd")
+                    wireRelations.push({ kind: "setAdd", setId: c.join.set.id, childId: c.draft.id });
                 else
-                    wireRelations.push({ kind: "ref", parentId: c.join.parent.id, prop: c.join.prop, childId: c.draft.id });
+                    wireRelations.push({ kind: "refSet", parentId: c.join.parent.id, prop: c.join.prop, childId: c.draft.id });
             }
-            // T3: the buffered set links/unlinks fold into the SAME wire `relations` the creates' joins use
-            // (the server's commit handler already supports "set" + "setUnlink" relations from T1/T2). The
-            // arrayAdd/arrayRemove hooks already recordMutation'd each intent; splice those per-op entries out
+            // The buffered set links/unlinks (and dicts) fold into the SAME wire `relations` the creates' joins use.
+            // The array*/entry hooks already recordMutation'd each intent; splice those per-op entries out
             // — the consolidated commit entry below (which replays every relation's undo/redo) replaces them.
             for (const r of relations) wireRelations.push(r.wire);
             spliceJournalEntries(new Set(relations.map(r => r.journalMsgId)));
@@ -1134,7 +1119,7 @@ function connectWs(): void {
                     // marks it alive until this entry retires (it must survive for the undo to drop it).
                     onReject: () => { for (const c of creates) pendingCommitCreates.delete(c.draft.id); },
                     roots: [...edits.map(e => e.obj), ...creates.map(c => c.draft),
-                            ...creates.map(c => c.join.kind === "set" ? c.join.set : c.join.parent),
+                            ...creates.map(c => c.join.kind === "setAdd" ? c.join.set : c.join.parent),
                             ...relations.flatMap(r => r.roots)],   // T3: keep linked/unlinked arrays alive for undo
                 });
                 committingCtx = prevCommitting;
@@ -1251,9 +1236,9 @@ function connectWs(): void {
         },
         // M12 auto-live parse-op — see the section doc above (module top) + codeExec.ts's WsHooks.parseMiss.
         parseMiss: (ctx, text) => recordParseMiss(ctx, text),
-        // Top-level data-change flush: the root ctx's notifyChange impl. If a top-level micro-bracket bracket
-        // is open (committingCtx === the root ctx), close it — endCommit emits ONE `commit`. Called by the
-        // mutation hooks via currentExecCtx.notifyChange(); a no-op unless that bracket is open.
+        // Top-level data-change flush: the root (live) ctx's notifyChange impl. If a top-level micro-bracket
+        // is open, close it — endCommit emits ONE `commit`. All top-level scalar/relation mutations
+        // ultimately respect the ambient root ctx for the implicit commit decision.
         topLevelChange: () => { if (committingCtx != null) wsHooks.endCommit(); },
     });
 }
@@ -1791,7 +1776,7 @@ function applyCommitRemap(idMap: { tempId: number; realId: number;
         if (obj != null && obj.type === "object") rekeyCreatedObject(obj, m.tempId, m.realId, m.collections);
         if (pending != null) {
             const join = pending.join;
-            if (join.kind === "set") invalidateMember(join.set.id);
+            if (join.kind === "setAdd") invalidateMember(join.set.id);
             else invalidateProp(join.parent.id, join.prop);
         }
         pendingCommitCreates.delete(m.tempId);

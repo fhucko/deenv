@@ -51,7 +51,7 @@ interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
 interface ExecCtx { type: "ctx"; id: number; staged: Map<ExecObject, Map<string, ExecValue>>; creates: StagedCreate[]; parent: ExecCtx | null; live: boolean; status: string; pending: number; conflicts: ExecValue[]; notifyChange?: () => void; }
 let currentExecCtx: ExecCtx | null = null;
 interface StagedCreate { draft: ExecObject; join: CreateJoin; }
-type CreateJoin = { kind: "set"; set: ExecArray } | { kind: "ref"; parent: ExecObject; prop: string };
+type CreateJoin = { kind: "setAdd"; set: ExecArray } | { kind: "refSet"; parent: ExecObject; prop: string };
 let nextCtxId = 1;
 function ctxStatusDep(ctxId: number): string { return "ctxStatus:" + ctxId; }
 function setCtxStatus(ctx: ExecCtx, status: string): void {
@@ -527,10 +527,10 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
 // Persist a field edit — shared by two-way binding (setValue above) AND a plain `obj.field = value`
 // assignment statement (executeAssignment's objectProp branch, S5a review fix — it used to gate on
 // `obj.id > 0` alone and silently drop the send for a pending object): a positive id is server-backed
-// (id-addressed objectPropChange); a dictionary entry has no extent id but carries its SourcePath, so it
-// persists via the PATH-addressed `write` op (a scalar entry writes at its path, an object entry at
+// (id-addressed edit in commit's `edits`); a dictionary entry has no extent id but carries its SourcePath, so it
+// persists via the PATH-addressed dictAdd (a scalar entry writes at its path as relation, an object entry at
 // path/prop); a just-added set member still at its transient negative id sends by that id anyway (the
-// server resolves it through the add's own remap).
+// server resolves it through the add's own remap). All mutations respect ambient ctx for staging vs micro-commit.
 //
 // Sandbox wire-leak note (S5a review, ui-arch Q1): every branch below ends in a `wsHooks?.` call, gated on
 // the SAME `wsHooks` the workbench dispatch bracket sets to null for a sandboxed instance's whole handler —
@@ -1876,7 +1876,7 @@ function execSetRef(codeCall: CodeCall, scope: ExecScope, context: ExecContext):
     // (mirrors addToCollection). An EXISTING (id>0) pick / a clear stays LIVE — the same id discriminator.
     if (value.type === "object" && value.id < 0) {
         const staging = nearestStagingCtx(context);
-        if (staging != null) { staging.creates.push({ draft: value, join: { kind: "ref", parent: obj, prop } }); return { type: "nothing" }; }
+        if (staging != null) { staging.creates.push({ draft: value, join: { kind: "refSet", parent: obj, prop } }); return { type: "nothing" }; }
     }
     if (obj.id > 0) referenceChange(obj, prop, value, before);
     return { type: "nothing" };
@@ -2230,7 +2230,7 @@ function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext)
     // new graph is transactional. The row already pushed above either way; only the persistence defers.
     if (arr.kind === "set" && value.type === "object" && value.id < 0) {
         const staging = nearestStagingCtx(context);
-        if (staging != null) { staging.creates.push({ draft: value, join: { kind: "set", set: arr } }); return; }
+        if (staging != null) { staging.creates.push({ draft: value, join: { kind: "setAdd", set: arr } }); return; }
     }
     if (arr.id > 0) sendArrayItemAdd(arr, item);
 }
@@ -2763,7 +2763,11 @@ function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
                             const before = obj.props[prop];
                             obj.props[prop] = val;
                             invalidateProp(obj.id, prop);
-                            if (obj.id > 0) propValueChange(obj, prop, val, before);
+                            // Use unified persist dispatch (chooses propValueChange vs pathWriteChange for
+                            // scalar-entry dict objects). Ensures "scalars" (incl. scalar dict values) use
+                            // their correct wire path (edits[] vs relations dictAdd) even when flushed
+                            // from ambient staging ctx via ctx.commit(). Everything respects the ctx.
+                            persistFieldEdit(obj, prop, val, before);
                         }
                     }
                 // Creates (atomic-commit Step B): a nested commit TRANSFERS each create up into the parent
@@ -2812,7 +2816,9 @@ function callCtxMethod(m: ExecCtxMethod, args: ExecValue[]): ExecValue {
 // overwritten before-value, the removed item and its index.
 interface WsHooks {
     propChange(obj: ExecObject, prop: string, value: ExecValue, before: ExecValue): void;
-    // A path-addressed leaf write for a dictionary entry's field (no extent id).
+    // A path-addressed leaf write for a dictionary entry's field (no extent id). Scalar values in
+    // dicts travel as `dictAdd` relations (with the full entry value) so scalars in dicts also
+    // go through the commit wire + ambient ctx decision.
     pathWrite(obj: ExecObject, prop: string, path: string, value: ExecValue, before: ExecValue): void;
     setRef(obj: ExecObject, prop: string, value: ExecValue, before: ExecValue): void;
     arrayAdd(arr: ExecArray, item: ExecArrayItem, typeName: string | undefined): void;
