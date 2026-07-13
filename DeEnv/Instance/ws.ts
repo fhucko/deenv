@@ -84,8 +84,8 @@ let commitEdits: CommitEdit[] | null = null;
 // staged create here; endCommit folds them into the ONE `commit` message's creates+relations. null = no commit
 // bracket open (parallel to commitEdits). Each carries the draft + join so endCommit can build the wire
 // create/relation AND the journal undo (drop the created object) + the ack re-key (negId→realId).
-interface CommitCreate { draft: ExecObject; join: CreateJoin }
-let commitCreates: CommitCreate[] | null = null;
+interface StagedCreate { draft: ExecObject; join: CreateJoin }
+let commitCreates: StagedCreate[] | null = null;
 // The SET LINK/UNLINK intents accumulated while inside a commit bracket (ctx.commit, ObjectForm Save)
 // OR a handler transaction (runHandlerTransaction — designer handlers like wrapNode/unwrapNode). The
 // arrayAdd/arrayRemove hooks buffer here instead of sending individual arrayAdd/arrayRemove frames; the
@@ -698,7 +698,7 @@ const pendingAdds = new Map<number, number>();
 // Drop a staged create's optimistic row (atomic-commit Step B): the commit journal entry's undo reverts
 // it on a server reject — remove the draft from the set it was added to (set join) or unset the reference
 // it was pointed at (ref join), so a denied changeset leaves NO orphan row. invalidateMember/Prop re-renders.
-function dropStagedCreate(c: CommitCreate): void {
+function dropStagedCreate(c: StagedCreate): void {
     if (c.join.kind === "set") {
         const i = c.join.set.items.findIndex(it => it.value === c.draft);
         if (i >= 0) c.join.set.items.splice(i, 1);
@@ -711,7 +711,7 @@ function dropStagedCreate(c: CommitCreate): void {
 
 // Re-apply a staged create's optimistic row (atomic-commit Step B): the commit journal entry's redo, used
 // when an EARLIER entry's rollback reverse-replayed this one. The mirror of dropStagedCreate.
-function restageCreate(c: CommitCreate): void {
+function restageCreate(c: StagedCreate): void {
     if (c.join.kind === "set") {
         if (!c.join.set.items.some(it => it.value === c.draft))
             c.join.set.items.push({ key: c.draft.id, value: c.draft });

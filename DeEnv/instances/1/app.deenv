@@ -491,8 +491,8 @@ ui
         if site == null
             return null
         var wrapper = newNode("", "div", site.node.order)
-        wrapper.children = [site.node]
         site.parentSet.add(wrapper)
+        wrapper.children.add(site.node)
         site.parentSet.remove(site.node)
         selectNode(wrapper)
         revealSelected = revealSelected + 1

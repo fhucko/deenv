@@ -311,6 +311,8 @@ Full design + the long context-model dialogue: `docs/plans/atomic-commit.md`; me
 
 ## Client/server mutation model — ground rules (adopted 2026-07-12)
 
+Unified `commit` — every model op (edit / ref / set link-unlink / create / dict write-remove / remove-detach) is a `commit` relation or edit. `commit` is the SOLE server persistence op: the 7 live mutating wire ops are deleted (client never sends them; server rejects them). `remove` detaches; deletion is GC's call, never guaranteed (AppLog retains orphans). No `delete` store op exists — the ACL `delete` verb maps to `remove`.
+
 The unified `commit` slice (plan `2026-07-12_220000-unified-commit-all-ops.md`) collapsed the seven
 live mutating wire ops into a single `commit` frame. These four rules are the **permanent ground rules**
 that slice enforces — they are not slice-local; they govern every future client/server mutation.
