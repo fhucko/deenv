@@ -602,4 +602,62 @@ public sealed class CodeExecutorTests
         await Assert.That(() => new CodeExecutor().ExecuteValue(call, scope, new ExecContext()))
             .Throws<CodeRuntimeException>();
     }
+
+    // T6b-4b (R7 addressing): a dictionary surfaces as an ExecArray that carries its OWNER's address
+    // (OwnerRef = the db object id, DictProp = the dict prop name), and each entry ExecObject carries
+    // the same owner address + its Key — so the client can persist through id-addressed dictAdd/dictRemove
+    // relations instead of the path-addressed addEntry/removeEntry ops.
+    [Test]
+    public async Task A_dict_array_and_its_entries_carry_their_owner_address()
+    {
+        var desc = InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    settings dict of text by text
+                    configs dict of Config by text
+                Config
+                    name text
+            """);
+        var dataPath = Path.GetTempFileName();
+        try
+        {
+            var store = new JsonFileInstanceStore(dataPath, desc);
+            store.CreateEntry(NodePath.Root.Field("settings"), new TextValue("theme"), new TextValue("dark"));
+            var cfg = store.CreateObject("Config", new ObjectValue(new Dictionary<string, NodeValue>
+                { ["name"] = new TextValue("api") }));
+            var cfgRead = store.ReadById(cfg);
+            if (cfgRead is { } cfgTuple)
+                store.CreateEntry(NodePath.Root.Field("configs"), new TextValue("api"), cfgTuple.Fields);
+
+            var ctx = new ExecContext();
+            var db = DbBridge.LoadRoot(store, desc, ctx);
+
+            // Scalar dict (settings): the array carries the owner address.
+            var settingsArr = (ExecArray)db.Props["settings"];
+            await Assert.That(settingsArr.OwnerRef).IsEqualTo(1);
+            await Assert.That(settingsArr.DictProp).IsEqualTo("settings");
+            var settingsEntry = (ExecObject)settingsArr.Items.Single().Value;
+            await Assert.That(settingsEntry.OwnerRef).IsEqualTo(1);
+            await Assert.That(settingsEntry.DictProp).IsEqualTo("settings");
+            await Assert.That(settingsEntry.Key).IsEqualTo("theme");
+
+            // Object dict (configs): same addressing on the array + entry.
+            var configsArr = (ExecArray)db.Props["configs"];
+            await Assert.That(configsArr.OwnerRef).IsEqualTo(1);
+            await Assert.That(configsArr.DictProp).IsEqualTo("configs");
+            var configEntry = (ExecObject)configsArr.Items.Single().Value;
+            await Assert.That(configEntry.OwnerRef).IsEqualTo(1);
+            await Assert.That(configEntry.DictProp).IsEqualTo("configs");
+            await Assert.That(configEntry.Key).IsEqualTo("api");
+
+            // The wire (ClientState.Serialize) emits the SAME ownerRef/dictProp/key — the emit code reads
+            // these exact model fields, so the dict array + entry arrive at the client addressable. (A full
+            // render that accesses the dict in output position is covered by the CodeClient/render suites;
+            // here we assert the model side, which is what 4b populates.)
+        }
+        finally
+        {
+            if (File.Exists(dataPath)) File.Delete(dataPath);
+        }
+    }
 }

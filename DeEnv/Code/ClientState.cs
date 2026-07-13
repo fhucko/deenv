@@ -56,6 +56,12 @@ public static class ClientState
                     entry["sourcePath"] = sp;
                     entry["scalarEntry"] = o.ScalarEntry;
                 }
+                // T6b-4b (R7 addressing): a dict entry carries its owning dict's address so the
+                // client can persist via id-addressed dictAdd/dictRemove (not the path-addressed
+                // addEntry/removeEntry ops). Only meaningful for dictionary entries.
+                if (o.OwnerRef is { } oRef) entry["ownerRef"] = oRef;
+                if (o.DictProp is { } oProp) entry["dictProp"] = oProp;
+                if (o.Key is { } oKey) entry["key"] = oKey;
                 objects[o.Id.ToString()] = entry;
                 // Two ship-WHOLE cases, both shipping every prop:
                 //   • a Constant (a sys.schema descriptor): provably user-data-free, and its consumer
@@ -92,6 +98,11 @@ public static class ClientState
                     ["sourcePath"] = a.SourcePath,   // dicts persist via their path (add/removeEntry)
                     ["items"] = items,
                 };
+                // T6b-4b (R7 addressing): a dict array carries its owner's address so client
+                // entryAdd/entryRemove build id-addressed dictAdd/dictRemove relations. Only
+                // dictionary arrays have these (set/list stay null).
+                if (a.OwnerRef is { } arrRef) arrays[a.Id.ToString()]["ownerRef"] = arrRef;
+                if (a.DictProp is { } arrProp) arrays[a.Id.ToString()]["dictProp"] = arrProp;
                 // A Constant array (a descriptor's prop list — props/values/valueProps) ships ALL its
                 // items; its element objects are Constant too, so they recurse whole. Otherwise only the
                 // DISPLAYED items ship — so a where/orderBy result or array literal (negative-id, NOT

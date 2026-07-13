@@ -60,6 +60,14 @@ public sealed class ExecObject : IExecValue
     public string? SourcePath { get; set; }
     public bool ScalarEntry { get; set; }
 
+    // T6b-4b (R7 addressing): a dictionary ENTRY carries the address of its owning dict so the
+    // client can persist through the id-addressed `dictAdd`/`dictRemove` commit relations (not the
+    // PATH-addressed addEntry/removeEntry ops). OwnerRef = the dict owner's object id; DictProp =
+    // the owner's dictionary-typed prop; Key = this entry's dictionary key.
+    public int? OwnerRef { get; set; }
+    public string? DictProp { get; set; }
+    public string? Key { get; set; }
+
     // A provably-constant, user-data-FREE value (a sys.schema descriptor: built from schema
     // metadata only, in a fresh empty scope, so it cannot reference db). ClientState ships a
     // Constant object/array WHOLE — every prop, every item, recursively — because a consumer
@@ -93,6 +101,12 @@ public sealed class ExecArray : IExecValue
     // key under a path (M5), unlike a set member reached by its own identity. Set/list are
     // null. Ships to the client so its add/remove sends carry the path.
     public string? SourcePath { get; set; }
+
+    // T6b-4b (R7 addressing): a dictionary array carries the address of its owner so client edits
+    // (entryAdd/entryRemove) can build id-addressed `dictAdd`/`dictRemove` relations. OwnerRef =
+    // the owner object's id; DictProp = the owner's dictionary-typed prop name.
+    public int? OwnerRef { get; set; }
+    public string? DictProp { get; set; }
 
     // Part of a provably-constant, user-data-free value (a sys.schema descriptor's nested array,
     // e.g. `props`/`values`/`valueProps`). ClientState ships a Constant array WHOLE — every item —

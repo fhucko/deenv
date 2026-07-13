@@ -251,8 +251,15 @@ Split into parts:
   edits are whole-entry `dictAdd` re-issues (model-faithful: a dict entry IS a value). `CommitDictTests` covers
   add + whole-entry rewrite + remove for an object dict. **Server capability now matches the client's object
   dict needs** — the remaining work is purely the client-side routing (4b/4c) + handler deletion (4d).
-- **T6b-4b (TODO):** dict `ExecArray` carries `ownerRef`+`prop`; entry items carry `key` (R7 addressing). Server
-  `ClientState.cs` emit + client `dt.ts`/`codeExec.ts` model.
+- **T6b-4b (DONE):** dict `ExecArray` + entry `ExecObject` now carry R7 addressing — `ownerRef`
+  (the dict owner's object id) + `dictProp` (the dictionary-typed prop) on the array, plus `key`
+  on each entry object. Populated in `DbBridge` (the runtime render) from the owner/prop/key it
+  already knows; emitted by `ClientState` (mirroring the existing `sourcePath` path); merged into
+  the client's `ExecArray`/`ExecObject` via `dt.ts` (and copied in `workbench.ts` for the designer
+  seed-graph). The client's `setDictEntry` also stamps the entry's `ownerRef`/`dictProp`/`key` from
+  the merged dict array, so optimistic edits before a refetch are addressable. **No behavior change**
+  — purely extra wire fields; the 3 dict live ops (`addEntry`/`removeEntry`/`write`) still fire.
+  `CodeExecutorTests` asserts the model-level addressing for both scalar and object dicts.
 - **T6b-4c (TODO):** client dict hooks → commit ops: `entryAdd`→`dictAdd`, `entryRemove`→`dictRemove`,
   `pathWrite`→`dictAdd` whole-entry (decision flagged + accepted: object-entry field edit = whole-entry rewrite).
 - **T6b-4d (TODO):** delete `HandleWrite`/`HandleAddEntry`/`HandleRemoveEntry` + response records + case arms;

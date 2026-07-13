@@ -75,7 +75,7 @@ function deepCopySeed(value: ExecValue, seen: Map<ExecObject | ExecArray, ExecOb
     if (value.type === "object") {
         const existing = seen.get(value);
         if (existing != null) return existing as ExecObject;
-        const copy: ExecObject = { type: "object", props: {}, id: fakeIdCounter++, sourcePath: value.sourcePath, scalarEntry: value.scalarEntry };
+        const copy: ExecObject = { type: "object", props: {}, id: fakeIdCounter++, sourcePath: value.sourcePath, scalarEntry: value.scalarEntry, ownerRef: value.ownerRef, dictProp: value.dictProp, key: value.key };
         seen.set(value, copy);
         for (const key of Object.keys(value.props)) copy.props[key] = deepCopySeed(value.props[key], seen);
         return copy;
@@ -83,7 +83,7 @@ function deepCopySeed(value: ExecValue, seen: Map<ExecObject | ExecArray, ExecOb
     if (value.type === "array") {
         const existing = seen.get(value);
         if (existing != null) return existing as ExecArray;
-        const copy: ExecArray = { type: "array", kind: value.kind, items: [], id: fakeIdCounter++, elementTypeName: value.elementTypeName, sourcePath: value.sourcePath };
+        const copy: ExecArray = { type: "array", kind: value.kind, items: [], id: fakeIdCounter++, elementTypeName: value.elementTypeName, sourcePath: value.sourcePath, ownerRef: value.ownerRef, dictProp: value.dictProp };
         seen.set(value, copy);
         copy.items = value.items.map(item => {
             const v = deepCopySeed(item.value, seen);

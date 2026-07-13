@@ -10,8 +10,8 @@ interface DtObjectRef { type: "object"; id: number; }
 interface DtArrayRef { type: "array"; id: number; }
 
 interface DtScopeValue { isReadOnly: boolean; value: DtValue; }
-interface ServerDtObject { props: { [name: string]: DtValue }; sourcePath?: string; scalarEntry?: boolean; }
-interface ServerDtArray { kind: "set" | "dict" | "list"; elementTypeName?: string; sourcePath?: string; items: { key: number; value: DtValue }[]; }
+interface ServerDtObject { props: { [name: string]: DtValue }; sourcePath?: string; scalarEntry?: boolean; ownerRef?: number; dictProp?: string; key?: string; }
+interface ServerDtArray { kind: "set" | "dict" | "list"; elementTypeName?: string; sourcePath?: string; ownerRef?: number; dictProp?: string; items: { key: number; value: DtValue }[]; }
 
 interface ServerDtState {
     leaves: { objects: { [id: number]: ServerDtObject }; arrays: { [id: number]: ServerDtArray } };
@@ -67,6 +67,9 @@ function mergeState(dtState: ServerDtState): void {
         for (const [name, value] of Object.entries(dtObj.props)) obj.props[name] = fromDtValue(value);
         // A dict entry carries its path so a bound field edit persists path-addressed.
         if (dtObj.sourcePath != null) { obj.sourcePath = dtObj.sourcePath; obj.scalarEntry = dtObj.scalarEntry; }
+        if (dtObj.ownerRef != null) obj.ownerRef = dtObj.ownerRef;
+        if (dtObj.dictProp != null) obj.dictProp = dtObj.dictProp;
+        if (dtObj.key != null) obj.key = dtObj.key;
     }
 
     for (const [idText, dtArr] of Object.entries(dtState.leaves.arrays)) {
@@ -75,6 +78,8 @@ function mergeState(dtState: ServerDtState): void {
         arr.kind = dtArr.kind;
         arr.elementTypeName = dtArr.elementTypeName;
         arr.sourcePath = dtArr.sourcePath;
+        if (dtArr.ownerRef != null) arr.ownerRef = dtArr.ownerRef;
+        if (dtArr.dictProp != null) arr.dictProp = dtArr.dictProp;
         for (const item of dtArr.items)
             if (!arr.items.some(p => p.key === item.key)) arr.items.push({ key: item.key, value: fromDtValue(item.value) });
     }

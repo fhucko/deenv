@@ -111,6 +111,9 @@ public static class DbBridge
                                 // this path; an object entry's fields hang under it.
                                 SourcePath = fieldPath.Key(keyText).ToString(),
                                 ScalarEntry = !elementIsObject,
+                                // T6b-4b (R7 addressing): the entry carries its owning dict's address
+                                // so the client can persist via id-addressed dictAdd/dictRemove.
+                                OwnerRef = obj.Id, DictProp = prop.Name, Key = keyText,
                             };
                             if (elementIsObject && entryVal is ObjectValue entryOv)
                             {
@@ -144,6 +147,9 @@ public static class DbBridge
                         Kind = ArrayKind.Dict,
                         ElementTypeName = elemType!.Name,
                         SourcePath = fieldPath.ToString(),
+                        // T6b-4b (R7 addressing): the dict array carries its owner's address so
+                        // client entryAdd/entryRemove can build id-addressed dictAdd/dictRemove.
+                        OwnerRef = obj.Id, DictProp = prop.Name,
                     };
                     break;
                 }

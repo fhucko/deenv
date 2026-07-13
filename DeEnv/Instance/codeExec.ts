@@ -53,11 +53,11 @@ interface ExecBool { type: "bool"; value: boolean; }
 interface ExecText { type: "text"; value: string; }
 interface ExecNull { type: "null"; }
 interface ExecNothing { type: "nothing"; }
-interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id: number; sourcePath?: string; scalarEntry?: boolean; }
-// The Code array — one collection shape for every kind, identical on server, wire, and
+interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id: number; sourcePath?: string; scalarEntry?: boolean; ownerRef?: number; dictProp?: string; key?: string; }
+interface ExecArray { type: "array"; kind: "set" | "dict" | "list"; items: ExecArrayItem[]; id: number; elementTypeName?: string; sourcePath?: string; ownerRef?: number; dictProp?: string; }
 // client. A positive id ⇒ persisted (a db set/dict); a negative id ⇒ transient (a list
-// literal or where/orderBy result). ElementTypeName is the member type (set/dict only).
-interface ExecArray { type: "array"; kind: "set" | "dict" | "list"; items: ExecArrayItem[]; id: number; elementTypeName?: string; sourcePath?: string; }
+interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id: number; sourcePath?: string; scalarEntry?: boolean; ownerRef?: number; dictProp?: string; key?: string; }
+interface ExecArray { type: "array"; kind: "set" | "dict" | "list"; items: ExecArrayItem[]; id: number; elementTypeName?: string; sourcePath?: string; ownerRef?: number; dictProp?: string; }
 interface ExecArrayItem { key: number; value: ExecValue; }
 // `handlerSlot` (client data layer, slice 4): the render-slot path active when an onClick handler closure was
 // built (stamped by executeTag), so a click can report the handler's (slot, fn-id) to the server's action-miss
@@ -2313,6 +2313,13 @@ function setDictEntry(arr: ExecArray, key: ExecValue, value: ExecValue): void {
     }
     props["__key"] = { type: "text", value: keyText };
     const entry: ExecObject = { type: "object", id, props };
+    // T6b-4b (R7 addressing): the entry carries its owning dict's address (from the dict array,
+    // which the server merged with ownerRef/dictProp) so pathWrite can build an id-addressed
+    // dictAdd whole-entry rewrite. The client-created entry may not yet have them on first render,
+    // but the server's next state merge backfills them (the entry id is stable-by-key).
+    if (arr.ownerRef != null) entry.ownerRef = arr.ownerRef;
+    if (arr.dictProp != null) entry.dictProp = arr.dictProp;
+    entry.key = keyText;
     const existing = arr.items.findIndex(i => i.key === id);
     let item: ExecArrayItem;
     if (existing >= 0) { item = arr.items[existing]; item.value = entry; }
