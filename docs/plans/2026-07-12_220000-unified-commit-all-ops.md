@@ -273,16 +273,15 @@ is reached across sets and dicts. (Array side in prior commits; dict side in ad0
 > `commit` the server can't apply, or a live op the server no longer serves). The split keeps each land
 > reviewable and revertible.
 
-### Task 7: `refactor(app): wrapNode emits setByProp; drop nested children refId`
+### Task 7: `refactor(app): wrapNode emits setByProp; drop nested children refId` (DONE 2026-07-13)
 
 **Files:** `DeEnv/instances/1/app.deenv`, `DeEnv.Tests/Code/StoreConcurrencyTests.cs`
 - `wrapNode` (L489): remove `wrapper.children = [site.node]`; after `site.parentSet.add(wrapper)` buffer
-  `setByProp(wrapperDraft,"children",site.node)`; `site.parentSet.remove(site.node)` → `setUnlink`. Net ONE
+  `setByProp(wrapperDraft,"children",site.node)` (implemented via children collection add in Code); `site.parentSet.remove(site.node)` → `setUnlink`. Net ONE
   `commit`: [create wrapper] + [setByProp(-1,"children",node)] + [setUnlink(parentSet,node)].
-- **VERIFICATION GAP (state in PR):** `wrapNode` *click* has no headless test. Prove via `StoreConcurrencyTests`:
-  a `commit` with `setByProp(-1,"children",member)` puts member in wrapper.children + unlinks old parent.
+- StoreConcurrencyTests covers the atomic reparent. DesignerSourceTests 31/31. (wrap click itself has no headless harness — R1 acknowledged.)
 
-### Task 8: `docs: record the unified model + remove-not-delete + commit-is-mandatory`
+### Task 8: `docs: record the unified model + remove-not-delete + commit-is-mandatory` (DONE)
 
 **Files:** `docs/plans/2026-07-12_143000-transparent-client-mutations-t2-t4.md`, `DECISIONS.md`
 - `DECISIONS.md`: "Unified `commit` — every model op (edit / ref / set link-unlink / create / dict write-remove /
@@ -291,25 +290,14 @@ is reached across sets and dicts. (Array side in prior commits; dict side in ad0
   never guaranteed (AppLog retains orphans). No `delete` store op exists — the ACL `delete` verb maps to `remove`."
 - Relabel T4.2/T4.3 DONE; note T4.4 (UI macro) still needs sign-off (default: keep).
 
-### Task 9: `refactor: unify naming across client/server commit vocabulary`
+### Task 9: `refactor: unify naming across client/server commit vocabulary` (DONE 2026-07-13)
 
 **Files:** `DeEnv/Instance/ws.ts`, `DeEnv/Http/WsHandler.cs`
-- **Collision fix (discipline #4):** rename the client buffered-create interface `CommitCreate { draft, join }`
-  (ws.ts L70) → `StagedCreate`, so it no longer collides with the server `CommitCreate(int TempId, …)` record
-  (IInstanceStore.cs L192). Update `commitCreates: CommitCreate[]` → `commitCreates: StagedCreate[]` and all refs.
-  (The server `CommitCreate` is the model term — keep it; the client one is a UI-staging buffer — rename it.
-  Both are RUNTIME-INTERNAL; no user-code surface changes.)
-- **NO begin/end verb in user code (discipline #5):** do NOT rename `runHandlerTransaction`/`flushHandlerTx` to a
-  `beginHandlerCommit`/`endHandlerCommit` pair — that would surface a begin/end verb, violating "user code sees
-  only plain commit." Keep `runHandlerTransaction` as the runtime's atomic-action wrapper; it calls the
-  RUNTIME-INTERNAL `beginCommit`/`endCommit` primitives (same ones the form Save uses via `ctx.commit`) plus its
-  handler-specific rollback + action-miss logic. User Code never names a bracket.
-- **Audit for residual drift:** grep `beginCommit`/`endCommit` — confirm ALL call sites are inside the runtime
-  (ws.ts / codeExec.ts / ui.ts), NONE in app.deenv. `ctx.commit` is the only commit verb app.deenv may use (form
-  Save). No behavior change — pure rename of the internal interface + a doc clarification.
-- GREEN: build + `DesignerSourceTests` 31/31; `grep -rn "CommitCreate\b" DeEnv/Instance` shows ONLY the server
-  record reference (none on the client); `grep -rn "beginCommit\|endCommit" DeEnv/instances` returns NOTHING
-  (no user-code surface).
+- **Collision fix (discipline #4):** renamed the client buffered-create interface `CommitCreate { draft, join }`
+  (ws.ts) → `StagedCreate`. Updated `commitCreates: ...` and refs (dropStagedCreate etc.). Server `CommitCreate` kept.
+- **NO begin/end verb in user code (discipline #5):** kept `runHandlerTransaction` etc. as internal only.
+- Audits: no `CommitCreate\b` in DeEnv/Instance (client); no begin/endCommit in .deenv instances.
+- GREEN: build + DesignerSource 31/31; greps clean.
 
 ## Files that change
 
