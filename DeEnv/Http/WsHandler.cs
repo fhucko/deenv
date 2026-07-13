@@ -767,7 +767,7 @@ public sealed class WsHandler
                 // (kept out of the ParsedRelation union on purpose — unlinks have no typed child). Skip them
                 // here so ParseRelation (which only knows "set"/"ref") does not reject them as malformed.
                 if (relEl.TryGetProperty("kind", out var skipKindEl) && skipKindEl.GetString() is
-                    "setByProp" or "setUnlink" or "setUnlinkByProp" or "dictRemove" or "dict")
+                    "setByProp" or "setUnlink" or "setUnlinkByProp" or "dictRemove" or "dictAdd")
                     continue;
                 if (ParseRelation(relEl, session) is not { } rel)
                     return Error("commit relation is malformed.");
@@ -828,9 +828,9 @@ public sealed class WsHandler
                     continue;
                 }
 
-                if (tpKind == "dict")
+                if (tpKind == "dictAdd")
                 {
-                    // T6a.1: `dict` (write ONE dict entry) — the wire-accepted counterpart of DictWriteMutation
+                    // T6a.1: `dictAdd` (write ONE dict entry) — the wire-accepted counterpart of DictWriteMutation
                     // (formerly server-only). Scalar value only (object entries keep the standalone
                     // WriteDictionaryEntry path). Mirrors dictRemove's parse + the edit floor of HandleWrite's
                     // dict-entry gate. owner/prop/key address the entry; value is a scalar leaf { type, value }.

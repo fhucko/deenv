@@ -204,7 +204,7 @@ public sealed record FieldWriteMutation(int ObjectRef, string Prop, NodeValue Va
 // intrinsic id OwnerRef. SERVER-SIDE VOCABULARY ONLY (M13 slice 3, review fix 3): this exists so
 // sys.commitDesign can carry a Commit's `idMap` entries in the SAME atomic CommitBatch as the Commit's
 // creation, closing the crash window a separate post-batch WriteDictionaryEntry loop opened. The WIRE
-// `commit` op carries it from clients (T6a.1): the `dict` relation parses owner/prop/key/value and emits
+// `commit` op carries it from clients (T6a.1): the `dictAdd` relation parses owner/prop/key/value and emits
 // this mutation — so ctx.commit can write a dict entry, not just the standalone WriteDictionaryEntry. Value
 // is a scalar leaf (the idMap values are ints); object-valued dict entries are not a commit-batch case (the
 // standalone WriteDictionaryEntry keeps that path). Batch semantics mirror FieldWriteMutation: the owner must

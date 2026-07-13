@@ -119,16 +119,16 @@ This keeps each landing reviewable and avoids a half-cutover.
 ### Task 3: `feat(ws): commit accepts dict + remove relations (promote server-only kinds)`
 
 **Files:** `DeEnv/Http/WsHandler.cs`
-- ParseRelation second pass (L878): add `case "dict"` → parse `{ownerRef/parentId, prop, key, value}`; resolve
+- ParseRelation second pass (L878): add `case "dictAdd"` → parse `{ownerRef/parentId, prop, key, value}`; resolve
   owner (negative allowed); emit `DictWriteMutation(ownerRef, prop, key, value)` (value via `DeserializeValue`/
   `ParseKey` — same as `HandleAddEntry` L615-617). Add `case "dictRemove"` → `{ownerRef, prop, key}` →
   `DictRemoveMutation`. Add `case "remove"` → `{objectId}` → `RemoveMutation(Resolve(session,objectId))`.
-- Access floor: `dict`/`dictRemove` mirror `HandleAddEntry`'s `RequireDictWrite` (L606) — the owner edit floor.
+- Access floor: `dictAdd`/`dictRemove` mirror `HandleAddEntry`'s `RequireDictWrite` (L606) — the owner edit floor.
   `remove` floors the object as `delete` (acl verb) — mirror `HandleRemoveEntry`'s `RequireWrite(...,"delete",...)`
   (L639). **This is the one place the `delete` ACL verb maps to a real op** (remove), consistent with
   InstanceDescription.cs L83's verb list.
-- Drop the `continue` skip at L838-840 so `dict`/`dictRemove`/`remove` are NOT skipped (they now parse here).
-- RED: `CodeClientTests`/`WsHandler` test — a `commit` carrying `dict` writes a dict entry; `remove` detaches.
+- Drop the `continue` skip at L838-840 so `dictAdd`/`dictRemove`/`remove` are NOT skipped (they now parse here).
+- RED: `CodeClientTests`/`WsHandler` test — a `commit` carrying `dictAdd` writes a dict entry; `remove` detaches.
 - GREEN: passes. `DesignerSourceTests` 31/31.
 
 ### Task 4: `feat(ws): client CommitRelation union adds dict / dictRemove / remove`
@@ -171,7 +171,7 @@ This keeps each landing reviewable and avoids a half-cutover.
   - `setReferenceField` (L865): DELETE live send; buffer/commit a `RefLinkMutation` relation (clear = target null).
   - `arrayAdd` mint (L913-917): DELETE live `arrayAdd`; buffer/commit `commitCreate` (+ `setByProp` join).
   - `arrayRemove` (L941): DELETE live send; buffer/commit `setUnlink`/`setUnlinkByProp`.
-  - `entryAdd` (L959): DELETE live `addEntry`; SET→`commitCreate`+`setByProp`; DICT→`dict` relation.
+  - `entryAdd` (L959): DELETE live `addEntry`; SET→`commitCreate`+`setByProp`; DICT→`dictAdd` relation.
   - `entryRemove` (L970): DELETE live `removeEntry`; SET→`setUnlink`; DICT→`dictRemove`.
 - GREEN: `DesignerSourceTests` 31/31; `CodeClientTests` asserts (a) NONE of the 7 live ops is ever sent, and
   (b) a top-level edit produces exactly ONE `commit` with one `edit` (micro-bracket), not a live `objectPropChange`.
@@ -192,18 +192,18 @@ This keeps each landing reviewable and avoids a half-cutover.
 These are the only two things still missing for `commit` to cover every model op. Each is its own slice;
 build + prove with headless tests BEFORE any client cutover.
 
-**T6a.1 — Server `dict`/`dictRemove`/`write` as `commit` relations (kills `HandleWrite`/`HandleAddEntry`/`HandleRemoveEntry`).**
-- Server `CommitRelation` union gains `{kind:"dict", ownerRef, prop, key, value}` (scalar value) and
-  `{kind:"dict", ownerRef, prop, key, value: <object props>}` (object entry) → `DictWriteMutation`; plus the
-  existing `dictRemove` already parses (T2/T3). Apply arms already exist in `JsonFileInstanceStore`.
+**T6a.1 — Server `dictAdd`/`dictRemove` as `commit` relations (kills `HandleWrite`/`HandleAddEntry`/`HandleRemoveEntry`).**
+- Server `CommitRelation` union gains `{kind:"dictAdd", ownerRef, prop, key, value}` (scalar value) →
+  `DictWriteMutation`; plus the existing `dictRemove` already parses (T2/T3). Apply arms already exist in
+  `JsonFileInstanceStore`.
 - **Client must be able to NAME the dict `prop`.** Today `ExecArray` (set/dict) carries no `prop`; the dict
   owner is addressed by path, not `(ownerRef, prop).` Add `prop` to the dict `ExecArray` (mirrors how the set
   `ExecArray` knows its containing set's id) so `entryAdd`/`entryRemove`/`pathWrite` can build
-  `{kind:"dict", ownerRef, prop, key, ...}` wire. (This is the real blocker the earlier analysis flagged — the
+  `{kind:"dictAdd", ownerRef, prop, key, ...}` wire. (This is the real blocker the earlier analysis flagged — the
   client literally cannot construct the wire without the dict `prop` name.)
 - `entryAdd` / `entryRemove` / `pathWrite` (dict field) hooks: when a bracket is open (or via `stageTopLevel`),
-  buffer a `dict`/`dictRemove` relation instead of sending live `addEntry`/`removeEntry`.
-- Tests: extend `CommitSetByPropTests` / a new `CommitDictTests` — a `commit` carrying `dict` writes an entry;
+  buffer a `dictAdd`/`dictRemove` relation instead of sending live `addEntry`/`removeEntry`.
+- Tests: extend `CommitSetByPropTests` / a new `CommitDictTests` — a `commit` carrying `dictAdd` writes an entry;
   `dictRemove` drops it; floor = owner `edit` (mirrors `RequireDictWrite`).
 - NOTE: `DictWriteMutation` is currently server-only (IInstanceStore.cs L207-208, "not from wire"). This task
   PROMOTES it to a wire-accepted `commit` relation — that is the substance of the slice.
@@ -230,7 +230,7 @@ build + prove with headless tests BEFORE any client cutover.
 
 Only after T6a proves `commit` can express dict-write + nested-create:
 - Client: `arrayAdd` mint → `commitCreate`+`setByProp`/`set` (T6a.2 path); `entryAdd`/`entryRemove`/`pathWrite`
-  → `dict`/`dictRemove` (T6a.1 path). No live `arrayAdd`/`addEntry`/`removeEntry`/`write` send remains.
+  → `dictAdd`/`dictRemove` (T6a.1 path). No live `arrayAdd`/`addEntry`/`removeEntry`/`write` send remains.
 - Server: delete `HandleWrite`, `HandleAddEntry`, `HandleRemoveEntry`, `HandleArrayAdd` + `NestedSetLinks` +
   their `case` arms + dead response records (`WriteResponse`, `AddEntryResponse`, `RemoveEntryResponse`,
   `ArrayAddResponse`). Any received op among `write`/`addEntry`/`removeEntry`/`arrayAdd` hits the
@@ -289,7 +289,7 @@ Only after T6a proves `commit` can express dict-write + nested-create:
   `HandleWrite`/`HandleAddEntry`/`HandleRemoveEntry`/`HandleArrayAdd` + `NestedSetLinks` + dead response
   records (T6b)
 - `DeEnv/Instance/ws.ts` — dict `ExecArray` carries `prop` (T6a.1); `entryAdd`/`entryRemove`/`pathWrite` buffer
-  `dict`/`dictRemove` (T6a.1); `arrayAdd` mint stages into enclosing form ctx OR `stageTopLevel` (T6a.2); delete
+  `dictAdd`/`dictRemove` (T6a.1); `arrayAdd` mint stages into enclosing form ctx OR `stageTopLevel` (T6a.2); delete
   remaining live sends (T6b); rename `CommitCreate`→`StagedCreate` (T9)
 - `DeEnv/instances/1/app.deenv` — `wrapNode` setByProp (T7); call-site renames (T9)
 - `DeEnv.Tests/Code/CommitDictTests.cs` (NEW) — `commit` dict write/remove applies (T6a.1)
@@ -315,7 +315,7 @@ Only after T6a proves `commit` can express dict-write + nested-create:
   it. Tests must assert a still-referenced object SURVIVES a `remove`. This is the user's explicit discipline.
 - **R3 (blast radius):** opening `commitCreates`/`commitEdits` in the handler bracket flips every designer
   handler + palette `add`/`addEntry` to atomic-commit. Audit `app.deenv` for such call sites; confirm dict-create
-  routes through `dict` relation (model now supports it), not a stray `addEntry`.
+  routes through `dictAdd` relation (model now supports it), not a stray `addEntry`.
 - **R4 (ACL):** `remove` maps to the `delete` verb floor (InstanceDescription.cs L83). Confirm the floor rejects a
   non-deletable object exactly as `HandleRemoveEntry` did — no behavior change.
 - **R5 (commit scopes — THE GOTCHA):** discipline #3 means every mutation reaches the server as a `commit`, but

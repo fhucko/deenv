@@ -9,8 +9,8 @@ using TUnit.Core;
 
 namespace DeEnv.Tests.Code;
 
-// T6a.1: HandleCommit must recognize the `dict` commit relation — the wire-accepted counterpart of
-// DictWriteMutation (formerly server-only). A `dict` relation writes ONE scalar dict entry on the owner's
+// T6a.1: HandleCommit must recognize the `dictAdd` commit relation — the wire-accepted counterpart of
+// DictWriteMutation (formerly server-only). A `dictAdd` relation writes ONE scalar dict entry on the owner's
 // (owner, prop) dictionary field; a `dictRemove` drops it. Both floor on an `edit` of the owner, matching
 // HandleWrite's dict-entry gate. Mirrors CommitSetByPropTests' wiring (WsHandler + session harness; wire
 // keys reuse ParseRelation's names — owner/prop/key/value — so the wire stays consistent).
@@ -39,7 +39,7 @@ public sealed class CommitDictTests
                   "edits": [],
                   "creates": [],
                   "relations": [
-                    { "kind": "dict", "owner": 1, "prop": "meta", "key": "theme", "value": { "type": "text", "value": "dark" } }
+                    { "kind": "dictAdd", "owner": 1, "prop": "meta", "key": "theme", "value": { "type": "text", "value": "dark" } }
                   ]
                 }
                 """);
@@ -76,7 +76,7 @@ public sealed class CommitDictTests
             ws.ProcessMessage($$"""
                 {
                   "op": "commit", "clientId": "{{session.Id}}", "edits": [], "creates": [],
-                  "relations": [ { "kind": "dict", "owner": 1, "prop": "meta", "key": "theme", "value": { "type": "text", "value": "dark" } } ]
+                  "relations": [ { "kind": "dictAdd", "owner": 1, "prop": "meta", "key": "theme", "value": { "type": "text", "value": "dark" } } ]
                 }
                 """);
 
@@ -121,7 +121,7 @@ public sealed class CommitDictTests
             var replyText = ws.ProcessMessage($$"""
                 {
                   "op": "commit", "clientId": "{{session.Id}}", "edits": [], "creates": [],
-                  "relations": [ { "kind": "dict", "owner": 1, "prop": "title", "key": "k", "value": { "type": "text", "value": "v" } } ]
+                  "relations": [ { "kind": "dictAdd", "owner": 1, "prop": "title", "key": "k", "value": { "type": "text", "value": "v" } } ]
                 }
                 """);
             using var reply = JsonDocument.Parse(replyText);
@@ -156,7 +156,7 @@ public sealed class CommitDictTests
             var replyText = ws.ProcessMessage($$"""
                 {
                   "op": "commit", "clientId": "{{session.Id}}", "edits": [], "creates": [],
-                  "relations": [ { "kind": "dict", "owner": 1, "prop": "meta", "key": "theme", "value": { "type": "text", "value": "dark" } } ]
+                  "relations": [ { "kind": "dictAdd", "owner": 1, "prop": "meta", "key": "theme", "value": { "type": "text", "value": "dark" } } ]
                 }
                 """);
             using var reply = JsonDocument.Parse(replyText);
