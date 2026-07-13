@@ -103,17 +103,6 @@ public sealed class WsWireShapeTests
             """{"op":"arrayAdd","newId":42,"collections":{},"newVersion":5}""");
     }
 
-    // ── outgoing: setReferenceField — newId present (create-new) vs omitted (link/clear) ──
-
-    [Test]
-    public async Task SetReferenceField_includes_newId_only_when_minted()
-    {
-        await Assert.That(Serialize(new SetReferenceFieldResponse { NewId = 99, NewVersion = 5 }))
-            .IsEqualTo("""{"op":"setReferenceField","ok":true,"newId":99,"newVersion":5}""");
-        await Assert.That(Serialize(new SetReferenceFieldResponse { NewId = null, NewVersion = 5 }))
-            .IsEqualTo("""{"op":"setReferenceField","ok":true,"newVersion":5}""");
-    }
-
     // ── outgoing: commit — the reply the ctx re-pin hinges on (finding 2) ─────────────────
     //
     // `newVersion` is the store's post-commit version, captured under the store lock (finding 3), that the
@@ -163,10 +152,6 @@ public sealed class WsWireShapeTests
             .IsEqualTo("""{"op":"removeEntry","path":"/d","ok":true,"newVersion":5}""");
         await Assert.That(Serialize(new HelloResponse { SessionAlive = true }))
             .IsEqualTo("""{"op":"hello","sessionAlive":true}""");
-        await Assert.That(Serialize(new ObjectPropChangeResponse { NewVersion = 5 }))
-            .IsEqualTo("""{"op":"objectPropChange","ok":true,"newVersion":5}""");
-        await Assert.That(Serialize(new ArrayRemoveResponse { NewVersion = 5 }))
-            .IsEqualTo("""{"op":"arrayRemove","ok":true,"newVersion":5}""");
         await Assert.That(Serialize(new HostActionResponse()))
             .IsEqualTo("""{"op":"hostAction","ok":true}""");
         await Assert.That(Serialize(new AckRemapResponse()))

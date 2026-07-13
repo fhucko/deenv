@@ -119,12 +119,6 @@ public sealed record HelloResponse
     public required bool SessionAlive { get; init; }
 }
 
-public sealed record ObjectPropChangeResponse
-{
-    public string Op => "objectPropChange";
-    public bool Ok => true;
-    public required int NewVersion { get; init; }
-}
 
 // The reply for a `commit` op: all-or-nothing batch of field edits + creates + relations from a ctx.commit().
 // `idMap` (atomic-commit Step B) carries the negative→real id remap for every created object plus its minted
@@ -149,15 +143,6 @@ public sealed record CommitIdMapEntry
     public required Dictionary<string, CollectionInfo> Collections { get; init; }
 }
 
-public sealed record SetReferenceFieldResponse
-{
-    public string Op => "setReferenceField";
-    public bool Ok => true;
-    // Present only when a new object was minted (a create-new pick), never for link/clear —
-    // omitted when null by the options' DefaultIgnoreCondition (WhenWritingNull).
-    public int? NewId { get; init; }
-    public required int NewVersion { get; init; }
-}
 
 // A collection prop the store minted on a new object: its intrinsic id + element type, so
 // the client re-keys the transient array it created optimistically. Field order: id, then
@@ -182,12 +167,6 @@ public sealed record ArrayAddResponse
     public required int NewVersion { get; init; }
 }
 
-public sealed record ArrayRemoveResponse
-{
-    public string Op => "arrayRemove";
-    public bool Ok => true;
-    public required int NewVersion { get; init; }
-}
 
 public sealed record RefetchResponse
 {
@@ -448,11 +427,8 @@ public sealed class WsHandler
                 "addEntry"          => HandleAddEntry(path, pathStr, req),
                 "removeEntry"       => HandleRemoveEntry(path, pathStr, req),
                 "hello"             => HandleHello(req),
-                "objectPropChange"  => HandleObjectPropChange(req),
                 "commit"            => HandleCommit(req),
-                "setReferenceField" => HandleSetReferenceField(req),
                 "arrayAdd"          => HandleArrayAdd(req),
-                "arrayRemove"       => HandleArrayRemove(req),
                 "refetch"           => HandleRefetch(pathStr, req),
                 "hostAction"        => HandleHostAction(req),
                 "ackRemap"          => HandleAckRemap(req),
@@ -759,51 +735,6 @@ public sealed class WsHandler
 
     // ── code-owned UI mutations (the Code runtime, identity-addressed) ──────────
 
-    // A two-way-bound prop write from the client: persist a single leaf field on the
-    // object with this intrinsic id, after validating it against the schema — the
-    // object's type must declare the prop as a single scalar field, and the value
-    // must fit its declared base type. (The client already applied the change
-    // optimistically; a reject rolls it back.)
-    private string HandleObjectPropChange(WsRequest req)
-    {
-        if (req.ObjectId is not { } objectIdRaw)
-            return Error("objectPropChange requires a numeric 'objectId'.");
-        var objectId = Resolve(Session(req), objectIdRaw);
-        if (req.Prop is not { } prop)
-            return Error("objectPropChange requires 'prop'.");
-        if (req.Value is not { } valEl)
-            return Error("objectPropChange requires 'value'.");
-
-        if (_store.ReadById(objectId) is not { } hit)
-            return Error($"No object with id {objectId}.");
-        var propDef = _desc.FindType(hit.TypeName)?.Props?.FirstOrDefault(p => p.Name == prop);
-        if (propDef is null)
-            return Error($"Type '{hit.TypeName}' has no field '{prop}'.");
-        if (propDef.Cardinality != Cardinality.Single || _desc.ScalarBaseOf(propDef.Type) is not { } baseType)
-            return Error($"Field '{prop}' on '{hit.TypeName}' is not a scalar field.");
-
-        var leaf = LeafForType(valEl, baseType);
-        // An enum field's value must be a declared member of its enum (or empty). The leaf is
-        // text-shaped; off-list is rejected so a bad value never persists (mirrored in the
-        // startup guard, StoredDataValidator).
-        if (leaf is TextValue tv && !_desc.EnumAccepts(propDef.Type, tv.Text))
-            return Error($"'{tv.Text}' is not a value of enum '{propDef.Type}'.");
-
-        // The write floor: editing a field is an `edit` of the (existing) object, decided over its
-        // CURRENT scalar fields. A denied edit throws → the `{ error }` reply rolls the client back.
-        RequireWrite(Floor(req), "edit", hit.TypeName, Code.AccessFloor.ScalarObject(hit.TypeName, objectId, hit.Fields, _desc));
-        // The WRITE chokepoint of the `password` type (M-auth): a `password`-typed plaintext is PBKDF2-hashed
-        // here, at the WS layer (above the dumb store), before it persists — so no client write path ever
-        // stores plaintext. An empty value writes NOTHING (= "no change", so a blank-on-load password field
-        // re-submitted unchanged never clobbers the stored hash); HashLeaf returns null for that case.
-        // A real write reports the store's UNDER-LOCK post-write version (finding 3); the empty no-op writes
-        // nothing (no write-then-read split), so CurrentVersion is the accurate current HEAD.
-        var newVersion = HashLeaf(hit.TypeName, prop, leaf) is { } toWrite
-            ? _store.WriteField(objectId, prop, toWrite)
-            : _store.CurrentVersion;
-
-        return Serialize(new ObjectPropChangeResponse { NewVersion = newVersion });
-    }
 
     // Atomic batch commit of a whole changeset staged in a ctx.commit() — field EDITS (Step A) + new objects
     // (CREATES) and the RELATIONS linking them (Step B). Payload: { edits: [ { objectId, prop, value } ],
@@ -1180,59 +1111,6 @@ public sealed class WsHandler
     }
 
     // Set/clear a single object REFERENCE prop on the object with this intrinsic id —
-    // the self-hosted reference editor's persist path (setRef). `refId` points at an
-    // existing extent object; `value` ({ props }) mints a new object and points at it
-    // (reply carries its real id); `clear` unsets. GC runs after (an orphaned target
-    // is collected). Identity-addressed so it serves both a reference route and an
-    // embedded reference field uniformly.
-    private string HandleSetReferenceField(WsRequest req)
-    {
-        var session = Session(req);
-        if (req.ObjectId is not { } objectIdRaw)
-            return Error("setReferenceField requires a numeric 'objectId'.");
-        var objectId = Resolve(session, objectIdRaw);
-        if (req.Prop is not { } prop)
-            return Error("setReferenceField requires 'prop'.");
-
-        if (_store.ReadById(objectId) is not { } hit)
-            return Error($"No object with id {objectId}.");
-        var propDef = _desc.FindType(hit.TypeName)?.Props?.FirstOrDefault(p => p.Name == prop);
-        if (propDef is null)
-            return Error($"Type '{hit.TypeName}' has no field '{prop}'.");
-        if (propDef.Cardinality != Cardinality.Single || !_desc.IsObjectType(propDef.Type))
-            return Error($"Field '{prop}' on '{hit.TypeName}' is not a single reference.");
-        var targetType = _desc.FindType(propDef.Type)!;
-
-        // The write floor: setting/clearing a reference is an `edit` of the (existing) OWNER object, so the
-        // edit verb is non-bypassable via this seam too (not just objectPropChange). A create-new pick ALSO
-        // mints a target object, gated as `create` on the target type below.
-        var floor = Floor(req);
-        RequireWrite(floor, "edit", hit.TypeName, Code.AccessFloor.ScalarObject(hit.TypeName, objectId, hit.Fields, _desc));
-
-        int? newId = null;
-        int newVersion; // the WriteReference under-lock version — the LAST store op in every branch (finding 3)
-        if (req.RefId is { } refIdRaw)
-        {
-            newVersion = _store.WriteReference(objectId, prop, Resolve(session, refIdRaw), targetType.Name);
-        }
-        else if (req.Value is { } valueEl)
-        {
-            RequireWrite(floor, "create", targetType.Name, CandidateFromValue(valueEl, targetType));
-            // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store.
-            newId = _store.CreateObject(targetType.Name, HashPasswordFields(targetType.Name, ExecObjectValue(valueEl, targetType)));
-            newVersion = _store.WriteReference(objectId, prop, newId, targetType.Name);
-        }
-        else if (req.Clear is not null)
-        {
-            newVersion = _store.WriteReference(objectId, prop, null, targetType.Name);
-        }
-        else
-        {
-            return Error("setReferenceField requires 'refId', 'value', or 'clear'.");
-        }
-
-        return Serialize(new SetReferenceFieldResponse { NewId = newId, NewVersion = newVersion });
-    }
 
     // The WS's first message on open: claims the session minted at SSR (keeping it past
     // the claim window). The session carries no data — a refetch re-renders from a fresh
@@ -1707,33 +1585,12 @@ public sealed class WsHandler
         return null;
     }
 
-    private string HandleArrayRemove(WsRequest req)
-    {
-        var session = Session(req);
-        if (req.SetId is not { } setIdRaw)
-            return Error("arrayRemove requires a numeric 'setId'.");
-        if (req.ObjectId is not { } objectIdRaw)
-            return Error("arrayRemove requires a numeric 'objectId'.");
-        var setId = Resolve(session, setIdRaw);
-        var objectId = Resolve(session, objectIdRaw);
 
-        if (_store.SetElementType(setId) is null)
-            return Error($"No set with id {setId}.");
-
-        // The write floor: removing a set member is a `delete` of that member, decided over its current
-        // scalar fields. Rejected BEFORE removal (and its GC), so a denied delete leaves the object intact.
-        if (_store.ReadById(objectId) is { } member)
-            RequireWrite(Floor(req), "delete", member.TypeName,
-                Code.AccessFloor.ScalarObject(member.TypeName, objectId, member.Fields, _desc));
-        // Report the store's under-lock post-write version (finding 3), never a separate CurrentVersion read.
-        var newVersion = _store.RemoveFromSet(setId, objectId);
-
-        return Serialize(new ArrayRemoveResponse { NewVersion = newVersion });
-    }
-
-    // A new object's scalar props as the client ships them ({ "props": { name: leaf } }),
-    // validated against the declared type: unknown or non-scalar fields are rejected,
-    // and each value must fit its prop's declared base type.
+    // Deserialize a wire object value ({ props: { name: leaf } }) into an ObjectValue, schema-driven:
+    // every prop must be a declared single scalar field, and an enum value must be a declared member. Used by
+    // the live object/collection handlers (HandleWrite / HandleAddEntry / HandleAddSetMember / HandleArrayAdd)
+    // to turn a request's value element into store fields. (Restored when HandleArrayRemove — which formerly
+    // hosted it — was deleted in the unified-commit slice; it is a shared helper, not array-remove-specific.)
     private ObjectValue ExecObjectValue(JsonElement el, TypeDefinition type, bool allowSets = false)
     {
         var fields = new Dictionary<string, NodeValue>();

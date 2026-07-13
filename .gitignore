@@ -16,6 +16,7 @@ DeEnv/Instance/*.js
 
 ## Local AI tool settings
 .claude/settings.local.json
+/graphify-out
 
 ## NuGet
 *.nupkg
