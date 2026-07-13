@@ -355,7 +355,7 @@ public sealed class AccessSteps(InstanceContext ctx)
     {
         var (ws, clientId) = BoundWs();
         _writeReply = ws.ProcessMessage(
-            $$"""{ "op": "objectPropChange", "clientId": "{{clientId}}", "objectId": {{InstanceContext.AccessMilestoneId}}, "prop": "{{prop}}", "value": { "type": "text", "value": "{{value}}" } }""");
+            $$"""{ "op": "commit", "clientId": "{{clientId}}", "edits": [ { "objectId": {{InstanceContext.AccessMilestoneId}}, "prop": "{{prop}}", "value": { "type": "text", "value": "{{value}}" } } ], "creates": [], "relations": [] }""");
     }
 
     // create: an arrayAdd minting a new Milestone into the Db.milestones set.
@@ -388,7 +388,7 @@ public sealed class AccessSteps(InstanceContext ctx)
         var (ws, clientId) = BoundWs();
         var setId = MilestonesSetId();
         _writeReply = ws.ProcessMessage(
-            $$"""{ "op": "arrayRemove", "clientId": "{{clientId}}", "setId": {{setId}}, "objectId": {{memberId}} }""");
+            $$"""{ "op": "commit", "clientId": "{{clientId}}", "edits": [], "creates": [], "relations": [ { "kind": "setUnlink", "setId": {{setId}}, "childId": {{memberId}} } ] }""");
     }
 
     // The intrinsic id of the Db.milestones set (the seeded root's set) — needed to address arrayAdd/remove.

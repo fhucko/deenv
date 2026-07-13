@@ -86,12 +86,12 @@ public sealed class ArrayAddMovePrimitiveTests
         var ws = new WsHandler(store, desc);
         // The move: link into itemsB FIRST (now reachable via both sets)...
         ws.ProcessMessage(
-            $$"""{ "op": "arrayAdd", "id": 1, "clientId": "c1", "setId": {{itemsBSetId}}, "refId": {{itemId}} }""");
+            $$"""{ "op": "commit", "edits": [], "creates": [], "relations": [ { "kind": "set", "setId": {{itemsBSetId}}, "childId": {{itemId}} } ] }""");
         // ...THEN unlink from itemsA. RemoveFromSet's CollectGarbage() must find the object reachable via
         // itemsB at the moment it marks the graph — this is the ordering the safety of the whole primitive
         // rests on.
         ws.ProcessMessage(
-            $$"""{ "op": "arrayRemove", "id": 2, "clientId": "c1", "setId": {{itemsASetId}}, "objectId": {{itemId}} }""");
+            $$"""{ "op": "commit", "edits": [], "creates": [], "relations": [ { "kind": "setUnlink", "setId": {{itemsASetId}}, "childId": {{itemId}} } ] }""");
 
         await Assert.That(store.ReadExtent("Item").Count).IsEqualTo(1); // survived — not swept
         var hit = store.ReadById(itemId);

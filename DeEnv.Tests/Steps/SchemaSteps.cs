@@ -137,7 +137,7 @@ public sealed class SchemaSteps(InstanceContext ctx)
     [When("the order's status is set to {string} over the WS")]
     public void WhenSetStatus(string value) =>
         _enumReply = _enumWs!.ProcessMessage(
-            $$"""{ "op": "objectPropChange", "objectId": {{OrderId}}, "prop": "status", "value": { "type": "text", "value": "{{value}}" } }""");
+            $$"""{ "op": "commit", "edits": [ { "objectId": {{OrderId}}, "prop": "status", "value": { "type": "text", "value": "{{value}}" } } ], "creates": [], "relations": [] }""");
 
     [Then("the change is accepted")]
     public async Task ThenAccepted()

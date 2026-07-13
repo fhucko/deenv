@@ -1151,7 +1151,7 @@ public sealed class HostActionSteps
         _messageBeforeWrite = ((TextValue)fields.Fields["message"]).Text;
         var ws = Ws();
         _reply = ws.ProcessMessage(
-            $$"""{ "op": "objectPropChange", "clientId": "{{_clientId}}", "objectId": {{commitId}}, "prop": "message", "value": { "type": "text", "value": "HACKED" } }""");
+            $$"""{ "op": "commit", "clientId": "{{_clientId}}", "edits": [ { "objectId": {{commitId}}, "prop": "message", "value": { "type": "text", "value": "HACKED" } } ], "creates": [], "relations": [] }""");
     }
 
     [Then("the commit's message is unchanged")]
@@ -1169,7 +1169,7 @@ public sealed class HostActionSteps
         _headBeforeWrite = head?.TargetId?.ToString() ?? "";
         var ws = Ws();
         _reply = ws.ProcessMessage(
-            $$"""{ "op": "setReferenceField", "clientId": "{{_clientId}}", "objectId": {{branchId}}, "prop": "head", "clear": true }""");
+            $$"""{ "op": "commit", "clientId": "{{_clientId}}", "edits": [], "creates": [], "relations": [ { "kind": "setUnlinkByProp", "parentId": {{branchId}}, "prop": "head" } ] }""");
     }
 
     [Then("the branch's head is unchanged")]

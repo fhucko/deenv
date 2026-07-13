@@ -92,23 +92,10 @@ public sealed class TransientIdSteps
 
     [When("the client removes object {int} from the set over the WS")]
     public void WhenRemove(int objectId) =>
-        _reply = _ws.ProcessMessage(JsonSerializer.Serialize(new
-        {
-            op = "arrayRemove",
-            clientId = _clientId,
-            setId = ItemsSetId(),
-            objectId,
-        }, Opts));
+        _reply = _ws.ProcessMessage($$"""{ "op": "commit", "clientId": "{{_clientId}}", "edits": [], "creates": [], "relations": [ { "kind": "setUnlink", "setId": {{ItemsSetId()}}, "childId": {{objectId}} } ] }""");
 
     private void SetProp(string prop, int objectId, string value) =>
-        _reply = _ws.ProcessMessage(JsonSerializer.Serialize(new
-        {
-            op = "objectPropChange",
-            clientId = _clientId,
-            objectId,
-            prop,
-            value = new { type = "text", value },
-        }, Opts));
+        _reply = _ws.ProcessMessage($$"""{ "op": "commit", "clientId": "{{_clientId}}", "edits": [ { "objectId": {{objectId}}, "prop": "{{prop}}", "value": { "type": "text", "value": "{{value}}" } } ], "creates": [], "relations": [] }""");
 
     // ── Then ─────────────────────────────────────────────────────────────────────
 

@@ -102,7 +102,7 @@ public sealed class LoginSteps(InstanceContext ctx)
         session.PrincipalUserId = ctx.PrincipalUserId;
         var ws = new WsHandler(ctx.Store!, ctx.Description!, _sessions);
         _setPasswordReply = ws.ProcessMessage(
-            $$"""{ "op": "objectPropChange", "clientId": "{{session.Id}}", "objectId": {{userId}}, "prop": "{{InstanceContext.AccessPasswordField}}", "value": { "type": "text", "value": "{{newPassword}}" } }""");
+            $$"""{ "op": "commit", "clientId": "{{session.Id}}", "edits": [ { "objectId": {{userId}}, "prop": "{{InstanceContext.AccessPasswordField}}", "value": { "type": "text", "value": "{{newPassword}}" } } ], "creates": [], "relations": [] }""");
     }
 
     // The edit was accepted (the floor allowed the `User edit`): an objectPropChange ok reply, no error. The
@@ -112,7 +112,7 @@ public sealed class LoginSteps(InstanceContext ctx)
     {
         using var doc = JsonDocument.Parse(_setPasswordReply);
         var root = doc.RootElement;
-        await Assert.That(root.GetProperty("op").GetString()).IsEqualTo("objectPropChange");
+        await Assert.That(root.GetProperty("op").GetString()).IsEqualTo("commit");
         await Assert.That(root.GetProperty("ok").GetBoolean()).IsTrue();
         await Assert.That(root.TryGetProperty("error", out _)).IsFalse();
     }

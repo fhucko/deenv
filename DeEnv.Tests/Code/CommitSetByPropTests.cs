@@ -151,6 +151,7 @@ public sealed class CommitSetByPropTests
             access
                 Node
                     create where false
+                    delete where false
             """);
         var dataPath = Path.GetTempFileName();
         try
@@ -183,7 +184,8 @@ public sealed class CommitSetByPropTests
             using var linkJson = JsonDocument.Parse(linkReply);
             await Assert.That(linkJson.RootElement.TryGetProperty("error", out _)).IsTrue();
 
-            // setUnlink of the existing member → denied (member `create` floor fails; no owner handle).
+            // setUnlink of the existing member → denied (member `delete` floor fails; no owner handle —
+            // mirrors the former live `arrayRemove`, which floored on `delete` of the member).
             var unlinkReply = ws.ProcessMessage($$"""
                 {
                   "op": "commit",
@@ -198,7 +200,7 @@ public sealed class CommitSetByPropTests
             using var unlinkJson = JsonDocument.Parse(unlinkReply);
             await Assert.That(unlinkJson.RootElement.TryGetProperty("error", out _)).IsTrue();
 
-            // setUnlinkByProp of the existing member → denied (member `create` floor fails; owner edit of
+            // setUnlinkByProp of the existing member → denied (member `delete` floor fails; owner edit of
             // the unruled Db passes, but the member gate still rejects the whole commit).
             var unlinkByPropReply = ws.ProcessMessage($$"""
                 {

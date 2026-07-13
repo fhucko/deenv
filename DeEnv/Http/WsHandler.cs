@@ -813,7 +813,7 @@ public sealed class WsHandler
                         || drKeyStr.Length == 0)
                         return Error("commit relation is malformed.");
                     var drOwnerRaw = drOwnerEl.GetInt32();
-                    var drOwnerRef = drOwnerRaw < 0 ? drOwnerRaw : Resolve(session, drOwnerRaw);
+                    var drOwnerRef = Resolve(session, drOwnerRaw);
                     // The dict key is a NodeValue, parsed against the owner prop's declared keyType — mirrors
                     // HandleAddEntry's `ParseKey(keyStr, KeyTypeName ?? "text")`. Owner's type is unknown for a
                     // fresh (negative) owner; default to text (the store's apply arm re-keys under its schema).
@@ -832,8 +832,7 @@ public sealed class WsHandler
 
                 if (!relEl.TryGetProperty("childId", out var childEl) || childEl.ValueKind != JsonValueKind.Number)
                     return Error("commit relation is malformed.");
-                var childRaw = childEl.GetInt32();
-                var childRef = childRaw < 0 ? childRaw : Resolve(session, childRaw);
+                var childRef = Resolve(session, childEl.GetInt32());
 
                 switch (relEl.TryGetProperty("kind", out var kindEl) ? kindEl.GetString() : null)
                 {
@@ -844,7 +843,7 @@ public sealed class WsHandler
                         if (!relEl.TryGetProperty("parentId", out var pEl) || pEl.ValueKind != JsonValueKind.Number)
                             return Error("commit relation is malformed.");
                         var ownerRaw = pEl.GetInt32();
-                        var ownerRef = ownerRaw < 0 ? ownerRaw : Resolve(session, ownerRaw);
+                        var ownerRef = Resolve(session, ownerRaw);
 
                         // A transient (negative) child is typed from the owner's SET prop — the wire asserts no
                         // type a client could forge. An owner whose type isn't yet known (a tempId not yet seen
@@ -882,10 +881,12 @@ public sealed class WsHandler
                         if (!relEl.TryGetProperty("setId", out var setEl) || setEl.ValueKind != JsonValueKind.Number)
                             return Error("commit relation is malformed.");
                         var setId = Resolve(session, setEl.GetInt32());
-                        // Access floor: you must be able to read the object you detach (forgery + denial).
-                        // No owner handle here — the member floor alone is the guard (like a plain `set` link).
+                        // Access floor: removing a member from a set is a `delete` of THAT member, exactly as the
+                        // former `arrayRemove` live op — you must be able to delete the object you detach (forgery
+                        // + denial). No owner handle here — the member's delete floor alone is the guard (mirrors
+                        // HandleArrayRemove's RequireWrite "delete" on the member, not an owner edit gate).
                         if (childRef >= 0 && _store.ReadById(childRef) is { } setUnlinked)
-                            RequireWrite(floor, "create", setUnlinked.TypeName,
+                            RequireWrite(floor, "delete", setUnlinked.TypeName,
                                 Code.AccessFloor.ScalarObject(setUnlinked.TypeName, childRef, setUnlinked.Fields, _desc));
                         extraMutations.Add(new SetUnlinkMutation(setId, childRef));
                         break;
@@ -897,7 +898,7 @@ public sealed class WsHandler
                         if (!relEl.TryGetProperty("parentId", out var pEl) || pEl.ValueKind != JsonValueKind.Number)
                             return Error("commit relation is malformed.");
                         var ownerRaw = pEl.GetInt32();
-                        var ownerRef = ownerRaw < 0 ? ownerRaw : Resolve(session, ownerRaw);
+                        var ownerRef = Resolve(session, ownerRaw);
                         // Access floor: you must be able to read the object you detach (forgery + denial), and
                         // the OWNER is edited (its set prop changes) — mirrors the setByProp link side.
                         if (_store.ReadById(ownerRef) is { } setUnlinkByPropOwner)
@@ -1085,8 +1086,7 @@ public sealed class WsHandler
     {
         if ((el.TryGetProperty("kind", out var kindEl) ? kindEl.GetString() : null) is not { } kind) return null;
         if (!el.TryGetProperty("childId", out var childEl) || childEl.ValueKind != JsonValueKind.Number) return null;
-        var childRaw = childEl.GetInt32();
-        var childRef = childRaw < 0 ? childRaw : Resolve(session, childRaw); // a tempId stays; a real id remaps
+        var childRef = Resolve(session, childEl.GetInt32()); // a tempId stays (unknown → unchanged); a real id remaps
 
         if (kind == "set")
         {
