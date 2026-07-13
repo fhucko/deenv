@@ -43,6 +43,14 @@ rejects any of them with an error. Only NON-mutating ops survive (`hello`, `refe
 is M13's separate authority; noted as the one remaining non-`commit` persistence path, deferred, NOT in
 this slice.)
 
+**Execution order (user, 2026-07-13):** T1–T5 + T6-St1 landed `commit` as the path for edits/refs/set-links/
+set-unlinks/creates and DELETED 3 of the 7 live handlers (`objectPropChange`/`setReferenceField`/`arrayRemove`).
+The remaining 4 handlers (`write`/`addEntry`/`removeEntry`/`arrayAdd`-mint) require `commit` ops that do not
+yet exist: a **dict-write commit relation** and **deferred nested-create staging**. So T6 is split:
+- **T6a (this slice's remaining work):** build those two `commit` ops, proven with headless tests.
+- **T6b (later slice):** switch the client to use them + delete the 4 remaining live handlers.
+This keeps each landing reviewable and avoids a half-cutover.
+
 ## Model vocabulary = the contract (every commit op maps to one IInstanceStore op)
 
 | Model op (`IInstanceStore`) | commit form | status |
@@ -52,11 +60,11 @@ this slice.)
 | `AddToSet` | `SetLinkMutation` | ✅ already |
 | `RemoveFromSet` | `SetUnlinkMutation` | ✅ already |
 | `CreateObject` | `CommitCreate` | ✅ already |
-| `SetLinkByProp` (model helper) | `SetLinkByPropMutation` | server-only today → **promote to wire** |
-| `SetUnlinkByProp` (model helper) | `SetUnlinkByPropMutation` | server-only today → **promote to wire** |
-| `CreateEntry` (dict) | `DictWriteMutation` | server-only today → **promote to wire** |
-| `RemoveDictionaryEntry` (dict) | **`DictRemoveMutation`** (NEW) | must add to union |
-| **`Remove`/detach (unlink everywhere)** | **`RemoveMutation`** (NEW) | must add to union; then `CollectGarbage` |
+| `SetLinkByProp` (model helper) | `SetLinkByPropMutation` | ✅ wire (T1/T3) |
+| `SetUnlinkByProp` (model helper) | `SetUnlinkByPropMutation` | ✅ wire (T1/T3) |
+| `CreateEntry` (dict) | `DictWriteMutation` | server-only today → **T6a.1 promote to wire** |
+| `RemoveDictionaryEntry` (dict) | `DictRemoveMutation` | ✅ wire (T2/T3) |
+| **`Remove`/detach (unlink everywhere)** | `RemoveMutation` | ✅ wire (T2/T3); then `CollectGarbage` |
 
 ## What exists vs must be added (grounded in code reads)
 
@@ -168,22 +176,72 @@ this slice.)
 - GREEN: `DesignerSourceTests` 31/31; `CodeClientTests` asserts (a) NONE of the 7 live ops is ever sent, and
   (b) a top-level edit produces exactly ONE `commit` with one `edit` (micro-bracket), not a live `objectPropChange`.
 
-### Task 6: `refactor(ws): delete live mutating handlers on the server; commit is the only persistence path`
+### Task 6 (rescoped — two phases): build the `commit` ops FIRST, delete live handlers in a LATER slice
 
-**Files:** `DeEnv/Http/WsHandler.cs`, `DeEnv.Tests/Code/ArrayAddNestedRefTests.cs`, `DeEnv.Tests/Code/*Live*Tests.cs`
-- Delete `NestedSetLinks` (L1729) + call (L1571-1577). `HandleArrayAdd` create value no longer carries nested
-  `children:[{refId}]`; fresh-owner link arrives as a `setByProp` relation on `commit`.
-- Delete the 7 live mutating handlers entirely (discipline #3 — they bypass `commit`): `HandleWrite` (L486),
-  `HandleAddEntry` (L586), `HandleRemoveEntry` (L624), `HandleObjectPropChange` (L767), `HandleSetReferenceField`
-  (L1159), `HandleArrayAdd` (L1493), `HandleArrayRemove` (L1681). Remove their `case` arms in the `op switch`
-  (L447-455) — any received op among `write`/`addEntry`/`removeEntry`/`objectPropChange`/`setReferenceField`/
-  `arrayAdd`/`arrayRemove` now hits the `_ => Error("Unknown op …")` default (loud reject, no silent persist).
-- `HandleAddSetMember`'s `localTempId=-1` `CommitBatch` branch is gone with `HandleAddEntry`.
-- Delete the now-dead response records: `WriteResponse`, `AddEntryResponse`, `RemoveEntryResponse`,
-  `ObjectPropChangeResponse`, `SetReferenceFieldResponse`, `ArrayAddResponse`, `ArrayRemoveResponse`.
-- Delete `ArrayAddNestedRefTests.cs` + any `*Live*Tests` that exercised the live handlers.
-- RED→GREEN: build clean; those tests gone; a Gherkin/unit test asserts a `write`/`arrayAdd`/`objectPropChange`
-  frame returns `Unknown op` (error, not a persisted change). `DesignerSourceTests` 31/31.
+> **SEQUENCING DECISION (user, 2026-07-13):** build the `commit`-side machinery that makes every mutation
+> expressible as a `commit` FIRST (so the client has a real target for each of the 4 remaining live ops), then
+> switch the client over + delete the 4 live handlers in a SEPARATE slice. This mirrors the proven T5→T6-St1
+> order (build commit path → delete dead handler) and avoids a half-cutover where the client sends a `commit`
+> the server can't apply. **Do NOT delete `HandleWrite`/`HandleAddEntry`/`HandleRemoveEntry`/`HandleArrayAdd`
+> until T6a is done and green.** Three of the seven (`HandleObjectPropChange`, `HandleSetReferenceField`,
+> `HandleArrayRemove`) are ALREADY deleted (commit `28b905c`); their client sends already route through
+> `commit` (`8c40509` + `fe25f3d`).
+
+#### Phase 1 — T6a: build the two missing `commit` ops (client + server)
+
+These are the only two things still missing for `commit` to cover every model op. Each is its own slice;
+build + prove with headless tests BEFORE any client cutover.
+
+**T6a.1 — Server `dict`/`dictRemove`/`write` as `commit` relations (kills `HandleWrite`/`HandleAddEntry`/`HandleRemoveEntry`).**
+- Server `CommitRelation` union gains `{kind:"dict", ownerRef, prop, key, value}` (scalar value) and
+  `{kind:"dict", ownerRef, prop, key, value: <object props>}` (object entry) → `DictWriteMutation`; plus the
+  existing `dictRemove` already parses (T2/T3). Apply arms already exist in `JsonFileInstanceStore`.
+- **Client must be able to NAME the dict `prop`.** Today `ExecArray` (set/dict) carries no `prop`; the dict
+  owner is addressed by path, not `(ownerRef, prop).` Add `prop` to the dict `ExecArray` (mirrors how the set
+  `ExecArray` knows its containing set's id) so `entryAdd`/`entryRemove`/`pathWrite` can build
+  `{kind:"dict", ownerRef, prop, key, ...}` wire. (This is the real blocker the earlier analysis flagged — the
+  client literally cannot construct the wire without the dict `prop` name.)
+- `entryAdd` / `entryRemove` / `pathWrite` (dict field) hooks: when a bracket is open (or via `stageTopLevel`),
+  buffer a `dict`/`dictRemove` relation instead of sending live `addEntry`/`removeEntry`.
+- Tests: extend `CommitSetByPropTests` / a new `CommitDictTests` — a `commit` carrying `dict` writes an entry;
+  `dictRemove` drops it; floor = owner `edit` (mirrors `RequireDictWrite`).
+- NOTE: `DictWriteMutation` is currently server-only (IInstanceStore.cs L207-208, "not from wire"). This task
+  PROMOTES it to a wire-accepted `commit` relation — that is the substance of the slice.
+
+**T6a.2 — Deferred nested-create staging into the enclosing `commit` (kills `HandleArrayAdd` mint).**
+- The mint today goes `create-save` → `join(d)` → `set.add(d)` → `arrayAdd` hook. Two cases:
+  - *Top-level / save-less set* (`/orders`): must persist IMMEDIATELY as its own `commit` (stageTopLevel path —
+    already works for top-level edits).
+  - *Nested set under an object form* (Order's `lines`): must STAGE into the enclosing form's `commit`, persist
+    only on the Order form's Save (`A_create_under_an_object_form_defers_to_that_forms_save` pins this).
+- The blocker: when the nested `set.add(draft)` fires, **no commit bracket is open** (the form hasn't been
+  Saved yet). So the draft must be staged into the enclosing form ctx's pending creates WITHOUT an `endCommit`,
+  to be flushed by the form's eventual `ctx.commit()`. Required machinery:
+  - `arrayAdd` mint detects "this set belongs to an object currently being edited in a form ctx" (the enclosing
+    form's `currentExecCtx`) and lazily opens `commitCreates` on it WITHOUT flushing (defer), OR
+  - `ctx.commit` graph-walks the form's objects to discover negId drafts + their joins (a `set`/`ref` of a
+    negId object becomes a `commitCreate` + join). Pick ONE approach in the spec; the graph-walk is the more
+    robust (also covers ref-create-while-editing).
+  - The save-less case keeps the existing `stageTopLevel(mintCreate)` (own one-shot commit).
+- Tests: `A_create_under_a_save_less_container_persists_immediately` (top-level) + `A_create_under_an_object_form_defers_to_that_forms_save` (nested) BOTH stay green; `ArrayAddNestedRefTests` stays green (mint via commit).
+- This is the "intricate" slice the earlier work deferred; do it standalone with the two tests as the gate.
+
+#### Phase 2 — T6b (LATER slice, after T6a green): switch client + delete the 4 live handlers
+
+Only after T6a proves `commit` can express dict-write + nested-create:
+- Client: `arrayAdd` mint → `commitCreate`+`setByProp`/`set` (T6a.2 path); `entryAdd`/`entryRemove`/`pathWrite`
+  → `dict`/`dictRemove` (T6a.1 path). No live `arrayAdd`/`addEntry`/`removeEntry`/`write` send remains.
+- Server: delete `HandleWrite`, `HandleAddEntry`, `HandleRemoveEntry`, `HandleArrayAdd` + `NestedSetLinks` +
+  their `case` arms + dead response records (`WriteResponse`, `AddEntryResponse`, `RemoveEntryResponse`,
+  `ArrayAddResponse`). Any received op among `write`/`addEntry`/`removeEntry`/`arrayAdd` hits the
+  `_ => Error("Unknown op …")` default (loud reject, no silent persist).
+- A Gherkin/unit test asserts a `write`/`arrayAdd`/`addEntry`/`removeEntry` frame returns `Unknown op`.
+- `DesignerSourceTests` 31/31.
+
+> Why split: T6a is the hard, testable engineering (new `commit` op + draft discovery). T6b is mechanical
+> deletion that is ONLY safe once T6a is green — doing them together risks a half-cutover (client sends a
+> `commit` the server can't apply, or a live op the server no longer serves). The split keeps each land
+> reviewable and revertible.
 
 ### Task 7: `refactor(app): wrapNode emits setByProp; drop nested children refId`
 
@@ -225,15 +283,19 @@ this slice.)
 
 ## Files that change
 
-- `DeEnv/Storage/IInstanceStore.cs` — 2 new records (T1)
-- `DeEnv/Storage/JsonFileInstanceStore.cs` — apply `RemoveMutation`/`DictRemoveMutation` (T2)
-- `DeEnv/Http/WsHandler.cs` — parse `dict`/`dictRemove`/`remove`; delete `NestedSetLinks` + the 7 live handlers + dead response records (T3,T6)
-- `DeEnv/Instance/ws.ts` — `CommitRelation` union (T4); DELETE 7 live sends, buffer all into commit (T5); rename `CommitCreate`→`StagedCreate` + handler-bracket pair (T9)
-- `DeEnv/instances/1/app.deenv` — `wrapNode` setByProp; call-site renames (T7,T9)
-- `DeEnv.Tests/Code/ArrayAddNestedRefTests.cs` — delete (T6)
+- `DeEnv/Storage/IInstanceStore.cs` — `DictWriteMutation` promoted to wire-accepted (T6a.1)
+- `DeEnv/Storage/JsonFileInstanceStore.cs` — apply `DictWriteMutation` from wire (T6a.1)
+- `DeEnv/Http/WsHandler.cs` — parse `dict` (scalar + object entry) → `DictWriteMutation` (T6a.1); delete
+  `HandleWrite`/`HandleAddEntry`/`HandleRemoveEntry`/`HandleArrayAdd` + `NestedSetLinks` + dead response
+  records (T6b)
+- `DeEnv/Instance/ws.ts` — dict `ExecArray` carries `prop` (T6a.1); `entryAdd`/`entryRemove`/`pathWrite` buffer
+  `dict`/`dictRemove` (T6a.1); `arrayAdd` mint stages into enclosing form ctx OR `stageTopLevel` (T6a.2); delete
+  remaining live sends (T6b); rename `CommitCreate`→`StagedCreate` (T9)
+- `DeEnv/instances/1/app.deenv` — `wrapNode` setByProp (T7); call-site renames (T9)
+- `DeEnv.Tests/Code/CommitDictTests.cs` (NEW) — `commit` dict write/remove applies (T6a.1)
+- `DeEnv.Tests/Code/ArrayAddNestedRefTests.cs` — stays (T6a.2 proves mint-via-commit)
 - `DeEnv.Tests/Code/StoreConcurrencyTests.cs` — extend remove/wrap (T2,T7)
-- `DeEnv.Tests/Steps/AddEntrySetBatchSteps.cs` — commit set-mint (T6)
-- `DeEnv.Tests/Code/*Live*Tests.cs` — delete (T6)
+- `DeEnv.Tests/Steps/AddEntrySetBatchSteps.cs` — commit dict-set-mint (T6b)
 - `docs/plans/...t2-t4.md`, `DECISIONS.md` (T8)
 
 ## Verification grid (headless gaps explicit)
@@ -257,14 +319,23 @@ this slice.)
 - **R4 (ACL):** `remove` maps to the `delete` verb floor (InstanceDescription.cs L83). Confirm the floor rejects a
   non-deletable object exactly as `HandleRemoveEntry` did — no behavior change.
 - **R5 (commit scopes — THE GOTCHA):** discipline #3 means every mutation reaches the server as a `commit`, but
-  the THREE scopes stage differently (Task 5): form ctx = explicit bracket (unchanged); handler ctx = must also
-  open `commitEdits`+`commitCreates` (today only `commitRelations`); TOP-LEVEL ctx = NO bracket today → must
-  commit **immediately per mutation** via a micro-bracket (beginCommit→stage one→endCommit). Risk if missed: a
-  top-level edit with `commitEdits==null` would hit the deleted-live-op branch and silently drop. Mitigated by
-  the Task 5 grep guard (no live `op:` sends) + a `CodeClientTests` assertion that a top-level edit emits exactly
-  ONE `commit` (micro-bracket), and that the top-level ctx is identified so the micro-bracket wraps it.
-- **R6 (server reject behavior — NEW):** deleting the 7 live handlers means a stale/old client or a stray message
-  gets `Unknown op` instead of a persisted change. That is CORRECT (fail loud, no silent partial persist), but
-  any TEST/harness still sending those ops must be updated (Task 6 deletes them).
-- **R7 (naming purity — NEW):** Task 9 is a pure rename; risk is only mechanical breakage. The grep guard (no
+  the THREE scopes stage differently (T5): form ctx = explicit bracket (unchanged); handler ctx = opens all three
+  buffers (fe25f3d, done); TOP-LEVEL ctx = NO bracket today → commits **immediately per mutation** via a
+  micro-bracket (beginCommit→stage one→endCommit). Risk if missed: a top-level mutation with no open bracket
+  hits a deleted-live-op branch and silently drops. Mitigated by the grep guard (no live `op:` sends) + a
+  `CodeClientTests` assertion that a top-level edit emits exactly ONE `commit`. T6a.2 ADDS the nested-defer scope:
+  a mint under an enclosing form (no bracket open yet) must stage into the form ctx's pending creates WITHOUT an
+  `endCommit`, so the form's Save flushes it. Pick graph-walk (ctx.commit discovers negId drafts) or lazy
+  `commitCreates` on the enclosing ctx; the two gate tests (`A_create_under_a_save_less_container_persists_immediately`
+  + `A_create_under_an_object_form_defers_to_that_forms_save`) must BOTH stay green.
+- **R6 (sequence — build ops before deleting handlers):** per the user's 2026-07-13 direction, T6a builds the
+  dict-write + nested-create `commit` ops and PROVES them (headless tests) BEFORE T6b deletes the 4 live handlers.
+  Doing them together risks a half-cutover: the client sends a `commit` the server can't apply (dict-write not
+  yet wired) or a live op the server no longer serves. The split keeps each landing reviewable + revertible.
+  Deleting the 4 handlers means a stale/old client or stray message gets `Unknown op` (correct: fail loud, no
+  silent partial persist) — but no test/harness may still send those ops (T6b updates them).
+- **R7 (dict `prop` naming — NEW, T6a.1):** the client `ExecArray` for dicts must carry the dict `prop` name
+  (today it only knows the owning path). Without it `entryAdd`/`entryRemove`/`pathWrite` cannot build a
+  `{kind:"dict", ownerRef, prop, key, ...}` wire. Mirror how the set `ExecArray` carries its containing set's id.
+- **R8 (naming purity — NEW):** Task 9 is a pure rename; risk is only mechanical breakage. The grep guard (no
   client `CommitCreate`, no `runHandlerTransaction`/`flushHandlerTx`) proves completeness.
