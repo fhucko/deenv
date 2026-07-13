@@ -2,6 +2,9 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using DeEnv.Http;
+using DeEnv.Instance;
+using DeEnv.Storage;
+using DeEnv.Tests.TestSupport;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -69,38 +72,34 @@ public sealed class WsWireShapeTests
         await Assert.That(req.ClientId).IsEqualTo("c1");
     }
 
-    // ── outgoing: arrayAdd WITH a tempId (set add from the client) ───────────────────────
+    // ── retired op: `arrayAdd` is deleted (T6b) — any frame carrying it must be REJECTED ──
+    // The client no longer sends `arrayAdd` (arrayAdd/arrayRemove buffer into `commit` relations);
+    // a stray/old frame hitting the server must fail LOUD (Unknown op), never silently persist.
 
     [Test]
-    public async Task ArrayAdd_with_a_tempId_serializes_to_the_exact_wire_bytes()
+    public async Task A_retired_arrayAdd_op_is_rejected_as_unknown()
     {
-        var resp = new ArrayAddResponse
+        var desc = InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    items set of Item
+                Item
+                    title text
+            """);
+        var dataPath = Path.GetTempFileName();
+        try
         {
-            NewId = 42,
-            Collections = new() { ["notes"] = new CollectionInfo { Id = 43, ElementTypeName = "Note" } },
-            TempId = -2,
-            NewVersion = 5,
-        };
-
-        await Assert.That(Serialize(resp)).IsEqualTo(
-            """{"op":"arrayAdd","newId":42,"collections":{"notes":{"id":43,"elementTypeName":"Note"}},"tempId":-2,"newVersion":5}""");
-    }
-
-    // ── outgoing: arrayAdd WITHOUT a tempId — the field is OMITTED, not null ──────────────
-
-    [Test]
-    public async Task ArrayAdd_without_a_tempId_omits_the_field()
-    {
-        var resp = new ArrayAddResponse
+            var store = new JsonFileInstanceStore(dataPath, desc);
+            var sessions = new ClientSessionStore();
+            var ws = new WsHandler(store, desc, sessions);
+            var json = """{"op":"arrayAdd","id":7,"clientId":"c1","setId":3,"tempId":-2,"typeName":"Item","value":{"props":{"title":{"type":"text","value":"x"}}}}""";
+            var result = ws.ProcessMessage(json);
+            await Assert.That(result).Contains("Unknown op");
+        }
+        finally
         {
-            NewId = 42,
-            Collections = new(),
-            TempId = null,
-            NewVersion = 5,
-        };
-
-        await Assert.That(Serialize(resp)).IsEqualTo(
-            """{"op":"arrayAdd","newId":42,"collections":{},"newVersion":5}""");
+            File.Delete(dataPath);
+        }
     }
 
     // ── outgoing: commit — the reply the ctx re-pin hinges on (finding 2) ─────────────────

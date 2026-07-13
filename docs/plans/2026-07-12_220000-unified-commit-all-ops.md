@@ -229,15 +229,23 @@ build + prove with headless tests BEFORE any client cutover.
 
 #### Phase 2 — T6b (LATER slice, after T6a green): switch client + delete the 4 live handlers
 
-Only after T6a proves `commit` can express dict-write + nested-create:
-- Client: `arrayAdd` mint → `commitCreate`+`setByProp`/`set` (T6a.2 path); `entryAdd`/`entryRemove`/`pathWrite`
-  → `dictAdd`/`dictRemove` (T6a.1 path). No live `arrayAdd`/`addEntry`/`removeEntry`/`write` send remains.
-- Server: delete `HandleWrite`, `HandleAddEntry`, `HandleRemoveEntry`, `HandleArrayAdd` + `NestedSetLinks` +
-  their `case` arms + dead response records (`WriteResponse`, `AddEntryResponse`, `RemoveEntryResponse`,
-  `ArrayAddResponse`). Any received op among `write`/`addEntry`/`removeEntry`/`arrayAdd` hits the
-  `_ => Error("Unknown op …")` default (loud reject, no silent persist).
-- A Gherkin/unit test asserts a `write`/`arrayAdd`/`addEntry`/`removeEntry` frame returns `Unknown op`.
-- `DesignerSourceTests` 31/31.
+Split into TWO commits (user decision 2026-07-13: narrow path first, dict fork deferred):
+
+**T6b-2 (DONE — array side):** the live `arrayAdd`/`arrayRemove` ops are retired client-side (both link + mint
+buffer `set`/`setUnlink`/`setByProp` relations and micro-bracket a `commit`, mirroring `stageTopLevel`'s commit
+path — no live `wsSend` for sets). Server deleted `HandleArrayAdd` + `NestedSetLinks` + `ArrayAddResponse` + the
+`arrayAdd` case arm. `WsWireShapeTests` now asserts a stray `arrayAdd` frame is rejected as `Unknown op`;
+`ArrayAddNestedRefTests` rewritten to mint-via-`commit` (creates + `set` + `setByProp` relations).
+
+**T6b-4 (DEFERRED — R7 fork, per user):** the dict ops `entryAdd`/`entryRemove`/`pathWrite` still send live
+`addEntry`/`removeEntry`/`write`, and `HandleWrite`/`HandleAddEntry`/`HandleRemoveEntry` are RETAINED. The full
+R7 conversion (dict `ExecArray` carries `prop`+`ownerRef`; server `dictAdd`/`dictRemove` accept object-entry
+values; `pathWrite` → `dictAdd` whole-entry) is a separate, later commit. The narrow path keeps the dict
+handlers alive as the safety net for object-entry dicts.
+
+Plan T6b as-originally-written (delete all 4 handlers in one go) is therefore HALF-done: array side deleted,
+dict side deferred. The "commit is the SOLE persistence op" goal is reached for sets; dicts still use path-addressed
+live ops until T6b-4.
 
 > Why split: T6a is the hard, testable engineering (new `commit` op + draft discovery). T6b is mechanical
 > deletion that is ONLY safe once T6a is green — doing them together risks a half-cutover (client sends a

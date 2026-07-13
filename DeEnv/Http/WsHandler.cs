@@ -153,21 +153,6 @@ public sealed record CollectionInfo
     public required string ElementTypeName { get; init; }
 }
 
-public sealed record ArrayAddResponse
-{
-    public string Op => "arrayAdd";
-    // `newId`, not `id` — the reply's `id` slot is the request correlation id (added by WithId).
-    public required int NewId { get; init; }
-    // Keyed by user prop name; the dictionary keys serialize verbatim (the naming policy
-    // renames CLR PROPERTIES, not dictionary keys — DictionaryKeyPolicy is unset).
-    public required Dictionary<string, CollectionInfo> Collections { get; init; }
-    // Echoed back ONLY when the request carried one (a set add from the client) — omitted
-    // when null by the options' DefaultIgnoreCondition (WhenWritingNull).
-    public int? TempId { get; init; }
-    public required int NewVersion { get; init; }
-}
-
-
 public sealed record RefetchResponse
 {
     public string Op => "refetch";
@@ -428,7 +413,6 @@ public sealed class WsHandler
                 "removeEntry"       => HandleRemoveEntry(path, pathStr, req),
                 "hello"             => HandleHello(req),
                 "commit"            => HandleCommit(req),
-                "arrayAdd"          => HandleArrayAdd(req),
                 "refetch"           => HandleRefetch(pathStr, req),
                 "hostAction"        => HandleHostAction(req),
                 "ackRemap"          => HandleAckRemap(req),
@@ -1443,118 +1427,6 @@ public sealed class WsHandler
             _ => new Code.ExecNull(),
         };
 
-    // A new set member built on the client (its negative id is transient): mint a real
-    // object into the extent, link it into the set, and echo the negative→real id mapping
-    // so the client can re-key its optimistic copy.
-    private string HandleArrayAdd(WsRequest req)
-    {
-        var session = Session(req);
-        if (req.SetId is not { } setIdRaw)
-            return Error("arrayAdd requires a numeric 'setId'.");
-        var setId = Resolve(session, setIdRaw);
-
-        // The MOVE primitive (M12 S5c wrap/unwrap; grounded 2026-07-10/11): `refId` links an object that
-        // ALREADY has an identity into this set — no mint, no CommitBatch. Mirrors HandleAddSetMember's
-        // link-existing branch exactly (the same op create-forms use to pick an existing object), just
-        // reachable here from an id-addressed RUNTIME set (`coll.add(existingNode)`) instead of only a
-        // path-addressed one. The write floor is the SAME decision as the mint path below — linking a
-        // member is a `create` of the element type, decided over the linked object's CURRENT fields.
-        //
-        // Composing this with a SUBSEQUENT arrayRemove on the object's PREVIOUS set is how a Code-level
-        // "move" is built: link into the NEW set first, unlink from the OLD set second. RemoveFromSet
-        // runs CollectGarbage() synchronously and IMMEDIATELY (JsonFileInstanceStore), so the object must
-        // be reachable via the new set BEFORE the old link drops — reversing the order (remove then add)
-        // would sweep it. Two round-trips, not one atomic op: the HONEST RESIDUAL is a one-round-trip
-        // window where the object is a member of BOTH sets — provably harmless single-operator (this
-        // session's own writes are FIFO-ordered with monotonic msgIds, so no interleaving is possible),
-        // but a real gap a multi-user merge would need to close with a genuine atomic move op — not
-        // built here, named as the upgrade point.
-        if (req.RefId is { } refId)
-        {
-            var linkElementType = _store.SetElementType(setId);
-            if (linkElementType is null)
-                return Error($"No set with id {setId}.");
-            if (_store.ReadById(refId) is not { } linked)
-                return Error($"No object with id {refId}.");
-            if (linked.TypeName != linkElementType)
-                return Error($"Set {setId} holds '{linkElementType}' members, not '{linked.TypeName}'.");
-
-            RequireWrite(Floor(req), "create", linked.TypeName,
-                Code.AccessFloor.ScalarObject(linked.TypeName, refId, linked.Fields, _desc));
-            var linkVersion = _store.AddToSet(setId, refId);
-            // `newId` = the SAME id the client already knows (a link mints nothing) — TempId is echoed
-            // only when the request carried one, which a link deliberately never does (see ws.ts): no
-            // remap is ever needed, so the client's tempId/newId remap branch never fires for this reply.
-            return Serialize(new ArrayAddResponse
-            {
-                NewId = refId,
-                Collections = new Dictionary<string, CollectionInfo>(),
-                TempId = req.TempId,
-                NewVersion = linkVersion,
-            });
-        }
-
-        if (req.TypeName is not { } typeName)
-            return Error("arrayAdd requires 'typeName'.");
-        if (_desc.FindType(typeName) is not { } typeDef)
-            return Error($"Unknown type '{typeName}'.");
-
-        // The target set must exist and must declare exactly this element type.
-        var elementType = _store.SetElementType(setId);
-        if (elementType is null)
-            return Error($"No set with id {setId}.");
-        if (elementType != typeName)
-            return Error($"Set {setId} holds '{elementType}' members, not '{typeName}'.");
-
-        var value = req.Value is { } valEl
-            ? ExecObjectValue(valEl, typeDef, allowSets: true)
-            : new ObjectValue(new Dictionary<string, NodeValue>());
-
-        // The write floor: adding a set member is a `create` of the element type, decided over the NEW
-        // object's scalar fields (so `where object.status == "draft"` reads the new data). Rejected BEFORE
-        // minting, so a denied create leaves no orphan object in the extent. id 0 = no identity yet.
-        RequireWrite(Floor(req), "create", typeName, Code.AccessFloor.ScalarObject(typeName, 0, value, _desc));
-
-        // Mint + link as ONE atomic store mutation (ONE Save()/physical fsync), through the SAME
-        // all-or-none multi-mutation path ctx.commit() already uses (CommitBatch) — not two separate
-        // public-method calls (the former CreateObject then AddToSet), each its OWN WAL commit. A "create
-        // a set member" is one logical write; splitting it cost this op DOUBLE the durable-write latency
-        // of every other live edit — measurably the dominant contributor to the "add a field" store-poll
-        // flake under load (that step mints THEN immediately field-edits the same object: 2 fsyncs here
-        // plus 1 more for the name write, vs 1 for a plain field edit). -1 is a batch-local scratch tempId
-        // for this single call only — unrelated to the CLIENT's own tempId space (req.TempId, resolved via
-        // session below), which CommitBatch never sees.
-        const int localTempId = -1;
-        var nestedLinks = req.Value is { } nestedValue
-            ? NestedSetLinks(nestedValue, typeDef, localTempId, Floor(req))
-            : [];
-        var result = _store.CommitBatch(
-            [new CommitCreate(localTempId, typeName, HashPasswordFields(typeName, value))],
-            [new SetLinkMutation(setId, localTempId), .. nestedLinks]);
-        var created = result.Creates[0];
-        var id = created.RealId;
-        // The whole batch's post-write version (finding 3) — unchanged as the reply's newVersion.
-        var newVersion = result.Version;
-
-        // Record the negative→real mapping so the client's follow-up ops (a field edit, a remove) that
-        // still address this object by its transient id resolve to the real one — even if they arrive
-        // before the client has applied this reply's remap. (No tempId → an add that needs no remap.)
-        if (req.TempId is { } tempId)
-            session?.MapTransientId(tempId, id);
-
-        // The store minted the new object's collection props with their own intrinsic ids; CommitBatch
-        // already computed this exact map (the same typeDef.Props walk) as part of minting — reuse it
-        // instead of a second store read, so the client can re-key its transient arrays (else later adds
-        // into them would silently not persist).
-        var collections = created.Collections.ToDictionary(
-            kv => kv.Key, kv => new CollectionInfo { Id = kv.Value.Id, ElementTypeName = kv.Value.ElementTypeName });
-
-        // `newId`, not `id` — the reply's `id` slot is the request correlation id.
-        // tempId is echoed only when the request carried one (omitted otherwise).
-        return Serialize(new ArrayAddResponse
-            { NewId = id, Collections = collections, TempId = req.TempId, NewVersion = newVersion });
-    }
-
     // The client's ack that it has applied an arrayAdd's remap (re-keyed its copy from the transient
     // negative id to the real one): drop that mapping. The client now addresses the object by its real id
     // and will never send the transient one again, so the entry is dead — this keeps the per-session table
@@ -1659,35 +1531,6 @@ public sealed class WsHandler
                 fields[p.Name] = leaf;
             }
         return new ObjectValue(fields);
-    }
-
-    private List<CommitMutation> NestedSetLinks(JsonElement el, TypeDefinition ownerType, int ownerRef, Code.AccessFloor floor)
-    {
-        var links = new List<CommitMutation>();
-        if (!el.TryGetProperty("props", out var props) || props.ValueKind != JsonValueKind.Object)
-            return links;
-        foreach (var p in props.EnumerateObject())
-        {
-            var prop = ownerType.Props?.FirstOrDefault(d => d.Name == p.Name);
-            if (prop?.Cardinality != Cardinality.Set || p.Value.ValueKind != JsonValueKind.Object
-                || !p.Value.TryGetProperty("type", out var type) || type.GetString() != "array")
-                continue;
-            if (!p.Value.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
-                throw new InvalidOperationException($"Set field '{p.Name}' requires an items array.");
-            foreach (var item in items.EnumerateArray())
-            {
-                if (!item.TryGetProperty("refId", out var refEl) || refEl.ValueKind != JsonValueKind.Number)
-                    throw new InvalidOperationException($"Set field '{p.Name}' accepts existing-object refId entries only.");
-                var refId = refEl.GetInt32();
-                var linked = _store.ReadById(refId) ?? throw new InvalidOperationException($"No object with id {refId}.");
-                if (linked.TypeName != prop.Type)
-                    throw new InvalidOperationException($"Set field '{p.Name}' holds '{prop.Type}' members, not '{linked.TypeName}'.");
-                RequireWrite(floor, "create", linked.TypeName,
-                    Code.AccessFloor.ScalarObject(linked.TypeName, refId, linked.Fields, _desc));
-                links.Add(new SetLinkByPropMutation(ownerRef, p.Name, refId));
-            }
-        }
-        return links;
     }
 
     // Convert a wire scalar ({ type, value }) to the prop's DECLARED base type. The

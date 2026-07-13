@@ -977,23 +977,19 @@ function connectWs(): void {
                     journalMsgId: msgId, undo, redo, roots });
                 return;
             }
-            // Top-level (no bracket open): an existing-member LINK micro-brackets into ONE commit (server-supported
-            // `set` relation). A NEW (tempId) member is a mint, not a pure link — it keeps the LIVE arrayAdd path
-            // (tempId→realId remap), deferred from the commit pipeline per the unified-commit plan.
+            // Existing member (id>0): a LINK, not a mint. Buffer the `set` relation into a commit bracket
+            // when one is open, else a one-shot commit. (The live `arrayAdd` op is retired — T6b.)
             if (existingObj != null) {
-                stageTopLevel(
-                    () => { commitRelations!.push({ wire: { kind: "set", setId: arr.id, childId: existingObj.id },
-                        journalMsgId: msgId, undo, redo, roots }); },
-                    () => {
-                        recordMutation({
-                            msgId,
-                            undo,
-                            redo,
-                            roots,
-                        });
-                        wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
-                            setId: arr.id, refId: existingObj.id });
-                    });
+                const link = () => commitRelations!.push({ wire: { kind: "set", setId: arr.id, childId: existingObj.id },
+                    journalMsgId: msgId, undo, redo, roots });
+                if (commitRelations != null) {
+                    recordMutation({ msgId, undo, redo, roots });
+                    link();
+                    return;
+                }
+                recordMutation({ msgId, undo, redo, roots });
+                wsHooks.beginCommit(currentExecCtx);
+                try { link(); } finally { wsHooks.endCommit(); }
                 return;
             }
             // A NEW draft (id<0) is a MINT. `addToCollection` already staged drafts added under a staging
@@ -1008,13 +1004,9 @@ function connectWs(): void {
                 mintCreate();
                 return;
             }
-            stageTopLevel(
-                mintCreate,
-                () => {
-                    recordMutation({ msgId, undo, redo, onReject: () => pendingAdds.delete(item.key), roots });
-                    wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
-                        setId: arr.id, tempId: item.key, typeName, value: objectOf(item.value) });
-                });
+            recordMutation({ msgId, undo, redo, onReject: () => pendingAdds.delete(item.key), roots });
+            wsHooks.beginCommit(currentExecCtx);
+            try { mintCreate(); } finally { wsHooks.endCommit(); }
         },
         arrayRemove: (arr, item, index) => {
             const msgId = nextWsMsgId++;
@@ -1032,15 +1024,20 @@ function connectWs(): void {
                     journalMsgId: msgId, undo, redo, roots });
                 return;
             }
-            // Top-level (no bracket open): an UNLINK micro-brackets into ONE commit (server-supported `setUnlink` relation).
-            stageTopLevel(
-                () => { commitRelations!.push({ wire: { kind: "setUnlink", setId: arr.id, childId: item.key },
-                    journalMsgId: msgId, undo, redo, roots }); },
-                () => {
-                    recordMutation({ msgId, undo, redo, roots });
-                    wsSend({ op: "arrayRemove", id: msgId, clientId: uiStatic.clientId,
-                        setId: arr.id, objectId: item.key });
-                });
+            // Top-level (no bracket open): an UNLINK micro-brackets into ONE commit (server-supported
+            // `setUnlink` relation). The live `arrayRemove` op is retired — T6b.
+            if (commitRelations != null) {
+                recordMutation({ msgId, undo, redo, roots });
+                commitRelations.push({ wire: { kind: "setUnlink", setId: arr.id, childId: item.key },
+                    journalMsgId: msgId, undo, redo, roots });
+                return;
+            }
+            recordMutation({ msgId, undo, redo, roots });
+            wsHooks.beginCommit(currentExecCtx);
+            try {
+                commitRelations!.push({ wire: { kind: "setUnlink", setId: arr.id, childId: item.key },
+                    journalMsgId: msgId, undo, redo, roots });
+            } finally { wsHooks.endCommit(); }
         },
         // A dictionary entry persists through the PATH-addressed addEntry/removeEntry ops
         // (the dict carries its sourcePath). addEntry's CreateEntry rejects a duplicate key
