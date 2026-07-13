@@ -996,15 +996,25 @@ function connectWs(): void {
                     });
                 return;
             }
-            recordMutation({
-                msgId,
-                undo,
-                redo,
-                onReject: () => { if (existingObj == null) pendingAdds.delete(item.key); },
-                roots,
-            });
-            wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
-                setId: arr.id, tempId: item.key, typeName, value: objectOf(item.value) });
+            // A NEW draft (id<0) is a MINT. `addToCollection` already staged drafts added under a staging
+            // context into that ctx's creates (so a nested create under an object form defers to the form's
+            // `ctx.commit()` — see A_create_under_an_object_form_defers_to_that_forms_save). `wsHooks.arrayAdd`
+            // is therefore only reached for a REAL set (arr.id > 0) here. Route the mint through `commitCreate`
+            // so it lands via the `commit` pipeline (the live `arrayAdd` op is retired in T6b), mirroring the
+            // existing-member LINK branch above: buffer into an open bracket, else micro-bracket ONE commit.
+            const mintCreate = () => { wsHooks.commitCreate(item.value as ExecObject, { kind: "set", set: arr }); };
+            if (commitCreates != null) {
+                recordMutation({ msgId, undo, redo, onReject: () => pendingAdds.delete(item.key), roots });
+                mintCreate();
+                return;
+            }
+            stageTopLevel(
+                mintCreate,
+                () => {
+                    recordMutation({ msgId, undo, redo, onReject: () => pendingAdds.delete(item.key), roots });
+                    wsSend({ op: "arrayAdd", id: msgId, clientId: uiStatic.clientId,
+                        setId: arr.id, tempId: item.key, typeName, value: objectOf(item.value) });
+                });
         },
         arrayRemove: (arr, item, index) => {
             const msgId = nextWsMsgId++;

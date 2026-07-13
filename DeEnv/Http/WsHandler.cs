@@ -978,7 +978,9 @@ public sealed class WsHandler
                     return Error("commit create missing 'value'.");
                 // The draft's scalar fields in the SAME tagged { props: { name: leaf } } shape an arrayAdd
                 // ships, validated against the declared type exactly like HandleAddSetMember (ExecObjectValue).
-                var fields = ExecObjectValue(valueEl, typeDef);
+                // allowSets:true skips nested collection fields (e.g. an Order's `lines` set) — those are linked
+                // by the create's `set`/`setByProp` relation, never shipped inline (mirrors HandleAddSetMember).
+                var fields = ExecObjectValue(valueEl, typeDef, allowSets: true);
 
                 // The write floor: a create of the element/target type, decided over the NEW object's scalar
                 // fields (id 0 — no identity yet), exactly as HandleAddSetMember / HandleArrayAdd.

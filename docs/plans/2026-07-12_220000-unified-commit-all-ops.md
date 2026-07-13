@@ -208,23 +208,24 @@ build + prove with headless tests BEFORE any client cutover.
 - NOTE: `DictWriteMutation` is currently server-only (IInstanceStore.cs L207-208, "not from wire"). This task
   PROMOTES it to a wire-accepted `commit` relation — that is the substance of the slice.
 
-**T6a.2 — Deferred nested-create staging into the enclosing `commit` (kills `HandleArrayAdd` mint).**
+**T6a.2 — Deferred nested-create staging into the enclosing `commit` (kills `HandleArrayAdd` mint).** — DONE.
 - The mint today goes `create-save` → `join(d)` → `set.add(d)` → `arrayAdd` hook. Two cases:
-  - *Top-level / save-less set* (`/orders`): must persist IMMEDIATELY as its own `commit` (stageTopLevel path —
-    already works for top-level edits).
-  - *Nested set under an object form* (Order's `lines`): must STAGE into the enclosing form's `commit`, persist
-    only on the Order form's Save (`A_create_under_an_object_form_defers_to_that_forms_save` pins this).
-- The blocker: when the nested `set.add(draft)` fires, **no commit bracket is open** (the form hasn't been
-  Saved yet). So the draft must be staged into the enclosing form ctx's pending creates WITHOUT an `endCommit`,
-  to be flushed by the form's eventual `ctx.commit()`. Required machinery:
-  - `arrayAdd` mint detects "this set belongs to an object currently being edited in a form ctx" (the enclosing
-    form's `currentExecCtx`) and lazily opens `commitCreates` on it WITHOUT flushing (defer), OR
-  - `ctx.commit` graph-walks the form's objects to discover negId drafts + their joins (a `set`/`ref` of a
-    negId object becomes a `commitCreate` + join). Pick ONE approach in the spec; the graph-walk is the more
-    robust (also covers ref-create-while-editing).
-  - The save-less case keeps the existing `stageTopLevel(mintCreate)` (own one-shot commit).
-- Tests: `A_create_under_a_save_less_container_persists_immediately` (top-level) + `A_create_under_an_object_form_defers_to_that_forms_save` (nested) BOTH stay green; `ArrayAddNestedRefTests` stays green (mint via commit).
-- This is the "intricate" slice the earlier work deferred; do it standalone with the two tests as the gate.
+  - *Top-level / save-less set* (`/orders`): must persist IMMEDIATELY as its own `commit` (stageTopLevel path).
+  - *Nested set under an object form* (Order's `lines`): the draft is ALREADY staged into the enclosing form's
+    `ctx.creates` by `addToCollection` (codeExec.ts L2283-2286: a transient draft added to a set under a staging
+    ctx is pushed to `staging.creates`, never reaching `wsHooks.arrayAdd`). So `wsHooks.arrayAdd`'s mint branch is
+    only ever reached for a REAL set (`arr.id > 0`) — the nested case never arrives here. The form's `ctx.commit()`
+    mints staged creates + applies their set joins (no graph-walk needed; the staging machinery handles it).
+- Fix (`ws.ts` `arrayAdd` mint branch): route the real-set mint through `commitCreate(item.value, {kind:"set",
+  set: arr})`, mirroring the existing-member LINK branch — buffer into an open bracket, else `stageTopLevel` one
+  commit. The nested case was already deferred by `addToCollection`, so no special-casing was needed.
+- Server fix (`WsHandler.HandleCommit` L986): parse the create `value` with `ExecObjectValue(valueEl, typeDef,
+  allowSets: true)` — WITHOUT `allowSets`, a draft carrying a nested collection field (e.g. Order's `lines` set)
+  threw "Field 'lines' on 'Order' is not a scalar field" and the whole commit was rejected. `allowSets:true` skips
+  nested collection fields (they are linked by the create's `set`/`setByProp` relation, never shipped inline),
+  exactly as `HandleAddSetMember` does. This was the actual bug that broke the save-less mint; the earlier
+  "deferred graph-walk" hypothesis was wrong.
+- Tests: `A_create_under_a_save_less_container_persists_immediately` (top-level) + `A_create_under_an_object_form_defers_to_that_forms_save` (nested) BOTH green; `ArrayAddNestedRefTests` green (mint via commit). CodeClientTests 19/19.
 
 #### Phase 2 — T6b (LATER slice, after T6a green): switch client + delete the 4 live handlers
 
