@@ -8,15 +8,9 @@ namespace DeEnv.Http;
 
 // ── the wire model ─────────────────────────────────────────────────────────────
 //
-// The WS wire is the C#↔TS contract (see DeEnv/Instance/ws.ts). One incoming JSON
-// message → one outgoing JSON response. Both sides are typed here so the field names
-// are the contract; the shapes below reproduce the exact bytes the hand-built JSON
-// used to. A value/vars/args body that needs the schema/runtime to interpret stays a
-// raw JsonElement (DeserializeValue/ExecObjectValue/LeafForType read it schema-driven).
-
-// One request record covering every op (nullable fields, deserialized once per message).
-// A flat union over a tagged JSON object avoids polymorphic deserialization; each handler
-// reads the fields its op carries and validates the ones it requires.
+// WS wire contract between C# server and TS client. Shapes use camelCase to match
+// the original hand-built JSON. Complex bodies (values, vars, args) stay as raw
+// JsonElement so they can be interpreted schema-driven later.
 public sealed record WsRequest
 {
     public string? Op { get; init; }
@@ -36,58 +30,20 @@ public sealed record WsRequest
     public bool? Clear { get; init; }
     public JsonElement? Value { get; init; }
     public JsonElement? Vars { get; init; }
-    // refetch: the client's live per-component view-state (client data layer, slice 1b), a map from a
-    // component's render-slot key (`comp:<slotpath>`) to its setup-scope locals ({ varName: wireValue }).
-    // HandleRefetch rebuilds it into the `seed` RenderState applies, so the server reproduces the client's
-    // EXACT render (a toggled-open popup) and ships the data it demands. Same shape/handling as `Vars`.
-    public JsonElement? SlotState { get; init; }
-    // refetch: the ACTION-MISS intent (client data layer, slice 4) — present when this refetch is driven by a
-    // CLICK HANDLER that read un-shipped data. `HandlerFn` is the clicked handler closure's twin-stable lambda
-    // fn-id; `HandlerSlot` its render-slot path. HandleRefetch combines them (CodeExecutor.HandlerKey) into the
-    // key the server uses to locate that handler in the reproduced render and invoke it read-only to harvest
-    // the data it reads. Absent on an ordinary (render-miss) refetch — then no handler is invoked (today's path).
+    public JsonElement? SlotState { get; init; }  // client view-state for refetch (render-as-planner)
     public int? HandlerFn { get; init; }
     public string? HandlerSlot { get; init; }
-    // login: the credentials a `login` op carries. `name` is the User's login identifier
-    // (UserConvention.NameField), `password` the plaintext verified against the stored hash.
     public string? Name { get; init; }
     public string? Password { get; init; }
-    // commit: the batch of field edits from a ctx.commit(). Shaped as a list so Step B can add
-    // `creates`/`relations` without re-cutting the message format. Step A only sends/handles `edits`.
     public JsonElement? Edits { get; init; }
-    // commit (atomic-commit Step B): the new objects staged in this ctx — each `{ tempId, props }` (the
-    // draft's scalar fields; its TYPE is derived server-side from the relation that links it, never asserted
-    // on the wire) — and the `relations` linking them in (`{ kind:"set", setId, childId }` /
-    // `{ kind:"ref", parentId, prop, childId }`, where childId may be a create's negative tempId). Absent on
-    // an edits-only commit.
     public JsonElement? Creates { get; init; }
     public JsonElement? Relations { get; init; }
-    // commit: the optimistic-concurrency anti-clobber guard (DECISIONS.md "App versioning — the full
-    // design (M13 clump)", §0's baseVersion bullet). The store version the committing ctx last knew
-    // (ws.ts stamps it from the client's remembered HEAD, captured when the ctx first staged an edit).
-    // Threaded to IInstanceStore.CommitBatch, which rejects (StaleBaseException) iff an object this
-    // batch EDITS changed after this version. Null = no check (an older/lower-level caller with no
-    // version concept) — kept optional for compatibility, not a permanent bypass; every real ws.ts
-    // commit supplies it.
-    public int? BaseVersion { get; init; }
-    // parseExprs (M12 auto-live parse-op): the batch of edited expression source texts the client's canvas
-    // walk could not find in its shipped `sys.evalContext` exprs map (a tier-3 miss — edited-but-unrefreshed).
-    // Parsed pure/store-free (CodeParse.ParseExpression, no store, no floor, no session) — see HandleParseExprs.
+    public int? BaseVersion { get; init; }  // optimistic concurrency guard
     public string[]? Texts { get; init; }
 }
 
-// Response records — one per op. Each property's camelCase (the shared `_jsonOpts`
-// PropertyNamingPolicy) is the wire key, so these serialize to the exact bytes the old
-// JsonObject literal produced; the correlation id is still appended last by WithId, so
-// these never carry it. Field order matches the former literals; the get-only computed
-// `Op`/`Ok` props serialize by default.
-
-// `newVersion` (optimistic-concurrency anti-clobber — see CommitResponse's doc): EVERY mutating op's
-// reply carries the store's version AFTER this write, not just `commit`'s. A live write (autosave,
-// arrayAdd, setRef, …) advances the store's HEAD exactly like a commit does (JsonFileInstanceStore
-// bumps it uniformly); a client that only learned the version from `commit` acks would silently drift
-// behind its OWN live writes (e.g. a create's arrayAdd, then a later ctx.commit() editing that SAME
-// just-created object) and its next commit would be wrongly rejected as stale against its own history.
+// Response records serialize using camelCase (via `_jsonOpts`) so they match the old wire bytes.
+// `newVersion` is carried on every mutating reply so clients stay in sync with store version.
 
 public sealed record HelloResponse
 {
@@ -132,14 +88,9 @@ public sealed record CollectionInfo
 public sealed record RefetchResponse
 {
     public string Op => "refetch";
-    // The raw client-state node from RenderState; serialized inline, not reshaped.
     public required JsonNode State { get; init; }
 }
 
-// `Report` (M13 slice 4, additive — the ONE approved wire widening this slice makes) carries a structured
-// plan/outcome object for an action that produces one (today: `publish`'s identity-diff report); omitted
-// (null) for every other action, so the reply is byte-identical to before for create/delete/clone/rename/
-// setDesign/commitDesign. IHostActions.Run's return value flows straight through — see its own doc.
 public sealed record HostActionResponse
 {
     public string Op => "hostAction";
@@ -153,23 +104,12 @@ public sealed record AckRemapResponse
     public bool Ok => true;
 }
 
-// parseExprs (M12 auto-live parse-op): the reply to a batch parse request — a NEWLY EDITED expression's
-// source, parsed on-demand outside the `sys.evalContext` refresh cycle. `entries` maps each successfully
-// PARSED text to its AST, serialized THE SAME WIRE FORMAT `BuildEvalContext`'s `exprs` map already uses
-// (`SchemaJson.Options`) — so the client can drop the string straight in without a second format. An
-// unparseable (or capped-out — see HandleParseExprs) text is simply OMITTED: the client keeps showing its
-// chip (honest), never guesses. No `ok`/`error` distinction — a request with zero parseable texts still
-// replies with an (empty) `entries`, not a failure.
 public sealed record ParseExprsResponse
 {
     public string Op => "parseExprsResult";
     public required Dictionary<string, string> Entries { get; init; }
 }
 
-// login: the result of a credential check (M-auth). `ok` is the ONE bit the client acts on — a SUCCESS
-// reply also carries the bound `userId`; a FAILURE (wrong password OR unknown user — the SAME reply, so
-// the wire reveals no user-enumeration signal) carries no id (omitted when null). A failed login is a
-// NORMAL negative result, not an error — it is NOT routed through the `{ error }` rollback path.
 public sealed record LoginResponse
 {
     public string Op => "login";
@@ -177,7 +117,6 @@ public sealed record LoginResponse
     public int? UserId { get; init; }
 }
 
-// logout: always succeeds (clearing an already-anonymous session is idempotent).
 public sealed record LogoutResponse
 {
     public string Op => "logout";
@@ -189,14 +128,6 @@ public sealed record ErrorResponse
     public required string Error { get; init; }
 }
 
-// A commit REJECTED by a same-field collision (M13 slice 6 — the ONE approved wire widening this slice
-// makes). It carries BOTH the ordinary `error` string (so a custom `fn render()` that ignores conflicts
-// still shows the global error banner — no app can silently clobber) AND the structured `conflicts`
-// payload the generic form's coarse banner renders. `newVersion` is the store's CURRENT version — the
-// client re-pins the committing ctx's base to it so a "Keep mine" re-commit forces at a now-fresh base.
-// A commit rejected for any OTHER reason (a malformed batch, a floor denial) stays the plain `{ error }`
-// reply — `conflicts` is present ONLY on a genuine same-field collision, so every non-conflict reply is
-// byte-identical to before.
 public sealed record ConflictResponse
 {
     public required string Error { get; init; }
@@ -204,9 +135,6 @@ public sealed record ConflictResponse
     public required int NewVersion { get; init; }
 }
 
-// One conflicted field on the wire (M13 slice 6): the object id + a cheap type label, the field name, and
-// the per-field {base, mine, theirs} as bare wire scalars (scalarOf/refId shape). The coarse banner
-// surfaces only `field`; base/mine/theirs ride along so the later fine per-field UI needs no wire change.
 public sealed record ConflictFieldWire
 {
     public required int Object { get; init; }
@@ -217,18 +145,10 @@ public sealed record ConflictFieldWire
     public object? Theirs { get; init; }
 }
 
-// ── parsed commit relations (atomic-commit Step B) ──────────────────────────────────────────────
-// A relation linking a (possibly just-created) object into the graph. ChildRef is the linked object's id —
-// a transient create's NEGATIVE tempId, or a resolved positive real id. ChildType is the link-derived
-// declared TYPE of the child (a set's element type / a ref prop's target type) — server-resolved, never
-// wire-asserted — used to type a transient create + the store link.
 public abstract record ParsedRelation(int ChildRef, string ChildType);
 public sealed record ParsedSetRelation(int SetId, int Child, string ElementType) : ParsedRelation(Child, ElementType);
 public sealed record ParsedRefRelation(int ParentId, string Prop, int Child, string TargetType) : ParsedRelation(Child, TargetType);
 
-// Transport-agnostic WebSocket message dispatcher.
-// One incoming JSON message → one outgoing JSON response (request/response model).
-// The transport (GenHTTP websocket) calls ProcessMessage and sends the result.
 public sealed class WsHandler
 {
     private readonly IInstanceStore _store;
@@ -238,14 +158,7 @@ public sealed class WsHandler
     private readonly LiveRegistry _registry;
     private readonly IHostActions _hostActions;
     private readonly Func<string, string, bool> _verifyPassword;
-    // The instance's mount prefix ("/" root-mounted, "/apps/<name>" path-mounted). The client sends
-    // FULL paths (location.pathname, which carries the mount) for write/refetch ops; the handler
-    // strips the mount before resolving against the schema, so the instance stays mount-unaware (its
-    // node paths are root-relative). Identity-stripping when "/" (behavior-preserving).
     private readonly string _mountBase;
-    // The kernel-wired dry-run publish-preview delegate (M13 Track-B B3), passed to the refetch SsrRenderer
-    // so `sys.publishPreview` recomputes on a client-side toggle→refetch exactly as it did on first paint.
-    // Null for a non-design-host / non-kernel instance (sys.publishPreview then isn't reachable there).
     private readonly Func<Code.ExecObject, int, Code.ExecContext, Code.IExecValue>? _publishPreview;
     private readonly JsonSerializerOptions _jsonOpts = new()
     {
@@ -270,69 +183,23 @@ public sealed class WsHandler
         _publishPreview = publishPreview;
     }
 
-    // The warm per-client session a code-UI message addresses (clientId minted at SSR).
     private ClientSession? Session(WsRequest req) =>
         _sessions != null && req.ClientId is { } id ? _sessions.Get(id) : null;
 
-    // Resolve a wire id through the session's transient-id remap: a just-added object's negative id →
-    // the real one the server minted for it. No session (or an id it never mapped) → unchanged. This is
-    // what lets the client address a just-added object before its arrayAdd round-trip has returned.
     private static int Resolve(ClientSession? session, int id) => session?.ResolveId(id) ?? id;
 
-    // ── the write floor (M-auth) ────────────────────────────────────────────────
-    //
-    // The non-bypassable WRITE check: a create/edit/delete is accepted only when a matching-verb rule's
-    // condition holds for the bound principal + the target object — else it is REJECTED (the reply carries
-    // an error, which the client surfaces and its existing rollback restores from; the store is never
-    // touched). Deny-by-default among the ruled types; DORMANT (allow-all, today's behavior) when the app
-    // declares no rules — so a solo app pays nothing. The principal is the session's bound `currentUser`
-    // (ClientSession.PrincipalUserId — harness-set this slice; the password-login slice binds it on the WS).
-    //
-    // The OBJECT-graph write seams are ALL gated: set-member create/delete (arrayAdd/arrayRemove +
-    // removeEntry on a set), object-field + reference edit (objectPropChange/setReferenceField), the
-    // path-addressed `write` onto a set member's scalar field (HandleWrite — the SAME mutation
-    // objectPropChange performs, so it is gated identically), AND (review fix 3) a client DICT write whose
-    // owner is a set member — addEntry/removeEntry on a dict and a path-`write` onto a dict entry are gated
-    // as an `edit` of the owning set member (RequireDictWrite), so an immutable Commit/Branch idMap cannot
-    // be mutated from a client. That is the surface the read floor (DbBridge graph + sys.extent listing) gates.
-    // ponytail: the dict READ floor is still deferred (DbBridge does not gate dict members), and a dict
-    // whose owner is NOT a set member (a root-level dict like `/settings`) stays write-deferred too — only
-    // the set-member dict WRITE is gated now, which is exactly what the Commit/Branch immutability needs.
-    // Per-field rules and richer condition inputs (now/client/cross-row) are later slices too.
     private Code.AccessFloor Floor(WsRequest req) =>
         new(_desc.Rules ?? [], Code.AccessFloor.LoadPrincipal(_store, _desc, Session(req)?.PrincipalUserId));
 
-    // Reject a denied write: throw whose message ProcessMessage's catch turns into the `{ error }` reply
-    // (→ client rollback). A single chokepoint so every gated handler reads the same.
     private static void RequireWrite(Code.AccessFloor floor, string verb, string typeName, Code.ExecObject target)
     {
         if (!floor.CanWrite(verb, typeName, target))
-            throw new InvalidOperationException(
-                $"Access denied: not allowed to {verb} '{typeName}'.");
+            throw new InvalidOperationException($"Access denied: not allowed to {verb} '{typeName}'.");
     }
 
-    // The candidate object for a CREATE decision: the about-to-be-created value as a scalar-only ExecObject,
-    // so a condition like `where object.status == "draft"` reads the NEW data. Built from the same parsed
-    // ObjectValue the create would persist (id 0 — it has no identity until minted).
     private Code.ExecObject CandidateFromValue(JsonElement value, TypeDefinition type) =>
         Code.AccessFloor.ScalarObject(type.Name, 0, (ObjectValue)DeserializeValue(value, type), _desc);
 
-    // ── the password write chokepoint (M-auth `password` type) ───────────────────
-    //
-    // A `password`-typed plaintext from ANY client write path is PBKDF2-hashed HERE, at the WS layer (above
-    // the store), before it persists — so the IInstanceStore stays dumb (CLAUDE rule 6: a future pillar-5
-    // storage engine inherits the hashing for free) and NO client write path ever stores plaintext. Every
-    // WS write handler that materializes fields routes through these (objectPropChange/arrayAdd/addEntry/
-    // path-write/setReferenceField create-new/addSetMember). The two NON-WS write paths bypass them on
-    // purpose: AdminSeed writes an ALREADY-hashed value direct to the store (a store-level hash would
-    // double-hash it), and a `password` in initialData is a load/validate ERROR (never persisted).
-    //
-    // EMPTY = NO CHANGE. An empty password value writes nothing — so a field that loads BLANK ("" from the
-    // read chokepoint) and is re-submitted unchanged never clobbers the stored hash with "". A create that
-    // omits the password yields a credential-less user (the documented "create-then-set" contract).
-
-    // Every password-typed plaintext field in a create/edit ObjectValue, hashed (empty ones DROPPED so they
-    // persist nothing). Non-password fields pass through untouched. Used by the object-create paths.
     private ObjectValue HashPasswordFields(string typeName, ObjectValue obj)
     {
         var fields = new Dictionary<string, NodeValue>();

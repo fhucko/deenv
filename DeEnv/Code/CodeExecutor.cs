@@ -190,7 +190,7 @@ public sealed class CodeExecutor
             {
                 if (ExecuteValue(left, scope, context) is not ExecObject obj)
                     throw new CodeRuntimeException("Cannot assign a field on a non-object.");
-                // READ-ONLY harvest (client data layer, slice 4): the write stages into the throwaway overlay,
+                // READ-ONLY harvest (client data layer): the write stages into the throwaway overlay,
                 // never the loaded graph — so the prop ships at its STORE value (the harvest reads the data the
                 // handler READ, not what it wrote) while the handler still reads its own write back below
                 // (RecordPropAccess/the overlay-first read). Discarded with the context. Checked FIRST so a
@@ -387,7 +387,7 @@ public sealed class CodeExecutor
                 m.Ctx.Creates.Clear();
                 return new ExecNothing();
             }
-            // Conflict resolution (M13 slice 6 + Track-B B5): keep-mine (force re-commit at the fresh base) /
+            // Conflict resolution: keep-mine (force re-commit at the fresh base) /
             // take-theirs (drop mine + refresh to theirs), and B5's per-field `resolveField(object, field,
             // take)`. CLIENT-only effects driven by a WS reply (codeExec.ts/ws.ts) — the C# twin renders once
             // and never witnesses a conflict, so these are server no-ops (present for twin parity, so an SSR
@@ -2261,7 +2261,7 @@ public sealed class CodeExecutor
     }
 
     // Invoke an indexed onClick handler closure READ-ONLY to harvest its data footprint (client data layer,
-    // slice 4 — the action-miss round-trip). After RenderState reproduced the render and indexed the
+    // (client data layer — the action-miss round-trip). After RenderState reproduced the render and indexed the
     // handlers, the server looks up the one the client clicked (by its (slot, fn-id) key) and runs it here:
     //   • at the TOP level (DepStack empty) so its reads record as displayed LEAVES — exactly what
     //     ClientState.Serialize ships — rather than as private deps of an enclosing computation; and
@@ -2379,7 +2379,7 @@ public sealed class CodeExecutor
     // (a caller transitively depends on what its callees read).
     public static IExecValue Memoize(string key, ExecContext context, Func<IExecValue> compute)
     {
-        // Memo bypass (client data layer, slice 4 — the action-miss harvest): run the compute directly, with
+        // Memo bypass (client data layer — the action-miss harvest): run the compute directly, with
         // NO Deps frame and NO caching, so the reads inside stay in output position and harvest as leaves
         // (the twin of the client's runWithMemoBypass). Only set while invoking a handler to plan its fetch.
         if (context.MemoBypass) return compute();

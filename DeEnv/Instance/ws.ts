@@ -1,25 +1,9 @@
-// WebSocket transport for the code-owned UI (Stage 4b/5). Wires the codeExec mutation
-// hooks (setWsHooks) to the server so a two-way write reaches storage. Global script,
-// concatenated after codeExec/dt and before ui/init (see ClientScript.UiJs).
-//
-// Optimistic mutations are PROVISIONAL (Stage 5). Each one is applied locally first,
-// journaled with what its undo needs (the 3-state model: server-data is the current
-// state with the journal undone, client-after is the current state, and each entry
-// holds its own client-before), and sent with a correlation id. The server's reply is
-// authoritative: ok → the entry commits (drops); error → reverse-replay the journal
-// back past the failed entry, drop it, and re-apply the rest.
+// WebSocket transport for code-owned UI. Wires mutation hooks to server for two-way writes.
+// Optimistic updates journaled locally; server reply is authoritative (ok or rollback).
 
-// Where /ws and /js live (set by the SSR page): the asset AUTHORITY (host:port — a kernel-level
-// shared port, decoupled from the per-instance app addressing) and the instance's mount BASE
-// (`/apps/<name>`, or "/" root-mounted). The WS URL is `<proto>//<assetAuthority><base>/ws`. Empty
-// authority → a same-origin, base-relative URL (a reverse-proxied / domain-root deployment).
 declare const initAssetAuthority: string;
 declare const initBase: string;
-// The instance display name (the kernel registry `app` label), injected by the SSR page. The generic-UI
-// breadcrumb/title uses it (humanized) as the ROOT label on a client-side render — see ui.ts rootLabel.
 declare const initAppName: string;
-// The store's version as of THIS first paint (optimistic-concurrency anti-clobber — DECISIONS.md "App
-// versioning — the full design (M13 clump)"). Seeds clientKnownVersion below.
 declare const initStoreVersion: number;
 
 // The mount base as a URL PREFIX: "" when root-mounted ("/"), else the base verbatim ("/apps/todo").
@@ -31,53 +15,22 @@ function basePrefix(): string {
 let codeWs: WebSocket | null = null;
 const codeWsOutbox: string[] = [];
 
-// ── the change journal (pending optimistic mutations, in send order) ──────────────
-
 interface JournalEntry {
     msgId: number;
-    undo(): void;     // restore the captured before-state
-    redo(): void;     // re-apply after a rollback of an earlier entry (recaptures before)
-    onReject?(): void; // extra cleanup when this entry itself is the rejected one
-    // The objects/arrays this entry's undo/redo closures capture — exposed for the reachability GC
-    // (sweepUnreachable, dt.ts) to MARK as roots, since a closure's captured vars are opaque to a graph
-    // walk. A pending mutation must keep its referenced data alive for rollback — crucially an
-    // arrayRemove/entryRemove's DETACHED item, which is no longer in any array and so is reachable ONLY
-    // through this entry. The walk descends each root (an object's props, an array's items), so listing the
-    // top object(s)/array(s) suffices; the removed item is listed by its value explicitly.
+    undo(): void;
+    redo(): void;
+    onReject?(): void;
     roots?: ExecValue[];
-    // The ObjectForm ctx whose ctx.commit() produced this entry (form-Save feedback), set only for sends
-    // fired inside a commit bracket (beginCommit/endCommit). The ack drains it to "saved" once this ctx's
-    // last pending entry retires; a reject clears it back to "idle". Undefined for a LIVE collection edit
-    // (set/dict add/remove, ref, autosave per-keystroke) — those fire outside any commit, so they never
-    // touch a form's lifecycle.
     ctx?: ExecCtx;
 }
-// The ctx whose commit is currently flushing — set by beginCommit, cleared by endCommit. A commit's
-// staged-walk fires its WS sends SYNCHRONOUSLY inside that bracket, so recordMutation reads this to know
-// which form ctx an entry belongs to. Per-ctx (not a global counter) because a live collection edit can
-// interleave with a form's pending commit and must NOT decrement the form's count.
 let committingCtx: ExecCtx | null = null;
-// The ExecCtx currently executing (root ambient or a ctx.new() child), declared in codeExec.ts and read
-// here (same program). Used for the TOP-LEVEL micro-bracket: when no commit bracket is open, a mutation
-// opens beginCommit(currentExecCtx), stages one change, then currentExecCtx.notifyChange() flushes it
-// (root ctx → wsHooks.topLevelChange → endCommit; sub-ctx → empty no-op, already staging its own bracket).
+
 function stageTopLevel(stage: () => void, liveSend: () => void): void {
-    // Only open a micro-bracket when NO bracket is already open (form commit OR handler tx). If one is open,
-    // fall back to liveSend — the surrounding bracket captures it (form-commit buffers edits via commitEdits
-    // before this point; handler tx captures live sends via txSendBuffer). Opening a nested bracket here would
-    // clobber the surrounding buffer (beginCommit resets commitEdits/relations/creates).
     if (currentExecCtx == null || commitEdits != null || commitRelations != null || commitCreates != null) { liveSend(); return; }
-    // Open a micro-bracket on the active ctx, stage one change, flush ONE commit. Only called when no bracket
-    // is already open (the hooks return early otherwise), so flushing here is always safe — covers top-level
-    // page mutations AND save-less-container creates (whose sub-ctx has no enclosing commit to stage into).
     wsHooks.beginCommit(currentExecCtx);
     stage();
     wsHooks.endCommit();
 }
-// The edits accumulated during a commit bracket (beginCommit..endCommit). The propChange hook buffers
-// here instead of sending individual objectPropChange messages; endCommit flushes ONE `commit` message.
-// null = no commit bracket is open (live edits fire objectPropChange directly, unchanged).
-// Each entry carries the wire payload AND the closure data (obj, before) needed for the journal undo/redo.
 interface CommitEdit { obj: ExecObject; prop: string; value: ExecValue; before: ExecValue; wire: object }
 let commitEdits: CommitEdit[] | null = null;
 // The CREATES accumulated during a commit bracket (atomic-commit Step B). The commitCreate hook buffers each
@@ -94,13 +47,9 @@ let commitCreates: StagedCreate[] | null = null;
 // inside runHandlerTransaction). null = no bracket is open (set ops fire arrayAdd/arrayRemove directly,
 // unchanged). Each entry carries the wire relation ({kind, setId, childId} — mirroring the existing
 // commitCreates join shape) PLUS the capture the journal needs (undo/redo/roots) so the closer can build one
-// consolidated journal entry, and `journalMsgId` — the id the hook's recordMutation already used, so the
-// closer can splice those per-op entries out (the consolidated entry replaces them, acked by the ONE commit).
 interface CommitRelation {
-    wire: object;          // the wire relation: { kind: "set", setId, childId } | { kind: "setUnlink", setId, childId }
-                            //   | { kind: "setByProp", parentId, prop, childId } | { kind: "setUnlinkByProp", parentId, prop, childId }
-                            //   | { kind: "dictRemove", ownerRef, prop, key }  (drop ONE dict entry; server-accepted from T3)
-    journalMsgId: number;  // the id recordMutation used in the hook (retired at flush — the commit's ack owns it)
+    wire: object;
+    journalMsgId: number;
     undo: () => void;
     redo: () => void;
     roots: ExecValue[];
@@ -108,42 +57,16 @@ interface CommitRelation {
 let commitRelations: CommitRelation[] | null = null;
 const journal: JournalEntry[] = [];
 let nextWsMsgId = 1;
-// Host-action success callbacks (docs/plans/host-action-success-signal.md), keyed by the SENT op's
-// msgId (the reply is stamped with the same id via WithId — no wire change). Registered by the
-// hostAction hook when a call carries a trailing fn; invoked ONCE on that id's ok reply, then deleted
-// (also deleted on that id's error reply — never invoked). A navigate-away before the reply just
-// leaves the entry unreachable (same class as any other stale in-flight handler) — harmless.
 const hostActionCallbacks = new Map<number, ExecFunction>();
 
-// ── auto-live parse-op (M12) ────────────────────────────────────────────────────────────────────────
-//
-// The canvas evaluates a NEWLY EDITED expression WITHOUT the "Refresh values" click, via an on-demand
-// PARSE round-trip that involves NO refetch — so it can never race the tree editor's optimistic mutations
-// by construction (unlike S3a's removed auto-live attempt, which raced by keying the whole evalContext on
-// the edited subgraph). codeExec.ts's evalCtxExpr calls wsHooks.parseMiss for every canvas expression text
-// it can't find in the shipped `ctx.exprs` map; this section batches those misses, debounces one
-// `parseExprs` request, and merges a successful parse DIRECTLY into the SAME `ctx` object the walk already
-// holds — mutating its `exprs` props in place, never re-keying evalContext's own memo entry, never
-// touching needsServerData/maybeRefetch. CLIENT-ONLY liveness machinery, like reactive props: no twin, no
-// conformance case (codeExec.ts's own doc on WsHooks.parseMiss explains why).
-//
-// State is keyed PER evalContext object (a WeakMap on `ctx`'s identity), not one global set: a real
-// "Refresh values" click mints a BRAND NEW ctx (a new `evalContext:<designId>:<refreshKey>` memo key — the
-// empty-deps law, canvas-eval.md), so its WeakMap entry starts genuinely empty — the "failed" set below
-// drops its history on Refresh with NO explicit clear, and a reply for an OLD ctx simply mutates an object
-// nothing reads anymore (the stale-reply guard, "for free" via object identity — nothing to compare).
 interface ParseMissState {
-    pending: Set<string>;   // seen since the last flush, not yet sent
-    inFlight: Set<string>;  // sent, awaiting parseExprsResult
-    failed: Set<string>;    // requested, server had nothing (unparseable, or cap-truncated) — not re-asked
+    pending: Set<string>;
+    inFlight: Set<string>;
+    failed: Set<string>;
     timer: ReturnType<typeof setTimeout> | null;
 }
 const parseMissStateByCtx = new WeakMap<ExecObject, ParseMissState>();
 const parseExprsDebounceMs = 300;
-// Synthetic exprs-map entry ids for locally-merged parse results — never sent to the server, never looked
-// up by id (evalCtxExpr/BuildEvalContext's exprs consumers always read by TEXT, never id — see codeExec.ts),
-// so uniqueness only needs to avoid colliding with the SAME evalContext's own (small, near-zero) negative
-// ids; a far-away counter makes that collision practically impossible without needing a registry.
 let nextParseEntryId = -1_000_000_000;
 
 interface ParseExprsRequest { ctx: ExecObject; state: ParseMissState; texts: string[]; }

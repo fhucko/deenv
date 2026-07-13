@@ -56,9 +56,7 @@ public static class ClientState
                     entry["sourcePath"] = sp;
                     entry["scalarEntry"] = o.ScalarEntry;
                 }
-                // T6b-4b (R7 addressing): a dict entry carries its owning dict's address so the
-                // client can persist via id-addressed dictAdd/dictRemove (not the path-addressed
-                // addEntry/removeEntry ops). Only meaningful for dictionary entries.
+                // R7 dict addressing for id-based dictAdd/dictRemove.
                 if (o.OwnerRef is { } oRef) entry["ownerRef"] = oRef;
                 if (o.DictProp is { } oProp) entry["dictProp"] = oProp;
                 if (o.Key is { } oKey) entry["key"] = oKey;
@@ -98,9 +96,7 @@ public static class ClientState
                     ["sourcePath"] = a.SourcePath,   // dicts persist via their path (add/removeEntry)
                     ["items"] = items,
                 };
-                // T6b-4b (R7 addressing): a dict array carries its owner's address so client
-                // entryAdd/entryRemove build id-addressed dictAdd/dictRemove relations. Only
-                // dictionary arrays have these (set/list stay null).
+                // R7 addressing: dict arrays carry ownerRef + dictProp for id-based relations.
                 var dictArrJson = arrays[a.Id.ToString()]!;
                 if (a.OwnerRef is { } arrRef) dictArrJson["ownerRef"] = arrRef;
                 if (a.DictProp is { } arrProp) dictArrJson["dictProp"] = arrProp;

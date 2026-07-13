@@ -1,13 +1,5 @@
-// The client-side twin of the C# Code interpreter (DeEnv/Code/CodeExecutor.cs),
-// ported from the app14 prototype and adapted to the camelCase wire format. This is
-// the evaluation core only — DOM rendering (ui.ts) and the WebSocket/data-transfer
-// protocol (Stage 4) layer on top. The two interpreters are kept in lockstep by the
-// shared conformance suite (DeEnv/Code/conformance.json), run here via runConformance.
-//
-// Authored as a global script (no import/export) so it can be injected and called
-// directly. Op codes are the camelCase CodeInfixOpType values (CodeAst.cs).
-
-// ── AST (mirrors DeEnv/Code/CodeAst.cs, "type"-discriminated, camelCase) ──────────
+// Client-side twin of the C# Code interpreter. Kept in lockstep via conformance.json.
+// AST and runtime types mirror the C# side (camelCase wire).
 
 type CodeStatement = CodeAssignment | CodeBlock | CodeVarDec | CodeFunction | CodeReturn | CodeCall | CodeIf | CodeAmbient;
 
@@ -41,8 +33,6 @@ interface CodeTagAttribute { name: string; value: CodeValue; }
 interface CodeTagIf { type: "if"; condition: CodeValue; body: CodeTagChild[]; elseBody: CodeTagChild[] | null; }
 interface CodeTagForEach { type: "foreach"; item: CodeSymbol; collection: CodeValue; body: CodeTagChild[]; }
 
-// ── runtime values (mirrors DeEnv/Code/ExecValues.cs) ─────────────────────────────
-
 type ExecValue = ExecFunction | ExecSysFunction | ExecTag | ExecArray | ExecObject |
     ExecInt | ExecBool | ExecText | ExecNull | ExecNothing | ExecCtx | ExecCtxMethod;
 type ExecTagChild = ExecValue;
@@ -55,62 +45,20 @@ interface ExecNull { type: "null"; }
 interface ExecNothing { type: "nothing"; }
 interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id: number; sourcePath?: string; scalarEntry?: boolean; ownerRef?: number; dictProp?: string; key?: string; }
 interface ExecArray { type: "array"; kind: "set" | "dict" | "list"; items: ExecArrayItem[]; id: number; elementTypeName?: string; sourcePath?: string; ownerRef?: number; dictProp?: string; }
-// client. A positive id ⇒ persisted (a db set/dict); a negative id ⇒ transient (a list
-interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id: number; sourcePath?: string; scalarEntry?: boolean; ownerRef?: number; dictProp?: string; key?: string; }
-interface ExecArray { type: "array"; kind: "set" | "dict" | "list"; items: ExecArrayItem[]; id: number; elementTypeName?: string; sourcePath?: string; ownerRef?: number; dictProp?: string; }
 interface ExecArrayItem { key: number; value: ExecValue; }
-// `handlerSlot` (client data layer, slice 4): the render-slot path active when an onClick handler closure was
-// built (stamped by executeTag), so a click can report the handler's (slot, fn-id) to the server's action-miss
-// harvest — the slot path is reset per render, so it must be captured on the closure at build time. Set only on
-// onClick handler closures; absent on every other fn.
 interface ExecFunction { type: "fn"; fn: CodeFunction; scope: ExecScope; capturedAmbient?: AmbientFrame | null; handlerSlot?: string; }
 interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
-// A data context: staged field writes over a parent, read-through. live = the root (writes go
-// live); a sub-context (ctx.new) stages until commit. Staged keyed by object reference.
-// `status`/`pending` are the form-Save lifecycle (rendered by the generic ObjectForm as inline
-// feedback). status is "idle" | "saving" | "saved" (a reject clears back to "idle" — the failure
-// surfaces via the global error banner, not inline); pending counts THIS ctx's in-flight
-// commit sends. CLIENT-only — the C# twin renders once, so ctx.status there is always "idle" and
-// these fields don't exist server-side (the property read returns the literal "idle"). `id` is a
-// unique handle so a `ctx.status` READ records a reactive var dep (`ctxStatus:<id>`) and a status
-// WRITE invalidates it — that is what makes the rendered indicator re-render on the WS ack (the
-// memoized component view is otherwise served from cache, since ctx is not a tracked object).
-// `conflicts` (M13 slice 6): the same-field collisions from the LAST rejected commit of this ctx — CLIENT-
-// only (a conflict lands on a WS reply; the C# twin renders once and returns the EMPTY list). Each entry is
-// a `{ field: text }` ExecObject the generic form's coarse banner iterates; empty = no conflict (the common
-// case). Read via `ctx.conflicts` (records a `ctxConflicts:<id>` var dep so the banner re-renders when a
-// reply populates it), written by setCtxConflicts from ws.ts on a conflict reply / a resolution.
 interface ExecCtx { type: "ctx"; id: number; staged: Map<ExecObject, Map<string, ExecValue>>; creates: StagedCreate[]; parent: ExecCtx | null; live: boolean; status: string; pending: number; conflicts: ExecValue[]; notifyChange?: () => void; }
-// The ExecCtx currently executing (root ambient, or a ctx.new() child) — set in rootAmbient/ctx.new so the
-// mutation hooks can drive the top-level micro-bracket via ctx.notifyChange (ws.ts reads this; same program).
 let currentExecCtx: ExecCtx | null = null;
-// A staged create (atomic-commit Step B): a transient (id<0) draft `set.add`/`setRef`'d under a staging
-// ctx. The draft is held BY REFERENCE — its fields are read at commit time, never snapshotted, so a later
-// `draft.x = …` (an edit landing on the draft's own live props, since id<0 bypasses staging) is included.
-// `join` is where the draft attaches; at the outermost commit the create mints and the join applies, all
-// in one atomic `commit` op. Beside `staged` (the edits to EXISTING objects).
 interface StagedCreate { draft: ExecObject; join: CreateJoin; }
-// Where a staged create attaches: into a set (set.add) or onto a single reference field (setRef). The
-// element/target TYPE is resolved SERVER-SIDE from the join (the set's element type, or the prop's declared
-// type) — the wire carries no client-asserted type, so the floor can't be widened by a crafted type.
 type CreateJoin = { kind: "set"; set: ExecArray } | { kind: "ref"; parent: ExecObject; prop: string };
-// Unique per-ctx id (form-Save feedback) — namespaced into the var-dep key, so it never collides with
-// an object id or a real var name.
 let nextCtxId = 1;
 function ctxStatusDep(ctxId: number): string { return "ctxStatus:" + ctxId; }
-// Set a ctx's Save status and invalidate the reactive var dep so any rendered ctx.status indicator
-// re-renders. The single write path for the lifecycle — called from the commit branch (codeExec) and
-// the WS ack/reject (ws.ts), so every transition both updates the value and triggers the re-render.
 function setCtxStatus(ctx: ExecCtx, status: string): void {
     ctx.status = status;
     invalidateVar(ctxStatusDep(ctx.id));
 }
-// The reactive var dep a `ctx.conflicts` READ records (M13 slice 6) — namespaced by ctx id like the status
-// dep, so a conflict reply that sets/clears conflicts re-renders the memoized component view that reads it.
 function ctxConflictsDep(ctxId: number): string { return "ctxConflicts:" + ctxId; }
-// Set a ctx's same-field conflicts and invalidate the var dep so the coarse banner (which reads
-// `ctx.conflicts`) re-renders. The single write path — called from ws.ts on a conflict reply (populate) and
-// on a keep-mine/take-theirs resolution (clear to []). Mirrors setCtxStatus exactly.
 function setCtxConflicts(ctx: ExecCtx, conflicts: ExecValue[]): void {
     ctx.conflicts = conflicts;
     invalidateVar(ctxConflictsDep(ctx.id));
