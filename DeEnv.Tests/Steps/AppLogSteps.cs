@@ -116,8 +116,8 @@ public sealed class AppLogSteps(InstanceContext ctx)
         CaptureBaseline();
         var id = AliasId(alias);
         ctx.Store!.CommitBatch([], [
-            new FieldWriteMutation(id, "title", new TextValue(title)),
-            new FieldWriteMutation(id, "count", new IntValue(count)),
+            new FieldSetMutation(id, "title", new TextValue(title)),
+            new FieldSetMutation(id, "count", new IntValue(count)),
         ]);
     }
 
@@ -138,9 +138,9 @@ public sealed class AppLogSteps(InstanceContext ctx)
     public void WhenThreeWrites()
     {
         var id = AliasId("n");
-        ctx.Store!.CommitBatch([], [new FieldWriteMutation(id, "title", new TextValue("W1"))]);
-        ctx.Store!.CommitBatch([], [new FieldWriteMutation(id, "title", new TextValue("W2"))]);
-        ctx.Store!.CommitBatch([], [new FieldWriteMutation(id, "title", new TextValue("W3"))]);
+        ctx.Store!.CommitBatch([], [new FieldSetMutation(id, "title", new TextValue("W1"))]);
+        ctx.Store!.CommitBatch([], [new FieldSetMutation(id, "title", new TextValue("W2"))]);
+        ctx.Store!.CommitBatch([], [new FieldSetMutation(id, "title", new TextValue("W3"))]);
     }
 
     // ── the log/genesis files, read directly off disk ───────────────────────────────────────────
@@ -299,7 +299,7 @@ public sealed class AppLogSteps(InstanceContext ctx)
         ctx.Store.CommitBatch(
             [new CommitCreate(-1, "Person",
                 new ObjectValue(new Dictionary<string, NodeValue> { ["name"] = new TextValue("Alan") }))],
-            [new SetLinkMutation(setId, -1)]);
+            [new SetAddMutation(setId, -1)]);
 
         // set removal: drop Person 3 out of Db.people.
         ctx.Store.RemoveFromSet(setId, 3);
@@ -362,7 +362,7 @@ public sealed class AppLogSteps(InstanceContext ctx)
         // log write — no FieldWrite/Create for it. Post-restart this member advance is DISJOINT from a field
         // edit (set ops commute), so a later same-object title edit AUTO-MERGES (the auto-merge scenario).
         var setId = FindDbSetId("notes");
-        ctx.Store!.CommitBatch([], [new SetLinkMutation(setId, AliasId(alias))]);
+        ctx.Store!.CommitBatch([], [new SetAddMutation(setId, AliasId(alias))]);
     }
 
     [When("note {string} title is changed by a batch")]
@@ -370,7 +370,7 @@ public sealed class AppLogSteps(InstanceContext ctx)
     {
         // A FIELD write on the note: advances THAT note's title version via a FieldWrite log entry — the
         // durable attribution the boot rebuild must restore so a later stale SAME-FIELD edit is caught.
-        ctx.Store!.CommitBatch([], [new FieldWriteMutation(AliasId(alias), "title", new TextValue("Interleaved edit"))]);
+        ctx.Store!.CommitBatch([], [new FieldSetMutation(AliasId(alias), "title", new TextValue("Interleaved edit"))]);
     }
 
     [Then("a commit editing note {string} title at the remembered stale base is rejected as a conflict")]
@@ -382,7 +382,7 @@ public sealed class AppLogSteps(InstanceContext ctx)
         var store = _reopenedStore!;
         await Assert.That(() =>
             store.CommitBatch(
-                [], [new FieldWriteMutation(AliasId(alias), "title", new TextValue("Stale edit"))], _staleBase))
+                [], [new FieldSetMutation(AliasId(alias), "title", new TextValue("Stale edit"))], _staleBase))
             .Throws<ConflictException>();
     }
 
@@ -393,7 +393,7 @@ public sealed class AppLogSteps(InstanceContext ctx)
         // membership change is disjoint from the title field, so no conflict — the commit applies.
         var store = _reopenedStore!;
         store.CommitBatch(
-            [], [new FieldWriteMutation(AliasId(alias), "title", new TextValue("Merged edit"))], _staleBase);
+            [], [new FieldSetMutation(AliasId(alias), "title", new TextValue("Merged edit"))], _staleBase);
         await Assert.That(store.ReadById(AliasId(alias))!.Value.Fields.Fields["title"])
             .IsEqualTo((NodeValue)new TextValue("Merged edit"));
     }

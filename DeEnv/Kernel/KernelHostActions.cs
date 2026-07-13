@@ -387,7 +387,7 @@ public sealed class KernelHostActions(
     // Atomicity: the WHOLE commit is ONE CommitBatch (review fix 3) — the Commit row create + its
     // `design`/`parent` ref-links + its link into `db.commits` + EVERY idMap dict entry + the branch-head
     // advance, all-or-none under the store's single lock and ONE log entry (a design commit IS a single
-    // atomic changeset in the data log). The idMap rides the batch via DictWriteMutation (server-side-only
+    // atomic changeset in the data log). The idMap rides the batch via DictAddMutation (server-side-only
     // vocabulary — see its doc); there is no longer a follow-up write phase and thus no crash window where
     // a commit is observable in db.commits with a partial idMap or no head. The batch's own all-or-none
     // guarantee (throws untouched-on-failure) is the linearization point — atomicity is structural now.
@@ -531,20 +531,20 @@ public sealed class KernelHostActions(
         // observable half-written.
         var mutations = new List<CommitMutation>
         {
-            new RefLinkMutation(commitTemp, "design", designId, "Design"),
+            new RefSetMutation(commitTemp, "design", designId, "Design"),
         };
         if (store.SingleReferenceTargetType("Commit", "by") == "User"
             && StoreWriteContext.Get().Who is { } authorId
             && store.ReadById(authorId) is ("User", _))
-            mutations.Add(new RefLinkMutation(commitTemp, "by", authorId, "User"));
+            mutations.Add(new RefSetMutation(commitTemp, "by", authorId, "User"));
         if (parentHeadId.HasValue)
-            mutations.Add(new RefLinkMutation(commitTemp, "parent", parentHeadId, "Commit"));
+            mutations.Add(new RefSetMutation(commitTemp, "parent", parentHeadId, "Commit"));
         if (mergeParentHeadId.HasValue)
-            mutations.Add(new RefLinkMutation(commitTemp, "mergeParent", mergeParentHeadId, "Commit"));
-        mutations.Add(new SetLinkMutation(commitsSetId, commitTemp));
+            mutations.Add(new RefSetMutation(commitTemp, "mergeParent", mergeParentHeadId, "Commit"));
+        mutations.Add(new SetAddMutation(commitsSetId, commitTemp));
         foreach (var (path, id) in snap.IdMap)
-            mutations.Add(new DictWriteMutation(commitTemp, "idMap", new TextValue(path), new IntValue(id)));
-        mutations.Add(new RefLinkMutation(branchId, "head", commitTemp, "Commit"));
+            mutations.Add(new DictAddMutation(commitTemp, "idMap", new TextValue(path), new IntValue(id)));
+        mutations.Add(new RefSetMutation(branchId, "head", commitTemp, "Commit"));
 
         var result = store.CommitBatch(creates, mutations);
         return result.Creates.First(c => c.TempId == commitTemp).RealId;
@@ -580,10 +580,10 @@ public sealed class KernelHostActions(
             });
             if (store.ReadById(id) is ("MetaType", _))
             {
-                typeMutations.Add(new FieldWriteMutation(id, "name", new TextValue(type.Name)));
-                typeMutations.Add(new FieldWriteMutation(id, "baseType", new TextValue(BaseTypeWordOf(type.BaseType))));
-                typeMutations.Add(new FieldWriteMutation(id, "values", new TextValue(string.Join(",", type.Values ?? []))));
-                typeMutations.Add(new FieldWriteMutation(id, "order", new IntValue(index * 10)));
+                typeMutations.Add(new FieldSetMutation(id, "name", new TextValue(type.Name)));
+                typeMutations.Add(new FieldSetMutation(id, "baseType", new TextValue(BaseTypeWordOf(type.BaseType))));
+                typeMutations.Add(new FieldSetMutation(id, "values", new TextValue(string.Join(",", type.Values ?? []))));
+                typeMutations.Add(new FieldSetMutation(id, "order", new IntValue(index * 10)));
             }
             else
                 typeCreates.Add(new CommitCreate(-id, "MetaType", fields, id));
@@ -619,12 +619,12 @@ public sealed class KernelHostActions(
                 });
                 if (store.ReadById(id) is ("MetaProp", _))
                 {
-                    propMutations.Add(new FieldWriteMutation(id, "name", new TextValue(prop.Name)));
-                    propMutations.Add(new FieldWriteMutation(id, "type", new TextValue(prop.Type)));
-                    propMutations.Add(new FieldWriteMutation(id, "cardinality", new TextValue(CardinalityWordOf(prop.Cardinality))));
-                    propMutations.Add(new FieldWriteMutation(id, "keyType", new TextValue(prop.KeyType ?? "")));
-                    propMutations.Add(new FieldWriteMutation(id, "multiline", new BoolValue(prop.Multiline)));
-                    propMutations.Add(new FieldWriteMutation(id, "order", new IntValue(index * 10)));
+                    propMutations.Add(new FieldSetMutation(id, "name", new TextValue(prop.Name)));
+                    propMutations.Add(new FieldSetMutation(id, "type", new TextValue(prop.Type)));
+                    propMutations.Add(new FieldSetMutation(id, "cardinality", new TextValue(CardinalityWordOf(prop.Cardinality))));
+                    propMutations.Add(new FieldSetMutation(id, "keyType", new TextValue(prop.KeyType ?? "")));
+                    propMutations.Add(new FieldSetMutation(id, "multiline", new BoolValue(prop.Multiline)));
+                    propMutations.Add(new FieldSetMutation(id, "order", new IntValue(index * 10)));
                 }
                 else
                     propCreates.Add(new CommitCreate(-id, "MetaProp", fields, id));
@@ -757,10 +757,10 @@ public sealed class KernelHostActions(
         var linkMutations = new List<CommitMutation>();
         foreach (var (typeTemp, propTemps) in typeTempToProps)
         {
-            linkMutations.Add(new SetLinkMutation(typesSetId, byTemp[typeTemp].RealId));
+            linkMutations.Add(new SetAddMutation(typesSetId, byTemp[typeTemp].RealId));
             var propsSetId = byTemp[typeTemp].Collections["props"].Id;
             foreach (var propTemp in propTemps)
-                linkMutations.Add(new SetLinkMutation(propsSetId, byTemp[propTemp].RealId));
+                linkMutations.Add(new SetAddMutation(propsSetId, byTemp[propTemp].RealId));
         }
 
         const int branchTemp = -1;
@@ -768,13 +768,13 @@ public sealed class KernelHostActions(
         {
             new CommitCreate(branchTemp, "Branch", new ObjectValue(new Dictionary<string, NodeValue> { ["name"] = new TextValue(name) })),
         };
-        linkMutations.Add(new SetLinkMutation(branchesSetId, branchTemp));
-        linkMutations.Add(new RefLinkMutation(branchTemp, "workingCopy", designRealId, "Design"));
+        linkMutations.Add(new SetAddMutation(branchesSetId, branchTemp));
+        linkMutations.Add(new RefSetMutation(branchTemp, "workingCopy", designRealId, "Design"));
         // The new branch STARTS at the source branch's current head (a fresh branch is a checkout of
         // whatever the source already built) — a source branch with no commits yet leaves `head` unset,
         // same as EnsureMainBranches leaves a design's first main branch before its baseline commit.
         if (sourceBranch.Fields.Fields.GetValueOrDefault("head") is ReferenceValue { TargetId: { } sourceHeadId })
-            linkMutations.Add(new RefLinkMutation(branchTemp, "head", sourceHeadId, "Commit"));
+            linkMutations.Add(new RefSetMutation(branchTemp, "head", sourceHeadId, "Commit"));
 
         store.CommitBatch(branchCreates, linkMutations);
         return null;
@@ -950,7 +950,7 @@ public sealed class KernelHostActions(
     //      REMOVED from that set (RemoveFromSet — CommitBatch has no remove case, so removals run as their
     //      own small store calls, GC-collecting the dropped row afterward).
     //   2. Order: written directly onto each row's `order` FIELD from the merged type/prop list's target-
-    //      spine position (FieldWriteMutation) — the actual renormalization, not just an in-memory order.
+    //      spine position (FieldSetMutation) — the actual renormalization, not just an in-memory order.
     //   3. Code/access/initialData: reprint the merged Common/Ui/Rules into text (AppPrint.Print over a
     //      types-less/initialData-less description, then DesignerSeed.SplitSections pulls just
     //      common/ui/access) and write all four Design text fields via WriteField.
@@ -986,10 +986,10 @@ public sealed class KernelHostActions(
             var order = i * 10;
             if (existingTypesByLineage.TryGetValue(mt.Lineage, out var existingId))
             {
-                typeMutations.Add(new FieldWriteMutation(existingId, "name", new TextValue(mt.Type.Name)));
-                typeMutations.Add(new FieldWriteMutation(existingId, "baseType", new TextValue(BaseTypeWordOf(mt.Type.BaseType))));
-                typeMutations.Add(new FieldWriteMutation(existingId, "values", new TextValue(string.Join(",", mt.Type.Values ?? []))));
-                typeMutations.Add(new FieldWriteMutation(existingId, "order", new IntValue(order)));
+                typeMutations.Add(new FieldSetMutation(existingId, "name", new TextValue(mt.Type.Name)));
+                typeMutations.Add(new FieldSetMutation(existingId, "baseType", new TextValue(BaseTypeWordOf(mt.Type.BaseType))));
+                typeMutations.Add(new FieldSetMutation(existingId, "values", new TextValue(string.Join(",", mt.Type.Values ?? []))));
+                typeMutations.Add(new FieldSetMutation(existingId, "order", new IntValue(order)));
             }
             else
             {
@@ -1049,12 +1049,12 @@ public sealed class KernelHostActions(
                 var order = i * 10;
                 if (existingPropsByLineage.TryGetValue(mp.Lineage, out var existingPropId))
                 {
-                    propMutations.Add(new FieldWriteMutation(existingPropId, "name", new TextValue(mp.Prop.Name)));
-                    propMutations.Add(new FieldWriteMutation(existingPropId, "type", new TextValue(mp.Prop.Type)));
-                    propMutations.Add(new FieldWriteMutation(existingPropId, "cardinality", new TextValue(CardinalityWordOf(mp.Prop.Cardinality))));
-                    propMutations.Add(new FieldWriteMutation(existingPropId, "keyType", new TextValue(mp.Prop.KeyType ?? "")));
-                    propMutations.Add(new FieldWriteMutation(existingPropId, "multiline", new BoolValue(mp.Prop.Multiline)));
-                    propMutations.Add(new FieldWriteMutation(existingPropId, "order", new IntValue(order)));
+                    propMutations.Add(new FieldSetMutation(existingPropId, "name", new TextValue(mp.Prop.Name)));
+                    propMutations.Add(new FieldSetMutation(existingPropId, "type", new TextValue(mp.Prop.Type)));
+                    propMutations.Add(new FieldSetMutation(existingPropId, "cardinality", new TextValue(CardinalityWordOf(mp.Prop.Cardinality))));
+                    propMutations.Add(new FieldSetMutation(existingPropId, "keyType", new TextValue(mp.Prop.KeyType ?? "")));
+                    propMutations.Add(new FieldSetMutation(existingPropId, "multiline", new BoolValue(mp.Prop.Multiline)));
+                    propMutations.Add(new FieldSetMutation(existingPropId, "order", new IntValue(order)));
                 }
                 else
                 {
@@ -1319,8 +1319,8 @@ public sealed class KernelHostActions(
                 ["name"] = new TextValue("main"),
             }))],
             [
-                new SetLinkMutation(branchesSetId, branchTemp),
-                new RefLinkMutation(branchTemp, "workingCopy", designId, "Design"),
+                new SetAddMutation(branchesSetId, branchTemp),
+                new RefSetMutation(branchTemp, "workingCopy", designId, "Design"),
             ]);
         var branchId = result.Creates.First(c => c.TempId == branchTemp).RealId;
         return store.ReadById(branchId) is ("Branch", var fields) ? (branchId, fields) : null;

@@ -697,12 +697,12 @@ public sealed class KernelHost(
             };
             var mutations = new List<CommitMutation>
             {
-                new RefLinkMutation(commitTemp, "design", designId, "Design"),
-                new SetLinkMutation(setId, commitTemp),
+                new RefSetMutation(commitTemp, "design", designId, "Design"),
+                new SetAddMutation(setId, commitTemp),
             };
             foreach (var (path, id) in snapshot.IdMap)
-                mutations.Add(new DictWriteMutation(commitTemp, "idMap", new TextValue(path), new IntValue(id)));
-            mutations.Add(new RefLinkMutation(branchId, "head", commitTemp, "Commit"));
+                mutations.Add(new DictAddMutation(commitTemp, "idMap", new TextValue(path), new IntValue(id)));
+            mutations.Add(new RefSetMutation(branchId, "head", commitTemp, "Commit"));
             // `parent` stays unset — a baseline commit is the root of its design's history.
 
             var result = store.CommitBatch(creates, mutations);

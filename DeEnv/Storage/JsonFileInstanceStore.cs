@@ -236,7 +236,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
 
     // Every extent-object id a log entry's writes touched — the attribution set _objectVersions needs.
     // SetLink/SetUnlink map to their MEMBER id: live code stamps the linked member's version on every set
-    // op (BumpVersion(memberId) in AddToSet/RemoveFromSet + CommitBatch's SetLinkMutation) and the
+    // op (BumpVersion(memberId) in AddToSet/RemoveFromSet + CommitBatch's SetAddMutation) and the
     // baseVersion guard checks it (CommitBatch's RequireFresh(memberRef)), so a boot rebuild that dropped
     // the member here would let a stale commit editing that member — rejected before a restart — be
     // ACCEPTED after one (a missed clobber across restart, the exact failure residual #2's rebuild exists
@@ -552,18 +552,18 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             foreach (var mutation in mutations)
                 switch (mutation)
                 {
-                    case SetLinkMutation(var setId, var memberRef):
+                    case SetAddMutation(var setId, var memberRef):
                         if (FindSetNode(setId) is null) throw new InvalidOperationException($"No set with id {setId}.");
                         RequireResolvable(memberRef);
                         break;
-                    case RefLinkMutation(var ownerRef, _, var targetRef, _):
+                    case RefSetMutation(var ownerRef, _, var targetRef, _):
                         RequireResolvable(ownerRef);
                         if (targetRef is { } t) RequireResolvable(t);
                         break;
-                    case FieldWriteMutation(var objectRef, _, _):
+                    case FieldSetMutation(var objectRef, _, _):
                         RequireResolvable(objectRef);
                         break;
-                    case DictWriteMutation(var ownerRef, _, _, _):
+                    case DictAddMutation(var ownerRef, _, _, _):
                         RequireResolvable(ownerRef);
                         break;
                     case SetLinkByPropMutation(var ownerRef, var prop, var memberRef):
@@ -581,7 +581,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                             is not { Cardinality: Cardinality.Set })
                             throw new InvalidOperationException($"'{ownerType}' has no set prop '{prop}'.");
                         break;
-                    case SetUnlinkMutation(var setId, var memberRef):
+                    case SetRemoveMutation(var setId, var memberRef):
                         if (FindSetNode(setId) is null) throw new InvalidOperationException($"No set with id {setId}.");
                         RequireResolvable(memberRef);
                         break;
@@ -626,8 +626,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             if (baseVersion is { } bv)
             {
                 // My field writes per existing object (field → the value I'm writing, for the `mine` cell). A
-                // FieldWriteMutation and a RefLinkMutation each write ONE named field; a SetLinkMutation writes
-                // no field (commutes — excluded); a DictWriteMutation can't reach here from a wire commit
+                // FieldSetMutation and a RefSetMutation each write ONE named field; a SetAddMutation writes
+                // no field (commutes — excluded); a DictAddMutation can't reach here from a wire commit
                 // (HandleCommit builds none) and dict conflicts would be per-(prop,key), so it is left
                 // unanalyzed — commitDesign, its only source, passes no baseVersion anyway.
                 var myFields = new Dictionary<int, Dictionary<string, StoredValue?>>();
@@ -639,10 +639,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 foreach (var mutation in mutations)
                     switch (mutation)
                     {
-                        case RefLinkMutation(var ownerRef, var prop, var targetRef, var targetType):
+                        case RefSetMutation(var ownerRef, var prop, var targetRef, var targetType):
                             MyWrite(ownerRef, prop, targetRef is { } t ? new StoredRef(targetType, t) : null);
                             break;
-                        case FieldWriteMutation(var objectRef, var prop, var value):
+                        case FieldSetMutation(var objectRef, var prop, var value):
                             MyWrite(objectRef, prop, new StoredLeaf(value));
                             break;
                     }
@@ -722,7 +722,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             foreach (var mutation in mutations)
                 switch (mutation)
                 {
-                    case SetUnlinkMutation(var setId, var memberRef):
+                    case SetRemoveMutation(var setId, var memberRef):
                     {
                         var set = FindSetNode(setId)
                             ?? throw new InvalidOperationException($"No set with id {setId}.");
@@ -769,7 +769,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             foreach (var mutation in mutations)
                 switch (mutation)
                 {
-                    case SetLinkMutation(var setId, var memberRef):
+                    case SetAddMutation(var setId, var memberRef):
                     {
                         var memberId = ResolveRefId(memberRef);
                         var set = FindSetNode(setId)
@@ -784,8 +784,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         // Link a member into the owner's `prop` SET, addressed by (owner, prop) rather than a
                         // raw set id — so the owner may be a fresh create just minted above (its nested set ids
                         // are on the extent entry BuildFields minted, unreachable by any NodePath yet). Resolve
-                        // the owner (tempId→real like RefLinkMutation), read its `prop` StoredSet, then link
-                        // through the SAME shared core the SetLinkMutation arm and the standalone AddToSet use.
+                        // the owner (tempId→real like RefSetMutation), read its `prop` StoredSet, then link
+                        // through the SAME shared core the SetAddMutation arm and the standalone AddToSet use.
                         var ownerId = ResolveRefId(ownerRef);
                         var owner = ExtentEntryById(ownerId)
                             ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
@@ -803,7 +803,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             foreach (var mutation in mutations)
                 switch (mutation)
                 {
-                    case SetUnlinkMutation(var setId, var memberRef):
+                    case SetRemoveMutation(var setId, var memberRef):
                     {
                         var memberId = ResolveRefId(memberRef);
                         var set = FindSetNode(setId)
@@ -815,7 +815,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     {
                         // Unlink a member from the owner's `prop` SET, addressed by (owner, prop) — the set
                         // analog of SetLinkByPropMutation. Resolve the owner (tempId→real), read its `prop`
-                        // StoredSet, then unlink through the SAME shared core the SetUnlinkMutation arm and the
+                        // StoredSet, then unlink through the SAME shared core the SetRemoveMutation arm and the
                         // standalone RemoveFromSet use.
                         var ownerId = ResolveRefId(ownerRef);
                         var owner = ExtentEntryById(ownerId)
@@ -826,7 +826,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         UnlinkMember(set, memberId);
                         break;
                     }
-                    case RefLinkMutation(var ownerRef, var prop, var targetRef, var targetType):
+                    case RefSetMutation(var ownerRef, var prop, var targetRef, var targetType):
                     {
                         var entry = ExtentEntryById(ResolveRefId(ownerRef))
                             ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
@@ -843,7 +843,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         BumpVersion(ResolveRefId(ownerRef));
                         break;
                     }
-                    case FieldWriteMutation(var objectRef, var prop, var value):
+                    case FieldSetMutation(var objectRef, var prop, var value):
                     {
                         var entry = ExtentEntryById(ResolveRefId(objectRef))
                             ?? throw new InvalidOperationException($"No object with id {objectRef}.");
@@ -852,7 +852,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         BumpVersion(ResolveRefId(objectRef));
                         break;
                     }
-                    case DictWriteMutation(var ownerRef, var prop, var key, var value):
+                    case DictAddMutation(var ownerRef, var prop, var key, var value):
                     {
                         // Upsert a dict entry on the owner's `prop` dictionary field, by id (the owner may be a
                         // fresh create just minted above, unreachable by any NodePath yet). Same DictSet log-write
@@ -919,7 +919,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             // JSON rewrite (AGENTS.md ground rule #5) with no engine to schedule a background sweep safely.
             // When the storage-engine milestone lands (AGENTS.md ground rule #8 / VISION pillar 5), promote
             // this to a background/scheduled sweep — this single call site is the only place to move.
-            if (mutations.Any(m => m is SetUnlinkMutation or SetUnlinkByPropMutation
+            if (mutations.Any(m => m is SetRemoveMutation or SetUnlinkByPropMutation
                                   or DictRemoveMutation))
                 CollectGarbage();
 
@@ -2359,7 +2359,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     }
 
     // The dictionary node on an extent entry addressed BY ID + prop name (the id-addressed sibling of
-    // EnsureDict, for CommitBatch's DictWriteMutation — the owner may be a fresh create no NodePath can
+    // EnsureDict, for CommitBatch's DictAddMutation — the owner may be a fresh create no NodePath can
     // reach yet). Every object minted through MintObject already carries an empty StoredDict for each
     // declared dict prop (BuildFields), so the create-if-missing branch only fires for a legacy field a
     // migration introduced; when it DOES mint, that structural change is logged (a FieldWrite introducing

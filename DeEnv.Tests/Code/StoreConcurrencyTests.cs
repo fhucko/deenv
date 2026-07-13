@@ -58,7 +58,7 @@ public sealed class StoreConcurrencyTests
         }
     }
 
-    // M13 slice 3 review fix 3: a CommitBatch carrying a DictWriteMutation (the server-side vocabulary
+    // M13 slice 3 review fix 3: a CommitBatch carrying a DictAddMutation (the server-side vocabulary
     // sys.commitDesign uses to fold a Commit's idMap into the SAME atomic batch as the Commit's creation)
     // applies ALL-OR-NONE and logs as EXACTLY ONE entry. Proven at the store level, independent of the
     // designer wiring: create an object with a dict prop + upsert two dict entries on it in one batch, and
@@ -89,9 +89,9 @@ public sealed class StoreConcurrencyTests
             store.CommitBatch(
                 [new CommitCreate(boxTemp, "Box", new ObjectValue(new Dictionary<string, NodeValue>()))],
                 [
-                    new SetLinkMutation(boxesSetId, boxTemp),
-                    new DictWriteMutation(boxTemp, "tags", new TextValue("a"), new IntValue(11)),
-                    new DictWriteMutation(boxTemp, "tags", new TextValue("b"), new IntValue(22)),
+                    new SetAddMutation(boxesSetId, boxTemp),
+                    new DictAddMutation(boxTemp, "tags", new TextValue("a"), new IntValue(11)),
+                    new DictAddMutation(boxTemp, "tags", new TextValue("b"), new IntValue(22)),
                 ]);
 
             // (a) both dict entries persisted on the created Box.
@@ -252,8 +252,8 @@ public sealed class StoreConcurrencyTests
                     new CommitCreate(-2, "Item", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("b") })),
                 ],
                 [
-                    new SetLinkMutation(nodesSetId, -1),
-                    new SetLinkMutation(nodesSetId, -2),
+                    new SetAddMutation(nodesSetId, -1),
+                    new SetAddMutation(nodesSetId, -2),
                 ]);
 
             var ids = store.ReadExtent("Item").Keys.OrderBy(k => k).ToList();
@@ -267,8 +267,8 @@ public sealed class StoreConcurrencyTests
             store.CommitBatch(
                 [new CommitCreate(-3, "Item", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("wrapper") }))],
                 [
-                    new SetLinkMutation(nodesSetId, -3),          // wrapper → db.nodes (reachable)
-                    new SetUnlinkMutation(nodesSetId, aId),       // 'a' leaves db.nodes  (unlink, pass 2)
+                    new SetAddMutation(nodesSetId, -3),          // wrapper → db.nodes (reachable)
+                    new SetRemoveMutation(nodesSetId, aId),       // 'a' leaves db.nodes  (unlink, pass 2)
                     new SetLinkByPropMutation(-3, "children", aId), // 'a' enters wrapper.children (link, pass 1)
                 ]);
 
@@ -294,7 +294,7 @@ public sealed class StoreConcurrencyTests
             var verAfterMove = store.CurrentVersion;
             await Assert.That(() => store.CommitBatch(
                 [],
-                [new SetUnlinkMutation(999999, aId)]))
+                [new SetRemoveMutation(999999, aId)]))
                 .Throws<InvalidOperationException>();
             await Assert.That(store.CurrentVersion).IsEqualTo(verAfterMove); // version unchanged
             await Assert.That(((SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!).Members.ContainsKey(bId)).IsTrue();
@@ -332,11 +332,11 @@ public sealed class StoreConcurrencyTests
             // Seed one item (real id 1) into db.nodes, remember the version.
             store.CommitBatch(
                 [new CommitCreate(-1, "Item", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("a") }))],
-                [new SetLinkMutation(nodesSetId, -1)]);
+                [new SetAddMutation(nodesSetId, -1)]);
             var verBefore = store.CurrentVersion;
 
             // Try to unlink item 2, which was NEVER linked into db.nodes → must throw, store untouched.
-            await Assert.That(() => store.CommitBatch([], [new SetUnlinkMutation(nodesSetId, 2)]))
+            await Assert.That(() => store.CommitBatch([], [new SetRemoveMutation(nodesSetId, 2)]))
                 .Throws<InvalidOperationException>();
             await Assert.That(store.CurrentVersion).IsEqualTo(verBefore);
             var nodes = (SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!;
@@ -353,7 +353,7 @@ public sealed class StoreConcurrencyTests
     }
 
     // T2 (unified-commit): `DictRemoveMutation` removes ONE dict entry (by key) on the owner's dictionary
-    // prop, mirroring DictWriteMutation's owner/prop addressing. Proven at the store level: upsert two dict
+    // prop, mirroring DictAddMutation's owner/prop addressing. Proven at the store level: upsert two dict
     // entries, remove one, assert it is gone and the other survives.
     [Test]
     public async Task A_dict_remove_mutation_drops_one_dict_entry_and_keeps_the_rest()
@@ -377,9 +377,9 @@ public sealed class StoreConcurrencyTests
             store.CommitBatch(
                 [new CommitCreate(boxTemp, "Box", new ObjectValue(new Dictionary<string, NodeValue>()))],
                 [
-                    new SetLinkMutation(boxesSetId, boxTemp),
-                    new DictWriteMutation(boxTemp, "tags", new TextValue("a"), new IntValue(11)),
-                    new DictWriteMutation(boxTemp, "tags", new TextValue("b"), new IntValue(22)),
+                    new SetAddMutation(boxesSetId, boxTemp),
+                    new DictAddMutation(boxTemp, "tags", new TextValue("a"), new IntValue(11)),
+                    new DictAddMutation(boxTemp, "tags", new TextValue("b"), new IntValue(22)),
                 ]);
             var boxId = store.ReadExtent("Box").Keys.Single();
 
@@ -424,12 +424,12 @@ public sealed class StoreConcurrencyTests
 
             store.CommitBatch(
                 [new CommitCreate(-1, "Item", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("a") }))],
-                [new SetLinkMutation(nodesSetId, -1)]);
+                [new SetAddMutation(nodesSetId, -1)]);
             var itemId = store.ReadExtent("Item").Keys.Single();
             var verBefore = store.CurrentVersion;
 
             // The item IS in db.nodes → unlink must succeed.
-            store.CommitBatch([], [new SetUnlinkMutation(nodesSetId, itemId)]);
+            store.CommitBatch([], [new SetRemoveMutation(nodesSetId, itemId)]);
             await Assert.That(store.CurrentVersion).IsEqualTo(verBefore + 1);
             var nodes = (SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!;
             await Assert.That(nodes.Members.ContainsKey(itemId)).IsFalse();

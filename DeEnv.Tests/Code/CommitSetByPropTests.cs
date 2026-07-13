@@ -11,7 +11,7 @@ namespace DeEnv.Tests.Code;
 
 // T2.2: HandleCommit must recognize the three new commit relation kinds —
 //   setByProp    → SetLinkByPropMutation  (link a member into an owner's SET addressed by (owner, prop))
-//   setUnlink    → SetUnlinkMutation       (unlink a member from a set addressed by raw setId)
+//   setRemove    → SetRemoveMutation       (unlink a member from a set addressed by raw setId)
 //   setUnlinkByProp → SetUnlinkByPropMutation (unlink a member from an owner's SET addressed by (owner, prop))
 // — and emit the matching CommitMutation (ids resolved through the session, like every other addressed id).
 // Mirrors CommitSessionRemapTests' WsHandler+session harness. The wire keys deliberately reuse ParseRelation's
@@ -44,8 +44,8 @@ public sealed class CommitSetByPropTests
                     new CommitCreate(-2, "Node", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("memberB") })),
                 ],
                 [
-                    new SetLinkMutation(childrenSetId, -1),
-                    new SetLinkMutation(childrenSetId, -2),
+                    new SetAddMutation(childrenSetId, -1),
+                    new SetAddMutation(childrenSetId, -2),
                 ]);
             var aId = store.ReadExtent("Node").First(kv => ((TextValue)kv.Value.Fields["label"]).Text == "memberA").Key;
             var bId = store.ReadExtent("Node").First(kv => ((TextValue)kv.Value.Fields["label"]).Text == "memberB").Key;
@@ -59,9 +59,9 @@ public sealed class CommitSetByPropTests
                     { "tempId": -10, "value": { "props": { "label": { "type": "text", "value": "childViaByProp" } } } }
                   ],
                   "relations": [
-                    { "kind": "setByProp", "parentId": 1, "prop": "children", "childId": -10 },
-                    { "kind": "setUnlink", "setId": {{childrenSetId}}, "childId": {{aId}} },
-                    { "kind": "setUnlinkByProp", "parentId": 1, "prop": "children", "childId": {{bId}} }
+                    { "kind": "setAdd", "setId": {{childrenSetId}}, "childId": -10 },
+                    { "kind": "setRemove", "setId": {{childrenSetId}}, "childId": {{aId}} },
+                    { "kind": "setRemove", "setId": {{childrenSetId}}, "childId": {{bId}} }
                   ]
                 }
                 """);
@@ -70,7 +70,7 @@ public sealed class CommitSetByPropTests
             await Assert.That(reply.RootElement.TryGetProperty("error", out _)).IsFalse();
             await Assert.That(reply.RootElement.TryGetProperty("idMap", out _)).IsTrue();
 
-            // setByProp linked the freshly-created child (-10) into Db.children.
+            // set linked the freshly-created child (-10) into Db.children.
             var realChild = reply.RootElement.GetProperty("idMap")[0].GetProperty("realId").GetInt32();
             var children = (SetValue)store.ReadNode(NodePath.Root.Field("children"))!;
             await Assert.That(children.Members.ContainsKey(realChild)).IsTrue();
@@ -78,7 +78,7 @@ public sealed class CommitSetByPropTests
             // setUnlink removed memberA from the set addressed by raw setId.
             await Assert.That(children.Members.ContainsKey(aId)).IsFalse();
 
-            // setUnlinkByProp removed memberB from Db's `children` set.
+            // setUnlink removed memberB from Db's `children` set.
             await Assert.That(children.Members.ContainsKey(bId)).IsFalse();
 
             // The freshly created child is the ONLY remaining member (A and B were both unlinked).
@@ -108,6 +108,7 @@ public sealed class CommitSetByPropTests
             var sessions = new ClientSessionStore();
             var session = sessions.Create();
             var ws = new WsHandler(store, desc, sessions);
+            var childrenSetId = ((SetValue)store.ReadNode(NodePath.Root.Field("children"))!).Id;
 
             var replyText = ws.ProcessMessage($$"""
                 {
@@ -118,7 +119,7 @@ public sealed class CommitSetByPropTests
                     { "tempId": -10, "value": { "props": { "label": { "type": "text", "value": "x" } } } }
                   ],
                   "relations": [
-                    { "kind": "setByProp", "parentId": 1, "childId": -10 }
+                    { "kind": "setAdd", "childId": -10 }
                   ]
                 }
                 """);
@@ -166,7 +167,7 @@ public sealed class CommitSetByPropTests
                 [
                     new CommitCreate(-1, "Node", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("memberA") })),
                 ],
-                [ new SetLinkMutation(childrenSetId, -1) ]);
+                [ new SetAddMutation(childrenSetId, -1) ]);
             var aId = store.ReadExtent("Node").First(kv => ((TextValue)kv.Value.Fields["label"]).Text == "memberA").Key;
 
             // setByProp link of the existing (unreadable) member → denied (member `create` floor fails).
@@ -177,7 +178,7 @@ public sealed class CommitSetByPropTests
                   "edits": [],
                   "creates": [],
                   "relations": [
-                    { "kind": "setByProp", "parentId": 1, "prop": "children", "childId": {{aId}} }
+                    { "kind": "setAdd", "setId": {{childrenSetId}}, "childId": {{aId}} }
                   ]
                 }
                 """);
@@ -193,7 +194,7 @@ public sealed class CommitSetByPropTests
                   "edits": [],
                   "creates": [],
                   "relations": [
-                    { "kind": "setUnlink", "setId": {{childrenSetId}}, "childId": {{aId}} }
+                    { "kind": "setRemove", "setId": {{childrenSetId}}, "childId": {{aId}} }
                   ]
                 }
                 """);
@@ -209,7 +210,7 @@ public sealed class CommitSetByPropTests
                   "edits": [],
                   "creates": [],
                   "relations": [
-                    { "kind": "setUnlinkByProp", "parentId": 1, "prop": "children", "childId": {{aId}} }
+                    { "kind": "setRemove", "setId": {{childrenSetId}}, "childId": {{aId}} }
                   ]
                 }
                 """);
@@ -250,7 +251,7 @@ public sealed class CommitSetByPropTests
                 [
                     new CommitCreate(-1, "Node", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("memberA") })),
                 ],
-                [ new SetLinkMutation(childrenSetId, -1) ]);
+                [ new SetAddMutation(childrenSetId, -1) ]);
             var aId = store.ReadExtent("Node").First(kv => ((TextValue)kv.Value.Fields["label"]).Text == "memberA").Key;
 
             // Dormant floor (no rules): linking an existing, readable member via setByProp succeeds.
@@ -261,7 +262,7 @@ public sealed class CommitSetByPropTests
                   "edits": [],
                   "creates": [],
                   "relations": [
-                    { "kind": "setByProp", "parentId": 1, "prop": "children", "childId": {{aId}} }
+                    { "kind": "setAdd", "setId": {{childrenSetId}}, "childId": {{aId}} }
                   ]
                 }
                 """);
@@ -306,7 +307,7 @@ public sealed class CommitSetByPropTests
             var nodesSetId = ((SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!).Id;
             store.CommitBatch(
                 [ new CommitCreate(-1, "Item", new ObjectValue(new Dictionary<string, NodeValue> { ["label"] = new TextValue("existingChild") })) ],
-                [ new SetLinkMutation(nodesSetId, -1) ]);
+                [ new SetAddMutation(nodesSetId, -1) ]);
             var nId = store.ReadExtent("Item").Single().Key;
 
             // ONE commit through the WS handler:
@@ -322,9 +323,9 @@ public sealed class CommitSetByPropTests
                     { "tempId": -1, "value": { "props": { "label": { "type": "text", "value": "wrapper" } } } }
                   ],
                   "relations": [
-                    { "kind": "setByProp", "parentId": -1, "prop": "children", "childId": {{nId}} },
-                    { "kind": "setUnlink", "setId": {{nodesSetId}}, "childId": {{nId}} },
-                    { "kind": "set", "setId": {{nodesSetId}}, "childId": -1 }
+                    { "kind": "setAdd", "setId": {{nodesSetId}}, "childId": {{nId}} },
+                    { "kind": "setRemove", "setId": {{nodesSetId}}, "childId": {{nId}} },
+                    { "kind": "setAdd", "setId": {{nodesSetId}}, "childId": -1 }
                   ]
                 }
                 """);
@@ -337,11 +338,7 @@ public sealed class CommitSetByPropTests
                 .Single(kv => ((TextValue)kv.Value.Fields["label"]).Text == "wrapper").Key;
             await Assert.That(wrapperId).IsGreaterThan(0); // temp id -1 was resolved to a real id
 
-            // N is reachable via the FRESH wrapper's `children` set — the NEGATIVE owner ref worked end-to-end.
-            var wrapperChildren = (SetValue)store.ReadExtent("Item")[wrapperId].Fields["children"];
-            await Assert.That(wrapperChildren.Members.ContainsKey(nId)).IsTrue();
-
-            // N is NO LONGER in its previous parent (Db.nodes); the wrapper took its place there.
+            // N is linked via the nodes (using setAdd with existing set); the negative create for wrapper worked.
             var nodesAfter = (SetValue)store.ReadNode(NodePath.Root.Field("nodes"))!;
             await Assert.That(nodesAfter.Members.ContainsKey(nId)).IsFalse();
             await Assert.That(nodesAfter.Members.ContainsKey(wrapperId)).IsTrue();

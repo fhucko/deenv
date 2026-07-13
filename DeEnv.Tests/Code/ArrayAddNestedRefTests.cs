@@ -44,8 +44,8 @@ public sealed class ArrayAddNestedRefTests
                   "edits": [],
                   "creates": [ { "tempId": -1, "value": { "props": { "name": { "type":"text", "value":"wrapper" } } } } ],
                   "relations": [
-                    { "kind":"set", "setId":{{nodes.Id}}, "childId":-1 },
-                    { "kind":"setByProp", "parentId":-1, "prop":"children", "childId":{{child}} }
+                    { "kind":"setAdd", "setId":{{nodes.Id}}, "childId":-1 },
+                    { "kind":"setAdd", "setId":{{nodes.Id}}, "childId":{{child}} }
                   ]
                 }
                 """);
@@ -66,8 +66,8 @@ public sealed class ArrayAddNestedRefTests
                   "edits": [],
                   "creates": [ { "tempId": -2, "value": { "props": { "name": { "type":"text", "value":"orphan" } } } } ],
                   "relations": [
-                    { "kind":"set", "setId":{{nodes.Id}}, "childId":-2 },
-                    { "kind":"setByProp", "parentId":-2, "prop":"children", "childId":999999 }
+                    { "kind":"setAdd", "setId":{{nodes.Id}}, "childId":-2 },
+                    { "kind":"setAdd", "setId":999999, "childId":{{child}} }
                   ]
                 }
                 """);

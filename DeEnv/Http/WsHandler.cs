@@ -360,7 +360,7 @@ public sealed class WsHandler
                 // (kept out of the ParsedRelation union on purpose — unlinks have no typed child). Skip them
                 // here so ParseRelation (which only knows "set"/"ref") does not reject them as malformed.
                 if (relEl.TryGetProperty("kind", out var skipKindEl) && skipKindEl.GetString() is
-                    "setByProp" or "setUnlink" or "setUnlinkByProp" or "dictRemove" or "dictAdd")
+                    "setRemove" or "dictRemove" or "dictAdd")
                     continue;
                 if (ParseRelation(relEl, session) is not { } rel)
                     return Error("commit relation is malformed.");
@@ -423,7 +423,7 @@ public sealed class WsHandler
 
                 if (tpKind == "dictAdd")
                 {
-                    // T6a.1: `dictAdd` (write ONE dict entry) — the wire-accepted counterpart of DictWriteMutation
+                    // `dictAdd` (add ONE dict entry) — the wire counterpart of DictAddMutation
                     // (formerly server-only). Scalar value only (object entries keep the standalone
                     // WriteDictionaryEntry path). Mirrors dictRemove's parse + the edit floor of HandleWrite's
                     // dict-entry gate. owner/prop/key address the entry; value is a scalar leaf { type, value }.
@@ -446,7 +446,7 @@ public sealed class WsHandler
                         : "text";
                     // The entry's VALUE must fit the dict prop's element type. Scalar entries use the scalar
                     // base type; object entries (dict of Config) are now a commit case too — T6b-4a extends
-                    // DictWriteMutation's apply arm to mint a StoredObject (mirrors WriteDictionaryEntryInto).
+                    // DictAddMutation's apply arm to mint a StoredObject (mirrors WriteDictionaryEntryInto).
                     var dPropDef = dOwnerRef >= 0 && _store.ReadById(dOwnerRef) is { } dOwnerVal
                         ? _desc.FindType(dOwnerVal.TypeName)?.Props?.FirstOrDefault(p => p.Name == dProp)
                         : null;
@@ -479,92 +479,29 @@ public sealed class WsHandler
                     if (dOwnerRef >= 0 && _store.ReadById(dOwnerRef) is { } dOwnerObj)
                         RequireWrite(floor, "edit", dOwnerObj.TypeName,
                             Code.AccessFloor.ScalarObject(dOwnerObj.TypeName, dOwnerRef, dOwnerObj.Fields, _desc));
-                    extraMutations.Add(new DictWriteMutation(dOwnerRef, dProp, ParseKey(dKeyStr, dKeyType), dValue));
+                    extraMutations.Add(new DictAddMutation(dOwnerRef, dProp, ParseKey(dKeyStr, dKeyType), dValue));
                     continue;
                 }
 
-                if (tpKind is not ("setByProp" or "setUnlink" or "setUnlinkByProp")) continue;
+                if (tpKind is not "setRemove") continue;
 
                 if (!relEl.TryGetProperty("childId", out var childEl) || childEl.ValueKind != JsonValueKind.Number)
                     return Error("commit relation is malformed.");
                 var childRef = Resolve(session, childEl.GetInt32());
 
-                switch (relEl.TryGetProperty("kind", out var kindEl) ? kindEl.GetString() : null)
+                if (tpKind == "setRemove")
                 {
-                    case "setByProp":
-                    {
-                        if ((relEl.TryGetProperty("prop", out var propEl) ? propEl.GetString() : null) is not { } prop)
-                            return Error("commit relation is malformed.");
-                        if (!relEl.TryGetProperty("parentId", out var pEl) || pEl.ValueKind != JsonValueKind.Number)
-                            return Error("commit relation is malformed.");
-                        var ownerRaw = pEl.GetInt32();
-                        var ownerRef = Resolve(session, ownerRaw);
-
-                        // A transient (negative) child is typed from the owner's SET prop — the wire asserts no
-                        // type a client could forge. An owner whose type isn't yet known (a tempId not yet seen
-                        // by the first pass) is left untyped here; SetLinkByPropMutation's own pre-validation in
-                        // the store covers that case (errors before applying). One-join-per-create still holds:
-                        // two relations naming the same transient child fail the whole commit.
-                        if (childRef < 0)
-                        {
-                            var ownerType = ownerRef < 0
-                                ? (createTypeByTempId.TryGetValue(ownerRef, out var t) ? t : null)
-                                : _store.ReadById(ownerRef)?.TypeName;
-                            if (ownerType is { } ot
-                                && _desc.FindType(ot)?.Props?.FirstOrDefault(p => p.Name == prop)
-                                    is { Cardinality: Cardinality.Set } setProp)
-                            {
-                                if (!createTypeByTempId.TryAdd(childRef, setProp.Type))
-                                    return Error($"Commit create {childRef} has more than one relation.");
-                            }
-                        }
-                        // Access floor (mirrors the first-pass set/ref link): the OWNER is edited (its set
-                        // prop changes) and a real (positive-id) MEMBER being linked is a `create` (forgery +
-                        // denial — you must be able to read the object you attach). A transient (<0) member
-                        // already passed the create gate in the createBatch path above.
-                        if (_store.ReadById(ownerRef) is { } setByPropOwner)
-                            RequireWrite(floor, "edit", setByPropOwner.TypeName,
-                                Code.AccessFloor.ScalarObject(setByPropOwner.TypeName, ownerRef, setByPropOwner.Fields, _desc));
-                        if (childRef >= 0 && _store.ReadById(childRef) is { } setByPropLinked)
-                            RequireWrite(floor, "create", setByPropLinked.TypeName,
-                                Code.AccessFloor.ScalarObject(setByPropLinked.TypeName, childRef, setByPropLinked.Fields, _desc));
-                        extraMutations.Add(new SetLinkByPropMutation(ownerRef, prop, childRef));
-                        break;
-                    }
-                    case "setUnlink":
-                    {
-                        if (!relEl.TryGetProperty("setId", out var setEl) || setEl.ValueKind != JsonValueKind.Number)
-                            return Error("commit relation is malformed.");
-                        var setId = Resolve(session, setEl.GetInt32());
-                        // Access floor: removing a member from a set is a `delete` of THAT member, exactly as the
-                        // former `arrayRemove` live op — you must be able to delete the object you detach (forgery
-                        // + denial). No owner handle here — the member's delete floor alone is the guard (mirrors
-                        // HandleArrayRemove's RequireWrite "delete" on the member, not an owner edit gate).
-                        if (childRef >= 0 && _store.ReadById(childRef) is { } setUnlinked)
-                            RequireWrite(floor, "delete", setUnlinked.TypeName,
-                                Code.AccessFloor.ScalarObject(setUnlinked.TypeName, childRef, setUnlinked.Fields, _desc));
-                        extraMutations.Add(new SetUnlinkMutation(setId, childRef));
-                        break;
-                    }
-                    case "setUnlinkByProp":
-                    {
-                        if ((relEl.TryGetProperty("prop", out var propEl) ? propEl.GetString() : null) is not { } prop)
-                            return Error("commit relation is malformed.");
-                        if (!relEl.TryGetProperty("parentId", out var pEl) || pEl.ValueKind != JsonValueKind.Number)
-                            return Error("commit relation is malformed.");
-                        var ownerRaw = pEl.GetInt32();
-                        var ownerRef = Resolve(session, ownerRaw);
-                        // Access floor: you must be able to read the object you detach (forgery + denial), and
-                        // the OWNER is edited (its set prop changes) — mirrors the setByProp link side.
-                        if (_store.ReadById(ownerRef) is { } setUnlinkByPropOwner)
-                            RequireWrite(floor, "edit", setUnlinkByPropOwner.TypeName,
-                                Code.AccessFloor.ScalarObject(setUnlinkByPropOwner.TypeName, ownerRef, setUnlinkByPropOwner.Fields, _desc));
-                        if (childRef >= 0 && _store.ReadById(childRef) is { } setUnlinked)
-                            RequireWrite(floor, "create", setUnlinked.TypeName,
-                                Code.AccessFloor.ScalarObject(setUnlinked.TypeName, childRef, setUnlinked.Fields, _desc));
-                        extraMutations.Add(new SetUnlinkByPropMutation(ownerRef, prop, childRef));
-                        break;
-                    }
+                    if (!relEl.TryGetProperty("setId", out var setEl) || setEl.ValueKind != JsonValueKind.Number)
+                        return Error("commit relation is malformed.");
+                    var setId = Resolve(session, setEl.GetInt32());
+                    // Access floor: removing a member from a set is a `delete` of THAT member, exactly as the
+                    // former `arrayRemove` live op — you must be able to delete the object you detach (forgery
+                    // + denial). No owner handle here — the member's delete floor alone is the guard (mirrors
+                    // HandleArrayRemove's RequireWrite "delete" on the member, not an owner edit gate).
+                    if (childRef >= 0 && _store.ReadById(childRef) is { } setUnlinked)
+                        RequireWrite(floor, "delete", setUnlinked.TypeName,
+                            Code.AccessFloor.ScalarObject(setUnlinked.TypeName, childRef, setUnlinked.Fields, _desc));
+                    extraMutations.Add(new SetRemoveMutation(setId, childRef));
                 }
             }
 
@@ -631,7 +568,7 @@ public sealed class WsHandler
 
             // Password hash chokepoint: same as HandleObjectPropChange — a blank password is no change.
             if (HashLeaf(hit.TypeName, prop, leaf) is { } hashed)
-                mutations.Add(new FieldWriteMutation(objectId, prop, hashed));
+                mutations.Add(new FieldSetMutation(objectId, prop, hashed));
         }
 
         // ── relation write-floor + the link mutations. A set link = a `create` of the member type (whether
@@ -649,7 +586,7 @@ public sealed class WsHandler
                     // a transient (childRef<0) member was already create-gated above (createBatch); childType
                     // is its element type, used only to type the link in the store.
                     _ = childType;
-                    mutations.Add(new SetLinkMutation(setId, childRef));
+                    mutations.Add(new SetAddMutation(setId, childRef));
                     break;
                 }
                 case ParsedRefRelation(var parentId, var prop, var childRef, var childType):
@@ -661,7 +598,7 @@ public sealed class WsHandler
                     if (childRef >= 0 && _store.ReadById(childRef) is { } linkedRef)
                         RequireWrite(floor, "create", linkedRef.TypeName,
                             Code.AccessFloor.ScalarObject(linkedRef.TypeName, childRef, linkedRef.Fields, _desc));
-                    mutations.Add(new RefLinkMutation(parentId, prop, childRef, childType));
+                    mutations.Add(new RefSetMutation(parentId, prop, childRef, childType));
                     break;
                 }
             }
@@ -733,9 +670,9 @@ public sealed class WsHandler
         _ => null,
     };
 
-    // Parse a commit relation (atomic-commit Step B). A set relation `{ kind:"set", setId, childId }` links a
-    // member into a set; a ref relation `{ kind:"ref", parentId, prop, childId }` points a single reference at
-    // a target. childId may be a transient create's NEGATIVE id (resolved to its real id in the store batch) or
+    // Parse a commit relation (atomic-commit Step B). A setAdd relation `{ kind:"setAdd", setId, childId }` links a
+    // member into a set; a refSet relation `{ kind:"refSet", parentId, prop, childId }` points a single reference at
+    // a target (childId null clears). childId may be a transient create's NEGATIVE id (resolved to its real id in the store batch) or
     // an existing positive id (resolved through the session's transient-id remap, like every other addressed
     // id). ChildType — the create's declared TYPE — is derived from the link itself (a set's element type, a
     // ref prop's declared target type), so the WIRE never asserts a type a client could forge. Null if malformed.
@@ -745,7 +682,7 @@ public sealed class WsHandler
         if (!el.TryGetProperty("childId", out var childEl) || childEl.ValueKind != JsonValueKind.Number) return null;
         var childRef = Resolve(session, childEl.GetInt32()); // a tempId stays (unknown → unchanged); a real id remaps
 
-        if (kind == "set")
+        if (kind == "setAdd")
         {
             if (!el.TryGetProperty("setId", out var setEl) || setEl.ValueKind != JsonValueKind.Number) return null;
             var setId = Resolve(session, setEl.GetInt32());
@@ -753,7 +690,7 @@ public sealed class WsHandler
             if (elementType is null) return null; // no such set
             return new ParsedSetRelation(setId, childRef, elementType);
         }
-        if (kind == "ref")
+        if (kind == "refSet")
         {
             if (!el.TryGetProperty("parentId", out var pEl) || pEl.ValueKind != JsonValueKind.Number) return null;
             if ((el.TryGetProperty("prop", out var propEl) ? propEl.GetString() : null) is not { } prop) return null;

@@ -967,7 +967,7 @@ public sealed class PublishSteps
         var store = new JsonFileInstanceStore(_targetDataPath, published);
         try
         {
-            store.CommitBatch([], [new FieldWriteMutation(_staleObjectId, "title", new TextValue("stale edit"))],
+            store.CommitBatch([], [new FieldSetMutation(_staleObjectId, "title", new TextValue("stale edit"))],
                 baseVersion: _staleBaseVersion);
             _staleCommitError = null;
         }
@@ -1079,13 +1079,13 @@ public sealed class PublishSteps
         };
         var mutations = new List<CommitMutation>
         {
-            new RefLinkMutation(temp, "design", _designId, "Design"),
-            new SetLinkMutation(commitsSetId, temp),
+            new RefSetMutation(temp, "design", _designId, "Design"),
+            new SetAddMutation(commitsSetId, temp),
         };
-        if (parent is { } p) mutations.Add(new RefLinkMutation(temp, "parent", p, "Commit"));
-        if (mergeParent is { } mp) mutations.Add(new RefLinkMutation(temp, "mergeParent", mp, "Commit"));
+        if (parent is { } p) mutations.Add(new RefSetMutation(temp, "parent", p, "Commit"));
+        if (mergeParent is { } mp) mutations.Add(new RefSetMutation(temp, "mergeParent", mp, "Commit"));
         foreach (var (path, id) in snap.IdMap)
-            mutations.Add(new DictWriteMutation(temp, "idMap", new TextValue(path), new IntValue(id)));
+            mutations.Add(new DictAddMutation(temp, "idMap", new TextValue(path), new IntValue(id)));
         return store.CommitBatch(creates, mutations).Creates.Single().RealId;
     }
 

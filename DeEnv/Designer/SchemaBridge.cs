@@ -1028,7 +1028,7 @@ public static class SchemaBridge
 
         // Clear the `ui` text field so the S1a gate accepts the structured render as the authority — in the
         // SAME batch, so the rows and the cleared text land together (the atomicity that unbricks a crash).
-        mutations.Add(new FieldWriteMutation(designId, "ui", new TextValue("")));
+        mutations.Add(new FieldSetMutation(designId, "ui", new TextValue("")));
 
         store.CommitBatch(creates, mutations);
     }

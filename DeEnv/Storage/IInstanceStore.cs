@@ -52,7 +52,7 @@ public interface IInstanceStore
     // the same stale base could both pass the check before either applies.
     //
     // FIELD-LEVEL (M13 slice 6): a stale base is NOT rejected outright. For each EXISTING object this batch
-    // WRITES A FIELD OF (a FieldWriteMutation's ObjectRef, a RefLinkMutation's OwnerRef — a SetLinkMutation
+    // WRITES A FIELD OF (a FieldSetMutation's ObjectRef, a RefSetMutation's OwnerRef — a SetAddMutation
     // writes no field, so set add/remove COMMUTE and never conflict; a fresh create is exempt) whose
     // last-modified version > baseVersion, the batch's written fields are compared against the fields the
     // interleaved commits (log entries with seq > baseVersion) wrote to that SAME object:
@@ -195,11 +195,11 @@ public sealed record CommitCreate(int TempId, string TypeName, ObjectValue Field
 // OBJECT REFERENCE: a positive real id, or a negative tempId resolved to the create's just-minted real id.
 public abstract record CommitMutation;
 // Add a member (MemberRef) to the set with intrinsic id SetId.
-public sealed record SetLinkMutation(int SetId, int MemberRef) : CommitMutation;
+public sealed record SetAddMutation(int SetId, int MemberRef) : CommitMutation;
 // Point OwnerRef's single-reference prop at TargetRef (null = clear); TargetType is the prop's declared type.
-public sealed record RefLinkMutation(int OwnerRef, string Prop, int? TargetRef, string TargetType) : CommitMutation;
+public sealed record RefSetMutation(int OwnerRef, string Prop, int? TargetRef, string TargetType) : CommitMutation;
 // Write a single scalar leaf field on the object with intrinsic id ObjectRef.
-public sealed record FieldWriteMutation(int ObjectRef, string Prop, NodeValue Value) : CommitMutation;
+public sealed record FieldSetMutation(int ObjectRef, string Prop, NodeValue Value) : CommitMutation;
 // Upsert a SCALAR dictionary entry (Key → Value) into the `Prop` dictionary field of the object with
 // intrinsic id OwnerRef. SERVER-SIDE VOCABULARY ONLY (M13 slice 3, review fix 3): this exists so
 // sys.commitDesign can carry a Commit's `idMap` entries in the SAME atomic CommitBatch as the Commit's
@@ -207,18 +207,18 @@ public sealed record FieldWriteMutation(int ObjectRef, string Prop, NodeValue Va
 // `commit` op carries it from clients (T6a.1): the `dictAdd` relation parses owner/prop/key/value and emits
 // this mutation — so ctx.commit can write a dict entry, not just the standalone WriteDictionaryEntry. Value
 // is a scalar leaf (the idMap values are ints); object-valued dict entries are not a commit-batch case (the
-// standalone WriteDictionaryEntry keeps that path). Batch semantics mirror FieldWriteMutation: the owner must
+// standalone WriteDictionaryEntry keeps that path). Batch semantics mirror FieldSetMutation: the owner must
 // resolve (pre-validated), staleness + version attribution key on OwnerRef, and it logs the same DictSet the
 // standalone WriteDictionaryEntry emits (so fsck/replay stay total).
-public sealed record DictWriteMutation(int OwnerRef, string Prop, NodeValue Key, NodeValue Value) : CommitMutation;
-// Link MemberRef into OwnerRef's `Prop` SET — the set analog of RefLinkMutation (which does the same for a
+public sealed record DictAddMutation(int OwnerRef, string Prop, NodeValue Key, NodeValue Value) : CommitMutation;
+// Link MemberRef into OwnerRef's `Prop` SET — the set analog of RefSetMutation (which does the same for a
 // single-ref prop). OwnerRef/MemberRef are object references (positive real id, or a negative tempId resolved
 // to a create's just-minted real id). Unlike SetLinkMutation (raw SetId), this addresses the set by (owner,
 // prop) — so a child can link into a just-created parent's set within ONE batch (the parent's nested set id
-// isn't known until minted). SERVER-SIDE ONLY (like DictWriteMutation): constructed by SchemaBridge.ImportRender
+// isn't known until minted). SERVER-SIDE ONLY (like DictAddMutation): constructed by SchemaBridge.ImportRender
 // and WsHandler.HandleAddSetMember (the addEntry mint+link batching fix — an EXISTING owner there, not a
 // fresh one, but every extent object already carries a StoredSet for each set prop its type declares —
-// BuildFields' own invariant), never from a wire `commit` message (that op builds SetLinkMutation instead,
+// BuildFields' own invariant), never from a wire `commit` message (that op builds SetAddMutation instead,
 // by raw setId). Owner's `Prop` must be a set prop (pre-validated by the caller).
 public sealed record SetLinkByPropMutation(int OwnerRef, string Prop, int MemberRef) : CommitMutation;
 // Remove a member (MemberRef) from the set with intrinsic id SetId. The batch-analog of
@@ -226,19 +226,19 @@ public sealed record SetLinkByPropMutation(int OwnerRef, string Prop, int Member
 // ONE changeset, instead of a standalone GC'd unlink that (a) runs its own Save + GC and (b) leaves a
 // transient double-removal window between the two saves. MemberRef is an OBJECT REFERENCE (positive real
 // id, or a negative tempId resolved to a create's just-minted real id — a move targets EXISTING members,
-// so usually positive). Symmetric to SetLinkMutation (raw setId). SERVER-CONSTRUCTED today (WsHandler
+// so usually positive). Symmetric to SetAddMutation (raw setId). SERVER-CONSTRUCTED today (WsHandler
 // builds it from the wire in T2); the wire op that carries it lands there.
-public sealed record SetUnlinkMutation(int SetId, int MemberRef) : CommitMutation;
+public sealed record SetRemoveMutation(int SetId, int MemberRef) : CommitMutation;
 // Unlink MemberRef from OwnerRef's `Prop` SET, addressed by (owner, prop) — the set analog of
 // SetLinkByPropMutation (which links by the same key). So a child can be unlinked from a JUST-CREATED
 // parent's set within ONE batch (the parent's nested set id isn't known until minted). OwnerRef/MemberRef
 // are object references (positive real id, or a negative tempId resolved to a create's just-minted real
 // id). SERVER-SIDE ONLY like SetLinkByPropMutation: constructed by SchemaBridge / WsHandler, never yet
-// from a raw wire message (the wire carries SetUnlinkMutation by raw setId — T2 wires the (owner,prop) form).
+// from a raw wire message (the wire carries SetRemoveMutation by raw setId — T2 wires the (owner,prop) form).
 public sealed record SetUnlinkByPropMutation(int OwnerRef, string Prop, int MemberRef) : CommitMutation;
 // Remove a SCALAR dictionary entry (Key) from the `Prop` dictionary field of the object with intrinsic id
-// OwnerRef — the removal counterpart of DictWriteMutation (same shape, minus Value). SERVER-SIDE VOCABULARY
-// ONLY like DictWriteMutation: constructed by WsHandler in T3; the wire `commit` op carries it from clients
+// OwnerRef — the removal counterpart of DictAddMutation (same shape, minus Value). SERVER-SIDE VOCABULARY
+// ONLY like DictAddMutation: constructed by WsHandler in T3; the wire `commit` op carries it from clients
 // there. OwnerRef is an object reference (positive real id, or a negative tempId resolved to a create's
 // just-minted real id). Owner's `Prop` must be a dictionary prop (pre-validated by the caller, see the
 // DictRemoveMutation arm in CommitBatch's prevalidation pass). The apply arm lands in T2; here it is only

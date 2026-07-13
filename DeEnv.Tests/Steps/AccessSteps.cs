@@ -374,11 +374,12 @@ public sealed class AccessSteps(InstanceContext ctx)
     [When("the {word} writes {string} of {string} {int} to {string} via the path write op")]
     public void WhenPathWritesField(string _actor, string prop, string _type, int memberId, string value)
     {
-        // The `write` op carries a BARE scalar value (ws.ts sends `bareScalar(value)`), not the
-        // { type, value } envelope objectPropChange uses — title is text, so a bare JSON string.
+        // Path write on a set member scalar is now expressed as a commit edit (live "write" op retired).
+        // Uses the member's object id directly (same target as the old path seam). Matches the format
+        // used by the regular "edits the ... to set ..." step.
         var (ws, clientId) = BoundWs();
         _writeReply = ws.ProcessMessage(
-            $$"""{ "op": "write", "clientId": "{{clientId}}", "path": "/milestones/{{memberId}}/{{prop}}", "value": "{{value}}" }""");
+            $$"""{ "op": "commit", "clientId": "{{clientId}}", "edits": [ { "objectId": {{memberId}}, "prop": "{{prop}}", "value": { "type": "text", "value": "{{value}}" } } ], "creates": [], "relations": [] }""");
     }
 
     // delete: an arrayRemove dropping the seeded Milestone from the Db.milestones set.
