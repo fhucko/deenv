@@ -898,17 +898,27 @@ function connectWs(): void {
                 });
         },
         pathWrite: (obj, prop, path, value, before) => {
-            // A dictionary entry's field has no extent id, so it persists by PATH: the `write`
-            // op sets the leaf at the entry's path (an object entry's field at path/prop, a
-            // scalar entry's value at path). DeserializeLeaf reads a BARE value.
+            // T6b-4c: a dictionary entry's field edit is a WHOLE-ENTRY `dictAdd` rewrite (the entry IS a
+            // value — model-faithful). owner/prop/key come from the entry's R7 addressing (T6b-4b). An object
+            // entry ships { props: {...} } (dictEntryWireValue); a scalar entry ships the tagged scalar. The
+            // local optimistic update (obj.props[prop] = value) still runs in undo/redo so the UI reflects the
+            // edit before the commit round-trips. The live `write` op is retired.
             const msgId = nextWsMsgId++;
-            recordMutation({
-                msgId,
-                undo: () => { obj.props[prop] = before; invalidateProp(obj.id, prop); },
-                redo: () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); },
-                roots: [obj],
-            });
-            wsSend({ op: "write", id: msgId, clientId: uiStatic.clientId, path, value: bareScalar(value) });
+            const undo = () => { obj.props[prop] = before; invalidateProp(obj.id, prop); };
+            const redo = () => { before = obj.props[prop]; obj.props[prop] = value; invalidateProp(obj.id, prop); };
+            const roots: ExecValue[] = [obj];
+            const wholeEntry = dictEntryWireValue(obj);
+            const dictAdd = () => ({ kind: "dictAdd", owner: obj.ownerRef, prop: obj.dictProp, key: obj.key, value: wholeEntry });
+            if (commitRelations != null) {
+                recordMutation({ msgId, undo, redo, roots });
+                commitRelations.push({ wire: dictAdd(), journalMsgId: msgId, undo, redo, roots });
+                return;
+            }
+            recordMutation({ msgId, undo, redo, roots });
+            wsHooks.beginCommit(currentExecCtx);
+            try {
+                commitRelations!.push({ wire: dictAdd(), journalMsgId: msgId, undo, redo, roots });
+            } finally { wsHooks.endCommit(); }
         },
         setRef: (obj, prop, value, before) => {
             const msgId = nextWsMsgId++;
@@ -1044,29 +1054,43 @@ function connectWs(): void {
         // → the reply is an error → the journal rolls the optimistic row back automatically.
         entryAdd: (arr, item, key, value) => {
             const msgId = nextWsMsgId++;
-            recordMutation({
-                msgId,
-                undo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
-                redo: () => { if (!arr.items.includes(item)) arr.items.push(item); invalidateMember(arr.id); },
-                roots: [arr, item.value],
-            });
-            // addEntry's DeserializeValue/DeserializeLeaf reads BARE values at the top level
-            // (an object entry's fields as { name: rawScalar }, a scalar entry as the raw
-            // scalar) — not the tagged/`props` shape the id-addressed ops use.
-            const wireValue = value.type === "object" ? bareFieldsOf(value) : bareScalar(value);
-            wsSend({ op: "addEntry", id: msgId, clientId: uiStatic.clientId,
-                path: arr.sourcePath, key, value: wireValue });
+            const undo = () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); };
+            const redo = () => { if (!arr.items.includes(item)) arr.items.push(item); invalidateMember(arr.id); };
+            const roots: ExecValue[] = [arr, item.value];
+            // T6b-4c: route to the id-addressed `dictAdd` commit relation (owner/prop from the dict array's
+            // R7 addressing, set in T6b-4b). Object entries ship as { props: {...} } (objectOf); scalar entries
+            // ship tagged { type, value } (scalarOf) — the shape dictAdd's parse expects.
+            const wireValue = value.type === "object" ? objectOf(value) : scalarOf(value);
+            const dictAdd = () => ({ kind: "dictAdd", owner: arr.ownerRef, prop: arr.dictProp, key, value: wireValue });
+            if (commitRelations != null) {
+                recordMutation({ msgId, undo, redo, roots });
+                commitRelations.push({ wire: dictAdd(), journalMsgId: msgId, undo, redo, roots });
+                return;
+            }
+            recordMutation({ msgId, undo, redo, roots });
+            wsHooks.beginCommit(currentExecCtx);
+            try {
+                commitRelations!.push({ wire: dictAdd(), journalMsgId: msgId, undo, redo, roots });
+            } finally { wsHooks.endCommit(); }
         },
         entryRemove: (arr, item, key, index) => {
             const msgId = nextWsMsgId++;
-            recordMutation({
-                msgId,
-                undo: () => { arr.items.splice(Math.min(index, arr.items.length), 0, item); invalidateMember(arr.id); },
-                redo: () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); },
-                roots: [arr, item.value], // item.value is detached on removal — see arrayRemove
-            });
-            wsSend({ op: "removeEntry", id: msgId, clientId: uiStatic.clientId,
-                path: arr.sourcePath, key });
+            const undo = () => { arr.items.splice(Math.min(index, arr.items.length), 0, item); invalidateMember(arr.id); };
+            const redo = () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); };
+            const roots: ExecValue[] = [arr, item.value];
+            // T6b-4c: route to the id-addressed `dictRemove` commit relation (R7 addressing). The live
+            // `removeEntry` op is retired.
+            const dictRemove = () => ({ kind: "dictRemove", owner: arr.ownerRef, prop: arr.dictProp, key });
+            if (commitRelations != null) {
+                recordMutation({ msgId, undo, redo, roots });
+                commitRelations.push({ wire: dictRemove(), journalMsgId: msgId, undo, redo, roots });
+                return;
+            }
+            recordMutation({ msgId, undo, redo, roots });
+            wsHooks.beginCommit(currentExecCtx);
+            try {
+                commitRelations!.push({ wire: dictRemove(), journalMsgId: msgId, undo, redo, roots });
+            } finally { wsHooks.endCommit(); }
         },
         // A SERVER-ONLY host action (sys.publish): the server alone runs the effect, so this stages
         // NOTHING locally and pushes NO journal entry (there is no optimistic state to roll back). It
@@ -1936,4 +1960,16 @@ function bareFieldsOf(value: ExecValue): { [name: string]: string | number | boo
 function bareScalar(value: ExecValue): string | number | boolean {
     if (value.type === "int" || value.type === "bool" || value.type === "text") return value.value;
     return "";
+}
+
+// T6b-4c: the whole-entry wire value for a `dictAdd` rewrite of a dictionary entry (used by pathWrite,
+// which edits ONE field but persists the whole entry — a dict entry IS a value). Excludes the reserved
+// __key; scalar fields ship tagged (scalarOf, the { type, value } shape dictAdd's parse reads); nested
+// objects/arrays are skipped (mirrors ExecObjectValue allowSets:true — an entry's sets link by a separate
+// relation, never inline). A scalar entry (scalarEntry) ships the tagged scalar of its `value` prop.
+function dictEntryWireValue(obj: ExecObject): object {
+    if (obj.scalarEntry) return scalarOf(obj.props["value"]);
+    const entryCopy: ExecObject = { ...obj, props: { ...obj.props } };
+    delete entryCopy.props["__key"];
+    return objectOf(entryCopy);
 }

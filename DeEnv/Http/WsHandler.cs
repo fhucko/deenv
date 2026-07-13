@@ -88,30 +88,6 @@ public sealed record WsRequest
 // bumps it uniformly); a client that only learned the version from `commit` acks would silently drift
 // behind its OWN live writes (e.g. a create's arrayAdd, then a later ctx.commit() editing that SAME
 // just-created object) and its next commit would be wrongly rejected as stale against its own history.
-public sealed record WriteResponse
-{
-    public string Op => "write";
-    public required string Path { get; init; }
-    public bool Ok => true;
-    public required int NewVersion { get; init; }
-}
-
-public sealed record AddEntryResponse
-{
-    public string Op => "addEntry";
-    public required string Path { get; init; }
-    public bool Ok => true;
-    public required string Key { get; init; }
-    public required int NewVersion { get; init; }
-}
-
-public sealed record RemoveEntryResponse
-{
-    public string Op => "removeEntry";
-    public required string Path { get; init; }
-    public bool Ok => true;
-    public required int NewVersion { get; init; }
-}
 
 public sealed record HelloResponse
 {
@@ -408,9 +384,6 @@ public sealed class WsHandler
 
             var result = op switch
             {
-                "write"             => HandleWrite(path, pathStr, req),
-                "addEntry"          => HandleAddEntry(path, pathStr, req),
-                "removeEntry"       => HandleRemoveEntry(path, pathStr, req),
                 "hello"             => HandleHello(req),
                 "commit"            => HandleCommit(req),
                 "refetch"           => HandleRefetch(pathStr, req),
@@ -432,7 +405,6 @@ public sealed class WsHandler
         }
     }
 
-    // Echo the request's correlation id back so the client can match reply→request.
     private string WithId(string json, int? id)
     {
         if (id is null) return json;
@@ -443,179 +415,7 @@ public sealed class WsHandler
 
     // ── write ─────────────────────────────────────────────────────────────────
 
-    private string HandleWrite(NodePath path, string pathStr, WsRequest req)
-    {
-        var typeInfo = _resolver.ResolveType(path);
-        if (typeInfo == null)
-            return Error($"Path '{pathStr}' does not resolve.");
 
-        if (req.Value is not { } valEl)
-            return Error("Missing 'value' in write message.");
-
-        var value = DeserializeLeaf(valEl, typeInfo.Type);
-
-        // The WRITE floor (M-auth): a path `write` onto a SET MEMBER's scalar field (`/<set>/<id>/<field>`)
-        // is the SAME mutation HandleObjectPropChange performs — an `edit` of the owning extent object — so
-        // it MUST be gated the same way, or it routes around the floor. The owner is the set member at the
-        // parent path; its intrinsic id IS the parent's last segment (a set's members are keyed by id), so
-        // the candidate is built by-id over its CURRENT scalar fields, exactly as the objectPropChange edit
-        // floor builds it. Rejected → the `{ error }` reply (client rollback); the store is never touched.
-        // A scalar dict-entry write on a set-member-owned dict IS gated below (review fix 3, RequireDictWrite);
-        // an OBJECT-entry field path (`/customers/42/name`) has an object parent and writes through the
-        // set-member gate right here; a root-level dict stays write-deferred with the still-deferred dict READ gap.
-        var parentPath = path.IsRoot ? null : NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1));
-        if (parentPath != null && SetMemberOwnerId(parentPath) is { } ownerId
-            && _store.ReadById(ownerId) is { } owner)
-            RequireWrite(Floor(req), "edit", owner.TypeName,
-                Code.AccessFloor.ScalarObject(owner.TypeName, ownerId, owner.Fields, _desc));
-
-        // The WRITE chokepoint (M-auth `password`): a path `write` onto a `password`-typed leaf (a set
-        // member's password field, or a `dict of password` entry) hashes the plaintext before the store —
-        // so this seam never routes plaintext around the WS hash. An EMPTY value writes NOTHING (= "no
-        // change", the same blank-is-unchanged rule as objectPropChange). Decided AFTER the floor gate.
-        if (typeInfo.Type.Name == "password")
-        {
-            if (HashScalarLeaf(typeInfo.Type.Name, value) is not { } hashed)
-                // empty → NO write happened (store untouched): finding 3 (a WRITE's version over-counted by a
-                // separate read) does not apply, there being no write. CurrentVersion is the accurate HEAD.
-                return Serialize(new WriteResponse { Path = pathStr, NewVersion = _store.CurrentVersion });
-            value = hashed;
-        }
-
-        // A SCALAR dictionary entry's value lives at its path but is addressed by (dict, key)
-        // — WriteLeaf can't walk into a dict, so upsert the entry. (An OBJECT entry's field
-        // path, e.g. /customers/42/name, has an object parent and writes through WriteLeaf.)
-        // Report the version the store returns UNDER ITS LOCK (finding 3) — never a separate read.
-        int newVersion;
-        if (parentPath != null
-            && _resolver.ResolveType(parentPath) is { Cardinality: Cardinality.Dictionary } parentInfo)
-        {
-            // The DICT write floor (review fix 3): a path-`write` onto a dict entry whose owning object is a
-            // set member is an `edit` of that owner — so a client cannot overwrite a Commit's idMap lineage
-            // id here any more than through addEntry. Rejected → the `{ error }` reply; store untouched.
-            RequireDictWrite(req, parentPath);
-            newVersion = _store.WriteDictionaryEntry(parentPath, ParseKey(path.Segments[^1], parentInfo.KeyTypeName ?? "text"), value);
-        }
-        else
-        {
-            newVersion = _store.WriteLeaf(path, value);
-        }
-
-        return Serialize(new WriteResponse { Path = pathStr, NewVersion = newVersion });
-    }
-
-    // The intrinsic id of the EXTENT OBJECT a path addresses, but ONLY when the path is a SET MEMBER
-    // (`/<set>/<id>`) — a member's own segment IS its id (a set keys members by id), and the grandparent
-    // resolves to a Set. Used by the write floor to gate a path `write` onto a set member's scalar field as
-    // an `edit` of that member, matching HandleObjectPropChange. Returns null for anything else (the root, a
-    // top-level field, a single reference, or a DICTIONARY entry — the deferred dict gap), so only the
-    // set-member case is gated. The grandparent check is what distinguishes a set member (gate) from a dict
-    // entry (defer): both have a Single-object parent, but only a set member's parent sits under a Set.
-    private int? SetMemberOwnerId(NodePath memberPath)
-    {
-        if (memberPath.Segments.Count < 2) return null; // need a /<set>/<id> shape at least
-        if (_resolver.ResolveType(memberPath) is not { Cardinality: Cardinality.Single } info
-            || info.Type.BaseType != BaseType.Object)
-            return null; // not an object (so not a member with scalar fields)
-        var grandparent = NodePath.FromSegments(memberPath.Segments.Take(memberPath.Segments.Count - 1));
-        if (_resolver.ResolveType(grandparent) is not { Cardinality: Cardinality.Set }) return null;
-        return int.TryParse(memberPath.Segments[^1], out var id) ? id : null;
-    }
-
-    // The DICTIONARY write floor (M-auth, review fix 3): gate a client write to a dict ENTRY as an `edit`
-    // of the object that OWNS the dict, when that owner is a set member (`/<set>/<id>/<dict>`) — the
-    // security-critical case (a `Commit`/`Branch` idMap lives on a `db.commits`/`db.branches` set member,
-    // so `create edit delete where false` on those types now blocks a client addEntry/removeEntry/path-
-    // write, not only objectPropChange). `dictPath` is the DICT node's own path; its owner is the object
-    // one segment up, whose id IS that segment (a set keys members by id). Throws (the `{ error }` reply)
-    // when the owner's `edit` is denied; a no-op when the dict is NOT on a set member (a root-level dict
-    // like `/settings` keeps the deferred behavior — its owner is the un-ruled Db root, and the dict READ
-    // floor is still deferred there too). Mirrors the set-member gate, not the read floor: write-side only.
-    private void RequireDictWrite(WsRequest req, NodePath dictPath)
-    {
-        if (dictPath.IsRoot) return;
-        var ownerPath = NodePath.FromSegments(dictPath.Segments.Take(dictPath.Segments.Count - 1));
-        if (SetMemberOwnerId(ownerPath) is not { } ownerId || _store.ReadById(ownerId) is not { } owner)
-            return; // owner is not a set member (root/nested-object dict) — deferred, as before
-        RequireWrite(Floor(req), "edit", owner.TypeName,
-            Code.AccessFloor.ScalarObject(owner.TypeName, ownerId, owner.Fields, _desc));
-    }
-
-    // ── addEntry (create on the create-form Save) ──────────────────────────────
-
-    private string HandleAddEntry(NodePath path, string pathStr, WsRequest req)
-    {
-        var typeInfo = _resolver.ResolveType(path);
-        if (typeInfo == null)
-            return Error($"Path '{pathStr}' does not resolve.");
-
-        if (typeInfo.Cardinality == Cardinality.Set)
-            return HandleAddSetMember(path, pathStr, typeInfo, req);
-
-        if (typeInfo.Cardinality != Cardinality.Dictionary)
-            return Error($"Path '{pathStr}' is not a dictionary.");
-
-        if (req.Value is not { } valueEl)
-            return Error("Missing 'value' in addEntry message.");
-        if (req.Key is not { } keyStr || keyStr.Length == 0)
-            return Error("A dictionary entry requires a non-empty 'key'.");
-
-        // The DICT write floor (review fix 3): adding a dict entry whose owner is a set member is an `edit`
-        // of that owner — the fix's core case (a client cannot inject an idMap entry into an immutable
-        // Commit). Rejected → the `{ error }` reply; the store is never touched (the checks below are pure).
-        RequireDictWrite(req, path);
-
-        var value = DeserializeValue(valueEl, typeInfo.Type);
-        // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store. An
-        // object-entry dict's value is an ObjectValue (hash its password fields); a scalar-entry dict whose
-        // element type is itself `password` hashes the leaf. An empty value persists as-is (an empty entry).
-        value = value is ObjectValue ov
-            ? HashPasswordFields(typeInfo.Type.Name, ov)
-            : HashScalarLeaf(typeInfo.Type.Name, value) ?? value;
-        var key = ParseKey(keyStr, typeInfo.KeyTypeName ?? "text");
-        // throws on duplicate → caught as { error }. Report the store's under-lock post-write version (finding 3).
-        var newVersion = _store.CreateEntry(path, key, value);
-
-        return Serialize(new AddEntryResponse { Path = pathStr, Key = KeyString(key), NewVersion = newVersion });
-    }
-
-    // ── removeEntry ────────────────────────────────────────────────────────────
-
-    private string HandleRemoveEntry(NodePath path, string pathStr, WsRequest req)
-    {
-        var typeInfo = _resolver.ResolveType(path);
-        if (typeInfo == null)
-            return Error($"Path '{pathStr}' does not resolve.");
-        if (req.Key is not { } keyStr)
-            return Error("Missing 'key' in removeEntry message.");
-
-        int newVersion; // the store's under-lock post-write version (finding 3), from whichever branch ran
-        if (typeInfo.Cardinality == Cardinality.Set)
-        {
-            if (!int.TryParse(keyStr, out var memberId))
-                return Error("Set member key must be an integer identity.");
-            // The write floor: removing a set member is a `delete` of that member (same as arrayRemove).
-            if (_store.ReadById(memberId) is { } member)
-                RequireWrite(Floor(req), "delete", member.TypeName,
-                    Code.AccessFloor.ScalarObject(member.TypeName, memberId, member.Fields, _desc));
-            newVersion = _store.RemoveFromSet(path, memberId);
-        }
-        else if (typeInfo.Cardinality == Cardinality.Dictionary)
-        {
-            // The DICT write floor (review fix 3): removing a dict entry whose owner is a set member is an
-            // `edit` of that owner — so a client cannot delete a Commit's idMap entry either. Rejected →
-            // the `{ error }` reply; store untouched. (A dict on a non-set-member owner stays deferred, as
-            // before, in lockstep with the still-deferred dict READ floor there.)
-            RequireDictWrite(req, path);
-            newVersion = _store.RemoveDictionaryEntry(path, ParseKey(keyStr, typeInfo.KeyTypeName ?? "text"));
-        }
-        else
-        {
-            return Error($"Path '{pathStr}' is not a dictionary or set.");
-        }
-
-        return Serialize(new RemoveEntryResponse { Path = pathStr, NewVersion = newVersion });
-    }
 
     // ── set members + references (object model) ─────────────────────────────────
 
@@ -658,64 +458,6 @@ public sealed class WsHandler
         return parentHit.Fields.Fields.GetValueOrDefault(lastSeg) is ReferenceValue { TargetId: { } tid } ? tid : null;
     }
 
-    private string HandleAddSetMember(NodePath path, string pathStr, ResolvedTypeInfo typeInfo, WsRequest req)
-    {
-        // The write floor: adding a set member is a `create` of the element type — whether minting a new
-        // object (decided over the new value) or linking an existing one (decided over its current fields).
-        var floor = Floor(req);
-        var typeName = typeInfo.Type.Name;
-
-        int id;
-        int newVersion; // the LAST store op's under-lock version — the AddToSet link, in both branches (finding 3)
-        if (req.RefId is { } refId)
-        {
-            if (_store.ReadById(refId) is { } linked)
-                RequireWrite(floor, "create", typeName, Code.AccessFloor.ScalarObject(typeName, refId, linked.Fields, _desc));
-            id = refId;
-            newVersion = _store.AddToSet(path, id); // link an existing object
-        }
-        else if (req.Value is { } valueEl)
-        {
-            var obj = (ObjectValue)DeserializeValue(valueEl, typeInfo.Type);
-            RequireWrite(floor, "create", typeName, Code.AccessFloor.ScalarObject(typeName, 0, obj, _desc));
-            // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext before the store.
-            var hashed = HashPasswordFields(typeName, obj);
-
-            // Mint + link as ONE atomic store mutation (ONE Save()/physical fsync) through CommitBatch —
-            // the SAME fix HandleArrayAdd already applies (61c9330): the former two separate public-method
-            // calls (CreateObject then AddToSet) each took their own WAL commit — DOUBLE the durable-write
-            // latency of a plain edit, and left a crash window where a committed CreateObject with a
-            // FAILING AddToSet right after it persists an unreachable (orphaned) object. `path` is the
-            // set's own NodePath (decomposed in the HANDLER, not the store — no store-interface change);
-            // OwnerIdAt resolves its parent's intrinsic id so the link can address the set by (owner, prop)
-            // — SetLinkByPropMutation — the same mutation SchemaBridge already uses to link a fresh child
-            // into a fresh parent within one batch. -1 is a batch-local scratch tempId, like arrayAdd's.
-            const int localTempId = -1;
-            var parentPath = NodePath.FromSegments(path.Segments.Take(path.Segments.Count - 1));
-            if (OwnerIdAt(parentPath) is { } ownerId)
-            {
-                var propName = path.Segments[^1];
-                var result = _store.CommitBatch(
-                    [new CommitCreate(localTempId, typeName, hashed)],
-                    [new SetLinkByPropMutation(ownerId, propName, localTempId)]);
-                id = result.Creates[0].RealId;
-                newVersion = result.Version; // the batch's post-write version (finding 3) — same as the link's own
-            }
-            else
-            {
-                // No path shape reaches here today (see OwnerIdAt's doc) — kept as a correctness fallback
-                // (still correct, just not batched into one fsync) rather than a silent gap.
-                id = _store.CreateObject(typeName, hashed); // mint a new object…
-                newVersion = _store.AddToSet(path, id);     // …then link it (its version is the reported one)
-            }
-        }
-        else
-        {
-            return Error("addEntry on a set requires 'refId' (existing) or 'value' (new).");
-        }
-
-        return Serialize(new AddEntryResponse { Path = pathStr, Key = id.ToString(), NewVersion = newVersion });
-    }
 
     // ── code-owned UI mutations (the Code runtime, identity-addressed) ──────────
 

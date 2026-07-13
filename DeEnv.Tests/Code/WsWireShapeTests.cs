@@ -102,6 +102,46 @@ public sealed class WsWireShapeTests
         }
     }
 
+    // ── retired ops: write/addEntry/removeEntry deleted (T6b-4d) — frames must be REJECTED ──
+    // Dict mutations now route exclusively through `dictAdd`/`dictRemove` commit relations (T6b-4c).
+    // Any stray or legacy frame must fail loudly as "Unknown op".
+
+    [Test]
+    public async Task Retired_dict_ops_are_rejected_as_unknown()
+    {
+        var desc = InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    settings dict of text
+            """);
+        var dataPath = Path.GetTempFileName();
+        try
+        {
+            var store = new JsonFileInstanceStore(dataPath, desc);
+            var sessions = new ClientSessionStore();
+            var ws = new WsHandler(store, desc, sessions);
+
+            // path write on a dict entry (now dictAdd whole-entry)
+            var writeJson = """{"op":"write","id":1,"clientId":"c1","path":"/settings/foo","value":{"type":"text","value":"bar"}}""";
+            var r1 = ws.ProcessMessage(writeJson);
+            await Assert.That(r1).Contains("Unknown op");
+
+            // addEntry on dict
+            var addJson = """{"op":"addEntry","id":2,"clientId":"c1","path":"/settings","key":"newk","value":{"type":"text","value":"x"}}""";
+            var r2 = ws.ProcessMessage(addJson);
+            await Assert.That(r2).Contains("Unknown op");
+
+            // removeEntry on dict
+            var remJson = """{"op":"removeEntry","id":3,"clientId":"c1","path":"/settings","key":"foo"}""";
+            var r3 = ws.ProcessMessage(remJson);
+            await Assert.That(r3).Contains("Unknown op");
+        }
+        finally
+        {
+            File.Delete(dataPath);
+        }
+    }
+
     // ── outgoing: commit — the reply the ctx re-pin hinges on (finding 2) ─────────────────
     //
     // `newVersion` is the store's post-commit version, captured under the store lock (finding 3), that the
@@ -143,12 +183,6 @@ public sealed class WsWireShapeTests
     [Test]
     public async Task The_simple_ok_responses_serialize_to_their_exact_bytes()
     {
-        await Assert.That(Serialize(new WriteResponse { Path = "/a/b", NewVersion = 5 }))
-            .IsEqualTo("""{"op":"write","path":"/a/b","ok":true,"newVersion":5}""");
-        await Assert.That(Serialize(new AddEntryResponse { Path = "/d", Key = "k", NewVersion = 5 }))
-            .IsEqualTo("""{"op":"addEntry","path":"/d","ok":true,"key":"k","newVersion":5}""");
-        await Assert.That(Serialize(new RemoveEntryResponse { Path = "/d", NewVersion = 5 }))
-            .IsEqualTo("""{"op":"removeEntry","path":"/d","ok":true,"newVersion":5}""");
         await Assert.That(Serialize(new HelloResponse { SessionAlive = true }))
             .IsEqualTo("""{"op":"hello","sessionAlive":true}""");
         await Assert.That(Serialize(new HostActionResponse()))
