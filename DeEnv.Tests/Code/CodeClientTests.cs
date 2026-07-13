@@ -618,7 +618,7 @@ public sealed class CodeClientTests
             var sentOps = await page.EvaluateAsync<string[]>("() => window.__sent.map(s => s.op)");
             var actionRefetches = await page.EvaluateAsync<int>(
                 """() => window.__sent.filter(s => s.op === "refetch" && s.action).length""");
-            await Assert.That(sentOps).Contains("objectPropChange");
+            await Assert.That(sentOps).Contains("commit");
             await Assert.That(actionRefetches).IsEqualTo(0);
 
             // And the write reached the server: the stored Counter's `a` is 1 (the flushed objectPropChange

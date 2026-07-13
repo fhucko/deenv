@@ -485,10 +485,12 @@ function runHandlerTransaction(body: () => void, action?: PendingAction): void {
     txJournalMark = journal.length;
     txStartGen = stateGen;
     txSendBuffer = [];
-    // Open the set link/unlink buffer (T3): arrayAdd/arrayRemove of EXISTING members + removes now buffer
-    // into ONE `commit` frame (flushed by flushHandlerTx) instead of N standalone arrayAdd/arrayRemove
-    // frames. A designer handler (wrapNode/unwrapNode) runs HERE, so this is the bracket that closes the gap.
-    // A nested begin is impossible (single-level handlers), so just open unconditionally.
+    // Open the commit buffers the SAME way beginCommit does (so in-handler edits/creates/links buffer into
+    // ONE consolidated commit, not N live ops). A handler is a commit scope too — it just earns its existence
+    // on the atomic-rollback + action-miss logic below, not on buffer-opening. Single-level, so reset
+    // unconditionally.
+    commitEdits = [];
+    commitCreates = [];
     commitRelations = [];
     // Capture the out-of-journal client state (see the note above): the refetch flag and a snapshot of
     // every cache entry's stale flag, so an abort can restore the EXACT pre-handler state.
@@ -518,7 +520,10 @@ function runHandlerTransaction(body: () => void, action?: PendingAction): void {
             //    flush the pre-throw sends (the real work persists) + re-throw. Re-running this on the server
             //    read-only would mis-harvest (it reads client-only draft state the server cannot reproduce —
             //    "Unknown field" — and would re-do the mutation), so it must NOT take the action-miss path.
-            const didWork = (txSendBuffer?.length ?? 0) > 0;
+            const didWork = (txSendBuffer?.length ?? 0) > 0
+                || (commitEdits?.length ?? 0) > 0
+                || (commitRelations?.length ?? 0) > 0
+                || (commitCreates?.length ?? 0) > 0;
             if (action != null && !didWork) {
                 abortHandlerTx();
                 pendingAction = action;
@@ -554,6 +559,11 @@ function abortHandlerTx(): void {
     txStaleSnapshot = null;
     txSendBuffer = null;
     txDepth = 0;
+    // Roll back the optimistic local writes the buffered edits made (they have NO journal entry of their own —
+    // the consolidated commit entry handles undo on a clean flush, but an abort skips flush, so undo them here).
+    if (commitEdits != null) for (const e of commitEdits) { e.obj.props[e.prop] = e.before; invalidateProp(e.obj.id, e.prop); }
+    commitEdits = null;
+    commitCreates = null;
     commitRelations = null;   // discard buffered set intents on a handler abort (T3)
 }
 
@@ -577,26 +587,51 @@ function flushHandlerTx(): void {
     txStaleSnapshot = null;   // not an abort: keep the staling the handler/undo did, just drop the snapshot
     txDepth = 0;
     for (const text of buffered) wsSendText(text);
-    // T3: any set link/unlink intents buffered during this handler collapse into ONE `commit` frame (instead
-    // of the N standalone arrayAdd/arrayRemove frames they would otherwise have been). The consolidated entry
-    // replaces the per-op journal entries the hooks already pushed (spliced out by id) and is acked by this
-    // commit's reply. Edits/creates never reach here (a pure handler doesn't stage a form-commit), so they are
-    // empty. baseVersion is omitted (as a live arrayAdd carried none) — the server applies the links/unlinks.
-    const relations = commitRelations;
-    commitRelations = null;
-    if (relations != null && relations.length > 0) {
+    // The buffered edits/creates/links collapse into ONE `commit` frame (instead of N live ops). Mirrors
+    // endCommit: the consolidated entry replaces the per-op journal entries the hooks pushed (spliced out by
+    // id) and is acked by this commit's reply. baseVersion is omitted (a handler has no opened commit ctx) —
+    // the server applies all-or-none.
+    const edits = commitEdits; commitEdits = null;
+    const creates = commitCreates; commitCreates = null;
+    const relations = commitRelations; commitRelations = null;
+    if ((edits == null || edits.length === 0) && (creates == null || creates.length === 0) && (relations == null || relations.length === 0)) return;
+    if (relations != null && relations.length > 0)
         spliceJournalEntries(new Set(relations.map(r => r.journalMsgId)));
-        const msgId = nextWsMsgId++;
-        const wireRels = relations.map(r => r.wire);
-        recordMutation({
-            msgId,
-            undo: () => { for (const r of relations) r.undo(); },
-            redo: () => { for (const r of relations) r.redo(); },
-            roots: relations.flatMap(r => r.roots),
-        });
-        wsSend({ op: "commit", id: msgId, clientId: uiStatic.clientId, baseVersion: undefined,
-            edits: [], creates: [], relations: wireRels });
+    const editSnapshots = (edits ?? []).map(e => ({ obj: e.obj, prop: e.prop, before: e.before, after: e.value }));
+    const wireCreates: object[] = [];
+    const wireRelations: object[] = [];
+    if (creates != null) for (const c of creates) {
+        pendingCommitCreates.set(c.draft.id, { join: c.join, obj: c.draft });
+        wireCreates.push({ tempId: c.draft.id, value: objectOf(c.draft) });
+        if (c.join.kind === "set") wireRelations.push({ kind: "set", setId: c.join.set.id, childId: c.draft.id });
+        else wireRelations.push({ kind: "ref", parentId: c.join.parent.id, prop: c.join.prop, childId: c.draft.id });
     }
+    if (relations != null) for (const r of relations) wireRelations.push(r.wire);
+    const msgId = nextWsMsgId++;
+    const prevCommitting = committingCtx;
+    committingCtx = currentExecCtx;   // tag the Save-lifecycle entry on the handler's ctx
+    recordMutation({
+        msgId,
+        undo: () => {
+            for (const s of editSnapshots) { s.obj.props[s.prop] = s.before; invalidateProp(s.obj.id, s.prop); }
+            if (creates != null) for (const c of creates) dropStagedCreate(c);
+            if (relations != null) for (const r of relations) r.undo();
+        },
+        redo: () => {
+            for (const s of editSnapshots) { s.obj.props[s.prop] = s.after; invalidateProp(s.obj.id, s.prop); }
+            if (creates != null) for (const c of creates) restageCreate(c);
+            if (relations != null) for (const r of relations) r.redo();
+        },
+        onReject: () => { if (creates != null) for (const c of creates) pendingCommitCreates.delete(c.draft.id); },
+        roots: [...(edits ?? []).map(e => e.obj),
+                ...(creates != null ? creates.map(c => c.draft) : []),
+                ...(creates != null ? creates.map(c => c.join.kind === "set" ? c.join.set : c.join.parent) : []),
+                ...(relations != null ? relations.flatMap(r => r.roots) : [])],
+    });
+    committingCtx = prevCommitting;
+    const wireEdits = editSnapshots.map(s => ({ objectId: s.obj.id, prop: s.prop, value: scalarOf(s.obj.props[s.prop]) }));
+    wsSend({ op: "commit", id: msgId, clientId: uiStatic.clientId, baseVersion: undefined,
+        edits: wireEdits, creates: wireCreates, relations: wireRelations });
 }
 
 // ── action-miss pending action (client data layer, slice 4) ────────────────────────────────────────────
