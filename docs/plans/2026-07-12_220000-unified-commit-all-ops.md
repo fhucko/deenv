@@ -243,9 +243,24 @@ R7 conversion (dict `ExecArray` carries `prop`+`ownerRef`; server `dictAdd`/`dic
 values; `pathWrite` → `dictAdd` whole-entry) is a separate, later commit. The narrow path keeps the dict
 handlers alive as the safety net for object-entry dicts.
 
+Split into parts:
+- **T6b-4a (DONE):** server `dictAdd`/`dictRemove` now accept OBJECT dictionary entries (`dict of Config`), not
+  just scalars. The `dictAdd` parse branches scalar (`LeafForType`) vs object (`ExecObjectValue(allowSets:true)`,
+  the same `{props:{...}}` shape a commit create ships); the `DictWriteMutation` apply arm branches `StoredLeaf`
+  vs `MintObject`→`StoredRef` (mirroring `WriteDictionaryEntryInto`). `pathWrite`-equivalent object-entry field
+  edits are whole-entry `dictAdd` re-issues (model-faithful: a dict entry IS a value). `CommitDictTests` covers
+  add + whole-entry rewrite + remove for an object dict. **Server capability now matches the client's object
+  dict needs** — the remaining work is purely the client-side routing (4b/4c) + handler deletion (4d).
+- **T6b-4b (TODO):** dict `ExecArray` carries `ownerRef`+`prop`; entry items carry `key` (R7 addressing). Server
+  `ClientState.cs` emit + client `dt.ts`/`codeExec.ts` model.
+- **T6b-4c (TODO):** client dict hooks → commit ops: `entryAdd`→`dictAdd`, `entryRemove`→`dictRemove`,
+  `pathWrite`→`dictAdd` whole-entry (decision flagged + accepted: object-entry field edit = whole-entry rewrite).
+- **T6b-4d (TODO):** delete `HandleWrite`/`HandleAddEntry`/`HandleRemoveEntry` + response records + case arms;
+  add `write`/`addEntry`/`removeEntry` reject tests; rewrite `AddEntrySetBatchTests`.
+
 Plan T6b as-originally-written (delete all 4 handlers in one go) is therefore HALF-done: array side deleted,
 dict side deferred. The "commit is the SOLE persistence op" goal is reached for sets; dicts still use path-addressed
-live ops until T6b-4.
+live ops until T6b-4b/4c/4d.
 
 > Why split: T6a is the hard, testable engineering (new `commit` op + draft discovery). T6b is mechanical
 > deletion that is ONLY safe once T6a is green — doing them together risks a half-cutover (client sends a

@@ -835,27 +835,42 @@ public sealed class WsHandler
                     var dKeyType = dOwnerRef >= 0 && _store.ReadById(dOwnerRef) is { } dOwner
                         ? _desc.FindType(dOwner.TypeName)?.Props?.FirstOrDefault(p => p.Name == dProp)?.KeyType ?? "text"
                         : "text";
-                    // The entry's VALUE must fit the dict prop's SCALAR base type (object entries are not a
-                    // commit-batch case — rejected here, like DictWriteMutation's apply arm).
+                    // The entry's VALUE must fit the dict prop's element type. Scalar entries use the scalar
+                    // base type; object entries (dict of Config) are now a commit case too — T6b-4a extends
+                    // DictWriteMutation's apply arm to mint a StoredObject (mirrors WriteDictionaryEntryInto).
                     var dPropDef = dOwnerRef >= 0 && _store.ReadById(dOwnerRef) is { } dOwnerVal
                         ? _desc.FindType(dOwnerVal.TypeName)?.Props?.FirstOrDefault(p => p.Name == dProp)
                         : null;
-                    if (dPropDef is null || dPropDef.Cardinality != Cardinality.Dictionary
-                        || _desc.ScalarBaseOf(dPropDef.Type) is not { } dBaseType)
-                        return Error($"Field '{dProp}' on the owner is not a scalar dictionary field.");
-                    var leaf = LeafForType(dValEl, dBaseType);
-                    if (leaf is TextValue tv && !_desc.EnumAccepts(dPropDef.Type, tv.Text))
-                        return Error($"'{tv.Text}' is not a value of enum '{dPropDef.Type}'.");
-                    // The WRITE chokepoint (M-auth `password`): a `dict of password` entry hashes the plaintext
-                    // before the store — never routes plaintext around the WS hash (mirrors HandleWrite).
-                    if (dPropDef.Type == "password" && HashScalarLeaf(dPropDef.Type, leaf) is { } hashed)
-                        leaf = hashed;
+                    if (dPropDef is null || dPropDef.Cardinality != Cardinality.Dictionary)
+                        return Error($"Field '{dProp}' on the owner is not a dictionary field.");
+                    NodeValue dValue;
+                    if (_desc.ScalarBaseOf(dPropDef.Type) is { } dBaseType)
+                    {
+                        dValue = LeafForType(dValEl, dBaseType);
+                        if (dValue is TextValue tv && !_desc.EnumAccepts(dPropDef.Type, tv.Text))
+                            return Error($"'{tv.Text}' is not a value of enum '{dPropDef.Type}'.");
+                        // The WRITE chokepoint (M-auth `password`): a `dict of password` entry hashes the
+                        // plaintext before the store — never routes plaintext around the WS hash (mirrors HandleWrite).
+                        if (dPropDef.Type == "password" && HashScalarLeaf(dPropDef.Type, dValue) is { } hashed)
+                            dValue = hashed;
+                    }
+                    else if (_desc.FindType(dPropDef.Type) is { BaseType: BaseType.Object } dElemType)
+                    {
+                        // Object dictionary entry (dict of Config). Consume the value in the SAME { props: {...} }
+                        // shape a commit create ships (ExecObjectValue, allowSets:true — nested sets skipped, linked
+                        // by a separate set relation), mirroring HandleAddSetMember / HandleArrayAdd.
+                        dValue = ExecObjectValue(dValEl, dElemType, allowSets: true);
+                    }
+                    else
+                    {
+                        return Error($"Field '{dProp}' on the owner is not a supported dictionary field.");
+                    }
                     // Access floor: a dict write is an `edit` of the owner (mirrors RequireDictWrite's edit floor
                     // and the dictRemove branch above).
                     if (dOwnerRef >= 0 && _store.ReadById(dOwnerRef) is { } dOwnerObj)
                         RequireWrite(floor, "edit", dOwnerObj.TypeName,
                             Code.AccessFloor.ScalarObject(dOwnerObj.TypeName, dOwnerRef, dOwnerObj.Fields, _desc));
-                    extraMutations.Add(new DictWriteMutation(dOwnerRef, dProp, ParseKey(dKeyStr, dKeyType), leaf));
+                    extraMutations.Add(new DictWriteMutation(dOwnerRef, dProp, ParseKey(dKeyStr, dKeyType), dValue));
                     continue;
                 }
 

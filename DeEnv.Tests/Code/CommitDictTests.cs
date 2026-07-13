@@ -173,6 +173,87 @@ public sealed class CommitDictTests
         }
     }
 
+    [Test]
+    public async Task A_commit_with_a_dict_relation_writes_an_object_entry_and_rewrites_it_whole()
+    {
+        // T6b-4a: object dictionary entries (dict of Config) route through the SAME dictAdd relation as
+        // scalar entries — the wire value is the { props: {...} } shape a commit create ships. Editing a
+        // field is a whole-entry rewrite (dictAdd re-issues the entry), mirroring the model (a dict entry IS
+        // a value). dictRemove drops the entry.
+        var desc = InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    configs dict of Config by text
+                Config
+                    name text
+                    port int
+            """);
+        var dataPath = Path.GetTempFileName();
+        try
+        {
+            var store = new JsonFileInstanceStore(dataPath, desc);
+            var sessions = new ClientSessionStore();
+            var session = sessions.Create();
+            var ws = new WsHandler(store, desc, sessions);
+
+            var addReply = ws.ProcessMessage($$"""
+                {
+                  "op": "commit", "clientId": "{{session.Id}}", "edits": [], "creates": [],
+                  "relations": [
+                    { "kind": "dictAdd", "owner": 1, "prop": "configs", "key": "api",
+                      "value": { "props": { "name": { "type": "text", "value": "Api" }, "port": { "type": "int", "value": 8080 } } } }
+                  ]
+                }
+                """);
+            using (var add = JsonDocument.Parse(addReply))
+                await Assert.That(add.RootElement.TryGetProperty("error", out _)).IsFalse();
+
+            var dict = (DictionaryValue)store.ReadById(1).Value.Fields.Fields["configs"];
+            await Assert.That(dict.Entries.TryGetValue(new TextValue("api"), out var apiVal)).IsTrue();
+            var api = (ObjectValue)apiVal;
+            await Assert.That(((TextValue)api.Fields["name"]).Text).IsEqualTo("Api");
+            await Assert.That(((IntValue)api.Fields["port"]).Value).IsEqualTo(8080);
+
+            // Whole-entry rewrite: re-issue the same key with new field values (name unchanged, port bumped).
+            // The previous object is unreferenced and swept by the batch GC.
+            var rewriteReply = ws.ProcessMessage($$"""
+                {
+                  "op": "commit", "clientId": "{{session.Id}}", "edits": [], "creates": [],
+                  "relations": [
+                    { "kind": "dictAdd", "owner": 1, "prop": "configs", "key": "api",
+                      "value": { "props": { "name": { "type": "text", "value": "Api" }, "port": { "type": "int", "value": 9090 } } } }
+                  ]
+                }
+                """);
+            using (var rw = JsonDocument.Parse(rewriteReply))
+                await Assert.That(rw.RootElement.TryGetProperty("error", out _)).IsFalse();
+
+            var api2 = (ObjectValue)((DictionaryValue)store.ReadById(1).Value.Fields.Fields["configs"])
+                .Entries[new TextValue("api")];
+            await Assert.That(((IntValue)api2.Fields["port"]).Value).IsEqualTo(9090);
+            // Exactly ONE entry remains under the "api" key (the rewrite replaced, not appended).
+            await Assert.That(
+                ((DictionaryValue)store.ReadById(1).Value.Fields.Fields["configs"]).Entries.Count).IsEqualTo(1);
+
+            // dictRemove drops the entry.
+            var rmReply = ws.ProcessMessage($$"""
+                {
+                  "op": "commit", "clientId": "{{session.Id}}", "edits": [], "creates": [],
+                  "relations": [ { "kind": "dictRemove", "owner": 1, "prop": "configs", "key": "api" } ]
+                }
+                """);
+            using (var rm = JsonDocument.Parse(rmReply))
+                await Assert.That(rm.RootElement.TryGetProperty("error", out _)).IsFalse();
+            var dictAfter = (DictionaryValue)store.ReadById(1).Value.Fields.Fields["configs"];
+            await Assert.That(dictAfter.Entries.ContainsKey(new TextValue("api"))).IsFalse();
+        }
+        finally
+        {
+            if (File.Exists(dataPath)) File.Delete(dataPath);
+            CleanupLogGenesis(dataPath);
+        }
+    }
+
     private static void CleanupLogGenesis(string dataPath)
     {
         var logPath = AppPaths.LogPathForDataPath(dataPath);

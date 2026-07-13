@@ -854,16 +854,34 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     }
                     case DictWriteMutation(var ownerRef, var prop, var key, var value):
                     {
-                        // Upsert a SCALAR dict entry on the owner's `prop` dictionary field, by id (the owner
-                        // may be a fresh create just minted above, unreachable by any NodePath yet). Same
-                        // DictSet log-write + owner-version bump the standalone WriteDictionaryEntry emits, so
-                        // fsck/replay stay total; the value is a scalar leaf (idMap holds ints).
+                        // Upsert a dict entry on the owner's `prop` dictionary field, by id (the owner may be a
+                        // fresh create just minted above, unreachable by any NodePath yet). Same DictSet log-write
+                        // + owner-version bump the standalone WriteDictionaryEntry emits, so fsck/replay stay total.
                         var ownerId = ResolveRefId(ownerRef);
                         var dict = EnsureDictOnEntry(ownerId, prop);
                         var keyStr = KeyToString(key);
-                        var newLeaf = new StoredLeaf(value);
-                        _pending.Add(new DictSet(dict.Id, keyStr, dict.Entries.GetValueOrDefault(keyStr), newLeaf));
-                        dict.Entries[keyStr] = newLeaf;
+                        if (value is ObjectValue obj)
+                        {
+                            // Object dictionary entry (dict of Config) — T6b-4a. Mirror WriteDictionaryEntryInto's
+                            // object branch: MintObject records its own Create write into _pending BEFORE the DictSet
+                            // below, so replay applies the Create first and the DictSet's New ref resolves. The
+                            // previous object (if any) is unreferenced and swept by the end-of-batch GC.
+                            var ownerType = ownerRef < 0
+                                ? creates.First(c => c.TempId == ownerRef).TypeName
+                                : ExtentEntryById(ownerId)!.TypeName;
+                            var elemType = _desc.FindType(ownerType)?.Props?.FirstOrDefault(p => p.Name == prop)?.Type
+                                ?? throw new InvalidOperationException($"'{ownerType}' has no dictionary prop '{prop}'.");
+                            var newId = MintObject(elemType, obj);
+                            var newRef = new StoredRef(elemType, newId);
+                            _pending.Add(new DictSet(dict.Id, keyStr, dict.Entries.GetValueOrDefault(keyStr), newRef));
+                            dict.Entries[keyStr] = newRef;
+                        }
+                        else
+                        {
+                            var newLeaf = new StoredLeaf(value);
+                            _pending.Add(new DictSet(dict.Id, keyStr, dict.Entries.GetValueOrDefault(keyStr), newLeaf));
+                            dict.Entries[keyStr] = newLeaf;
+                        }
                         BumpVersion(ownerId);
                         break;
                     }
