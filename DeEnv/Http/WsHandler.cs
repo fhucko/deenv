@@ -767,7 +767,7 @@ public sealed class WsHandler
                 // (kept out of the ParsedRelation union on purpose — unlinks have no typed child). Skip them
                 // here so ParseRelation (which only knows "set"/"ref") does not reject them as malformed.
                 if (relEl.TryGetProperty("kind", out var skipKindEl) && skipKindEl.GetString() is
-                    "setByProp" or "setUnlink" or "setUnlinkByProp" or "dictRemove")
+                    "setByProp" or "setUnlink" or "setUnlinkByProp" or "dictRemove" or "dict")
                     continue;
                 if (ParseRelation(relEl, session) is not { } rel)
                     return Error("commit relation is malformed.");
@@ -825,6 +825,53 @@ public sealed class WsHandler
                         RequireWrite(floor, "edit", drOwnerObj.TypeName,
                             Code.AccessFloor.ScalarObject(drOwnerObj.TypeName, drOwnerRef, drOwnerObj.Fields, _desc));
                     extraMutations.Add(new DictRemoveMutation(drOwnerRef, drProp, ParseKey(drKeyStr, drKeyType)));
+                    continue;
+                }
+
+                if (tpKind == "dict")
+                {
+                    // T6a.1: `dict` (write ONE dict entry) — the wire-accepted counterpart of DictWriteMutation
+                    // (formerly server-only). Scalar value only (object entries keep the standalone
+                    // WriteDictionaryEntry path). Mirrors dictRemove's parse + the edit floor of HandleWrite's
+                    // dict-entry gate. owner/prop/key address the entry; value is a scalar leaf { type, value }.
+                    if ((relEl.TryGetProperty("prop", out var dPropEl) ? dPropEl.GetString() : null) is not { } dProp)
+                        return Error("commit relation is malformed.");
+                    if (!relEl.TryGetProperty("owner", out var dOwnerEl) || dOwnerEl.ValueKind != JsonValueKind.Number)
+                        return Error("commit relation is malformed.");
+                    if ((relEl.TryGetProperty("key", out var dKeyEl) ? dKeyEl.GetString() : null) is not { } dKeyStr
+                        || dKeyStr.Length == 0)
+                        return Error("commit relation is malformed.");
+                    if (!relEl.TryGetProperty("value", out var dValEl))
+                        return Error("commit relation is malformed.");
+                    var dOwnerRaw = dOwnerEl.GetInt32();
+                    var dOwnerRef = Resolve(session, dOwnerRaw);
+                    // The dict key is a NodeValue, parsed against the owner prop's declared keyType — mirrors
+                    // HandleAddEntry's `ParseKey(keyStr, KeyTypeName ?? "text")`. Owner's type is unknown for a
+                    // fresh (negative) owner; default to text (the store's apply arm re-keys under its schema).
+                    var dKeyType = dOwnerRef >= 0 && _store.ReadById(dOwnerRef) is { } dOwner
+                        ? _desc.FindType(dOwner.TypeName)?.Props?.FirstOrDefault(p => p.Name == dProp)?.KeyType ?? "text"
+                        : "text";
+                    // The entry's VALUE must fit the dict prop's SCALAR base type (object entries are not a
+                    // commit-batch case — rejected here, like DictWriteMutation's apply arm).
+                    var dPropDef = dOwnerRef >= 0 && _store.ReadById(dOwnerRef) is { } dOwnerVal
+                        ? _desc.FindType(dOwnerVal.TypeName)?.Props?.FirstOrDefault(p => p.Name == dProp)
+                        : null;
+                    if (dPropDef is null || dPropDef.Cardinality != Cardinality.Dictionary
+                        || _desc.ScalarBaseOf(dPropDef.Type) is not { } dBaseType)
+                        return Error($"Field '{dProp}' on the owner is not a scalar dictionary field.");
+                    var leaf = LeafForType(dValEl, dBaseType);
+                    if (leaf is TextValue tv && !_desc.EnumAccepts(dPropDef.Type, tv.Text))
+                        return Error($"'{tv.Text}' is not a value of enum '{dPropDef.Type}'.");
+                    // The WRITE chokepoint (M-auth `password`): a `dict of password` entry hashes the plaintext
+                    // before the store — never routes plaintext around the WS hash (mirrors HandleWrite).
+                    if (dPropDef.Type == "password" && HashScalarLeaf(dPropDef.Type, leaf) is { } hashed)
+                        leaf = hashed;
+                    // Access floor: a dict write is an `edit` of the owner (mirrors RequireDictWrite's edit floor
+                    // and the dictRemove branch above).
+                    if (dOwnerRef >= 0 && _store.ReadById(dOwnerRef) is { } dOwnerObj)
+                        RequireWrite(floor, "edit", dOwnerObj.TypeName,
+                            Code.AccessFloor.ScalarObject(dOwnerObj.TypeName, dOwnerRef, dOwnerObj.Fields, _desc));
+                    extraMutations.Add(new DictWriteMutation(dOwnerRef, dProp, ParseKey(dKeyStr, dKeyType), leaf));
                     continue;
                 }
 
