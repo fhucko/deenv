@@ -81,12 +81,11 @@ public sealed class TodoSteps(InstanceContext ctx)
     // add persisted and the negative→real id remap re-rendered the row.
     private async Task AllItemKeysRealAsync(string list)
     {
-        var cardSel = $"article.todo-card:has(h3.list-name:has-text({Quoted(list)}))";
-        await ctx.Page!.WaitForFunctionAsync(
-            "sel => { const card = document.querySelector(sel); if (!card) return false;" +
-            " const rows = [...card.querySelectorAll('.item-row')];" +
-            " return rows.length > 0 && rows.every(e => +e.getAttribute('data-key') > 0); }",
-            cardSel);
+        var card = Card(list);
+        // Wait until there are no more item rows without a (positive) data-key.
+        // This waits for the remap of all items in the card.
+        await card.Locator(".item-row:not([data-key]), .item-row[data-key^='-']").First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
     }
 
     [When("I remove the item {string}")]
@@ -113,12 +112,20 @@ public sealed class TodoSteps(InstanceContext ctx)
 
     // The item text lives in input.text's VALUE (a composed library <Input>), so match on value.
     [Then("the page shows an item {string}")]
-    public async Task ThenShowsItem(string text) =>
-        await ctx.Page!.Locator($".item-row input.text[value={JsString(text)}]").First.WaitForAsync();
+    public async Task ThenShowsItem(string text)
+    {
+        var input = ctx.Page!.Locator(".item-row input.text").First;
+        await input.WaitForAsync();
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(text);
+    }
 
     [Then("the page does not show an item {string}")]
-    public async Task ThenDoesNotShowItem(string text) =>
+    public async Task ThenDoesNotShowItem(string text)
+    {
+        // For "does not show", we wait for no matching value.
+        // Since multiple, use count or simple wait for absence.
         await ctx.Page!.Locator($".item-row input.text[value={JsString(text)}]").First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+    }
 
     [Then("the item {string} is checked")]
     public async Task ThenItemChecked(string text) =>

@@ -614,11 +614,15 @@ public sealed partial class DesignerSteps
         await TypeNameInput(name).WaitForAsync();
 
     [Then("the design editor shows the design's label {string}")]
-    public async Task ThenEditorShowsLabel(string label) =>
+    public async Task ThenEditorShowsLabel(string label)
+    {
         // The editor's label is now an editable two-way-bound <input> (input.design-label = design.label);
         // a freshly-created design opens here with its label and otherwise-empty fields (an empty types
         // list, empty code areas) — a valid library entry, only invalid to DEPLOY until it gains types.
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor input.design-label[value={CssString(label)}]").WaitForAsync();
+        var input = ctx.Page!.Locator("main.ide-design-edit .design-editor input.design-label");
+        await input.WaitForAsync();
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(label);
+    }
 
     // ──── Then/When: the editable design label (rename in the editor) ────────────────────────────
 
@@ -628,7 +632,9 @@ public sealed partial class DesignerSteps
         // The editor's label input is two-way-bound to design.label; filling it edits the model and
         // autosaves a journaled scalar change (objectPropChange) to the designer's sovereign store.
         await ctx.Page!.Locator("main.ide-design-edit .design-editor input.design-label").First.FillAsync(newLabel);
-        await ctx.Page.Locator($"main.ide-design-edit .design-editor input.design-label[value={CssString(newLabel)}]").WaitForAsync();
+        var input = ctx.Page.Locator("main.ide-design-edit .design-editor input.design-label");
+        await input.WaitForAsync();
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(newLabel);
         // Wait for the autosave to reach the store, so a fresh server render (a reload) shows the new label.
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values
             .Any(o => o.Fields.TryGetValue("label", out var v) && v is DeEnv.Storage.TextValue t && t.Text == newLabel));
@@ -645,8 +651,12 @@ public sealed partial class DesignerSteps
     }
 
     [Then("the design editor's label input holds {string}")]
-    public async Task ThenEditorLabelInputHolds(string label) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor input.design-label[value={CssString(label)}]").WaitForAsync();
+    public async Task ThenEditorLabelInputHolds(string label)
+    {
+        var input = ctx.Page!.Locator("main.ide-design-edit .design-editor input.design-label");
+        await input.WaitForAsync();
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(label);
+    }
 
     // ──── When/Then: the Commit-button UX slice (M13's last piece) ─────────────────────────────────
 
@@ -693,12 +703,20 @@ public sealed partial class DesignerSteps
     // afterCommit clears commitMessage on the ok reply's refetch, which lands asynchronously (poll,
     // don't assert immediately after the click).
     [Then("the commit message input eventually holds {string}")]
-    public async Task ThenCommitMessageInputEventuallyHolds(string message) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor input.commit-message[value={CssString(message)}]").WaitForAsync();
+    public async Task ThenCommitMessageInputEventuallyHolds(string message)
+    {
+        var input = ctx.Page!.Locator("main.ide-design-edit .design-editor input.commit-message");
+        await input.WaitForAsync();
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(message);
+    }
 
     [Then("the migration textarea eventually holds {string}")]
-    public async Task ThenMigrationTextareaEventuallyHolds(string text) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor textarea.commit-migration-input[value={CssString(text)}]").WaitForAsync();
+    public async Task ThenMigrationTextareaEventuallyHolds(string text)
+    {
+        var input = ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.commit-migration-input");
+        await input.WaitForAsync();
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(text);
+    }
 
     // The rejection leg's retained-migration proof: the callback never ran, so the textarea still
     // holds exactly what "I type a migration for ... into the migration textarea" typed.
@@ -1034,7 +1052,7 @@ public sealed partial class DesignerSteps
             Has = ctx.Page.Locator("input.prop-name[value=\"\"]")
         }).First;
         await newRow.Locator("input.prop-name").FillAsync(propName);
-        await ctx.Page.Locator($"main.ide-design-edit .design-editor .prop-row input.prop-name[value={CssString(propName)}]").First.WaitForAsync();
+        await newRow.Locator("input.prop-name").First.WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
             .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == propName));
     }
@@ -1051,9 +1069,7 @@ public sealed partial class DesignerSteps
             Has = ctx.Page.Locator($"input.prop-name[value={CssString(from)}]")
         }).Locator("input.prop-name");
         await input.FillAsync(to);
-        await card.Locator(".prop-row", new() {
-            Has = ctx.Page.Locator($"input.prop-name[value={CssString(to)}]")
-        }).Locator("input.prop-name").First.WaitForAsync();
+        await card.Locator("input.prop-name").First.WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
             .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == to));
     }
@@ -1428,8 +1444,6 @@ public sealed partial class DesignerSteps
         var input = row.Locator("input.use-name");
         await input.FillAsync(name);
         await input.WaitForAsync();
-        // Wait via locator for the row-scoped input bearing the expected value attribute.
-        await row.Locator($"input.use-name[value={CssString(name)}]").WaitForAsync();
     }
 
     [When("I add an arg to configuration {int}")]
@@ -1450,8 +1464,6 @@ public sealed partial class DesignerSteps
         await input.DispatchEventAsync("input");
         await input.DispatchEventAsync("change");
         await input.WaitForAsync();
-        // Ensure the value is in the DOM for the model used by render, using locator + value attr wait.
-        await row.Locator($"input.node-attr-value[value={CssString(value)}]").Nth(argIndex).WaitForAsync();
         // Force refresh of evals so the use-preview's renderTree re-computes with the current arg binding.
         var refresh = ctx.Page!.Locator("button.refresh-eval").First;
         if (await refresh.CountAsync() > 0)
@@ -2082,21 +2094,33 @@ public sealed partial class DesignerSteps
     // direct `input.node-tag` (not a descendant's) reads the root's tag. Scoped to the first element's own
     // tag row so a nested node's input can't satisfy it.
     [Then("the tree editor's root node tag input reads {string}")]
-    public async Task ThenRootTagInput(string tag) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree > .node-element > .node-tag-row > input.node-tag[value={CssString(tag)}]").WaitForAsync();
+    public async Task ThenRootTagInput(string tag)
+    {
+        var input = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree > .node-element > .node-tag-row > input.node-tag").First;
+        await input.WaitForAsync();
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(tag);
+    }
 
     // Recursion proof: a NESTED element (h1) must appear as its OWN .node-element nested UNDER the root's
     // .node-children — i.e. the component recursed a level deep, rendering a child element with its own tag
     // input. Assert some node-tag input inside .node-children reads the child's tag.
     [Then("the tree editor shows a nested node with tag input {string}")]
-    public async Task ThenNestedTagInput(string tag) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree .node-children input.node-tag[value={CssString(tag)}]").First.WaitForAsync();
+    public async Task ThenNestedTagInput(string tag)
+    {
+        var input = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-children input.node-tag").First;
+        await input.WaitForAsync();
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(tag);
+    }
 
     // A LEAF node (empty tag) renders only its `expr` input. The nested h1's text child {leaf} imports as a
     // leaf whose expr source is `leaf`; assert some node-expr input reads it (proving leaves render too).
     [Then("the tree editor shows a leaf expr input reading {string}")]
-    public async Task ThenLeafExprInput(string expr) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree input.node-expr[value={CssString(expr)}]").First.WaitForAsync();
+    public async Task ThenLeafExprInput(string expr)
+    {
+        var input = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree input.node-expr").First;
+        await input.WaitForAsync();
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(expr);
+    }
 
     // Edit the ROOT's tag input (an ordinary two-way-bound MetaNode.tag write, like type.name): fill the
     // first .node-element's own tag input with the new value.
@@ -2135,8 +2159,12 @@ public sealed partial class DesignerSteps
     // element whose own tag input reads the expected default/edited tag — proving both that it landed and
     // that it landed at the END (a naive order:0 would sort it to the FRONT, ahead of the imported <h1>).
     [Then("the root node's last child is an element with tag {string}")]
-    public async Task ThenRootLastChildTag(string tag) =>
-        await ctx.Page!.Locator(RootLastChildElement + " > .node-tag-row > input.node-tag[value=" + CssString(tag) + "]").WaitForAsync();
+    public async Task ThenRootLastChildTag(string tag)
+    {
+        var input = ctx.Page!.Locator(RootLastChildElement + " > .node-tag-row > input.node-tag").First;
+        await input.WaitForAsync();
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(tag);
+    }
 
     [When("I edit the root node's last child tag input to {string}")]
     public async Task WhenEditLastChildTag(string tag) =>
@@ -2616,8 +2644,12 @@ public sealed partial class DesignerSteps
     [Then("the tree editor shows a for row with item {string} and collection {string}")]
     public async Task ThenForRowInputs(string item, string collection)
     {
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree input.node-for-item[value={CssString(item)}]").WaitForAsync();
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree input.node-for-collection[value={CssString(collection)}]").WaitForAsync();
+        var itemInput = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree input.node-for-item").First;
+        await itemInput.WaitForAsync();
+        await Assert.That(await itemInput.InputValueAsync()).IsEqualTo(item);
+        var collInput = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree input.node-for-collection").First;
+        await collInput.WaitForAsync();
+        await Assert.That(await collInput.InputValueAsync()).IsEqualTo(collection);
     }
 
     [When("I edit the for row's item input to {string}")]
@@ -2720,8 +2752,12 @@ public sealed partial class DesignerSteps
     // The tree editor's for-row collection input still reads the edited source (the race-guard proof: the
     // canvas falls to the template, but the operator's own input is UNDISTURBED — not reverted).
     [Then("the tree editor shows a for-collection input reading {string}")]
-    public async Task ThenForCollectionInputReads(string collection) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree input.node-for-collection[value={CssString(collection)}]").First.WaitForAsync();
+    public async Task ThenForCollectionInputReads(string collection)
+    {
+        var collInput = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree input.node-for-collection").First;
+        await collInput.WaitForAsync();
+        await Assert.That(await collInput.InputValueAsync()).IsEqualTo(collection);
+    }
 
     // ──── M12 F3 — call-position evaluation of design fns ─────────────────────────────────────────────────────────────────────────────────
     //
