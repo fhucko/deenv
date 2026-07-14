@@ -1,5 +1,14 @@
 namespace DeEnv.Tests.TestSupport;
 
+public static class TestTimeouts
+{
+    /// <summary>Timeout (ms) for individual Playwright actions/waits (locator waits, WaitFor*, etc.).</summary>
+    public const int ActionMs = 10_000;
+
+    /// <summary>Timeout (ms) for the overall test (page default timeout etc.).</summary>
+    public const int TestMs = 30_000;
+}
+
 /// <summary>
 /// Poll a condition until it holds, the deterministic replacement for a fixed <c>WaitForTimeoutAsync</c>
 /// sleep. A fixed sleep both flakes (the async outcome — a WS round-trip, a server GC — can take longer

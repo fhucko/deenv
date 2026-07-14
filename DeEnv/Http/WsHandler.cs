@@ -147,7 +147,8 @@ public sealed record ConflictFieldWire
 
 public abstract record ParsedRelation(int ChildRef, string ChildType);
 public sealed record ParsedSetRelation(int SetId, int Child, string ElementType) : ParsedRelation(Child, ElementType);
-public sealed record ParsedRefRelation(int ParentId, string Prop, int Child, string TargetType) : ParsedRelation(Child, TargetType);
+// Child is nullable for ref clear (childId omitted or null in wire -> clear the reference).
+public sealed record ParsedRefRelation(int ParentId, string Prop, int? Child, string TargetType) : ParsedRelation(Child ?? 0, TargetType);
 
 public sealed class WsHandler
 {
@@ -595,9 +596,9 @@ public sealed class WsHandler
                         return Error($"No object with id {parentId}.");
                     RequireWrite(floor, "edit", owner.TypeName,
                         Code.AccessFloor.ScalarObject(owner.TypeName, parentId, owner.Fields, _desc));
-                    if (childRef >= 0 && _store.ReadById(childRef) is { } linkedRef)
+                    if (childRef is >= 0 && _store.ReadById(childRef.Value) is { } linkedRef)
                         RequireWrite(floor, "create", linkedRef.TypeName,
-                            Code.AccessFloor.ScalarObject(linkedRef.TypeName, childRef, linkedRef.Fields, _desc));
+                            Code.AccessFloor.ScalarObject(linkedRef.TypeName, childRef.Value, linkedRef.Fields, _desc));
                     mutations.Add(new RefSetMutation(parentId, prop, childRef, childType));
                     break;
                 }
@@ -679,16 +680,19 @@ public sealed class WsHandler
     private ParsedRelation? ParseRelation(JsonElement el, ClientSession? session)
     {
         if ((el.TryGetProperty("kind", out var kindEl) ? kindEl.GetString() : null) is not { } kind) return null;
-        if (!el.TryGetProperty("childId", out var childEl) || childEl.ValueKind != JsonValueKind.Number) return null;
-        var childRef = Resolve(session, childEl.GetInt32()); // a tempId stays (unknown → unchanged); a real id remaps
+
+        int? childRef = null;
+        if (el.TryGetProperty("childId", out var childEl) && childEl.ValueKind == JsonValueKind.Number)
+            childRef = Resolve(session, childEl.GetInt32()); // tempId or real; null means clear for refSet
 
         if (kind == "setAdd")
         {
+            if (!childRef.HasValue) return null;
             if (!el.TryGetProperty("setId", out var setEl) || setEl.ValueKind != JsonValueKind.Number) return null;
             var setId = Resolve(session, setEl.GetInt32());
             var elementType = _store.SetElementType(setId);
             if (elementType is null) return null; // no such set
-            return new ParsedSetRelation(setId, childRef, elementType);
+            return new ParsedSetRelation(setId, childRef.Value, elementType);
         }
         if (kind == "refSet")
         {

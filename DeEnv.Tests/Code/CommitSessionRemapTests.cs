@@ -35,8 +35,8 @@ public sealed class CommitSessionRemapTests
                 { "tempId": -2, "value": { "props": { "label": { "type": "text", "value": "beta"  } } } }
               ],
               "relations": [
-                { "kind": "set", "setId": {{tagsSetId}}, "childId": -1 },
-                { "kind": "set", "setId": {{tagsSetId}}, "childId": -2 }
+                { "kind": "setAdd", "setId": {{tagsSetId}}, "childId": -1 },
+                { "kind": "setAdd", "setId": {{tagsSetId}}, "childId": -2 }
               ]
             }
             """);

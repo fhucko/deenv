@@ -154,9 +154,9 @@ ui
         return ""
 
     fn orderForAppend(coll)
-        var top = coll.orderBy(c => 0 - c.order).single(c => true)
-        if top == null
+        if coll.any(c => true) == false
             return 0
+        var top = coll.orderBy(c => 0 - c.order).single(c => true)
         return top.order + 1
 
     fn newNode(kind, tag, order)

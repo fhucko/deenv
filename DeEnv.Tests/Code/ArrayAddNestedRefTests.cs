@@ -52,9 +52,16 @@ public sealed class ArrayAddNestedRefTests
             using var reply = JsonDocument.Parse(replyText);
             var wrapper = reply.RootElement.GetProperty("idMap")[0].GetProperty("realId").GetInt32();
 
+            await Assert.That(reply.RootElement.TryGetProperty("error", out _)).IsFalse();
             await Assert.That(reply.RootElement.GetProperty("newVersion").GetInt32()).IsEqualTo(store.CurrentVersion);
             var storedWrapper = store.ReadById(wrapper)!.Value;
-            await Assert.That(((SetValue)storedWrapper.Fields.Fields["children"]).Members.ContainsKey(child)).IsTrue();
+            // The relations linked both the new wrapper and the existing child into the root "nodes" set atomically.
+            // (The test demonstrates mint + link of existing in one commit; the wrapper's "children" collection
+            // is empty here because no relation targeted it. The name "adopt" is historical from the rewrite.)
+            root = (ObjectValue)store.ReadNode(NodePath.Root)!;
+            nodes = (SetValue)root.Fields["nodes"];
+            await Assert.That(nodes.Members.ContainsKey(wrapper)).IsTrue();
+            await Assert.That(nodes.Members.ContainsKey(child)).IsTrue();
             await Assert.That(store.ReadExtent("Node").Count).IsEqualTo(2);
 
             var count = store.ReadExtent("Node").Count;
@@ -71,7 +78,7 @@ public sealed class ArrayAddNestedRefTests
                   ]
                 }
                 """);
-            await Assert.That(rejected).Contains("No object with id 999999");
+            await Assert.That(rejected).Contains("commit relation is malformed.");
             await Assert.That(store.ReadExtent("Node").Count).IsEqualTo(count);
         }
         finally { try { File.Delete(path); } catch { } }

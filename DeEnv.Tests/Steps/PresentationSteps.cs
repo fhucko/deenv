@@ -27,7 +27,7 @@ public sealed class PresentationSteps(InstanceContext ctx)
         // Load-tolerant timeout (default 30s sat below the loaded worst-case: the click's full SSR nav
         // is ~7x slower under full-suite peak load, tipping DOMContentLoaded past 30s — a load flake).
         await ctx.Page.WaitForLoadStateAsync(Microsoft.Playwright.LoadState.DOMContentLoaded,
-            new Microsoft.Playwright.PageWaitForLoadStateOptions { Timeout = 60000 });
+            new Microsoft.Playwright.PageWaitForLoadStateOptions { Timeout = TestTimeouts.ActionMs });
     }
 
     // The "create form" is the self-hosted, flag-gated create form (.create-form, revealed by `+ New`):

@@ -932,8 +932,12 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
             $"() => [...document.querySelectorAll('.note-row')].some(e => e.textContent.includes({JsString(title)}))");
 
     [Then("the draft title is empty")]
-    public async Task ThenDraftTitleEmpty() =>
-        await ctx.Page!.WaitForFunctionAsync("() => document.querySelector('input.draft-title')?.value === ''");
+    public async Task ThenDraftTitleEmpty()
+    {
+        var input = ctx.Page!.Locator("input.draft-title");
+        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await Assert.That(await input.InputValueAsync()).IsEqualTo("");
+    }
 
     // ── reactive components: slot-path identity (milestone 11) ──────────────────────
 
@@ -959,9 +963,12 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.Page!.Locator("button.toggle").ClickAsync();
 
     [Then("the draft title is still {string}")]
-    public async Task ThenDraftTitleStill(string value) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => document.querySelector('input.draft-title')?.value === {JsString(value)}");
+    public async Task ThenDraftTitleStill(string value)
+    {
+        var input = ctx.Page!.Locator("input.draft-title");
+        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(value);
+    }
 
     // ── reactive components in a list: per-row slot identity (milestone 11, slice 2) ──
 
@@ -986,11 +993,13 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
 
     // Locate the row by its title text (robust across a reorder, which moves rows in the DOM).
     [Then("the scratch of the row titled {string} is {string}")]
-    public async Task ThenScratchOfRowIs(string title, string value) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            "() => { const r = [...document.querySelectorAll('.note-row')]" +
-            $".find(e => e.querySelector('.row-title')?.textContent.includes({JsString(title)}));" +
-            $" return r?.querySelector('input.scratch')?.value === {JsString(value)}; }}");
+    public async Task ThenScratchOfRowIs(string title, string value)
+    {
+        var input = ctx.Page!.Locator(".note-row").Filter(new() { HasText = title })
+            .Locator("input.scratch");
+        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(value);
+    }
 
     [When("I reorder the rows")]
     public async Task WhenReorderRows() =>
@@ -1015,9 +1024,12 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
             """);
 
     [Then("the scalar query input is still {string}")]
-    public async Task ThenScalarQueryInputStill(string value) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => document.querySelector('input.query')?.value === {JsString(value)}");
+    public async Task ThenScalarQueryInputStill(string value)
+    {
+        var input = ctx.Page!.Locator("input.query");
+        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(value);
+    }
 
     [Then("the first row is titled {string}")]
     public async Task ThenFirstRowTitled(string title) =>
@@ -1038,9 +1050,12 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
         await ctx.Page!.Locator(".box input.scratch").FillAsync(value);
 
     [Then("the box scratch is {string}")]
-    public async Task ThenBoxScratchIs(string value) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => document.querySelector('.box input.scratch')?.value === {JsString(value)}");
+    public async Task ThenBoxScratchIs(string value)
+    {
+        var input = ctx.Page!.Locator(".box input.scratch");
+        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(value);
+    }
 
     // Flips the key bound to the component, which must reset it (new slot identity → fresh state).
     [When("I rekey the component")]

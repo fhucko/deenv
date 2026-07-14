@@ -3,8 +3,9 @@ using TUnit.Core;
 
 namespace DeEnv.Tests.TestSupport;
 
+
 /// <summary>
-/// One Playwright driver + one headless Chromium for the WHOLE test run. Spawning the driver (a Node
+/// One Playwright driver + one Chromium (headless except when debugging in VS) for the WHOLE test run. Spawning the driver (a Node
 /// process) and a browser process costs hundreds of ms each; doing it per scenario dominated the suite.
 /// Each scenario/test gets a fresh <see cref="IBrowserContext"/> instead — full cookie/storage/cache
 /// isolation, a few ms to create — so there is no isolation regression (the server + store are already
@@ -51,7 +52,12 @@ public static class SharedBrowser
         try
         {
             _playwright ??= await Playwright.CreateAsync();
-            _browser ??= await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+            var headless = !System.Diagnostics.Debugger.IsAttached;
+            _browser ??= await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+            {
+                Headless = headless,
+                SlowMo = headless ? 0 : 100, // slow down for visibility when debugging in VS
+            });
             return _browser;
         }
         finally { Gate.Release(); }
@@ -104,8 +110,8 @@ public static class SharedBrowser
         try
         {
             var page = await context.NewPageAsync();
-            page.SetDefaultTimeout(30000);
-            page.SetDefaultNavigationTimeout(30000);
+            page.SetDefaultTimeout(TestTimeouts.TestMs);
+            page.SetDefaultNavigationTimeout(TestTimeouts.TestMs);
             return page;
         }
         catch

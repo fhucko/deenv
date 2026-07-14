@@ -139,7 +139,7 @@ public sealed class TodoSteps(InstanceContext ctx)
 
     // The list card whose title matches (exact-ish via :has-text on the .list-name heading).
     private ILocator Card(string list) =>
-        ctx.Page!.Locator($"article.todo-card:has(h3.list-name:has-text({Quoted(list)}))");
+        ctx.Page!.Locator($"article.todo-card:has(h3.list-name:has-text({Quoted(list)}))").First;
 
     // The item row whose composed text <Input> (input.text) holds the given VALUE. The text is in
     // the input's value PROPERTY (set by client render), not the attribute, so it can't be matched by

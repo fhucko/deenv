@@ -30,11 +30,11 @@ public static class PageNav
     /// </summary>
     public static async Task WaitForUrlContentAsync(this IPage page, Regex url)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(10);
+        var deadline = DateTime.UtcNow.AddMilliseconds(TestTimeouts.ActionMs);
         while (!url.IsMatch(page.Url))
         {
             if (DateTime.UtcNow > deadline)
-                throw new TimeoutException($"URL did not match /{url}/ within 10s (current: {page.Url}).");
+                throw new TimeoutException($"URL did not match /{url}/ within {TestTimeouts.ActionMs}ms (current: {page.Url}).");
             await Task.Delay(25);
         }
     }

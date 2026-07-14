@@ -23,13 +23,13 @@
     <ProjectReference Include="..\DeEnv\DeEnv.csproj" />
   </ItemGroup>
 
-  <!-- Ship the committed app documents, each in its own id-dir (instances/<id>/app.app), so the
+  <!-- Ship the committed app documents, each in its own id-dir (instances/<id>/app.deenv), so the
        tests load the same single source of truth the kernel hosts: instances/1 = designer (the
        meta-schema for Bridge/HostAction), 2 = todo (TodoDb), 3 = crm, 4 = shop. The instances/<id>/
        structure is preserved into the test output (LinkBase) so a test can resolve a fixture by id,
        exactly like the kernel does. -->
   <ItemGroup>
-    <Content Include="..\DeEnv\instances\**\*.app"
+    <Content Include="..\DeEnv\instances\**\app.deenv"
              LinkBase="instances"
              CopyToOutputDirectory="PreserveNewest" />
     <!-- Shared Code-interpreter conformance cases (run by C# and by the TypeScript twin). -->

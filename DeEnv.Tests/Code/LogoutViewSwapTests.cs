@@ -65,10 +65,10 @@ public sealed class LogoutViewSwapTests
             // async); the Log out button is what the logout half of the slice adds.
             await page.WaitForFunctionAsync(
                 "() => !!document.querySelector('#app .object-form') && !!document.querySelector('#app .user-menu button.logout')",
-                null, new PageWaitForFunctionOptions { Timeout = 10000 });
+                null, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
             await page.WaitForFunctionAsync(
                 "() => document.body.innerText.includes('Gate #3')",
-                null, new PageWaitForFunctionOptions { Timeout = 10000 });
+                null, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
 
             // Log out through the UserMenu.
             await page.Locator("#app .user-menu button.logout").ClickAsync();
@@ -82,7 +82,7 @@ public sealed class LogoutViewSwapTests
             {
                 await page.WaitForFunctionAsync(
                     "() => !!document.querySelector('#app .login-form') && !document.querySelector('#app .object-form')",
-                    null, new PageWaitForFunctionOptions { Timeout = 10000 });
+                    null, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
             }
             catch (TimeoutException)
             {
@@ -95,7 +95,7 @@ public sealed class LogoutViewSwapTests
             // the real anonymous gate, not a stale shell still showing the admin's data.
             await page.WaitForFunctionAsync(
                 "() => !document.body.innerText.includes('Gate #3')",
-                null, new PageWaitForFunctionOptions { Timeout = 10000 });
+                null, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
         }
         finally
         {

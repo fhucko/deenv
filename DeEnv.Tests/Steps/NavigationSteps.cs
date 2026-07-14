@@ -88,8 +88,9 @@ public sealed class NavigationSteps(InstanceContext ctx)
     // satisfies it immediately.
     [Then(@"I see a form for {string}")]
     public async Task ThenFormForAsync(string typeName) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => document.querySelector('.object-form h2, form h2')?.textContent.trim() === {JsString(typeName)}");
+        await ctx.Page!.Locator(".object-form h2, form h2")
+            .Filter(new() { HasTextString = typeName })
+            .WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
 
     // Matches: And the "customers" field renders as a table
     [Then(@"the {string} field renders as a table")]
@@ -103,27 +104,18 @@ public sealed class NavigationSteps(InstanceContext ctx)
     [Then(@"the {string} field shows {string}")]
     public async Task ThenFieldShowsAsync(string fieldName, string expected)
     {
-        var input = await FieldInputAsync(fieldName);
-        var value = await input.GetAttributeAsync("value") ?? "";
-        await Assert.That(value).IsEqualTo(expected);
+        var input = ctx.Page!.Locator($"input.{fieldName}, textarea.{fieldName}, select.{fieldName}").First;
+        await input.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached, Timeout = TestTimeouts.ActionMs });
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(expected);
     }
 
     // Matches: And the "active" field shows a checked checkbox
     [Then(@"the {string} field shows a checked checkbox")]
     public async Task ThenFieldCheckedAsync(string fieldName)
     {
-        var cb = await FieldInputAsync(fieldName);
+        var cb = ctx.Page!.Locator($"input.{fieldName}").First;
+        await cb.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached, Timeout = TestTimeouts.ActionMs });
         await Assert.That(await cb.IsCheckedAsync()).IsTrue();
-    }
-
-    // A field input on either UI: the self-hosted form classes inputs by prop name
-    // (input.name); the retiring C# auto-form keyed them by path (data-path$='/name').
-    private async Task<ILocator> FieldInputAsync(string fieldName)
-    {
-        var selfHosted = ctx.Page!.Locator($"input.{fieldName}");
-        return await selfHosted.CountAsync() > 0
-            ? selfHosted.First
-            : ctx.Page!.Locator($"input[data-path$='/{fieldName}']").First;
     }
 
     // Matches: Then the URL is "/customers/42"

@@ -122,7 +122,7 @@ public sealed class AddEntrySetBatchSteps
                 }
             },
             relations = new[] {
-                new { kind = "set", setId = _itemsSetId, childId = -1 }
+                new { kind = "setAdd", setId = _itemsSetId, childId = -1 }
             }
         }, Opts));
         CaptureReportedId();
@@ -150,7 +150,7 @@ public sealed class AddEntrySetBatchSteps
                 }
             },
             relations = new[] {
-                new { kind = "set", setId = parentChildrenSetId, childId = -1 }
+                new { kind = "setAdd", setId = parentChildrenSetId, childId = -1 }
             }
         }, Opts));
         CaptureReportedId();
@@ -178,7 +178,7 @@ public sealed class AddEntrySetBatchSteps
                 }
             },
             relations = new[] {
-                new { kind = "set", setId = 999999, childId = -1 }
+                new { kind = "setAdd", setId = 999999, childId = -1 }
             }
         }, Opts));
         CaptureReportedId();
@@ -206,7 +206,7 @@ public sealed class AddEntrySetBatchSteps
                 }
             },
             relations = new[] {
-                new { kind = "set", setId = notesSetId, childId = -1 }
+                new { kind = "setAdd", setId = notesSetId, childId = -1 }
             }
         }, Opts));
         CaptureReportedId();
@@ -215,9 +215,10 @@ public sealed class AddEntrySetBatchSteps
     private void CaptureReportedId()
     {
         using var doc = JsonDocument.Parse(_reply);
-        if (doc.RootElement.TryGetProperty("idMap", out var idMap) && idMap.GetArrayLength() > 0)
+        var idMapEl = doc.RootElement.TryGetProperty("idMap", out var im) ? im : (doc.RootElement.TryGetProperty("IdMap", out var im2) ? im2 : default);
+        if (idMapEl.ValueKind == JsonValueKind.Array && idMapEl.GetArrayLength() > 0)
         {
-            var first = idMap[0];
+            var first = idMapEl[0];
             if (first.TryGetProperty("realId", out var r) && r.TryGetInt32(out var id))
                 _reportedId = id;
         }
@@ -234,7 +235,10 @@ public sealed class AddEntrySetBatchSteps
     public async Task ThenReplyOk()
     {
         using var doc = JsonDocument.Parse(_reply);
-        await Assert.That(doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean()).IsTrue();
+        // Commit response uses "Ok" (from CommitResponse.Ok), support either for compatibility during transition
+        var hasOk = doc.RootElement.TryGetProperty("ok", out var ok1) && ok1.GetBoolean() ||
+                    doc.RootElement.TryGetProperty("Ok", out var ok2) && ok2.GetBoolean();
+        await Assert.That(hasOk).IsTrue();
         await Assert.That(doc.RootElement.TryGetProperty("error", out _)).IsFalse();
     }
 

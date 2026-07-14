@@ -58,13 +58,14 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
     {
         await ctx.Page!.RevealCreateFormAsync(); // reveal the gated create form (the set page was a read-only nav)
         await ctx.Page!.Locator(".create-form input.name").FillAsync(name);
-        await ctx.Page.Locator("button.create-save").ClickAsync();
-        await ctx.Page.Locator(".set-row", new() { HasTextString = name }).First.WaitForAsync();
+        await ctx.Page.Locator("button.create-save").First.ClickAsync();
+        await ctx.Page.Locator(".set-row", new() { HasTextString = name }).First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
         // Wait for the negative→real id remap to land in the DOM: the row's link now addresses a
         // real (positive) identity, so following it reaches the member page, not a transient id.
         await ctx.Page.WaitForFunctionAsync(
             @"n => { for (const r of document.querySelectorAll('.set-row')) if (r.textContent.includes(n)) { const a = r.querySelector('a.row-link'); if (a && /\/[0-9]+$/.test(new URL(a.href).pathname)) return true; } return false; }",
-            name);
+            name,
+            new Microsoft.Playwright.PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
         await ctx.Page.Locator(".set-row", new() { HasTextString = name })
                       .First.Locator("a.row-link").ClickAsync();
         // Following the open link is a real navigation; wait for the member page URL.
@@ -85,7 +86,7 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
         // collapse). Reveal it first; the save button is the join-agnostic `.create-save`.
         await ctx.Page!.RevealCreateFormAsync();
         await ctx.Page!.Locator(".create-form input.name").FillAsync(name);
-        await ctx.Page.Locator("button.create-save").ClickAsync();
+        await ctx.Page.Locator("button.create-save").First.ClickAsync();
         // Wait for the created object to be minted + referenced — the editor shows it as current.
         await ctx.Page.WaitForFunctionAsync(
             "n => document.querySelector('.ref-current')?.textContent.includes(n)", name);
@@ -123,7 +124,7 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
                       .Locator("button.set-remove").First.ClickAsync();
         // The row disappears once the server confirms the unlink (and its GC ran) — poll for that.
         await ctx.Page.Locator(".set-row", new() { HasTextString = name }).First
-            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached, Timeout = TestTimeouts.ActionMs });
     }
 
     // ── Then ────────────────────────────────────────────────────────────────────

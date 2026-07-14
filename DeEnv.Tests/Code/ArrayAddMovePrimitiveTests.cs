@@ -50,14 +50,13 @@ public sealed class ArrayAddMovePrimitiveTests
         await Assert.That(store.ReadExtent("Item").Count).IsEqualTo(1); // one Item exists before the link
 
         var ws = new WsHandler(store, desc);
+        // Now use commit + setAdd relation for existing (refId equivalent) to reuse identity, no mint.
         using var reply = JsonDocument.Parse(
             ws.ProcessMessage(
-                $$"""{ "op": "arrayAdd", "id": 1, "clientId": "c1", "setId": {{itemsBSetId}}, "refId": {{itemId}} }"""));
+                $$"""{ "op": "commit", "id": 1, "clientId": "c1", "edits": [], "creates": [], "relations": [ { "kind": "setAdd", "setId": {{itemsBSetId}}, "childId": {{itemId}} } ] }"""));
 
-        // The SAME id came back — no new object minted (the identity pin), and no remap is ever needed
-        // (the reply carries no tempId — ws.ts's arrayAdd-remap branch is gated on tempId being present).
-        await Assert.That(reply.RootElement.GetProperty("newId").GetInt32()).IsEqualTo(itemId);
-        await Assert.That(reply.RootElement.TryGetProperty("tempId", out _)).IsFalse();
+        // Commit succeeds (no error), no newId/tempId since no create. Identity reuse via id in relation.
+        await Assert.That(reply.RootElement.TryGetProperty("error", out _)).IsFalse();
         await Assert.That(store.ReadExtent("Item").Count).IsEqualTo(1);
 
         // Both memberships are live: reachable via itemsA (the original) AND itemsB (the new link).
@@ -86,12 +85,12 @@ public sealed class ArrayAddMovePrimitiveTests
         var ws = new WsHandler(store, desc);
         // The move: link into itemsB FIRST (now reachable via both sets)...
         ws.ProcessMessage(
-            $$"""{ "op": "commit", "edits": [], "creates": [], "relations": [ { "kind": "set", "setId": {{itemsBSetId}}, "childId": {{itemId}} } ] }""");
+            $$"""{ "op": "commit", "edits": [], "creates": [], "relations": [ { "kind": "setAdd", "setId": {{itemsBSetId}}, "childId": {{itemId}} } ] }""");
         // ...THEN unlink from itemsA. RemoveFromSet's CollectGarbage() must find the object reachable via
         // itemsB at the moment it marks the graph — this is the ordering the safety of the whole primitive
         // rests on.
         ws.ProcessMessage(
-            $$"""{ "op": "commit", "edits": [], "creates": [], "relations": [ { "kind": "setUnlink", "setId": {{itemsASetId}}, "childId": {{itemId}} } ] }""");
+            $$"""{ "op": "commit", "edits": [], "creates": [], "relations": [ { "kind": "setRemove", "setId": {{itemsASetId}}, "childId": {{itemId}} } ] }""");
 
         await Assert.That(store.ReadExtent("Item").Count).IsEqualTo(1); // survived — not swept
         var hit = store.ReadById(itemId);

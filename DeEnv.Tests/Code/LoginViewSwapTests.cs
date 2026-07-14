@@ -77,7 +77,7 @@ public sealed class LoginViewSwapTests
             {
                 await page.WaitForFunctionAsync(
                     "() => !!document.querySelector('#app .object-form') && !document.querySelector('#app .login-form')",
-                    null, new PageWaitForFunctionOptions { Timeout = 10000 });
+                    null, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
             }
             catch (TimeoutException)
             {
@@ -90,7 +90,7 @@ public sealed class LoginViewSwapTests
             // the real authoritative view, not an empty shell.
             await page.WaitForFunctionAsync(
                 "() => document.body.innerText.includes('Gate #3')",
-                null, new PageWaitForFunctionOptions { Timeout = 10000 });
+                null, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
         }
         finally
         {

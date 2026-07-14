@@ -157,7 +157,7 @@ public sealed class AtomicCommitSteps(InstanceContext ctx)
                 { "tempId": -1, "value": { "props": { "label": { "type": "text", "value": "{{tagLabel}}" } } } }
               ],
               "relations": [
-                { "kind": "set", "setId": {{tagsSetId}}, "childId": -1 }
+                { "kind": "setAdd", "setId": {{tagsSetId}}, "childId": -1 }
               ]
             }
             """);
@@ -181,8 +181,8 @@ public sealed class AtomicCommitSteps(InstanceContext ctx)
                 { "tempId": -1, "value": { "props": { "label": { "type": "text", "value": "forged" } } } }
               ],
               "relations": [
-                { "kind": "set", "setId": {{tagsSetId}}, "childId": -1 },
-                { "kind": "set", "setId": {{usersSetId}}, "childId": -1 }
+                { "kind": "setAdd", "setId": {{tagsSetId}}, "childId": -1 },
+                { "kind": "setAdd", "setId": {{usersSetId}}, "childId": -1 }
               ]
             }
             """);
@@ -202,7 +202,7 @@ public sealed class AtomicCommitSteps(InstanceContext ctx)
               "edits": [],
               "creates": [],
               "relations": [
-                { "kind": "set", "setId": {{tagsSetId}}, "childId": -99 }
+                { "kind": "setAdd", "setId": {{tagsSetId}}, "childId": -99 }
               ]
             }
             """);
@@ -226,7 +226,7 @@ public sealed class AtomicCommitSteps(InstanceContext ctx)
                     "password": { "type": "text", "value": "{{password}}" } } } }
               ],
               "relations": [
-                { "kind": "set", "setId": {{usersSetId}}, "childId": -1 }
+                { "kind": "setAdd", "setId": {{usersSetId}}, "childId": -1 }
               ]
             }
             """);

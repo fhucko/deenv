@@ -61,18 +61,41 @@ public sealed class TransientIdSteps
     [When("the client adds an item with transient id {int} over the WS")]
     public void WhenAddItem(int tempId)
     {
+        // Now uses unified commit (create + setAdd relation) instead of retired arrayAdd.
+        // Mirrors the pattern in AddEntrySetBatchSteps.
         _reply = _ws.ProcessMessage(JsonSerializer.Serialize(new
         {
-            op = "arrayAdd",
+            op = "commit",
             clientId = _clientId,
-            setId = ItemsSetId(),
-            tempId,
-            typeName = "Item",
-            value = new { props = new { name = new { type = "text", value = "" } } },
+            edits = new object[] { },
+            creates = new[] {
+                new {
+                    tempId,
+                    value = new {
+                        props = new {
+                            name = new { type = "text", value = "" }
+                        }
+                    }
+                }
+            },
+            relations = new[] {
+                new { kind = "setAdd", setId = ItemsSetId(), childId = tempId }
+            }
         }, Opts));
-        // The reply carries the real extent id the server minted (newId) — the id the client would remap to.
+        // Capture realId from the commit's idMap (or legacy newId for safety).
         using var doc = JsonDocument.Parse(_reply);
-        if (doc.RootElement.TryGetProperty("newId", out var n)) _addedRealId = n.GetInt32();
+        var idMapEl = doc.RootElement.TryGetProperty("idMap", out var im) ? im :
+                      (doc.RootElement.TryGetProperty("IdMap", out var im2) ? im2 : default);
+        if (idMapEl.ValueKind == JsonValueKind.Array && idMapEl.GetArrayLength() > 0)
+        {
+            var first = idMapEl[0];
+            if (first.TryGetProperty("realId", out var r) && r.TryGetInt32(out var id))
+                _addedRealId = id;
+            else if (first.TryGetProperty("RealId", out var r2) && r2.TryGetInt32(out var id2))
+                _addedRealId = id2;
+        }
+        else if (doc.RootElement.TryGetProperty("newId", out var n))
+            _addedRealId = n.GetInt32();
     }
 
     [When("the client sets prop {string} on object {int} to {string} over the WS")]
@@ -92,7 +115,7 @@ public sealed class TransientIdSteps
 
     [When("the client removes object {int} from the set over the WS")]
     public void WhenRemove(int objectId) =>
-        _reply = _ws.ProcessMessage($$"""{ "op": "commit", "clientId": "{{_clientId}}", "edits": [], "creates": [], "relations": [ { "kind": "setUnlink", "setId": {{ItemsSetId()}}, "childId": {{objectId}} } ] }""");
+        _reply = _ws.ProcessMessage($$"""{ "op": "commit", "clientId": "{{_clientId}}", "edits": [], "creates": [], "relations": [ { "kind": "setRemove", "setId": {{ItemsSetId()}}, "childId": {{objectId}} } ] }""");
 
     private void SetProp(string prop, int objectId, string value) =>
         _reply = _ws.ProcessMessage($$"""{ "op": "commit", "clientId": "{{_clientId}}", "edits": [ { "objectId": {{objectId}}, "prop": "{{prop}}", "value": { "type": "text", "value": "{{value}}" } } ], "creates": [], "relations": [] }""");
@@ -103,7 +126,9 @@ public sealed class TransientIdSteps
     public async Task ThenReplyOk()
     {
         using var doc = JsonDocument.Parse(_reply);
-        await Assert.That(doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean()).IsTrue();
+        var hasOk = doc.RootElement.TryGetProperty("ok", out var ok1) && ok1.GetBoolean() ||
+                    doc.RootElement.TryGetProperty("Ok", out var ok2) && ok2.GetBoolean();
+        await Assert.That(hasOk).IsTrue();
         await Assert.That(doc.RootElement.TryGetProperty("error", out _)).IsFalse();
     }
 

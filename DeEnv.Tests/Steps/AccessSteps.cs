@@ -364,8 +364,9 @@ public sealed class AccessSteps(InstanceContext ctx)
     {
         var (ws, clientId) = BoundWs();
         var setId = MilestonesSetId();
+        // Use commit + create + setAdd for mint+link (replaces retired arrayAdd)
         _writeReply = ws.ProcessMessage(
-            $$"""{ "op": "arrayAdd", "clientId": "{{clientId}}", "setId": {{setId}}, "typeName": "Milestone", "value": { "props": { "title": { "type": "text", "value": "{{title}}" } } } }""");
+            $$"""{ "op": "commit", "clientId": "{{clientId}}", "edits": [], "creates": [ { "tempId": -1, "value": { "props": { "title": { "type": "text", "value": "{{title}}" } } } } ], "relations": [ { "kind": "setAdd", "setId": {{setId}}, "childId": -1 } ] }""");
     }
 
     // Fix 2 — the path `write` op onto a set member's scalar field (`/milestones/<id>/title`). This is the
@@ -389,7 +390,7 @@ public sealed class AccessSteps(InstanceContext ctx)
         var (ws, clientId) = BoundWs();
         var setId = MilestonesSetId();
         _writeReply = ws.ProcessMessage(
-            $$"""{ "op": "commit", "clientId": "{{clientId}}", "edits": [], "creates": [], "relations": [ { "kind": "setUnlink", "setId": {{setId}}, "childId": {{memberId}} } ] }""");
+            $$"""{ "op": "commit", "clientId": "{{clientId}}", "edits": [], "creates": [], "relations": [ { "kind": "setRemove", "setId": {{setId}}, "childId": {{memberId}} } ] }""");
     }
 
     // The intrinsic id of the Db.milestones set (the seeded root's set) — needed to address arrayAdd/remove.

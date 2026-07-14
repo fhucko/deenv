@@ -82,7 +82,7 @@ public sealed class ClientDataLayerSteps(InstanceContext ctx)
         {
             await ctx.Page!.WaitForFunctionAsync(
                 "t => [...document.querySelectorAll('.gated-row')].some(e => e.textContent.includes(t))",
-                title, new PageWaitForFunctionOptions { Timeout = 10000 });
+                title, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
         }
         catch (TimeoutException)
         {
@@ -152,7 +152,7 @@ public sealed class ClientDataLayerSteps(InstanceContext ctx)
         {
             await ctx.Page!.WaitForFunctionAsync(
                 "v => document.querySelector('.counter-a')?.textContent === v",
-                value.ToString(), new PageWaitForFunctionOptions { Timeout = 10000 });
+                value.ToString(), new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
         }
         catch (TimeoutException)
         {
@@ -219,7 +219,7 @@ public sealed class ClientDataLayerSteps(InstanceContext ctx)
         var ownAction = RowByName(ctx.Page!, name).Locator(".menu-body").Locator(selector);
         try
         {
-            await ownAction.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Attached, Timeout = 10000 });
+            await ownAction.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Attached, Timeout = TestTimeouts.ActionMs });
         }
         catch (TimeoutException)
         {

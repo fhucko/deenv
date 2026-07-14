@@ -136,7 +136,7 @@ public sealed class LoginUiSteps(InstanceContext ctx)
     {
         await ctx.Page!.WaitForFunctionAsync(
             "t => document.body.innerText.includes(t)", text,
-            new PageWaitForFunctionOptions { Timeout = 10000 });
+            new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
     }
 
     // A wrong password now surfaces on the SAME global rejection banner (uiStatic.lastError, id="__error")
