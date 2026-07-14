@@ -1234,20 +1234,36 @@ AGENTS.md rules 2/10 still hold. It extends "C# is the kernel — app logic belo
 in the app" above. Recorded now because the *seams* it implies are cheap to honor
 early and expensive to retrofit.
 
-**Kernel vs. image — the split that makes self-modification safe.** Two layers:
+**Kernel vs. image — the split that makes self-modification safe (historical pragmatic choice).** Two layers:
 - The **kernel** — a thin, trusted, *not self-hosted* compiled-C# floor: the
   interpreter, the storage interface, a multi-instance/port supervisor, and boot.
-  Plain code; cannot be edited from inside.
+  Plain code; cannot be edited from inside (in the current implementation).
 - The **image** — everything else as data + Code in the store: the IDE, the
   designer, every user app. Malleable, versioned, live.
 
-"deenv changes itself" means **the image changes**, and *safely*: a schema/behavior
-edit is branched, previewed live, and promoted (the Stage 2 versioning loop), so
-there is always a known-good image to boot from. The **kernel** evolves like any
-program — recompile and redeploy, a process restart with a new binary — *not* live
-self-modification. Keeping the kernel un-editable from inside is the deliberate
-recovery floor. (The existing `system`/`internal`-scope-outside-userspace pattern
-is this same trusted-floor-vs-userspace instinct in miniature.)
+"deenv changes itself" means **the image changes**, and *safely* in the current
+model: a schema/behavior edit is branched, previewed live, and promoted (the Stage 2
+versioning loop), so there is always a known-good image to boot from. The **kernel**
+evolves like any program — recompile and redeploy, a process restart with a new
+binary — *not* live self-modification under today's engineering approach.
+
+**Update 2026-07-14 — Radical liveness direction.** The kernel/image split and the
+"never live self-modification" rule were pragmatic choices made because full
+runtime redefinition of the substrate (including what is today the kernel) was
+difficult to picture in concrete terms. The original long-term vision (see
+VISION.md "Radical liveness — nothing is fixed") is more ambitious: it must be
+possible to change *anything* at runtime, including OS-level behaviors, with total
+reducibility (a full system live-reduced to a minimal primitive using only a few
+bytes) and without any requirement for reversibility or a recovery floor.
+
+With AI assistance it is believed that the deeper self-redefinition becomes
+feasible. The current kernel/image boundary is therefore documented as an
+implementation detail of the present stage, not as an invariant of the destination.
+Seams should be kept such that moving more (eventually all) of what is today
+"kernel" behavior into the live, redefinable layer remains possible. The
+`system`/`internal` scope pattern and the host-language floor remain useful for
+the current host (Linux/.NET userspace), but the vision allows the system to
+transcend them.
 
 **Precedent — K2: self-modifiable, but the tooling calcified (cautionary).** K2 (a
 long-standing Central-European ERP) is extensively modifiable *from itself* — strong
@@ -2441,8 +2457,10 @@ operator-level: fix the instance's files (or publish a corrected doc) and restar
 kernel-level failure (a shared host failing to bind) still aborts the process, correctly. Registry
 collisions (`EnsureNoCollisions`) also stay fatal — a registry aliasing two instances' stores is an
 operator config error with no unambiguous "bad instance" to skip. This is the first, cheapest
-increment of the north-star recovery floor (STAGES) — the "mint a fresh known-good designer"
-half stays future.
+increment of the (then-current) north-star recovery floor concept from STAGES.
+Under the radical liveness principle the guaranteed recovery floor is no longer
+a destination requirement (see VISION.md). The "mint a fresh known-good" capability
+remains useful for the pragmatic current host model.
 
 ## Distributed ACID upgraded: sharding is the destination — 2026-07-06
 

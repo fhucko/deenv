@@ -7,8 +7,16 @@ back here; do not duplicate project rules there.
 ## What this project is
 
 A web-first development environment for building database-backed web apps,
-where developers design data visually and use it as objects. Full mission in
-**VISION.md**.
+where developers design data visually and use it as objects. The long-term
+destination is a radically live system in which anything — OS layer and
+applications alike — can be changed at runtime with no fixed substrate
+("nothing is permanently fixed"). Total reducibility is in scope (a full
+environment can be live-transformed into a minimal primitive). Full mission
+and principle in **VISION.md**. 
+
+Near-term work remains disciplined and sequenced (see ROADMAP.md and current
+focus below); the radical liveness ambition shapes long-term architecture
+decisions and seams.
 
 ## Read these before working
 

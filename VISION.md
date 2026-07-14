@@ -21,6 +21,22 @@ is not a footnote to the mission, it is the other half of it. The devops half
 is drawn in full in **STAGES.md** (the self-hosted-image north star) — its
 thesis is that operating the system collapses toward a single act.
 
+## Radical liveness — nothing is fixed
+
+The original and enduring ambition is a system (initially an environment for applications, later potentially an operating system itself) in which **anything can be changed at runtime, without restart, in both the OS layer and the applications**. Nothing is permanently fixed ("nic není napevno").
+
+This principle includes **total reducibility**. A running full instance of the system can be transformed live into a completely different, minimal one. For example: from a rich deenv environment running on a conventional host OS (Linux + .NET process) into a primitive system whose only capability is to display the current time and which occupies only a few bytes of memory.
+
+**Irreversibility is acceptable by design.** There is no requirement that every transformation must preserve a path back to a previous state. A radical change can be one-way.
+
+For the foreseeable future the system operates as a powerful **userspace application** on an existing host. Over time the same live-mutability principles can allow it to become (or directly provide) operating-system-level functionality.
+
+When sufficiently powerful constructs are added inside the system — whether through Code, data definitions, or higher-order mechanisms — they can redefine core behaviors of the environment. The rest of the system adapts dynamically to the new reality.
+
+Historically, certain architectural choices (in particular the split between a thin trusted kernel implemented in a host language and a malleable image living in data + Code) were made because full runtime redefinition of the substrate was difficult to envision in detail. With AI as a collaborator and force multiplier, deeper self-redefinition of the runtime itself is now considered reachable in the long term. The kernel/image distinction remains a useful pragmatic description of the current implementation approach, but it is not a permanent limitation on what can be changed live.
+
+This principle of radical liveness informs the pillars, the stages, and the north star. It does not relax the sequencing discipline (see ROADMAP.md and AGENTS.md): near-term work continues to focus on the usable-MVP gates and current milestones, while long-term seams and ambitions are documented here so that they are not accidentally foreclosed.
+
 ## Who uses this
 
 There is **one operator** — the person driving the tool. They must be
@@ -142,9 +158,9 @@ license** — chosen for maximum reach and embedding. The considered alternative
 copyleft (GPL/**AGPL**), which would instead keep the core from being taken closed and
 out-proprietarised at some adoption friction; permissive won on reach. (Restrictive
 source-available licenses like BSL were never on the table — they are not open source.)
-The kernel/image boundary is in any case a natural license boundary, so apps built on
-the kernel stay the author's own regardless (as the Linux kernel's GPL does not reach
-userspace). The creator's role is **steward, not founder** —
+The kernel/image distinction is in any case a natural license boundary today, so apps built on
+the current host layer stay the author's own regardless (as the Linux kernel's GPL does not reach
+userspace). In the long term the radical liveness principle means even this boundary is not permanently fixed. The creator's role is **steward, not founder** —
 the Linus Torvalds / Evan You model: build and maintain the core, funded by
 **donations and sponsorship**, with a day job as the runway until (if ever) it
 earns the right to go full-time. **AI is the force multiplier** that makes this

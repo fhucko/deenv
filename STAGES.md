@@ -120,8 +120,20 @@ multi-instance/port supervisor, boot) hosts a malleable **image** — the IDE, t
 designer, and every app as data + Code. The IDE is just an instance, seeded via
 `initialData`; the kernel runs it and spawns more instances on more ports. "deenv
 changes itself" = the *image* changes, safely, via the Stage 2 branch→preview→
-promote loop; the kernel evolves by recompile/redeploy, never live
-self-modification (the recovery floor).
+promote loop.
+
+**Note on radical liveness (2026-07-14).** The description above reflects the pragmatic
+current implementation approach. The long-term destination (see VISION.md "Radical liveness — nothing is fixed")
+goes further: the system must support total live reducibility and redefinition, including
+behaviors that today live in the kernel layer. A full environment can be transformed at
+runtime into a minimal primitive system (e.g. a few-byte clock display) with no
+requirement for a guaranteed return path. The kernel/image split is therefore a
+temporary engineering description, not a permanent architectural limit. Recovery
+floor guarantees are not required by the vision.
+
+The kernel evolves by recompile/redeploy in the near term; the radical ambition is
+that even substrate behaviors become live-redefinable over time, with AI assistance
+making deeper self-redefinition feasible.
 
 This is the terminus of the self-hosting path (M4 designer-as-instance, M9
 self-hosted UI) and the concrete form of pillar 9. It is reached incrementally —
@@ -153,17 +165,12 @@ fork. This is a real destination but a **late** one: hosting strangers demands
 currently out of scope — and, at scale, the distributed runtime. Written here as
 a capability the architecture *enables*, not near-term work.
 
-**Recovery floor (open question).** The section above names *the recovery
-floor* — the guarantee that a botched self-edit can be undone. Its likely shape:
-a **"safe mode" in which the kernel mints a fresh, known-good default IDE
-instance** (recovery as just another instance spawn) from a default that lives
-where a failing image cannot corrupt it. The hard parts are deferred and
-unsolved: *where* that trustworthy default lives (compiled into the kernel? a
-read-only kernel seed? the git-committed known-good, re-checked-out?), and the
-trade between a **frozen** default (always safe, but stale — it loses the IDE's
-own self-hosted improvements) and a **last-known-good** snapshot (fresher, but it
-must be proven uncorrupted). Named here so the self-operation promise stays
-honest, not solved.
+**Recovery floor.** Under the pragmatic kernel/image model the recovery floor
+was an important safety property. Under the radical liveness principle documented
+in VISION.md, guaranteed recovery is not required — transformations (including
+radical reduction) may be irreversible by design. A minimal "safe mode" or external
+seed loader may still exist for practical bootstrapping, but it is not obligated
+to be able to resurrect an arbitrarily transformed system from inside itself.
 
 **The ecosystem (capstone).** The furthest destination: an **npm- and
 GitHub-for-apps** — a registry and collaboration surface for libraries and whole
