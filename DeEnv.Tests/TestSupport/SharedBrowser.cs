@@ -56,7 +56,7 @@ public static class SharedBrowser
             _browser ??= await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
             {
                 Headless = headless,
-                SlowMo = headless ? 0 : 100, // slow down for visibility when debugging in VS
+                SlowMo = headless ? 0 : 500, // slow down for visibility when debugging in VS
             });
             return _browser;
         }
