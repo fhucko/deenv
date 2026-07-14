@@ -74,7 +74,7 @@ Feature: Designer - Library and Navigation
   # ONLY if it built completely from local data; the thin editor needs server data, so the LIST view is
   # HELD until the refetch paints the COMPLETE editor once. A MutationObserver armed before the nav records
   # any `.design-editor` that ever rendered WITHOUT a `.type-card` (the empty/partial state — the todo
-  # design always has the TodoItem type, so a complete editor always has ΓëÑ1 type card), so the assertion
+  # design always has the TodoItem type, so a complete editor always has ≥1 type card), so the assertion
   # proves the partial editor never appeared, not merely that it is absent now. The populated assertions
   # (the TodoItem type + the UI text) confirm the nav still completed onto the real editor.
   @milestone-10 @single-user
@@ -94,7 +94,7 @@ Feature: Designer - Library and Navigation
 
 
   # The instances list shows each instance alongside the design it currently runs, resolved by the
-  # explicit designId reference (todo ΓåÆ its seeded "todo" design).
+  # explicit designId reference (todo → its seeded "todo" design).
   @milestone-10 @single-user
   Scenario: The instances route lists the hosted instances with their current design
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
@@ -121,7 +121,7 @@ Feature: Designer - Library and Navigation
 
   # Create an instance via the generic <SetTable>'s create form (the `createForm` slot): ONE step — a
   # design <select> (over db.designs) + a name field, then Save. Save runs SetTable's `onCreate`
-  # override ΓåÆ sys.create(design, name), spawning a new instance running that design under that name,
+  # override → sys.create(design, name), spawning a new instance running that design under that name,
   # served at /apps/<name>. The instance is a designer-stored object (db.instances), so the new ROW —
   # including its design column — must appear IN PLACE via the WS refetch (+ resetViewState), with NO
   # reload (the kernel mirror writes the design ref after add-to-set, so the in-place design cell is the
@@ -138,7 +138,7 @@ Feature: Designer - Library and Navigation
 
   # The create form is client-TOGGLED: revealing it sets the SetTable component's `state.creating = true`
   # and the client re-renders. RefSelect's `foreach c in db.designs` reads data the first paint never
-  # shipped (the form was closed) ΓåÆ a value-not-available refetch. The refetch ships the SetTable's whole
+  # shipped (the form was closed) → a value-not-available refetch. The refetch ships the SetTable's whole
   # `state` via slotState — including the NESTED transient `draft` (state.draft = sys.new(desc)) BY VALUE,
   # recursively. The server reconstructs that draft as a throwaway transient, reproduces the open form
   # (RefSelect parent = the real draft, not null), reads `db.designs`, and HARVESTS it — so the picker
@@ -263,7 +263,7 @@ Feature: Designer - Library and Navigation
     Then the design editor's label input holds "renamed1"
 
 
-  # Each instances-list row gathers its actions into ONE trailing actions cell behind a "Γï»" overflow
+  # Each instances-list row gathers its actions into ONE trailing actions cell behind a "⋯" overflow
   # (kebab) menu — supplied to the generic <SetTable> as its `rowActions` cell. The menu is a per-row
   # REACTIVE component: hidden until the row's kebab is clicked, its open/closed state keyed to that
   # row's instance identity, so opening one row's menu does NOT open another's (independent state that

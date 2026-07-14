@@ -64,7 +64,7 @@ Feature: Designer - Commit, Publish, Branches, Merge
   # HostActionScan.UsesHostActions exactly like the existing sys.publish/sys.delete detection
   # (Kernel.feature's "designer-shaped, uses host actions" scenario) — the wiring this slice adds, proven
   # at the same seam. A real seam is built (the AST wiring works), but the app declares no `sys` rule, so
-  # the authority gate still rejects — the same shape-Γëá-authority proof Kernel.feature already makes for
+  # the authority gate still rejects — the same shape-≠-authority proof Kernel.feature already makes for
   # sys.delete, now repeated for sys.commitDesign.
   @milestone-13 @single-user
   Scenario: An app whose Code calls sys.commitDesign is wired for host actions, and the sys rule still gates it
@@ -127,7 +127,7 @@ Feature: Designer - Commit, Publish, Branches, Merge
     Then the commit history's first row has message "newest one"
 
 
-  # Review fix 5 — the textareaΓåÆcommitDesignΓåÆdetail round-trip has no rendered-UI proof and the
+  # Review fix 5 — the textarea→commitDesign→detail round-trip has no rendered-UI proof and the
   # binding is load-bearing: open the Migration disclosure, type a valid migration, commit, then
   # confirm it rendered on the commit's detail page.
   @milestone-13 @single-user
@@ -239,7 +239,7 @@ Feature: Designer - Commit, Publish, Branches, Merge
   # (retyping the referencing prop so the design stays valid) and commit again. Opening the second commit's
   # detail page shows the STRUCTURAL diff against its parent, computed server-side by sys.diffCommits and
   # shipped via the memo cache (like sys.schema/sys.canRead — no host action, no conformance). The payoff of
-  # the identity diff: the type change renders as a RENAME ("TodoItem ΓåÆ Task"), never as a remove+add.
+  # the identity diff: the type change renders as a RENAME ("TodoItem → Task"), never as a remove+add.
   @milestone-13 @single-user
   Scenario: The commit-detail page shows a rename as a rename in "Changes since parent"
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
@@ -352,7 +352,7 @@ Feature: Designer - Commit, Publish, Branches, Merge
     Then the "todo" instance eventually holds a "Task" with text "buy milk"
 
 
-  # 4) The previewΓåÆapply CONSISTENCY GUARD (addendum). Splitting preview from apply opens a TOCTOU window:
+  # 4) The preview→apply CONSISTENCY GUARD (addendum). Splitting preview from apply opens a TOCTOU window:
   # the operator approves a SPECIFIC plan (the preview), but an unguarded apply recomputes fresh and could
   # execute a DIFFERENT plan if the target moved in between. The Apply button always passes back the token
   # `sys.publishPreview` handed it (targetCommit + targetVersion); the server rejects a stale apply BEFORE
@@ -391,6 +391,9 @@ Feature: Designer - Commit, Publish, Branches, Merge
   Scenario: A clean guarded apply on the versioned path still succeeds and carries data
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     And the "todo" target holds a TodoItem with text "guarded apply keeps me"
+    # The target is already stamped at boot to the design's baseline (see EnsureMainBranches +
+    # StampMatchingInstance). We change the design and do one guarded publish; it will be on the
+    # versioned path (diff from the boot stamp) and exercises the 4-arg guarded form.
     When I open the designs list
     And I edit the design "todo"
     And I rename the type "TodoItem" to "Task"
@@ -431,7 +434,7 @@ Feature: Designer - Commit, Publish, Branches, Merge
 
   # 2) A clean merge carries a disjoint change. Commit a baseline, branch, add a field on the branch and
   # commit it there, then merge the branch back into the main design — a clean merge (disjoint edit), and
-  # the main design's type now carries the branch's new field. Proves the whole previewΓåÆapply UI path.
+  # the main design's type now carries the branch's new field. Proves the whole preview→apply UI path.
   @milestone-13 @single-user
   Scenario: Merging a branch cleanly carries its change into the target design
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"

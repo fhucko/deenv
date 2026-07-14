@@ -12,7 +12,7 @@ Feature: Designer - Structured Render Tree and Canvas
 
 
   # The create form's design picker is the generic <RefSelect> — a BARE ref-binding <select> in the lib,
-  # no Set/Use button. Picking an option fires the native change ΓåÆ RefSelect's onChange (applyPick) ΓåÆ
+  # no Set/Use button. Picking an option fires the native change → RefSelect's onChange (applyPick) →
   # sys.setRef on the draft (the write is in HANDLER position, not render). So a single native pick (no
   # extra click) binds the draft's design, and Save spawns the instance running it. This proves the
   # render-time sys.setRef the old picker used is gone, replaced by the generic component.
@@ -130,15 +130,15 @@ Feature: Designer - Structured Render Tree and Canvas
   #
   # E1 made the tree editor recurse and inline-edit each node's SCALAR fields, but you could not change the
   # SHAPE of the tree — no way to add or remove nodes/attributes. E2 adds that, mirroring the type editor's
-  # add/remove idiom (set.add({ΓÇªall fields defaultedΓÇª}) + an inline set.remove(member)). Each ELEMENT node
+  # add/remove idiom (set.add({…all fields defaulted…}) + an inline set.remove(member)). Each ELEMENT node
   # gets a small button row — "+ element" / "+ text" / "+ attr" — that appends a child element (default tag
   # "div"), a child text-leaf (expr defaulting to the empty-string literal source "" so it PROJECTS), or an
-  # attribute (value likewise "" so it projects). Each non-root child and each attr gets an inline "├ù" that
+  # attribute (value likewise "" so it projects). Each non-root child and each attr gets an inline "×" that
   # removes it from its parent's set (the removed subtree is GC-reclaimed). The single-root invariant holds:
   # the ROOT keeps its add controls but has NO remove control.
   #
   # The one real correctness trap: E1 renders children via .orderBy(c => c.order), and the import assigns
-  # dense 0,1,2ΓÇª orders, so a naive order:0 on a new child would SORT TO THE FRONT and collide with the
+  # dense 0,1,2… orders, so a naive order:0 on a new child would SORT TO THE FRONT and collide with the
   # imported first child. New members must APPEND — order = (max existing sibling order) + 1, computed in
   # Code over the sibling set (orderBy descending, take the first). The scenario proves it: after adding an
   # element to the root (whose sole imported child is <h1>), the new node lands LAST, not first.
@@ -177,7 +177,7 @@ Feature: Designer - Structured Render Tree and Canvas
     And the stored render projects to a valid design document
 
 
-  # ──── M12 S5a — reorder (Γû▓/Γû╝ swap `order` with the neighbor sibling; the E2 add/remove idiom family) ──
+  # ──── M12 S5a — reorder (▲/▼ swap `order` with the neighbor sibling; the E2 add/remove idiom family) ──
   #
   # The one structural op E2 still lacked (visual-designer.md's E3 ledger). `moveRow(coll, node, dir)` finds
   # the nearest sibling by strict `order` comparison and swaps the two ints — an ordinary two ctx-staged
@@ -187,9 +187,9 @@ Feature: Designer - Structured Render Tree and Canvas
   # The proof: convert the nested render (root <main> starts with one child, <h1>), append two more elements
   # and rename them, giving the root exactly three children (h1, second, third — test (a)'s "parent with
   # three children"); assert the tree editor AND the canvas already agree on that order; assert the first
-  # row's Γû▓ and the last row's Γû╝ are DISABLED (test (b) — ux review: disable-in-place, not hidden — the
-  # button is always present, only its `disabled` attribute reflects the edge, so ├ù never slides into the
-  # slot a chase-click would land on); click Γû╝ on the first row and assert BOTH surfaces show the new order
+  # row's ▲ and the last row's ▼ are DISABLED (test (b) — ux review: disable-in-place, not hidden — the
+  # button is always present, only its `disabled` attribute reflects the edge, so × never slides into the
+  # slot a chase-click would land on); click ▼ on the first row and assert BOTH surfaces show the new order
   # with no reload (the same-frame repaint pin); reload the whole editor and assert the new order survived —
   # proving the swap is a real persisted write, not just an optimistic client reorder (test (c)).
   @m12 @single-user
@@ -526,12 +526,12 @@ Feature: Designer - Structured Render Tree and Canvas
   # EVALUATES the row: a `for` iterates its collection against the seed graph and instantiates the body
   # PER ITEM with the loop var bound (the row scope — an ambient-bindings layer over {db}); an `if`
   # evaluates its condition and renders ONLY the taken branch. The instances REPLACE the template — real
-  # content, no badge. This is the end-to-end integration over a REAL seed graph (initialData ΓåÆ the
+  # content, no badge. This is the end-to-end integration over a REAL seed graph (initialData → the
   # evalContext's synthetic db), the piece the conformance suite pins on both twins at the value level.
   #
   # The design: a Db root with `notes` (a set of Note{title}) and a bool `flag`, seeded with two notes
-  # ("Alpha","Beta") and flag=true; a render whose <main> holds `foreach note in db.notes ΓåÆ <li>{note.title}`
-  # plus `if db.flag ΓåÆ <p>"ON" else <p>"OFF"`. After Convert the canvas shows BOTH titles as real <li> text
+  # ("Alpha","Beta") and flag=true; a render whose <main> holds `foreach note in db.notes → <li>{note.title}`
+  # plus `if db.flag → <p>"ON" else <p>"OFF"`. After Convert the canvas shows BOTH titles as real <li> text
   # (not chips, not a for-template badge) and the taken `if` branch ("ON", never "OFF").
   #
   # THE RACE GUARD (the S3a idiom, now for a collection): editing the for-row's collection to a source the
@@ -639,7 +639,7 @@ Feature: Designer - Structured Render Tree and Canvas
     And the design canvas does not show the stale-fns banner
 
 
-  # ──── M12 S4a — canvas selection: click ΓåÆ select ΓåÆ highlight ΓåÆ scroll-to-row ──────────────────────────────────────────────
+  # ──── M12 S4a — canvas selection: click → select → highlight → scroll-to-row ──────────────────────────────────────────────
   #
   # The canvas becomes the editor's selection surface: every element sys.renderTree emits carries
   # `data-node` (CANVAS-1); a click resolves the nearest one and writes it into the `selectedNode` ui

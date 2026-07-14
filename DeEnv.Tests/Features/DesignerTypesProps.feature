@@ -162,7 +162,7 @@ Feature: Designer - Types and Props Editor
     And the design canvas shows the evaluated leaf text "Hello"
 
 
-  # ──── M12 S4b — the page-order reorder: types ΓåÆ render ΓåÆ publish ΓåÆ branches ──────────────────────────────────────────────────────
+  # ──── M12 S4b — the page-order reorder: types → render → publish → branches ──────────────────────────────────────────────────────
   #
   # The UX ledger's one high-value reorder (visual-designer.md, 2026-07-08 checkpoint): publish/branches
   # used to split the canvas+tree authoring pair from the type editor above it. A markup move only — the

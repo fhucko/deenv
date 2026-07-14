@@ -136,9 +136,9 @@ Feature: Designer - Components and Live Previews
   # upheld decision — a true atomic two-object mint isn't reachable from a plain click handler), so the
   # new card's body shows a ROOT-position add-row. That row must offer ONLY "+ element"/"+ text/expr" —
   # NOT "+ for"/"+ if" (a for/if row can never be a fn's body root — projection refuses it — and a body
-  # root has no remove ├ù, so a for/if click would strand the operator until they delete the WHOLE
+  # root has no remove ×, so a for/if click would strand the operator until they delete the WHOLE
   # component). Also proves the inline "'render' is reserved" name hint (fix 3) and that removing the
-  # component (its OWN ├ù in the fn-head) cleanly removes the card.
+  # component (its OWN × in the fn-head) cleanly removes the card.
   @m12 @single-user
   Scenario: A from-scratch component starts with a root-only add-row, gains its first body node, shows the reserved-name hint, and removes cleanly
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"

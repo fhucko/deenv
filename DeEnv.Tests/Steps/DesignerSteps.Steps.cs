@@ -38,9 +38,9 @@ public sealed partial class DesignerSteps
     public async Task WhenEditDesign(string label)
     {
         // The Edit link is an <a href="/designs/<designId>"> on the matching design row. Since round-1 the
-        // in-app click is INTERCEPTED and handled CLIENT-SIDE (no full reload ΓÇö the deep editor re-renders
+        // in-app click is INTERCEPTED and handled CLIENT-SIDE (no full reload — the deep editor re-renders
         // over the warm session; a full SSR still happens on a DIRECT GET of the URL, e.g. a refresh).
-        // Wait for the editor SECTION (always present once the design resolves) rather than a type row ΓÇö
+        // Wait for the editor SECTION (always present once the design resolves) rather than a type row —
         // a freshly-added design has no types yet, so .type-name would never appear for it.
         await DesignRowFor(label).Locator("a.edit-design").ClickAsync();
         await ctx.Page!.WaitForSelectorAsync("main.ide-design-edit .design-editor", new() { Timeout = TestTimeouts.ActionMs });
@@ -51,8 +51,8 @@ public sealed partial class DesignerSteps
     public async Task WhenOpenInstance(string label)
     {
         // The Open link is a fresh-SSR <a href="/instances/<id>"> now living in the row's kebab (overflow)
-        // menu ΓÇö all row actions were consolidated there. Reaching the instance page can start from the
-        // instances list OR directly (after editing a design) ΓÇö go to the list first so the row is present,
+        // menu — all row actions were consolidated there. Reaching the instance page can start from the
+        // instances list OR directly (after editing a design) — go to the list first so the row is present,
         // open its kebab so the Open link is visible, then click it.
         if (await ctx.Page!.Locator($"main.ide-list .set-row").CountAsync() == 0)
             await WhenOpenList();
@@ -68,7 +68,7 @@ public sealed partial class DesignerSteps
         // The just-created instance is the one carrying the name we typed (its mount + display label).
         // The selector route is keyed by the design-host's stored Instance OBJECT id (what the generic
         // <SetTable>'s row-link emits via sys.nest(setPath, member)), so look that id up from db.instances
-        // by the runtime id ΓÇö then navigate exactly as the row-link / Open link would. The Slice-2 mirror
+        // by the runtime id — then navigate exactly as the row-link / Open link would. The Slice-2 mirror
         // writes the row inside CreateAsync (before the WS reply), so it is present by now; poll defensively.
         var created = ctx.Kernel!.Instances.Single(i => i.Spec.App == _newInstanceName);
         int objId = 0;
@@ -86,7 +86,7 @@ public sealed partial class DesignerSteps
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
     }
 
-    // ΓöÇΓöÇ When: creating (the GENERIC SetTable create) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── When: creating (the GENERIC SetTable create) ─────────────────────────────────────────────────────────
 
     // Both phrasings drive the SAME generic-create flow (the designer no longer has a bespoke Add box):
     // the SetTable's "New" button reveals its create form, which the designs list customizes to a
@@ -99,9 +99,9 @@ public sealed partial class DesignerSteps
 
     private async Task CreateDesignViaGenericNew(string label)
     {
-        // Click the SetTable's "New " button to reveal its create form (the table ΓåÆ create-form swap),
-        // then fill the customized label-only field and Save. Save runs db.designs.add(draft) ΓÇö a
-        // journaled mutation. The new row appears immediately via the client re-render (no nav ΓÇö
+        // Click the SetTable's "New " button to reveal its create form (the table → create-form swap),
+        // then fill the customized label-only field and Save. Save runs db.designs.add(draft) — a
+        // journaled mutation. The new row appears immediately via the client re-render (no nav —
         // race-free), first carrying the draft's NEGATIVE transient id; the WS persist then remaps it.
         await ctx.Page!.Locator("main.ide-designs .new-btn").ClickAsync();
         await ctx.Page.Locator("main.ide-designs .create-form input.label").FillAsync(label);
@@ -110,7 +110,7 @@ public sealed partial class DesignerSteps
         // the generic <SetTable>, so a row is .set-row and the label is the stretched a.row-link.
         await ctx.Page.WaitForSelectorAsync(
             $".set-row:has(a.row-link:text-is({CssString(label)}))");
-        // Then wait for the persist+remap to land on the client ΓÇö the row's Edit link must point at the
+        // Then wait for the persist+remap to land on the client — the row's Edit link must point at the
         // real (positive) id, so a later Edit click navigates to the now-persisted design, not its
         // transient negative id. The href is /designs/<id> via sys.nest, so match a positive trailing id.
         await ctx.Page.WaitForFunctionAsync(
@@ -129,11 +129,11 @@ public sealed partial class DesignerSteps
     public async Task WhenCreateInstance(string name, string designLabel)
     {
         // The instances list is the generic <SetTable>: its "New Instance" button reveals the create
-        // form. The `createForm` slot self-hosts a focused body ΓÇö the generic <RefSelect> (a bare
+        // form. The `createForm` slot self-hosts a focused body — the generic <RefSelect> (a bare
         // ref-binding <select> over db.designs) plus the generic name <Field>. It is ONE step: pick the
         // design, type the name, Save. The native SelectOption fires the select's `onChange` (RefSelect's
-        // applyPick) which does sys.setRef on the draft ΓÇö NO extra "Set"/"Use" click. Save runs SetTable's
-        // `onCreate` override ΓåÆ sys.create(draft.design, name), a host action; the reply triggers a WS
+        // applyPick) which does sys.setRef on the draft — NO extra "Set"/"Use" click. Save runs SetTable's
+        // `onCreate` override → sys.create(draft.design, name), a host action; the reply triggers a WS
         // refetch (+ resetViewState) so the new row appears via the db.instances mirror, in place, no reload.
         await ctx.Page!.Locator("main.ide-list .new-btn").ClickAsync();
         var form = ctx.Page.Locator("main.ide-list .create-form");
@@ -156,14 +156,14 @@ public sealed partial class DesignerSteps
     public async Task ThenBareRefSelect()
     {
         var form = ctx.Page!.Locator("main.ide-list .create-form");
-        // The generic RefSelect is the bare ref-binding <select> ΓÇö present, with the "(chooseΓÇª)" placeholder.
+        // The generic RefSelect is the bare ref-binding <select> — present, with the "(choose…)" placeholder.
         // It renders only once `candidates` (db.designs) is available: with no footprint anchor, that data
         // arrives on the toggle REFETCH (the nested-draft round-trip reproducing the open form), so wait for
         // the select to attach rather than asserting its count synchronously (which would race the refetch).
         await form.Locator("select.ref-select").WaitForAsync(
             new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
         await Assert.That(await form.Locator("select.ref-select").CountAsync()).IsEqualTo(1);
-        // No per-candidate Set/Use button (the old picker pattern) ΓÇö the native pick is the whole control.
+        // No per-candidate Set/Use button (the old picker pattern) — the native pick is the whole control.
         await Assert.That(await form.Locator(".ref-set, button:has-text(\"Set\")").CountAsync()).IsEqualTo(0);
     }
 
@@ -172,7 +172,7 @@ public sealed partial class DesignerSteps
     {
         // The picker is the generic <RefSelect> whose `foreach c in db.designs` builds one <option> per
         // candidate. Those candidates are harvested by the toggle refetch reproducing the OPEN form on the
-        // server ΓÇö which only works if the SetTable's nested transient `draft` round-tripped (slotState
+        // server — which only works if the SetTable's nested transient `draft` round-tripped (slotState
         // ships it by value; the server rebuilds it so RefSelect's `parent` is non-null and db.designs is
         // read). An auto-waiting locator: the option appears once the refetch reply fills the picker.
         var option = ctx.Page!.Locator("main.ide-list .create-form select.ref-select option")
@@ -187,8 +187,8 @@ public sealed partial class DesignerSteps
     public async Task WhenPickViaRefSelect(string designLabel, string name)
     {
         var form = ctx.Page!.Locator("main.ide-list .create-form");
-        // SelectOptionAsync fires the native change ΓåÆ RefSelect.applyPick ΓåÆ sys.setRef on the draft. NO
-        // extra "Set"/"Use" click ΓÇö the single native pick is the whole bind.
+        // SelectOptionAsync fires the native change → RefSelect.applyPick → sys.setRef on the draft. NO
+        // extra "Set"/"Use" click — the single native pick is the whole bind.
         await form.Locator("select.ref-select").SelectOptionAsync(
             new Microsoft.Playwright.SelectOptionValue { Label = designLabel });
         _newInstanceName = name;
@@ -196,16 +196,16 @@ public sealed partial class DesignerSteps
         await form.Locator("button.create-save").ClickAsync();
     }
 
-    // ΓöÇΓöÇ When: editing a design (on /designs/<id>) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── When: editing a design (on /designs/<id>) ────────────────────────────────────────────────────────────────
 
     [When("I rename the type {string} to {string}")]
     public async Task WhenRename(string from, string to)
     {
         await TypeNameInput(from).FillAsync(to);
-        // The bound input re-renders the model name to the new value (the client edit landed)ΓÇª
+        // The bound input re-renders the model name to the new value (the client edit landed)…
         await ctx.Page!.WaitForFunctionAsync(
             $"() => [...document.querySelectorAll('main.ide-design-edit .design-editor .type-card input.type-name')].some(e => e.value === {JsString(to)})");
-        // ΓÇªthen wait for the autosave (objectPropChange) to reach the designer's sovereign store, so a
+        // …then wait for the autosave (objectPropChange) to reach the designer's sovereign store, so a
         // later apply projects the renamed design (the apply reads the store fresh).
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
             .Any(o => o.Fields.TryGetValue("name", out var v)
@@ -221,10 +221,10 @@ public sealed partial class DesignerSteps
         // currently holds `propName`; selecting the target type writes prop.type through the binding.
         await PropTypeSelect(propName).SelectOptionAsync(
             new Microsoft.Playwright.SelectOptionValue { Value = newType });
-        // The bound select reflects the new value (the client edit landed)ΓÇª
+        // The bound select reflects the new value (the client edit landed)…
         await ctx.Page!.WaitForFunctionAsync(
             $"() => [...document.querySelectorAll('main.ide-design-edit .design-editor .prop-row select.prop-type')].some(e => e.value === {JsString(newType)})");
-        // ΓÇªthen wait for the autosave to reach the designer's store, so a later apply projects the
+        // …then wait for the autosave to reach the designer's store, so a later apply projects the
         // retyped prop (the apply reads the store fresh).
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
             .Any(o => o.Fields.TryGetValue("type", out var v)
@@ -236,7 +236,7 @@ public sealed partial class DesignerSteps
     {
         // The cardinality <select> in the prop's row (single / set / dictionary). Selecting an option
         // writes prop.cardinality through the two-way <select> binding and autosaves it. Options come from
-        // the system `cardinalities` vocab ΓÇö their VALUE is the raw word, the visible label is humanized ΓÇö
+        // the system `cardinalities` vocab — their VALUE is the raw word, the visible label is humanized —
         // so select by value. The designer now stores "single" explicitly (so the value matches its
         // dropdown option), hence the stored value is the word itself for every cardinality.
         await PropCardinalitySelect(propName).SelectOptionAsync(
@@ -265,7 +265,7 @@ public sealed partial class DesignerSteps
     [When("I toggle multiline on the prop {string}")]
     public async Task WhenToggleMultiline(string propName)
     {
-        // The multiline checkbox in the prop's row (shown only for a single text prop). Check it ΓÇö the
+        // The multiline checkbox in the prop's row (shown only for a single text prop). Check it — the
         // two-way `checked` binding writes prop.multiline = true and autosaves. Wait for THIS prop's
         // autosave (matched by name + multiline) so the designer's store has captured the flag.
         await PropMultilineInput(propName).CheckAsync();
@@ -293,7 +293,7 @@ public sealed partial class DesignerSteps
     [When("I set the just-added type's base type to {string}")]
     public async Task WhenSetJustAddedBaseType(string baseType)
     {
-        // The kind <select> of the row we just named (located by its now-known name) ΓÇö Object / Enum,
+        // The kind <select> of the row we just named (located by its now-known name) — Object / Enum,
         // sourced from the system `typeKinds` vocab (option VALUE is the raw word, label humanized), so
         // select by value. For "enum" this flips the projection branch in SchemaBridge; wait for the
         // autosave so a later apply sees it.
@@ -343,7 +343,7 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"]) button.remove-type").First
             .First.ClickAsync();
 
-    // ΓöÇΓöÇ When: the instance selector (on /instances/<id>) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── When: the instance selector (on /instances/<id>) ─────────────────────────────────────────────────
 
     [When("I pick the design {string} in the dropdown")]
     public async Task WhenPickDesign(string designLabel)
@@ -362,13 +362,13 @@ public sealed partial class DesignerSteps
     public async Task WhenApply() =>
         await ctx.Page!.Locator("button.apply-design").ClickAsync();
 
-    // ΓöÇΓöÇ The per-row kebab (overflow) actions menu on the instances list ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── The per-row kebab (overflow) actions menu on the instances list ────────────────────
 
     [Then("the instance {string} row actions are hidden behind a kebab")]
     public async Task ThenRowActionsBehindKebab(string label)
     {
-        // The row carries a single "Γï»" toggle in its trailing actions cell (the generic <SetTable>'s
-        // rowActions slot), and the menu items (Open/Clone/Delete) start HIDDEN ΓÇö they live in the DOM
+        // The row carries a single "⋯" toggle in its trailing actions cell (the generic <SetTable>'s
+        // rowActions slot), and the menu items (Open/Clone/Delete) start HIDDEN — they live in the DOM
         // (the menu container is always rendered, only toggled by a class), so this asserts hidden, not
         // absent. Proves the actions are consolidated behind the kebab rather than spread across columns.
         var row = RowFor(label);
@@ -380,7 +380,7 @@ public sealed partial class DesignerSteps
 
     [When("I open the actions menu for instance {string}")]
     public async Task WhenOpenActionsMenu(string label) =>
-        // Click the row's "Γï»" toggle ΓÇö the component flips its own open state and re-renders, so the
+        // Click the row's "⋯" toggle — the component flips its own open state and re-renders, so the
         // menu (class .kebab-menu.open) becomes visible. State is keyed to this row's slot, so only this
         // row's menu opens.
         await RowFor(label).Locator("td.row-action button.kebab-toggle").ClickAsync();
@@ -389,7 +389,7 @@ public sealed partial class DesignerSteps
     public async Task ThenActionsMenuShowsAll(string label)
     {
         // Opened, the LIST menu reveals Open / Clone / Delete (gathered in one place). Rename is NOT here
-        // ΓÇö <SetTable> owns the name cell, so inline in-row rename can't be driven from a rowActions cell;
+        // — <SetTable> owns the name cell, so inline in-row rename can't be driven from a rowActions cell;
         // rename lives on the detail page. WaitForAsync (default: Visible) proves each is displayed.
         var menu = RowFor(label).Locator(".kebab-menu.open");
         await menu.Locator("a.open-instance").WaitForAsync();
@@ -401,18 +401,18 @@ public sealed partial class DesignerSteps
     [Then("the instance {string} actions menu stays closed")]
     public async Task ThenActionsMenuClosed(string label)
     {
-        // Opening one row's kebab must NOT open another's ΓÇö each row's menu has independent state keyed
+        // Opening one row's kebab must NOT open another's — each row's menu has independent state keyed
         // to its instance identity. So this row has no .open menu and its items stay hidden.
         var row = RowFor(label);
         await Assert.That(await row.Locator(".kebab-menu.open").CountAsync()).IsEqualTo(0);
         await row.Locator(".kebab-menu button.delete-instance").WaitForAsync(Hidden);
     }
 
-    // ΓöÇΓöÇ The same kebab on the instance DETAIL page (/instances/<id>) ΓÇö no Open item ΓöÇΓöÇ
+    // ──── The same kebab on the instance DETAIL page (/instances/<id>) — no Open item ────
 
     [When("I open the actions menu on the instance page")]
     public async Task WhenOpenActionsMenuOnDetail() =>
-        // The detail page carries the SAME instanceActions component in its head; click its "Γï»" toggle.
+        // The detail page carries the SAME instanceActions component in its head; click its "⋯" toggle.
         await ctx.Page!.Locator("main.ide-instance .kebab button.kebab-toggle").ClickAsync();
 
     [Then("the instance page actions menu has no Open item")]
@@ -420,7 +420,7 @@ public sealed partial class DesignerSteps
     {
         // The component is called with showOpen=false here, so the Open item is not in the tree at all
         // (the only place "Open" would point is this very page). The menu IS open and still offers the
-        // other actions ΓÇö assert one is visible to prove the menu opened, and that Open is absent.
+        // other actions — assert one is visible to prove the menu opened, and that Open is absent.
         var menu = ctx.Page!.Locator("main.ide-instance .kebab-menu.open");
         await menu.Locator("button.rename-instance").WaitForAsync();
         await Assert.That(await menu.Locator("a.open-instance").CountAsync()).IsEqualTo(0);
@@ -442,7 +442,7 @@ public sealed partial class DesignerSteps
         await Assert.That(await head.Locator("button.rename-cancel").CountAsync()).IsEqualTo(1);
     }
 
-    // ΓöÇΓöÇ When: deleting a design (the two-step inline confirm) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── When: deleting a design (the two-step inline confirm) ────────────────────────────────────────
 
     [When("I click Delete on the design {string}")]
     public async Task WhenClickDelete(string label) =>
@@ -458,11 +458,11 @@ public sealed partial class DesignerSteps
 
     [When("I confirm the delete of the design {string}")]
     public async Task WhenConfirmDelete(string label) =>
-        // The Yes button in the armed confirm runs db.designs.remove(d) ΓÇö a journaled mutation that drops
+        // The Yes button in the armed confirm runs db.designs.remove(d) — a journaled mutation that drops
         // the design (and persists over the WS, running the store GC).
         await DesignRowFor(label).Locator("button.delete-yes").ClickAsync();
 
-    // ΓöÇΓöÇ When: a non-existent design id ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── When: a non-existent design id ─────────────────────────────────────────────────────────────────────────────────────
 
     [When("I open a non-existent design")]
     public async Task WhenOpenMissingDesign()
@@ -475,7 +475,7 @@ public sealed partial class DesignerSteps
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
     }
 
-    // ΓöÇΓöÇ Then ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── Then ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
     [Then("the designs list shows a design {string}")]
     public async Task ThenDesignsListShows(string label) =>
@@ -499,7 +499,7 @@ public sealed partial class DesignerSteps
         await Assert.That(await row.Locator("button.delete-design").CountAsync()).IsEqualTo(1);
     }
 
-    // ΓöÇΓöÇ Then: the single create control is the generic New (the blocker fix) ΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── Then: the single create control is the generic New (the blocker fix) ─────────
 
     [Then("the designs list shows the generic SetTable New as its only create control")]
     public async Task ThenListHasGenericNew()
@@ -514,7 +514,7 @@ public sealed partial class DesignerSteps
     [Then("the designs list does not show a bespoke Add box")]
     public async Task ThenListNoBespokeAdd()
     {
-        // The old bespoke .new-design "Add" box (a label input + an Add button) is gone ΓÇö the generic New
+        // The old bespoke .new-design "Add" box (a label input + an Add button) is gone — the generic New
         // is the only create control, so neither the box nor its Add button is in the DOM.
         await Assert.That(await ctx.Page!.Locator("main.ide-designs .new-design").CountAsync()).IsEqualTo(0);
         await Assert.That(await ctx.Page!.Locator("main.ide-designs button.add-design").CountAsync()).IsEqualTo(0);
@@ -523,7 +523,7 @@ public sealed partial class DesignerSteps
     [When("I reveal the generic create form")]
     public async Task WhenRevealCreateForm()
     {
-        // Click the SetTable's "New " button to reveal its create form (the table ΓåÆ create-form swap).
+        // Click the SetTable's "New " button to reveal its create form (the table → create-form swap).
         await ctx.Page!.Locator("main.ide-designs .new-btn").ClickAsync();
         await ctx.Page.WaitForSelectorAsync("main.ide-designs .create-form");
     }
@@ -532,7 +532,7 @@ public sealed partial class DesignerSteps
     public async Task ThenCreateFormNoCodeSections()
     {
         // The designs list's createForm slot renders a LABEL-ONLY field, so the create form must NOT expose
-        // a Design's code sections (ui/common/initialData) ΓÇö neither as the editor's <textarea>s nor as the
+        // a Design's code sections (ui/common/initialData) — neither as the editor's <textarea>s nor as the
         // default all-scalars form's raw <input>s for those props. Their absence proves the slot replaced
         // the default per-scalar form (which WOULD render them).
         await Assert.That(await ctx.Page!.Locator("main.ide-designs .create-form textarea").CountAsync()).IsEqualTo(0);
@@ -540,12 +540,12 @@ public sealed partial class DesignerSteps
             "main.ide-designs .create-form input.ui, main.ide-designs .create-form input.common, main.ide-designs .create-form input.initialData").CountAsync()).IsEqualTo(0);
     }
 
-    // ΓöÇΓöÇ Then: Edit/Delete are clickable (no whole-row overlay) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── Then: Edit/Delete are clickable (no whole-row overlay) ─────────────────────────────────────
 
     [Then("the design {string} Edit link receives the click")]
     public async Task ThenEditClickable(string label) =>
-        // A trial click performs ALL of Playwright's actionability checks ΓÇö including that THIS element (not
-        // an overlay) would receive the event ΓÇö WITHOUT actually clicking. It throws if the row-link overlay
+        // A trial click performs ALL of Playwright's actionability checks — including that THIS element (not
+        // an overlay) would receive the event — WITHOUT actually clicking. It throws if the row-link overlay
         // sits over the Edit link. Passing proves the action-managed table suppresses the overlay, so the
         // band-aid z-index rule is unnecessary.
         await DesignRowFor(label).Locator("a.edit-design").ClickAsync(new() { Trial = true });
@@ -553,11 +553,11 @@ public sealed partial class DesignerSteps
     [Then("the design {string} Delete button receives the click")]
     public async Task ThenDeleteClickable(string label) =>
         // Same hit-test for the always-visible Delete button: it must receive the click, not the overlay
-        // (a mis-click on a stretched overlay would navigate to the editor ΓÇö or worse, the overlay over the
+        // (a mis-click on a stretched overlay would navigate to the editor — or worse, the overlay over the
         // button would let the row-link swallow a Delete). Trial = actionability only, no real click.
         await DesignRowFor(label).Locator("button.delete-design").ClickAsync(new() { Trial = true });
 
-    // ΓöÇΓöÇ Then: the two-step delete confirm ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── Then: the two-step delete confirm ────────────────────────────────────────────────────────────────────────────────
 
     [Then("the design {string} shows a delete confirmation")]
     public async Task ThenShowsConfirm(string label)
@@ -584,23 +584,23 @@ public sealed partial class DesignerSteps
 
     [Then("the design {string} is still listed")]
     public async Task ThenStillListed(string label) =>
-        // Clicking the plain Delete (and Cancel) must NOT remove the design ΓÇö only Yes does.
+        // Clicking the plain Delete (and Cancel) must NOT remove the design — only Yes does.
         await Assert.That(await ctx.Page!.Locator($".set-row a.row-link:text-is({CssString(label)})").CountAsync())
             .IsGreaterThanOrEqualTo(1);
 
     [Then("the designs list eventually drops the design {string}")]
     public async Task ThenEventuallyDropped(string label)
     {
-        // Yes runs db.designs.remove(d) ΓÇö the row disappears client-side (the re-render), and the WS persist
-        // commits it to the designer's sovereign store (GC included). Confirm both: the row leaves the DOMΓÇª
+        // Yes runs db.designs.remove(d) — the row disappears client-side (the re-render), and the WS persist
+        // commits it to the designer's sovereign store (GC included). Confirm both: the row leaves the DOM…
         await ctx.Page!.Locator($".set-row:has(a.row-link:text-is({CssString(label)}))")
             .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
-        // ΓÇªand the design is gone from the store (no Design object with that label survives).
+        // …and the design is gone from the store (no Design object with that label survives).
         await EventuallyAsync(() => !_designer.Store.ReadExtent("Design").Values
             .Any(o => o.Fields.TryGetValue("label", out var v) && v is DeEnv.Storage.TextValue t && t.Text == label));
     }
 
-    // ΓöÇΓöÇ Then: nav active-state ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── Then: nav active-state ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
     [Then("the nav {string} link is active")]
     public async Task ThenNavActive(string label) =>
@@ -612,7 +612,7 @@ public sealed partial class DesignerSteps
         await Assert.That(await ctx.Page!.Locator($"nav.ide-nav a:not(.is-active):text-is({CssString(label)})").CountAsync())
             .IsEqualTo(1);
 
-    // ΓöÇΓöÇ Then: a non-existent design id ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── Then: a non-existent design id ─────────────────────────────────────────────────────────────────────────────────────
 
     [Then("the design editor shows a not-found message")]
     public async Task ThenEditorNotFound() =>
@@ -631,11 +631,11 @@ public sealed partial class DesignerSteps
     public async Task ThenEditorShowsLabel(string label) =>
         // The editor's label is now an editable two-way-bound <input> (input.design-label = design.label);
         // a freshly-created design opens here with its label and otherwise-empty fields (an empty types
-        // list, empty code areas) ΓÇö a valid library entry, only invalid to DEPLOY until it gains types.
+        // list, empty code areas) — a valid library entry, only invalid to DEPLOY until it gains types.
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const e = document.querySelector('main.ide-design-edit .design-editor input.design-label'); return e != null && e.value === {JsString(label)}; }}");
 
-    // ΓöÇΓöÇ Then/When: the editable design label (rename in the editor) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── Then/When: the editable design label (rename in the editor) ────────────────────────────
 
     [When("I rename the design's label to {string}")]
     public async Task WhenRenameDesignLabel(string newLabel)
@@ -654,7 +654,7 @@ public sealed partial class DesignerSteps
     public async Task WhenReloadEditor()
     {
         // A fresh server render of the SAME editor URL (the design's label comes from the store), so the
-        // input's value is the persisted label ΓÇö proving the rename survived as data, not just in the DOM.
+        // input's value is the persisted label — proving the rename survived as data, not just in the DOM.
         await ctx.Page!.ReloadAsync();
         await ctx.Page.WaitForSelectorAsync("main.ide-design-edit .design-editor");
         await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
@@ -665,13 +665,13 @@ public sealed partial class DesignerSteps
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const e = document.querySelector('main.ide-design-edit .design-editor input.design-label'); return e != null && e.value === {JsString(label)}; }}");
 
-    // ΓöÇΓöÇ When/Then: the Commit-button UX slice (M13's last piece) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── When/Then: the Commit-button UX slice (M13's last piece) ─────────────────────────────────
 
     [When("I type {string} into the commit message")]
     public async Task WhenTypeCommitMessage(string message)
         => await ctx.Page!.Locator("main.ide-design-edit .design-editor input.commit-message").First.FillAsync(message);
 
-    // Just clicks ΓÇö the commit message is NEVER cleared client-side (a UX review fix: a synchronous
+    // Just clicks — the commit message is NEVER cleared client-side (a UX review fix: a synchronous
     // clear both faked "done" before the server ack and destroyed the typed message on a rejected
     // commit), so this step makes no assumption about success. The positive confirmation is the
     // "Last commit:" line (updates on the success ack's refetch); a rejection surfaces as the global
@@ -681,13 +681,13 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator("main.ide-design-edit .design-editor button.commit-design").First.ClickAsync();
 
     // The positive confirmation: the design editor's "Last commit:" line is pure Code reading the
-    // design's main branch head, so it updates only once the success ack's refetch lands (ws.ts:947) ΓÇö
+    // design's main branch head, so it updates only once the success ack's refetch lands (ws.ts:947) —
     // poll, no fixed sleep.
     [Then("the last-commit line eventually shows message {string}")]
     public async Task ThenLastCommitLineShowsMessage(string message) =>
         await ctx.Page!.Locator($"main.ide-design-edit .design-editor p.last-commit:has-text({CssString("\"" + message + "\"")})").WaitForAsync();
 
-    // The bare-text variant (no quote-wrapping) ΓÇö used for the "(no message)" placeholder, which the
+    // The bare-text variant (no quote-wrapping) — used for the "(no message)" placeholder, which the
     // Code renders WITHOUT the quote marks (only a real message gets wrapped in quotes).
     [Then("the last-commit line eventually shows {string}")]
     public async Task ThenLastCommitLineShowsText(string text) =>
@@ -706,7 +706,7 @@ public sealed partial class DesignerSteps
         await Assert.That(await ctx.Page!.Locator("main.ide-design-edit .design-editor input.commit-message").InputValueAsync())
             .IsEqualTo(message);
 
-    // Host-action success callback (docs/plans/host-action-success-signal.md) ΓÇö the commit bar's
+    // Host-action success callback (docs/plans/host-action-success-signal.md) — the commit bar's
     // afterCommit clears commitMessage on the ok reply's refetch, which lands asynchronously (poll,
     // don't assert immediately after the click).
     [Then("the commit message input eventually holds {string}")]
@@ -738,9 +738,9 @@ public sealed partial class DesignerSteps
     public async Task ThenCommitHistoryShowsMessage(string message) =>
         await ctx.Page!.Locator($"main.ide-commits .set-row:has-text({CssString(message)})").WaitForAsync();
 
-    // An empty-message commit still creates a real row (the label column ΓÇö Commit.message, the type's
-    // labelProp ΓÇö renders empty text), so assert the store directly: a Commit exists whose message is "".
-    // The row IS in the DOM (a .set-row per member ΓÇö SetTable never skips a member for an empty label),
+    // An empty-message commit still creates a real row (the label column — Commit.message, the type's
+    // labelProp — renders empty text), so assert the store directly: a Commit exists whose message is "".
+    // The row IS in the DOM (a .set-row per member — SetTable never skips a member for an empty label),
     // just with no visible text to locate it by, so the browser-visible proof is the row COUNT increasing.
     [Then("the commit history shows a commit with an empty message")]
     public async Task ThenCommitHistoryShowsEmptyMessage() =>
@@ -754,7 +754,7 @@ public sealed partial class DesignerSteps
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const r = document.querySelector('main.ide-commits .set-row'); return r != null && r.textContent.includes({JsString(message)}); }}");
 
-    // B1: a history row is now a real link (linked restored) ΓÇö clicking it navigates client-side to the
+    // B1: a history row is now a real link (linked restored) — clicking it navigates client-side to the
     // commit-detail page (/commits/<id>). Locate the row by its message and click its row-link.
     [When("I open the commit {string} from the history")]
     public async Task WhenOpenCommitFromHistory(string message)
@@ -791,7 +791,7 @@ public sealed partial class DesignerSteps
     public async Task ThenCommitDetailShowsAuthor(string author) =>
         await ctx.Page!.Locator($"main.ide-commit-detail .commit-field:has(.field-label:text-is({CssString("By")})) .field-value:text-is({CssString(author)})").WaitForAsync();
 
-    // Review fix 5 ΓÇö the textareaΓåÆcommitDesignΓåÆdetail round-trip. The Migration input lives inside a
+    // Review fix 5 — the textarea→commitDesign→detail round-trip. The Migration input lives inside a
     // collapsed-by-default <details class="commit-migration">; click its <summary> to expand before
     // the textarea is fill-able (Playwright refuses to type into a hidden element).
     [When("I expand the Migration disclosure")]
@@ -808,28 +808,28 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator(
             $"main.ide-commit-detail .commit-migration-text:has-text({CssString($"fn {typeName}(old)")})").WaitForAsync();
 
-    // B2 ΓÇö the "Changes since parent" section. sys.diffCommits(parent, this) is a server-backed READ builtin
-    // (computed server-side, shipped via the memo cache, reused by the client twin ΓÇö like sys.schema). A
-    // rename renders as ONE rename row ("From ΓåÆ To"), the identity-diff payoff ΓÇö never a remove+add.
+    // B2 — the "Changes since parent" section. sys.diffCommits(parent, this) is a server-backed READ builtin
+    // (computed server-side, shipped via the memo cache, reused by the client twin — like sys.schema). A
+    // rename renders as ONE rename row ("From → To"), the identity-diff payoff — never a remove+add.
     [Then("the changes-since-parent shows a rename from {string} to {string}")]
     public async Task ThenChangesSinceParentRename(string from, string to) =>
-        await ctx.Page!.Locator($"main.ide-commit-detail .commit-diff .diff-rename:has-text({CssString(from + " ΓåÆ " + to)})").WaitForAsync();
+        await ctx.Page!.Locator($"main.ide-commit-detail .commit-diff .diff-rename:has-text({CssString(from + " → " + to)})").WaitForAsync();
 
-    // The other half of the rename proof: a renamed type must NOT also surface as a removal ΓÇö the diff joins
+    // The other half of the rename proof: a renamed type must NOT also surface as a removal — the diff joins
     // by intrinsic id, so the old name never appears in the "Removed" group.
     [Then("the changes-since-parent shows no removal of {string}")]
     public async Task ThenChangesSinceParentNoRemoval(string name)
     {
-        // The rename row must be present first (proves the diff section rendered ΓÇö otherwise "no removal"
+        // The rename row must be present first (proves the diff section rendered — otherwise "no removal"
         // could pass vacuously on a not-yet-hydrated page).
         await ctx.Page!.Locator("main.ide-commit-detail .commit-diff").WaitForAsync();
         await Assert.That(await ctx.Page!.Locator($".commit-diff .diff-remove:has-text({CssString(name)})").CountAsync())
             .IsEqualTo(0);
     }
 
-    // ΓöÇΓöÇ B3 ΓÇö Publish + dry-run from the designer ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── B3 — Publish + dry-run from the designer ────────────────────────────────────────────────────────────────────
 
-    // Remove a leaf field from a type in the design editor (the prop-row's "├ù" remove button). Drives
+    // Remove a leaf field from a type in the design editor (the prop-row's "×" remove button). Drives
     // arrayRemove on the type's nested props set; wait for the client edit AND the autosave to the designer's
     // store (a later commit snapshots the design, so the removal must have landed).
     [Then("the changes-since-parent shows an add of {string}")]
@@ -843,15 +843,15 @@ public sealed partial class DesignerSteps
             $"main.ide-design-edit .design-editor .type-card:has(input.type-name[value={CssString(typeName)}]) " +
             $".prop-row:has(input.prop-name[value={CssString(propName)}])");
         await row.Locator("button.remove-prop").ClickAsync();
-        // The row disappears from the DOM (the prop is gone client-side)ΓÇª
+        // The row disappears from the DOM (the prop is gone client-side)…
         await row.WaitForAsync(Hidden);
-        // ΓÇªthen the removal reaches the designer's sovereign store (no MetaProp named propName on that type).
+        // …then the removal reaches the designer's sovereign store (no MetaProp named propName on that type).
         await EventuallyAsync(() => !_designer.Store.ReadExtent("MetaProp").Values
             .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == propName));
     }
 
     // Open the toggle-gated Preview for an instance in the design editor's Publish section: click its row's
-    // "Preview publish" button, then wait for the report (server-backed read ΓåÆ shipped via the memo cache, so
+    // "Preview publish" button, then wait for the report (server-backed read → shipped via the memo cache, so
     // the preview populates after the toggle-driven refetch lands).
     [When("I preview the publish for the instance {string}")]
     public async Task WhenPreviewPublish(string label)
@@ -860,7 +860,7 @@ public sealed partial class DesignerSteps
         await PublishRowFor(label).Locator(".publish-preview .publish-report").WaitForAsync();
     }
 
-    // The dry-run report must surface a removal in the LOUD destructive class (.publish-remove ΓÇö red).
+    // The dry-run report must surface a removal in the LOUD destructive class (.publish-remove — red).
     [Then("the publish preview flags {string} as removed loudly")]
     public async Task ThenPreviewFlagsRemoved(string path) =>
         await PublishRowFor("todo").Locator($".publish-preview .publish-remove:has-text({CssString(path)})").WaitForAsync();
@@ -884,18 +884,18 @@ public sealed partial class DesignerSteps
 
     [Then("the publish preview shows a rename from {string} to {string}")]
     public async Task ThenPreviewShowsRename(string from, string to) =>
-        await PublishRowFor("todo").Locator($".publish-preview .publish-rename:has-text({CssString(from + " ΓåÆ " + to)})").WaitForAsync();
+        await PublishRowFor("todo").Locator($".publish-preview .publish-rename:has-text({CssString(from + " → " + to)})").WaitForAsync();
 
-    // The previewΓåÆapply CONSISTENCY GUARD (addendum): bump the TARGET's own live store version by a direct
-    // field write (through the live hosted store ΓÇö never a second store over its file), simulating "the
+    // The preview→apply CONSISTENCY GUARD (addendum): bump the TARGET's own live store version by a direct
+    // field write (through the live hosted store — never a second store over its file), simulating "the
     // target's data moved after the preview was taken." A plain re-write of a field to its OWN current value
-    // is enough (WriteField bumps CurrentVersion regardless of whether the value actually changed) ΓÇö the
+    // is enough (WriteField bumps CurrentVersion regardless of whether the value actually changed) — the
     // lightest possible version bump, with no schema/design involvement.
     //
     // Also captures the target's ON-DISK log line count right after the bump (NOT the live store's
-    // CurrentVersion ΓÇö see the hardening step below for why that would be a VACUOUS check: the versioned
+    // CurrentVersion — see the hardening step below for why that would be a VACUOUS check: the versioned
     // leg's boundary write, JsonFileInstanceStore.ApplyPublishBoundary, is an OFFLINE write straight to the
-    // target's DataPath/log file, bypassing the live hosted store entirely until a restart re-opens it ΓÇö so
+    // target's DataPath/log file, bypassing the live hosted store entirely until a restart re-opens it — so
     // the live store's CurrentVersion never observes it, guarded or not).
     [Then("the {string} target's data changes since the preview")]
     public async Task ThenTargetDataChangesSincePreview(string label)
@@ -919,11 +919,11 @@ public sealed partial class DesignerSteps
     }
 
     // Review hardening (M13 Track-B B3 addendum fix): the rejected apply must not have MATERIALIZED the
-    // versioned leg's destructive boundary onto the target's DATA file ΓÇö the class of bug where the guard
+    // versioned leg's destructive boundary onto the target's DATA file — the class of bug where the guard
     // fired too late (after ApplyPublishBoundary had already written the DataPath + a WAL entry, leaving
     // DataPath migrated but SchemaPath/the stamp/the live store all still on the OLD schema). This checks the
-    // ON-DISK log file (never the live store's CurrentVersion ΓÇö see the note above: an offline boundary write
-    // never bumps that) grew by EXACTLY ZERO entries since the staleness bump ΓÇö the boundary apply's first
+    // ON-DISK log file (never the live store's CurrentVersion — see the note above: an offline boundary write
+    // never bumps that) grew by EXACTLY ZERO entries since the staleness bump — the boundary apply's first
     // act is to append a WAL entry BEFORE it rewrites the snapshot, so "the log did not grow at all" is the
     // most direct proof available that NO write of any kind (not even a partial/crashed one) reached the file.
     [Then("the {string} target's data is unchanged by the rejected apply")]
@@ -941,7 +941,7 @@ public sealed partial class DesignerSteps
     }
 
     // Apply the previewed publish: click the row's Apply button (or the ConfirmButton's Yes when the report
-    // was destructive ΓÇö a rename is non-destructive, so a plain button; handle both to keep the step general).
+    // was destructive — a rename is non-destructive, so a plain button; handle both to keep the step general).
     [When("I apply the publish for the instance {string}")]
     public async Task WhenApplyPublish(string label)
     {
@@ -958,7 +958,7 @@ public sealed partial class DesignerSteps
     }
 
     // After Apply, the target is published + stamped to the design's head, so a fresh Preview reads "up to
-    // date" ΓÇö the operator-visible success signal (the diff is now empty). The host-action ack ran
+    // date" — the operator-visible success signal (the diff is now empty). The host-action ack ran
     // resetViewState (closing the prior open preview) AND dropped the stale `publishPreview:` read (ws.ts), so
     // the re-opened preview recomputes fresh over the now-stamped target rather than reusing the pre-publish
     // report. Wide window: the re-preview rides a value-not-available refetch.
@@ -971,7 +971,7 @@ public sealed partial class DesignerSteps
     public async Task ThenPublishRowShows(string label, string text) =>
         await ctx.Page!.Locator($".publish-section .last-publish:has-text({CssString(text)})").WaitForAsync();
 
-    // Seed a TodoItem into the LIVE target instance's store (never a second store over its file ΓÇö the
+    // Seed a TodoItem into the LIVE target instance's store (never a second store over its file — the
     // single-store invariant): create the item and add it into the existing TodoList's `items` set.
     [Given("the {string} target holds a TodoItem with text {string}")]
     public async Task GivenTargetHoldsTodoItem(string label, string text)
@@ -992,7 +992,7 @@ public sealed partial class DesignerSteps
 
     // The rename carried the target's data: after the publish + restart, the renamed type "Task" holds the
     // object whose `text` survived. Re-resolve the LIVE hosted instance each poll (restart hot-swaps the
-    // store), and read the renamed extent ΓÇö proving the designer's Publish UI reached the rename-safe publish.
+    // store), and read the renamed extent — proving the designer's Publish UI reached the rename-safe publish.
     [Then("the {string} instance eventually holds a {string} with text {string}")]
     public async Task ThenTargetHoldsRenamed(string label, string typeName, string text) =>
         await EventuallyAsync(() =>
@@ -1002,12 +1002,12 @@ public sealed partial class DesignerSteps
                 o.Fields.TryGetValue("text", out var v) && v is DeEnv.Storage.TextValue t && t.Text == text);
         }, timeoutMs: 30000);
 
-    // ΓöÇΓöÇ B4 ΓÇö branches + merge from the design editor ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── B4 — branches + merge from the design editor ─────────────────────────────────────────────────────────
 
-    // Create a branch: type the name into the Branches-section input, click "+ Branch" (sys.createBranch ΓÇö
+    // Create a branch: type the name into the Branches-section input, click "+ Branch" (sys.createBranch —
     // a host action), then wait for the branch link to appear via the ack's refetch (the new Branch row is
     // GC-reachable via db.branches, and branchSection lists branches whose workingCopy shares the app's
-    // lineage). Poll the DOM for the link ΓÇö the refetch is async.
+    // lineage). Poll the DOM for the link — the refetch is async.
     [When("I create a branch named {string}")]
     public async Task WhenCreateBranch(string name)
     {
@@ -1020,11 +1020,11 @@ public sealed partial class DesignerSteps
     public async Task ThenBranchesListsLink(string name) =>
         await BranchLinkFor(name).WaitForAsync();
 
-    // Switch to a branch's editor. A branch working copy is a Design row at its OWN URL (/designs/<wcId>) ΓÇö
+    // Switch to a branch's editor. A branch working copy is a Design row at its OWN URL (/designs/<wcId>) —
     // "switching branches" is navigation, the settled model. The Branches section renders the branch as a
     // real <a href="/designs/<wcId>"> link (asserted by the "lists a branch link" scenario); here we OPEN
-    // that URL directly (a fresh SSR load ΓÇö a direct visit / reload is navigation too), which gives a clean
-    // data-hydrated barrier. This avoids the editorΓåÆeditor client-side-nav sync problem: both the source and
+    // that URL directly (a fresh SSR load — a direct visit / reload is navigation too), which gives a clean
+    // data-hydrated barrier. This avoids the editor→editor client-side-nav sync problem: both the source and
     // branch editors share `.design-editor`/`.type-card` markup with the same label, so a link CLICK alone
     // cannot be reliably awaited from an already-open editor (the old DOM lingers until the refetch swaps it).
     [When("I open the branch {string} from the Branches section")]
@@ -1070,7 +1070,7 @@ public sealed partial class DesignerSteps
     // Grant a read rule on a type for the branch (reusing the slice-5 store-level access mutation): append an
     // access rule onto the branch working copy's Design record in the designer's own store BEFORE the branch
     // is committed via the UI, so sys.commitDesign snapshots it into the branch head. A store write on the ONE
-    // live store (never a second store over the file ΓÇö the single-store invariant).
+    // live store (never a second store over the file — the single-store invariant).
     [When("I grant read on {string} to everyone on the branch {string}")]
     public async Task WhenGrantReadOnBranch(string typeName, string branchName)
     {
@@ -1082,7 +1082,7 @@ public sealed partial class DesignerSteps
     }
 
     // Open the toggle-gated merge Preview for a branch: click its "Preview merge", then wait for the report
-    // (server-backed read ΓåÆ shipped via the memo cache, so it populates after the toggle-driven refetch).
+    // (server-backed read → shipped via the memo cache, so it populates after the toggle-driven refetch).
     [When("I preview the merge of branch {string}")]
     public async Task WhenPreviewMerge(string name)
     {
@@ -1103,7 +1103,7 @@ public sealed partial class DesignerSteps
     public async Task ThenBranchesShows(string text) =>
         await ctx.Page!.Locator($".branch-section:has-text({CssString(text)})").WaitForAsync();
 
-    // The conflict's source row is labeled with the SOURCE BRANCH's real name (review fix ΓÇö "source:"/
+    // The conflict's source row is labeled with the SOURCE BRANCH's real name (review fix — "source:"/
     // "target:" named the internal marker, not a branch, so the UI now reads "<branchName>: <value>" /
     // "this design: <value>"); the branch under test is always "feature" here.
     [Then("the merge preview shows a conflict with source {string} and target {string}")]
@@ -1119,7 +1119,7 @@ public sealed partial class DesignerSteps
     public async Task ThenNoMergeButton() =>
         await Assert.That(await ctx.Page!.Locator(".merge-preview button.merge-apply").CountAsync()).IsEqualTo(0);
 
-    // Pick "source" for the first (only) conflict ΓÇö clicks its Take source button, which accumulates the pick
+    // Pick "source" for the first (only) conflict — clicks its Take source button, which accumulates the pick
     // in the merge component's client state; the Apply button then appears (all conflicts resolved).
     [When("I take source for the first conflict")]
     public async Task WhenTakeSourceFirstConflict()
@@ -1139,7 +1139,7 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator($".merge-preview .merge-access .merge-access-row:has-text({CssString(phrase)})").WaitForAsync();
 
     // A prop by name is stored on a named type of the design in db.designs (the MAIN working copy, NOT a
-    // branch clone ΓÇö a clone shares the label, so scope to the design reachable from db.designs).
+    // branch clone — a clone shares the label, so scope to the design reachable from db.designs).
     [Then("the design {string} eventually has a stored prop named {string} on {string}")]
     public async Task ThenDesignHasStoredPropOnType(string designLabel, string propName, string typeName) =>
         await EventuallyAsync(() =>
@@ -1191,8 +1191,8 @@ public sealed partial class DesignerSteps
         ctx.Page!.Locator($".publish-section .publish-row:has(.publish-target:text-is({CssString(label)}))");
 
     // B1 ride-along: the newest-first FIRST row's label cell is a real <a class="row-link"> (linked
-    // restored) whose text is the "(no <humanized labelProp>)" placeholder ΓÇö "(no Message)" here (the
-    // generic empty-label fallback humanizes the prop name, matching the library convention) ΓÇö proving both
+    // restored) whose text is the "(no <humanized labelProp>)" placeholder — "(no Message)" here (the
+    // generic empty-label fallback humanizes the prop name, matching the library convention) — proving both
     // that the row links and that an empty message is not a phantom empty anchor.
     [Then("the commit history's first row link reads {string}")]
     public async Task ThenCommitHistoryFirstRowLinkReads(string text)
@@ -1241,14 +1241,14 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("access", out var av) && av is DeEnv.Storage.TextValue at && at.Text == accessSection));
     }
 
-    // ΓöÇΓöÇ M12 X2b ΓÇö the Convert-to-structured button + the structured render view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 X2b — the Convert-to-structured button + the structured render view ────────────────────────────────────
 
     // A SIMPLE convertible render: a `fn render()` returning a `<main>` with an attribute and a nested
-    // element whose child is a text literal ΓÇö the exact shape S1b's ImportRender accepts (no foreach / if /
+    // element whose child is a text literal — the exact shape S1b's ImportRender accepts (no foreach / if /
     // helper components, which it refuses). Filled into the editable `ui` textarea (bound to
     // sys.field(design,"ui"), a journaled scalar autosave like the access textarea); polled on the store so
     // the write has landed before we convert.
-    // The stored `ui` field carries the `ui` SECTION (header + indented body) ΓÇö the exact text
+    // The stored `ui` field carries the `ui` SECTION (header + indented body) — the exact text
     // AppPrint.PrintUi emits and SchemaBridge.ImportRender re-parses via ParseUiSection (which expects the
     // `ui` header). So author the whole section, render body indented under `fn render()`.
     private const string SimpleConvertibleRender =
@@ -1265,7 +1265,7 @@ public sealed partial class DesignerSteps
 
     // The convert button lives inside the Advanced (code) <details> disclosure. Its open/closed state is
     // uncontrolled DOM (not model-bound), so the autosave re-render after authoring the render rebuilds the
-    // disclosure CLOSED ΓÇö the button is present but hidden. Assert it is ATTACHED (the mode-conditional
+    // disclosure CLOSED — the button is present but hidden. Assert it is ATTACHED (the mode-conditional
     // rendered it), independent of the disclosure's transient open state.
     [Then("the design editor shows the Convert-to-structured button")]
     public async Task ThenShowsConvertButton()
@@ -1278,25 +1278,25 @@ public sealed partial class DesignerSteps
     public async Task WhenClickConvert()
     {
         // The convert button lives under the Advanced (code) disclosure (a text design's `ui` is "advanced
-        // code"); its open state is UNCONTROLLED DOM that the authoring autosave re-render ΓÇö possibly still
-        // in flight from the previous step ΓÇö rebuilds CLOSED, hiding the button. A normal (actionability-
+        // code"); its open state is UNCONTROLLED DOM that the authoring autosave re-render — possibly still
+        // in flight from the previous step — rebuilds CLOSED, hiding the button. A normal (actionability-
         // gated) click then RACES that re-render: whenever a collapse lands in the gap the button is hidden
-        // and the click's visibility wait runs out the clock (the 30s flake) ΓÇö and a longer deadline can't
+        // and the click's visibility wait runs out the clock (the 30s flake) — and a longer deadline can't
         // cure it, the button simply keeps getting re-hidden. The button is always in the DOM though
         // (ThenShowsConvertButton gated on it ATTACHED) and its click handler fires regardless of the
-        // disclosure's visual open state, so dispatch the click directly on the element ΓÇö deterministic, no
+        // disclosure's visual open state, so dispatch the click directly on the element — deterministic, no
         // hit-testing race. This step tests the CONVERT behaviour (asserted next), not click mechanics; the
-        // RESULT ΓÇö the structured render section ΓÇö is first-class, OUTSIDE this disclosure.
+        // RESULT — the structured render section — is first-class, OUTSIDE this disclosure.
         var btn = ctx.Page!.Locator("main.ide-design-edit .design-editor button.convert-render").First;
         await btn.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
         await btn.ClickAsync();
     }
 
-    // ΓöÇΓöÇ M12 E1 ΓÇö the structured-render TREE EDITOR (recursive renderNodeEditor) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 E1 — the structured-render TREE EDITOR (recursive renderNodeEditor) ────────────────────────────────────
 
-    // A NESTED convertible render: <main class="x"><h1>{leaf}</h1></main> ΓÇö an element with an attribute,
+    // A NESTED convertible render: <main class="x"><h1>{leaf}</h1></main> — an element with an attribute,
     // a nested ELEMENT child (h1), whose own child is a text-EXPRESSION leaf ({leaf}). Its structure
-    // forces the recursion to descend a level (main ΓåÆ h1) and to render both an element and a leaf node,
+    // forces the recursion to descend a level (main → h1) and to render both an element and a leaf node,
     // so the tree editor's nesting + leaf handling are both exercised. Same authoring plumbing as the
     // simple render: fill the `ui` textarea, poll the store for the write.
     private const string NestedConvertibleRender =
@@ -1312,7 +1312,7 @@ public sealed partial class DesignerSteps
     }
 
     // A PROJECTABLE nested convertible render for E2: like NestedConvertibleRender, but the leaf is a REAL
-    // bound expression (`db.greeting`) rather than the bare undefined symbol `leaf` ΓÇö so once the design
+    // bound expression (`db.greeting`) rather than the bare undefined symbol `leaf` — so once the design
     // carries a Db root type with a `greeting` field, the whole document PROJECTS to a valid design document
     // (the bare `leaf` cannot resolve, which is fine for E1's tree-recursion proof but blocks a projection
     // check). Same authoring plumbing (fill the ui textarea, poll the store).
@@ -1328,7 +1328,7 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ProjectableNestedRender));
     }
 
-    // A LITERAL render (no `db.` reference at all) ΓÇö imports fine regardless of the type schema's
+    // A LITERAL render (no `db.` reference at all) — imports fine regardless of the type schema's
     // validity, so it isolates the eval-degrade-banner repro to the fieldless type alone (the render
     // itself is never the cause of the evalContext failure). Wraps the leaf in <h1> so the existing
     // ThenCanvasShowsEvaluatedText step (`.design-canvas h1`) can assert the post-fix evaluated text too.
@@ -1344,10 +1344,10 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == LiteralConvertibleRender));
     }
 
-    // ΓöÇΓöÇ M12 F1 ΓÇö structured fns: the Components editor area ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 F1 — structured fns: the Components editor area ─────────────────────────────────────────────────────────────────────────────
 
     // A convertible render whose `ui` carries a COMPONENT function (`NoteCard(note)`, single-return
-    // element) besides `fn render()` ΓÇö the shape F1's import lifts the old refusal for. Same authoring
+    // element) besides `fn render()` — the shape F1's import lifts the old refusal for. Same authoring
     // plumbing as the other convertible-render fixtures (fill the `ui` textarea, poll the store).
     private const string ComponentConvertibleRender =
         "ui\n    fn NoteCard(note)\n        return <li>\n            note.title\n    fn render()\n        return <main>\n            \"hi\"\n";
@@ -1382,14 +1382,14 @@ public sealed partial class DesignerSteps
             o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == name
             && o.Fields.TryGetValue("params", out var p) && p is DeEnv.Storage.TextValue pt && pt.Text == paramsText));
 
-    // ΓöÇΓöÇ M12 U1 ΓÇö MetaUse rows: the Configurations editor + static per-configuration preview ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 U1 — MetaUse rows: the Configurations editor + static per-configuration preview ─────────────
     //
     // A "configuration" (MetaUse) under a component card: a name input + its args (MetaAttr rows,
-    // mirroring the render tree's own attr editing ΓÇö `.node-attr`/`.node-attr-name`/`.node-attr-value`
-    // reused verbatim, styling included), and a per-configuration STATIC preview panel ΓÇö the component's
+    // mirroring the render tree's own attr editing — `.node-attr`/`.node-attr-name`/`.node-attr-value`
+    // reused verbatim, styling included), and a per-configuration STATIC preview panel — the component's
     // REAL rendered content with the configuration's args bound, via the same F2 expansion the main
     // canvas already uses (a synthesized transient invocation node fed to `sys.renderTree`). Every
-    // scenario using these steps has exactly ONE component card, so queries are unscoped by fn name ΓÇö
+    // scenario using these steps has exactly ONE component card, so queries are unscoped by fn name —
     // the same unscoped convention the design-level-state-var steps above use.
 
     [When("I click the add-configuration button")]
@@ -1478,9 +1478,9 @@ public sealed partial class DesignerSteps
         Console.WriteLine($"DEBUG: wrote preview-debug.html for arg {useIndex}");
     }
 
-    // ux review ΓÇö a typo'd arg name is currently byte-identical to no arg at all (both bind ExecNull);
+    // ux review — a typo'd arg name is currently byte-identical to no arg at all (both bind ExecNull);
     // the hint span (`.attr-name-hint`) is a SIBLING right after that specific arg's `.node-attr` row
-    // (attrRow's own markup, shared with the tree editor, carries no such hint ΓÇö it is layered on only
+    // (attrRow's own markup, shared with the tree editor, carries no such hint — it is layered on only
     // at THIS call site), so it is found via nextElementSibling off the Nth `.node-attr`, not nested
     // inside it.
     [Then("configuration {int}'s arg {int} shows the {string} hint")]
@@ -1530,12 +1530,12 @@ public sealed partial class DesignerSteps
     public async Task WhenRemoveConfiguration(int index) =>
         await ConfigRow(index).Locator("button.remove-use").ClickAsync();
 
-    // ΓöÇΓöÇ M12 W1a ΓÇö the live-instance driver (workbench.ts) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 W1a — the live-instance driver (workbench.ts) ─────────────────────────────────────────────────────────────────────────────────
     //
     // Distinguishes a LIVE-mounted instance from U1's static row-walk preview by the marker the row-walk
     // (renderTreeNode) stamps on EVERY element it emits ("data-node", the canvas's own click-to-select
-    // provenance attribute ΓÇö codeExec.ts:1264) and the REAL runtime NEVER emits (that is canvas-only
-    // instrumentation) ΓÇö so an element with the expected text AND no data-node can only have come from the
+    // provenance attribute — codeExec.ts:1264) and the REAL runtime NEVER emits (that is canvas-only
+    // instrumentation) — so an element with the expected text AND no data-node can only have come from the
     // real component invocation the workbench driver runs, not the static walk.
     [Then("configuration {int}'s live instance shows a {string} element reading {string}")]
     public async Task ThenConfigurationLiveInstanceShowsElement(int index, string tag, string text) =>
@@ -1557,7 +1557,7 @@ public sealed partial class DesignerSteps
             $"const e = preview.querySelector('.instance-error'); return e != null && e.textContent === {JsString(message)}; }}",
             null, new Microsoft.Playwright.PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
 
-    // Stamps the mounted instance's first element with a test-only marker ΓÇö the opaque-container pin: an
+    // Stamps the mounted instance's first element with a test-only marker — the opaque-container pin: an
     // UNTOUCHED (idempotent) mount hook pass never rebuilds this element, so the marker surviving an
     // unrelated page re-render (below) proves the page never clobbered the driver's own live DOM.
     [When("I mark configuration {int}'s live instance node")]
@@ -1574,11 +1574,11 @@ public sealed partial class DesignerSteps
             $"const r = rows[{index}]; if (r == null) return false; const preview = r.querySelector('.use-preview'); if (preview == null) return false; " +
             $"const el = preview.firstElementChild; return el != null && el.getAttribute('data-test-marker') === 'kept'; }}");
 
-    // A component that reads an AMBIENT (currentUser) ΓÇö still a miss against the workbench sandbox's
+    // A component that reads an AMBIENT (currentUser) — still a miss against the workbench sandbox's
     // parent-less scope even after M12 W1c seeds schema:/extent:/canWrite:/canRead: (per-use ambients are a
     // LATER rung, per component-workbench.md's stated v1 fidelity boundary), proving the driver surfaces
     // the REAL interpreter error rather than rendering blank. (Before W1c this fixture called
-    // `sys.schema("Db")` ΓÇö that builtin now REVIVES from the seeded cache, so it moved to the seeding
+    // `sys.schema("Db")` — that builtin now REVIVES from the seeded cache, so it moved to the seeding
     // scenarios below; this fixture keeps testing a boundary that is STILL real.)
     private const string AmbientReadingComponentConvertibleRender =
         "ui\n    fn Broken()\n        return <div>\n            currentUser\n    fn render()\n        return <main>\n            \"hi\"\n";
@@ -1592,16 +1592,16 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == AmbientReadingComponentConvertibleRender));
     }
 
-    // ΓöÇΓöÇ M12 W1b ΓÇö the live-instance driver: events + Reset through the dispatch bracket ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 W1b — the live-instance driver: events + Reset through the dispatch bracket ────────────────────────
 
-    // A component whose handler actually CLICKS need REACTIVE local state ΓÇö `var state = { count: 0 }` (an
+    // A component whose handler actually CLICKS need REACTIVE local state — `var state = { count: 0 }` (an
     // OBJECT), not a bare scalar var. This is the framework's OWN established idiom for component-local
     // state that must re-render on change (GenericUi.cs's KebabMenu: `var state = { open: false }`,
-    // `state.open = ...`): an object-prop write invalidates by (object id, prop) regardless of scope ΓÇö a
+    // `state.open = ...`): an object-prop write invalidates by (object id, prop) regardless of scope — a
     // PLAIN scalar var write only invalidates when the var lives in the page's TOP scope (codeExec.ts
-    // executeAssignment's symbol branch ΓÇö `if (itemScope.isTop) invalidateVar(...)`), which a component's
+    // executeAssignment's symbol branch — `if (itemScope.isTop) invalidateVar(...)`), which a component's
     // OWN local `var` never is. The EXISTING W1a fixture (StatefulComponentConvertibleRender, `var count =
-    // 0`) only asserts its INITIAL render ΓÇö never clicks it ΓÇö so this gap stays latent there; W1b's own
+    // 0`) only asserts its INITIAL render — never clicks it — so this gap stays latent there; W1b's own
     // scenarios click-and-observe, so they need the reactive shape. A SEPARATE fixture (not editing the
     // existing one) keeps the already-reviewed W1a scenario untouched.
     private const string ReactiveCounterConvertibleRender =
@@ -1618,9 +1618,9 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ReactiveCounterConvertibleRender));
     }
 
-    // A two-way-bound local var (`value={state.text}`) inside a stateful component ΓÇö the shape wireEvents'
+    // A two-way-bound local var (`value={state.text}`) inside a stateful component — the shape wireEvents'
     // own input/textarea binding needs, mirrored by W1b's instanceWiring. `state.text` (not a bare scalar,
-    // for the same reactivity reason as ReactiveCounterConvertibleRender above) ΓÇö the echo <span> makes the
+    // for the same reactivity reason as ReactiveCounterConvertibleRender above) — the echo <span> makes the
     // REPAINT (not just the underlying model write) directly observable. The bare `<a href>` (no onClick)
     // is the anchor-containment pin (arch review fold): it has NO wired handler at all, so only the
     // container-level click swallow (workbench.ts ensureInstanceContent) stops it reaching the page's
@@ -1650,7 +1650,7 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == TwoWayComponentConvertibleRender));
     }
 
-    // A component whose handler fires sys.logout() ΓÇö the session-safety pin (component-workbench.md's
+    // A component whose handler fires sys.logout() — the session-safety pin (component-workbench.md's
     // "grill's core fix"): sendLogout is NOT id-gated (codeExec.ts execLogout calls it unconditionally), so
     // ONLY the dispatch bracket's wsHooks-null is what stops a card's click from really logging the
     // operator's own page session out.
@@ -1666,9 +1666,9 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == LogoutComponentConvertibleRender));
     }
 
-    // A Thrower (a handler that reads an unseeded AMBIENT ΓÇö still a v1-fidelity-boundary miss even after
+    // A Thrower (a handler that reads an unseeded AMBIENT — still a v1-fidelity-boundary miss even after
     // M12 W1c seeds schema:/extent:, same as AmbientReadingComponentConvertibleRender at render time)
-    // alongside an ordinary REACTIVE Counter (see ReactiveCounterConvertibleRender's doc comment ΓÇö
+    // alongside an ordinary REACTIVE Counter (see ReactiveCounterConvertibleRender's doc comment —
     // `var state = { count: 0 }`, not a bare scalar), in ONE design: proves a throwing instance's handler
     // error never touches a SIBLING instance's own liveness, nor the page's.
     private const string ThrowerAndCounterConvertibleRender =
@@ -1686,9 +1686,9 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ThrowerAndCounterConvertibleRender));
     }
 
-    // ΓöÇΓöÇ M12 W1c ΓÇö sandbox cache seeding: schema:/extent:/canWrite:/canRead: + library binding ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 W1c — sandbox cache seeding: schema:/extent:/canWrite:/canRead: + library binding ────────────
 
-    // A component composing the LIBRARY's own <Field> over sys.schema/sys.new ΓÇö the ObjectForm-class
+    // A component composing the LIBRARY's own <Field> over sys.schema/sys.new — the ObjectForm-class
     // generic pattern the v1 boundary excluded until the private cache is seeded from the design's OWN
     // rows (BuildEvalContext's `types` payload). No var/setup split needed (single-return, stateless).
     private const string SchemaFieldComponentConvertibleRender =
@@ -1703,7 +1703,7 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == SchemaFieldComponentConvertibleRender));
     }
 
-    // sys.extent("Note") over the seed data ΓÇö the instance's OWN deep-copied "notes" set IS the extent
+    // sys.extent("Note") over the seed data — the instance's OWN deep-copied "notes" set IS the extent
     // (seedExtentCache's per-instance client-side derivation).
     private const string ExtentListingComponentConvertibleRender =
         "ui\n    fn Lister()\n        return <ul>\n            foreach n in sys.extent(\"Note\")\n                <li>\n                    n.title\n    fn render()\n        return <main>\n            \"hi\"\n";
@@ -1717,7 +1717,7 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ExtentListingComponentConvertibleRender));
     }
 
-    // A STATEFUL component holding a sys.new-minted, sys.schema-backed draft in `var state` ΓÇö a real
+    // A STATEFUL component holding a sys.new-minted, sys.schema-backed draft in `var state` — a real
     // <Field> two-way-binds into it (sys.field's setValue, the SAME idiom RefEditor/ObjectForm use
     // throughout the library), with an echo <span> making the write directly observable per instance.
     private const string StatefulSchemaFieldComponentConvertibleRender =
@@ -1742,18 +1742,18 @@ public sealed partial class DesignerSteps
     }
 
     // A handler that ADDS a fresh sys.new-minted row to db's own set (db.notes.add) then re-lists
-    // sys.extent("Note") ΓÇö proves extent is re-derived every render pass (mutation-consistent) and Reset
+    // sys.extent("Note") — proves extent is re-derived every render pass (mutation-consistent) and Reset
     // discards the addition along with the rest of the sandbox (component-workbench.md's whole-sandbox
     // Reset semantics, now covering the seeded extent too). STATEFUL (var + nested render()): sys.schema
-    // is read ONCE at SETUP time into `noteDesc` ΓÇö a HANDLER runs under memoBypass (codeExec.ts memoize's
-    // very first line skips the cache lookup entirely whenever memoBypass is set ΓÇö a general interpreter
+    // is read ONCE at SETUP time into `noteDesc` — a HANDLER runs under memoBypass (codeExec.ts memoize's
+    // very first line skips the cache lookup entirely whenever memoBypass is set — a general interpreter
     // property, not workbench-specific), so calling sys.schema(...) FRESH *inside* the onClick handler
     // would always throw "Value not available" regardless of seeding; capturing the descriptor as a var
     // and reading it back (a plain symbol lookup, no memoize involved) is the same idiom GenericUi's own
     // RefEditor.closeCreate uses (`state.draft = sys.new(target)`, `target` a captured param, never a
     // fresh sys.schema call). No separately-named helper fn (TryMatchStatefulShape's stateful shape
-    // refuses a component with an EXTRA fn alongside render() ΓÇö component-workbench's own "GenericUi's
-    // ConfirmButton/KebabMenu" import gap) ΓÇö the handler is an inline lambda.
+    // refuses a component with an EXTRA fn alongside render() — component-workbench's own "GenericUi's
+    // ConfirmButton/KebabMenu" import gap) — the handler is an inline lambda.
     private const string ExtentAddingComponentConvertibleRender =
         "ui\n"
         + "    fn AddNote()\n"
@@ -1778,9 +1778,9 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ExtentAddingComponentConvertibleRender));
     }
 
-    // A LIBRARY component (RefSelect) composing sys.extent for its OWN candidates ΓÇö the "lib components
+    // A LIBRARY component (RefSelect) composing sys.extent for its OWN candidates — the "lib components
     // render as empty literal elements" v1 boundary this slice lifts (ctx.lib, bound into the sandbox
-    // scope alongside the design's own ctx.fns). Stateless wrapper (no var needed ΓÇö a fresh sys.new draft
+    // scope alongside the design's own ctx.fns). Stateless wrapper (no var needed — a fresh sys.new draft
     // per render is fine; this scenario never clicks the select).
     private const string RefSelectComponentConvertibleRender =
         "ui\n    fn Picker()\n        return <RefSelect parent={sys.new(sys.schema(\"Db\"))} prop=\"pick\" candidates={sys.extent(\"Note\")} labelProp=\"title\">\n    fn render()\n        return <main>\n            \"hi\"\n";
@@ -1794,7 +1794,7 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == RefSelectComponentConvertibleRender));
     }
 
-    // The element-COUNT variant of "shows a {tag} element reading {text}" (W1a) ΓÇö scoped to
+    // The element-COUNT variant of "shows a {tag} element reading {text}" (W1a) — scoped to
     // `.workbench-instance-content` specifically (not the whole `.use-preview`, which also holds the
     // Reset toolbar) so a count assertion can never be thrown off by framework chrome.
     [Then("configuration {int}'s live instance shows {int} {string} element(s)")]
@@ -1807,20 +1807,20 @@ public sealed partial class DesignerSteps
             $"return content.querySelectorAll({JsString(tag)}).length === {count}; }}",
             null, new Microsoft.Playwright.PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
 
-    // Locate a configuration's live-instance `.use-preview` panel by GLOBAL document order ΓÇö the existing
-    // convention these steps already use (`.use-row` is queried unscoped by fn-card, so index 0/1/ΓÇª tracks
+    // Locate a configuration's live-instance `.use-preview` panel by GLOBAL document order — the existing
+    // convention these steps already use (`.use-row` is queried unscoped by fn-card, so index 0/1/… tracks
     // DOCUMENT order across however many component cards a scenario has, matching authored fn order).
     private Microsoft.Playwright.ILocator LiveInstancePreview(int index) =>
         ComponentCard().Locator(".use-row").Nth(index).Locator(".use-preview");
 
-    // Scope the add-configuration click to ONE named component card ΓÇö needed once a scenario has more than
+    // Scope the add-configuration click to ONE named component card — needed once a scenario has more than
     // one `.fn-card` (the existing unscoped "I click the add-configuration button" step is deliberately
     // unscoped, for the single-fn-card scenarios that predate multi-component designs).
     [When("I click the add-configuration button for {string}")]
     public async Task WhenClickAddConfigurationFor(string fnName) =>
         await ctx.Page!.Locator($"main.ide-design-edit .design-editor .components-section .fn-card:has(input.fn-name[value=\"{fnName}\"]) .add-use").ClickAsync();
 
-    // Click the previewed component's OWN root element ΓÇö scoped to `.workbench-instance-content` so it can
+    // Click the previewed component's OWN root element — scoped to `.workbench-instance-content` so it can
     // never hit the sibling toolbar's Reset button (`.workbench-instance-reset`), even though both live
     // inside the same `.use-preview` container.
     [When("I click configuration {int}'s live instance button")]
@@ -1835,8 +1835,8 @@ public sealed partial class DesignerSteps
     public async Task WhenClickConfigurationLiveInstanceReset(int index) =>
         await LiveInstancePreview(index).Locator(".workbench-instance-reset").ClickAsync();
 
-    // The anchor-containment pin (arch review fold): a previewed component's own in-app `<a href>` ΓÇö no
-    // onClick, so nothing in instanceWiring stops it ΓÇö must not navigate the page. The click's OWN
+    // The anchor-containment pin (arch review fold): a previewed component's own in-app `<a href>` — no
+    // onClick, so nothing in instanceWiring stops it — must not navigate the page. The click's OWN
     // completion (Playwright waits for it) is already proof the browser did not tear down this page mid-
     // click; the scenario's own follow-up assertions (the editor still shown, the instance's state intact)
     // are the positive proof nothing moved.
@@ -1846,18 +1846,18 @@ public sealed partial class DesignerSteps
 
     // The session-safety pin's direct assertion: no login gate appeared (the page's OWN session is still
     // bound). Combined, in the scenario, with a page-side write (a design rename) whose autosave is
-    // admin-gated ΓÇö if the real session HAD flipped anonymous, that write would be silently denied and the
+    // admin-gated — if the real session HAD flipped anonymous, that write would be silently denied and the
     // rename step's own store poll would time out, so together the two are a strong proof, not just this
     // one shallow DOM check.
     [Then("the designer's own session is still logged in")]
     public async Task ThenDesignerSessionStillLoggedIn() =>
         await Assert.That(await ctx.Page!.Locator(".login-form").CountAsync()).IsEqualTo(0);
 
-    // ΓöÇΓöÇ M12 V1 ΓÇö MetaVar rows: component state + top-level ui vars ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 V1 — MetaVar rows: component state + top-level ui vars ────────────────────────────────────────────────────────────────
 
     // A convertible render whose `ui` carries a REAL stateful setup/view component (`Counter()`, the
     // canonical shape confirmed against the designer's own designEditor + GenericUi's library: a state
-    // var, a nested `fn render()`, `return render`) besides `fn render()` ΓÇö the shape V1's import lifts
+    // var, a nested `fn render()`, `return render`) besides `fn render()` — the shape V1's import lifts
     // the lambda-return refusal for. Same authoring plumbing as the other convertible-render fixtures.
     private const string StatefulComponentConvertibleRender =
         "ui\n"
@@ -1873,7 +1873,7 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == StatefulComponentConvertibleRender));
     }
 
-    // The imported state var shows inside its component's `.fn-vars` area ΓÇö a `name` input and an `init`
+    // The imported state var shows inside its component's `.fn-vars` area — a `name` input and an `init`
     // input, both two-way-bound to the MetaVar row (the SAME shape the render tree's own leaf/attr editing
     // already uses).
     [Then("the Components area shows a component named {string} with a state var named {string} and init {string}")]
@@ -1911,7 +1911,7 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator("main.ide-design-edit .design-editor .design-state-section .var-row button.remove-var").Last.ClickAsync();
 
     // ux review coverage gap: the client-computed name hint (designVarNameHint) is invisible to the
-    // unit-level SchemaBridge tests (client-only, no projection/commit involved) ΓÇö prove it shows in the
+    // unit-level SchemaBridge tests (client-only, no projection/commit involved) — prove it shows in the
     // real DOM. `index` addresses the row by POSITION (0-based), matching insertion order (addVar appends).
     [When("I set design-level state var {int}'s name to {string}")]
     public async Task WhenSetDesignStateVarName(int index, string name) =>
@@ -1924,11 +1924,11 @@ public sealed partial class DesignerSteps
             $"const r = rows[{index}]; if (r == null) return false; const h = r.querySelector('.var-name-hint'); " +
             $"return h != null && h.textContent.includes({JsString(hintText)}); }}");
 
-    // ΓöÇΓöÇ M12 F2 ΓÇö canvas expansion of design-component invocations ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 F2 — canvas expansion of design-component invocations ─────────────────────────────────────────────────────────────────
 
     // A convertible render that both DEFINES `fn NoteCard(note)` (single-return `<li>{note.title}</li>`)
-    // AND INVOKES it (`<NoteCard note={n}/>`, no children ΓÇö component tags never carry them) inside a
-    // `foreach n in db.notes` ΓÇö the exact shape F2's canvas walk expands. Same authoring plumbing as the
+    // AND INVOKES it (`<NoteCard note={n}/>`, no children — component tags never carry them) inside a
+    // `foreach n in db.notes` — the exact shape F2's canvas walk expands. Same authoring plumbing as the
     // other convertible-render fixtures (fill the `ui` textarea, poll the store).
     private const string ComponentInvokingConvertibleRender =
         "ui\n"
@@ -1945,7 +1945,7 @@ public sealed partial class DesignerSteps
     }
 
     // Edit the named component's body LEAF expr input (its `.fn-body` holds the SAME recursive
-    // renderNodeEditor the render tree uses) ΓÇö the F2 liveness proof: every expansion of this fn shares
+    // renderNodeEditor the render tree uses) — the F2 liveness proof: every expansion of this fn shares
     // this ONE body row, so editing it must repaint EVERY expanded instance same-frame. The feature writes
     // inner quotes as `\"` (the Gherkin escape for a literal `"` inside the quoted argument); Reqnroll
     // passes the backslashes through verbatim (see AccessSteps.GivenAccessRule), so unescape them first.
@@ -1954,9 +1954,9 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator($"main.ide-design-edit .design-editor .components-section .fn-card:has(input.fn-name[value=\"{name}\"]) .fn-body input.node-expr")
             .FillAsync(expr.Replace("\\\"", "\""));
 
-    // ΓöÇΓöÇ M12 F1 review fix (ui-arch + ux) ΓÇö the from-scratch "+ Component" flow ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 F1 review fix (ui-arch + ux) — the from-scratch "+ Component" flow ────────────────────────────────────────────
 
-    // A BARE convertible render ΓÇö no helper/component fn, just enough for `design.render.any()` to gate
+    // A BARE convertible render — no helper/component fn, just enough for `design.render.any()` to gate
     // the render section (and its Components area) into view. Same authoring plumbing (fill the `ui`
     // textarea, poll the store) as the other convertible-render fixtures, scoped to THIS scenario's
     // design label ("scratchcomp").
@@ -1973,22 +1973,22 @@ public sealed partial class DesignerSteps
     }
 
     // This scenario ever mints exactly ONE MetaFn (the "+ Component" click), so every "the new
-    // component" step addresses the sole `.fn-card` ΓÇö no by-name/by-value disambiguation needed.
+    // component" step addresses the sole `.fn-card` — no by-name/by-value disambiguation needed.
     private const string NewComponentCard = "main.ide-design-edit .design-editor .components-section .fn-card";
 
     [When("I click the add-component button")]
     public async Task WhenClickAddComponent() =>
         await ctx.Page!.Locator("main.ide-design-edit .design-editor button.add-fn").First.ClickAsync();
 
-    // A freshly-minted MetaFn has an EMPTY `body` (the reviewed, upheld decision ΓÇö see the F1 slice
+    // A freshly-minted MetaFn has an EMPTY `body` (the reviewed, upheld decision — see the F1 slice
     // note): its body area shows the ROOT-position add-row, not a rendered node.
     [Then("a new component card appears with an empty body")]
     public async Task ThenNewComponentEmptyBody() =>
         await ctx.Page!.WaitForSelectorAsync(NewComponentCard + " .fn-body > .node-add-row");
 
-    // The root-position add-row (addRootRow) must offer ONLY "+ element"/"+ text/expr" ΓÇö NOT "+ for"/
+    // The root-position add-row (addRootRow) must offer ONLY "+ element"/"+ text/expr" — NOT "+ for"/
     // "+ if" (a for/if row can never be a fn's body root; projection refuses it, and a body root has no
-    // remove ├ù, so a for/if click would strand the operator).
+    // remove ×, so a for/if click would strand the operator).
     [Then("the new component's body add-row offers only element and text, not for or if")]
     public async Task ThenRootAddRowOffersOnlyElementAndText()
     {
@@ -2011,8 +2011,8 @@ public sealed partial class DesignerSteps
     public async Task WhenSetNewComponentName(string name) =>
         await ctx.Page!.Locator(NewComponentCard + " input.fn-name").FillAsync(name);
 
-    // The inline "'render' is reserved" hint (review fix 3) ΓÇö client-computed, no projection/commit
-    // involved ΓÇö shown the moment the name input reads "render".
+    // The inline "'render' is reserved" hint (review fix 3) — client-computed, no projection/commit
+    // involved — shown the moment the name input reads "render".
     [Then("the new component shows the reserved-name hint")]
     public async Task ThenNewComponentShowsReservedHint() =>
         await ctx.Page!.WaitForFunctionAsync(
@@ -2027,7 +2027,7 @@ public sealed partial class DesignerSteps
         await ctx.Page!.WaitForFunctionAsync(
             $"() => document.querySelectorAll({JsString(NewComponentCard)}).length === 0");
 
-    // The label-parameterized sibling of ThenProjectsValid (E2) ΓÇö proves the design LABELED `label`
+    // The label-parameterized sibling of ThenProjectsValid (E2) — proves the design LABELED `label`
     // projects to a valid document, polled the same way (a staged ctx write lands over the WS
     // asynchronously; on timeout the LAST projection error is surfaced).
     [Then("the stored render for {string} projects to a valid design document")]
@@ -2054,10 +2054,10 @@ public sealed partial class DesignerSteps
 
     // After the import host action's ack refetch re-renders the editor, the mode flips: a first-class
     // "Structured render" section (OUTSIDE the collapsing Advanced disclosure) appears, holding the
-    // recursive tree editor over design.render. Plain visible wait ΓÇö no fixed sleep, no disclosure dance.
+    // recursive tree editor over design.render. Plain visible wait — no fixed sleep, no disclosure dance.
     // After the import host action's ack refetch re-renders the editor, the mode flips: a first-class
     // "Structured render" section (OUTSIDE the collapsing Advanced disclosure) appears, holding the
-    // recursive tree editor over design.render. Wait for the ROOT element's own tag input ΓÇö proof the
+    // recursive tree editor over design.render. Wait for the ROOT element's own tag input — proof the
     // recursive renderNodeEditor ran at least once. No fixed sleep, no disclosure dance.
     [Then("the design editor eventually shows the structured render tree editor")]
     public async Task ThenShowsTreeEditor()
@@ -2075,7 +2075,7 @@ public sealed partial class DesignerSteps
             $"() => {{ const r = document.querySelector('main.ide-design-edit .design-editor .render-tree > .node-element > .node-tag-row > input.node-tag'); return r != null && r.value === {JsString(tag)}; }}");
 
     // Recursion proof: a NESTED element (h1) must appear as its OWN .node-element nested UNDER the root's
-    // .node-children ΓÇö i.e. the component recursed a level deep, rendering a child element with its own tag
+    // .node-children — i.e. the component recursed a level deep, rendering a child element with its own tag
     // input. Assert some node-tag input inside .node-children reads the child's tag.
     [Then("the tree editor shows a nested node with tag input {string}")]
     public async Task ThenNestedTagInput(string tag) =>
@@ -2097,7 +2097,7 @@ public sealed partial class DesignerSteps
 
     // The edit is a journaled scalar autosave; poll the store: the root MetaNode is the one whose tag is
     // the new value AND that is not a child of any other node (a root). Simpler: assert SOME MetaNode now
-    // carries the new tag and the OLD root tag is gone ΓÇö a rename, not an add.
+    // carries the new tag and the OLD root tag is gone — a rename, not an add.
     [Then("the stored render root node has tag {string}")]
     public async Task ThenStoredRootTag(string tag) =>
         await EventuallyAsync(() =>
@@ -2107,13 +2107,13 @@ public sealed partial class DesignerSteps
                 && !nodes.Any(o => o.Fields.TryGetValue("tag", out var tv) && tv is DeEnv.Storage.TextValue { Text: "main" });
         });
 
-    // ΓöÇΓöÇ M12 E2 ΓÇö structural editing (add/remove child nodes + attributes, appending in order) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 E2 — structural editing (add/remove child nodes + attributes, appending in order) ────────────────
 
     // The ROOT node is the first .node-element directly under .render-tree; its OWN controls are direct
     // children (`>`) so a nested node's identically-classed controls can't satisfy the locator. Its add-row
     // holds "+ element" / "+ text/expr" / "+ attr"; its direct children live in its own .node-children, one
-    // per child node ΓÇö no wrapper (the E2 ux fix dropped the .node-child sibling wrapper so each child's
-    // remove ├ù lives INSIDE that child's own tag-row/leaf-row instead of floating beside the whole subtree).
+    // per child node — no wrapper (the E2 ux fix dropped the .node-child sibling wrapper so each child's
+    // remove × lives INSIDE that child's own tag-row/leaf-row instead of floating beside the whole subtree).
     private const string RootNode = "main.ide-design-edit .design-editor .render-tree > .node-element";
     // The root's LAST direct child's editor (the appended element must be LAST under .orderBy(order)).
     private const string RootLastChildElement = RootNode + " > .node-children > :last-child.node-element";
@@ -2123,7 +2123,7 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator(RootNode + " > .node-add-row > button.add-element").First.ClickAsync();
 
     // The appended element sorts LAST (order = max sibling order + 1). Assert the root's LAST child is an
-    // element whose own tag input reads the expected default/edited tag ΓÇö proving both that it landed and
+    // element whose own tag input reads the expected default/edited tag — proving both that it landed and
     // that it landed at the END (a naive order:0 would sort it to the FRONT, ahead of the imported <h1>).
     [Then("the root node's last child is an element with tag {string}")]
     public async Task ThenRootLastChildTag(string tag) =>
@@ -2151,7 +2151,7 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator(RootLastChildElement + " > .node-children .node-leaf > input.node-expr").First.WaitForAsync();
     }
 
-    // The ├ù now lives INSIDE the last child's own tag-row (the E2 ux fix), not beside a .node-child wrapper.
+    // The × now lives INSIDE the last child's own tag-row (the E2 ux fix), not beside a .node-child wrapper.
     [When("I remove the root node's last child")]
     public async Task WhenRemoveLastChild() =>
         await ctx.Page!.Locator(RootLastChildElement + " > .node-tag-row > button.remove-node").ClickAsync();
@@ -2166,7 +2166,7 @@ public sealed partial class DesignerSteps
 
     // The whole point of a structured render: after every structural edit it must still PROJECT to a valid
     // app document. Read the "treeme" Design node (resolved recursively) from the store and run the real
-    // SchemaBridge.ProjectDesignDb ΓÇö an un-projectable node (an empty-nothing node, or an attribute
+    // SchemaBridge.ProjectDesignDb — an un-projectable node (an empty-nothing node, or an attribute
     // with an empty value expression) throws a SchemaValidationException here. Polled (the add is a staged
     // ctx mutation flushed over the WS, so there is a brief async window); on timeout the LAST projection
     // error is surfaced (a bare EventuallyAsync would only say "expected true").
@@ -2193,10 +2193,10 @@ public sealed partial class DesignerSteps
         {
             // ProjectDesignDb builds + validates the whole document, including the render tree: an
             // un-projectable node (an empty-nothing node, or an attribute with an empty value expression)
-            // throws a SchemaValidationException here. That is the E2 correctness bar ΓÇö the STRUCTURAL
+            // throws a SchemaValidationException here. That is the E2 correctness bar — the STRUCTURAL
             // projectability of the edited render. (We deliberately do NOT then interpreter-LOAD the doc:
             // the imported fixture render references a bare symbol `leaf` that a running app has no binding
-            // for ΓÇö a symbol-resolution concern orthogonal to whether the render tree projects.)
+            // for — a symbol-resolution concern orthogonal to whether the render tree projects.)
             var doc = DeEnv.Designer.SchemaBridge.ProjectDesignDb(design);
             return doc.Contains("fn render()");
         }
@@ -2205,9 +2205,9 @@ public sealed partial class DesignerSteps
 
     private string _lastProjectError = "";
 
-    // ΓöÇΓöÇ M12 S5a ΓÇö reorder (Γû▓/Γû╝ per row, swapping `order` with the neighbor sibling) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 S5a — reorder (▲/▼ per row, swapping `order` with the neighbor sibling) ────────────────────────────────
     //
-    // Direct children of the root under `.node-children`, in DOM order ΓÇö this scenario's fixture only ever
+    // Direct children of the root under `.node-children`, in DOM order — this scenario's fixture only ever
     // has element rows (h1 + two appended `div`s renamed via the existing tag input), so a plain
     // `.node-element` selector suffices; a for/if-row family would need `:scope > .node-children > *`
     // instead (the same widening `ThenRootLastChildIsForRow` uses), not needed here.
@@ -2229,7 +2229,7 @@ public sealed partial class DesignerSteps
 
     // The DOM-order assertion above only proves the tree editor's OWN optimistic client state; a move's
     // `order` writes are ordinary ctx-staged field assignments that reach the server over the warm WS
-    // session ASYNCHRONOUSLY (the WhenRenameDesignLabel precedent) ΓÇö so a reload fired right after a click
+    // session ASYNCHRONOUSLY (the WhenRenameDesignLabel precedent) — so a reload fired right after a click
     // can race ahead of the autosave and observe the OLD order. This polls the real SERVER STORE (not the
     // DOM) for the swap, the same "wait for the write to land" step every persistence proof in this file
     // takes before reloading.
@@ -2252,7 +2252,7 @@ public sealed partial class DesignerSteps
     }
 
     // The canvas's root element (`<main data-node>`) holds the same children directly, rendered with their
-    // OWN edited tag as the literal DOM tag name (proven by the E2/CANVAS-1 "footer" case) ΓÇö so reading
+    // OWN edited tag as the literal DOM tag name (proven by the E2/CANVAS-1 "footer" case) — so reading
     // `tagName` off each direct child is the canvas-side twin of the tree-editor assertion above, proving
     // the SAME-FRAME repaint landed the new order there too, not just in the editor's own optimistic DOM.
     [Then("the design canvas shows children in order: {string}")]
@@ -2266,9 +2266,9 @@ public sealed partial class DesignerSteps
             "return tags.length === expected.length && tags.every((t, i) => t === expected[i]); }");
     }
 
-    // ux review (adjudicated over ui-arch): DISABLE-IN-PLACE at the edge, never hidden ΓÇö first/last-of-
+    // ux review (adjudicated over ui-arch): DISABLE-IN-PLACE at the edge, never hidden — first/last-of-
     // siblings is DYNAMIC (it flips mid-interaction), unlike the STATIC onRemove==null root case, so hiding
-    // Γû╝ at the last position would slide the destructive ├ù into the slot the operator is chase-clicking. The
+    // ▼ at the last position would slide the destructive × into the slot the operator is chase-clicking. The
     // button is always PRESENT; only its `disabled` attribute reflects the edge.
     [Then("the root node's first child's move-up button is disabled")]
     public async Task ThenRootFirstChildMoveUpDisabled() =>
@@ -2286,7 +2286,7 @@ public sealed partial class DesignerSteps
     public async Task WhenClickMoveDownOnRootChild(int index) =>
         await ctx.Page!.Locator(RootChildren).Nth(index).Locator(":scope > .node-tag-row > button.move-down").ClickAsync();
 
-    // Capture a UI-verification screenshot ΓÇö the DataConflictSteps.Shot precedent, gated on DEENV_SHOTS so
+    // Capture a UI-verification screenshot — the DataConflictSteps.Shot precedent, gated on DEENV_SHOTS so
     // it costs nothing (no file, no delay) in a normal run and only fires during a deliberate capture pass.
     [Then("I capture a screenshot named {string}")]
     public async Task ThenCaptureScreenshot(string name)
@@ -2302,7 +2302,7 @@ public sealed partial class DesignerSteps
         }
     }
 
-    // ΓöÇΓöÇ M12 S5a ΓÇö attribute reorder (the SAME attrRow(coll, a) the render tree and use-args share) ΓöÇΓöÇ
+    // ──── M12 S5a — attribute reorder (the SAME attrRow(coll, a) the render tree and use-args share) ────
 
     [When("I set the root node's last child's attribute {int}'s name to {string}")]
     public async Task WhenSetLastChildAttrName(int index, string name) =>
@@ -2322,7 +2322,7 @@ public sealed partial class DesignerSteps
     public async Task WhenClickMoveDownOnLastChildAttr(int index) =>
         await ctx.Page!.Locator(RootLastChildElement + " > .node-attr").Nth(index).Locator("button.move-down").ClickAsync();
 
-    // ΓöÇΓöÇ M12 S5a ΓÇö configuration (MetaUse) reorder ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 S5a — configuration (MetaUse) reorder ─────────────────────────────────────────────────────────────────────────────────────────────────
 
     [Then("configurations read, in order: {string}")]
     public async Task ThenConfigurationsOrder(string csv)
@@ -2350,11 +2350,11 @@ public sealed partial class DesignerSteps
         await Task.Delay(200);
     }
 
-    // ΓöÇΓöÇ M12 S5c ΓÇö unwrap (splice a plain element's children into its own parent collection) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 S5c — unwrap (splice a plain element's children into its own parent collection) ────────────────
     //
     // Root <main> with two children: <section> (itself holding <h1>"Title" and <p>"Body") and <footer>"Bye".
     // Unwrapping <section> must splice h1+p into <main>'s children at section's old position (between
-    // nothing-before and footer), section itself must be GC'd, and h1/p must keep their EXACT stored ids ΓÇö
+    // nothing-before and footer), section itself must be GC'd, and h1/p must keep their EXACT stored ids —
     // the identity pin. Same shape also covers the "root with more than one child" disabled case (main
     // itself has two children, so its own unwrap stays disabled).
     private const string UnwrapTestRender =
@@ -2372,7 +2372,7 @@ public sealed partial class DesignerSteps
     }
 
     // A root that IS the wrapped shape a hand-built wrap would have produced: <div><button>"Click"</button></div>.
-    // The root has exactly ONE element child, so unwrapping the ROOT is legal ΓÇö <button> becomes the new
+    // The root has exactly ONE element child, so unwrapping the ROOT is legal — <button> becomes the new
     // sole root, keeping its own stored id.
     private const string WrappedRootRender =
         "ui\n    fn render()\n        return <div>\n            <button>\n                \"Click\"\n";
@@ -2386,9 +2386,9 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == WrappedRootRender));
     }
 
-    // The stored id of the (first, by extent scan order ΓÇö every fixture in this section uses distinct tag
+    // The stored id of the (first, by extent scan order — every fixture in this section uses distinct tag
     // names) MetaNode carrying `tag`, captured for a later identity comparison. Polls first (the row may
-    // still be mid-import/mid-add) ΓÇö a bare extent read right after a click could race the write.
+    // still be mid-import/mid-add) — a bare extent read right after a click could race the write.
     private readonly Dictionary<string, int> _capturedNodeIds = new();
 
     [When("I capture the stored id of the MetaNode with tag {string}")]
@@ -2401,7 +2401,7 @@ public sealed partial class DesignerSteps
     }
 
     // The identity pin: the MetaNode now carrying `tag` is the SAME OBJECT (same intrinsic id) as the one
-    // captured earlier ΓÇö proving a move (link-then-unlink), not a mint-a-copy-and-abandon-the-original.
+    // captured earlier — proving a move (link-then-unlink), not a mint-a-copy-and-abandon-the-original.
     [Then("the MetaNode with tag {string} still carries its captured id")]
     public async Task ThenNodeIdUnchanged(string tag)
     {
@@ -2412,12 +2412,12 @@ public sealed partial class DesignerSteps
         await Assert.That(nowId).IsEqualTo(_capturedNodeIds[tag]);
     }
 
-    // No MetaNode anywhere carries this tag any more ΓÇö the unwrapped-away wrapper's subtree was reclaimed
+    // No MetaNode anywhere carries this tag any more — the unwrapped-away wrapper's subtree was reclaimed
     // (GC), same check ThenNoChildWithTag already performs, reused under a name that also fits a root case.
     [Then("no MetaNode has tag {string}")]
     public async Task ThenNoMetaNodeWithTag(string tag) => await ThenNoChildWithTag(tag);
 
-    // The design's sole render root now carries the id captured earlier under `tag` ΓÇö proving the promoted
+    // The design's sole render root now carries the id captured earlier under `tag` — proving the promoted
     // child became the SOLE root (Members.Count == 1) with its OWN identity intact, not a re-mint.
     [Then("the design {string}'s render root has the captured id of tag {string}")]
     public async Task ThenRenderRootHasCapturedId(string label, string tag) =>
@@ -2462,14 +2462,14 @@ public sealed partial class DesignerSteps
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const b = document.querySelector({JsString(RootLastChildElement + " > .node-tag-row > button.unwrap-node")}); return b != null && b.title === {JsString(text)}; }}");
 
-    // ΓöÇΓöÇ M12 S5c review fold ΓÇö the tie-scramble regression ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 S5c review fold — the tie-scramble regression ────────────────────────────────────────────────────────────────────────────────
     //
     // A reorder (moveRow swaps `order` values, not ids) done BEFORE an unwrap must survive splicing. The
     // live client's stable sort tie-breaks by array-insertion order (masking a shared-order tie), but the
-    // DURABLE paths (SchemaBridge.OrderedMembers, the store reload) tie-break by intrinsic id ΓÇö so without
+    // DURABLE paths (SchemaBridge.OrderedMembers, the store reload) tie-break by intrinsic id — so without
     // renumbering after the splice, the published/projected document silently reverts the reorder even
     // though the live tree editor and canvas still show it correctly. These steps reach one level deeper
-    // than RootChildren (a grandchild of the root ΓÇö the wrapped element's OWN children) and read the
+    // than RootChildren (a grandchild of the root — the wrapped element's OWN children) and read the
     // DURABLE projected document text directly (SchemaBridge.ProjectDesignDb), not just the DOM.
 
     [When("I click move-down on the root node's child {int}'s child {int}")]
@@ -2492,11 +2492,11 @@ public sealed partial class DesignerSteps
     }
 
     // The DURABLE-projection assertion (the one that catches the tie-scramble without the renumber fix):
-    // reads the design fresh from the store and runs the REAL SchemaBridge.ProjectDesignDb ΓÇö the same
-    // walk `sys.publish`/Commit use ΓÇö then checks the printed source has `first`'s opening tag textually
+    // reads the design fresh from the store and runs the REAL SchemaBridge.ProjectDesignDb — the same
+    // walk `sys.publish`/Commit use — then checks the printed source has `first`'s opening tag textually
     // BEFORE `second`'s. A shared-order tie that SchemaBridge tie-breaks by id (not the operator's intended
     // visual order) would print them in the WRONG sequence even though the live tree editor/canvas agree
-    // with each other (both client-side, both order-tie-tolerant the same way) ΓÇö only this text-level check
+    // with each other (both client-side, both order-tie-tolerant the same way) — only this text-level check
     // on the SERVER-SIDE canonical projection sees the divergence.
     [Then("the projected document shows {string} before {string} in the render")]
     public async Task ThenProjectedOrder(string first, string second) =>
@@ -2516,21 +2516,21 @@ public sealed partial class DesignerSteps
             catch { return false; }
         });
 
-    // ΓöÇΓöÇ M12 CANVAS-1 ΓÇö the client-computable canvas (sys.renderTree) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 CANVAS-1 — the client-computable canvas (sys.renderTree) ────────────────────────────────────────────────────────
     //
     // The canvas (.design-canvas) renders the design's MetaNode rows into a live tag tree via
-    // sys.renderTree ΓÇö computed on the CLIENT from the row data it already holds. An element node emits its
+    // sys.renderTree — computed on the CLIENT from the row data it already holds. An element node emits its
     // real tag carrying data-node=<row id> (the provenance spine); a non-literal expression leaf emits a
     // span.expr-chip. These steps assert the canvas's rendered DOM directly (a REAL element, not an input),
-    // and ΓÇö crucially ΓÇö that it updates LIVE (no reload) after a tree-editor edit, proving dep-recording
+    // and — crucially — that it updates LIVE (no reload) after a tree-editor edit, proving dep-recording
     // fires through the builtin's walk.
 
     // A real rendered element of the given tag inside the canvas, stamped with data-node. Auto-waits, so a
-    // tree-editor edit that flips a tag (main ΓåÆ section) or an add that introduces a new element (div) is
-    // observed WITHOUT any reload ΓÇö the liveness proof: the edit alone re-rendered the canvas.
+    // tree-editor edit that flips a tag (main → section) or an add that introduces a new element (div) is
+    // observed WITHOUT any reload — the liveness proof: the edit alone re-rendered the canvas.
     [Then("the design canvas shows a {string} element with a data-node attribute")]
     public async Task ThenCanvasShowsElement(string tag) =>
-        // Attached (presence in the DOM), not Visible ΓÇö a freshly-added empty element (e.g. an empty <div>)
+        // Attached (presence in the DOM), not Visible — a freshly-added empty element (e.g. an empty <div>)
         // has zero size and would fail a visibility check, but it IS in the canvas; presence is the assertion.
         await ctx.Page!.Locator($".design-canvas {tag}[data-node]").First
             .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
@@ -2540,14 +2540,14 @@ public sealed partial class DesignerSteps
     public async Task ThenCanvasShowsChip(string source) =>
         await ctx.Page!.Locator($".design-canvas span.expr-chip[data-node]:has-text({CssString(source)})").First.WaitForAsync();
 
-    // ΓöÇΓöÇ M12 CANVAS-EVAL-1 ΓÇö the canvas EVALUATES expressions (sys.evalContext) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 CANVAS-EVAL-1 — the canvas EVALUATES expressions (sys.evalContext) ─────────────────────────────────────────
     //
     // These steps drive the eval-context wiring: an idempotent Advanced-disclosure opener (Convert-to-
-    // structured collapses the disclosure ΓÇö see WhenClickConvert ΓÇö so a later textarea edit needs it
+    // structured collapses the disclosure — see WhenClickConvert — so a later textarea edit needs it
     // reopened, but blindly clicking the summary again would TOGGLE it shut), authoring `initialData` through
     // the same journaled-textarea idiom the access/common sections use, editing a LEAF's expr input (the
     // render's one leaf under the imported <h1>), clicking the Refresh-values control, and asserting the
-    // canvas's EVALUATED text (as opposed to a chip) ΓÇö the twin of ThenCanvasShowsChip.
+    // canvas's EVALUATED text (as opposed to a chip) — the twin of ThenCanvasShowsChip.
 
     [When("I ensure the Advanced code disclosure is open")]
     public async Task WhenEnsureAdvancedOpen()
@@ -2567,7 +2567,7 @@ public sealed partial class DesignerSteps
             o.Fields.TryGetValue("initialData", out var iv) && iv is DeEnv.Storage.TextValue it && it.Text == initialData));
     }
 
-    // The render's one leaf (imported from `{db.greeting}` under <h1>) ΓÇö a plain journaled edit, the same
+    // The render's one leaf (imported from `{db.greeting}` under <h1>) — a plain journaled edit, the same
     // two-way-bound MetaNode.expr write the leaf input already exercises (ThenLeafExprInput reads it back).
     [When("I edit the leaf expr input to {string}")]
     public async Task WhenEditLeafExpr(string expr) =>
@@ -2577,8 +2577,8 @@ public sealed partial class DesignerSteps
     public async Task WhenClickRefreshValues() =>
         await ctx.Page!.Locator("main.ide-design-edit .design-editor button.refresh-eval").First.ClickAsync();
 
-    // The canvas's <h1> (the render's one element wrapping the evaluated leaf) shows its EVALUATED text ΓÇö
-    // never a chip's raw source ΓÇö proving the eval-context pivot actually ran the real interpreter over the
+    // The canvas's <h1> (the render's one element wrapping the evaluated leaf) shows its EVALUATED text —
+    // never a chip's raw source — proving the eval-context pivot actually ran the real interpreter over the
     // seed graph. Scoped to <h1> (the render's only element besides the root <main>/<section>), so this
     // cannot accidentally match a chip's OWN text (a chip is a <span>, never an <h1>).
     [Then("the design canvas shows the evaluated leaf text {string}")]
@@ -2586,9 +2586,9 @@ public sealed partial class DesignerSteps
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const e = document.querySelector('.design-canvas h1'); return e != null && e.textContent === {JsString(text)}; }}");
 
-    // ΓöÇΓöÇ M12 S6a ΓÇö `foreach`/`if` as structured rows (for-row tree editor + canvas template mode) ΓöÇΓöÇΓöÇ
+    // ──── M12 S6a — `foreach`/`if` as structured rows (for-row tree editor + canvas template mode) ─────
 
-    // A convertible render whose root has ONE `foreach` child ΓÇö the S6a import lift's target shape
+    // A convertible render whose root has ONE `foreach` child — the S6a import lift's target shape
     // (S1b previously REFUSED this; it now mints a `kind="for"` row). Same authoring plumbing as the other
     // convertible-render fixtures: fill the `ui` textarea, poll the store for the write.
     private const string ForLoopConvertibleRender =
@@ -2604,7 +2604,7 @@ public sealed partial class DesignerSteps
     }
 
     // The tree editor's for-row: item/collection inputs (`.node-for-item`/`.node-for-collection`) hold the
-    // imported values. Scoped loosely (some input reads X) ΓÇö there is only one for-row in these scenarios.
+    // imported values. Scoped loosely (some input reads X) — there is only one for-row in these scenarios.
     [Then("the tree editor shows a for row with item {string} and collection {string}")]
     public async Task ThenForRowInputs(string item, string collection) =>
         await ctx.Page!.WaitForFunctionAsync(
@@ -2622,13 +2622,13 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree input.node-for-collection").First.FillAsync(collection);
         // Poll for the journaled autosave to reach the designer's store (no timer): the collection field's
         // new value must be persisted before a later "Refresh values" recomputes sys.evalContext server-side
-        // (it reads the design fresh) ΓÇö otherwise the refresh would re-ship the OLD source's AST and the
+        // (it reads the design fresh) — otherwise the refresh would re-ship the OLD source's AST and the
         // canvas would still miss. The optimistic client edit re-renders the canvas immediately regardless.
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaNode").Values.Any(o =>
             o.Fields.TryGetValue("collection", out var v) && v is DeEnv.Storage.TextValue t && t.Text == collection));
     }
 
-    // The canvas's for-template badge shows the loop var name in `.for-item` ΓÇö the NO-CTX marker (S6a; the
+    // The canvas's for-template badge shows the loop var name in `.for-item` — the NO-CTX marker (S6a; the
     // loop is not evaluated). Auto-waits, so an item-input edit's live repaint (no reload) is observed here.
     [Then("the design canvas shows a for-template with item {string}")]
     public async Task ThenCanvasForTemplateItem(string item) =>
@@ -2641,7 +2641,7 @@ public sealed partial class DesignerSteps
     public async Task WhenAddForLoop() =>
         await ctx.Page!.Locator(RootNode + " > .node-add-row > button.add-for").ClickAsync();
 
-    // The root's last child (by DOM order under `.node-children`) carries the for-row's `.node-for` class ΓÇö
+    // The root's last child (by DOM order under `.node-children`) carries the for-row's `.node-for` class —
     // NOT `.node-element` (a for-row is a distinct kind), so this can't reuse RootLastChildElement.
     [Then("the root node's last child is a for row")]
     public async Task ThenRootLastChildIsForRow() =>
@@ -2650,7 +2650,7 @@ public sealed partial class DesignerSteps
             "const last = kids[kids.length - 1]; return last != null && last.classList.contains('node-for'); }");
 
     // The added for-row's own remove control lives in its `.node-for-head` (the S6a mirror of E2's
-    // tag-row-anchored ├ù). Scoped to the LAST for-row under the root's children.
+    // tag-row-anchored ×). Scoped to the LAST for-row under the root's children.
     [When("I remove the root node's last child for row")]
     public async Task WhenRemoveLastForRow() =>
         await ctx.Page!.Locator(RootNode + " > .node-children > .node-for:last-child > .node-for-head > button.remove-node").ClickAsync();
@@ -2665,10 +2665,10 @@ public sealed partial class DesignerSteps
             _designer.Store.ReadExtent("MetaNode").Values.Count(o =>
                 o.Fields.TryGetValue("kind", out var kv) && kv is DeEnv.Storage.TextValue { Text: "for" }) == count);
 
-    // ΓöÇΓöÇ M12 S6b ΓÇö the canvas EVALUATES for/if rows (row-scope evaluation) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 S6b — the canvas EVALUATES for/if rows (row-scope evaluation) ─────────────────────────────────────────────────
     //
-    // A convertible render whose <main> holds a `foreach note in db.notes ΓåÆ <li>{note.title}` AND an
-    // `if db.flag ΓåÆ <p>"ON" else <p>"OFF"`. Paired with a Db{notes: set of Note{title}, flag: bool} schema
+    // A convertible render whose <main> holds a `foreach note in db.notes → <li>{note.title}` AND an
+    // `if db.flag → <p>"ON" else <p>"OFF"`. Paired with a Db{notes: set of Note{title}, flag: bool} schema
     // and a two-note seed, so after Convert the WITH-CTX canvas evaluates the loop (two <li>s with real
     // titles) and the if (the taken branch). Same authoring plumbing as the other fixtures.
     private const string ForAndIfConvertibleRender =
@@ -2692,7 +2692,7 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ForAndIfConvertibleRender));
     }
 
-    // A REAL evaluated element in the canvas whose textContent is the given text ΓÇö the S6b proof that a
+    // A REAL evaluated element in the canvas whose textContent is the given text — the S6b proof that a
     // for-body instance (`<li>{note.title}` -> "Alpha"/"Beta") or an if taken-branch (`<p>"ON"`) rendered as
     // actual content, NOT a chip and NOT a for-template badge. Auto-waits so a live repaint (edit/refresh)
     // is observed with no reload. Matches ANY element of that tag in the canvas whose text equals `text`.
@@ -2710,15 +2710,15 @@ public sealed partial class DesignerSteps
             $"() => {{ const c = document.querySelector('.design-canvas'); return c != null && !c.textContent.includes({JsString(text)}); }}");
 
     // The tree editor's for-row collection input still reads the edited source (the race-guard proof: the
-    // canvas falls to the template, but the operator's own input is UNDISTURBED ΓÇö not reverted).
+    // canvas falls to the template, but the operator's own input is UNDISTURBED — not reverted).
     [Then("the tree editor shows a for-collection input reading {string}")]
     public async Task ThenForCollectionInputReads(string collection) =>
         await ctx.Page!.WaitForFunctionAsync(
             $"() => [...document.querySelectorAll('main.ide-design-edit .design-editor .render-tree input.node-for-collection')].some(e => e.value === {JsString(collection)})");
 
-    // ΓöÇΓöÇ M12 F3 ΓÇö call-position evaluation of design fns ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 F3 — call-position evaluation of design fns ─────────────────────────────────────────────────────────────────────────────────
     //
-    // A convertible render that DEFINES a HELPER (`fmtGreeting(name)`, a scalar-returning fn ΓÇö no
+    // A convertible render that DEFINES a HELPER (`fmtGreeting(name)`, a scalar-returning fn — no
     // element root) AND a COMPONENT (`NoteCard(note)`, F2's own shape) and INVOKES both: the helper by
     // plain call syntax inside a leaf (`fmtGreeting(db.greeting)`, wrapped in its own <span> for a clean
     // assertion target), the component via a `foreach`-driven tag invocation (the F2 fixture, proving F3
@@ -2753,7 +2753,7 @@ public sealed partial class DesignerSteps
         await ctx.Page!.WaitForFunctionAsync(
             "() => document.querySelector('.design-canvas .stale-fns-banner') == null");
 
-    // ΓöÇΓöÇ M12 eval-degrade-banner ΓÇö an honest notice when evalContext itself fails to build ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 eval-degrade-banner — an honest notice when evalContext itself fails to build ────────────────────
     //
     // BuildEvalContext's catch arm ships a non-empty `error` (the REAL exception message, never a
     // paraphrase) alongside the empty db/exprs/fns/ambients/params payload; the walk splices ONE
@@ -2770,11 +2770,11 @@ public sealed partial class DesignerSteps
         await ctx.Page!.WaitForFunctionAsync(
             "() => document.querySelector('.design-canvas .eval-degrade-banner') == null");
 
-    // ΓöÇΓöÇ M12 V1b ΓÇö init-evaluated state in the static canvas ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── M12 V1b — init-evaluated state in the static canvas ────────────────────────────────────────────────────────────────────────────────
     //
     // A top-level `ui var greeting` (design-level state, V1's import shape) referenced in its own <span>,
     // AND a real stateful `Counter()` (V1's canonical setup/view shape) INVOKED as a tag inside the
-    // render (F2's expansion) ΓÇö the ONE fixture that proves BOTH V1b binding sites at once: the walk
+    // render (F2's expansion) — the ONE fixture that proves BOTH V1b binding sites at once: the walk
     // ROOT (design.vars) and ExpandFn's own bodyBindings (a MetaFn's vars). Same authoring plumbing as
     // the other convertible-render fixtures.
     private const string InitStateConvertibleRender =
@@ -2793,7 +2793,7 @@ public sealed partial class DesignerSteps
     }
 
     // Edit the design-level var's INIT input (`.design-state-section .var-row input.var-init`, by row
-    // index ΓÇö this scenario ever imports exactly one design-level var, so index 0 is unambiguous).
+    // index — this scenario ever imports exactly one design-level var, so index 0 is unambiguous).
     [When("I edit design-level state var {int}'s init to {string}")]
     // The feature writes inner quotes as `\"` (the Gherkin escape for a literal `"` inside the quoted
     // argument); Reqnroll passes the backslashes through verbatim (see WhenEditComponentBodyLeaf /
@@ -2840,19 +2840,19 @@ public sealed partial class DesignerSteps
     public async Task ThenNewInstanceAppears(string name, string designLabel)
     {
         // The hostAction reply triggers a WS refetch + resetViewState (ws.ts), so the list re-renders
-        // IN PLACE ΓÇö no page reload. Wait for the new row to appear in the CURRENT DOM. 45s covers the
+        // IN PLACE — no page reload. Wait for the new row to appear in the CURRENT DOM. 45s covers the
         // async create (doc write + handler build) plus the round-trip refetch.
         // KNOWN ISSUE: under FULL-SUITE peak load the new instance's host can be spawn-starved and
-        // the row never appears (a hang, not slowness ΓÇö raising this to 90s still failed 3/3). Passes
+        // the row never appears (a hang, not slowness — raising this to 90s still failed 3/3). Passes
         // in isolation. Tracked as a deploy/host-spawn-starvation issue, NOT a timeout to bump.
         await ctx.Page!.WaitForSelectorAsync(
             $"main.ide-list .set-row a.row-link:text-is({CssString(name)})",
             new Microsoft.Playwright.PageWaitForSelectorOptions { Timeout = TestTimeouts.ActionMs });
-        // The DESIGN CELL must populate IN PLACE too ΓÇö no reload. This is the load-bearing assertion:
+        // The DESIGN CELL must populate IN PLACE too — no reload. This is the load-bearing assertion:
         // the kernel mirror writes the new Instance's `design` reference AFTER adding it to the set (a GC
         // ordering constraint), so the row could momentarily render with an empty design cell; the
         // in-place refetch must show the design label. WaitForSelector (auto-waiting) proves it appears
-        // without racing the row's first paint ΓÇö if it never populates in place, this fails (a real
+        // without racing the row's first paint — if it never populates in place, this fails (a real
         // refetch-timing bug), rather than a count that might pass on a stale/empty cell.
         await ctx.Page.WaitForSelectorAsync(
             $"main.ide-list .set-row:has(a.row-link:text-is({CssString(name)})) td:not(.row-id):text-is({CssString(designLabel)})",
@@ -2862,14 +2862,14 @@ public sealed partial class DesignerSteps
     [Then("the design dropdown has the design {string} selected")]
     public async Task ThenDropdownSelected(string designLabel) =>
         // The <select>'s pre-selected option (driven by the instance's designId through the <select>
-        // binding) is the instance's current design ΓÇö its visible text is the design's label.
+        // binding) is the instance's current design — its visible text is the design's label.
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const s = document.querySelector('select.design-pick'); return s != null && s.options[s.selectedIndex] != null && s.options[s.selectedIndex].textContent.trim() === {JsString(designLabel)}; }}");
 
     [Then("the instance {string} records the design {string}")]
     public async Task ThenInstanceRecordsDesign(string instanceLabel, string designLabel)
     {
-        // Apply (setDesign) records the chosen design on the target's registry entry ΓÇö the kernel updates
+        // Apply (setDesign) records the chosen design on the target's registry entry — the kernel updates
         // the live spec's DesignId (and rewrites kernel.json). Poll the live spec (the WS host-action is
         // async) until it carries the picked design's id.
         var designId = ctx.DesignIdForLabel(designLabel);
@@ -2883,7 +2883,7 @@ public sealed partial class DesignerSteps
         // Apply also deployed: it wrote the projected app document onto the target instance's app doc (its
         // own sovereign id-dir). Poll it (the WS host-action + file write is async) until the type appears.
         // The deploy projects the WHOLE app and resets the target store, so it can run long at the tail of
-        // a saturated full suite ΓÇö a wide window keeps it deterministic (this feature's 8 kernel-backed
+        // a saturated full suite — a wide window keeps it deterministic (this feature's 8 kernel-backed
         // browser scenarios run [NotInParallel], so the last one's deploy lands under peak load).
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
         await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
@@ -2920,8 +2920,8 @@ public sealed partial class DesignerSteps
     public async Task ThenDesignerTypeIsEnum(string typeName, string values)
     {
         // Split-target (no apply/deploy): assert the designer captured the enum in its OWN sovereign
-        // store ΓÇö base type "enum" + the values input. Applying a design
-        // is proven by "Applying a different design ... deploys it" + HostAction ΓÇö so there is no kernel
+        // store — base type "enum" + the values input. Applying a design
+        // is proven by "Applying a different design ... deploys it" + HostAction — so there is no kernel
         // deploy, no second instance's schema file, no 45s poll here, just the UI-authoring seam. The
         // values input persists over an async WS round-trip, so poll the (fast, local) MetaType extent.
         var expected = values.Split(',').Select(v => v.Trim()).Where(v => v.Length > 0).ToList();
@@ -2935,7 +2935,7 @@ public sealed partial class DesignerSteps
     [Then("the design's prop {string} is multiline")]
     public async Task ThenDesignerPropMultiline(string propName) =>
         // The designer captured the multiline flag in its OWN sovereign store (the prop's bound checkbox
-        // wrote prop.multiline = true). Poll the (fast, local) MetaProp extent ΓÇö the toggle persists over
+        // wrote prop.multiline = true). Poll the (fast, local) MetaProp extent — the toggle persists over
         // an async WS round-trip.
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values.Any(o =>
             o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
@@ -2943,7 +2943,7 @@ public sealed partial class DesignerSteps
 
     [Then("the design's prop {string} is not multiline")]
     public async Task ThenDesignerPropNotMultiline(string propName) =>
-        // A non-text prop never gets the flag (its toggle is hidden). Its stored multiline reads false ΓÇö
+        // A non-text prop never gets the flag (its toggle is hidden). Its stored multiline reads false —
         // the store defaults a declared bool to false, so the field is present and false, never errors.
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values.Any(o =>
             o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
@@ -2967,18 +2967,18 @@ public sealed partial class DesignerSteps
             .IsEqualTo(0);
     }
 
-    // ΓöÇΓöÇ Then: progressive disclosure (fields hidden until their shape is chosen) ΓöÇΓöÇ
+    // ──── Then: progressive disclosure (fields hidden until their shape is chosen) ────
 
     [Then("the prop {string} shows no key-type field")]
     public async Task ThenPropNoKeyType(string propName) =>
         // A single/set prop's key-type field is hidden (it is meaningful only for a dictionary). The field
-        // stays in the DOM ΓÇö progressive disclosure flips visibility via the row's class ΓÇö so assert it is
+        // stays in the DOM — progressive disclosure flips visibility via the row's class — so assert it is
         // HIDDEN, not absent.
         await PropKeytypeInput(propName).First.WaitForAsync(Hidden);
 
     [Then("the prop {string} shows a key-type field")]
     public async Task ThenPropKeyType(string propName) =>
-        // Set to dictionary, the key-type field becomes visible via the row's class change ΓÇö wait for it
+        // Set to dictionary, the key-type field becomes visible via the row's class change — wait for it
         // (proving the disclosure reconciles when cardinality changes).
         await PropKeytypeInput(propName).First.WaitForAsync();
 
@@ -2990,7 +2990,7 @@ public sealed partial class DesignerSteps
 
     [Then("the prop {string} shows no multiline toggle")]
     public async Task ThenPropNoMultilineToggle(string propName) =>
-        // A non-text (or non-single) prop's multiline checkbox is hidden ΓÇö multiline is valid only on a
+        // A non-text (or non-single) prop's multiline checkbox is hidden — multiline is valid only on a
         // single text prop. The field stays in the DOM; assert it is HIDDEN, not absent.
         await PropMultilineInput(propName).First.WaitForAsync(Hidden);
 
@@ -3010,20 +3010,20 @@ public sealed partial class DesignerSteps
     public async Task ThenJustAddedNoValuesField() =>
         await JustAddedTypeRow().Locator("input.type-values").First.WaitForAsync(Hidden);
 
-    // M12 eval-degrade-banner ΓÇö the type-card hint (typeHint idiom, mirrors fnNameHint) for a baseType
+    // M12 eval-degrade-banner — the type-card hint (typeHint idiom, mirrors fnNameHint) for a baseType
     // "object" type with zero props (the same condition that degrades evalContext).
     [Then("the just-added type shows the hint {string}")]
     public async Task ThenJustAddedTypeHint(string hintText) =>
         await JustAddedTypeRow().Locator($".type-hint:has-text({CssString(hintText)})").First.WaitForAsync();
 
-    // The hint span is a structural `if` (mirroring fn-name-hint/var-name-hint) ΓÇö ABSENT from the DOM
+    // The hint span is a structural `if` (mirroring fn-name-hint/var-name-hint) — ABSENT from the DOM
     // when there is no hint, not merely CSS-hidden, so this polls for absence rather than Hidden.
     [Then("the just-added type shows no hint")]
     public async Task ThenJustAddedNoTypeHint() =>
         await ctx.Page!.WaitForFunctionAsync(
             $"() => document.querySelectorAll({JsString("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=" + CssString(_justAddedTypeName) + "]) .type-hint")}).length === 0");
 
-    // ΓöÇΓöÇ Then: the grouped prop-type picker ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── Then: the grouped prop-type picker ─────────────────────────────────────────────────────────────────────────────
 
     [Then("the prop {string} type picker offers the built-in type {string}")]
     public async Task ThenPickerOffersBuiltin(string propName, string typeName) =>
@@ -3040,16 +3040,16 @@ public sealed partial class DesignerSteps
     [Then("the prop {string} type picker keeps built-in and design types in separate groups")]
     public async Task ThenPickerGrouped(string propName)
     {
-        // The system scalars and the user's own types live in SEPARATE <optgroup>s ΓÇö not flatly intermixed.
+        // The system scalars and the user's own types live in SEPARATE <optgroup>s — not flatly intermixed.
         var select = PropTypeSelect(propName);
         await Assert.That(await select.Locator("optgroup[label=\"Built-in\"]").CountAsync()).IsGreaterThanOrEqualTo(1);
         await Assert.That(await select.Locator("optgroup[label=\"This design\"]").CountAsync()).IsGreaterThanOrEqualTo(1);
     }
 
-    // ΓöÇΓöÇ Then: client-side (SPA) navigation in the custom designer ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── Then: client-side (SPA) navigation in the custom designer ────────────────────────────────
 
     // The browser URL after the client-side Edit-link nav: the designer is kernel-mounted at
-    // /apps/designer, so its emitted href + the pushState target carry that mount ΓÇö the URL becomes
+    // /apps/designer, so its emitted href + the pushState target carry that mount — the URL becomes
     // /apps/designer/designs/<designId>. Polled (a client-side nav updates location via pushState with
     // no Load event); the dynamic design id is matched with a regex.
     [Then("the browser URL is the mounted design editor")]
@@ -3059,7 +3059,7 @@ public sealed partial class DesignerSteps
 
     // Structural-privacy pin for the custom designer's first paint: the designs LIST ships only what it
     // displays (design labels), NOT every design's full source. The todo design's `ui` section is the real
-    // todo app's custom render; it contains the class token "user-chip", which the list never displays ΓÇö so
+    // todo app's custom render; it contains the class token "user-chip", which the list never displays — so
     // that token must NOT appear anywhere in the first paint's shipped client state (window.initData). Reads
     // the WHOLE document (the head data island included), so it catches a value leaking through initData even
     // though it is never in the visible body. (Mirrors CodeSteps' window.initData privacy assertions.)
@@ -3076,14 +3076,14 @@ public sealed partial class DesignerSteps
         await Assert.That(initData.Contains(token, StringComparison.Ordinal)).IsFalse();
     }
 
-    // ΓöÇΓöÇ Then: no partial-content FLASH on the deep editor (round-2) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── Then: no partial-content FLASH on the deep editor (round-2) ────────────────────────────
 
     // Arm a MutationObserver that flips window.__sawBlankEditor the instant the editor PAGE
-    // (`main.ide-design-edit` ΓÇö its heading + Back link) appears under #app WITHOUT any `.type-card` in it:
+    // (`main.ide-design-edit` — its heading + Back link) appears under #app WITHOUT any `.type-card` in it:
     // the empty/partial editor state. (The optimistic round-1 paint rendered the page chrome but the
     // deep `designEditor(d)` call read the design's UNSHIPPED types and was swallowed to nothing, so the
-    // `.design-editor` body ΓÇö and its type cards ΓÇö were absent for a frame.) The todo design always has
-    // the TodoItem type, so a COMPLETE editor always carries ΓëÑ1 `.type-card`; only a partial paint shows
+    // `.design-editor` body — and its type cards — were absent for a frame.) The todo design always has
+    // the TodoItem type, so a COMPLETE editor always carries ≥1 `.type-card`; only a partial paint shows
     // the page with none. This is state-agnostic to HOW the body is missing (no `.design-editor` at all,
     // OR a `.design-editor` with an empty type list). A post-hoc check would miss a transient flash the
     // refetch then fills, so the observer watches every intermediate mutation; the current state is
@@ -3110,16 +3110,16 @@ public sealed partial class DesignerSteps
     // The blank/partial editor NEVER rendered during the navigation: the detector flag stayed false. The
     // preceding populated assertions (the TodoItem type card + the settled UI text) already waited for the
     // COMPLETE editor to appear, so by now any transient blank-editor flash would have been observed. This
-    // is the decisive flash assertion ΓÇö without the speculative guard, the optimistic paint renders the
+    // is the decisive flash assertion — without the speculative guard, the optimistic paint renders the
     // editor section with an empty type list here and the flag is true.
     [Then("the blank design editor never appeared during the navigation")]
     public async Task ThenBlankEditorNeverAppeared() =>
         await Assert.That(await ctx.Page!.EvaluateAsync<bool>("() => window.__sawBlankEditor === true")).IsFalse();
 
     // Scroll the page down so a following forward-nav can prove it resets scroll. Appends a tall spacer to
-    // document.body (OUTSIDE #app, so the editor's #app rebuild leaves it in place ΓÇö the page stays
+    // document.body (OUTSIDE #app, so the editor's #app rebuild leaves it in place — the page stays
     // scrollable across the nav), scrolls to a positive offset, and asserts the scroll actually moved
-    // (non-zero scrollY) ΓÇö otherwise the later "scrolled to the top" assertion would be vacuously true on a
+    // (non-zero scrollY) — otherwise the later "scrolled to the top" assertion would be vacuously true on a
     // page too short to scroll. (scrollTo is sync; the assert reads the settled scroll position.)
     [When("I scroll the page down")]
     public async Task WhenScrollDown()
@@ -3138,13 +3138,13 @@ public sealed partial class DesignerSteps
     }
 
     // The window is scrolled back to the top after a forward client-side nav (the SPA twin of the full
-    // reload's scroll reset). Polled ΓÇö the reset fires when the TARGET view paints, which (for a held
+    // reload's scroll reset). Polled — the reset fires when the TARGET view paints, which (for a held
     // incomplete target like the deep editor) is the refetch reply's render, slightly after the URL change.
     [Then("the page is scrolled to the top")]
     public async Task ThenScrolledTop() =>
         await ctx.Page!.WaitForFunctionAsync("() => window.scrollY === 0");
 
-    // ΓöÇΓöÇ Then: db.instances seeded from registry (slice 1) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── Then: db.instances seeded from registry (slice 1) ────────────────────────────────────────────────
 
     [Then("the design-host has a stored Instance for each hosted instance")]
     public async Task ThenDesignHostHasStoredInstances()
@@ -3160,7 +3160,7 @@ public sealed partial class DesignerSteps
     public async Task ThenStoredInstanceRuntimeId(string label)
     {
         // The Instance whose `name` == label must have a `runtimeId` that matches the live kernel
-        // instance's spec.Id ΓÇö the stable link from the stored mirror back to the runtime row.
+        // instance's spec.Id — the stable link from the stored mirror back to the runtime row.
         var kernelId = ctx.Kernel!.Instances.Single(i => i.Spec.App == label).Spec.Id;
         var instances = _designer.Store.ReadExtent("Instance");
         var match = instances.Values.FirstOrDefault(o =>
@@ -3177,7 +3177,7 @@ public sealed partial class DesignerSteps
     {
         // The Instance for `instanceLabel` must have its `design` reference pointing at the Design
         // whose label == `designLabel`. The `design` field is a stored bare id (a single reference);
-        // the Design extent holds objects at those ids ΓÇö resolves by construction.
+        // the Design extent holds objects at those ids — resolves by construction.
         var instances = _designer.Store.ReadExtent("Instance");
         var designs = _designer.Store.ReadExtent("Design");
 
@@ -3202,7 +3202,7 @@ public sealed partial class DesignerSteps
             .IsEqualTo(designLabel);
     }
 
-    // ΓöÇΓöÇ When/Then: db.instances mirror (Slice 2 ΓÇö direct host-action calls, no browser) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ──── When/Then: db.instances mirror (Slice 2 — direct host-action calls, no browser) ────────────────────────
 
     // Create a new instance via the kernel host action directly (not through the browser UI).
     // Uses the named design's existing app document as the new instance's source, and passes
