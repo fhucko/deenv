@@ -20,7 +20,7 @@ public sealed partial class DesignerSteps
         await ctx.Page!.GotoReadyAsync(ctx.DesignerUrl("/designs"));
         // The designs list now renders via the generic <SetTable> (a .set-row per design, the label in
         // a stretched a.row-link, with a per-row action cell carrying the Edit link + Delete button).
-        await ctx.Page!.WaitForSelectorAsync("main.ide-designs .set-row");
+        await ctx.Page!.Locator("main.ide-designs .set-row").First.WaitForAsync();
         // Wait for a post-init interactive element instead of the legacy initUi global.
         await ctx.Page.Locator("main.ide-designs .new-btn").First.WaitForAsync();
     }
@@ -31,7 +31,7 @@ public sealed partial class DesignerSteps
         await ctx.Page!.GotoReadyAsync(ctx.DesignerUrl("/instances"));
         // Hydration checkpoint: the SSR instance rows are present AND the client bundle has bootstrapped
         // (window.initUi set), so the hand-rolled links/handlers are attached before we interact.
-        await ctx.Page!.WaitForSelectorAsync("main.ide-list .set-row");
+        await ctx.Page!.Locator("main.ide-list .set-row").First.WaitForAsync();
         await ctx.Page.Locator("main.ide-list .new-btn").First.WaitForAsync();
     }
 
@@ -45,7 +45,7 @@ public sealed partial class DesignerSteps
         // a freshly-added design has no types yet, so .type-name would never appear for it.
         await DesignRowFor(label).Locator("a.edit-design").ClickAsync();
         await ctx.Page!.WaitForSelectorAsync("main.ide-design-edit .design-editor");
-        await ctx.Page.Locator("main.ide-design-edit .design-editor .add-type").First.WaitForAsync();
+        await ctx.Page.Locator("main.ide-design-edit .design-editor .add-type").WaitForAsync();
     }
 
     [When("I open the instance {string}")]
@@ -58,9 +58,10 @@ public sealed partial class DesignerSteps
         if (await ctx.Page!.Locator($"main.ide-list .set-row").CountAsync() == 0)
             await WhenOpenList();
         await RowFor(label).Locator("td.row-action button.kebab-toggle").ClickAsync();
-        await RowFor(label).Locator(".kebab-menu.open a.open-instance").ClickAsync();
-        await ctx.Page!.WaitForSelectorAsync("main.ide-instance select.design-pick");
-        await ctx.Page.Locator("main.ide-instance .new-btn").First.WaitForAsync();
+        var openLink = RowFor(label).Locator(".kebab-menu.open a.open-instance");
+        await openLink.WaitForAsync();
+        await openLink.ClickAsync();
+        await ctx.Page!.Locator("main.ide-instance select.design-pick").WaitForAsync();
     }
 
     [When("I open that new instance")]
@@ -83,8 +84,7 @@ public sealed partial class DesignerSteps
             return true;
         });
         await ctx.Page!.GotoReadyAsync(ctx.DesignerUrl($"/instances/{objId}"));
-        await ctx.Page!.WaitForSelectorAsync("main.ide-instance select.design-pick");
-        await ctx.Page.Locator("main.ide-instance .new-btn").First.WaitForAsync();
+        await ctx.Page!.Locator("main.ide-instance select.design-pick").WaitForAsync();
     }
 
     // ──── When: creating (the GENERIC SetTable create) ─────────────────────────────────────────────────────────
@@ -109,12 +109,14 @@ public sealed partial class DesignerSteps
         await ctx.Page.Locator("main.ide-designs .create-form button.create-save").ClickAsync();
         // Confirm the new row shows in the list (the race-free client re-render). The list renders via
         // the generic <SetTable>, so a row is .set-row and the label is the stretched a.row-link.
-        var newDesignRow = ctx.Page.Locator(".set-row", new() {
+        var newDesignRow = ctx.Page.Locator("main.ide-designs .set-row", new() {
             Has = ctx.Page.Locator("a.row-link", new() { HasTextString = label })
         });
         await newDesignRow.WaitForAsync();
         // Wait for the remapped positive id on the Edit link (negative ids start with -).
-        await newDesignRow.Locator("a.edit-design[href^=\"/designs/\"]:not([href^=\"/designs/-\"])").WaitForAsync();
+        // Use contains (*) and tolerant of mount prefix (e.g. /apps/designer/designs/123).
+        // The link is always present; we wait for the one without the transient negative id.
+        await newDesignRow.Locator("a.edit-design:not([href*=\"/-\"])").WaitForAsync();
     }
 
     [When("I create an instance named {string} from the design {string}")]
@@ -270,14 +272,9 @@ public sealed partial class DesignerSteps
     public async Task WhenNameJustAddedType(string name)
     {
         _justAddedTypeName = name;
-        var typeCardWithEmptyName = ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {
-            Has = ctx.Page.Locator("input.type-name[value=\"\"]")
-        });
-        var emptyInput = typeCardWithEmptyName.Locator("input.type-name").First;
-        await emptyInput.FillAsync(name);
-        // Wait for the just-filled input's card to no longer be the "empty name" one (the re-render reflects the name).
-        await typeCardWithEmptyName.First
-            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+        var lastCard = ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card").Last;
+        await lastCard.Locator("input.type-name").FillAsync(name);
+        // The re-render after fill reflects the name into the input (value attr + prop).
         await TypeNameInput(name).WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
             .Any(o => o.Fields.TryGetValue("name", out var v)
@@ -317,20 +314,16 @@ public sealed partial class DesignerSteps
     [When("I add a type to the design")]
     public async Task WhenAddType()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.add-type", new() { HasTextString = "+ Type" }).First.ClickAsync();
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {
-            Has = ctx.Page.Locator("input.type-name[value=\"\"]")
-        }).First.WaitForAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.add-type", new() { HasTextString = "+ Type" }).ClickAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card").Last.WaitForAsync();
     }
 
     [When("I remove the just-added unnamed type")]
     public async Task WhenRemoveUnnamedType() =>
-        // The just-added row is the one whose type-name input is still empty (the client mirrors the model
-        // name into the `value` attribute, so the attribute selector matches it). Clicking ITS Remove type
-        // button drives arrayRemove on the nested types set -- the path that runs the store's GC.
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {
-            Has = ctx.Page.Locator("input.type-name[value=\"\"]")
-        }).Locator("button.remove-type").First.ClickAsync();
+        // The just-added row is the last .type-card (adds append). Clicking its Remove button
+        // drives arrayRemove on the nested types set.
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card").Last
+            .Locator("button.remove-type").ClickAsync();
 
     // ──── When: the instance selector (on /instances/<id>) ─────────────────────────────────────────────────
 
@@ -343,9 +336,12 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator("select.design-pick").SelectOptionAsync(
             new Microsoft.Playwright.SelectOptionValue { Label = designLabel });
         // The selection lands (the bound state reflects the new pick) before we apply.
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor select.design-pick").WaitForAsync();
-        // The option text is reflected; confirm via the visible selected content.
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor select.design-pick option:checked", new() { HasTextString = designLabel }).WaitForAsync();
+        // An <option> inside a closed <select> is never "visible", so wait for ATTACHED (it exists in the
+        // DOM once the selection is reflected), not for visibility. Matches the pattern used for other
+        // select option waits (e.g. ref-select in create form).
+        var selected = ctx.Page!.Locator("select.design-pick option")
+            .Filter(new() { HasTextString = designLabel });
+        await selected.First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     [When("I apply the design")]
@@ -462,7 +458,7 @@ public sealed partial class DesignerSteps
         // not-found message because the foreach finds no match.
         await ctx.Page!.GotoReadyAsync(ctx.DesignerUrl("/designs/999999"));
         await ctx.Page!.WaitForSelectorAsync("main.ide-design-edit");
-        await ctx.Page.Locator("main.ide-design-edit .design-editor").First.WaitForAsync();
+        await ctx.Page.Locator("main.ide-design-edit .design-editor").WaitForAsync();
     }
 
     // ──── Then ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -639,7 +635,7 @@ public sealed partial class DesignerSteps
     {
         // The editor's label input is two-way-bound to design.label; filling it edits the model and
         // autosaves a journaled scalar change (objectPropChange) to the designer's sovereign store.
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor input.design-label").First.FillAsync(newLabel);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor input.design-label").FillAsync(newLabel);
         var input = ctx.Page.Locator("main.ide-design-edit .design-editor input.design-label");
         await input.WaitForAsync();
         await Assert.That(await input.InputValueAsync()).IsEqualTo(newLabel);
@@ -655,7 +651,7 @@ public sealed partial class DesignerSteps
         // input's value is the persisted label — proving the rename survived as data, not just in the DOM.
         await ctx.Page!.ReloadAsync();
         await ctx.Page.WaitForSelectorAsync("main.ide-design-edit .design-editor");
-        await ctx.Page.Locator("main.ide-design-edit .design-editor .add-type").First.WaitForAsync();
+        await ctx.Page.Locator("main.ide-design-edit .design-editor .add-type").WaitForAsync();
     }
 
     [Then("the design editor's label input holds {string}")]
@@ -670,7 +666,7 @@ public sealed partial class DesignerSteps
 
     [When("I type {string} into the commit message")]
     public async Task WhenTypeCommitMessage(string message)
-        => await ctx.Page!.Locator("main.ide-design-edit .design-editor input.commit-message").First.FillAsync(message);
+        => await ctx.Page!.Locator("main.ide-design-edit .design-editor input.commit-message").FillAsync(message);
 
     // Just clicks — the commit message is NEVER cleared client-side (a UX review fix: a synchronous
     // clear both faked "done" before the server ack and destroyed the typed message on a rejected
@@ -679,7 +675,7 @@ public sealed partial class DesignerSteps
     // error banner with the input untouched. Callers assert whichever leg they are testing.
     [When("I click Commit")]
     public async Task WhenClickCommit() =>
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.commit-design").First.ClickAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.commit-design").ClickAsync();
 
     // The positive confirmation: the design editor's "Last commit:" line is pure Code reading the
     // design's main branch head, so it updates only once the success ack's refetch lands (ws.ts:947) —
@@ -736,7 +732,7 @@ public sealed partial class DesignerSteps
     [When("I open the commit history")]
     public async Task WhenOpenCommitHistory()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor a.view-history").First.ClickAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor a.view-history").ClickAsync();
         await ctx.Page.WaitForSelectorAsync("main.ide-commits");
         await ctx.Page.Locator("main.ide-commits .set-row").First.WaitForAsync();
     }
@@ -804,7 +800,7 @@ public sealed partial class DesignerSteps
     // the textarea is fill-able (Playwright refuses to type into a hidden element).
     [When("I expand the Migration disclosure")]
     public async Task WhenExpandMigrationDisclosure() =>
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor details.commit-migration summary").First.ClickAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor details.commit-migration summary").ClickAsync();
 
     [When("I type a migration for {string} into the migration textarea")]
     public async Task WhenTypeMigrationTextarea(string typeName) =>
@@ -1043,8 +1039,8 @@ public sealed partial class DesignerSteps
         var wcId = BranchWorkingCopyId(name);
         var page = ctx.Page!;
         await page.GotoReadyAsync(ctx.DesignerUrl($"/designs/{wcId}"));
-        await page.WaitForSelectorAsync("main.ide-design-edit .design-editor .type-card");
-        await page.Locator("main.ide-design-edit .design-editor .add-type").First.WaitForAsync();
+        await page.WaitForSelectorAsync("main.ide-design-edit .design-editor");
+        await page.Locator("main.ide-design-edit .design-editor .add-type").WaitForAsync();
     }
 
     // Add a field to a named type: click that type-card's "+ Field", then name the just-added (empty-name)
@@ -1054,13 +1050,11 @@ public sealed partial class DesignerSteps
     {
         var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {
             Has = ctx.Page.Locator($"input.type-name[value={CssString(typeName)}]")
-        }).First;
-        await card.Locator("button.add-prop").First.ClickAsync();
-        var newRow = card.Locator(".prop-row", new() {
-            Has = ctx.Page.Locator("input.prop-name[value=\"\"]")
-        }).First;
+        });
+        await card.Locator("button.add-prop").ClickAsync();
+        var newRow = card.Locator(".prop-row").Last;
         await newRow.Locator("input.prop-name").FillAsync(propName);
-        await newRow.Locator("input.prop-name").First.WaitForAsync();
+        await newRow.Locator("input.prop-name").WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
             .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == propName));
     }
@@ -1077,7 +1071,7 @@ public sealed partial class DesignerSteps
             Has = ctx.Page.Locator($"input.prop-name[value={CssString(from)}]")
         }).Locator("input.prop-name");
         await input.FillAsync(to);
-        await card.Locator("input.prop-name").First.WaitForAsync();
+        await card.Locator("input.prop-name").WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
             .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == to));
     }
@@ -1248,12 +1242,12 @@ public sealed partial class DesignerSteps
 
     [When("I expand the Advanced code disclosure")]
     public async Task WhenExpandAdvancedCode() =>
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor details.code-areas summary").First.ClickAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor details.code-areas summary").ClickAsync();
 
     [When("I type this access section:")]
     public async Task WhenTypeAccessSection(string accessSection)
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-access").First.FillAsync(accessSection);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-access").FillAsync(accessSection);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "todo" }
             && o.Fields.TryGetValue("access", out var av) && av is DeEnv.Storage.TextValue at && at.Text == accessSection));
@@ -1275,7 +1269,7 @@ public sealed partial class DesignerSteps
     [When("I author a simple convertible render into the design's UI")]
     public async Task WhenAuthorSimpleRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(SimpleConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(SimpleConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "convertme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == SimpleConvertibleRender));
@@ -1323,7 +1317,7 @@ public sealed partial class DesignerSteps
     [When("I author a nested convertible render into the design's UI")]
     public async Task WhenAuthorNestedRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(NestedConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(NestedConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "treeme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == NestedConvertibleRender));
@@ -1340,7 +1334,7 @@ public sealed partial class DesignerSteps
     [When("I author a projectable nested render into the design's UI")]
     public async Task WhenAuthorProjectableNestedRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(ProjectableNestedRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(ProjectableNestedRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "treeme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ProjectableNestedRender));
@@ -1356,7 +1350,7 @@ public sealed partial class DesignerSteps
     [When("I author a literal convertible render into the design's UI")]
     public async Task WhenAuthorLiteralRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(LiteralConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(LiteralConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "brokenme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == LiteralConvertibleRender));
@@ -1373,7 +1367,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with a component function into the design's UI")]
     public async Task WhenAuthorComponentRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(ComponentConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(ComponentConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "compme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ComponentConvertibleRender));
@@ -1386,8 +1380,8 @@ public sealed partial class DesignerSteps
     {
         var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card")
             .Filter(new() { Has = ctx.Page.Locator($"input.fn-name[value={CssString(name)}]") });
-        await card.First.WaitForAsync();
-        var paramsInput = card.First.Locator("input.fn-params");
+        await card.WaitForAsync();
+        var paramsInput = card.Locator("input.fn-params");
         await paramsInput.WaitForAsync();
         await Assert.That(await paramsInput.InputValueAsync()).IsEqualTo(paramsText);
     }
@@ -1601,7 +1595,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with an ambient-reading component into the design's UI")]
     public async Task WhenAuthorAmbientReadingComponentRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(AmbientReadingComponentConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(AmbientReadingComponentConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "brokencomp" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == AmbientReadingComponentConvertibleRender));
@@ -1627,7 +1621,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with a reactive Counter component into the design's UI")]
     public async Task WhenAuthorReactiveCounterRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(ReactiveCounterConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(ReactiveCounterConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "wbcounterme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ReactiveCounterConvertibleRender));
@@ -1659,7 +1653,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with a two-way-bound TextBox component into the design's UI")]
     public async Task WhenAuthorTwoWayComponentRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(TwoWayComponentConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(TwoWayComponentConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "twowayme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == TwoWayComponentConvertibleRender));
@@ -1675,7 +1669,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with a sandboxed logout button component into the design's UI")]
     public async Task WhenAuthorLogoutComponentRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(LogoutComponentConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(LogoutComponentConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "logoutme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == LogoutComponentConvertibleRender));
@@ -1695,7 +1689,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with a throwing component and a Counter component into the design's UI")]
     public async Task WhenAuthorThrowerAndCounterRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(ThrowerAndCounterConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(ThrowerAndCounterConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "throwme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ThrowerAndCounterConvertibleRender));
@@ -1712,7 +1706,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with a schema-backed Field component into the design's UI")]
     public async Task WhenAuthorSchemaFieldComponentRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(SchemaFieldComponentConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(SchemaFieldComponentConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "seedschema" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == SchemaFieldComponentConvertibleRender));
@@ -1726,7 +1720,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with an extent-listing component into the design's UI")]
     public async Task WhenAuthorExtentListingComponentRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(ExtentListingComponentConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(ExtentListingComponentConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "seedextent" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ExtentListingComponentConvertibleRender));
@@ -1750,7 +1744,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with a stateful schema-backed Editor component into the design's UI")]
     public async Task WhenAuthorStatefulSchemaFieldComponentRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(StatefulSchemaFieldComponentConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(StatefulSchemaFieldComponentConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "seedfieldtype" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == StatefulSchemaFieldComponentConvertibleRender));
@@ -1787,7 +1781,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with an extent-adding component into the design's UI")]
     public async Task WhenAuthorExtentAddingComponentRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(ExtentAddingComponentConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(ExtentAddingComponentConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "seedresetextent" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ExtentAddingComponentConvertibleRender));
@@ -1803,7 +1797,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with a RefSelect component into the design's UI")]
     public async Task WhenAuthorRefSelectComponentRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(RefSelectComponentConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(RefSelectComponentConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "seedlib" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == RefSelectComponentConvertibleRender));
@@ -1885,7 +1879,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with a stateful Counter component into the design's UI")]
     public async Task WhenAuthorStatefulComponentRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(StatefulComponentConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(StatefulComponentConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "counterme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == StatefulComponentConvertibleRender));
@@ -1899,11 +1893,11 @@ public sealed partial class DesignerSteps
     {
         var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card")
             .Filter(new() { Has = ctx.Page.Locator($"input.fn-name[value={CssString(fnName)}]") });
-        await card.First.WaitForAsync();
-        var varRow = card.First.Locator(".fn-vars .var-row")
+        await card.WaitForAsync();
+        var varRow = card.Locator(".fn-vars .var-row")
             .Filter(new() { Has = ctx.Page.Locator($"input.var-name[value={CssString(varName)}]") });
-        await varRow.First.WaitForAsync();
-        var initInput = varRow.First.Locator("input.var-init");
+        await varRow.WaitForAsync();
+        var initInput = varRow.Locator("input.var-init");
         await initInput.WaitForAsync();
         await Assert.That(await initInput.InputValueAsync()).IsEqualTo(init);
     }
@@ -1925,7 +1919,7 @@ public sealed partial class DesignerSteps
 
     [When("I click the add-design-state-var button")]
     public async Task WhenClickAddDesignStateVar() =>
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .design-state-section button.add-var").First.ClickAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .design-state-section button.add-var").ClickAsync();
 
     [Then("the design's State area shows {int} state var row(s)")]
     public async Task ThenDesignStateAreaShowsCount(int count)
@@ -1971,7 +1965,7 @@ public sealed partial class DesignerSteps
     [When("I author a component-invoking convertible render into the design's UI")]
     public async Task WhenAuthorComponentInvokingRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(ComponentInvokingConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(ComponentInvokingConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "expandme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ComponentInvokingConvertibleRender));
@@ -2000,7 +1994,7 @@ public sealed partial class DesignerSteps
     [When("I author a bare convertible render into the design's UI")]
     public async Task WhenAuthorBareRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(BareConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(BareConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "scratchcomp" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == BareConvertibleRender));
@@ -2012,7 +2006,7 @@ public sealed partial class DesignerSteps
 
     [When("I click the add-component button")]
     public async Task WhenClickAddComponent() =>
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.add-fn").First.ClickAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.add-fn").ClickAsync();
 
     // A freshly-minted MetaFn has an EMPTY `body` (the reviewed, upheld decision — see the F1 slice
     // note): its body area shows the ROOT-position add-row, not a rendered node.
@@ -2061,7 +2055,7 @@ public sealed partial class DesignerSteps
 
     [Then("the new component card is gone")]
     public async Task ThenNewComponentGone() =>
-        await ctx.Page!.Locator(NewComponentCard).First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+        await ctx.Page!.Locator(NewComponentCard).WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
 
     // The label-parameterized sibling of ThenProjectsValid (E2) — proves the design LABELED `label`
     // projects to a valid document, polled the same way (a staged ctx write lands over the WS
@@ -2138,7 +2132,7 @@ public sealed partial class DesignerSteps
     // first .node-element's own tag input with the new value.
     [When("I edit the root node's tag input to {string}")]
     public async Task WhenEditRootTag(string tag) =>
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree > .node-element > .node-tag-row > input.node-tag").First.FillAsync(tag);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree > .node-element > .node-tag-row > input.node-tag").FillAsync(tag);
 
     // The edit is a journaled scalar autosave; poll the store: the root MetaNode is the one whose tag is
     // the new value AND that is not a child of any other node (a root). Simpler: assert SOME MetaNode now
@@ -2195,8 +2189,8 @@ public sealed partial class DesignerSteps
     [Then("the root node's last child element has an attribute input and a text-leaf child")]
     public async Task ThenLastChildHasAttrAndText()
     {
-        await ctx.Page!.Locator(RootLastChildElement + " > .node-attr > input.node-attr-name").First.WaitForAsync();
-        await ctx.Page!.Locator(RootLastChildElement + " > .node-children .node-leaf > input.node-expr").First.WaitForAsync();
+        await ctx.Page!.Locator(RootLastChildElement + " > .node-attr > input.node-attr-name").WaitForAsync();
+        await ctx.Page!.Locator(RootLastChildElement + " > .node-children .node-leaf > input.node-expr").WaitForAsync();
     }
 
     // The × now lives INSIDE the last child's own tag-row (the E2 ux fix), not beside a .node-child wrapper.
@@ -2413,7 +2407,7 @@ public sealed partial class DesignerSteps
     [When("I author an unwrap-test convertible render into the design's UI")]
     public async Task WhenAuthorUnwrapTestRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(UnwrapTestRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(UnwrapTestRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "unwrapme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == UnwrapTestRender));
@@ -2428,7 +2422,7 @@ public sealed partial class DesignerSteps
     [When("I author a wrapped-root convertible render into the design's UI")]
     public async Task WhenAuthorWrappedRootRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(WrappedRootRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(WrappedRootRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "unwraproot" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == WrappedRootRender));
@@ -2601,7 +2595,7 @@ public sealed partial class DesignerSteps
     public async Task WhenEnsureAdvancedOpen()
     {
         if (await ctx.Page!.Locator("main.ide-design-edit .design-editor details.code-areas[open]").CountAsync() == 0)
-            await ctx.Page!.Locator("main.ide-design-edit .design-editor details.code-areas summary").First.ClickAsync();
+            await ctx.Page!.Locator("main.ide-design-edit .design-editor details.code-areas summary").ClickAsync();
     }
 
     // The `.design-initial` textarea is a journaled scalar autosave over sys.field(design, "initialData"),
@@ -2610,7 +2604,7 @@ public sealed partial class DesignerSteps
     [When("I set the design's initial data to:")]
     public async Task WhenSetInitialData(string initialData)
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-initial").First.FillAsync(initialData);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-initial").FillAsync(initialData);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("initialData", out var iv) && iv is DeEnv.Storage.TextValue it && it.Text == initialData));
     }
@@ -2619,11 +2613,11 @@ public sealed partial class DesignerSteps
     // two-way-bound MetaNode.expr write the leaf input already exercises (ThenLeafExprInput reads it back).
     [When("I edit the leaf expr input to {string}")]
     public async Task WhenEditLeafExpr(string expr) =>
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree input.node-expr").First.FillAsync(expr);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree input.node-expr").FillAsync(expr);
 
     [When("I click Refresh values")]
     public async Task WhenClickRefreshValues() =>
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.refresh-eval").First.ClickAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.refresh-eval").ClickAsync();
 
     // The canvas's <h1> (the render's one element wrapping the evaluated leaf) shows its EVALUATED text —
     // never a chip's raw source — proving the eval-context pivot actually ran the real interpreter over the
@@ -2645,7 +2639,7 @@ public sealed partial class DesignerSteps
     [When("I author a for-loop convertible render into the design's UI")]
     public async Task WhenAuthorForLoopRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(ForLoopConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(ForLoopConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "treeme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ForLoopConvertibleRender));
@@ -2666,12 +2660,12 @@ public sealed partial class DesignerSteps
 
     [When("I edit the for row's item input to {string}")]
     public async Task WhenEditForItem(string item) =>
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree input.node-for-item").First.FillAsync(item);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree input.node-for-item").FillAsync(item);
 
     [When("I edit the for row's collection input to {string}")]
     public async Task WhenEditForCollection(string collection)
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree input.node-for-collection").First.FillAsync(collection);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree input.node-for-collection").FillAsync(collection);
         // Poll for the journaled autosave to reach the designer's store (no timer): the collection field's
         // new value must be persisted before a later "Refresh values" recomputes sys.evalContext server-side
         // (it reads the design fresh) — otherwise the refresh would re-ship the OLD source's AST and the
@@ -2738,7 +2732,7 @@ public sealed partial class DesignerSteps
     [When("I author a for-and-if convertible render into the design's UI")]
     public async Task WhenAuthorForAndIfRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(ForAndIfConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(ForAndIfConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "loopme" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ForAndIfConvertibleRender));
@@ -2789,7 +2783,7 @@ public sealed partial class DesignerSteps
     [When("I author a call-eval convertible render into the design's UI")]
     public async Task WhenAuthorCallEvalRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(CallEvalConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(CallEvalConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "calleval" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == CallEvalConvertibleRender));
@@ -2841,7 +2835,7 @@ public sealed partial class DesignerSteps
     [When("I author a convertible render with a design var and an invoked Counter component into the design's UI")]
     public async Task WhenAuthorInitStateRender()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").First.FillAsync(InitStateConvertibleRender);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(InitStateConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "initstate" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == InitStateConvertibleRender));
@@ -3016,10 +3010,8 @@ public sealed partial class DesignerSteps
         // ...and it stays gone across a fresh server render of the editor (no reappearance on reload).
         await ctx.Page!.ReloadAsync();
         await ctx.Page.WaitForSelectorAsync("main.ide-design-edit .design-editor");
-        await ctx.Page.Locator("main.ide-design-edit .design-editor .add-type").First.WaitForAsync();
-        var emptyNameInputs = ctx.Page.Locator("main.ide-design-edit .design-editor .type-card", new() {
-            Has = ctx.Page.Locator("input.type-name[value=\"\"]")
-        }).Locator("input.type-name");
+        await ctx.Page.Locator("main.ide-design-edit .design-editor .add-type").WaitForAsync();
+        var emptyNameInputs = ctx.Page.Locator("main.ide-design-edit .design-editor input.type-name[value=\"\"]");
         await Assert.That(await emptyNameInputs.CountAsync()).IsEqualTo(0);
     }
 
@@ -3030,76 +3022,76 @@ public sealed partial class DesignerSteps
         // A single/set prop's key-type field is hidden (it is meaningful only for a dictionary). The field
         // stays in the DOM — progressive disclosure flips visibility via the row's class — so assert it is
         // HIDDEN, not absent.
-        await PropKeytypeInput(propName).First.WaitForAsync(Hidden);
+        await PropKeytypeInput(propName).WaitForAsync(Hidden);
 
     [Then("the prop {string} shows a key-type field")]
     public async Task ThenPropKeyType(string propName) =>
         // Set to dictionary, the key-type field becomes visible via the row's class change — wait for it
         // (proving the disclosure reconciles when cardinality changes).
-        await PropKeytypeInput(propName).First.WaitForAsync();
+        await PropKeytypeInput(propName).WaitForAsync();
 
     [Then("the prop {string} shows a multiline toggle")]
     public async Task ThenPropMultilineToggle(string propName) =>
         // A single text prop's row shows the multiline checkbox (visible via the row's is-text-single
         // class). Wait for it visible (the field is always in the DOM; disclosure flips visibility).
-        await PropMultilineInput(propName).First.WaitForAsync();
+        await PropMultilineInput(propName).WaitForAsync();
 
     [Then("the prop {string} shows no multiline toggle")]
     public async Task ThenPropNoMultilineToggle(string propName) =>
         // A non-text (or non-single) prop's multiline checkbox is hidden — multiline is valid only on a
         // single text prop. The field stays in the DOM; assert it is HIDDEN, not absent.
-        await PropMultilineInput(propName).First.WaitForAsync(Hidden);
+        await PropMultilineInput(propName).WaitForAsync(Hidden);
 
     [Then("the just-added type shows a props editor")]
     public async Task ThenJustAddedPropsEditor() =>
-        await JustAddedTypeRow().Locator(".props-editor").First.WaitForAsync();
+        await JustAddedTypeRow().Locator(".props-editor").WaitForAsync();
 
     [Then("the just-added type shows no props editor")]
     public async Task ThenJustAddedNoPropsEditor() =>
-        await JustAddedTypeRow().Locator(".props-editor").First.WaitForAsync(Hidden);
+        await JustAddedTypeRow().Locator(".props-editor").WaitForAsync(Hidden);
 
     [Then("the just-added type shows a values field")]
     public async Task ThenJustAddedValuesField() =>
-        await JustAddedTypeRow().Locator("input.type-values").First.WaitForAsync();
+        await JustAddedTypeRow().Locator("input.type-values").WaitForAsync();
 
     [Then("the just-added type shows no values field")]
     public async Task ThenJustAddedNoValuesField() =>
-        await JustAddedTypeRow().Locator("input.type-values").First.WaitForAsync(Hidden);
+        await JustAddedTypeRow().Locator("input.type-values").WaitForAsync(Hidden);
 
     // M12 eval-degrade-banner — the type-card hint (typeHint idiom, mirrors fnNameHint) for a baseType
     // "object" type with zero props (the same condition that degrades evalContext).
     [Then("the just-added type shows the hint {string}")]
     public async Task ThenJustAddedTypeHint(string hintText) =>
-        await JustAddedTypeRow().Locator(".type-hint", new() { HasTextString = hintText }).First.WaitForAsync();
+        await JustAddedTypeRow().Locator(".type-hint", new() { HasTextString = hintText }).WaitForAsync();
 
     // The hint span is a structural `if` (mirroring fn-name-hint/var-name-hint) — ABSENT from the DOM
-    // when there is no hint, not merely CSS-hidden, so this polls for absence rather than Hidden.
+    // when there is no hint, not merely CSS-hidden, so this waits for absence (Detached) rather than Hidden.
     [Then("the just-added type shows no hint")]
     public async Task ThenJustAddedNoTypeHint() =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => document.querySelectorAll({JsString("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=" + CssString(_justAddedTypeName) + "]) .type-hint")}).length === 0");
+        await JustAddedTypeRow().Locator(".type-hint")
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
 
     // ──── Then: the grouped prop-type picker ─────────────────────────────────────────────────────────────────────────────
 
     [Then("the prop {string} type picker offers the built-in type {string}")]
     public async Task ThenPickerOffersBuiltin(string propName, string typeName) =>
-        await Assert.That(await PropTypeSelect(propName)
-            .Locator($"optgroup[label=\"Built-in\"] option[value={CssString(typeName)}]").CountAsync())
-            .IsGreaterThanOrEqualTo(1);
+        await PropTypeSelect(propName)
+            .Locator("optgroup[label=\"Built-in\"] option", new() { HasTextString = typeName })
+            .WaitForAsync();
 
     [Then("the prop {string} type picker offers the design type {string}")]
     public async Task ThenPickerOffersDesignType(string propName, string typeName) =>
-        await Assert.That(await PropTypeSelect(propName)
-            .Locator($"optgroup[label=\"This design\"] option[value={CssString(typeName)}]").CountAsync())
-            .IsGreaterThanOrEqualTo(1);
+        await PropTypeSelect(propName)
+            .Locator("optgroup[label=\"This design\"] option", new() { HasTextString = typeName })
+            .WaitForAsync();
 
     [Then("the prop {string} type picker keeps built-in and design types in separate groups")]
     public async Task ThenPickerGrouped(string propName)
     {
         // The system scalars and the user's own types live in SEPARATE <optgroup>s — not flatly intermixed.
         var select = PropTypeSelect(propName);
-        await Assert.That(await select.Locator("optgroup[label=\"Built-in\"]").CountAsync()).IsGreaterThanOrEqualTo(1);
-        await Assert.That(await select.Locator("optgroup[label=\"This design\"]").CountAsync()).IsGreaterThanOrEqualTo(1);
+        await select.Locator("optgroup[label=\"Built-in\"]").WaitForAsync();
+        await select.Locator("optgroup[label=\"This design\"]").WaitForAsync();
     }
 
     // ──── Then: client-side (SPA) navigation in the custom designer ────────────────────────────────
