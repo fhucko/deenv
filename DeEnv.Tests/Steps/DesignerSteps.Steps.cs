@@ -1387,7 +1387,9 @@ public sealed partial class DesignerSteps
         var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card")
             .Filter(new() { Has = ctx.Page.Locator($"input.fn-name[value={CssString(name)}]") });
         await card.First.WaitForAsync();
-        await card.First.Locator($"input.fn-params[value={CssString(paramsText)}]").WaitForAsync();
+        var paramsInput = card.First.Locator("input.fn-params");
+        await paramsInput.WaitForAsync();
+        await Assert.That(await paramsInput.InputValueAsync()).IsEqualTo(paramsText);
     }
 
     // Locate the fn-card by its CURRENT name input value (mirrors JustAddedTypeRow's by-value lookup).
@@ -1901,7 +1903,9 @@ public sealed partial class DesignerSteps
         var varRow = card.First.Locator(".fn-vars .var-row")
             .Filter(new() { Has = ctx.Page.Locator($"input.var-name[value={CssString(varName)}]") });
         await varRow.First.WaitForAsync();
-        await varRow.First.Locator($"input.var-init[value={CssString(init)}]").WaitForAsync();
+        var initInput = varRow.First.Locator("input.var-init");
+        await initInput.WaitForAsync();
+        await Assert.That(await initInput.InputValueAsync()).IsEqualTo(init);
     }
 
     [When("I edit component {string}'s state var {string} init to {string}")]
@@ -3013,9 +3017,10 @@ public sealed partial class DesignerSteps
         await ctx.Page!.ReloadAsync();
         await ctx.Page.WaitForSelectorAsync("main.ide-design-edit .design-editor");
         await ctx.Page.Locator("main.ide-design-edit .design-editor .add-type").First.WaitForAsync();
-        await Assert.That(
-            await ctx.Page.Locator("main.ide-design-edit .design-editor .type-card input.type-name[value=\"\"]").CountAsync())
-            .IsEqualTo(0);
+        var emptyNameInputs = ctx.Page.Locator("main.ide-design-edit .design-editor .type-card", new() {
+            Has = ctx.Page.Locator("input.type-name[value=\"\"]")
+        }).Locator("input.type-name");
+        await Assert.That(await emptyNameInputs.CountAsync()).IsEqualTo(0);
     }
 
     // ──── Then: progressive disclosure (fields hidden until their shape is chosen) ────

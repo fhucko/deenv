@@ -68,7 +68,9 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
         });
 
     private Microsoft.Playwright.ILocator TypeNameInput(string name) =>
-        ctx.Page!.Locator($"main.ide-design-edit .design-editor .type-card input.type-name[value={CssString(name)}]");
+        ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {
+            Has = ctx.Page.Locator($"input.type-name[value={CssString(name)}]")
+        }).Locator("input.type-name");
 
     private Microsoft.Playwright.ILocator JustAddedTypeRow() =>
         ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {

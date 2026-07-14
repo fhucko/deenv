@@ -122,9 +122,10 @@ public sealed class TodoSteps(InstanceContext ctx)
     [Then("the page does not show an item {string}")]
     public async Task ThenDoesNotShowItem(string text)
     {
-        // For "does not show", we wait for no matching value.
-        // Since multiple, use count or simple wait for absence.
-        await ctx.Page!.Locator($".item-row input.text[value={JsString(text)}]").First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+        // Wait for the row containing the input with that value to be gone.
+        await ctx.Page!.Locator(".item-row")
+            .Filter(new() { Has = ctx.Page.Locator($"input.text[value={JsString(text)}]") })
+            .First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
     }
 
     [Then("the item {string} is checked")]
