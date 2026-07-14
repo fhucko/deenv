@@ -82,11 +82,15 @@ public sealed class TodoSteps(InstanceContext ctx)
 
     // Wait until every item row in the given card has a real (positive) data-key — the optimistic
     // add persisted and the negative→real id remap re-rendered the row.
-    private async Task AllItemKeysRealAsync(string list) =>
+    private async Task AllItemKeysRealAsync(string list)
+    {
+        var cardSel = $"article.todo-card:has(h3.list-name:has-text({Quoted(list)}))";
         await ctx.Page!.WaitForFunctionAsync(
-            "card => { const rows = [...card.querySelectorAll('.item-row')];" +
+            "sel => { const card = document.querySelector(sel); if (!card) return false;" +
+            " const rows = [...card.querySelectorAll('.item-row')];" +
             " return rows.length > 0 && rows.every(e => +e.getAttribute('data-key') > 0); }",
-            await Card(list).ElementHandleAsync());
+            cardSel);
+    }
 
     [When("I remove the item {string}")]
     public async Task WhenRemoveItem(string text) =>

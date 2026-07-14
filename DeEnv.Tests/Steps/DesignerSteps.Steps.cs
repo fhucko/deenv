@@ -201,7 +201,8 @@ public sealed partial class DesignerSteps
     [When("I rename the type {string} to {string}")]
     public async Task WhenRename(string from, string to)
     {
-        await TypeNameInput(from).FillAsync(to);
+        var input = TypeNameInput(from);
+        await input.FillAsync(to);
         // The bound input re-renders the model name to the new value (the client edit landed)…
         await TypeNameInput(to).WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
         // …then wait for the autosave (objectPropChange) to reach the designer's sovereign store, so a
@@ -274,12 +275,12 @@ public sealed partial class DesignerSteps
     [When("I name the just-added type {string}")]
     public async Task WhenNameJustAddedType(string name)
     {
-        // The just-added row is the one whose type-name input is still empty (the client mirrors the model
-        // name into the `value` attribute). Fill ITS name input, then wait for the autosave to reach the
-        // designer's sovereign store (so a later apply projects the named type). Remember the name so the
-        // base-type / values steps can locate the same row once it is no longer the empty one.
         _justAddedTypeName = name;
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"]) input.type-name").First.FillAsync(name);
+        var emptyInput = ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"]) input.type-name").First;
+        await emptyInput.FillAsync(name);
+        // Wait for the just-filled input's card to no longer be the "empty name" one (the re-render reflects the name).
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"])").First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached, Timeout = TestTimeouts.ActionMs });
         await TypeNameInput(name).WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
             .Any(o => o.Fields.TryGetValue("name", out var v)
@@ -317,13 +318,7 @@ public sealed partial class DesignerSteps
     [When("I add a type to the design")]
     public async Task WhenAddType()
     {
-        // "Add type" runs addType(design): design.types.add({ name: "", baseType: "object", ... }) -- a
-        // journaled add to the design's NESTED types set. The new (empty-name) row appears immediately via
-        // the client re-render, first keyed by its transient negative id; the WS persist then remaps it. The
-        // next steps may edit/remove the row by that STILL-negative id -- the server resolves it through its
-        // per-session transient-id remap (see TransientId.feature), so no wait for the round-trip is needed.
         await ctx.Page!.Locator("main.ide-design-edit .design-editor button.add-type:has-text(\"+ Type\")").First.ClickAsync();
-        // Wait for the fresh empty-name type card in DOM (more robust than global count if multiple editor surfaces).
         await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"])").First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
     }
 
@@ -333,7 +328,7 @@ public sealed partial class DesignerSteps
         // name into the `value` attribute, so the attribute selector matches it). Clicking ITS Remove type
         // button drives arrayRemove on the nested types set -- the path that runs the store's GC.
         await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"]) button.remove-type").First
-            .First.ClickAsync();
+            .ClickAsync();
 
     // ──── When: the instance selector (on /instances/<id>) ─────────────────────────────────────────────────
 
@@ -1380,12 +1375,8 @@ public sealed partial class DesignerSteps
     [When("I click the add-configuration button")]
     public async Task WhenClickAddConfiguration()
     {
-        // Target the relevant card (use Last for the newly added component card in these scenarios).
-        // Wait explicitly for the button, then click the first match inside that card (defends against strict).
         var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card").Last;
-        var addBtn = card.Locator(".add-use").First;
-        await addBtn.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs, State = Microsoft.Playwright.WaitForSelectorState.Visible });
-        await addBtn.ClickAsync();
+        await card.Locator(".add-use").First.ClickAsync();
     }
 
     private Microsoft.Playwright.ILocator ComponentCard() =>
@@ -1419,8 +1410,6 @@ public sealed partial class DesignerSteps
         var row = ConfigRow(index);
         var input = row.Locator("input.use-name");
         await input.FillAsync(name);
-        // Force the value and input event, then wait for this specific input to show the value (handles re-renders).
-        await input.EvaluateAsync("(el, val) => { el.value = val; el.dispatchEvent(new Event('input', { bubbles: true })); }", name);
         await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
         // Wait via locator for the row-scoped input bearing the expected value attribute.
         await row.Locator($"input.use-name[value={CssString(name)}]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });

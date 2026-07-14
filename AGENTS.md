@@ -138,6 +138,10 @@ Reqnroll, do not introduce a different assertion library. All step
 definitions must fit the existing Reqnroll + TUnit setup. (Browser-facing
 steps, when reached, use Playwright.)
 
+See **docs/TESTING.md** for Playwright locator conventions, actionability/retry
+behavior, re-render patterns in the designer, what to avoid (Force, Evaluate
+clicks, WaitForFunction for presence, etc.), and preferred step patterns.
+
 ## Current focus
 
 **Usable-MVP gates** (DECISIONS "Data must survive schema changes" + the
