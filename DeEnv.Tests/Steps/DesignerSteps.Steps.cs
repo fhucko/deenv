@@ -1412,12 +1412,11 @@ public sealed partial class DesignerSteps
     [Then("component configurations shows {int} row(s)")]
     public async Task ThenConfigurationsShowsCount(int count)
     {
-        // Count .use-row anywhere in the components section (defensive against which .fn-card is "last"
-        // or how the cards are ordered during live updates). This matches how many of the WaitForFunctions
-        // already query the section.
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => document.querySelectorAll('main.ide-design-edit .design-editor .components-section .use-row').length === {count}",
-            null, new Microsoft.Playwright.PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
+        var locator = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row");
+        if (count == 0)
+            await locator.First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached, Timeout = TestTimeouts.ActionMs });
+        else
+            await locator.Nth(count - 1).WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached, Timeout = TestTimeouts.ActionMs });
     }
 
     [Then("configuration {int} shows the {string} hint")]
