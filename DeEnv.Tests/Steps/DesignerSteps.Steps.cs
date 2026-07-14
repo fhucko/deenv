@@ -214,7 +214,9 @@ public sealed partial class DesignerSteps
         await PropTypeSelect(propName).SelectOptionAsync(
             new Microsoft.Playwright.SelectOptionValue { Value = newType });
         // The bound select reflects the new value (the client edit landed)…
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .prop-row select.prop-type[value={CssString(newType)}]").First.WaitForAsync();
+        var select = PropTypeSelect(propName);
+        await select.WaitForAsync();
+        await Assert.That(await select.InputValueAsync()).IsEqualTo(newType);
         // …then wait for the autosave to reach the designer's store, so a later apply projects the
         // retyped prop (the apply reads the store fresh).
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
@@ -289,9 +291,11 @@ public sealed partial class DesignerSteps
         // sourced from the system `typeKinds` vocab (option VALUE is the raw word, label humanized), so
         // select by value. For "enum" this flips the projection branch in SchemaBridge; wait for the
         // autosave so a later apply sees it.
-        await JustAddedTypeRow().Locator("select.type-kind").SelectOptionAsync(
+        var kindSelect = JustAddedTypeRow().Locator("select.type-kind");
+        await kindSelect.SelectOptionAsync(
             new Microsoft.Playwright.SelectOptionValue { Value = baseType });
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .type-card select.type-kind[value={CssString(baseType)}]").First.WaitForAsync();
+        await kindSelect.WaitForAsync();
+        await Assert.That(await kindSelect.InputValueAsync()).IsEqualTo(baseType);
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
             .Any(o => o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == _justAddedTypeName
                 && o.Fields.TryGetValue("baseType", out var v) && v is DeEnv.Storage.TextValue t && t.Text == baseType));
@@ -610,8 +614,12 @@ public sealed partial class DesignerSteps
         await Assert.That(await ctx.Page!.Locator("main.ide-design-edit a.back").CountAsync()).IsEqualTo(1);
 
     [Then("the design editor shows a type named {string}")]
-    public async Task ThenEditorShowsType(string name) =>
-        await TypeNameInput(name).WaitForAsync();
+    public async Task ThenEditorShowsType(string name)
+    {
+        var input = TypeNameInput(name);  // still uses [value] for identification in helper
+        await input.WaitForAsync();
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(name);
+    }
 
     [Then("the design editor shows the design's label {string}")]
     public async Task ThenEditorShowsLabel(string label)
