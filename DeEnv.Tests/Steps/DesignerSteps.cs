@@ -1,4 +1,4 @@
-using DeEnv.Kernel;
+﻿using DeEnv.Kernel;
 using DeEnv.Tests.TestSupport;
 using DeEnv.Instance;
 using Reqnroll;
@@ -7,9 +7,8 @@ using TUnit.Assertions.Extensions;
 
 namespace DeEnv.Tests.Steps;
 
-// Steps for Designer.feature — SPLIT COMPLETE (see docs/plans/2026-07-14-designer-tests-relevance-and-split.md)
-// Categorized into multiple files using partial class to keep ~3k lines manageable.
-// Core + shared in this file. Logic distributed by area.
+// Split: core in this file, step methods in DesignerSteps.Steps.cs
+// Categorized markers in other Designer*Steps.cs
 
 [Binding]
 public sealed partial class DesignerSteps(InstanceContext ctx)
@@ -23,8 +22,6 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
     private int _lastCreatedInstanceId;
     private string _justAddedTypeName = "";
     private int _todoTargetLogLinesAfterStaleness;
-
-    // ── Given ───────────────────────────────────────────────────────────────────
 
     [Given("the operator IDE is running on a kernel hosting instances {string} and {string}")]
     public async Task GivenIdeRunning(string firstLabel, string secondLabel)
@@ -42,13 +39,6 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
         SeedDesignerAdmin();
         ctx.Page!.SetDefaultTimeout(TestTimeouts.ActionMs);
     }
-
-    // All other [Given/When/Then] step defs are in the categorized partial files:
-    // DesignerLibraryNavigationSteps.cs, DesignerTypePropEditorSteps.cs,
-    // DesignerTreeCanvasSteps.cs, DesignerComponentsLiveSteps.cs
-    // (and commit/publish in future).
-
-    // ── helpers (shared) ─────────────────────────────────────────────────────────────────
 
     private void SeedDesignerAdmin()
     {
@@ -103,7 +93,4 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
     private static string JsString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 
     private static string CssString(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
-
-    // Supporting privates needed by partials
-    // Supporting methods like CreateDesignViaGenericNew and constants are in the steps partial.
 }

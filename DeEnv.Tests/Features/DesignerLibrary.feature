@@ -1,5 +1,616 @@
-﻿Feature: Designer Library and Navigation
-The designs route, instances, create forms, kebabs, deletes, navigation in the operator IDE.
+Feature: Designer - Library and Navigation
 
-# Full scenarios from original categorized here.
-# (Content to be populated from the categorization; markers for structure.)
+
+  @milestone-10 @single-user
+  Scenario: The designs route lists the design library
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    Then the designs list shows a design "todo"
+    And the designs list shows a design "crm"
+
+
+  # The designs list is rendered by the generic <SetTable> (label-only column) with a per-row action
+  # cell carrying an Edit link (/designs/<id>) and a Delete button. Opening the list CLIENT-SIDE (the
+  # step waits for window.initUi) proves the client now hydrates over the <SetTable>-rendered page —
+  # the prior build crashed on hydration (a function-equality twin divergence) and timed out here.
+  @milestone-10 @single-user
+  Scenario: Each designs-list row shows its label, an Edit link, and a Delete button via SetTable
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    Then the designs list shows a design "todo"
+    And the design "todo" row has an Edit link and a Delete button
+    And the design "crm" row has an Edit link and a Delete button
+
+
+  # The designer (instance 1) is a managed instance like any other: no special-casing in the render.
+  # It has its OWN design in db.designs (a bounded self-snapshot) and its instances-list row resolves
+  # to that design through the same explicit designId reference every other row uses — so it appears in
+  # BOTH lists uniformly. (The kernel always hosts the designer; the fixture seeds its designId.)
+  @milestone-10 @single-user
+  Scenario: The designer appears uniformly as a design and a managed instance
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    Then the designs list shows a design "designer"
+    When I open the instances list
+    Then the instances list shows the instance "designer" running design "designer"
+
+
+  # ──── client-side (SPA) navigation in the CUSTOM-render designer (uniform with the generic UI) ────
+  # The designer is a fully-custom `fn render()`, yet an in-app Edit-link click navigates CLIENT-SIDE
+  # exactly as the generic UI does: the click is intercepted, the URL is updated via the History API,
+  # and the deep `/designs/<id>` type/prop editor re-renders over the warm session — NO full page reload,
+  # NO re-hydration. A window marker set after the list loads survives the navigation (a reload would wipe
+  # it), the browser URL becomes the mounted editor URL, and the editor's deeply-nested content (the
+  # design's real types and its UI source text — read cross-page over a fresh store load) actually renders.
+  # The PRIVACY pin proves the structural-privacy claim stays honest: the designs LIST ships design labels,
+  # not every design's full source — the todo design's UI source token ("user-chip") never appears in the
+  # first paint's window.initData. Browser Back then restores the list (the slot-reset path re-runs the
+  # list's components cleanly), also without a reload.
+  @milestone-10 @single-user
+  Scenario: An Edit-link click in the custom designer navigates client-side to the deep editor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    Then the designs list first paint does not ship the design's UI source token "user-chip"
+    When I mark the live page
+    And I edit the design "todo"
+    Then the browser URL is the mounted design editor
+    And the design editor shows a type named "TodoItem"
+    And the design editor shows the design's UI text in a textarea
+    And the live page mark survives
+    And the page is still the same hydrated session
+    When I navigate back
+    Then the designs list shows a design "todo"
+    And the live page mark survives
+
+
+  # ──── no partial-content FLASH on the deep editor (round-2) ──────────────────────────────────────────────────────────────────────────────
+  # The designs LIST ships only each design's label (structural privacy — types/ui/common/initialData are
+  # NOT shipped). The design OBJECT is present (a list leaf), so the prior flash guard ("is the target
+  # object present?") let the Edit-nav optimistic-paint immediately — but designEditor then reads the
+  # UNSHIPPED design.types / sys.field(design,"ui"), throws "Value not available", which memoize swallows
+  # to empty: the operator saw the editor heading + an EMPTY type list + blank code areas for one frame
+  # before the refetch filled it (a blink on localhost; a visible "blank then snapped in" on a real
+  # network). The round-2 speculative-commit guard renders the target into a throwaway tree and commits it
+  # ONLY if it built completely from local data; the thin editor needs server data, so the LIST view is
+  # HELD until the refetch paints the COMPLETE editor once. A MutationObserver armed before the nav records
+  # any `.design-editor` that ever rendered WITHOUT a `.type-card` (the empty/partial state — the todo
+  # design always has the TodoItem type, so a complete editor always has ΓëÑ1 type card), so the assertion
+  # proves the partial editor never appeared, not merely that it is absent now. The populated assertions
+  # (the TodoItem type + the UI text) confirm the nav still completed onto the real editor.
+  @milestone-10 @single-user
+  Scenario: Navigating into the deep design editor never flashes a blank editor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I arm the blank-editor detector
+    And I scroll the page down
+    And I edit the design "todo"
+    Then the browser URL is the mounted design editor
+    And the design editor shows a type named "TodoItem"
+    And the design editor shows the design's UI text in a textarea
+    And the blank design editor never appeared during the navigation
+    # SCROLL RESET (round-2): a full reload reset scroll; SPA forward-nav must too. The list was
+    # scrolled down above, so the editor would otherwise open mid-page — assert it landed at the top.
+    And the page is scrolled to the top
+
+
+  # The instances list shows each instance alongside the design it currently runs, resolved by the
+  # explicit designId reference (todo ΓåÆ its seeded "todo" design).
+  @milestone-10 @single-user
+  Scenario: The instances route lists the hosted instances with their current design
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the instances list
+    Then the instances list shows the instance "todo" running design "todo"
+    And the instances list shows the instance "crm" running design "crm"
+
+
+  # Create a design through the GENERIC create: the SetTable's own "New" button reveals its create form,
+  # which the designs list customizes (a `createForm` slot) to a clean LABEL-ONLY field — NOT the default
+  # all-scalars form (which for a Design would render ui/common/initialData as raw textareas). Save runs
+  # the generic set.add(draft) and the row appears via the client re-render (no nav — race-free). Opening
+  # it shows the (empty) editor with its label. An empty-types design is a valid LIBRARY entry; it is only
+  # invalid to deploy until it gains types (added on the edit page).
+  @milestone-10 @single-user
+  Scenario: Creating a design via the generic New puts it in the library and it opens in the editor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "blank"
+    Then the designs list shows a design "blank"
+    When I edit the design "blank"
+    Then the design editor shows the design's label "blank"
+
+
+  # Create an instance via the generic <SetTable>'s create form (the `createForm` slot): ONE step — a
+  # design <select> (over db.designs) + a name field, then Save. Save runs SetTable's `onCreate`
+  # override ΓåÆ sys.create(design, name), spawning a new instance running that design under that name,
+  # served at /apps/<name>. The instance is a designer-stored object (db.instances), so the new ROW —
+  # including its design column — must appear IN PLACE via the WS refetch (+ resetViewState), with NO
+  # reload (the kernel mirror writes the design ref after add-to-set, so the in-place design cell is the
+  # load-bearing assertion). Its NEW entry carries the picked design's id, so opening it pre-selects it.
+  @milestone-10 @single-user
+  Scenario: Creating an instance from the list form spawns it running the picked design
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the instances list
+    And I create an instance named "myapp" from the design "crm"
+    Then a new instance "myapp" running design "crm" appears in the instances list
+    When I open that new instance
+    Then the design dropdown has the design "crm" selected
+
+
+  # The create form is client-TOGGLED: revealing it sets the SetTable component's `state.creating = true`
+  # and the client re-renders. RefSelect's `foreach c in db.designs` reads data the first paint never
+  # shipped (the form was closed) ΓåÆ a value-not-available refetch. The refetch ships the SetTable's whole
+  # `state` via slotState — including the NESTED transient `draft` (state.draft = sys.new(desc)) BY VALUE,
+  # recursively. The server reconstructs that draft as a throwaway transient, reproduces the open form
+  # (RefSelect parent = the real draft, not null), reads `db.designs`, and HARVESTS it — so the picker
+  # populates with NO hidden footprint anchor. (The prior build forced db.designs with a `hidden` <ul>
+  # foreach over db.designs in instancesListPage; that anchor is now DELETED — this scenario is its
+  # replacement guard, proving the nested-draft round-trip alone harvests the candidates.)
+  @milestone-10 @single-user
+  Scenario: The create-form design picker populates on toggle with no footprint anchor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the instances list
+    And I reveal the instance create form
+    Then the instance create form's design ref-select offers the design "todo"
+    And the instance create form's design ref-select offers the design "crm"
+    When I pick the design "todo" in the create form and name it "anchored" and save
+    Then a new instance "anchored" running design "todo" appears in the instances list
+
+
+  # Progressive disclosure: a field that is only meaningful in one shape is hidden until that shape is
+  # chosen, so the editor is not a wall of permanently-blank inputs. The key-type field appears only for
+  # a dictionary prop; a type's props editor shows for the object kind and its enum-values field for the
+  # enum kind (never both). The kind is a dropdown sourced from the system vocabulary, not free text.
+  # This also proves the conditional fields reconcile on the client when cardinality / kind change.
+  @milestone-10 @single-user
+  Scenario: Irrelevant fields are hidden until their shape is chosen
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    Then the prop "text" shows no key-type field
+    When I set the prop "text" cardinality to "dictionary"
+    Then the prop "text" shows a key-type field
+    When I add a type to the design
+    And I name the just-added type "Status"
+    Then the just-added type shows a props editor
+    And the just-added type shows no values field
+    When I set the just-added type's base type to "enum"
+    Then the just-added type shows a values field
+    And the just-added type shows no props editor
+
+
+  # The designs list now uses the GENERIC create — the SetTable's own "New" button is the SINGLE create
+  # control (the old bespoke .new-design "Add" box is gone). The list customizes the SetTable's create
+  # form (a `createForm` slot) to a clean LABEL-ONLY field, so revealing it shows NO raw ui/common/
+  # initialData textareas (the default all-scalars form WOULD render those). So the page shows EXACTLY ONE
+  # create affordance, and that affordance does not expose the code sections as raw text boxes.
+  @milestone-10 @single-user
+  Scenario: The designs list shows exactly one create control and it is the generic New
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    Then the designs list shows the generic SetTable New as its only create control
+    And the designs list does not show a bespoke Add box
+    When I reveal the generic create form
+    Then the create form has a labeled "label" field
+    And the create form shows no code-section textareas
+
+
+  # An action-managed SetTable (one given `rowActions`) does NOT sit under the whole-row click overlay
+  # (the stretched a.row-link::after that the data-table path uses). So the per-row Edit link and Delete
+  # button are directly clickable — no per-consumer z-index band-aid needed. This proves both render and
+  # are hit-testable (a click reaches them, not the overlay).
+  @milestone-10 @single-user
+  Scenario: The designs-list Edit and Delete are clickable, not under a row overlay
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    Then the design "todo" Edit link receives the click
+    And the design "todo" Delete button receives the click
+
+
+  # Deleting a design destroys a whole app (unrecoverable), so Delete is a deliberate two-step inline
+  # confirm — the SAME pattern the instances list uses for inline rename. Clicking Delete does NOT remove
+  # the row; it arms a confirm (Delete? [Yes] [Cancel]). Cancel restores the plain Delete; Yes removes
+  # the design. This verifies the in-row confirm toggles and reconciles correctly on the client.
+  @milestone-10 @single-user
+  Scenario: Deleting a design asks for confirmation; Cancel restores, Yes removes
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I add a design named "scratch"
+    And I click Delete on the design "scratch"
+    Then the design "scratch" shows a delete confirmation
+    And the design "scratch" is still listed
+    When I cancel the delete of the design "scratch"
+    Then the design "scratch" shows no delete confirmation
+    And the design "scratch" is still listed
+    When I click Delete on the design "scratch"
+    And I confirm the delete of the design "scratch"
+    Then the designs list eventually drops the design "scratch"
+
+
+  # The IDE nav marks the current section (Instances / Designs) with an is-active class, so the operator
+  # can see where they are. Zero new data — the render already computes the section from the path.
+  @milestone-10 @single-user
+  Scenario: The nav marks the active section
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    Then the nav "Designs" link is active
+    And the nav "Instances" link is not active
+    When I open the instances list
+    Then the nav "Instances" link is active
+    And the nav "Designs" link is not active
+
+
+  # A bad /designs/<id> (no such design) must not render a blank page under the heading — it shows a
+  # "not found" message, matching the model's own not-found discipline, with the Back link still present.
+  @milestone-10 @single-user
+  Scenario: A non-existent design id shows a not-found message
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open a non-existent design
+    Then the design editor shows a not-found message
+    And the design editor keeps its Back link
+
+
+  # The design's label is editable IN the editor: a two-way-bound <input> (was a read-only heading), so a
+  # design can be renamed where it is edited. The rename is a journaled scalar autosave to the designer's
+  # store, so it survives a fresh server render — reloading the editor shows the new label.
+  @milestone-10 @single-user
+  Scenario: The editor's design label is an editable input that persists a rename
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "draft1"
+    And I edit the design "draft1"
+    And I rename the design's label to "renamed1"
+    And I reload the design editor
+    Then the design editor's label input holds "renamed1"
+
+
+  # Each instances-list row gathers its actions into ONE trailing actions cell behind a "Γï»" overflow
+  # (kebab) menu — supplied to the generic <SetTable> as its `rowActions` cell. The menu is a per-row
+  # REACTIVE component: hidden until the row's kebab is clicked, its open/closed state keyed to that
+  # row's instance identity, so opening one row's menu does NOT open another's (independent state that
+  # survives re-render). The list kebab offers Open / Clone / Delete. RENAME is NOT in the list kebab:
+  # <SetTable> owns the identity (name) cell, so an inline in-row rename (which swaps that cell to an
+  # input) cannot be driven from a rowActions cell — rename lives on the per-instance detail page
+  # (reached via Open), which keeps its own inline rename. (See the detail-page scenario below.)
+  @milestone-10 @single-user
+  Scenario: Row actions are consolidated into a per-row kebab menu with independent state
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the instances list
+    Then the instance "todo" row actions are hidden behind a kebab
+    When I open the actions menu for instance "todo"
+    Then the instance "todo" actions menu shows Open, Clone, and Delete
+    And the instance "crm" actions menu stays closed
+
+
+  # The instance DETAIL page (/instances/<id>) carries the same kebab, but it must NOT offer "Open" -
+  # that would point at the page you are already on (self-referential). So the detail kebab drops Open
+  # and keeps Rename/Clone/Delete; choosing Rename opens the SAME inline rename editor in the page head
+  # (the established conditional), proving the menu drives the real operation here too.
+  @milestone-10 @single-user
+  Scenario: The instance detail page kebab omits Open and its Rename opens the inline editor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the instances list
+    And I open the instance "todo"
+    And I open the actions menu on the instance page
+    Then the instance page actions menu has no Open item
+    When I choose Rename from the instance page kebab
+    Then the instance page shows the inline rename editor
+
+
+  # The design-host's `db.instances` is seeded from the kernel registry on EVERY boot (the INVERSE of
+  # `db.designs`: both are rebuilt from the live specs). One stored Instance per hosted instance, with
+  # `name` = the registry label, `runtimeId` = the kernel id (the link to the runtime row), and `design`
+  # = a reference to the matching Design in `db.designs` (resolves by construction — designId is the key).
+  # This is a STORE read, not a UI assertion — UI is unchanged in this slice; Slice 3 does the UI change.
+  @milestone-10 @single-user
+  Scenario: The design-host seeds db.instances from the kernel registry on boot
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    Then the design-host has a stored Instance for each hosted instance
+    And the stored Instance for "todo" has runtimeId matching the kernel
+    And the stored Instance for "todo" has its design resolved to the "todo" design
+    And the stored Instance for "crm" has runtimeId matching the kernel
+    And the stored Instance for "crm" has its design resolved to the "crm" design
+
+
+  @milestone-10 @single-user
+  Scenario: Deleting an instance via a host action removes its row from db.instances
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When the "crm" instance is deleted via host action
+    Then the design-host has no stored Instance named "crm"
+
+
+  @milestone-10 @single-user
+  Scenario: Renaming an instance via a host action updates its name in db.instances
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When the "todo" instance is renamed to "mytodo" via host action
+    Then the design-host has a stored Instance named "mytodo"
+    And the design-host has no stored Instance named "todo"
+
+
+  # Slice 3 — the instances list and selector now read from db.instances (the store), not sys.instances
+  # (the live kernel set). This scenario verifies that after a host-action rename (which updates
+  # db.instances via Slice 2), the instances list page reflects the new name from the STORED data.
+  # The step reloads the page so the SSR runs fresh from db.instances (the live kernel also has the
+  # new name, so both paths would show it — the key proof is that the SSR uses db.instances fields:
+  # inst.name for the label and inst.design.label for the design column).
+  @milestone-10 @single-user
+  Scenario: The instances list shows renamed instance from db.instances after rename
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When the "todo" instance is renamed to "myrenamedtodo" via host action
+    And I open the instances list
+    Then the instances list shows the instance "myrenamedtodo" running design "todo"
+
+
+  # Per-design isolation (M13 review fix, D3): commitMessage/commitMigration moved from top-scope ui
+  # vars into designEditor's OWN component state, keyed on the design's id (key={sys.id(design)}) — so
+  # design A and design B get DIFFERENT slots. Typing a migration under "todo" must not bleed into
+  # "crm"'s editor — proven by navigating away and back within ONE tab, no reload. The state move is a
+  # REMOUNT on navigation (a fresh slot has fresh state, by construction), so "todo"'s own textarea is
+  # ALSO expected empty on return — retention-across-navigation was never promised; only cross-design
+  # bleed is what this guards against.
+  @milestone-13 @single-user
+  Scenario: Typing a migration in one design's editor does not bleed into another design's editor
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I expand the Migration disclosure
+    And I type a migration for "TodoItem" into the migration textarea
+    And I open the designs list
+    And I edit the design "crm"
+    And I expand the Migration disclosure
+    Then the migration textarea eventually holds ""
+    When I open the designs list
+    And I edit the design "todo"
+    And I expand the Migration disclosure
+    Then the migration textarea eventually holds ""
+
+
+  @milestone-13 @single-user
+  Scenario: The advanced editor deploys an authored access section
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I edit the design "todo"
+    And I expand the Advanced code disclosure
+    And I type this access section:
+      """
+      access
+          TodoItem
+              read
+      """
+    And I type "grant public todo read" into the commit message
+    And I click Commit
+    Then the last-commit line eventually shows message "grant public todo read"
+    When I open the instance "todo"
+    And I apply the design
+    Then the "todo" instance's app document has an access rule for "TodoItem" granting "read"
+
+
+  # The SAME moveRow helper reorders MetaAttr rows (attrRow(coll, a) is shared by node attrs AND use args —
+  # composes at zero marginal cost, per the spec's "same helper" guidance) — proven here on a node's own
+  # attributes; fns/vars are deliberately SKIPPED (their display foreach is still unsorted pending
+  # task_d7c6ed6a's orderBy restoration — wiring a control there would change data order invisibly, a lie).
+  @m12 @single-user
+  Scenario: A node's attributes can be reordered with the same move controls
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "treeme"
+    And I edit the design "treeme"
+    And I expand the Advanced code disclosure
+    And I author a projectable nested render into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "greeting" to the type "Db"
+    When I add a child element to the root node
+    And I add an attribute to the root node's last child
+    And I set the root node's last child's attribute 0's name to "aa"
+    And I add an attribute to the root node's last child
+    And I set the root node's last child's attribute 1's name to "bb"
+    Then the root node's last child's attributes read, in order: "aa, bb"
+    When I click move-down on the root node's last child's attribute 0
+    Then the root node's last child's attributes read, in order: "bb, aa"
+
+
+  # ──── M12 W1b — events + Reset through the dispatch bracket ────────────────────────────────────────────────────────────────────────────────
+  #
+  # W1a mounted a real running instance but left it INERT (noWiring — the isolation bracket only wrapped
+  # RENDER, and a click fires from the DOM long after that bracket restored the page's real globals). W1b
+  # adds the dispatch-time bracket every instance event routes through (runInstanceHandler), the matching
+  # wiring strategy (instanceWiring), and Reset — a framework-owned control bar the driver renders inside
+  # the container. The independence-at-CLICK pin is the arc's headline: two configurations, click one,
+  # only it changes.
+  #
+  # S5a review note (ui-arch Q1, the wire-leak pin): the Counter fixture's own handler body
+  # (`state.count = state.count + 1`) is a PLAIN object-field assignment on a fresh negative-id local
+  # object (executeObject always mints `id: --context.lastId.value`, never added to any set) — exactly the
+  # `executeAssignment` objectProp branch persistFieldEdit now routes through (codeExec.ts). This scenario
+  # already exercises that exact statement shape through the sandboxed dispatch bracket. The guard that
+  # actually prevents the leak is STRUCTURAL and UNCHANGED by the S5a fix: every branch persistFieldEdit can
+  # reach ends in `wsHooks?.propChange(...)` / `wsHooks?.pathWrite(...)` — optional-chained on a `wsHooks`
+  # the dispatch bracket sets to null for the click's whole duration — so nothing sends regardless of which
+  # branch (id>0, dict-entry, or S5a's newly-reachable pending-id fallback) a given write takes. The fallback
+  # branch specifically is ONLY reachable by an object like `state` here — never added to a set, so it has
+  # no server-side counterpart at all — meaning even a hypothetical wsHooks-null regression would surface as
+  # a harmless server-side "no such object" reject, not a real-store corruption (unlike a fake-positive-id
+  # DB-copy write, which stays on the UNCHANGED id>0 branch two-way binding already proved safe). No separate
+  # leak-pin scenario needed — this IS the trace.
+  @m12 @single-user
+  Scenario: An instance's own click handler only affects that instance, and Reset returns it to its initial state
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "wbcounterme"
+    And I edit the design "wbcounterme"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a reactive Counter component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    And I click the add-configuration button
+    Then component configurations shows 2 rows
+    And configuration 0's live instance shows a "button" element reading "0"
+    And configuration 1's live instance shows a "button" element reading "0"
+    When I click configuration 0's live instance button
+    And I click configuration 0's live instance button
+    Then configuration 0's live instance shows a "button" element reading "2"
+    And configuration 1's live instance shows a "button" element reading "0"
+    When I click configuration 0's live instance Reset button
+    Then configuration 0's live instance shows a "button" element reading "0"
+    And configuration 1's live instance shows a "button" element reading "0"
+
+
+  # Two-way binding (value= state writes) through the SAME dispatch bracket the click path uses, plus the
+  # bracket-restore proof: the page's own editing (a design rename, an admin-gated autosave) still works
+  # right after an instance's handler ran. Also carries the ANCHOR-CONTAINMENT pin (arch review fold): the
+  # TextBox fixture's own `<a href>` has NO onClick — nothing in instanceWiring stops it — so only the
+  # container-level click swallow (workbench.ts ensureInstanceContent) stops it bubbling to the page's
+  # document-level interceptNavigation and navigating the whole designer away.
+  @m12 @single-user
+  Scenario: Typing into an instance's two-way-bound input repaints only that instance, and the page's own editing still works
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "twowayme"
+    And I edit the design "twowayme"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a two-way-bound TextBox component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    Then component configurations shows 1 row
+    When I type "hello" into configuration 0's live instance input
+    Then configuration 0's live instance shows a "span" element reading "hello"
+    When I click configuration 0's live instance link
+    Then the design editor eventually shows the structured render tree editor
+    And configuration 0's live instance shows a "span" element reading "hello"
+    When I rename the design's label to "twowayme-renamed"
+    Then the design editor shows the design's label "twowayme-renamed"
+
+
+  # THE SESSION-SAFETY PIN (component-workbench.md's "grill's core fix"): sys.login/sys.logout are NOT
+  # id-gated, so a login/logout call inside a sandboxed instance's handler could otherwise really re-bind
+  # the operator's own page session. Only the dispatch bracket's wsHooks-null stops it. Chained with a
+  # page-side rename (an admin-gated autosave) as a SECOND, stronger proof: if the real session had flipped
+  # anonymous, that write would be silently denied and the rename step's own store poll would time out.
+  @m12 @single-user
+  Scenario: A card's handler calling sys.logout never touches the page's own session
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "logoutme"
+    And I edit the design "logoutme"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a sandboxed logout button component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    Then configuration 0's live instance shows a "button" element reading "Log out (sandboxed)"
+    When I click configuration 0's live instance button
+    Then the designer's own session is still logged in
+    When I rename the design's label to "logoutme-renamed"
+    Then the design editor shows the design's label "logoutme-renamed"
+
+
+  # A throwing handler (an unseeded-ambient read, the same v1 fidelity boundary as render time — W1c seeds
+  # schema/extent but NOT ambients) renders the REAL error into its own card — never a rollback, never a
+  # page-wide crash, and a SIBLING instance (a different component, in this design) stays fully interactive,
+  # proving the isolation bracket is per-dispatch, not something one broken handler can wedge for the whole
+  # page.
+  @m12 @single-user
+  Scenario: A throwing instance handler shows the real error without disabling the page or its sibling instance
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "throwme"
+    And I edit the design "throwme"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a throwing component and a Counter component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button for "Thrower"
+    And I click the add-configuration button for "Counter"
+    Then component configurations shows 2 rows
+    And configuration 0's live instance shows a "button" element reading "boom"
+    And configuration 1's live instance shows a "button" element reading "0"
+    When I click configuration 0's live instance button
+    Then configuration 0's live instance shows the error "Variable currentUser not found"
+    When I click configuration 1's live instance button
+    Then configuration 1's live instance shows a "button" element reading "1"
+    When I rename the design's label to "throwme-renamed"
+    Then the design editor shows the design's label "throwme-renamed"
+
+
+  # The isolation pins (W1a/W1b) EXTENDED to generic UI: typing into a real <Field>'s editor (sys.schema-
+  # backed, sys.new-drafted) writes only THIS instance's local draft — a sibling configuration of the SAME
+  # component, and the page's own editing, are both untouched.
+  @m12 @single-user
+  Scenario: Typing into a Field editor inside an instance updates only that instance's local draft
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "seedfieldtype"
+    And I edit the design "seedfieldtype"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    And I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a stateful schema-backed Editor component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    And I click the add-configuration button
+    Then component configurations shows 2 rows
+    When I type "hello" into configuration 0's live instance input
+    Then configuration 0's live instance shows a "span" element reading "hello"
+    And configuration 1's live instance shows a "span" element reading ""
+    When I rename the design's label to "seedfieldtype-renamed"
+    Then the design editor shows the design's label "seedfieldtype-renamed"
+
+
+  # Reset (the whole-sandbox disposal W1b established) now covers the SEEDED extent too: a handler-added
+  # row (db.notes.add via a freshly sys.new-minted draft, schema-backed) shows up in sys.extent immediately
+  # (mutation-consistent, per-instance derivation), and Reset discards it along with the rest of the sandbox.
+  @m12 @single-user
+  Scenario: Reset returns an instance's seeded extent to its initial rows after a handler mutates it
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "seedresetextent"
+    And I edit the design "seedresetextent"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a type to the design
+    And I name the just-added type "Note"
+    And I add a field "title" to the type "Note"
+    When I add a field "notes" to the type "Db"
+    When I reload the design editor
+    And I retype the prop "notes" to "Note"
+    And I set the prop "notes" cardinality to "set"
+    When I ensure the Advanced code disclosure is open
+    And I set the design's initial data to:
+      """
+      initialData
+          Db 1
+              notes: [2]
+          Note 2
+              title: "Alpha"
+      """
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with an extent-adding component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    Then configuration 0's live instance shows 1 "li" element
+    When I click configuration 0's live instance button
+    Then configuration 0's live instance shows 2 "li" elements
+    When I click configuration 0's live instance Reset button
+    Then configuration 0's live instance shows 1 "li" element
