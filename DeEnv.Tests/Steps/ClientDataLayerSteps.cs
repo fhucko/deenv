@@ -80,9 +80,8 @@ public sealed class ClientDataLayerSteps(InstanceContext ctx)
     {
         try
         {
-            await ctx.Page!.WaitForFunctionAsync(
-                "t => [...document.querySelectorAll('.gated-row')].some(e => e.textContent.includes(t))",
-                title, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
+            await ctx.Page!.Locator(".gated-row", new() { HasTextString = title })
+                .First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
         }
         catch (TimeoutException)
         {
@@ -150,9 +149,9 @@ public sealed class ClientDataLayerSteps(InstanceContext ctx)
     {
         try
         {
-            await ctx.Page!.WaitForFunctionAsync(
-                "v => document.querySelector('.counter-a')?.textContent === v",
-                value.ToString(), new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
+            var counter = ctx.Page!.Locator(".counter-a");
+            await counter.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+            await Assert.That(await counter.InnerTextAsync()).IsEqualTo(value.ToString());
         }
         catch (TimeoutException)
         {

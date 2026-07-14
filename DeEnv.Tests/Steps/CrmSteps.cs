@@ -132,9 +132,12 @@ public sealed class CrmSteps(InstanceContext ctx)
     }
 
     [Then("I see a create error")]
-    public async Task ThenCreateErrorAsync() =>
+    public async Task ThenCreateErrorAsync()
+    {
         // The self-hosted dict table shows a non-empty .dict-error when an add is rejected
         // (e.g. a duplicate key). The reactive re-render fills it after the Add click.
-        await ctx.Page!.WaitForFunctionAsync(
-            "() => (document.querySelector('.dict-error')?.textContent ?? '').trim().length > 0");
+        var err = ctx.Page!.Locator(".dict-error");
+        await err.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await Assert.That((await err.InnerTextAsync()).Trim().Length).IsGreaterThan(0);
+    }
 }
