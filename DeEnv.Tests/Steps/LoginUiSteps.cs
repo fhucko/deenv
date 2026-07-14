@@ -262,7 +262,7 @@ public sealed class LoginUiSteps(InstanceContext ctx)
     {
         // Navigate to the user's object page by clicking its row link, then wait for the masked password
         // input the generic form renders for the `password`-typed field.
-        await ctx.Page!.Locator($".set-row:has-text(\"{name}\") a.row-link").ClickAsync();
+        await ctx.Page!.Locator(".set-row", new() { HasTextString = name }).Locator("a.row-link").ClickAsync();
         var field = ctx.Page.Locator(".object-form input.password");
         await field.WaitForAsync();
         await field.FillAsync(password);

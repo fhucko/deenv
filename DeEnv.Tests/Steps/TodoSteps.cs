@@ -101,15 +101,15 @@ public sealed class TodoSteps(InstanceContext ctx)
 
     [Then("the page shows the user {string}")]
     public async Task ThenShowsUser(string name) =>
-        await ctx.Page!.WaitForSelectorAsync($"button.user-chip:has-text({Quoted(name)})");
+        await ctx.Page!.Locator("button.user-chip", new() { HasTextString = name }).WaitForAsync();
 
     [Then("the page shows the selected user {string}")]
     public async Task ThenShowsSelectedUser(string name) =>
-        await ctx.Page!.WaitForSelectorAsync($"h2.selected-user:has-text({Quoted(name)})");
+        await ctx.Page!.Locator("h2.selected-user", new() { HasTextString = name }).WaitForAsync();
 
     [Then("the page shows the list {string}")]
     public async Task ThenShowsList(string name) =>
-        await ctx.Page!.WaitForSelectorAsync($"h3.list-name:has-text({Quoted(name)})");
+        await ctx.Page!.Locator("h3.list-name", new() { HasTextString = name }).WaitForAsync();
 
     // The item text lives in input.text's VALUE (a composed library <Input>), so match on value.
     [Then("the page shows an item {string}")]
@@ -136,7 +136,7 @@ public sealed class TodoSteps(InstanceContext ctx)
 
     // ── locators ──────────────────────────────────────────────────────────────────
 
-    // The list card whose title matches (exact-ish via :has-text on the .list-name heading).
+    // The list card whose title matches (via HasTextString on locator).
     private ILocator Card(string list) =>
         ctx.Page!.Locator("article.todo-card", new() {
             Has = ctx.Page.Locator("h3.list-name", new() { HasTextString = list })
@@ -154,7 +154,7 @@ public sealed class TodoSteps(InstanceContext ctx)
             .First;
     }
 
-    // A name as a quoted :has-text() argument — quotes/backslashes in the value escaped.
+    // A name as a quoted :has-text() argument — quotes/backslashes in the value escaped. (legacy in JS string)
     private static string Quoted(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
     private static string JsString(string s) => "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
 

@@ -156,7 +156,7 @@ public sealed partial class DesignerSteps
             new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
         await Assert.That(await form.Locator("select.ref-select").CountAsync()).IsEqualTo(1);
         // No per-candidate Set/Use button (the old picker pattern) — the native pick is the whole control.
-        await Assert.That(await form.Locator(".ref-set, button:has-text(\"Set\")").CountAsync()).IsEqualTo(0);
+        await Assert.That(await form.Locator("button", new() { HasTextString = "Set" }).CountAsync()).IsEqualTo(0);
     }
 
     [Then("the instance create form's design ref-select offers the design {string}")]
@@ -341,7 +341,7 @@ public sealed partial class DesignerSteps
         // The selection lands (the bound state reflects the new pick) before we apply.
         await ctx.Page!.Locator("main.ide-design-edit .design-editor select.design-pick").WaitForAsync();
         // The option text is reflected; confirm via the visible selected content.
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor select.design-pick option:checked:has-text({CssString(designLabel)})").WaitForAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor select.design-pick option:checked", new() { HasTextString = designLabel }).WaitForAsync();
     }
 
     [When("I apply the design")]
@@ -467,7 +467,7 @@ public sealed partial class DesignerSteps
     public async Task ThenDesignsListShows(string label) =>
         // The designs list renders via the generic <SetTable>: each design is a .set-row whose label
         // is the stretched a.row-link (label-only column), with an Edit link + Delete button per row.
-        await Assert.That(await ctx.Page!.Locator($".set-row a.row-link:text-is({CssString(label)})").CountAsync())
+        await Assert.That(await ctx.Page!.Locator(".set-row a.row-link", new() { HasTextString = label }).CountAsync())
             .IsGreaterThanOrEqualTo(1);
 
     [Then("the design {string} row has an Edit link and a Delete button")]
@@ -591,12 +591,12 @@ public sealed partial class DesignerSteps
 
     [Then("the nav {string} link is active")]
     public async Task ThenNavActive(string label) =>
-        await Assert.That(await ctx.Page!.Locator($"nav.ide-nav a.is-active:text-is({CssString(label)})").CountAsync())
+        await Assert.That(await ctx.Page!.Locator("nav.ide-nav a.is-active", new() { HasTextString = label }).CountAsync())
             .IsEqualTo(1);
 
     [Then("the nav {string} link is not active")]
     public async Task ThenNavNotActive(string label) =>
-        await Assert.That(await ctx.Page!.Locator($"nav.ide-nav a:not(.is-active):text-is({CssString(label)})").CountAsync())
+        await Assert.That(await ctx.Page!.Locator("nav.ide-nav a:not(.is-active)", new() { HasTextString = label }).CountAsync())
             .IsEqualTo(1);
 
     // ──── Then: a non-existent design id ─────────────────────────────────────────────────────────────────────────────────────
@@ -717,7 +717,7 @@ public sealed partial class DesignerSteps
 
     [Then("the commit history shows a commit with message {string}")]
     public async Task ThenCommitHistoryShowsMessage(string message) =>
-        await ctx.Page!.Locator($"main.ide-commits .set-row:has-text({CssString(message)})").WaitForAsync();
+        await ctx.Page!.Locator("main.ide-commits .set-row", new() { HasTextString = message }).WaitForAsync();
 
     // An empty-message commit still creates a real row (the label column — Commit.message, the type's
     // labelProp — renders empty text), so assert the store directly: a Commit exists whose message is "".
@@ -761,11 +761,11 @@ public sealed partial class DesignerSteps
     // equal to the message/design proves the right commit resolved (values are distinct across fields).
     [Then("the commit detail page shows message {string}")]
     public async Task ThenCommitDetailShowsMessage(string message) =>
-        await ctx.Page!.Locator($"main.ide-commit-detail .field-value:text-is({CssString(message)})").WaitForAsync();
+        await ctx.Page!.Locator("main.ide-commit-detail .field-value", new() { HasTextString = message }).WaitForAsync();
 
     [Then("the commit detail page shows design {string}")]
     public async Task ThenCommitDetailShowsDesign(string design) =>
-        await ctx.Page!.Locator($"main.ide-commit-detail .field-value:text-is({CssString(design)})").WaitForAsync();
+        await ctx.Page!.Locator("main.ide-commit-detail .field-value", new() { HasTextString = design }).WaitForAsync();
 
     [Then("the commit detail page shows author {string}")]
     public async Task ThenCommitDetailShowsAuthor(string author) =>
@@ -788,14 +788,14 @@ public sealed partial class DesignerSteps
     [Then("the commit detail page shows the migration source for {string}")]
     public async Task ThenCommitDetailShowsMigration(string typeName) =>
         await ctx.Page!.Locator(
-            $"main.ide-commit-detail .commit-migration-text:has-text({CssString($"fn {typeName}(old)")})").WaitForAsync();
+            "main.ide-commit-detail .commit-migration-text", new() { HasTextString = $"fn {typeName}(old)" }).WaitForAsync();
 
     // B2 — the "Changes since parent" section. sys.diffCommits(parent, this) is a server-backed READ builtin
     // (computed server-side, shipped via the memo cache, reused by the client twin — like sys.schema). A
     // rename renders as ONE rename row ("From → To"), the identity-diff payoff — never a remove+add.
     [Then("the changes-since-parent shows a rename from {string} to {string}")]
     public async Task ThenChangesSinceParentRename(string from, string to) =>
-        await ctx.Page!.Locator($"main.ide-commit-detail .commit-diff .diff-rename:has-text({CssString(from + " → " + to)})").WaitForAsync();
+        await ctx.Page!.Locator("main.ide-commit-detail .commit-diff .diff-rename", new() { HasTextString = from + " → " + to }).WaitForAsync();
 
     // The other half of the rename proof: a renamed type must NOT also surface as a removal — the diff joins
     // by intrinsic id, so the old name never appears in the "Removed" group.
@@ -805,7 +805,7 @@ public sealed partial class DesignerSteps
         // The rename row must be present first (proves the diff section rendered — otherwise "no removal"
         // could pass vacuously on a not-yet-hydrated page).
         await ctx.Page!.Locator("main.ide-commit-detail .commit-diff").WaitForAsync();
-        await Assert.That(await ctx.Page!.Locator($".commit-diff .diff-remove:has-text({CssString(name)})").CountAsync())
+        await Assert.That(await ctx.Page!.Locator(".commit-diff .diff-remove", new() { HasTextString = name }).CountAsync())
             .IsEqualTo(0);
     }
 
@@ -816,7 +816,7 @@ public sealed partial class DesignerSteps
     // store (a later commit snapshots the design, so the removal must have landed).
     [Then("the changes-since-parent shows an add of {string}")]
     public async Task ThenChangesSinceParentAdd(string path) =>
-        await ctx.Page!.Locator($"main.ide-commit-detail .commit-diff .diff-add:has-text({CssString(path)})").WaitForAsync();
+        await ctx.Page!.Locator("main.ide-commit-detail .commit-diff .diff-add", new() { HasTextString = path }).WaitForAsync();
 
     [When("I remove the field {string} from the type {string}")]
     public async Task WhenRemoveField(string propName, string typeName)
@@ -1127,7 +1127,7 @@ public sealed partial class DesignerSteps
 
     [Then("the merge preview's access block mentions {string}")]
     public async Task ThenMergeAccessMentions(string phrase) =>
-        await ctx.Page!.Locator($".merge-preview .merge-access .merge-access-row:has-text({CssString(phrase)})").WaitForAsync();
+        await ctx.Page!.Locator(".merge-preview .merge-access .merge-access-row", new() { HasTextString = phrase }).WaitForAsync();
 
     // A prop by name is stored on a named type of the design in db.designs (the MAIN working copy, NOT a
     // branch clone — a clone shares the label, so scope to the design reachable from db.designs).
@@ -1171,7 +1171,7 @@ public sealed partial class DesignerSteps
 
     // The Branches-section link for a branch (its <a class="branch-link"> naming the branch).
     private Microsoft.Playwright.ILocator BranchLinkFor(string name) =>
-        ctx.Page!.Locator($".branch-section .branch-list a.branch-link:text-is({CssString(name)})");
+        ctx.Page!.Locator(".branch-section .branch-list a.branch-link", new() { HasTextString = name });
 
     // The merge row for a branch in the Branches section (its head shows Merge "<name>").
     private Microsoft.Playwright.ILocator MergeRowFor(string name) =>
@@ -2546,7 +2546,7 @@ public sealed partial class DesignerSteps
     // A non-literal expression leaf renders as a visible span.expr-chip placeholder carrying the raw source.
     [Then("the design canvas shows an expression chip reading {string}")]
     public async Task ThenCanvasShowsChip(string source) =>
-        await ctx.Page!.Locator($".design-canvas span.expr-chip[data-node]:has-text({CssString(source)})").First.WaitForAsync();
+        await ctx.Page!.Locator(".design-canvas span.expr-chip[data-node]", new() { HasTextString = source }).First.WaitForAsync();
 
     // ──── M12 CANVAS-EVAL-1 — the canvas EVALUATES expressions (sys.evalContext) ─────────────────────────────────────────
     //
@@ -2839,7 +2839,7 @@ public sealed partial class DesignerSteps
         // The list is the generic <SetTable> with columns ["name", "design"]: the `design` column is an
         // object-ref cell that SetTable renders as the referenced Design's label text (a plain <td>, not
         // the row-id identity cell). Assert that cell holds the expected design label.
-        await Assert.That(await row.Locator($"td:not(.row-id):text-is({CssString(designLabel)})").CountAsync())
+        await Assert.That(await row.Locator("td:not(.row-id)", new() { HasTextString = designLabel }).CountAsync())
             .IsGreaterThanOrEqualTo(1);
     }
 
@@ -3021,7 +3021,7 @@ public sealed partial class DesignerSteps
     // "object" type with zero props (the same condition that degrades evalContext).
     [Then("the just-added type shows the hint {string}")]
     public async Task ThenJustAddedTypeHint(string hintText) =>
-        await JustAddedTypeRow().Locator($".type-hint:has-text({CssString(hintText)})").First.WaitForAsync();
+        await JustAddedTypeRow().Locator(".type-hint", new() { HasTextString = hintText }).First.WaitForAsync();
 
     // The hint span is a structural `if` (mirroring fn-name-hint/var-name-hint) — ABSENT from the DOM
     // when there is no hint, not merely CSS-hidden, so this polls for absence rather than Hidden.

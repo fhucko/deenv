@@ -71,7 +71,7 @@ public sealed class NavigationSteps(InstanceContext ctx)
     [When(@"I click the row for key {string} in the customers table")]
     public async Task WhenClickRowAsync(string key)
     {
-        await ctx.Page!.Locator($"table a:text-is('{key}')").First.ClickAsync();
+        await ctx.Page!.Locator("table a", new() { HasTextString = key }).First.ClickAsync();
         await ctx.Page.WaitForUrlContentAsync(new System.Text.RegularExpressions.Regex($".*/customers/{key}$"));
     }
 
