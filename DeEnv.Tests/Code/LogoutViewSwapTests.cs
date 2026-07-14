@@ -64,11 +64,9 @@ public sealed class LogoutViewSwapTests
             // This is the state the LOGOUT swap must move AWAY from. Poll the live DOM (the WS round-trip is
             // async); the Log out button is what the logout half of the slice adds.
             await page.WaitForFunctionAsync(
-                "() => !!document.querySelector('#app .object-form') && !!document.querySelector('#app .user-menu button.logout')",
-                null, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
+                "() => !!document.querySelector('#app .object-form') && !!document.querySelector('#app .user-menu button.logout')");
             await page.WaitForFunctionAsync(
-                "() => document.body.innerText.includes('Gate #3')",
-                null, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
+                "() => document.body.innerText.includes('Gate #3')");
 
             // Log out through the UserMenu.
             await page.Locator("#app .user-menu button.logout").ClickAsync();
@@ -81,8 +79,7 @@ public sealed class LogoutViewSwapTests
             try
             {
                 await page.WaitForFunctionAsync(
-                    "() => !!document.querySelector('#app .login-form') && !document.querySelector('#app .object-form')",
-                    null, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
+                    "() => !!document.querySelector('#app .login-form') && !document.querySelector('#app .object-form')");
             }
             catch (TimeoutException)
             {
@@ -94,8 +91,7 @@ public sealed class LogoutViewSwapTests
             // The ruled data is denied again (the refetch ran as anonymous), confirming the swap landed on
             // the real anonymous gate, not a stale shell still showing the admin's data.
             await page.WaitForFunctionAsync(
-                "() => !document.body.innerText.includes('Gate #3')",
-                null, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
+                "() => !document.body.innerText.includes('Gate #3')");
         }
         finally
         {

@@ -24,10 +24,8 @@ public sealed class PresentationSteps(InstanceContext ctx)
         await ctx.Page!.Locator($"a.list-title:text-is('{title}'), .list-title a:text-is('{title}')")
             .First.ClickAsync();
         // Wait for the navigation's HTML to parse, NOT the full Load (the /js bundle) — see PageNav.
-        // Load-tolerant timeout (default 30s sat below the loaded worst-case: the click's full SSR nav
-        // is ~7x slower under full-suite peak load, tipping DOMContentLoaded past 30s — a load flake).
-        await ctx.Page.WaitForLoadStateAsync(Microsoft.Playwright.LoadState.DOMContentLoaded,
-            new Microsoft.Playwright.PageWaitForLoadStateOptions { Timeout = TestTimeouts.ActionMs });
+        // Uses global default timeout.
+        await ctx.Page.WaitForLoadStateAsync(Microsoft.Playwright.LoadState.DOMContentLoaded);
     }
 
     // The "create form" is the self-hosted, flag-gated create form (.create-form, revealed by `+ New`):

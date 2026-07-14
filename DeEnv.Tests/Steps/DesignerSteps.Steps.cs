@@ -21,7 +21,8 @@ public sealed partial class DesignerSteps
         // The designs list now renders via the generic <SetTable> (a .set-row per design, the label in
         // a stretched a.row-link, with a per-row action cell carrying the Edit link + Delete button).
         await ctx.Page!.WaitForSelectorAsync("main.ide-designs .set-row");
-        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+        // Wait for a post-init interactive element instead of the legacy initUi global.
+        await ctx.Page.Locator("main.ide-designs .new-btn").First.WaitForAsync();
     }
 
     [When("I open the instances list")]
@@ -31,7 +32,7 @@ public sealed partial class DesignerSteps
         // Hydration checkpoint: the SSR instance rows are present AND the client bundle has bootstrapped
         // (window.initUi set), so the hand-rolled links/handlers are attached before we interact.
         await ctx.Page!.WaitForSelectorAsync("main.ide-list .set-row");
-        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+        await ctx.Page.Locator("main.ide-list .new-btn").First.WaitForAsync();
     }
 
     [When("I edit the design {string}")]
@@ -43,8 +44,8 @@ public sealed partial class DesignerSteps
         // Wait for the editor SECTION (always present once the design resolves) rather than a type row —
         // a freshly-added design has no types yet, so .type-name would never appear for it.
         await DesignRowFor(label).Locator("a.edit-design").ClickAsync();
-        await ctx.Page!.WaitForSelectorAsync("main.ide-design-edit .design-editor", new() { Timeout = TestTimeouts.ActionMs });
-        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'", null, new Microsoft.Playwright.PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.WaitForSelectorAsync("main.ide-design-edit .design-editor");
+        await ctx.Page.Locator("main.ide-design-edit .design-editor .add-type").First.WaitForAsync();
     }
 
     [When("I open the instance {string}")]
@@ -59,7 +60,7 @@ public sealed partial class DesignerSteps
         await RowFor(label).Locator("td.row-action button.kebab-toggle").ClickAsync();
         await RowFor(label).Locator(".kebab-menu.open a.open-instance").ClickAsync();
         await ctx.Page!.WaitForSelectorAsync("main.ide-instance select.design-pick");
-        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+        await ctx.Page.Locator("main.ide-instance .new-btn").First.WaitForAsync();
     }
 
     [When("I open that new instance")]
@@ -83,7 +84,7 @@ public sealed partial class DesignerSteps
         });
         await ctx.Page!.GotoReadyAsync(ctx.DesignerUrl($"/instances/{objId}"));
         await ctx.Page!.WaitForSelectorAsync("main.ide-instance select.design-pick");
-        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+        await ctx.Page.Locator("main.ide-instance .new-btn").First.WaitForAsync();
     }
 
     // ──── When: creating (the GENERIC SetTable create) ─────────────────────────────────────────────────────────
@@ -110,19 +111,10 @@ public sealed partial class DesignerSteps
         // the generic <SetTable>, so a row is .set-row and the label is the stretched a.row-link.
         await ctx.Page.WaitForSelectorAsync(
             $".set-row:has(a.row-link:text-is({CssString(label)}))");
-        // Then wait for the persist+remap to land on the client — the row's Edit link must point at the
-        // real (positive) id, so a later Edit click navigates to the now-persisted design, not its
-        // transient negative id. The href is /designs/<id> via sys.nest, so match a positive trailing id.
-        await ctx.Page.WaitForFunctionAsync(
-            $$"""
-            () => {
-                const rows = [...document.querySelectorAll('.set-row')];
-                const row = rows.find(r => { const l = r.querySelector('a.row-link'); return l && l.textContent.trim() === {{JsString(label)}}; });
-                if (!row) return false;
-                const a = row.querySelector('a.edit-design');
-                return a != null && /\/designs\/[0-9]+$/.test(a.getAttribute('href') || '');
-            }
-            """);
+        // Wait for the remapped positive id on the Edit link (negative ids start with -).
+        await ctx.Page.Locator(
+            $".set-row:has(a.row-link:text-is({CssString(label)})) a.edit-design[href^=\"/designs/\"]:not([href^=\"/designs/-\"])"
+        ).WaitForAsync();
     }
 
     [When("I create an instance named {string} from the design {string}")]
@@ -204,7 +196,7 @@ public sealed partial class DesignerSteps
         var input = TypeNameInput(from);
         await input.FillAsync(to);
         // The bound input re-renders the model name to the new value (the client edit landed)…
-        await TypeNameInput(to).WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await TypeNameInput(to).WaitForAsync();
         // …then wait for the autosave (objectPropChange) to reach the designer's sovereign store, so a
         // later apply projects the renamed design (the apply reads the store fresh).
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
@@ -222,7 +214,7 @@ public sealed partial class DesignerSteps
         await PropTypeSelect(propName).SelectOptionAsync(
             new Microsoft.Playwright.SelectOptionValue { Value = newType });
         // The bound select reflects the new value (the client edit landed)…
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .prop-row select.prop-type[value={CssString(newType)}]").First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .prop-row select.prop-type[value={CssString(newType)}]").First.WaitForAsync();
         // …then wait for the autosave to reach the designer's store, so a later apply projects the
         // retyped prop (the apply reads the store fresh).
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
@@ -254,7 +246,7 @@ public sealed partial class DesignerSteps
         // runs after the prop's cardinality has been set to dictionary, so the field is present (FillAsync
         // auto-waits for it).
         await PropKeytypeInput(propName).FillAsync(keyType);
-        await PropKeytypeInput(propName).WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await PropKeytypeInput(propName).WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
             .Any(o => o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
                 && o.Fields.TryGetValue("keyType", out var v) && v is DeEnv.Storage.TextValue t && t.Text == keyType));
@@ -280,8 +272,8 @@ public sealed partial class DesignerSteps
         await emptyInput.FillAsync(name);
         // Wait for the just-filled input's card to no longer be the "empty name" one (the re-render reflects the name).
         await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"])").First
-            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached, Timeout = TestTimeouts.ActionMs });
-        await TypeNameInput(name).WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+        await TypeNameInput(name).WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
             .Any(o => o.Fields.TryGetValue("name", out var v)
                 && v is DeEnv.Storage.TextValue t && t.Text == name));
@@ -296,7 +288,7 @@ public sealed partial class DesignerSteps
         // autosave so a later apply sees it.
         await JustAddedTypeRow().Locator("select.type-kind").SelectOptionAsync(
             new Microsoft.Playwright.SelectOptionValue { Value = baseType });
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .type-card select.type-kind[value={CssString(baseType)}]").First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .type-card select.type-kind[value={CssString(baseType)}]").First.WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
             .Any(o => o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == _justAddedTypeName
                 && o.Fields.TryGetValue("baseType", out var v) && v is DeEnv.Storage.TextValue t && t.Text == baseType));
@@ -309,7 +301,7 @@ public sealed partial class DesignerSteps
         // only for an enum; SchemaBridge ignores it on non-enum types. Wait for THIS type's autosave so
         // a later apply projects the value list.
         await JustAddedTypeRow().Locator("input.type-values").FillAsync(values);
-        await JustAddedTypeRow().Locator("input.type-values").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await JustAddedTypeRow().Locator("input.type-values").WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
             .Any(o => o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == _justAddedTypeName
                 && o.Fields.TryGetValue("values", out var v) && v is DeEnv.Storage.TextValue t && t.Text == values));
@@ -319,7 +311,7 @@ public sealed partial class DesignerSteps
     public async Task WhenAddType()
     {
         await ctx.Page!.Locator("main.ide-design-edit .design-editor button.add-type:has-text(\"+ Type\")").First.ClickAsync();
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"])").First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"])").First.WaitForAsync();
     }
 
     [When("I remove the just-added unnamed type")]
@@ -341,9 +333,9 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator("select.design-pick").SelectOptionAsync(
             new Microsoft.Playwright.SelectOptionValue { Label = designLabel });
         // The selection lands (the bound state reflects the new pick) before we apply.
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor select.design-pick").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor select.design-pick").WaitForAsync();
         // The option text is reflected; confirm via the visible selected content.
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor select.design-pick option:checked:has-text({CssString(designLabel)})").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor select.design-pick option:checked:has-text({CssString(designLabel)})").WaitForAsync();
     }
 
     [When("I apply the design")]
@@ -460,7 +452,7 @@ public sealed partial class DesignerSteps
         // not-found message because the foreach finds no match.
         await ctx.Page!.GotoReadyAsync(ctx.DesignerUrl("/designs/999999"));
         await ctx.Page!.WaitForSelectorAsync("main.ide-design-edit");
-        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+        await ctx.Page.Locator("main.ide-design-edit .design-editor").First.WaitForAsync();
     }
 
     // ──── Then ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -612,14 +604,14 @@ public sealed partial class DesignerSteps
 
     [Then("the design editor shows a type named {string}")]
     public async Task ThenEditorShowsType(string name) =>
-        await TypeNameInput(name).WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await TypeNameInput(name).WaitForAsync();
 
     [Then("the design editor shows the design's label {string}")]
     public async Task ThenEditorShowsLabel(string label) =>
         // The editor's label is now an editable two-way-bound <input> (input.design-label = design.label);
         // a freshly-created design opens here with its label and otherwise-empty fields (an empty types
         // list, empty code areas) — a valid library entry, only invalid to DEPLOY until it gains types.
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor input.design-label[value={CssString(label)}]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor input.design-label[value={CssString(label)}]").WaitForAsync();
 
     // ──── Then/When: the editable design label (rename in the editor) ────────────────────────────
 
@@ -629,7 +621,7 @@ public sealed partial class DesignerSteps
         // The editor's label input is two-way-bound to design.label; filling it edits the model and
         // autosaves a journaled scalar change (objectPropChange) to the designer's sovereign store.
         await ctx.Page!.Locator("main.ide-design-edit .design-editor input.design-label").First.FillAsync(newLabel);
-        await ctx.Page.Locator($"main.ide-design-edit .design-editor input.design-label[value={CssString(newLabel)}]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page.Locator($"main.ide-design-edit .design-editor input.design-label[value={CssString(newLabel)}]").WaitForAsync();
         // Wait for the autosave to reach the store, so a fresh server render (a reload) shows the new label.
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values
             .Any(o => o.Fields.TryGetValue("label", out var v) && v is DeEnv.Storage.TextValue t && t.Text == newLabel));
@@ -642,12 +634,12 @@ public sealed partial class DesignerSteps
         // input's value is the persisted label — proving the rename survived as data, not just in the DOM.
         await ctx.Page!.ReloadAsync();
         await ctx.Page.WaitForSelectorAsync("main.ide-design-edit .design-editor");
-        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+        await ctx.Page.Locator("main.ide-design-edit .design-editor .add-type").First.WaitForAsync();
     }
 
     [Then("the design editor's label input holds {string}")]
     public async Task ThenEditorLabelInputHolds(string label) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor input.design-label[value={CssString(label)}]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor input.design-label[value={CssString(label)}]").WaitForAsync();
 
     // ──── When/Then: the Commit-button UX slice (M13's last piece) ─────────────────────────────────
 
@@ -681,7 +673,7 @@ public sealed partial class DesignerSteps
     public async Task ThenGlobalErrorBannerMentioning(string phrase)
     {
         var banner = ctx.Page!.Locator("#__error");
-        await banner.WaitForAsync(new Microsoft.Playwright.LocatorWaitForOptions { Timeout = TestTimeouts.ActionMs });
+        await banner.WaitForAsync();
         await Assert.That(await banner.InnerTextAsync()).Contains(phrase);
     }
 
@@ -695,11 +687,11 @@ public sealed partial class DesignerSteps
     // don't assert immediately after the click).
     [Then("the commit message input eventually holds {string}")]
     public async Task ThenCommitMessageInputEventuallyHolds(string message) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor input.commit-message[value={CssString(message)}]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor input.commit-message[value={CssString(message)}]").WaitForAsync();
 
     [Then("the migration textarea eventually holds {string}")]
     public async Task ThenMigrationTextareaEventuallyHolds(string text) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor textarea.commit-migration-input[value={CssString(text)}]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor textarea.commit-migration-input[value={CssString(text)}]").WaitForAsync();
 
     // The rejection leg's retained-migration proof: the callback never ran, so the textarea still
     // holds exactly what "I type a migration for ... into the migration textarea" typed.
@@ -713,7 +705,7 @@ public sealed partial class DesignerSteps
     {
         await ctx.Page!.Locator("main.ide-design-edit .design-editor a.view-history").First.ClickAsync();
         await ctx.Page.WaitForSelectorAsync("main.ide-commits");
-        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+        await ctx.Page.Locator("main.ide-commits .set-row").First.WaitForAsync();
     }
 
     [Then("the commit history shows a commit with message {string}")]
@@ -733,7 +725,7 @@ public sealed partial class DesignerSteps
     // order, now driven by commitsPage's orderBy descending on logSeq) carries the given message.
     [Then("the commit history's first row has message {string}")]
     public async Task ThenCommitHistoryFirstRowHasMessage(string message) =>
-        await ctx.Page!.Locator($"main.ide-commits .set-row:has-text({CssString(message)})").First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-commits .set-row:has-text({CssString(message)})").First.WaitForAsync();
 
     // B1: a history row is now a real link (linked restored) — clicking it navigates client-side to the
     // commit-detail page (/commits/<id>). Locate the row by its message and click its row-link.
@@ -945,8 +937,7 @@ public sealed partial class DesignerSteps
     // report. Wide window: the re-preview rides a value-not-available refetch.
     [Then("the publish preview for the instance {string} reads up to date")]
     public async Task ThenPreviewReadsUpToDate(string label) =>
-        await PublishRowFor(label).Locator(".publish-preview .publish-uptodate").WaitForAsync(
-            new Microsoft.Playwright.LocatorWaitForOptions { Timeout = TestTimeouts.ActionMs });
+        await PublishRowFor(label).Locator(".publish-preview .publish-uptodate").WaitForAsync();
 
     [Then("the publish row for instance {string} eventually shows {string}")]
     public async Task ThenPublishRowShows(string label, string text) =>
@@ -994,7 +985,7 @@ public sealed partial class DesignerSteps
     {
         await ctx.Page!.Locator(".branch-section input.branch-name").FillAsync(name);
         await ctx.Page.Locator(".branch-section button.create-branch").ClickAsync();
-        await BranchLinkFor(name).WaitForAsync(new Microsoft.Playwright.LocatorWaitForOptions { Timeout = TestTimeouts.ActionMs });
+        await BranchLinkFor(name).WaitForAsync();
     }
 
     [Then("the Branches section lists a branch link {string}")]
@@ -1015,7 +1006,7 @@ public sealed partial class DesignerSteps
         var page = ctx.Page!;
         await page.GotoReadyAsync(ctx.DesignerUrl($"/designs/{wcId}"));
         await page.WaitForSelectorAsync("main.ide-design-edit .design-editor .type-card");
-        await page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+        await page.Locator("main.ide-design-edit .design-editor .add-type").First.WaitForAsync();
     }
 
     // Add a field to a named type: click that type-card's "+ Field", then name the just-added (empty-name)
@@ -1027,7 +1018,7 @@ public sealed partial class DesignerSteps
         await card.Locator("button.add-prop").First.ClickAsync();
         var newRow = card.Locator(".prop-row:has(input.prop-name[value=\"\"])").First;
         await newRow.Locator("input.prop-name").FillAsync(propName);
-        await ctx.Page.Locator($"main.ide-design-edit .design-editor .prop-row input.prop-name[value={CssString(propName)}]").First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page.Locator($"main.ide-design-edit .design-editor .prop-row input.prop-name[value={CssString(propName)}]").First.WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
             .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == propName));
     }
@@ -1041,7 +1032,7 @@ public sealed partial class DesignerSteps
             $"main.ide-design-edit .design-editor .type-card:has(input.type-name[value={CssString(typeName)}]) " +
             $".prop-row input.prop-name[value={CssString(from)}]");
         await input.FillAsync(to);
-        await ctx.Page.Locator($"main.ide-design-edit .design-editor .prop-row input.prop-name[value={CssString(to)}]").First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page.Locator($"main.ide-design-edit .design-editor .prop-row input.prop-name[value={CssString(to)}]").First.WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
             .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == to));
     }
@@ -1066,8 +1057,7 @@ public sealed partial class DesignerSteps
     public async Task WhenPreviewMerge(string name)
     {
         await MergeRowFor(name).Locator("button.preview-merge").ClickAsync();
-        await MergeRowFor(name).Locator(".merge-preview .merge-report").WaitForAsync(
-            new Microsoft.Playwright.LocatorWaitForOptions { Timeout = TestTimeouts.ActionMs });
+        await MergeRowFor(name).Locator(".merge-preview .merge-report").WaitForAsync();
     }
 
     [Then("the merge preview reports a clean merge")]
@@ -1203,7 +1193,7 @@ public sealed partial class DesignerSteps
     public async Task ThenEditorShowsUiText() =>
         // The design's `ui` section text is bound into the code-area <textarea> (a real multi-line
         // editor); the seeded design's UI is a custom `fn render()`, so its text contains "fn render".
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui[value*=\"fn render\"]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui[value*=\"fn render\"]").WaitForAsync();
 
 
     [When("I expand the Advanced code disclosure")]
@@ -1346,8 +1336,8 @@ public sealed partial class DesignerSteps
     {
         var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card")
             .Filter(new() { Has = ctx.Page.Locator($"input.fn-name[value={CssString(name)}]") });
-        await card.First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
-        await card.First.Locator($"input.fn-params[value={CssString(paramsText)}]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await card.First.WaitForAsync();
+        await card.First.Locator($"input.fn-params[value={CssString(paramsText)}]").WaitForAsync();
     }
 
     // Locate the fn-card by its CURRENT name input value (mirrors JustAddedTypeRow's by-value lookup).
@@ -1390,9 +1380,9 @@ public sealed partial class DesignerSteps
     {
         var locator = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row");
         if (count == 0)
-            await locator.First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached, Timeout = TestTimeouts.ActionMs });
+            await locator.First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
         else
-            await locator.Nth(count - 1).WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached, Timeout = TestTimeouts.ActionMs });
+            await locator.Nth(count - 1).WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     [Then("configuration {int} shows the {string} hint")]
@@ -1400,7 +1390,7 @@ public sealed partial class DesignerSteps
     {
         var hint = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row")
             .Nth(index).Locator(".use-name-hint");
-        await hint.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await hint.WaitForAsync();
         await Assert.That(await hint.InnerTextAsync()).Contains(hintText);
     }
 
@@ -1410,9 +1400,9 @@ public sealed partial class DesignerSteps
         var row = ConfigRow(index);
         var input = row.Locator("input.use-name");
         await input.FillAsync(name);
-        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await input.WaitForAsync();
         // Wait via locator for the row-scoped input bearing the expected value attribute.
-        await row.Locator($"input.use-name[value={CssString(name)}]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await row.Locator($"input.use-name[value={CssString(name)}]").WaitForAsync();
     }
 
     [When("I add an arg to configuration {int}")]
@@ -1432,9 +1422,9 @@ public sealed partial class DesignerSteps
         // Dispatch events to ensure any input binding listeners (for two-way value={ } on .node-attr-value) fire and update the model.
         await input.DispatchEventAsync("input");
         await input.DispatchEventAsync("change");
-        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await input.WaitForAsync();
         // Ensure the value is in the DOM for the model used by render, using locator + value attr wait.
-        await row.Locator($"input.node-attr-value[value={CssString(value)}]").Nth(argIndex).WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await row.Locator($"input.node-attr-value[value={CssString(value)}]").Nth(argIndex).WaitForAsync();
         // Force refresh of evals so the use-preview's renderTree re-computes with the current arg binding.
         var refresh = ctx.Page!.Locator("button.refresh-eval").First;
         if (await refresh.CountAsync() > 0)
@@ -1463,7 +1453,7 @@ public sealed partial class DesignerSteps
         var attr = row.Locator(".node-attr").Nth(argIndex);
         // The hint is emitted as the next sibling after its attr div when present.
         var hint = attr.Locator("xpath=following-sibling::span[contains(@class, 'attr-name-hint')]");
-        await hint.First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await hint.First.WaitForAsync();
         await Assert.That(await hint.First.InnerTextAsync()).Contains(hintText);
     }
 
@@ -1492,7 +1482,7 @@ public sealed partial class DesignerSteps
         {
             // Wait for the element inside the preview (handles static renderTree or live mount).
             var container = preview.Locator(".workbench-instance-content").Or(preview);
-            await container.Locator(tag, new() { HasTextString = text }).First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+            await container.Locator(tag, new() { HasTextString = text }).First.WaitForAsync();
         }
         catch (TimeoutException)
         {
@@ -1521,8 +1511,7 @@ public sealed partial class DesignerSteps
             $"() => {{ const rows = document.querySelectorAll('main.ide-design-edit .design-editor .components-section .fn-uses .use-row'); " +
             $"const r = rows[{index}]; if (r == null) return false; " +
             $"const preview = r.querySelector('.use-preview'); if (preview == null) return false; " +
-            $"return [...preview.querySelectorAll({JsString(tag)})].some(e => e.textContent === {JsString(text)} && !e.hasAttribute('data-node')); }}",
-            null, new Microsoft.Playwright.PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
+            $"return [...preview.querySelectorAll({JsString(tag)})].some(e => e.textContent === {JsString(text)} && !e.hasAttribute('data-node')); }}");
     }
 
     // The v1 fidelity boundary made honest (design doc): a component whose render throws shows the REAL
@@ -1532,7 +1521,7 @@ public sealed partial class DesignerSteps
     {
         var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row").Nth(index);
         var err = row.Locator(".use-preview .instance-error");
-        await err.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await err.WaitForAsync();
         await Assert.That(await err.InnerTextAsync()).Contains(message);
     }
 
@@ -1549,7 +1538,7 @@ public sealed partial class DesignerSteps
     [Then("configuration {int}'s live instance node is unchanged since marking")]
     public async Task ThenConfigurationLiveInstanceNodeUnchanged(int index) =>
         await ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row").Nth(index)
-            .Locator(".use-preview [data-test-marker='kept']").First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+            .Locator(".use-preview [data-test-marker='kept']").First.WaitForAsync();
 
     // A component that reads an AMBIENT (currentUser) — still a miss against the workbench sandbox's
     // parent-less scope even after M12 W1c seeds schema:/extent:/canWrite:/canRead: (per-use ambients are a
@@ -1780,9 +1769,9 @@ public sealed partial class DesignerSteps
         var content = LiveInstancePreview(index).Locator(".workbench-instance-content");
         var els = content.Locator(tag);
         if (count == 0)
-            await els.First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached, Timeout = TestTimeouts.ActionMs });
+            await els.First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
         else
-            await els.Nth(count - 1).WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached, Timeout = TestTimeouts.ActionMs });
+            await els.Nth(count - 1).WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     // Locate a configuration's live-instance `.use-preview` panel by GLOBAL document order — the existing
@@ -1859,11 +1848,11 @@ public sealed partial class DesignerSteps
     {
         var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card")
             .Filter(new() { Has = ctx.Page.Locator($"input.fn-name[value={CssString(fnName)}]") });
-        await card.First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await card.First.WaitForAsync();
         var varRow = card.First.Locator(".fn-vars .var-row")
             .Filter(new() { Has = ctx.Page.Locator($"input.var-name[value={CssString(varName)}]") });
-        await varRow.First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
-        await varRow.First.Locator($"input.var-init[value={CssString(init)}]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await varRow.First.WaitForAsync();
+        await varRow.First.Locator($"input.var-init[value={CssString(init)}]").WaitForAsync();
     }
 
     [When("I edit component {string}'s state var {string} init to {string}")]
@@ -1887,9 +1876,9 @@ public sealed partial class DesignerSteps
     {
         var rows = ctx.Page!.Locator("main.ide-design-edit .design-editor .design-state-section .var-row");
         if (count == 0)
-            await rows.First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached, Timeout = TestTimeouts.ActionMs });
+            await rows.First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
         else
-            await rows.Nth(count - 1).WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached, Timeout = TestTimeouts.ActionMs });
+            await rows.Nth(count - 1).WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     [When("I remove the last design-level state var")]
@@ -1908,7 +1897,7 @@ public sealed partial class DesignerSteps
     {
         var hint = ctx.Page!.Locator("main.ide-design-edit .design-editor .design-state-section .var-row")
             .Nth(index).Locator(".var-name-hint");
-        await hint.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await hint.WaitForAsync();
         await Assert.That(await hint.InnerTextAsync()).Contains(hintText);
     }
 
@@ -2005,7 +1994,7 @@ public sealed partial class DesignerSteps
     public async Task ThenNewComponentShowsReservedHint()
     {
         var hint = ctx.Page!.Locator(NewComponentCard + " span.fn-name-hint");
-        await hint.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await hint.WaitForAsync();
         await Assert.That(await hint.InnerTextAsync()).Contains("reserved");
     }
 
@@ -2015,7 +2004,7 @@ public sealed partial class DesignerSteps
 
     [Then("the new component card is gone")]
     public async Task ThenNewComponentGone() =>
-        await ctx.Page!.Locator(NewComponentCard).First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached, Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator(NewComponentCard).First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
 
     // The label-parameterized sibling of ThenProjectsValid (E2) — proves the design LABELED `label`
     // projects to a valid document, polled the same way (a staged ctx write lands over the WS
@@ -2053,7 +2042,7 @@ public sealed partial class DesignerSteps
     public async Task ThenShowsTreeEditor()
     {
         var rootTag = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree > .node-element > .node-tag-row > input.node-tag").First;
-        await rootTag.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached, Timeout = TestTimeouts.ActionMs });
+        await rootTag.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     // The tree editor renders element nodes outermost-first; the ROOT is the first .node-element, so its
@@ -2061,20 +2050,20 @@ public sealed partial class DesignerSteps
     // tag row so a nested node's input can't satisfy it.
     [Then("the tree editor's root node tag input reads {string}")]
     public async Task ThenRootTagInput(string tag) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree > .node-element > .node-tag-row > input.node-tag[value={CssString(tag)}]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree > .node-element > .node-tag-row > input.node-tag[value={CssString(tag)}]").WaitForAsync();
 
     // Recursion proof: a NESTED element (h1) must appear as its OWN .node-element nested UNDER the root's
     // .node-children — i.e. the component recursed a level deep, rendering a child element with its own tag
     // input. Assert some node-tag input inside .node-children reads the child's tag.
     [Then("the tree editor shows a nested node with tag input {string}")]
     public async Task ThenNestedTagInput(string tag) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree .node-children input.node-tag[value={CssString(tag)}]").First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree .node-children input.node-tag[value={CssString(tag)}]").First.WaitForAsync();
 
     // A LEAF node (empty tag) renders only its `expr` input. The nested h1's text child {leaf} imports as a
     // leaf whose expr source is `leaf`; assert some node-expr input reads it (proving leaves render too).
     [Then("the tree editor shows a leaf expr input reading {string}")]
     public async Task ThenLeafExprInput(string expr) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree input.node-expr[value={CssString(expr)}]").First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree input.node-expr[value={CssString(expr)}]").First.WaitForAsync();
 
     // Edit the ROOT's tag input (an ordinary two-way-bound MetaNode.tag write, like type.name): fill the
     // first .node-element's own tag input with the new value.
@@ -2114,8 +2103,7 @@ public sealed partial class DesignerSteps
     // that it landed at the END (a naive order:0 would sort it to the FRONT, ahead of the imported <h1>).
     [Then("the root node's last child is an element with tag {string}")]
     public async Task ThenRootLastChildTag(string tag) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => {{ const e = document.querySelector({JsString(RootLastChildElement + " > .node-tag-row > input.node-tag")}); return e != null && e.value === {JsString(tag)}; }}");
+        await ctx.Page!.Locator(RootLastChildElement + " > .node-tag-row > input.node-tag[value=" + CssString(tag) + "]").WaitForAsync();
 
     [When("I edit the root node's last child tag input to {string}")]
     public async Task WhenEditLastChildTag(string tag) =>
@@ -2595,8 +2583,8 @@ public sealed partial class DesignerSteps
     [Then("the tree editor shows a for row with item {string} and collection {string}")]
     public async Task ThenForRowInputs(string item, string collection)
     {
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree input.node-for-item[value={CssString(item)}]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree input.node-for-collection[value={CssString(collection)}]").WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree input.node-for-item[value={CssString(item)}]").WaitForAsync();
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree input.node-for-collection[value={CssString(collection)}]").WaitForAsync();
     }
 
     [When("I edit the for row's item input to {string}")]
@@ -2700,7 +2688,7 @@ public sealed partial class DesignerSteps
     // canvas falls to the template, but the operator's own input is UNDISTURBED — not reverted).
     [Then("the tree editor shows a for-collection input reading {string}")]
     public async Task ThenForCollectionInputReads(string collection) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree input.node-for-collection[value={CssString(collection)}]").First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree input.node-for-collection[value={CssString(collection)}]").First.WaitForAsync();
 
     // ──── M12 F3 — call-position evaluation of design fns ─────────────────────────────────────────────────────────────────────────────────
     //
@@ -2832,8 +2820,7 @@ public sealed partial class DesignerSteps
         // the row never appears (a hang, not slowness — raising this to 90s still failed 3/3). Passes
         // in isolation. Tracked as a deploy/host-spawn-starvation issue, NOT a timeout to bump.
         await ctx.Page!.WaitForSelectorAsync(
-            $"main.ide-list .set-row a.row-link:text-is({CssString(name)})",
-            new Microsoft.Playwright.PageWaitForSelectorOptions { Timeout = TestTimeouts.ActionMs });
+            $"main.ide-list .set-row a.row-link:text-is({CssString(name)})");
         // The DESIGN CELL must populate IN PLACE too — no reload. This is the load-bearing assertion:
         // the kernel mirror writes the new Instance's `design` reference AFTER adding it to the set (a GC
         // ordering constraint), so the row could momentarily render with an empty design cell; the
@@ -2841,8 +2828,7 @@ public sealed partial class DesignerSteps
         // without racing the row's first paint — if it never populates in place, this fails (a real
         // refetch-timing bug), rather than a count that might pass on a stale/empty cell.
         await ctx.Page.WaitForSelectorAsync(
-            $"main.ide-list .set-row:has(a.row-link:text-is({CssString(name)})) td:not(.row-id):text-is({CssString(designLabel)})",
-            new Microsoft.Playwright.PageWaitForSelectorOptions { Timeout = TestTimeouts.ActionMs });
+            $"main.ide-list .set-row:has(a.row-link:text-is({CssString(name)})) td:not(.row-id):text-is({CssString(designLabel)})");
     }
 
     [Then("the design dropdown has the design {string} selected")]
@@ -2947,7 +2933,7 @@ public sealed partial class DesignerSteps
         // ...and it stays gone across a fresh server render of the editor (no reappearance on reload).
         await ctx.Page!.ReloadAsync();
         await ctx.Page.WaitForSelectorAsync("main.ide-design-edit .design-editor");
-        await ctx.Page.WaitForFunctionAsync("() => typeof window.initUi !== 'undefined'");
+        await ctx.Page.Locator("main.ide-design-edit .design-editor .add-type").First.WaitForAsync();
         await Assert.That(
             await ctx.Page.Locator("main.ide-design-edit .design-editor .type-card input.type-name[value=\"\"]").CountAsync())
             .IsEqualTo(0);

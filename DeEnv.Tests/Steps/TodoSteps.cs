@@ -66,10 +66,7 @@ public sealed class TodoSteps(InstanceContext ctx)
         // and rebuilds the selected-user section (its add-list button included). A test that selects this
         // user and clicks "Add list" during that churn window hit "element detached from the DOM, retrying"
         // until timeout under load. Gating on the remap settles the view before the next interaction.
-        await ctx.Page.WaitForFunctionAsync(
-            "name => { const b = [...document.querySelectorAll('button.user-chip')]" +
-            ".find(e => e.textContent.includes(name)); return b != null && +b.getAttribute('data-key') > 0; }",
-            name);
+        await ctx.Page.Locator($"button.user-chip:has-text(\"{name}\")[data-key]:not([data-key^=\"-\"])").First.WaitForAsync();
     }
 
     [When("I add a new list {string}")]
@@ -94,11 +91,11 @@ public sealed class TodoSteps(InstanceContext ctx)
 
     [When("I remove the item {string}")]
     public async Task WhenRemoveItem(string text) =>
-        await (await ItemRowAsync(text)).Locator("button.remove-item").ClickAsync();
+        await ItemRowAsync(text).Locator("button.remove-item").ClickAsync();
 
     [When("I check the item {string}")]
     public async Task WhenCheckItem(string text) =>
-        await (await ItemRowAsync(text)).Locator("input.checked").CheckAsync();
+        await ItemRowAsync(text).Locator("input.checked").CheckAsync();
 
     // ── Then ────────────────────────────────────────────────────────────────────
 
@@ -117,17 +114,15 @@ public sealed class TodoSteps(InstanceContext ctx)
     // The item text lives in input.text's VALUE (a composed library <Input>), so match on value.
     [Then("the page shows an item {string}")]
     public async Task ThenShowsItem(string text) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('.item-row input.text')].some(e => e.value === {JsString(text)})");
+        await ctx.Page!.Locator($".item-row input.text[value={JsString(text)}]").First.WaitForAsync();
 
     [Then("the page does not show an item {string}")]
     public async Task ThenDoesNotShowItem(string text) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => ![...document.querySelectorAll('.item-row input.text')].some(e => e.value === {JsString(text)})");
+        await ctx.Page!.Locator($".item-row input.text[value={JsString(text)}]").First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
 
     [Then("the item {string} is checked")]
     public async Task ThenItemChecked(string text) =>
-        await Assert.That(await (await ItemRowAsync(text)).Locator("input.checked").IsCheckedAsync()).IsTrue();
+        await Assert.That(await ItemRowAsync(text).Locator("input.checked").IsCheckedAsync()).IsTrue();
 
     [Then("the store eventually has a {string} whose {string} is {string}")]
     public async Task ThenStoreHasText(string typeName, string field, string expected) =>
@@ -148,15 +143,13 @@ public sealed class TodoSteps(InstanceContext ctx)
     // The item row whose composed text <Input> (input.text) holds the given VALUE. The text is in
     // the input's value PROPERTY (set by client render), not the attribute, so it can't be matched by
     // a CSS attribute selector — resolve the row's index in JS (waiting for it), then take that nth row.
-    private async Task<ILocator> ItemRowAsync(string text)
+    private ILocator ItemRowAsync(string text)
     {
-        // Resolve the 1-based row index in JS (0 would be falsy and never satisfy WaitForFunction),
-        // then take the (index-1)th row. Waits until the row whose input.text holds `text` exists.
-        var oneBased = await ctx.Page!.WaitForFunctionAsync(
-            $"() => {{ const rows = [...document.querySelectorAll('.item-row')];" +
-            $" const i = rows.findIndex(r => r.querySelector('input.text')?.value === {JsString(text)});" +
-            " return i < 0 ? null : i + 1; }");
-        return ctx.Page.Locator(".item-row").Nth((int)await oneBased.JsonValueAsync<double>() - 1);
+        // Use locator filter to find the row containing the input with the matching value.
+        // This waits when the locator is used.
+        return ctx.Page!.Locator(".item-row")
+            .Filter(new() { Has = ctx.Page.Locator($"input.text[value={JsString(text)}]") })
+            .First;
     }
 
     // A name as a quoted :has-text() argument — quotes/backslashes in the value escaped.

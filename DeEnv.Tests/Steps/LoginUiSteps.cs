@@ -135,8 +135,7 @@ public sealed class LoginUiSteps(InstanceContext ctx)
     public async Task ThenEventuallyAppears(string text)
     {
         await ctx.Page!.WaitForFunctionAsync(
-            "t => document.body.innerText.includes(t)", text,
-            new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
+            "t => document.body.innerText.includes(t)", text);
     }
 
     // A wrong password now surfaces on the SAME global rejection banner (uiStatic.lastError, id="__error")
@@ -218,10 +217,8 @@ public sealed class LoginUiSteps(InstanceContext ctx)
         await ctx.Page.Locator(".create-form select.role").SelectOptionAsync(role);
         await ctx.Page.Locator(".create-form button.create-save").ClickAsync();
         await ctx.Page.Locator($".set-row:has-text(\"{name}\")").WaitForAsync();
-        await ctx.Page.WaitForFunctionAsync(
-            "name => { const r = [...document.querySelectorAll('.set-row')]" +
-            ".find(e => e.textContent.includes(name)); return r != null && +r.getAttribute('data-key') > 0; }",
-            name);
+        // Positive data-key after remap (negative keys start with -).
+        await ctx.Page.Locator($".set-row:has-text(\"{name}\")[data-key]:not([data-key^=\"-\"])").First.WaitForAsync();
     }
 
     // Create a User with name + role + PASSWORD in ONE create-form submit (the M-auth `password` type makes
@@ -236,10 +233,8 @@ public sealed class LoginUiSteps(InstanceContext ctx)
         await ctx.Page.Locator(".create-form input.password").FillAsync(password);
         await ctx.Page.Locator(".create-form button.create-save").ClickAsync();
         await ctx.Page.Locator($".set-row:has-text(\"{name}\")").WaitForAsync();
-        await ctx.Page.WaitForFunctionAsync(
-            "name => { const r = [...document.querySelectorAll('.set-row')]" +
-            ".find(e => e.textContent.includes(name)); return r != null && +r.getAttribute('data-key') > 0; }",
-            name);
+        // Positive data-key after remap (negative keys start with -).
+        await ctx.Page.Locator($".set-row:has-text(\"{name}\")[data-key]:not([data-key^=\"-\"])").First.WaitForAsync();
         // Gate on the hash actually persisting (the create's add + the password write are both async).
         await Polling.EventuallyAsync(() => ctx.Store!.ReadExtent("User").Values.Any(u =>
             u.Fields.TryGetValue("name", out var n) && n is TextValue { Text: var nm } && nm == name

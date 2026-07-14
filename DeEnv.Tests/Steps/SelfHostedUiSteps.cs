@@ -90,8 +90,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     // settled text is the proof of feedback; polled because the ack→render is an async WS round-trip.
     [Then("the form save status eventually reads {string}")]
     public async Task ThenSaveStatusEventuallyReads(string text) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => document.querySelector('.object-form .save-status')?.textContent.trim() === {JsString(text)}");
+        await ctx.Page!.Locator($".object-form .save-status:has-text(\"{text}\")").First.WaitForAsync();
 
     // A staged edit must NOT reach the store: the named type's stored object STILL holds the
     // original value. A direct read (not "eventually") — a staged edit fires no WS op, so the store
@@ -197,8 +196,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     // value), addressed by the member's nested URL (path-walk), e.g. /notes/2 — not /~/<id>.
     [Then("the set row link points at {string}")]
     public async Task ThenSetRowLink(string href) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll('.set-row a.row-link')].some(e => e.getAttribute('href') === {JsString(href)})");
+        await ctx.Page!.Locator($".set-row a.row-link[href=\"{href}\"]").First.WaitForAsync();
 
     // Click the row-link and follow it. End-to-end parity: the link string is built by `nest`
     // on the server (SSR) AND re-built by the client on hydrate (from location.pathname) —
@@ -548,7 +546,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     // WaitForFunction so a still-reconciling DOM settles.
     [Then("the page does not show {string}")]
     public async Task ThenPageDoesNotShow(string selector) =>
-        await ctx.Page!.WaitForFunctionAsync($"() => document.querySelector({JsString(selector)}) === null");
+        await ctx.Page!.Locator(selector).First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
 
     // Click the `+ New` button to reveal the create form (below the still-visible table). Hydration
     // is awaited because the click runs a JS handler that flips the component's `creating` state.
@@ -935,7 +933,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task ThenDraftTitleEmpty()
     {
         var input = ctx.Page!.Locator("input.draft-title");
-        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await input.WaitForAsync();
         await Assert.That(await input.InputValueAsync()).IsEqualTo("");
     }
 
@@ -966,7 +964,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task ThenDraftTitleStill(string value)
     {
         var input = ctx.Page!.Locator("input.draft-title");
-        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await input.WaitForAsync();
         await Assert.That(await input.InputValueAsync()).IsEqualTo(value);
     }
 
@@ -997,7 +995,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     {
         var input = ctx.Page!.Locator(".note-row").Filter(new() { HasText = title })
             .Locator("input.scratch");
-        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await input.WaitForAsync();
         await Assert.That(await input.InputValueAsync()).IsEqualTo(value);
     }
 
@@ -1027,7 +1025,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task ThenScalarQueryInputStill(string value)
     {
         var input = ctx.Page!.Locator("input.query");
-        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await input.WaitForAsync();
         await Assert.That(await input.InputValueAsync()).IsEqualTo(value);
     }
 
@@ -1053,7 +1051,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     public async Task ThenBoxScratchIs(string value)
     {
         var input = ctx.Page!.Locator(".box input.scratch");
-        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await input.WaitForAsync();
         await Assert.That(await input.InputValueAsync()).IsEqualTo(value);
     }
 

@@ -90,7 +90,7 @@ public sealed class NavigationSteps(InstanceContext ctx)
     public async Task ThenFormForAsync(string typeName) =>
         await ctx.Page!.Locator(".object-form h2, form h2")
             .Filter(new() { HasTextString = typeName })
-            .WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+            .WaitForAsync();
 
     // Matches: And the "customers" field renders as a table
     [Then(@"the {string} field renders as a table")]
@@ -105,7 +105,7 @@ public sealed class NavigationSteps(InstanceContext ctx)
     public async Task ThenFieldShowsAsync(string fieldName, string expected)
     {
         var input = ctx.Page!.Locator($"input.{fieldName}, textarea.{fieldName}, select.{fieldName}").First;
-        await input.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached, Timeout = TestTimeouts.ActionMs });
+        await input.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
         await Assert.That(await input.InputValueAsync()).IsEqualTo(expected);
     }
 
@@ -114,7 +114,7 @@ public sealed class NavigationSteps(InstanceContext ctx)
     public async Task ThenFieldCheckedAsync(string fieldName)
     {
         var cb = ctx.Page!.Locator($"input.{fieldName}").First;
-        await cb.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached, Timeout = TestTimeouts.ActionMs });
+        await cb.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
         await Assert.That(await cb.IsCheckedAsync()).IsTrue();
     }
 

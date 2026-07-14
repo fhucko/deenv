@@ -81,7 +81,7 @@ public sealed class ClientDataLayerSteps(InstanceContext ctx)
         try
         {
             await ctx.Page!.Locator(".gated-row", new() { HasTextString = title })
-                .First.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+                .First.WaitForAsync();
         }
         catch (TimeoutException)
         {
@@ -150,7 +150,7 @@ public sealed class ClientDataLayerSteps(InstanceContext ctx)
         try
         {
             var counter = ctx.Page!.Locator(".counter-a");
-            await counter.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+            await counter.WaitForAsync();
             await Assert.That(await counter.InnerTextAsync()).IsEqualTo(value.ToString());
         }
         catch (TimeoutException)
@@ -218,7 +218,7 @@ public sealed class ClientDataLayerSteps(InstanceContext ctx)
         var ownAction = RowByName(ctx.Page!, name).Locator(".menu-body").Locator(selector);
         try
         {
-            await ownAction.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Attached, Timeout = TestTimeouts.ActionMs });
+            await ownAction.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Attached });
         }
         catch (TimeoutException)
         {

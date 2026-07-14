@@ -357,7 +357,7 @@ public sealed class DataConflictSteps(InstanceContext ctx)
     [Then("conflict session 2 sees the conflict banner naming {string}")]
     public async Task ThenS2SeesBanner(string field)
     {
-        await ctx.Page2!.Locator(".conflict-bar").WaitForAsync(new LocatorWaitForOptions { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page2!.Locator(".conflict-bar").WaitForAsync();
         var text = await ctx.Page2.Locator(".conflict-bar").InnerTextAsync();
         // The banner humanizes the field label ("title" → "Title"); match case-insensitively.
         await Assert.That(text.Contains(field, StringComparison.OrdinalIgnoreCase)).IsTrue();
@@ -370,12 +370,12 @@ public sealed class DataConflictSteps(InstanceContext ctx)
     [Then("conflict session 2's conflict bar shows theirs value {string}")]
     public async Task ThenS2BarShowsTheirs(string expected) =>
         await ctx.Page2!.Locator(".conflict-theirs", new PageLocatorOptions { HasTextString = expected })
-            .WaitForAsync(new LocatorWaitForOptions { Timeout = TestTimeouts.ActionMs });
+            .WaitForAsync();
 
     [Then("conflict session 2's conflict bar shows mine value {string}")]
     public async Task ThenS2BarShowsMine(string expected) =>
         await ctx.Page2!.Locator(".conflict-mine", new PageLocatorOptions { HasTextString = expected })
-            .WaitForAsync(new LocatorWaitForOptions { Timeout = TestTimeouts.ActionMs });
+            .WaitForAsync();
 
     // B5 disambiguation: the collisions are grouped BY OBJECT under a labeled header (typeName + " #" + id),
     // so two objects render as two distinguishable groups (not a flat "field, field" list). The single-object
@@ -384,7 +384,7 @@ public sealed class DataConflictSteps(InstanceContext ctx)
     [Then("conflict session 2's conflict bar group is labeled for note {int}")]
     public async Task ThenS2GroupLabeled(int id) =>
         await ctx.Page2!.Locator(".conflict-group-label", new PageLocatorOptions { HasTextString = "Note #" + id })
-            .WaitForAsync(new LocatorWaitForOptions { Timeout = TestTimeouts.ActionMs });
+            .WaitForAsync();
 
     [When("conflict session 2 clicks Take theirs")]
     public async Task WhenS2TakeTheirs() => await ctx.Page2!.Locator("button.conflict-take").ClickAsync();
@@ -394,7 +394,7 @@ public sealed class DataConflictSteps(InstanceContext ctx)
     {
         await ctx.Page2!.Locator("button.conflict-keep").ClickAsync();
         // Wait for the force re-commit to resolve (banner clears) before the store assertion + shot.
-        await ctx.Page2.Locator(".conflict-bar").WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Detached, Timeout = TestTimeouts.ActionMs });
+        await ctx.Page2.Locator(".conflict-bar").WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Detached });
         await Shot("keep-mine");
     }
 
@@ -402,14 +402,14 @@ public sealed class DataConflictSteps(InstanceContext ctx)
     public async Task ThenS2TitleShows(string expected)
     {
         var input = ctx.Page2!.Locator("input.title");
-        await input.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await input.WaitForAsync();
         await Assert.That(await input.InputValueAsync()).IsEqualTo(expected);
         await Shot("take-theirs");
     }
 
     [Then("conflict session 2's conflict banner is gone")]
     public async Task ThenS2BannerGone() =>
-        await ctx.Page2!.Locator(".conflict-bar").WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Detached, Timeout = TestTimeouts.ActionMs });
+        await ctx.Page2!.Locator(".conflict-bar").WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Detached });
 
     // Three-lens review fix 1: the GLOBAL banner (#__error) is a separate DOM element from the coarse
     // .conflict-bar (ThenS2BannerGone above) — both must clear on resolution, or the rejection notice
@@ -417,14 +417,14 @@ public sealed class DataConflictSteps(InstanceContext ctx)
     // mine forces the overwrite). Asserted as its OWN step so a regression that clears only one is caught.
     [Then("conflict session 2's global error banner is gone")]
     public async Task ThenS2GlobalErrorBannerGone() =>
-        await ctx.Page2!.Locator("#__error").WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Detached, Timeout = TestTimeouts.ActionMs });
+        await ctx.Page2!.Locator("#__error").WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Detached });
 
     // Three-lens review fix 4b: Take theirs' transient confirmation (symmetric to Keep-mine's implicit
     // "Saved" via the commit-ack lifecycle), surfaced through the SAME save-status span as ctx.status.
     [Then("conflict session 2 sees the {string} confirmation")]
     public async Task ThenS2SeesConfirmation(string text) =>
         await ctx.Page2!.Locator(".save-status", new PageLocatorOptions { HasTextString = text })
-            .WaitForAsync(new LocatorWaitForOptions { Timeout = TestTimeouts.ActionMs });
+            .WaitForAsync();
 
     // Three-lens review fix 2: while ctx.conflicts is non-empty the form-actions Save/Discard row (which
     // includes button.save) must not render at all — the bar's two buttons ARE the complete decision set,
@@ -439,7 +439,7 @@ public sealed class DataConflictSteps(InstanceContext ctx)
 
     [Then("conflict session 2's Save button is visible again")]
     public async Task ThenS2SaveButtonVisible() =>
-        await ctx.Page2!.Locator(".object-form button.save").WaitForAsync(new LocatorWaitForOptions { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page2!.Locator(".object-form button.save").WaitForAsync();
 
     // Capture a screenshot of session 2's page for the UI-verification artifact — gated on DEENV_SHOTS so it
     // is OFF in normal runs (no cost/files) and ON only for the mandatory screenshot capture pass. Two

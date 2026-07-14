@@ -96,12 +96,12 @@ public sealed class ConcurrencySteps(InstanceContext ctx)
     // once a resolver surfaces the conflict, so the ConflictBar is now the client-side reject surface.)
     [Then("session 2's save is rejected")]
     public async Task ThenSession2Rejected() =>
-        await ctx.Page2!.Locator(".conflict-bar").WaitForAsync(new LocatorWaitForOptions { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page2!.Locator(".conflict-bar").WaitForAsync();
 
     [Then("session 2 sees the in-form conflict bar naming {string}")]
     public async Task ThenSession2SeesConflictBar(string field)
     {
-        await ctx.Page2!.Locator(".conflict-bar").WaitForAsync(new LocatorWaitForOptions { Timeout = TestTimeouts.ActionMs });
+        await ctx.Page2!.Locator(".conflict-bar").WaitForAsync();
         var text = await ctx.Page2.Locator(".conflict-bar").InnerTextAsync();
         await Assert.That(text.Contains(field, StringComparison.OrdinalIgnoreCase)).IsTrue();
     }
@@ -111,7 +111,7 @@ public sealed class ConcurrencySteps(InstanceContext ctx)
     [Then("session 2 shows no global error banner")]
     public async Task ThenSession2NoGlobalBanner() =>
         await ctx.Page2!.Locator("#__error").WaitForAsync(
-            new LocatorWaitForOptions { State = WaitForSelectorState.Detached, Timeout = TestTimeouts.ActionMs });
+            new LocatorWaitForOptions { State = WaitForSelectorState.Detached });
 
     // ── (b)/(c) WsHandler-level, two (or one, twice) sessions ───────────────────
 

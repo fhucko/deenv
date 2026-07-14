@@ -137,7 +137,7 @@ public sealed class CrmSteps(InstanceContext ctx)
         // The self-hosted dict table shows a non-empty .dict-error when an add is rejected
         // (e.g. a duplicate key). The reactive re-render fills it after the Add click.
         var err = ctx.Page!.Locator(".dict-error");
-        await err.WaitForAsync(new() { Timeout = TestTimeouts.ActionMs });
+        await err.WaitForAsync();
         await Assert.That((await err.InnerTextAsync()).Trim().Length).IsGreaterThan(0);
     }
 }

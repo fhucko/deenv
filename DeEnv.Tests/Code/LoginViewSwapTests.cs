@@ -76,8 +76,7 @@ public sealed class LoginViewSwapTests
             try
             {
                 await page.WaitForFunctionAsync(
-                    "() => !!document.querySelector('#app .object-form') && !document.querySelector('#app .login-form')",
-                    null, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
+                    "() => !!document.querySelector('#app .object-form') && !document.querySelector('#app .login-form')");
             }
             catch (TimeoutException)
             {
@@ -89,8 +88,7 @@ public sealed class LoginViewSwapTests
             // The ruled data is now readable (the refetch ran as the admin), confirming the swap landed on
             // the real authoritative view, not an empty shell.
             await page.WaitForFunctionAsync(
-                "() => document.body.innerText.includes('Gate #3')",
-                null, new PageWaitForFunctionOptions { Timeout = TestTimeouts.ActionMs });
+                "() => document.body.innerText.includes('Gate #3')");
         }
         finally
         {
