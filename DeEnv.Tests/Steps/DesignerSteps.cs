@@ -58,28 +58,42 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
     }
 
     private Microsoft.Playwright.ILocator RowFor(string label) =>
-        ctx.Page!.Locator($"main.ide-list .set-row:has(a.row-link:text-is({CssString(label)}))");
+        ctx.Page!.Locator("main.ide-list .set-row", new() {
+            Has = ctx.Page.Locator("a.row-link", new() { HasTextString = label })
+        });
 
     private Microsoft.Playwright.ILocator DesignRowFor(string label) =>
-        ctx.Page!.Locator($".set-row:has(a.row-link:text-is({CssString(label)}))");
+        ctx.Page!.Locator(".set-row", new() {
+            Has = ctx.Page.Locator("a.row-link", new() { HasTextString = label })
+        });
 
     private Microsoft.Playwright.ILocator TypeNameInput(string name) =>
         ctx.Page!.Locator($"main.ide-design-edit .design-editor .type-card input.type-name[value={CssString(name)}]");
 
     private Microsoft.Playwright.ILocator JustAddedTypeRow() =>
-        ctx.Page!.Locator($"main.ide-design-edit .design-editor .type-card:has(input.type-name[value={CssString(_justAddedTypeName)}])");
+        ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {
+            Has = ctx.Page.Locator($"input.type-name[value={CssString(_justAddedTypeName)}]")
+        });
 
     private Microsoft.Playwright.ILocator PropTypeSelect(string propName) =>
-        ctx.Page!.Locator($"main.ide-design-edit .design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) select.prop-type");
+        ctx.Page!.Locator("main.ide-design-edit .design-editor .prop-row", new() {
+            Has = ctx.Page.Locator($"input.prop-name[value={CssString(propName)}]")
+        }).Locator("select.prop-type");
 
     private Microsoft.Playwright.ILocator PropCardinalitySelect(string propName) =>
-        ctx.Page!.Locator($"main.ide-design-edit .design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) select.prop-cardinality");
+        ctx.Page!.Locator("main.ide-design-edit .design-editor .prop-row", new() {
+            Has = ctx.Page.Locator($"input.prop-name[value={CssString(propName)}]")
+        }).Locator("select.prop-cardinality");
 
     private Microsoft.Playwright.ILocator PropKeytypeInput(string propName) =>
-        ctx.Page!.Locator($"main.ide-design-edit .design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) input.prop-keytype");
+        ctx.Page!.Locator("main.ide-design-edit .design-editor .prop-row", new() {
+            Has = ctx.Page.Locator($"input.prop-name[value={CssString(propName)}]")
+        }).Locator("input.prop-keytype");
 
     private Microsoft.Playwright.ILocator PropMultilineInput(string propName) =>
-        ctx.Page!.Locator($"main.ide-design-edit .design-editor .prop-row:has(input.prop-name[value={CssString(propName)}]) input.prop-multiline");
+        ctx.Page!.Locator("main.ide-design-edit .design-editor .prop-row", new() {
+            Has = ctx.Page.Locator($"input.prop-name[value={CssString(propName)}]")
+        }).Locator("input.prop-multiline");
 
     private static readonly Microsoft.Playwright.LocatorWaitForOptions Hidden =
         new() { State = Microsoft.Playwright.WaitForSelectorState.Hidden };

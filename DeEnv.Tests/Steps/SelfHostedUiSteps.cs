@@ -90,7 +90,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     // settled text is the proof of feedback; polled because the ack→render is an async WS round-trip.
     [Then("the form save status eventually reads {string}")]
     public async Task ThenSaveStatusEventuallyReads(string text) =>
-        await ctx.Page!.Locator($".object-form .save-status:has-text(\"{text}\")").First.WaitForAsync();
+        await ctx.Page!.Locator(".object-form .save-status", new() { HasTextString = text }).First.WaitForAsync();
 
     // A staged edit must NOT reach the store: the named type's stored object STILL holds the
     // original value. A direct read (not "eventually") — a staged edit fires no WS op, so the store
@@ -615,16 +615,16 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
     [Then("the {string} list title is not a link")]
     public async Task ThenListTitleIsNotALink(string title)
     {
-        await ctx.Page!.WaitForSelectorAsync($".list-title:text-is('{title}')");
-        var linkCount = await ctx.Page.Locator($"a.list-title:text-is('{title}')").CountAsync();
+        await ctx.Page!.Locator(".list-title", new() { HasTextString = title }).WaitForAsync();
+        var linkCount = await ctx.Page.Locator("a.list-title", new() { HasTextString = title }).CountAsync();
         await Assert.That(linkCount).IsEqualTo(0);
     }
 
     [Then("the {string} row title is not a link")]
     public async Task ThenRowTitleIsNotALink(string title)
     {
-        await ctx.Page!.WaitForSelectorAsync($".row-link:text-is('{title}')");
-        var linkCount = await ctx.Page.Locator($"a.row-link:text-is('{title}')").CountAsync();
+        await ctx.Page!.Locator(".row-link", new() { HasTextString = title }).WaitForAsync();
+        var linkCount = await ctx.Page.Locator("a.row-link", new() { HasTextString = title }).CountAsync();
         await Assert.That(linkCount).IsEqualTo(0);
     }
 

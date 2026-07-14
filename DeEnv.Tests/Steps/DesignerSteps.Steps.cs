@@ -109,12 +109,12 @@ public sealed partial class DesignerSteps
         await ctx.Page.Locator("main.ide-designs .create-form button.create-save").ClickAsync();
         // Confirm the new row shows in the list (the race-free client re-render). The list renders via
         // the generic <SetTable>, so a row is .set-row and the label is the stretched a.row-link.
-        await ctx.Page.WaitForSelectorAsync(
-            $".set-row:has(a.row-link:text-is({CssString(label)}))");
+        var newDesignRow = ctx.Page.Locator(".set-row", new() {
+            Has = ctx.Page.Locator("a.row-link", new() { HasTextString = label })
+        });
+        await newDesignRow.WaitForAsync();
         // Wait for the remapped positive id on the Edit link (negative ids start with -).
-        await ctx.Page.Locator(
-            $".set-row:has(a.row-link:text-is({CssString(label)})) a.edit-design[href^=\"/designs/\"]:not([href^=\"/designs/-\"])"
-        ).WaitForAsync();
+        await newDesignRow.Locator("a.edit-design[href^=\"/designs/\"]:not([href^=\"/designs/-\"])").WaitForAsync();
     }
 
     [When("I create an instance named {string} from the design {string}")]
@@ -268,10 +268,13 @@ public sealed partial class DesignerSteps
     public async Task WhenNameJustAddedType(string name)
     {
         _justAddedTypeName = name;
-        var emptyInput = ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"]) input.type-name").First;
+        var typeCardWithEmptyName = ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {
+            Has = ctx.Page.Locator("input.type-name[value=\"\"]")
+        });
+        var emptyInput = typeCardWithEmptyName.Locator("input.type-name").First;
         await emptyInput.FillAsync(name);
         // Wait for the just-filled input's card to no longer be the "empty name" one (the re-render reflects the name).
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"])").First
+        await typeCardWithEmptyName.First
             .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
         await TypeNameInput(name).WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Values
@@ -310,8 +313,10 @@ public sealed partial class DesignerSteps
     [When("I add a type to the design")]
     public async Task WhenAddType()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.add-type:has-text(\"+ Type\")").First.ClickAsync();
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"])").First.WaitForAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.add-type", new() { HasTextString = "+ Type" }).First.ClickAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {
+            Has = ctx.Page.Locator("input.type-name[value=\"\"]")
+        }).First.WaitForAsync();
     }
 
     [When("I remove the just-added unnamed type")]
@@ -319,8 +324,9 @@ public sealed partial class DesignerSteps
         // The just-added row is the one whose type-name input is still empty (the client mirrors the model
         // name into the `value` attribute, so the attribute selector matches it). Clicking ITS Remove type
         // button drives arrayRemove on the nested types set -- the path that runs the store's GC.
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card:has(input.type-name[value=\"\"]) button.remove-type").First
-            .ClickAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {
+            Has = ctx.Page.Locator("input.type-name[value=\"\"]")
+        }).Locator("button.remove-type").First.ClickAsync();
 
     // ──── When: the instance selector (on /instances/<id>) ─────────────────────────────────────────────────
 
@@ -565,7 +571,7 @@ public sealed partial class DesignerSteps
     [Then("the design {string} is still listed")]
     public async Task ThenStillListed(string label) =>
         // Clicking the plain Delete (and Cancel) must NOT remove the design — only Yes does.
-        await Assert.That(await ctx.Page!.Locator($".set-row a.row-link:text-is({CssString(label)})").CountAsync())
+        await Assert.That(await ctx.Page!.Locator(".set-row a.row-link", new() { HasTextString = label }).CountAsync())
             .IsGreaterThanOrEqualTo(1);
 
     [Then("the designs list eventually drops the design {string}")]
@@ -573,8 +579,9 @@ public sealed partial class DesignerSteps
     {
         // Yes runs db.designs.remove(d) — the row disappears client-side (the re-render), and the WS persist
         // commits it to the designer's sovereign store (GC included). Confirm both: the row leaves the DOM…
-        await ctx.Page!.Locator($".set-row:has(a.row-link:text-is({CssString(label)}))")
-            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+        await ctx.Page!.Locator(".set-row", new() {
+            Has = ctx.Page.Locator("a.row-link", new() { HasTextString = label })
+        }).WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
         // …and the design is gone from the store (no Design object with that label survives).
         await EventuallyAsync(() => !_designer.Store.ReadExtent("Design").Values
             .Any(o => o.Fields.TryGetValue("label", out var v) && v is DeEnv.Storage.TextValue t && t.Text == label));
@@ -661,13 +668,13 @@ public sealed partial class DesignerSteps
     // poll, no fixed sleep.
     [Then("the last-commit line eventually shows message {string}")]
     public async Task ThenLastCommitLineShowsMessage(string message) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor p.last-commit:has-text({CssString("\"" + message + "\"")})").WaitForAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor p.last-commit", new() { HasTextString = "\"" + message + "\"" }).WaitForAsync();
 
     // The bare-text variant (no quote-wrapping) — used for the "(no message)" placeholder, which the
     // Code renders WITHOUT the quote marks (only a real message gets wrapped in quotes).
     [Then("the last-commit line eventually shows {string}")]
     public async Task ThenLastCommitLineShowsText(string text) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor p.last-commit:has-text({CssString(text)})").WaitForAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor p.last-commit", new() { HasTextString = text }).WaitForAsync();
 
     [Then("the global error banner is shown mentioning {string}")]
     public async Task ThenGlobalErrorBannerMentioning(string phrase)
@@ -725,14 +732,14 @@ public sealed partial class DesignerSteps
     // order, now driven by commitsPage's orderBy descending on logSeq) carries the given message.
     [Then("the commit history's first row has message {string}")]
     public async Task ThenCommitHistoryFirstRowHasMessage(string message) =>
-        await ctx.Page!.Locator($"main.ide-commits .set-row:has-text({CssString(message)})").First.WaitForAsync();
+        await ctx.Page!.Locator("main.ide-commits .set-row", new() { HasTextString = message }).First.WaitForAsync();
 
     // B1: a history row is now a real link (linked restored) — clicking it navigates client-side to the
     // commit-detail page (/commits/<id>). Locate the row by its message and click its row-link.
     [When("I open the commit {string} from the history")]
     public async Task WhenOpenCommitFromHistory(string message)
     {
-        await ctx.Page!.Locator($"main.ide-commits .set-row a.row-link:text-is({CssString(message)})").ClickAsync();
+        await ctx.Page!.Locator("main.ide-commits .set-row a.row-link", new() { HasTextString = message }).ClickAsync();
         await ctx.Page.WaitForSelectorAsync("main.ide-commit-detail");
     }
 
@@ -762,7 +769,9 @@ public sealed partial class DesignerSteps
 
     [Then("the commit detail page shows author {string}")]
     public async Task ThenCommitDetailShowsAuthor(string author) =>
-        await ctx.Page!.Locator($"main.ide-commit-detail .commit-field:has(.field-label:text-is({CssString("By")})) .field-value:text-is({CssString(author)})").WaitForAsync();
+        await ctx.Page!.Locator("main.ide-commit-detail .commit-field", new() {
+            Has = ctx.Page.Locator(".field-label", new() { HasTextString = "By" })
+        }).Locator(".field-value", new() { HasTextString = author }).WaitForAsync();
 
     // Review fix 5 — the textarea→commitDesign→detail round-trip. The Migration input lives inside a
     // collapsed-by-default <details class="commit-migration">; click its <summary> to expand before
@@ -813,8 +822,11 @@ public sealed partial class DesignerSteps
     public async Task WhenRemoveField(string propName, string typeName)
     {
         var row = ctx.Page!.Locator(
-            $"main.ide-design-edit .design-editor .type-card:has(input.type-name[value={CssString(typeName)}]) " +
-            $".prop-row:has(input.prop-name[value={CssString(propName)}])");
+            "main.ide-design-edit .design-editor .type-card", new() {
+                Has = ctx.Page.Locator($"input.type-name[value={CssString(typeName)}]")
+            }).Locator(".prop-row", new() {
+                Has = ctx.Page.Locator($"input.prop-name[value={CssString(propName)}]")
+            });
         await row.Locator("button.remove-prop").ClickAsync();
         // The row disappears from the DOM (the prop is gone client-side)…
         await row.WaitForAsync(Hidden);
@@ -836,11 +848,11 @@ public sealed partial class DesignerSteps
     // The dry-run report must surface a removal in the LOUD destructive class (.publish-remove — red).
     [Then("the publish preview flags {string} as removed loudly")]
     public async Task ThenPreviewFlagsRemoved(string path) =>
-        await PublishRowFor("todo").Locator($".publish-preview .publish-remove:has-text({CssString(path)})").WaitForAsync();
+        await PublishRowFor("todo").Locator(".publish-preview .publish-remove", new() { HasTextString = path }).WaitForAsync();
 
     [Then("the publish preview asks me to commit before publishing")]
     public async Task ThenPreviewAsksCommitFirst() =>
-        await ctx.Page!.Locator(".publish-preview .publish-blocked:has-text(\"commit before publishing\")").WaitForAsync();
+        await ctx.Page!.Locator(".publish-preview .publish-blocked", new() { HasTextString = "commit before publishing" }).WaitForAsync();
 
     [Then("the publish preview for the instance {string} shows no Apply button")]
     public async Task ThenPreviewShowsNoApply(string label) =>
@@ -857,7 +869,7 @@ public sealed partial class DesignerSteps
 
     [Then("the publish preview shows a rename from {string} to {string}")]
     public async Task ThenPreviewShowsRename(string from, string to) =>
-        await PublishRowFor("todo").Locator($".publish-preview .publish-rename:has-text({CssString(from + " → " + to)})").WaitForAsync();
+        await PublishRowFor("todo").Locator(".publish-preview .publish-rename", new() { HasTextString = from + " → " + to }).WaitForAsync();
 
     // The preview→apply CONSISTENCY GUARD (addendum): bump the TARGET's own live store version by a direct
     // field write (through the live hosted store — never a second store over its file), simulating "the
@@ -941,7 +953,7 @@ public sealed partial class DesignerSteps
 
     [Then("the publish row for instance {string} eventually shows {string}")]
     public async Task ThenPublishRowShows(string label, string text) =>
-        await ctx.Page!.Locator($".publish-section .last-publish:has-text({CssString(text)})").WaitForAsync();
+        await ctx.Page!.Locator(".publish-section .last-publish", new() { HasTextString = text }).WaitForAsync();
 
     // Seed a TodoItem into the LIVE target instance's store (never a second store over its file — the
     // single-store invariant): create the item and add it into the existing TodoList's `items` set.
@@ -1014,9 +1026,13 @@ public sealed partial class DesignerSteps
     [When("I add a field {string} to the type {string}")]
     public async Task WhenAddField(string propName, string typeName)
     {
-        var card = ctx.Page!.Locator($"main.ide-design-edit .design-editor .type-card:has(input.type-name[value={CssString(typeName)}])").First;
+        var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {
+            Has = ctx.Page.Locator($"input.type-name[value={CssString(typeName)}]")
+        }).First;
         await card.Locator("button.add-prop").First.ClickAsync();
-        var newRow = card.Locator(".prop-row:has(input.prop-name[value=\"\"])").First;
+        var newRow = card.Locator(".prop-row", new() {
+            Has = ctx.Page.Locator("input.prop-name[value=\"\"]")
+        }).First;
         await newRow.Locator("input.prop-name").FillAsync(propName);
         await ctx.Page.Locator($"main.ide-design-edit .design-editor .prop-row input.prop-name[value={CssString(propName)}]").First.WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
@@ -1028,11 +1044,16 @@ public sealed partial class DesignerSteps
     [When("I rename the prop {string} to {string} on the type {string}")]
     public async Task WhenRenameProp(string from, string to, string typeName)
     {
-        var input = ctx.Page!.Locator(
-            $"main.ide-design-edit .design-editor .type-card:has(input.type-name[value={CssString(typeName)}]) " +
-            $".prop-row input.prop-name[value={CssString(from)}]");
+        var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {
+            Has = ctx.Page.Locator($"input.type-name[value={CssString(typeName)}]")
+        });
+        var input = card.Locator(".prop-row", new() {
+            Has = ctx.Page.Locator($"input.prop-name[value={CssString(from)}]")
+        }).Locator("input.prop-name");
         await input.FillAsync(to);
-        await ctx.Page.Locator($"main.ide-design-edit .design-editor .prop-row input.prop-name[value={CssString(to)}]").First.WaitForAsync();
+        await card.Locator(".prop-row", new() {
+            Has = ctx.Page.Locator($"input.prop-name[value={CssString(to)}]")
+        }).Locator("input.prop-name").First.WaitForAsync();
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
             .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == to));
     }
@@ -1070,7 +1091,7 @@ public sealed partial class DesignerSteps
 
     [Then("the Branches section eventually shows {string}")]
     public async Task ThenBranchesShows(string text) =>
-        await ctx.Page!.Locator($".branch-section:has-text({CssString(text)})").WaitForAsync();
+        await ctx.Page!.Locator(".branch-section", new() { HasTextString = text }).WaitForAsync();
 
     // The conflict's source row is labeled with the SOURCE BRANCH's real name (review fix — "source:"/
     // "target:" named the internal marker, not a branch, so the UI now reads "<branchName>: <value>" /
@@ -1078,8 +1099,9 @@ public sealed partial class DesignerSteps
     [Then("the merge preview shows a conflict with source {string} and target {string}")]
     public async Task ThenMergeConflictSourceTarget(string source, string target)
     {
-        await ctx.Page!.Locator($".merge-conflict:has(.merge-conflict-source:text-is({CssString("feature: " + source)})) " +
-            $".merge-conflict-target:text-is({CssString("this design: " + target)})").WaitForAsync();
+        await ctx.Page!.Locator(".merge-conflict", new() {
+            Has = ctx.Page.Locator(".merge-conflict-source", new() { HasTextString = "feature: " + source })
+        }).Locator(".merge-conflict-target", new() { HasTextString = "this design: " + target }).WaitForAsync();
     }
 
     // Apply is gated until every conflict is resolved: with an unresolved conflict, no .merge-apply button
@@ -1153,11 +1175,15 @@ public sealed partial class DesignerSteps
 
     // The merge row for a branch in the Branches section (its head shows Merge "<name>").
     private Microsoft.Playwright.ILocator MergeRowFor(string name) =>
-        ctx.Page!.Locator($".branch-section .branch-row:has(.branch-link:has-text({CssString("Merge \"" + name + "\"")}))");
+        ctx.Page!.Locator(".branch-section .branch-row", new() {
+            Has = ctx.Page.Locator(".branch-link", new() { HasTextString = "Merge \"" + name + "\"" })
+        });
 
     // The design editor's Publish-section row for an instance, located by its target name.
     private Microsoft.Playwright.ILocator PublishRowFor(string label) =>
-        ctx.Page!.Locator($".publish-section .publish-row:has(.publish-target:text-is({CssString(label)}))");
+        ctx.Page!.Locator(".publish-section .publish-row", new() {
+            Has = ctx.Page.Locator(".publish-target", new() { HasTextString = label })
+        });
 
     // B1 ride-along: the newest-first FIRST row's label cell is a real <a class="row-link"> (linked
     // restored) whose text is the "(no <humanized labelProp>)" placeholder — "(no Message)" here (the
@@ -1343,8 +1369,9 @@ public sealed partial class DesignerSteps
     // Locate the fn-card by its CURRENT name input value (mirrors JustAddedTypeRow's by-value lookup).
     [When("I edit the component {string}'s params to {string}")]
     public async Task WhenEditComponentParams(string name, string newParams) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .components-section .fn-card:has(input.fn-name[value=\"{name}\"]) input.fn-params")
-            .FillAsync(newParams);
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card", new() {
+            Has = ctx.Page.Locator($"input.fn-name[value=\"{name}\"]")
+        }).Locator("input.fn-params").FillAsync(newParams);
 
     [Then("the stored component {string} has params {string}")]
     public async Task ThenStoredComponentParams(string name, string paramsText) =>
@@ -1785,7 +1812,9 @@ public sealed partial class DesignerSteps
     // unscoped, for the single-fn-card scenarios that predate multi-component designs).
     [When("I click the add-configuration button for {string}")]
     public async Task WhenClickAddConfigurationFor(string fnName) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .components-section .fn-card:has(input.fn-name[value=\"{fnName}\"]) .add-use").ClickAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card", new() {
+            Has = ctx.Page.Locator($"input.fn-name[value=\"{fnName}\"]")
+        }).Locator(".add-use").ClickAsync();
 
     // Click the previewed component's OWN root element — scoped to `.workbench-instance-content` so it can
     // never hit the sibling toolbar's Reset button (`.workbench-instance-reset`), even though both live
@@ -1858,8 +1887,11 @@ public sealed partial class DesignerSteps
     [When("I edit component {string}'s state var {string} init to {string}")]
     public async Task WhenEditStateVarInit(string fnName, string varName, string newInit) =>
         await ctx.Page!.Locator(
-            $"main.ide-design-edit .design-editor .components-section .fn-card:has(input.fn-name[value=\"{fnName}\"]) " +
-            $".fn-vars .var-row:has(input.var-name[value=\"{varName}\"]) input.var-init").First.FillAsync(newInit);
+            "main.ide-design-edit .design-editor .components-section .fn-card", new() {
+                Has = ctx.Page.Locator($"input.fn-name[value=\"{fnName}\"]")
+            }).Locator(".fn-vars .var-row", new() {
+                Has = ctx.Page.Locator($"input.var-name[value=\"{varName}\"]")
+            }).Locator("input.var-init").First.FillAsync(newInit);
 
     [Then("the stored state var {string} has init {string}")]
     public async Task ThenStoredStateVarInit(string varName, string init) =>
@@ -1928,8 +1960,9 @@ public sealed partial class DesignerSteps
     // passes the backslashes through verbatim (see AccessSteps.GivenAccessRule), so unescape them first.
     [When("I edit the component {string}'s body leaf to {string}")]
     public async Task WhenEditComponentBodyLeaf(string name, string expr) =>
-        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .components-section .fn-card:has(input.fn-name[value=\"{name}\"]) .fn-body input.node-expr")
-            .FillAsync(expr.Replace("\\\"", "\""));
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card", new() {
+            Has = ctx.Page.Locator($"input.fn-name[value=\"{name}\"]")
+        }).Locator(".fn-body input.node-expr").FillAsync(expr.Replace("\\\"", "\""));
 
     // ──── M12 F1 review fix (ui-arch + ux) — the from-scratch "+ Component" flow ────────────────────────────────────────────
 
@@ -2819,16 +2852,18 @@ public sealed partial class DesignerSteps
         // KNOWN ISSUE: under FULL-SUITE peak load the new instance's host can be spawn-starved and
         // the row never appears (a hang, not slowness — raising this to 90s still failed 3/3). Passes
         // in isolation. Tracked as a deploy/host-spawn-starvation issue, NOT a timeout to bump.
-        await ctx.Page!.WaitForSelectorAsync(
-            $"main.ide-list .set-row a.row-link:text-is({CssString(name)})");
+        await ctx.Page!.Locator("main.ide-list .set-row", new() {
+            Has = ctx.Page.Locator("a.row-link", new() { HasTextString = name })
+        }).WaitForAsync();
         // The DESIGN CELL must populate IN PLACE too — no reload. This is the load-bearing assertion:
         // the kernel mirror writes the new Instance's `design` reference AFTER adding it to the set (a GC
         // ordering constraint), so the row could momentarily render with an empty design cell; the
         // in-place refetch must show the design label. WaitForSelector (auto-waiting) proves it appears
         // without racing the row's first paint — if it never populates in place, this fails (a real
         // refetch-timing bug), rather than a count that might pass on a stale/empty cell.
-        await ctx.Page.WaitForSelectorAsync(
-            $"main.ide-list .set-row:has(a.row-link:text-is({CssString(name)})) td:not(.row-id):text-is({CssString(designLabel)})");
+        await ctx.Page.Locator("main.ide-list .set-row", new() {
+            Has = ctx.Page.Locator("a.row-link", new() { HasTextString = name })
+        }).Locator("td:not(.row-id)", new() { HasTextString = designLabel }).WaitForAsync();
     }
 
     [Then("the design dropdown has the design {string} selected")]

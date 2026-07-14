@@ -39,8 +39,8 @@ public sealed class TodoSteps(InstanceContext ctx)
     [When("I select the user {string}")]
     public async Task WhenSelectUser(string name)
     {
-        await ctx.Page!.Locator($"button.user-chip:has-text({Quoted(name)})").First.ClickAsync();
-        await ctx.Page.WaitForSelectorAsync($"h2.selected-user:has-text({Quoted(name)})");
+        await ctx.Page!.Locator("button.user-chip", new() { HasTextString = name }).First.ClickAsync();
+        await ctx.Page.Locator("h2.selected-user", new() { HasTextString = name }).WaitForAsync();
     }
 
     // Add an item to a specific list's card: fill that card's inline add-item input, click its
@@ -66,7 +66,7 @@ public sealed class TodoSteps(InstanceContext ctx)
         // and rebuilds the selected-user section (its add-list button included). A test that selects this
         // user and clicks "Add list" during that churn window hit "element detached from the DOM, retrying"
         // until timeout under load. Gating on the remap settles the view before the next interaction.
-        await ctx.Page.Locator($"button.user-chip:has-text(\"{name}\")[data-key]:not([data-key^=\"-\"])").First.WaitForAsync();
+        await ctx.Page.Locator("button.user-chip[data-key]:not([data-key^='-'])", new() { HasTextString = name }).First.WaitForAsync();
     }
 
     [When("I add a new list {string}")]
@@ -74,7 +74,7 @@ public sealed class TodoSteps(InstanceContext ctx)
     {
         await ctx.Page!.Locator("input.new-list").FillAsync(name);
         await ctx.Page.Locator("button.add-list-btn").ClickAsync();
-        await ctx.Page.WaitForSelectorAsync($"h3.list-name:has-text({Quoted(name)})");
+        await ctx.Page.Locator("h3.list-name", new() { HasTextString = name }).WaitForAsync();
     }
 
     // Wait until every item row in the given card has a real (positive) data-key — the optimistic
@@ -138,7 +138,9 @@ public sealed class TodoSteps(InstanceContext ctx)
 
     // The list card whose title matches (exact-ish via :has-text on the .list-name heading).
     private ILocator Card(string list) =>
-        ctx.Page!.Locator($"article.todo-card:has(h3.list-name:has-text({Quoted(list)}))").First;
+        ctx.Page!.Locator("article.todo-card", new() {
+            Has = ctx.Page.Locator("h3.list-name", new() { HasTextString = list })
+        }).First;
 
     // The item row whose composed text <Input> (input.text) holds the given VALUE. The text is in
     // the input's value PROPERTY (set by client render), not the attribute, so it can't be matched by

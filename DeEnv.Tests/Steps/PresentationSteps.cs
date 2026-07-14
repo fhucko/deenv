@@ -11,7 +11,7 @@ public sealed class PresentationSteps(InstanceContext ctx)
     [Then(@"I see the label {string}")]
     public async Task ThenISeeLabelAsync(string text)
     {
-        var count = await ctx.Page!.Locator($"label:text-is('{text}')").CountAsync();
+        var count = await ctx.Page!.Locator("label", new() { HasTextString = text }).CountAsync();
         await Assert.That(count).IsGreaterThanOrEqualTo(1);
     }
 
@@ -21,7 +21,7 @@ public sealed class PresentationSteps(InstanceContext ctx)
     [When(@"I click the {string} list title")]
     public async Task WhenClickListTitleAsync(string title)
     {
-        await ctx.Page!.Locator($"a.list-title:text-is('{title}'), .list-title a:text-is('{title}')")
+        await ctx.Page!.Locator("a.list-title, .list-title a", new() { HasTextString = title })
             .First.ClickAsync();
         // Wait for the navigation's HTML to parse, NOT the full Load (the /js bundle) — see PageNav.
         // Uses global default timeout.

@@ -69,7 +69,9 @@ public sealed class AgedStoreSteps(InstanceContext ctx)
         // The clicked Edit link is handled CLIENT-SIDE (the refetch path). The editor's publish
         // section runs instancesRunning(design) — the `i.design != null && sys.id(i.design)` filter —
         // over the design-less devlog row and the cleared retired row: the a79f19f repro flow.
-        await ctx.Page!.Locator($".set-row:has(a.row-link:text-is(\"{label}\")) a.edit-design").ClickAsync();
+        await ctx.Page!.Locator(".set-row", new() {
+            Has = ctx.Page.Locator("a.row-link", new() { HasTextString = label })
+        }).Locator("a.edit-design").ClickAsync();
         await ctx.Page.WaitForSelectorAsync("main.ide-design-edit .design-editor");
     }
 
@@ -93,16 +95,18 @@ public sealed class AgedStoreSteps(InstanceContext ctx)
     public async Task WhenOpenAdoptionCommit() =>
         // Every design got its main branch + "Adopted" baseline at kernel boot (EnsureMainBranches) —
         // a commit with NO author and NO parent, the absent-single-ref shape on the Commit type.
-        await ctx.Page!.Locator("main.ide-commits .set-row a.row-link:text-is(\"Adopted\")").First.ClickAsync();
+        await ctx.Page!.Locator("main.ide-commits .set-row", new() {
+            Has = ctx.Page.Locator("a.row-link", new() { HasTextString = "Adopted" })
+        }).First.ClickAsync();
 
     [Then("the adoption commit detail renders")]
     public async Task ThenAdoptionDetailRenders() =>
-        await ctx.Page!.Locator("main.ide-commit-detail .field-value:text-is(\"Adopted\")").WaitForAsync();
+        await ctx.Page!.Locator("main.ide-commit-detail .field-value", new() { HasTextString = "Adopted" }).WaitForAsync();
 
     [When("I click the Instances nav link")]
     public async Task WhenClickInstancesNav()
     {
-        await ctx.Page!.Locator("nav.ide-nav a:text-is(\"Instances\")").First.ClickAsync();
+        await ctx.Page!.Locator("nav.ide-nav a", new() { HasTextString = "Instances" }).First.ClickAsync();
         await ctx.Page.WaitForSelectorAsync("main.ide-list .set-row");
     }
 
@@ -110,13 +114,17 @@ public sealed class AgedStoreSteps(InstanceContext ctx)
     public async Task ThenInstancesListShows(string a, string b, string c)
     {
         foreach (var label in new[] { a, b, c })
-            await ctx.Page!.Locator($"main.ide-list .set-row:has(a.row-link:text-is(\"{label}\"))").WaitForAsync();
+            await ctx.Page!.Locator("main.ide-list .set-row", new() {
+                Has = ctx.Page.Locator("a.row-link", new() { HasTextString = label })
+            }).WaitForAsync();
     }
 
     [When("I click into the aged instance {string}")]
     public async Task WhenClickIntoInstance(string label)
     {
-        var row = ctx.Page!.Locator($"main.ide-list .set-row:has(a.row-link:text-is(\"{label}\"))");
+        var row = ctx.Page!.Locator("main.ide-list .set-row", new() {
+            Has = ctx.Page.Locator("a.row-link", new() { HasTextString = label })
+        });
         await row.Locator("td.row-action button.kebab-toggle").ClickAsync();
         await row.Locator(".kebab-menu.open a.open-instance").ClickAsync();
     }
@@ -208,7 +216,7 @@ public sealed class AgedStoreSteps(InstanceContext ctx)
     {
         // A clicked row-link — client-side nav over the warm session, so the member page's fields
         // (including the author RefEditor's extent read) come through the refetch path.
-        await ctx.Page!.Locator($".set-row a.row-link:text-is(\"{title}\")").ClickAsync();
+        await ctx.Page!.Locator(".set-row a.row-link", new() { HasTextString = title }).ClickAsync();
         await ctx.Page.Locator("input.title").WaitForAsync();
     }
 

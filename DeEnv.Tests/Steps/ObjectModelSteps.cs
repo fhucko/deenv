@@ -61,7 +61,9 @@ public sealed class ObjectModelSteps(InstanceContext ctx)
         await ctx.Page.Locator("button.create-save").First.ClickAsync();
         await ctx.Page.Locator(".set-row", new() { HasTextString = name }).First.WaitForAsync();
         // Wait for the negative→real id remap (positive href).
-        await ctx.Page.Locator($".set-row:has-text(\"{name}\") a.row-link[href^=\"/\"]:not([href*=\"/-\"])").First.WaitForAsync();
+        await ctx.Page.Locator(".set-row", new() {
+            HasTextString = name
+        }).Locator("a.row-link[href^=\"/\"]:not([href*=\"/-\"])").First.WaitForAsync();
         await ctx.Page.Locator(".set-row", new() { HasTextString = name })
                       .First.Locator("a.row-link").ClickAsync();
         // Following the open link is a real navigation; wait for the member page URL.
