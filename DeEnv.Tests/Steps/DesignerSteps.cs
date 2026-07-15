@@ -19,6 +19,7 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
     private HostedInstance _designer = null!;
     private string _newInstanceName = "";
     private string _urlBeforeClick = "";
+    private float _scrollYBefore;
     private int _lastCreatedInstanceId;
     private string _justAddedTypeName = "";
     private int _todoTargetLogLinesAfterStaleness;

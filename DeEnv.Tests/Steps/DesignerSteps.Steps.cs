@@ -1993,6 +1993,23 @@ public sealed partial class DesignerSteps
             o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == SelectionTestConvertibleRender));
     }
 
+    // Long variant for scroll-into-view tests: enough rows that a root-level insert lands below the fold.
+    private const string LongPaletteTestConvertibleRender =
+        "ui\n    fn render()\n        return <main>\n" +
+        "            <p>\"1\"</p>\n            <p>\"2\"</p>\n            <p>\"3\"</p>\n            <p>\"4\"</p>\n            <p>\"5\"</p>\n" +
+        "            <p>\"6\"</p>\n            <p>\"7\"</p>\n            <p>\"8\"</p>\n            <p>\"9\"</p>\n            <p>\"10\"</p>\n" +
+        "            <p>\"11\"</p>\n            <p>\"12\"</p>\n            <p>\"13\"</p>\n            <p>\"14\"</p>\n            <p>\"15\"</p>\n" +
+        "            <p>\"16\"</p>\n            <p>\"17\"</p>\n            <p>\"18\"</p>\n            <p>\"19\"</p>\n            <p>\"20\"</p>\n" +
+        "            \"end\"\n";
+
+    [When("I author a long palette-test convertible render into the design's UI")]
+    public async Task WhenAuthorLongPaletteTestRender()
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(LongPaletteTestConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == LongPaletteTestConvertibleRender));
+    }
+
     // Edit the named component's body LEAF expr input (its `.fn-body` holds the SAME recursive
     // renderNodeEditor the render tree uses) — the F2 liveness proof: every expansion of this fn shares
     // this ONE body row, so editing it must repaint EVERY expanded instance same-frame. The feature writes
@@ -2089,6 +2106,19 @@ public sealed partial class DesignerSteps
         await row.First.ClickAsync();
     }
 
+    [When(@"I click the tree editor's leaf row reading ""(.*)""")]
+    public async Task WhenIClickTheTreeEditorsLeafRowReading(string text)
+    {
+        // Leaf rows in the render tree use .node-leaf + input.node-expr whose value attr holds the expr (literals include quotes).
+        // Feature passes the Gherkin-escaped form (e.g. "\"Hello\""); normalize backslashes like sibling leaf edit steps.
+        var expr = text.Replace("\\\"", "\"");
+        var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-leaf", new() {
+            Has = ctx.Page.Locator($"input.node-expr[value={CssString(expr)}]")
+        });
+        await row.First.WaitForAsync();
+        await row.First.ClickAsync();
+    }
+
     [When("I click the tree editor's for row")]
     public async Task WhenIClickTheTreeEditorsForRow()
     {
@@ -2121,6 +2151,41 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Keyboard.PressAsync("Escape");
     }
 
+    [When("I click empty canvas space")]
+    public async Task WhenClickEmptyCanvasSpace()
+    {
+        // Click the canvas container itself (not a data-node child) to clear selection.
+        await ctx.Page!.Locator(".design-canvas").ClickAsync();
+    }
+
+    [When("I note the current page URL")]
+    public async Task WhenNoteCurrentUrl()
+    {
+        _urlBeforeClick = ctx.Page!.Url;
+    }
+
+    [When("I note the current scroll position")]
+    public async Task WhenNoteCurrentScroll()
+    {
+        var y = await ctx.Page!.EvaluateAsync("() => window.scrollY");
+        _scrollYBefore = y.HasValue ? (float)y.Value.GetDouble() : 0f;
+    }
+
+    [Then("the page URL is unchanged")]
+    public async Task ThenPageUrlUnchanged()
+    {
+        var current = ctx.Page!.Url;
+        await Assert.That(current).IsEqualTo(_urlBeforeClick);
+    }
+
+    [Then("the page scroll position is unchanged")]
+    public async Task ThenPageScrollUnchanged()
+    {
+        var yEl = await ctx.Page!.EvaluateAsync("() => window.scrollY");
+        var y = yEl.HasValue ? (float)yEl.Value.GetDouble() : 0f;
+        await Assert.That(y).IsEqualTo(_scrollYBefore);
+    }
+
     [Then("the design canvas shows {int} selected element")]
     public async Task ThenTheDesignCanvasShowsSelectedElement(int count)
     {
@@ -2146,6 +2211,14 @@ public sealed partial class DesignerSteps
     {
         await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .is-selected")
             .First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+    }
+
+    [Then("the selected tree editor row is scrolled into view")]
+    public async Task ThenSelectedTreeEditorRowIsScrolledIntoView()
+    {
+        // Use a function wait: the row with .is-selected must have a bounding box intersecting the viewport.
+        await ctx.Page!.WaitForFunctionAsync(
+            "() => { const el = document.querySelector('main.ide-design-edit .design-editor .render-tree .is-selected'); if (!el) return false; const r = el.getBoundingClientRect(); return r.top >= 0 && r.top <= window.innerHeight; }");
     }
 
     [Then(@"the tree editor's ""(.*)"" element row is not selected")]
