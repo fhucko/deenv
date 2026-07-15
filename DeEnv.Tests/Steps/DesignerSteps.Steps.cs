@@ -1982,6 +1982,17 @@ public sealed partial class DesignerSteps
             o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == PaletteTestConvertibleRender));
     }
 
+    private const string SelectionTestConvertibleRender =
+        "ui\n    fn render()\n        return <main>\n            <h1>\n                \"Hello\"\n";
+
+    [When("I author a selection-test convertible render into the design's UI")]
+    public async Task WhenAuthorSelectionTestRender()
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(SelectionTestConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == SelectionTestConvertibleRender));
+    }
+
     // Edit the named component's body LEAF expr input (its `.fn-body` holds the SAME recursive
     // renderNodeEditor the render tree uses) — the F2 liveness proof: every expansion of this fn shares
     // this ONE body row, so editing it must repaint EVERY expanded instance same-frame. The feature writes
@@ -2078,6 +2089,23 @@ public sealed partial class DesignerSteps
         await row.First.ClickAsync();
     }
 
+    [When("I click the tree editor's for row")]
+    public async Task WhenIClickTheTreeEditorsForRow()
+    {
+        // Use scoped .First and native wait; the for row has .node-for class.
+        var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-for");
+        await row.First.WaitForAsync();
+        await row.First.ClickAsync();
+    }
+
+    [When("I click the tree editor's if row")]
+    public async Task WhenIClickTheTreeEditorsIfRow()
+    {
+        var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-if");
+        await row.First.WaitForAsync();
+        await row.First.ClickAsync();
+    }
+
     [Then("no tree editor row is selected in the main render tree")]
     public async Task ThenNoTreeEditorRowIsSelectedInTheMainRenderTree()
     {
@@ -2085,6 +2113,54 @@ public sealed partial class DesignerSteps
         // the selection landed in the component's own body tree inside .components-section instead.
         await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .is-selected")
             .First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+    }
+
+    [When("I press Escape")]
+    public async Task WhenIPressEscape()
+    {
+        await ctx.Page!.Keyboard.PressAsync("Escape");
+    }
+
+    [Then("the design canvas shows {int} selected element")]
+    public async Task ThenTheDesignCanvasShowsSelectedElement(int count)
+    {
+        var loc = ctx.Page!.Locator(".design-canvas [data-node].is-selected");
+        if (count == 0)
+            await loc.First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+        else
+            await loc.Nth(count - 1).WaitForAsync();
+    }
+
+    [Then("the design canvas shows {int} selected elements")]
+    public async Task ThenTheDesignCanvasShowsSelectedElements(int count)
+    {
+        var loc = ctx.Page!.Locator(".design-canvas [data-node].is-selected");
+        if (count == 0)
+            await loc.First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+        else
+            await loc.Nth(count - 1).WaitForAsync();
+    }
+
+    [Then("no tree editor row is selected")]
+    public async Task ThenNoTreeEditorRowIsSelected()
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .is-selected")
+            .First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+    }
+
+    [Then(@"the tree editor's ""(.*)"" element row is not selected")]
+    public async Task ThenTheTreeEditorsElementRowIsNotSelected(string tag)
+    {
+        var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element", new() {
+            Has = ctx.Page.Locator($"input.node-tag[value={CssString(tag)}]")
+        });
+        await row.Locator(":scope.is-selected").First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+    }
+
+    [Then(@"the design canvas's ""(.*)"" element is selected")]
+    public async Task ThenTheDesignCanvasElementIsSelected(string tag)
+    {
+        await ctx.Page!.Locator($".design-canvas {tag}[data-node].is-selected").First.WaitForAsync();
     }
 
     [Then(@"the tree editor's ""(.*)"" element row is selected")]
@@ -2102,6 +2178,18 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree {cls}.is-selected").First.WaitForAsync();
     }
 
+    [Then("the tree editor's for row is selected")]
+    public async Task ThenTheTreeEditorsForRowIsSelected()
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-for.is-selected").First.WaitForAsync();
+    }
+
+    [Then("the tree editor's if row is selected")]
+    public async Task ThenTheTreeEditorsIfRowIsSelected()
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-if.is-selected").First.WaitForAsync();
+    }
+
     [Then(@"the tree editor's ""(.*)"" element row is the last child of the ""(.*)"" element row")]
     public async Task ThenTheTreeEditorsElementRowIsTheLastChild(string childTag, string parentTag)
     {
@@ -2109,6 +2197,15 @@ public sealed partial class DesignerSteps
             Has = ctx.Page.Locator($"input.node-tag[value={CssString(parentTag)}]")
         });
         await parentRow.Locator($":scope > .node-children > .node-element:last-child", new() {
+            Has = ctx.Page.Locator($"input.node-tag[value={CssString(childTag)}]")
+        }).WaitForAsync();
+    }
+
+    [Then(@"the tree editor's ""(.*)"" element row is the last child of the for row")]
+    public async Task ThenTheTreeEditorsElementRowIsTheLastChildOfTheForRow(string childTag)
+    {
+        var forRow = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-for").First;
+        await forRow.Locator($":scope > .node-children > .node-element:last-child", new() {
             Has = ctx.Page.Locator($"input.node-tag[value={CssString(childTag)}]")
         }).WaitForAsync();
     }
