@@ -1081,8 +1081,13 @@ public sealed partial class DesignerSteps
             Has = ctx.Page.Locator($"input.prop-name[value={CssString(from)}]")
         }).Locator("input.prop-name");
         await input.FillAsync(to);
-        await input.WaitForAsync();
-        await Assert.That(await input.InputValueAsync()).IsEqualTo(to);
+        // Do not re-use the 'input' locator for post-fill waits/asserts: its definition includes
+        // Has filter on the *original* value. Recreate using the new value (or rely on Fill + assert
+        // DOM reflection; explicit WaitFor not needed per review). Matches pattern used for type renames.
+        var renamedInput = card.Locator(".prop-row", new() {
+            Has = ctx.Page.Locator($"input.prop-name[value={CssString(to)}]")
+        }).Locator("input.prop-name");
+        await Assert.That(await renamedInput.InputValueAsync()).IsEqualTo(to);
         // Rely on DOM reflection for the rename (same rationale as add-field for new designs).
     }
 
@@ -1572,7 +1577,9 @@ public sealed partial class DesignerSteps
     {
         var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row").Nth(index);
         var preview = row.Locator(".use-preview");
-        // Use WaitForFunction only for the negation (!data-node) which is hard to express with pure locator filters.
+        // Use WaitForFunction *only* for the !data-node negation (live mounted content vs. static renderTree
+        // pre-mount body that stamps data-node on everything). All other presence/text is expressed with
+        // native Locator + HasTextString per TESTING.md. The function is scoped to the row for stability.
         await ctx.Page!.WaitForFunctionAsync(
             $"() => {{ const rows = document.querySelectorAll('main.ide-design-edit .design-editor .components-section .fn-uses .use-row'); " +
             $"const r = rows[{index}]; if (r == null) return false; " +
@@ -2833,8 +2840,7 @@ public sealed partial class DesignerSteps
 
     [Then("the root node's unwrap button is disabled")]
     public async Task ThenRootUnwrapDisabled() =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => {{ const b = document.querySelector({JsString(RootNode + " > .node-tag-row > button.unwrap-node")}); return b != null && b.disabled; }}");
+        await ctx.Page!.Locator(RootNode + " > .node-tag-row > button.unwrap-node[disabled]").First.WaitForAsync();
 
     [Then("the root node's unwrap button's title reads {string}")]
     public async Task ThenRootUnwrapTitle(string text) =>
@@ -2843,8 +2849,7 @@ public sealed partial class DesignerSteps
 
     [Then("the root node's last child's unwrap button is disabled")]
     public async Task ThenRootLastChildUnwrapDisabled() =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => {{ const b = document.querySelector({JsString(RootLastChildElement + " > .node-tag-row > button.unwrap-node")}); return b != null && b.disabled; }}");
+        await ctx.Page!.Locator(RootLastChildElement + " > .node-tag-row > button.unwrap-node[disabled]").First.WaitForAsync();
 
     [Then("the root node's last child's unwrap button's title reads {string}")]
     public async Task ThenRootLastChildUnwrapTitle(string text) =>
@@ -2972,8 +2977,7 @@ public sealed partial class DesignerSteps
     // cannot accidentally match a chip's OWN text (a chip is a <span>, never an <h1>).
     [Then("the design canvas shows the evaluated leaf text {string}")]
     public async Task ThenCanvasShowsEvaluatedText(string text) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => {{ const e = document.querySelector('.design-canvas h1'); return e != null && e.textContent === {JsString(text)}; }}");
+        await ctx.Page!.Locator(".design-canvas h1", new() { HasTextString = text }).First.WaitForAsync();
 
     // ──── M12 S6a — `foreach`/`if` as structured rows (for-row tree editor + canvas template mode) ─────
 
@@ -3025,8 +3029,7 @@ public sealed partial class DesignerSteps
     // loop is not evaluated). Auto-waits, so an item-input edit's live repaint (no reload) is observed here.
     [Then("the design canvas shows a for-template with item {string}")]
     public async Task ThenCanvasForTemplateItem(string item) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => {{ const e = document.querySelector('.design-canvas .for-template .for-item'); return e != null && e.textContent === {JsString(item)}; }}");
+        await ctx.Page!.Locator(".design-canvas .for-template .for-item", new() { HasTextString = item }).First.WaitForAsync();
 
     // The root's "+ for" control (same add-row as "+ element"/"+ text"/"+ attr") appends a for-row LAST,
     // exactly like E2's element append (order = max sibling order + 1).
@@ -3091,16 +3094,15 @@ public sealed partial class DesignerSteps
     // is observed with no reload. Matches ANY element of that tag in the canvas whose text equals `text`.
     [Then("the design canvas shows a {string} element reading {string}")]
     public async Task ThenCanvasElementReading(string tag, string text) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => [...document.querySelectorAll({JsString(".design-canvas " + tag)})].some(e => e.textContent === {JsString(text)})");
+        await ctx.Page!.Locator($".design-canvas {tag}", new() { HasTextString = text }).First.WaitForAsync();
 
     // The falsy/omitted if-branch is NEVER rendered: the canvas must not contain the given text anywhere.
     // Guarded by a WaitForFunction so it settles rather than reading a mid-render frame (the preceding
     // positive assertions already prove the canvas is populated, so a persistent presence would fail here).
     [Then("the design canvas does not show the text {string}")]
     public async Task ThenCanvasNoText(string text) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => {{ const c = document.querySelector('.design-canvas'); return c != null && !c.textContent.includes({JsString(text)}); }}");
+        // When the text is gone the "canvas that has this text" locator no longer matches.
+        await ctx.Page!.Locator(".design-canvas", new() { HasTextString = text }).First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
 
     // The tree editor's for-row collection input still reads the edited source (the race-guard proof: the
     // canvas falls to the template, but the operator's own input is UNDISTURBED — not reverted).
@@ -3146,8 +3148,7 @@ public sealed partial class DesignerSteps
 
     [Then("the design canvas does not show the stale-fns banner")]
     public async Task ThenCanvasNoStaleBanner() =>
-        await ctx.Page!.WaitForFunctionAsync(
-            "() => document.querySelector('.design-canvas .stale-fns-banner') == null");
+        await ctx.Page!.Locator(".design-canvas .stale-fns-banner").First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
 
     // ──── M12 eval-degrade-banner — an honest notice when evalContext itself fails to build ────────────────────
     //
@@ -3157,14 +3158,11 @@ public sealed partial class DesignerSteps
 
     [Then("the design canvas shows the eval-degrade notice mentioning {string}")]
     public async Task ThenCanvasShowsEvalDegradeNotice(string substring) =>
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => {{ const e = document.querySelector('.design-canvas .eval-degrade-banner'); " +
-            $"return e != null && e.textContent.includes({JsString(substring)}); }}");
+        await ctx.Page!.Locator(".design-canvas .eval-degrade-banner", new() { HasTextString = substring }).First.WaitForAsync();
 
     [Then("the design canvas does not show the eval-degrade notice")]
     public async Task ThenCanvasNoEvalDegradeNotice() =>
-        await ctx.Page!.WaitForFunctionAsync(
-            "() => document.querySelector('.design-canvas .eval-degrade-banner') == null");
+        await ctx.Page!.Locator(".design-canvas .eval-degrade-banner").First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
 
     // ──── M12 V1b — init-evaluated state in the static canvas ────────────────────────────────────────────────────────────────────────────────
     //

@@ -169,6 +169,80 @@ public static class SchemaBridge
         return document;
     }
 
+    /// <summary>
+    /// Builds an in-memory designer-side Design (as ObjectValue) from a textual app document.
+    /// This is the "textual instance description → design model" direction.
+    /// The resulting object can be passed directly to ProjectDesignDb for projection/roundtrip tests
+    /// without needing a store or files.
+    /// Types are turned into MetaType/MetaProp objects; sections are carried verbatim.
+    /// </summary>
+    public static ObjectValue DesignFromText(string appText, string label = "")
+    {
+        var desc = AppParse.Parse(appText);
+        var sections = DesignerSeed.SplitSections(appText);
+
+        var metaTypes = new Dictionary<int, NodeValue>();
+        int typeOrder = 1;
+        foreach (var type in desc.AllTypes())
+        {
+            var metaProps = new Dictionary<int, NodeValue>();
+            int propOrder = 1;
+            foreach (var prop in type.Props ?? [])
+            {
+                var propFields = new Dictionary<string, NodeValue>
+                {
+                    ["name"] = new TextValue(prop.Name),
+                    ["type"] = new TextValue(prop.Type),
+                    ["order"] = new IntValue(propOrder * 10),
+                    ["cardinality"] = new TextValue(prop.Cardinality switch
+                    {
+                        Cardinality.Set => "set",
+                        Cardinality.Dictionary => "dictionary",
+                        _ => "single",
+                    }),
+                    ["multiline"] = new BoolValue(prop.Multiline),
+                };
+                if (prop.Cardinality == Cardinality.Dictionary)
+                    propFields["keyType"] = new TextValue(prop.KeyType ?? "text");
+
+                metaProps[propOrder] = new ObjectValue(propFields);
+                propOrder++;
+            }
+
+            var propsSet = new SetValue(9000 + typeOrder, metaProps);
+
+            string baseStr = type.BaseType == BaseType.Object ? "object"
+                : type.BaseType == BaseType.Enum ? "enum"
+                : BaseTypes.NameOf(type.BaseType);
+
+            var mtFields = new Dictionary<string, NodeValue>
+            {
+                ["name"] = new TextValue(type.Name),
+                ["baseType"] = new TextValue(baseStr),
+                ["values"] = new TextValue(string.Join(", ", type.Values ?? [])),
+                ["order"] = new IntValue(typeOrder * 10),
+                ["props"] = propsSet,
+            };
+
+            metaTypes[typeOrder] = new ObjectValue(mtFields);
+            typeOrder++;
+        }
+
+        var typesSet = new SetValue(999, metaTypes);
+
+        var designFields = new Dictionary<string, NodeValue>
+        {
+            ["label"] = new TextValue(label),
+            ["initialData"] = new TextValue(sections.GetValueOrDefault("initialData", "")),
+            ["access"] = new TextValue(sections.GetValueOrDefault("access", "")),
+            ["common"] = new TextValue(sections.GetValueOrDefault("common", "")),
+            ["ui"] = new TextValue(sections.GetValueOrDefault("ui", "")),
+            ["types"] = typesSet,
+        };
+
+        return new ObjectValue(designFields);
+    }
+
     // Pure projection: a Design (or legacy Db) node's `types` set → the typed description (types
     // only). Shared by ProjectDesignDb (which adds the other sections) and the M4 tests.
     public static InstanceDescription Project(NodeValue designerDb)

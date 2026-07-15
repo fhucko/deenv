@@ -101,20 +101,32 @@ The correct long-term fix is proper keying when we add better array support in t
 - Designer tests exercise the full client runtime + reconciler + WS round-trips. They are the canary for rendering and identity problems.
 
 ### Targeting long-running designer scenarios (live previews, error isolation, convert flows)
-The @m12 live-preview + error scenarios (multiple live `.use-preview` cards, sandboxed mounts, handler/ambient errors, sibling isolation) are intentionally heavier (full per-scenario kernel boot + authoring + Convert + live mounts). Use precise filters so you do not pay for them in every fast smoke:
+The @m12 live-preview + error scenarios (multiple live `.use-preview` cards, sandboxed mounts, handler/ambient errors, sibling isolation) are intentionally heavier (full per-scenario kernel boot + authoring + Convert + live mounts). Use precise filters so you do not pay for them in every fast smoke.
+
+TUnit's `-- --treenode-filter` uses the generated test hierarchy (class names from the .feature.cs files). Tag globs like `/*/*/*/*@m12-live-isolation*` may not match directly; use the owning feature class name (or `--list-tests` to discover UIDs). The `@m12-live-isolation` tag (and `@m12`) are still useful for grepping source or combining with other filters.
 
 ```
-# Only the critical combined isolation proofs (single-boot "page + sibling survive error" tests)
-dotnet test DeEnv.Tests -c Release --no-build -- --treenode-filter '/*/*/*/*@m12-live-isolation*'
+# Isolation proofs (the throwing+sibling and ambient error scenarios — must stay as single-boot proofs)
+dotnet test DeEnv.Tests -c Release --no-build -- --treenode-filter '/*/*/Designer_LibraryAndNavigationFeature/*'
+dotnet test DeEnv.Tests -c Release --no-build -- --treenode-filter '/*/*/Designer_ComponentsAndLivePreviewsFeature/*'
 
-# Broader @m12 live cluster (configs, previews, independence, error banners)
-dotnet test DeEnv.Tests -c Release --no-build -- --treenode-filter '/*/*/*/*@m12*'
+# Broader live previews + canvas (configs, independence, error banners, live mounts)
+dotnet test DeEnv.Tests -c Release --no-build -- --treenode-filter '/*/*/Designer_ComponentsAndLivePreviewsFeature/*'
+dotnet test DeEnv.Tests -c Release --no-build -- --treenode-filter '/*/*/Designer_StructuredRenderTreeAndCanvasFeature/*'
 
-# Or combine with tags used in the .feature files
-# (treenode is preferred for precision; the generated class names are stable)
+# Library navigation + other @m12
+dotnet test DeEnv.Tests -c Release --no-build -- --treenode-filter '/*/*/Designer_LibraryAndNavigationFeature/*'
 ```
 
 Do **not** split the isolation scenarios themselves (they prove cross-card behavior inside one boot + one page). See `docs/plans/2026-07-15-split-long-designer-scenarios.md` and its grill for the full analysis.
+
+Generated class names for the main designer features (use these for precise treenode):
+- Designer_LibraryAndNavigationFeature
+- Designer_ComponentsAndLivePreviewsFeature
+- Designer_StructuredRenderTreeAndCanvasFeature
+- Designer_TypesAndPropsEditorFeature
+- Designer_CommitPublishBranchesMergeFeature
+- TheOperatorIDEDesignsLibraryInstanceDesignSelectorFeature (older Designer.feature)
 
 ## References
 

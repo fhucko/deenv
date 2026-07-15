@@ -142,22 +142,24 @@ public sealed class ClientDataLayerSteps(InstanceContext ctx)
 
     // THE ACTION-MISS ROUND-TRIP LANDED (the assertion that fails before the wiring): the handler read
     // un-shipped `c.link`, the server harvested it, the client re-invoked the handler over the now-present
-    // data, and the increment landed on the visible `a` (0 → 1). Poll the live DOM (the round-trip is async).
-    // Before the wiring exists the handler dies on the VNA and `a` stays 0 forever.
+    // data, and the increment landed on the visible `a` (0 → 1). Wait for the async round-trip (refetch
+    // harvest + merge + re-invoke tx + render patch) to update the live DOM text. A plain one-shot read
+    // after click races the WS; use Playwright's text expectation which polls.
     [Then("the counter eventually reads {int}")]
     public async Task ThenCounterEventuallyReads(int value)
     {
+        var counter = ctx.Page!.Locator(".counter-a");
         try
         {
-            var counter = ctx.Page!.Locator(".counter-a");
             await counter.WaitForAsync();
-            await Assert.That(await counter.InnerTextAsync()).IsEqualTo(value.ToString());
+            await Microsoft.Playwright.Assertions.Expect(counter)
+                .ToHaveTextAsync(value.ToString(), new() { Timeout = TestTimeouts.ActionMs });
         }
-        catch (TimeoutException)
+        catch (Exception ex) when (ex is TimeoutException or Microsoft.Playwright.PlaywrightException)
         {
             var app = await ctx.Page!.Locator("#app").InnerHTMLAsync();
             throw new Exception($"The counter never reached {value} — the action-miss round-trip did not " +
-                "complete the handler. #app (first 1200):\n" + app[..Math.Min(1200, app.Length)]);
+                "complete the handler. #app (first 1200):\n" + app[..Math.Min(1200, app.Length)], ex);
         }
     }
 

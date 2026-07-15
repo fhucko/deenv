@@ -67,48 +67,198 @@ public sealed class DesignerSourceTests
         await Assert.That(AppPrint.Print(second)).IsEqualTo(printed);
     }
 
-    // Every committed app reverse-projects (DesignerSeed — the kernel's first-boot path) into a Design
-    // that forward-projects (SchemaBridge.ProjectDesignDb — the publish path) back to the SAME app
-    // document. This inherits the intent of the deleted DesignerSeedGenerator consistency guard ("editing
-    // crm in the IDE edits the REAL crm, and Publish re-publishes the REAL crm") — but now WITHOUT its
-    // self-reference exception: the designer's own app (id 1) carries an empty initialData, so its
-    // self-design round-trips FAITHFULLY too (the old embedded-seed model could not, so it skipped the
-    // designer). Comparison is normalized through parse∘print, so only semantic equality matters.
+    // Every committed app reverse-projects (via DesignerSeed logic) into a Design
+    // that forward-projects (via SchemaBridge.ProjectDesignDb) back to the SAME app document.
+    //
+    // We use a single *custom minimal textual app* (with rich ui exercising the render constructs)
+    // for speed and explicit coverage.
+    //
+    // Flow: textual app text
+    //   → AppParse (to InstanceDescription "AST")
+    //   → SchemaBridge.DesignFromText (builds the in-memory designer Design model)
+    //   → ProjectDesignDb (projects back to app text)
+    //   → compare Canonical forms.
     [Test]
     public async Task Every_committed_app_reverse_then_forward_projects_to_itself()
     {
-        // The committed apps the kernel seeds as designs (1 = designer, 2 = todo, 3 = crm, 4 = shop),
-        // with arbitrary distinct designIds (the ids are not load-bearing for THIS round-trip — that the
-        // id EQUALS the designId is covered by the kernel seeding scenario).
-        var apps = new (int Id, int DesignId)[] { (1, 60), (2, 13), (3, 27), (4, 39) };
+        const string original = """
+            types
+                Item
+                    name text
+                    done bool
+                Db
+                    title text
+                    count int
+                    items set of Item
 
-        foreach (var (id, designId) in apps)
-        {
-            var committed = File.ReadAllText(InstanceContext.AppFixture(id));
+            ui
+                fn render()
+                    return <main class={db.count}>
+                        <h1>
+                            "Title: "
+                            db.title
+                        <ul>
+                            foreach it in db.items
+                                <li>
+                                    if it.done
+                                        <s>
+                                            it.name
+                                    else
+                                        it.name
+            """;
 
-            // Reverse-project this one app into a one-design seed, seed a throwaway store from it (so the
-            // Design is a live node the publish path reads by id), read it back, and forward-project it.
-            var seed = DesignerSeed.Build([("app-" + id, designId, committed)], []);
-            var designerDesc = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1))
-                with { InitialData = seed };
+        var design = SchemaBridge.DesignFromText(original, "minimal-ast");
+        var projected = SchemaBridge.ProjectDesignDb(design);
 
-            var storePath = Path.Combine(Path.GetTempPath(), "deenv-rtcheck-" + Guid.NewGuid().ToString("N") + ".json");
-            var store = new JsonFileInstanceStore(storePath, designerDesc);
-            try
-            {
-                var design = store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-                var projected = SchemaBridge.ProjectDesignDb(design);
-                await Assert.That(Canonical(projected)).IsEqualTo(Canonical(committed));
-            }
-            finally
-            {
-                File.Delete(storePath);
-            }
-        }
+        await Assert.That(Canonical(projected)).IsEqualTo(Canonical(original));
     }
+
+
+
+
+
 
     // The canonical printed form, so two documents compare by semantics not incidental whitespace.
     private static string Canonical(string appDoc) => AppPrint.Print(AppParse.Parse(appDoc));
+
+    // ── Pure in-memory design construction (no store, no files) for fast projection tests ─────
+
+    private static ObjectValue MakeMetaType(string name, string baseType, int order, ObjectValue[]? props = null)
+    {
+        var fields = new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name),
+            ["baseType"] = new TextValue(baseType),
+            ["order"] = new IntValue(order),
+            ["values"] = new TextValue(""),
+        };
+        if (props != null && props.Length > 0)
+            fields["props"] = MakeSet(props);
+        return new ObjectValue(fields);
+    }
+
+    private static ObjectValue MakeMetaProp(string name, string type, int order)
+    {
+        return new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name),
+            ["type"] = new TextValue(type),
+            ["order"] = new IntValue(order),
+            ["cardinality"] = new TextValue("single"),
+            ["multiline"] = new BoolValue(false),
+        });
+    }
+
+    private static SetValue MakeSet(params ObjectValue[] members)
+    {
+        var dict = new Dictionary<int, NodeValue>();
+        for (int i = 0; i < members.Length; i++)
+            dict[1000 + i] = members[i];
+        return new SetValue(500, dict);
+    }
+
+    private static ObjectValue MakeNode(string tag = "", string expr = "", int order = 0,
+        string kind = "", string item = "", string collection = "", string condition = "",
+        ObjectValue[]? attrs = null, ObjectValue[]? children = null, ObjectValue[]? elseChildren = null)
+    {
+        var d = new Dictionary<string, NodeValue>
+        {
+            ["tag"] = new TextValue(tag),
+            ["expr"] = new TextValue(expr),
+            ["order"] = new IntValue(order),
+        };
+        if (!string.IsNullOrEmpty(kind)) d["kind"] = new TextValue(kind);
+        if (!string.IsNullOrEmpty(item)) d["item"] = new TextValue(item);
+        if (!string.IsNullOrEmpty(collection)) d["collection"] = new TextValue(collection);
+        if (!string.IsNullOrEmpty(condition)) d["condition"] = new TextValue(condition);
+        if (attrs != null && attrs.Length > 0) d["attrs"] = MakeSet(attrs);
+        if (children != null && children.Length > 0) d["children"] = MakeSet(children);
+        if (elseChildren != null && elseChildren.Length > 0) d["elseChildren"] = MakeSet(elseChildren);
+        return new ObjectValue(d);
+    }
+
+    private static ObjectValue MakeAttr(string name, string value, int order = 0)
+    {
+        return new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name),
+            ["value"] = new TextValue(value),
+            ["order"] = new IntValue(order),
+        });
+    }
+
+    private static ObjectValue MakeDesign(string label, string ui = "", SetValue? types = null, SetValue? render = null, SetValue? fns = null, SetValue? vars = null)
+    {
+        var fields = new Dictionary<string, NodeValue>
+        {
+            ["label"] = new TextValue(label),
+            ["ui"] = new TextValue(ui),
+            ["initialData"] = new TextValue(""),
+            ["access"] = new TextValue(""),
+            ["common"] = new TextValue(""),
+        };
+        if (types != null) fields["types"] = types;
+        if (render != null) fields["render"] = render;
+        if (fns != null) fields["fns"] = fns;
+        if (vars != null) fields["vars"] = vars;
+        return new ObjectValue(fields);
+    }
+
+    // Helper to attach/replace a top-level set field on an existing design value (for refusal fixtures).
+    private static ObjectValue WithField(ObjectValue design, string field, NodeValue value)
+    {
+        var d = design.Fields.ToDictionary(kv => kv.Key, kv => kv.Value);
+        d[field] = value;
+        return new ObjectValue(d);
+    }
+
+    private static (SetValue types, ObjectValue db) MinimalDbTypes()
+    {
+        var greeting = MakeMetaProp("greeting", "text", 0);
+        var db = MakeMetaType("Db", "object", 0, new[] { greeting });
+        var types = MakeSet(db);
+        return (types, db);
+    }
+
+    private static ObjectValue Var(string name, string init, int order = 0) =>
+        new(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue(name), ["init"] = new TextValue(init), ["order"] = new IntValue(order),
+        });
+
+    // Pure in-memory minimal design (Db type + bare main render root). Used by ProjectDesignDb var/fn
+    // refusal tests and the stateful projection test.
+    private static ObjectValue MinimalDesignForVars(string label)
+    {
+        var (types, _) = MinimalDbTypes();
+        var main = MakeNode("main", order: 0);
+        return MakeDesign(label, ui: "", types: types, render: MakeSet(main));
+    }
+
+    // Encapsulates the (still necessary) store usage ONLY for tests that exercise ImportRender's
+    // mutation (it writes MetaNode rows into the design via IInstanceStore). All pure projection
+    // and RenderExprSources tests use the in-memory Make* helpers above and never touch disk.
+    private ObjectValue ImportRenderForTest(string label, string ui)
+    {
+        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
+        var storePath = Path.Combine(Path.GetTempPath(), "deenv-import-" + Guid.NewGuid().ToString("N") + ".json");
+        var store = new JsonFileInstanceStore(storePath, meta);
+        try
+        {
+            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
+            {
+                ["label"] = new TextValue(label), ["ui"] = new TextValue(ui),
+            }));
+            store.AddToSet(NodePath.Root.Field("designs"), designId);
+            AddDbType(store, designId);
+            SchemaBridge.ImportRender(store, designId);
+            return (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+        }
+        finally
+        {
+            File.Delete(storePath);
+        }
+    }
 
     // ── M12 S1a: structured render tree → canonical fn render() ───────────────────
 
@@ -118,48 +268,21 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ProjectDesignDb_projects_a_structured_render_to_a_canonical_render_fn()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1a-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
-        {
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("hello-app"),
-                ["ui"]    = new TextValue(""), // empty — the render tree is the authority
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId); // a custom-UI app still needs a valid Db root type
+        // Build a pure in-memory Design (structured render tree, empty ui) — no store, no file.
+        var (types, _) = MinimalDbTypes();
+        var cls = MakeAttr("class", "\"hello\"", 0);
+        var hi = MakeNode(expr: "\"Hi\"", order: 0);
+        var h1 = MakeNode("h1", children: new[] { hi }, order: 0);
+        var main = MakeNode("main", attrs: new[] { cls }, children: new[] { h1 }, order: 0);
+        var render = MakeSet(main);
+        var design = MakeDesign("hello-app", ui: "", types: types, render: render);
 
-            // main.hello > h1 > "Hi", built top-down so no node is transiently unreachable (the store GCs
-            // unreferenced objects on link mutations). `render` is now a SET (holding exactly one root), so
-            // the root itself is addressed as a set member (Key(main)), like any other set-owned object.
-            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
-            var main = store.CreateObject("MetaNode", Node("main"));
-            store.AddToSet(designPath.Field("render"), main);
-            var mainPath = designPath.Field("render").Key(main.ToString());
-            var cls = store.CreateObject("MetaAttr", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue("class"), ["value"] = new TextValue("\"hello\""), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(mainPath.Field("attrs"), cls);
-            var h1 = store.CreateObject("MetaNode", Node("h1"));
-            store.AddToSet(mainPath.Field("children"), h1);
-            var hi = store.CreateObject("MetaNode", Node("", "\"Hi\""));
-            store.AddToSet(mainPath.Field("children").Key(h1.ToString()).Field("children"), hi);
+        var projected = SchemaBridge.ProjectDesignDb(design);
 
-            var design = store.ReadNode(designPath)!;
-            var projected = SchemaBridge.ProjectDesignDb(design);
-
-            // The exact canonical render fn the printer produces for the equivalent hand-written UI.
-            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(
-                "ui\n    fn render()\n        return <main class=\"hello\">\n            <h1>\n                \"Hi\"\n"));
-            await Assert.That(projected).Contains(expectedUi.TrimEnd('\n'));
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
+        // The exact canonical render fn the printer produces for the equivalent hand-written UI.
+        var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(
+            "ui\n    fn render()\n        return <main class=\"hello\">\n            <h1>\n                \"Hi\"\n"));
+        await Assert.That(projected).Contains(expectedUi.TrimEnd('\n'));
     }
 
     // ProjectDesignDb REFUSES a design carrying both a structured render tree AND a non-empty `ui`
@@ -168,29 +291,16 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ProjectDesignDb_refuses_a_render_tree_alongside_a_non_empty_ui_text()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1a-both-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
-        {
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("clash"),
-                ["ui"]    = new TextValue("ui\n    fn render()\n        return <main>\n            \"x\"\n"),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            var main = store.CreateObject("MetaNode", Node("main"));
-            store.AddToSet(NodePath.Root.Field("designs").Key(designId.ToString()).Field("render"), main);
+        var (types, _) = MinimalDbTypes();
+        var main = MakeNode("main");
+        var render = MakeSet(main);
+        var design = MakeDesign("clash",
+            ui: "ui\n    fn render()\n        return <main>\n            \"x\"\n",
+            types: types, render: render);
 
-            var design = store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
-                .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("both a structured `render`");
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
+        var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
+            .Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("both a structured `render`");
     }
 
     // ── M12 S1b: import (`ui` render text → structured MetaNode rows) ─────────────
@@ -203,58 +313,39 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ImportRender_mints_the_row_tree_and_round_trips()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1b-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
-        {
-            // <main class="hello" id="root"> with a nested <h1>"Hi" AND a bare-symbol expression leaf `db.greeting`.
-            var ui = "ui\n    fn render()\n        return <main class=\"hello\" id=\"root\">\n"
-                   + "            <h1>\n                \"Hi\"\n            db.greeting\n";
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("s1b"), ["ui"] = new TextValue(ui),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId);
+        // <main class="hello" id="root"> with a nested <h1>"Hi" AND a bare-symbol expression leaf `db.greeting`.
+        var ui = "ui\n    fn render()\n        return <main class=\"hello\" id=\"root\">\n"
+               + "            <h1>\n                \"Hi\"\n            db.greeting\n";
 
-            SchemaBridge.ImportRender(store, designId);
+        var design = ImportRenderForTest("s1b", ui);
 
-            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+        // The `ui` text field was cleared (so the S1a gate accepts the structured render).
+        await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo("");
 
-            // The `ui` text field was cleared (so the S1a gate accepts the structured render).
-            var design = (ObjectValue)store.ReadNode(designPath)!;
-            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo("");
+        // Root: <main> with two attrs in order (class, id) and two children (the <h1> element, then the
+        // db.greeting leaf).
+        var root = OrderedByOrder((SetValue)design.Fields["render"]).Single();
+        await Assert.That(Text(root, "tag")).IsEqualTo("main");
+        var attrs = OrderedByOrder((SetValue)root.Fields["attrs"]).ToList();
+        await Assert.That(attrs.Select(a => Text(a, "name")).ToList()).IsEquivalentTo(new[] { "class", "id" });
+        await Assert.That(Text(attrs[0], "value")).IsEqualTo("\"hello\"");
+        await Assert.That(Text(attrs[1], "value")).IsEqualTo("\"root\"");
 
-            // Root: <main> with two attrs in order (class, id) and two children (the <h1> element, then the
-            // db.greeting leaf).
-            var root = OrderedByOrder((SetValue)design.Fields["render"]).Single();
-            await Assert.That(Text(root, "tag")).IsEqualTo("main");
-            var attrs = OrderedByOrder((SetValue)root.Fields["attrs"]).ToList();
-            await Assert.That(attrs.Select(a => Text(a, "name")).ToList()).IsEquivalentTo(new[] { "class", "id" });
-            await Assert.That(Text(attrs[0], "value")).IsEqualTo("\"hello\"");
-            await Assert.That(Text(attrs[1], "value")).IsEqualTo("\"root\"");
+        var children = OrderedByOrder((SetValue)root.Fields["children"]).ToList();
+        await Assert.That(children.Count).IsEqualTo(2);
+        // Child 0: the nested <h1> element carrying a text leaf.
+        await Assert.That(Text(children[0], "tag")).IsEqualTo("h1");
+        var h1Kids = OrderedByOrder((SetValue)children[0].Fields["children"]).Single();
+        await Assert.That(Text(h1Kids, "tag")).IsEqualTo("");            // a leaf: empty tag
+        await Assert.That(Text(h1Kids, "expr")).IsEqualTo("\"Hi\"");    // the text leaf's source
+        // Child 1: the expression leaf `db.greeting` (empty tag, expr carries the source).
+        await Assert.That(Text(children[1], "tag")).IsEqualTo("");
+        await Assert.That(Text(children[1], "expr")).IsEqualTo("db.greeting");
 
-            var children = OrderedByOrder((SetValue)root.Fields["children"]).ToList();
-            await Assert.That(children.Count).IsEqualTo(2);
-            // Child 0: the nested <h1> element carrying a text leaf.
-            await Assert.That(Text(children[0], "tag")).IsEqualTo("h1");
-            var h1Kids = OrderedByOrder((SetValue)children[0].Fields["children"]).Single();
-            await Assert.That(Text(h1Kids, "tag")).IsEqualTo("");            // a leaf: empty tag
-            await Assert.That(Text(h1Kids, "expr")).IsEqualTo("\"Hi\"");    // the text leaf's source
-            // Child 1: the expression leaf `db.greeting` (empty tag, expr carries the source).
-            await Assert.That(Text(children[1], "tag")).IsEqualTo("");
-            await Assert.That(Text(children[1], "expr")).IsEqualTo("db.greeting");
-
-            // The round-trip: projecting the imported design yields the canonical form of the original render.
-            var projected = SchemaBridge.ProjectDesignDb(design);
-            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
-            await Assert.That(projected).Contains(expectedUi);
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
+        // The round-trip: projecting the imported design yields the canonical form of the original render.
+        var projected = SchemaBridge.ProjectDesignDb(design);
+        var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
+        await Assert.That(projected).Contains(expectedUi);
     }
 
     // ── M12 S6a: `foreach`/`if` render forms import to structured `kind="for"`/`kind="if"` rows ──
@@ -266,58 +357,41 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ImportRender_converts_a_foreach_loop_and_an_if_else_to_structured_rows_and_round_trips()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s6a-forif-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
-        {
-            var ui = "ui\n    fn render()\n        return <main>\n"
-                   + "            foreach note in db.notes\n"
-                   + "                <li>\n                    note.title\n"
-                   + "            if db.greeting == \"hi\"\n"
-                   + "                <p>\n                    \"hello\"\n"
-                   + "            else\n"
-                   + "                <p>\n                    \"bye\"\n";
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("forif"), ["ui"] = new TextValue(ui),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId);
+        var ui = "ui\n    fn render()\n        return <main>\n"
+               + "            foreach note in db.notes\n"
+               + "                <li>\n                    note.title\n"
+               + "            if db.greeting == \"hi\"\n"
+               + "                <p>\n                    \"hello\"\n"
+               + "            else\n"
+               + "                <p>\n                    \"bye\"\n";
 
-            SchemaBridge.ImportRender(store, designId);
+        var design = ImportRenderForTest("forif", ui);
 
-            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
+        await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
 
-            var root = OrderedByOrder((SetValue)design.Fields["render"]).Single();
-            var children = OrderedByOrder((SetValue)root.Fields["children"]).ToList();
-            await Assert.That(children.Count).IsEqualTo(2);
+        var root = OrderedByOrder((SetValue)design.Fields["render"]).Single();
+        var children = OrderedByOrder((SetValue)root.Fields["children"]).ToList();
+        await Assert.That(children.Count).IsEqualTo(2);
 
-            var forRow = children[0];
-            await Assert.That(Text(forRow, "kind")).IsEqualTo("for");
-            await Assert.That(Text(forRow, "item")).IsEqualTo("note");
-            await Assert.That(Text(forRow, "collection")).IsEqualTo("db.notes");
-            var forBody = OrderedByOrder((SetValue)forRow.Fields["children"]).Single();
-            await Assert.That(Text(forBody, "tag")).IsEqualTo("li");
+        var forRow = children[0];
+        await Assert.That(Text(forRow, "kind")).IsEqualTo("for");
+        await Assert.That(Text(forRow, "item")).IsEqualTo("note");
+        await Assert.That(Text(forRow, "collection")).IsEqualTo("db.notes");
+        var forBody = OrderedByOrder((SetValue)forRow.Fields["children"]).Single();
+        await Assert.That(Text(forBody, "tag")).IsEqualTo("li");
 
-            var ifRow = children[1];
-            await Assert.That(Text(ifRow, "kind")).IsEqualTo("if");
-            await Assert.That(Text(ifRow, "condition")).IsEqualTo("db.greeting == \"hi\"");
-            var thenBody = OrderedByOrder((SetValue)ifRow.Fields["children"]).Single();
-            await Assert.That(Text(thenBody, "tag")).IsEqualTo("p");
-            var elseBody = OrderedByOrder((SetValue)ifRow.Fields["elseChildren"]).Single();
-            await Assert.That(Text(elseBody, "tag")).IsEqualTo("p");
+        var ifRow = children[1];
+        await Assert.That(Text(ifRow, "kind")).IsEqualTo("if");
+        await Assert.That(Text(ifRow, "condition")).IsEqualTo("db.greeting == \"hi\"");
+        var thenBody = OrderedByOrder((SetValue)ifRow.Fields["children"]).Single();
+        await Assert.That(Text(thenBody, "tag")).IsEqualTo("p");
+        var elseBody = OrderedByOrder((SetValue)ifRow.Fields["elseChildren"]).Single();
+        await Assert.That(Text(elseBody, "tag")).IsEqualTo("p");
 
-            // The round-trip: projecting the imported design yields the canonical form of the original render.
-            var projected = SchemaBridge.ProjectDesignDb(design);
-            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
-            await Assert.That(projected).Contains(expectedUi);
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
+        // The round-trip: projecting the imported design yields the canonical form of the original render.
+        var projected = SchemaBridge.ProjectDesignDb(design);
+        var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
+        await Assert.That(projected).Contains(expectedUi);
     }
 
     // The else-if fixpoint (M12 S6a review fix 2 — the load-bearing corner of the printer collapse):
@@ -328,36 +402,24 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ImportRender_converts_an_else_if_chain_to_a_nested_if_row_and_round_trips()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s6a-elseif-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
-        {
-            var ui = "ui\n    fn render()\n        return <main>\n"
-                   + "            if db.a\n"
-                   + "                <p>\n                    \"A\"\n"
-                   + "            else if db.b\n"
-                   + "                <p>\n                    \"B\"\n"
-                   + "            else\n"
-                   + "                <p>\n                    \"C\"\n";
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("elseif"), ["ui"] = new TextValue(ui),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId);
+        var ui = "ui\n    fn render()\n        return <main>\n"
+               + "            if db.a\n"
+               + "                <p>\n                    \"A\"\n"
+               + "            else if db.b\n"
+               + "                <p>\n                    \"B\"\n"
+               + "            else\n"
+               + "                <p>\n                    \"C\"\n";
 
-            SchemaBridge.ImportRender(store, designId);
+        var design = ImportRenderForTest("elseif", ui);
 
-            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
+        await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
 
-            var root = OrderedByOrder((SetValue)design.Fields["render"]).Single();
-            var outerIf = OrderedByOrder((SetValue)root.Fields["children"]).Single();
-            await Assert.That(Text(outerIf, "kind")).IsEqualTo("if");
-            await Assert.That(Text(outerIf, "condition")).IsEqualTo("db.a");
-            var outerThen = OrderedByOrder((SetValue)outerIf.Fields["children"]).Single();
-            await Assert.That(Text(outerThen, "tag")).IsEqualTo("p");
+        var root = OrderedByOrder((SetValue)design.Fields["render"]).Single();
+        var outerIf = OrderedByOrder((SetValue)root.Fields["children"]).Single();
+        await Assert.That(Text(outerIf, "kind")).IsEqualTo("if");
+        await Assert.That(Text(outerIf, "condition")).IsEqualTo("db.a");
+        var outerThen = OrderedByOrder((SetValue)outerIf.Fields["children"]).Single();
+        await Assert.That(Text(outerThen, "tag")).IsEqualTo("p");
 
             // The outer if's elseChildren holds EXACTLY ONE row, and it is itself a NESTED kind="if" row —
             // not two flat sibling rows — the shape the printer's else-if collapse depends on.
@@ -378,11 +440,6 @@ public sealed class DesignerSourceTests
             var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
             await Assert.That(projected).Contains(expectedUi);
             await Assert.That(expectedUi).Contains("else if"); // the fixture actually exercises the collapse
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
     }
 
     // The collector invariant (M12 S6a): SchemaBridge.RenderExprSources — the hand-kept parallel walk the
@@ -394,58 +451,26 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task RenderExprSources_collects_a_for_collection_and_an_expr_inside_elseChildren()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s6a-collect-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
-        {
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("collect"), ["ui"] = new TextValue(""),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId);
-            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+        // Pure in-memory design graph for the collector test (no file, no store).
+        var (types, _) = MinimalDbTypes();
+        var forLeaf = MakeNode(expr: "note.title", order: 0);
+        var forRow = MakeNode(kind: "for", item: "note", collection: "db.notes", order: 0, children: new[] { forLeaf });
 
-            // Root <main> holds a `for` row (collection = db.notes, body leaf note.title) and an `if` row
-            // (condition = db.flag, then-leaf "\"on\"", else-leaf db.elseExpr — INSIDE elseChildren).
-            var main = store.CreateObject("MetaNode", Node("main"));
-            store.AddToSet(designPath.Field("render"), main);
-            var mainPath = designPath.Field("render").Key(main.ToString());
+        var thenLeaf = MakeNode(expr: "\"on\"", order: 0);
+        var elseLeaf = MakeNode(expr: "db.elseExpr", order: 0);
+        var ifRow = MakeNode(kind: "if", condition: "db.flag", order: 1, children: new[] { thenLeaf }, elseChildren: new[] { elseLeaf });
 
-            var forRow = store.CreateObject("MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["kind"] = new TextValue("for"), ["item"] = new TextValue("note"),
-                ["collection"] = new TextValue("db.notes"), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(mainPath.Field("children"), forRow);
-            var forLeaf = store.CreateObject("MetaNode", Node("", "note.title"));
-            store.AddToSet(mainPath.Field("children").Key(forRow.ToString()).Field("children"), forLeaf);
+        var main = MakeNode("main", children: new[] { forRow, ifRow }, order: 0);
+        var render = MakeSet(main);
+        var design = MakeDesign("collect", ui: "", types: types, render: render);
 
-            var ifRow = store.CreateObject("MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["kind"] = new TextValue("if"), ["condition"] = new TextValue("db.flag"), ["order"] = new IntValue(1),
-            }));
-            store.AddToSet(mainPath.Field("children"), ifRow);
-            var ifPath = mainPath.Field("children").Key(ifRow.ToString());
-            var thenLeaf = store.CreateObject("MetaNode", Node("", "\"on\""));
-            store.AddToSet(ifPath.Field("children"), thenLeaf);
-            var elseLeaf = store.CreateObject("MetaNode", Node("", "db.elseExpr"));
-            store.AddToSet(ifPath.Field("elseChildren"), elseLeaf);
+        var sources = SchemaBridge.RenderExprSources(design);
 
-            var design = store.ReadNode(designPath)!;
-            var sources = SchemaBridge.RenderExprSources(design);
-
-            await Assert.That(sources).Contains("db.notes");     // the for row's collection
-            await Assert.That(sources).Contains("note.title");   // the for body leaf
-            await Assert.That(sources).Contains("db.flag");      // the if row's condition
-            await Assert.That(sources).Contains("\"on\"");       // the then-branch leaf
-            await Assert.That(sources).Contains("db.elseExpr");  // the ELSE-branch leaf — the easy-to-forget one
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
+        await Assert.That(sources).Contains("db.notes");     // the for row's collection
+        await Assert.That(sources).Contains("note.title");   // the for body leaf
+        await Assert.That(sources).Contains("db.flag");      // the if row's condition
+        await Assert.That(sources).Contains("\"on\"");       // the then-branch leaf
+        await Assert.That(sources).Contains("db.elseExpr");  // the ELSE-branch leaf — the easy-to-forget one
     }
 
     // The collector invariant (M12 F2/V1): RenderExprSources also walks `design.fns` body roots — a
@@ -458,52 +483,28 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task RenderExprSources_collects_a_source_inside_a_fn_body_reached_only_via_expansion()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f2-collect-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
+        var (types, _) = MinimalDbTypes();
+        var fnLeaf = MakeNode(expr: "note.title", order: 0);
+        var fnBody = MakeNode("li", children: new[] { fnLeaf }, order: 0);
+
+        var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("collectfn"), ["ui"] = new TextValue(""),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId);
-            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+            ["name"] = new TextValue("NoteCard"),
+            ["params"] = new TextValue("note"),
+            ["order"] = new IntValue(0),
+            ["body"] = MakeSet(fnBody),
+            ["vars"] = MakeSet(Var("localFlag", "note.done == false")),
+        });
 
-            var main = store.CreateObject("MetaNode", Node("main"));
-            store.AddToSet(designPath.Field("render"), main);
+        var main = MakeNode("main", order: 0);
+        var design = MakeDesign("collectfn", ui: "", types: types, render: MakeSet(main), fns: MakeSet(fn),
+            vars: MakeSet(Var("topCount", "db.total + 1")));
 
-            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue("NoteCard"), ["params"] = new TextValue("note"), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(designPath.Field("fns"), fn);
-            var fnPath = designPath.Field("fns").Key(fn.ToString());
+        var sources = SchemaBridge.RenderExprSources(design);
 
-            var fnBody = store.CreateObject("MetaNode", Node("li"));
-            store.AddToSet(fnPath.Field("body"), fnBody);
-            var fnBodyPath = fnPath.Field("body").Key(fnBody.ToString());
-
-            var fnLeaf = store.CreateObject("MetaNode", Node("", "note.title"));
-            store.AddToSet(fnBodyPath.Field("children"), fnLeaf);
-
-            // M12 V1 — a design-level var init AND a fn-level var init, each with a DISTINCT source, reached
-            // ONLY through CollectVarInitSources (never through the render/fn-body tag walk above).
-            store.AddToSet(designPath.Field("vars"), store.CreateObject("MetaVar", Var("topCount", "db.total + 1")));
-            store.AddToSet(fnPath.Field("vars"), store.CreateObject("MetaVar", Var("localFlag", "note.done == false")));
-
-            var design = store.ReadNode(designPath)!;
-            var sources = SchemaBridge.RenderExprSources(design);
-
-            await Assert.That(sources).Contains("note.title");
-            await Assert.That(sources).Contains("db.total + 1");
-            await Assert.That(sources).Contains("note.done == false");
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
+        await Assert.That(sources).Contains("note.title");
+        await Assert.That(sources).Contains("db.total + 1");
+        await Assert.That(sources).Contains("note.done == false");
     }
 
     // The collector invariant (M12 U1): a MetaUse's `args` (a stored sample-invocation configuration on a
@@ -516,51 +517,29 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task RenderExprSources_collects_a_source_reachable_only_via_a_fn_use_arg()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-u1-collect-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
+        var (types, _) = MinimalDbTypes();
+        var fnBody = MakeNode("li", order: 0);
+        var useArg = MakeAttr("note", "db.firstNote", 0);
+        var use = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("collectuse"), ["ui"] = new TextValue(""),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId);
-            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
-
-            // A trivial render root, deliberately unrelated to the use's arg source.
-            var main = store.CreateObject("MetaNode", Node("main"));
-            store.AddToSet(designPath.Field("render"), main);
-
-            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue("NoteCard"), ["params"] = new TextValue("note"), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(designPath.Field("fns"), fn);
-            var fnPath = designPath.Field("fns").Key(fn.ToString());
-            store.AddToSet(fnPath.Field("body"), store.CreateObject("MetaNode", Node("li")));
-
-            var use = store.CreateObject("MetaUse", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue("sample"), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(fnPath.Field("uses"), use);
-            var arg = store.CreateObject("MetaAttr", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue("note"), ["value"] = new TextValue("db.firstNote"), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(fnPath.Field("uses").Key(use.ToString()).Field("args"), arg);
-
-            var design = store.ReadNode(designPath)!;
-            var sources = SchemaBridge.RenderExprSources(design);
-
-            await Assert.That(sources).Contains("db.firstNote");
-        }
-        finally
+            ["name"] = new TextValue("sample"),
+            ["order"] = new IntValue(0),
+            ["args"] = MakeSet(useArg),
+        });
+        var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            File.Delete(storePath);
-        }
+            ["name"] = new TextValue("NoteCard"),
+            ["params"] = new TextValue("note"),
+            ["order"] = new IntValue(0),
+            ["body"] = MakeSet(fnBody),
+            ["uses"] = MakeSet(use),
+        });
+        var main = MakeNode("main", order: 0);
+        var design = MakeDesign("collectuse", ui: "", types: types, render: MakeSet(main), fns: MakeSet(fn));
+
+        var sources = SchemaBridge.RenderExprSources(design);
+
+        await Assert.That(sources).Contains("db.firstNote");
     }
 
     // M12 V1 LIFTS the old refusal this test used to cover (a `ui` section carrying top-level `var`s
@@ -570,37 +549,19 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ImportRender_converts_a_top_level_var_to_a_MetaVar_row_and_round_trips()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-v1-topvar-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
-        {
-            var ui = "ui\n    var count = 0\n    fn render()\n        return <main>\n            \"hi\"\n";
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("vars"), ["ui"] = new TextValue(ui),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId);
+        var ui = "ui\n    var count = 0\n    fn render()\n        return <main>\n            \"hi\"\n";
+        var design = ImportRenderForTest("vars", ui);
 
-            SchemaBridge.ImportRender(store, designId);
+        await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
 
-            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
+        var vars = OrderedByOrder((SetValue)design.Fields["vars"]).ToList();
+        await Assert.That(vars.Count).IsEqualTo(1);
+        await Assert.That(Text(vars[0], "name")).IsEqualTo("count");
+        await Assert.That(Text(vars[0], "init")).IsEqualTo("0");
 
-            var vars = OrderedByOrder((SetValue)design.Fields["vars"]).ToList();
-            await Assert.That(vars.Count).IsEqualTo(1);
-            await Assert.That(Text(vars[0], "name")).IsEqualTo("count");
-            await Assert.That(Text(vars[0], "init")).IsEqualTo("0");
-
-            var projected = SchemaBridge.ProjectDesignDb(design);
-            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
-            await Assert.That(projected).Contains(expectedUi);
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
+        var projected = SchemaBridge.ProjectDesignDb(design);
+        var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
+        await Assert.That(projected).Contains(expectedUi);
     }
 
     // ── M12 F1: structured fns (helper + component functions → MetaFn rows) ───────
@@ -611,50 +572,32 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ImportRender_converts_a_helper_and_a_component_function_to_MetaFn_rows_and_round_trips()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-fns-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
-        {
-            var ui = "ui\n"
-                   + "    fn helperLabel(active)\n        return active ? \"Yes\" : \"No\"\n"
-                   + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
-                   + "    fn render()\n        return <main>\n            \"hi\"\n";
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("fns"), ["ui"] = new TextValue(ui),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId);
+        var ui = "ui\n"
+               + "    fn helperLabel(active)\n        return active ? \"Yes\" : \"No\"\n"
+               + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
+               + "    fn render()\n        return <main>\n            \"hi\"\n";
+        var design = ImportRenderForTest("fns", ui);
 
-            SchemaBridge.ImportRender(store, designId);
+        await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
 
-            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
+        var fns = OrderedByOrder((SetValue)design.Fields["fns"]).ToList();
+        await Assert.That(fns.Count).IsEqualTo(2);
+        await Assert.That(Text(fns[0], "name")).IsEqualTo("helperLabel");
+        await Assert.That(Text(fns[0], "params")).IsEqualTo("active");
+        var helperBody = OrderedByOrder((SetValue)fns[0].Fields["body"]).Single();
+        await Assert.That(Text(helperBody, "tag")).IsEqualTo("");             // a leaf: the ternary source
+        await Assert.That(Text(helperBody, "expr")).IsEqualTo("active ? \"Yes\" : \"No\"");
 
-            var fns = OrderedByOrder((SetValue)design.Fields["fns"]).ToList();
-            await Assert.That(fns.Count).IsEqualTo(2);
-            await Assert.That(Text(fns[0], "name")).IsEqualTo("helperLabel");
-            await Assert.That(Text(fns[0], "params")).IsEqualTo("active");
-            var helperBody = OrderedByOrder((SetValue)fns[0].Fields["body"]).Single();
-            await Assert.That(Text(helperBody, "tag")).IsEqualTo("");             // a leaf: the ternary source
-            await Assert.That(Text(helperBody, "expr")).IsEqualTo("active ? \"Yes\" : \"No\"");
+        await Assert.That(Text(fns[1], "name")).IsEqualTo("NoteCard");
+        await Assert.That(Text(fns[1], "params")).IsEqualTo("note");
+        var cardBody = OrderedByOrder((SetValue)fns[1].Fields["body"]).Single();
+        await Assert.That(Text(cardBody, "tag")).IsEqualTo("li");
 
-            await Assert.That(Text(fns[1], "name")).IsEqualTo("NoteCard");
-            await Assert.That(Text(fns[1], "params")).IsEqualTo("note");
-            var cardBody = OrderedByOrder((SetValue)fns[1].Fields["body"]).Single();
-            await Assert.That(Text(cardBody, "tag")).IsEqualTo("li");
-
-            // The round-trip: projecting the imported design reproduces the canonical original — render AND
-            // both structured functions, in order.
-            var projected = SchemaBridge.ProjectDesignDb(design);
-            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
-            await Assert.That(projected).Contains(expectedUi);
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
+        // The round-trip: projecting the imported design reproduces the canonical original — render AND
+        // both structured functions, in order.
+        var projected = SchemaBridge.ProjectDesignDb(design);
+        var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
+        await Assert.That(projected).Contains(expectedUi);
     }
 
     // Import refuses (imports NOTHING) when a top-level function is server-only — projecting it back would
@@ -796,39 +739,18 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ProjectDesignDb_refuses_a_structured_function_named_render()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-namedrender-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
+        var baseDesign = MinimalDesignForVars("namedrender");
+        var badFnBody = MakeNode(expr: "\"x\"", order: 0);
+        var badFn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("namedrender"), ["ui"] = new TextValue(""),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId);
-            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+            ["name"] = new TextValue("render"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            ["body"] = MakeSet(badFnBody),
+        });
+        var design = WithField(baseDesign, "fns", MakeSet(badFn));
 
-            var main = store.CreateObject("MetaNode", Node("main"));
-            store.AddToSet(designPath.Field("render"), main);
-
-            var badFn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue("render"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(designPath.Field("fns"), badFn);
-            var body = store.CreateObject("MetaNode", Node("", "\"x\""));
-            store.AddToSet(designPath.Field("fns").Key(badFn.ToString()).Field("body"), body);
-
-            var design = store.ReadNode(designPath)!;
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
-                .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("\"render\"");
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
+        var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
+            .Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("\"render\"");
     }
 
     // Projection refuses two structured functions sharing a name — every resolution site (function
@@ -837,42 +759,23 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ProjectDesignDb_refuses_duplicate_structured_function_names()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-dupname-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
+        var baseDesign = MinimalDesignForVars("dupname");
+        var body = MakeNode(expr: "\"x\"", order: 0);
+        var fn0 = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("dupname"), ["ui"] = new TextValue(""),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId);
-            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
-
-            var main = store.CreateObject("MetaNode", Node("main"));
-            store.AddToSet(designPath.Field("render"), main);
-
-            foreach (var order in new[] { 0, 1 })
-            {
-                var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
-                {
-                    ["name"] = new TextValue("dup"), ["params"] = new TextValue(""), ["order"] = new IntValue(order),
-                }));
-                store.AddToSet(designPath.Field("fns"), fn);
-                var body = store.CreateObject("MetaNode", Node("", "\"x\""));
-                store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"), body);
-            }
-
-            var design = store.ReadNode(designPath)!;
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
-                .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("dup");
-        }
-        finally
+            ["name"] = new TextValue("dup"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            ["body"] = MakeSet(body),
+        });
+        var fn1 = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            File.Delete(storePath);
-        }
+            ["name"] = new TextValue("dup"), ["params"] = new TextValue(""), ["order"] = new IntValue(1),
+            ["body"] = MakeSet(body),
+        });
+        var design = WithField(baseDesign, "fns", MakeSet(fn0, fn1));
+
+        var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
+            .Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("dup");
     }
 
     // Projection refuses `fns` (structured functions) alongside an EMPTY `render` set — the F1 INTERIM gate
@@ -881,95 +784,52 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ProjectDesignDb_refuses_fns_when_render_is_empty()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-f1-fnsnorender-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
+        var (types, _) = MinimalDbTypes();
+        var fnBody = MakeNode(expr: "\"x\"", order: 0);
+        var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("fnsnorender"), ["ui"] = new TextValue(""),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId);
-            var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
+            ["name"] = new TextValue("helper"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            ["body"] = MakeSet(fnBody),
+        });
+        var design = MakeDesign("fnsnorender", ui: "", types: types, render: MakeSet(), fns: MakeSet(fn));
 
-            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue("helper"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(designPath.Field("fns"), fn);
-            var body = store.CreateObject("MetaNode", Node("", "\"x\""));
-            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"), body);
-
-            var design = store.ReadNode(designPath)!;
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
-                .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("`fns`");
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
+        var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
+            .Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("`fns`");
     }
 
     // ── M12 V1: MetaVar rows — projection-side refusals ────────────────────────────────────────────
 
-    private static ObjectValue Var(string name, string init, int order = 0) =>
-        new(new Dictionary<string, NodeValue>
-        {
-            ["name"] = new TextValue(name), ["init"] = new TextValue(init), ["order"] = new IntValue(order),
-        });
-
-    // A minimal design with a valid Db type + a bare `<main>` render root, ready for a `vars`/fn-`vars`
-    // fixture to be added on top. Shared by every MetaVar refusal test below.
-    private (JsonFileInstanceStore Store, string Path, NodePath DesignPath) MinimalStructuredDesign(string label)
-    {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-v1-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-        {
-            ["label"] = new TextValue(label), ["ui"] = new TextValue(""),
-        }));
-        store.AddToSet(NodePath.Root.Field("designs"), designId);
-        AddDbType(store, designId);
-        var designPath = NodePath.Root.Field("designs").Key(designId.ToString());
-        var main = store.CreateObject("MetaNode", Node("main"));
-        store.AddToSet(designPath.Field("render"), main);
-        return (store, storePath, designPath);
-    }
+    // (Var helper defined earlier near the Make* builders)
 
     [Test]
     public async Task ProjectDesignDb_refuses_a_design_level_state_variable_with_an_empty_name()
     {
-        var (store, storePath, designPath) = MinimalStructuredDesign("emptyvarname");
-        try
-        {
-            var v = store.CreateObject("MetaVar", Var("", "0"));
-            store.AddToSet(designPath.Field("vars"), v);
+        var baseDesign = MinimalDesignForVars("emptyvarname");
+        // Attach an empty-named var directly (immutable: construct augmented design)
+        var badVar = Var("", "0");
+        var vars = MakeSet(badVar);
+        var design = new ObjectValue(baseDesign.Fields.ToDictionary(kv => kv.Key, kv => kv.Value)
+            .Concat(new[] { new KeyValuePair<string, NodeValue>("vars", vars) }).ToDictionary(kv => kv.Key, kv => kv.Value));
 
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!))
-                .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("empty name");
-        }
-        finally { File.Delete(storePath); }
+        var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
+            .Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("empty name");
     }
 
     [Test]
     public async Task ProjectDesignDb_refuses_duplicate_design_level_state_variable_names()
     {
-        var (store, storePath, designPath) = MinimalStructuredDesign("dupvarname");
-        try
-        {
-            store.AddToSet(designPath.Field("vars"), store.CreateObject("MetaVar", Var("count", "0", 0)));
-            store.AddToSet(designPath.Field("vars"), store.CreateObject("MetaVar", Var("count", "1", 1)));
+        var baseDesign = MinimalDesignForVars("dupvarname");
+        var v0 = Var("count", "0", 0);
+        var v1 = Var("count", "1", 1);
+        var vars = MakeSet(v0, v1);
+        var design = new ObjectValue(baseDesign.Fields.ToDictionary(kv => kv.Key, kv => kv.Value)
+            .Concat(new[] { new KeyValuePair<string, NodeValue>("vars", vars) }).ToDictionary(kv => kv.Key, kv => kv.Value));
 
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!))
-                .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("count");
-        }
-        finally { File.Delete(storePath); }
+        var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
+            .Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("count");
     }
 
     // A design-level state var sharing a NAME with a structured function refuses: SsrRenderer defines fns
@@ -978,71 +838,55 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ProjectDesignDb_refuses_a_design_level_state_variable_colliding_with_a_function_name()
     {
-        var (store, storePath, designPath) = MinimalStructuredDesign("varfncollide");
-        try
+        var baseDesign = MinimalDesignForVars("varfncollide");
+        var fnBody = MakeNode(expr: "\"x\"", order: 0);
+        var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue("helper"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(designPath.Field("fns"), fn);
-            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"),
-                store.CreateObject("MetaNode", Node("", "\"x\"")));
-            store.AddToSet(designPath.Field("vars"), store.CreateObject("MetaVar", Var("helper", "0")));
+            ["name"] = new TextValue("helper"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            ["body"] = MakeSet(fnBody),
+        });
+        var v = Var("helper", "0");
+        var design = WithField(WithField(baseDesign, "fns", MakeSet(fn)), "vars", MakeSet(v));
 
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!))
-                .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("helper");
-        }
-        finally { File.Delete(storePath); }
+        var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
+            .Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("helper");
     }
 
     [Test]
     public async Task ProjectDesignDb_refuses_a_fn_level_state_variable_with_an_empty_name()
     {
-        var (store, storePath, designPath) = MinimalStructuredDesign("emptyfnvarname");
-        try
+        var baseDesign = MinimalDesignForVars("emptyfnvarname");
+        var fnBody = MakeNode(expr: "\"x\"", order: 0);
+        var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(designPath.Field("fns"), fn);
-            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"),
-                store.CreateObject("MetaNode", Node("", "\"x\"")));
-            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
-                store.CreateObject("MetaVar", Var("", "0")));
+            ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            ["body"] = MakeSet(fnBody),
+            ["vars"] = MakeSet(Var("", "0")),
+        });
+        var design = WithField(baseDesign, "fns", MakeSet(fn));
 
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!))
-                .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("empty name");
-        }
-        finally { File.Delete(storePath); }
+        var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
+            .Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("empty name");
     }
 
     [Test]
     public async Task ProjectDesignDb_refuses_duplicate_fn_level_state_variable_names()
     {
-        var (store, storePath, designPath) = MinimalStructuredDesign("dupfnvarname");
-        try
+        var baseDesign = MinimalDesignForVars("dupfnvarname");
+        var fnBody = MakeNode(expr: "\"x\"", order: 0);
+        var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(designPath.Field("fns"), fn);
-            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"),
-                store.CreateObject("MetaNode", Node("", "\"x\"")));
-            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
-                store.CreateObject("MetaVar", Var("count", "0", 0)));
-            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
-                store.CreateObject("MetaVar", Var("count", "1", 1)));
+            ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            ["body"] = MakeSet(fnBody),
+            ["vars"] = MakeSet(Var("count", "0", 0), Var("count", "1", 1)),
+        });
+        var design = WithField(baseDesign, "fns", MakeSet(fn));
 
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!))
-                .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("count");
-        }
-        finally { File.Delete(storePath); }
+        var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
+            .Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("count");
     }
 
     // A fn-level state var named "render" collides with the RESERVED nested view-fn name the stateful shape
@@ -1051,24 +895,19 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ProjectDesignDb_refuses_a_fn_level_state_variable_named_render()
     {
-        var (store, storePath, designPath) = MinimalStructuredDesign("fnvarrender");
-        try
+        var baseDesign = MinimalDesignForVars("fnvarrender");
+        var fnBody = MakeNode(expr: "\"x\"", order: 0);
+        var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(designPath.Field("fns"), fn);
-            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"),
-                store.CreateObject("MetaNode", Node("", "\"x\"")));
-            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
-                store.CreateObject("MetaVar", Var("render", "0")));
+            ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            ["body"] = MakeSet(fnBody),
+            ["vars"] = MakeSet(Var("render", "0")),
+        });
+        var design = WithField(baseDesign, "fns", MakeSet(fn));
 
-            var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!))
-                .Throws<SchemaValidationException>();
-            await Assert.That(ex!.Message).Contains("reserved");
-        }
-        finally { File.Delete(storePath); }
+        var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
+            .Throws<SchemaValidationException>();
+        await Assert.That(ex!.Message).Contains("reserved");
     }
 
     // The POSITIVE case: a MetaFn carrying `vars` projects the STATEFUL canonical shape (var decs, a nested
@@ -1078,26 +917,19 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ProjectDesignDb_projects_a_stateful_fn_to_the_canonical_setup_view_shape()
     {
-        var (store, storePath, designPath) = MinimalStructuredDesign("statefulproj");
-        try
+        var baseDesign = MinimalDesignForVars("statefulproj");
+        var fnBody = MakeNode(expr: "count", order: 0);
+        var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            var fn = store.CreateObject("MetaFn", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            }));
-            store.AddToSet(designPath.Field("fns"), fn);
-            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("body"),
-                store.CreateObject("MetaNode", Node("", "count")));
-            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
-                store.CreateObject("MetaVar", Var("count", "0", 0)));
-            store.AddToSet(designPath.Field("fns").Key(fn.ToString()).Field("vars"),
-                store.CreateObject("MetaVar", Var("uninitialized", "", 1)));
+            ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
+            ["body"] = MakeSet(fnBody),
+            ["vars"] = MakeSet(Var("count", "0", 0), Var("uninitialized", "", 1)),
+        });
+        var design = WithField(baseDesign, "fns", MakeSet(fn));
 
-            var projected = SchemaBridge.ProjectDesignDb(store.ReadNode(designPath)!);
-            await Assert.That(projected).Contains(
-                "fn Counter()\n        var count = 0\n        var uninitialized\n        fn render()\n            return count\n        return render\n");
-        }
-        finally { File.Delete(storePath); }
+        var projected = SchemaBridge.ProjectDesignDb(design);
+        await Assert.That(projected).Contains(
+            "fn Counter()\n        var count = 0\n        var uninitialized\n        fn render()\n            return count\n        return render\n");
     }
 
     // A handler attribute (`onClick={() => ...}`) round-trips losslessly: import prints the lambda source
@@ -1106,36 +938,18 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ImportRender_round_trips_a_handler_attribute()
     {
-        var meta = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1));
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s1b-handler-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, meta);
-        try
-        {
-            var ui = "ui\n    fn render()\n        return <button onClick={() => db.greeting = \"hi\"}>\n            \"Click\"\n";
-            var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
-            {
-                ["label"] = new TextValue("handler"), ["ui"] = new TextValue(ui),
-            }));
-            store.AddToSet(NodePath.Root.Field("designs"), designId);
-            AddDbType(store, designId);
+        var ui = "ui\n    fn render()\n        return <button onClick={() => db.greeting = \"hi\"}>\n            \"Click\"\n";
+        var design = ImportRenderForTest("handler", ui);
 
-            SchemaBridge.ImportRender(store, designId);
+        await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
+        var onClick = OrderedByOrder((SetValue)OrderedByOrder((SetValue)design.Fields["render"]).Single().Fields["attrs"]).Single();
+        await Assert.That(Text(onClick, "name")).IsEqualTo("onClick");
 
-            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
-            var onClick = OrderedByOrder((SetValue)OrderedByOrder((SetValue)design.Fields["render"]).Single().Fields["attrs"]).Single();
-            await Assert.That(Text(onClick, "name")).IsEqualTo("onClick");
-
-            // The lossless proof: projecting the imported design reproduces the canonical original render,
-            // handler and all.
-            var projected = SchemaBridge.ProjectDesignDb(design);
-            var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
-            await Assert.That(projected).Contains(expectedUi);
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
+        // The lossless proof: projecting the imported design reproduces the canonical original render,
+        // handler and all.
+        var projected = SchemaBridge.ProjectDesignDb(design);
+        var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(ui)).TrimEnd('\n');
+        await Assert.That(projected).Contains(expectedUi);
     }
 
     private static IEnumerable<ObjectValue> OrderedByOrder(SetValue set) =>
@@ -1194,22 +1008,11 @@ public sealed class DesignerSourceTests
         var messyUi = "ui\n  fn render()\n    return <main class=\"x\">\n      \"hi\"\n";
         var appDoc = "types\n    Db\n        greeting text\n\n" + messyUi;
 
-        // Reverse-project into a live Design node (ui carried verbatim), then forward-project it.
-        var seed = DesignerSeed.Build([("app-messy", 71, appDoc)], []);
-        var designerDesc = InstanceDescriptionLoader.LoadFile(InstanceContext.AppFixture(1))
-            with { InitialData = seed };
-        var storePath = Path.Combine(Path.GetTempPath(), "deenv-s0-" + Guid.NewGuid().ToString("N") + ".json");
-        var store = new JsonFileInstanceStore(storePath, designerDesc);
-        try
-        {
-            var design = store.ReadNode(NodePath.Root.Field("designs").Key("71"))!;
-            var projected = SchemaBridge.ProjectDesignDb(design);
-            await Assert.That(projected).Contains("\n    fn render()");     // canonical 4-space indent
-            await Assert.That(projected).DoesNotContain("\n  fn render()");  // the verbatim 2-space form is gone
-        }
-        finally
-        {
-            File.Delete(storePath);
-        }
+        // Use DesignFromText (the textual reverse) to get a Design carrying the non-canonical ui verbatim,
+        // then ProjectDesignDb (which canonicalizes only the ui section).
+        var design = SchemaBridge.DesignFromText(appDoc, "messy-ui");
+        var projected = SchemaBridge.ProjectDesignDb(design);
+        await Assert.That(projected).Contains("\n    fn render()");     // canonical 4-space indent
+        await Assert.That(projected).DoesNotContain("\n  fn render()");  // the verbatim 2-space form is gone
     }
 }
