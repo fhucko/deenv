@@ -1506,10 +1506,6 @@ public sealed partial class DesignerSteps
         {
             await ctx.Page!.EvaluateAsync("() => { if (typeof evalRefresh !== 'undefined') evalRefresh = (evalRefresh|0) + 1; else if (window.evalRefresh !== undefined) window.evalRefresh = (window.evalRefresh|0) + 1; }");
         }
-        // Diagnostic: write what the preview actually contains after the set (to see if li is rendered or what the mount shows).
-        var previewHtml = await ctx.Page!.EvaluateAsync<string>($"() => {{ const rows = document.querySelectorAll('main.ide-design-edit .design-editor .components-section .fn-uses .use-row'); const r = rows[{useIndex}]; const p = r ? r.querySelector('.use-preview') : null; return p ? p.innerHTML : 'no-preview'; }}");
-        System.IO.File.WriteAllText("preview-debug.html", previewHtml);
-        Console.WriteLine($"DEBUG: wrote preview-debug.html for arg {useIndex}");
     }
 
     // ux review — a typo'd arg name is currently byte-identical to no arg at all (both bind ExecNull);
@@ -1547,8 +1543,6 @@ public sealed partial class DesignerSteps
     {
         var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row").Nth(index);
         var preview = row.Locator(".use-preview");
-        var previewHtml = await preview.InnerHTMLAsync();
-        Console.WriteLine($"PREVIEW AT ASSERT FOR {index}: {previewHtml}");
         try
         {
             // Wait for the element inside the preview (handles static renderTree or live mount).
@@ -1557,6 +1551,7 @@ public sealed partial class DesignerSteps
         }
         catch (TimeoutException)
         {
+            var previewHtml = await preview.InnerHTMLAsync();
             throw new TimeoutException($"Preview for config {index} did not show <{tag}> with '{text}'. Actual content at assert: {previewHtml}");
         }
     }
@@ -1590,22 +1585,9 @@ public sealed partial class DesignerSteps
     [Then("configuration {int}'s live instance shows the error {string}")]
     public async Task ThenConfigurationLiveInstanceShowsError(int index, string message)
     {
-        var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row").Nth(index);
-        var preview = row.Locator(".use-preview");
-        var previewHtml = await preview.InnerHTMLAsync();
-        Console.WriteLine($"LIVE ERROR PREVIEW AT ASSERT FOR {index}: {previewHtml}");
-        try
-        {
-            // Wait inside the use-preview for the error banner emitted by the workbench driver (render
-            // throw path or runInstanceHandler click-throw path). Explicit timeout gives headroom for
-            // the mount/evalContext roundtrip that precedes a render-time error card.
-            await preview.Locator(".instance-error", new() { HasTextString = message }).First.WaitForAsync(new() { Timeout = 30000 });
-        }
-        catch (TimeoutException)
-        {
-            previewHtml = await preview.InnerHTMLAsync();
-            throw new TimeoutException($"Configuration {index}'s live instance did not show error '{message}'. Actual content: {previewHtml}");
-        }
+        var preview = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row").Nth(index)
+            .Locator(".use-preview");
+        await preview.Locator(".instance-error", new() { HasTextString = message }).First.WaitForAsync();
     }
 
     // Stamps the mounted instance's first element with a test-only marker — the opaque-container pin: an
