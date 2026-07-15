@@ -3,10 +3,10 @@ namespace DeEnv.Tests.TestSupport;
 public static class TestTimeouts
 {
     /// <summary>Timeout (ms) for individual Playwright actions/waits (locator waits, WaitFor*, etc.).</summary>
-    public const int ActionMs = 10_000;
+    public const int ActionMs = 5_000;
 
     /// <summary>Timeout (ms) for the overall test (page default timeout etc.).</summary>
-    public const int TestMs = 30_000;
+    public const int TestMs = 5_000;
 }
 
 /// <summary>

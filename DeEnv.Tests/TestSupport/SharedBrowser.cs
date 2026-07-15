@@ -42,7 +42,7 @@ public static class SharedBrowser
     // never leak. 4 is the empirical sweet spot on a 6-core box: it leaves headroom for the in-process
     // servers + the test host while removing the oversubscription, and the heaviest sub-population (the
     // operator-IDE scenarios) stays additionally capped at 2 by Designer.feature's own [ParallelLimiter].
-    private const int MaxConcurrentPages = 4;
+    private const int MaxConcurrentPages = 2;
     private static readonly SemaphoreSlim PageGate = new(MaxConcurrentPages, MaxConcurrentPages);
 
     private static async Task<IBrowser> BrowserAsync()
