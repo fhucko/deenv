@@ -2640,6 +2640,10 @@ public sealed partial class DesignerSteps
     public async Task WhenClickMoveDownOnRootChild(int index) =>
         await ctx.Page!.Locator(RootChildren).Nth(index).Locator(":scope > .node-tag-row > button.move-down").ClickAsync();
 
+    [When("I click move-up on the root node's child {int}")]
+    public async Task WhenClickMoveUpOnRootChild(int index) =>
+        await ctx.Page!.Locator(RootChildren).Nth(index).Locator(":scope > .node-tag-row > button.move-up").ClickAsync();
+
     // Capture a UI-verification screenshot — the DataConflictSteps.Shot precedent, gated on DEENV_SHOTS so
     // it costs nothing (no file, no delay) in a normal run and only fires during a deliberate capture pass.
     [Then("I capture a screenshot named {string}")]

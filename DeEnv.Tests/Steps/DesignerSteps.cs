@@ -27,10 +27,15 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
     [Given("the operator IDE is running on a kernel hosting instances {string} and {string}")]
     public async Task GivenIdeRunning(string firstLabel, string secondLabel)
     {
+        // Startup (kernel boot + first browser navigation + login) can legitimately exceed the temporary
+        // tight 5s action timeout under load. Use a generous ceiling for init only, then enforce the
+        // requested 5s for all subsequent designer interaction steps (tree/palette/canvas clicks etc.).
+        const int StartupMs = 45_000;
         _designer = await ctx.StartKernelDesignerBrowserAsync((5, firstLabel), (6, secondLabel));
         SeedDesignerAdmin();
-        await LoginDesignerAdminAsync();
+        await LoginDesignerAdminAsync(StartupMs);
         ctx.Page!.SetDefaultTimeout(TestTimeouts.ActionMs);
+        ctx.Page!.SetDefaultNavigationTimeout(TestTimeouts.ActionMs);
     }
 
     [Given("the anonymous operator IDE is running on a kernel hosting instances {string} and {string}")]
@@ -38,7 +43,9 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
     {
         _designer = await ctx.StartKernelDesignerBrowserAsync((5, firstLabel), (6, secondLabel));
         SeedDesignerAdmin();
+        // Anonymous path skips the login form in this harness.
         ctx.Page!.SetDefaultTimeout(TestTimeouts.ActionMs);
+        ctx.Page!.SetDefaultNavigationTimeout(TestTimeouts.ActionMs);
     }
 
     private void SeedDesignerAdmin()
@@ -47,15 +54,16 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
         AdminSeed.Seed(_designer.Store, desc, DesignerAdminName, DesignerAdminPassword, "Admin");
     }
 
-    private async Task LoginDesignerAdminAsync()
+    private async Task LoginDesignerAdminAsync(int timeoutMs = 0)
     {
         var page = ctx.Page ?? throw new InvalidOperationException("Designer browser was not started.");
+        var to = timeoutMs > 0 ? timeoutMs : TestTimeouts.ActionMs;
         await page.GotoReadyAsync(ctx.DesignerUrl("/designs"));
         await page.WaitReadyAsync();
         await page.Locator(".login-form input.name").FillAsync(DesignerAdminName);
         await page.Locator(".login-form input.password").FillAsync(DesignerAdminPassword);
-        await page.Locator(".login-form button.login-submit").ClickAsync();
-        await page.Locator("main.ide-designs .set-row").First.WaitForAsync();
+        await page.Locator(".login-form button.login-submit").ClickAsync(new() { Timeout = to });
+        await page.Locator("main.ide-designs .set-row").First.WaitForAsync(new() { Timeout = to });
     }
 
     private Microsoft.Playwright.ILocator RowFor(string label) =>
