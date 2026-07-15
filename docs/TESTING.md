@@ -100,6 +100,22 @@ The correct long-term fix is proper keying when we add better array support in t
 - Post-action waits should be on the *visible/structural effect*, not on internal implementation details.
 - Designer tests exercise the full client runtime + reconciler + WS round-trips. They are the canary for rendering and identity problems.
 
+### Targeting long-running designer scenarios (live previews, error isolation, convert flows)
+The @m12 live-preview + error scenarios (multiple live `.use-preview` cards, sandboxed mounts, handler/ambient errors, sibling isolation) are intentionally heavier (full per-scenario kernel boot + authoring + Convert + live mounts). Use precise filters so you do not pay for them in every fast smoke:
+
+```
+# Only the critical combined isolation proofs (single-boot "page + sibling survive error" tests)
+dotnet test DeEnv.Tests -c Release --no-build -- --treenode-filter '/*/*/*/*@m12-live-isolation*'
+
+# Broader @m12 live cluster (configs, previews, independence, error banners)
+dotnet test DeEnv.Tests -c Release --no-build -- --treenode-filter '/*/*/*/*@m12*'
+
+# Or combine with tags used in the .feature files
+# (treenode is preferred for precision; the generated class names are stable)
+```
+
+Do **not** split the isolation scenarios themselves (they prove cross-card behavior inside one boot + one page). See `docs/plans/2026-07-15-split-long-designer-scenarios.md` and its grill for the full analysis.
+
 ## References
 
 - `DeEnv/Instance/ui.ts` — reconciler (`updateChildren`, keyed vs unkeyed)

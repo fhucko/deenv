@@ -440,7 +440,10 @@ Feature: Designer - Components and Live Previews
   # per-use ambients yet, unlike schema/extent which W1c now SEEDS — see the W1c section below) ALWAYS
   # misses against the workbench's sandbox scope — the driver shows the real interpreter error rather than
   # a blank card, and the page keeps working (a second configuration can still be added).
-  @m12 @single-user
+  @m12 @single-user @m12-live-isolation
+  # NOTE (per 2026-07-15 analysis + grill): This scenario (and the throwing sibling error in DesignerLibrary)
+  # intentionally proves cross-card + page isolation *within a single kernel boot + single page render*.
+  # The error on first config + successful add of second config is the proof. Do not split; use filters.
   Scenario: A component reading an unseeded ambient shows the real error in its configuration card, and the page stays alive
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list

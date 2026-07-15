@@ -522,7 +522,11 @@ Feature: Designer - Library and Navigation
   # page-wide crash, and a SIBLING instance (a different component, in this design) stays fully interactive,
   # proving the isolation bracket is per-dispatch, not something one broken handler can wedge for the whole
   # page.
-  @m12 @single-user
+  @m12 @single-user @m12-live-isolation
+  # NOTE (per 2026-07-15 analysis + grill): This scenario (and sibling ambient error) intentionally proves
+  # cross-card + page isolation *within a single kernel boot + single page render*. The multiple live
+  # configs + error + post-error sibling interaction + outer designer mutation are the proof. Do not split
+  # into separate boots; that would invalidate the isolation claim. Use treenode/tag filters for targeted runs.
   Scenario: A throwing instance handler shows the real error without disabling the page or its sibling instance
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
