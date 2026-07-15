@@ -1971,6 +1971,17 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ComponentInvokingConvertibleRender));
     }
 
+    private const string PaletteTestConvertibleRender =
+        "ui\n    fn Badge(label)\n        return <span>\n            label\n    fn render()\n        return <main>\n            \"hi\"\n";
+
+    [When("I author a palette-test convertible render into the design's UI")]
+    public async Task WhenAuthorPaletteTestRender()
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(PaletteTestConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == PaletteTestConvertibleRender));
+    }
+
     // Edit the named component's body LEAF expr input (its `.fn-body` holds the SAME recursive
     // renderNodeEditor the render tree uses) — the F2 liveness proof: every expansion of this fn shares
     // this ONE body row, so editing it must repaint EVERY expanded instance same-frame. The feature writes
@@ -2034,6 +2045,135 @@ public sealed partial class DesignerSteps
     [Then("the new component's body shows an element node")]
     public async Task ThenNewComponentBodyShowsElement() =>
         await ctx.Page!.WaitForSelectorAsync(NewComponentCard + " .fn-body > .node-element");
+
+    // ──── M12 F2 selection in canvas vs tree editor (main vs component body) ─────────────────────────
+
+    [Then(@"the component ""(.*)""'s body row is selected")]
+    public async Task ThenTheComponentsBodyRowIsSelected(string name)
+    {
+        var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card", new() {
+            Has = ctx.Page.Locator($"input.fn-name[value=\"{name}\"]")
+        });
+        await card.Locator(".fn-body .is-selected").First.WaitForAsync();
+    }
+
+    [When(@"I click the design canvas ""(.*)"" element reading ""(.*)""")]
+    public async Task WhenIClickTheDesignCanvasElementReading(string tag, string text)
+    {
+        // Click the rendered element in the (main) canvas to trigger selectNode on its data-node.
+        // Uses the data-node stamped element for fidelity.
+        await ctx.Page!.Locator($".design-canvas {tag}[data-node]", new() { HasTextString = text }).First.ClickAsync();
+    }
+
+    [When(@"I click the tree editor's ""(.*)"" element row")]
+    public async Task WhenIClickTheTreeEditorsElementRow(string tag)
+    {
+        // Locate the row by the node-tag INPUT's value attribute (which the runtime mirrors).
+        // Using the attribute inside Has (rather than HasTextString) because <input> value lives in the attr/property,
+        // not inner text content. This matches how other tag-based row locators were cleaned up.
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element", new() {
+            Has = ctx.Page.Locator($"input.node-tag[value={CssString(tag)}]")
+        }).First.ClickAsync();
+    }
+
+    [Then("no tree editor row is selected in the main render tree")]
+    public async Task ThenNoTreeEditorRowIsSelectedInTheMainRenderTree()
+    {
+        // The main render tree (top-level design.render) should have nothing selected;
+        // the selection landed in the component's own body tree inside .components-section instead.
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .is-selected")
+            .First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+    }
+
+    [Then(@"the tree editor's ""(.*)"" element row is selected")]
+    public async Task ThenTheTreeEditorsElementRowIsSelected(string tag)
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element.is-selected", new() {
+            Has = ctx.Page.Locator($"input.node-tag[value={CssString(tag)}]")
+        }).First.WaitForAsync();
+    }
+
+    [Then(@"the tree editor's (for|if) row is selected")]
+    public async Task ThenTheTreeEditorsStructuralRowIsSelected(string kind)
+    {
+        string cls = kind == "for" ? ".node-for" : ".node-if";
+        await ctx.Page!.Locator($"main.ide-design-edit .design-editor .render-tree {cls}.is-selected").First.WaitForAsync();
+    }
+
+    [Then(@"the tree editor's ""(.*)"" element row is the last child of the ""(.*)"" element row")]
+    public async Task ThenTheTreeEditorsElementRowIsTheLastChild(string childTag, string parentTag)
+    {
+        var parentRow = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element", new() {
+            Has = ctx.Page.Locator($"input.node-tag[value={CssString(parentTag)}]")
+        });
+        await parentRow.Locator($":scope > .node-children > .node-element:last-child", new() {
+            Has = ctx.Page.Locator($"input.node-tag[value={CssString(childTag)}]")
+        }).WaitForAsync();
+    }
+
+    [When("I open the component palette")]
+    public async Task WhenIOpenTheComponentPalette()
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor details.component-palette summary.palette-toggle").ClickAsync();
+        await ctx.Page.Locator("main.ide-design-edit .design-editor .palette-group").First.WaitForAsync();
+    }
+
+    [When(@"I click the palette item ""(.*)""")]
+    public async Task WhenIClickThePaletteItem(string name)
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.palette-item", new() { HasTextString = name }).First.ClickAsync();
+    }
+
+    [Then(@"the component palette lists ""(.*)"" in the ""(.*)"" group")]
+    public async Task ThenTheComponentPaletteListsInTheGroup(string item, string group)
+    {
+        var groupEl = ctx.Page!.Locator("main.ide-design-edit .design-editor .palette-group", new() {
+            Has = ctx.Page.Locator("span.palette-group-label", new() { HasTextString = group })
+        });
+        await groupEl.Locator("button.palette-item", new() { HasTextString = item }).WaitForAsync();
+    }
+
+    [Then("the component palette is still open")]
+    public async Task ThenTheComponentPaletteIsStillOpen()
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor details.component-palette[open]").First.WaitForAsync();
+    }
+
+    [When(@"I force-invoke the palette item ""(.*)""'s click handler")]
+    public async Task WhenIForceInvokeThePaletteItemSClickHandler(string name)
+    {
+        await ctx.Page!.EvaluateAsync(
+            $"() => {{ const btns = document.querySelectorAll('main.ide-design-edit .design-editor button.palette-item'); for (const b of btns) if ((b.textContent || '').trim() === {JsString(name)}) {{ b.click(); break; }} }}");
+    }
+
+    [Then(@"the palette target caption reads ""(.*)""")]
+    public async Task ThenThePaletteTargetCaptionReads(string text)
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .palette-target", new() { HasTextString = text }).WaitForAsync();
+    }
+
+    [Then("the palette insert buttons are disabled")]
+    public async Task ThenThePaletteInsertButtonsAreDisabled()
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.palette-item[disabled]").First.WaitForAsync();
+    }
+
+    [Then(@"the tree editor's top-level render row count is {int}")]
+    public async Task ThenTheTreeEditorsTopLevelRenderRowCountIs(int count)
+    {
+        var rows = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree > .node-element, main.ide-design-edit .design-editor .render-tree > .node-for, main.ide-design-edit .design-editor .render-tree > .node-if, main.ide-design-edit .design-editor .render-tree > .node-leaf");
+        if (count == 0)
+            await rows.First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+        else
+            await rows.Nth(count - 1).WaitForAsync();
+    }
+
+    [Then(@"the design canvas contains a literal ""(.*)"" element")]
+    public async Task ThenTheDesignCanvasContainsALiteralElement(string tag)
+    {
+        // A library component renders literally (the tag itself, not expanded), and typically without data-node or with special.
+        await ctx.Page!.Locator($".design-canvas {tag}").First.WaitForAsync();
+    }
 
     [When("I set the new component's name to {string}")]
     public async Task WhenSetNewComponentName(string name) =>

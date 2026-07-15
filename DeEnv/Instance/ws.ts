@@ -1703,6 +1703,15 @@ function remapAddedId(arrayId: number, tempId: number, realId: number,
     if (item) {
         item.key = realId;
         if (item.value.type === "object") rekeyCreatedObject(item.value, tempId, realId, collections);
+        // Dedup: mergeState (from refetch or other state ship) may have inserted a separate item
+        // for the realId while this pending negative was still present (before remap registered).
+        // Keep this remapped item (the one with client mutations), remove any duplicate positive.
+        for (let i = arr.items.length - 1; i >= 0; i--) {
+            const other = arr.items[i];
+            if (other !== item && other.key === realId) {
+                arr.items.splice(i, 1);
+            }
+        }
     }
     if (item == null || item.value.type !== "object") registerRemap(tempId, realId);
     // The re-keyed member changes what dependents render (row data-keys), so cached
@@ -1776,8 +1785,24 @@ function applyCommitRemap(idMap: { tempId: number; realId: number;
         if (obj != null && obj.type === "object") rekeyCreatedObject(obj, m.tempId, m.realId, m.collections);
         if (pending != null) {
             const join = pending.join;
-            if (join.kind === "setAdd") invalidateMember(join.set.id);
-            else invalidateProp(join.parent.id, join.prop);
+            if (join.kind === "setAdd") {
+                invalidateMember(join.set.id);
+                // Dedup same as live remap: merge may have added the positive id version separately.
+                const arr = uiStatic.state.arrays[join.set.id];
+                // Find the item by the obj we just rekeyed (its key may still be temp in batch case).
+                const item = arr?.items.find(i => i.value === pending.obj);
+                if (item && arr) {
+                    item.key = m.realId;
+                    for (let i = arr.items.length - 1; i >= 0; i--) {
+                        const other = arr.items[i];
+                        if (other !== item && other.key === m.realId) {
+                            arr.items.splice(i, 1);
+                        }
+                    }
+                }
+            } else {
+                invalidateProp(join.parent.id, join.prop);
+            }
         }
         pendingCommitCreates.delete(m.tempId);
     }

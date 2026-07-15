@@ -80,8 +80,20 @@ function mergeState(dtState: ServerDtState): void {
         arr.sourcePath = dtArr.sourcePath;
         if (dtArr.ownerRef != null) arr.ownerRef = dtArr.ownerRef;
         if (dtArr.dictProp != null) arr.dictProp = dtArr.dictProp;
-        for (const item of dtArr.items)
-            if (!arr.items.some(p => p.key === item.key)) arr.items.push({ key: item.key, value: fromDtValue(item.value) });
+        for (const item of dtArr.items) {
+            const k = item.key;
+            const has = arr.items.some(p => {
+                if (p.key === k) return true;
+                const mapped = uiStatic.state.localToServerIds[p.key];
+                if (mapped != null && mapped === k) return true;
+                const rev = uiStatic.state.serverToLocalIds[k];
+                if (rev != null && rev === p.key) return true;
+                return false;
+            });
+            if (!has) {
+                arr.items.push({ key: k, value: fromDtValue(item.value) });
+            }
+        }
     }
 
     // Keep client-minted (transient) ids below every shipped id, so a new object/array
