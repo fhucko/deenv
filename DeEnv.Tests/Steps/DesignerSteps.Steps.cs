@@ -1071,7 +1071,8 @@ public sealed partial class DesignerSteps
             Has = ctx.Page.Locator($"input.prop-name[value={CssString(from)}]")
         }).Locator("input.prop-name");
         await input.FillAsync(to);
-        await card.Locator("input.prop-name").WaitForAsync();
+        await input.WaitForAsync();
+        await Assert.That(await input.InputValueAsync()).IsEqualTo(to);
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
             .Any(o => o.Fields.TryGetValue("name", out var v) && v is DeEnv.Storage.TextValue t && t.Text == to));
     }

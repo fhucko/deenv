@@ -37,7 +37,7 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
         ctx.Page!.SetDefaultTimeout(StartupMs);
         ctx.Page!.SetDefaultNavigationTimeout(StartupMs);
         SeedDesignerAdmin();
-        await LoginDesignerAdminAsync();
+        await LoginDesignerAdminAsync(StartupMs);
         ctx.Page!.SetDefaultTimeout(TestTimeouts.ActionMs);
         ctx.Page!.SetDefaultNavigationTimeout(TestTimeouts.ActionMs);
     }
@@ -61,13 +61,15 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
     private async Task LoginDesignerAdminAsync(int timeoutMs = 0)
     {
         var page = ctx.Page ?? throw new InvalidOperationException("Designer browser was not started.");
-        var to = timeoutMs > 0 ? timeoutMs : TestTimeouts.ActionMs;
         await page.GotoReadyAsync(ctx.DesignerUrl("/designs"));
         await page.WaitReadyAsync();
         await page.Locator(".login-form input.name").FillAsync(DesignerAdminName);
         await page.Locator(".login-form input.password").FillAsync(DesignerAdminPassword);
-        await page.Locator(".login-form button.login-submit").ClickAsync(new() { Timeout = to });
-        await page.Locator("main.ide-designs .set-row").First.WaitForAsync(new() { Timeout = to });
+        await page.Locator(".login-form button.login-submit").ClickAsync();
+        if (timeoutMs > 0)
+            await page.Locator("main.ide-designs .set-row").First.WaitForAsync(new() { Timeout = timeoutMs });
+        else
+            await page.Locator("main.ide-designs .set-row").First.WaitForAsync();
     }
 
     private Microsoft.Playwright.ILocator RowFor(string label) =>
