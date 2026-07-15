@@ -40,6 +40,28 @@
     <!-- M12 W1a — the component-workbench live-instance driver, unit-tested in isolation (its deep-copy
          re-mint) the same way: loaded on a bare page alongside codeExec.js. -->
     <Content Include="..\DeEnv\Instance\workbench.js" Link="workbench.js" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The committed kernel.json (with designId mappings per label) is read by designer tests at runtime
+         for GetCommittedIdForLabel / DesignIdsByLabel when seeding and remapping for the designer kernel harness. -->
+    <Content Include="..\DeEnv\kernel.json" Link="kernel.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!-- Build-time pre-generation of the "designer kernel template" so that the expensive per-scenario
+       layout (instances/<id>/app.deenv + base kernel.json) is not re-created at test execution time.
+       The runtime StartKernelDesignerBrowserAsync will copy from here instead of re-ReadAllText+Write
+       for the common "todo"+"crm" case. This is the main lever for speeding up the heavy designer
+       scenarios (the "operator IDE" Given). -->
+  <Target Name="GenerateDesignerKernelTemplate" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <TemplateDir>$(TargetDir)designer-kernel-template</TemplateDir>
+    </PropertyGroup>
+    <RemoveDir Directories="$(TemplateDir)" />
+    <!-- Copy entire instances tree from source (supports runtime label->committed id remap, e.g. "todo" from committed 2 copied to runtime 5). -->
+    <Exec Command="xcopy &quot;$(MSBuildProjectDirectory)\..\DeEnv\instances&quot; &quot;$(TemplateDir)\instances\&quot; /E /I /Y /Q" />
+    <!-- Base (runtime will (re)write with actual ports). -->
+    <WriteLinesToFile File="$(TemplateDir)\kernel.json"
+                      Lines='{"appPort":0,"assetPort":0,"instances":[{"id":1,"app":"designer","designId":60},{"id":2,"app":"todo","designId":13},{"id":3,"app":"crm","designId":27}]}'
+                      Overwrite="true" />
+    <Message Text="Generated designer-kernel-template at $(TemplateDir)" Importance="high" />
+  </Target>
 
 </Project>

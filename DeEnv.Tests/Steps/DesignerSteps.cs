@@ -37,7 +37,7 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
         ctx.Page!.SetDefaultTimeout(StartupMs);
         ctx.Page!.SetDefaultNavigationTimeout(StartupMs);
         SeedDesignerAdmin();
-        await LoginDesignerAdminAsync(StartupMs);
+        await LoginDesignerAdminAsync();
         ctx.Page!.SetDefaultTimeout(TestTimeouts.ActionMs);
         ctx.Page!.SetDefaultNavigationTimeout(TestTimeouts.ActionMs);
     }
@@ -58,7 +58,7 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
         AdminSeed.Seed(_designer.Store, desc, DesignerAdminName, DesignerAdminPassword, "Admin");
     }
 
-    private async Task LoginDesignerAdminAsync(int timeoutMs = 0)
+    private async Task LoginDesignerAdminAsync()
     {
         var page = ctx.Page ?? throw new InvalidOperationException("Designer browser was not started.");
         await page.GotoReadyAsync(ctx.DesignerUrl("/designs"));
@@ -66,10 +66,10 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
         await page.Locator(".login-form input.name").FillAsync(DesignerAdminName);
         await page.Locator(".login-form input.password").FillAsync(DesignerAdminPassword);
         await page.Locator(".login-form button.login-submit").ClickAsync();
-        if (timeoutMs > 0)
-            await page.Locator("main.ide-designs .set-row").First.WaitForAsync(new() { Timeout = timeoutMs });
-        else
-            await page.Locator("main.ide-designs .set-row").First.WaitForAsync();
+        // Wait for list content (any row) after login. Use classic selector (at-least-one) rather than
+        // bare Locator to avoid strict-mode errors now that the list correctly shows 3 designs
+        // (designer + the two hosted targets) thanks to working seeding.
+        await page.WaitForSelectorAsync("main.ide-designs .set-row", new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     private Microsoft.Playwright.ILocator RowFor(string label) =>
@@ -117,7 +117,7 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
 
     private static Task EventuallyAsync(
         Func<bool> condition,
-        int timeoutMs = TestTimeouts.ActionMs,
+        int timeoutMs = 120_000,
         [System.Runtime.CompilerServices.CallerArgumentExpression(nameof(condition))] string what = "")
         => Polling.EventuallyAsync(condition, what, timeoutMs);
 

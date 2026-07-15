@@ -71,8 +71,20 @@ public class InstanceContext
     // A committed app fixture, resolved by its id-dir (instances/<id>/app.deenv) under the test output
     // — the same id-based layout the kernel hosts. Storage is fully id-based; the file name ("app")
     // no longer carries the app's identity, the id-dir does.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, string> _appFixtureTextCache = new();
     public static string AppFixture(int id) =>
         Path.Combine(AppContext.BaseDirectory, "instances", id.ToString(), "app.deenv");
+    public static string GetAppFixtureText(int id) =>
+        _appFixtureTextCache.GetOrAdd(id, i => File.ReadAllText(AppFixture(i)));
+
+    private static int GetCommittedIdForLabel(string label)
+    {
+        var registry = RegistryReader.Read(
+            Path.Combine(AppContext.BaseDirectory, "kernel.json"));
+        var entry = registry.Instances.FirstOrDefault(e => e.App == label)
+            ?? throw new InvalidOperationException($"No committed instance labelled '{label}' in kernel.json.");
+        return entry.Id;
+    }
 
     // Code milestone: a hand-written `ui` component over a Task set. The render fn
     // exercises element/text, a bound text field, a bound checkbox, foreach, if/else,
@@ -1896,9 +1908,29 @@ public class InstanceContext
         Directory.CreateDirectory(dir);
         KernelDir = dir;
 
-        // The designer at id 1: the REAL committed instances/1/app.deenv (copied from the test output),
-        // hosted by the kernel exactly as production would.
-        WriteIdApp(dir, 1, File.ReadAllText(AppFixture(1)));
+        // Prefer a pre-generated template (produced at test *build* time) to avoid repeated
+        // File.ReadAllText + WriteIdApp of the committed app.deenv files on every heavy designer scenario.
+        // The template has the committed layout under instances/<committedId>/. At runtime we remap
+        // to the test's runtime ids (e.g. designer at 1, targets at 5/6) by copying the correct content.
+        string templateDir = Path.Combine(AppContext.BaseDirectory, "designer-kernel-template");
+        bool usedTemplate = false;
+        if (Directory.Exists(templateDir))
+        {
+            // designer is always runtime id 1, content from committed id 1
+            CopyAppFromTemplateIfExists(templateDir, 1, dir, 1);
+            foreach (var (runtimeId, label) in targets)
+            {
+                int committedId = GetCommittedIdForLabel(label);
+                CopyAppFromTemplateIfExists(templateDir, committedId, dir, runtimeId);
+            }
+            usedTemplate = true;
+        }
+
+        if (!usedTemplate)
+        {
+            // Fallback: original per-scenario write path.
+            WriteIdApp(dir, 1, GetAppFixtureText(1));
+        }
 
         // Each target hosts the REAL committed app whose label it carries (todo → instances/2's app, crm
         // → instances/3's, …), so the kernel's first-boot seed reverse-projects each into its REAL Design.
@@ -1913,7 +1945,8 @@ public class InstanceContext
             // A label with no designId in the committed registry (devlog, demo) boots DESIGN-LESS —
             // its mirror row in db.instances never gets a design reference, exactly the real dev/prod
             // shape the aged-store harness drives (AgedStore.feature).
-            WriteIdApp(dir, id, File.ReadAllText(CommittedAppForLabel(label)));
+            if (!usedTemplate)
+                WriteIdApp(dir, id, GetAppFixtureText(GetCommittedIdForLabel(label)));
             entries.Add(RegistryEntryJson(id, label, designIds.TryGetValue(label, out var did) ? did : (int?)null));
         }
 
@@ -1951,11 +1984,8 @@ public class InstanceContext
     // so hosting the real app here gives the designer the real design (real types + real ui).
     private static string CommittedAppForLabel(string label)
     {
-        var registry = RegistryReader.Read(
-            Path.Combine(AppContext.BaseDirectory, "kernel.json"));
-        var entry = registry.Instances.FirstOrDefault(e => e.App == label)
-            ?? throw new InvalidOperationException($"No committed instance labelled '{label}' in kernel.json.");
-        return AppFixture(entry.Id);
+        int id = GetCommittedIdForLabel(label);
+        return AppFixture(id);
     }
 
     private static void WriteIdApp(string dir, int id, string appDoc)
@@ -1963,6 +1993,15 @@ public class InstanceContext
         var idDir = AppPaths.IdDirFor(dir, id);
         Directory.CreateDirectory(idDir);
         File.WriteAllText(Path.Combine(idDir, "app.deenv"), appDoc);
+    }
+
+    private static void CopyAppFromTemplateIfExists(string templateDir, int committedId, string targetBaseDir, int runtimeId)
+    {
+        var src = Path.Combine(templateDir, "instances", committedId.ToString(), "app.deenv");
+        if (!File.Exists(src)) return;
+        var destDir = AppPaths.IdDirFor(targetBaseDir, runtimeId);
+        Directory.CreateDirectory(destDir);
+        File.Copy(src, Path.Combine(destDir, "app.deenv"), overwrite: true);
     }
 
     private static string RegistryEntryJson(int id, string label, int? designId = null)
