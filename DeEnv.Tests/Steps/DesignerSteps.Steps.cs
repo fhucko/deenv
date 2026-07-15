@@ -2071,9 +2071,11 @@ public sealed partial class DesignerSteps
         // Locate the row by the node-tag INPUT's value attribute (which the runtime mirrors).
         // Using the attribute inside Has (rather than HasTextString) because <input> value lives in the attr/property,
         // not inner text content. This matches how other tag-based row locators were cleaned up.
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element", new() {
+        var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element", new() {
             Has = ctx.Page.Locator($"input.node-tag[value={CssString(tag)}]")
-        }).First.ClickAsync();
+        });
+        await row.First.WaitForAsync();
+        await row.First.ClickAsync();
     }
 
     [Then("no tree editor row is selected in the main render tree")]
