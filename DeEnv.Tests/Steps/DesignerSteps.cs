@@ -30,10 +30,14 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
         // Startup (kernel boot + first browser navigation + login) can legitimately exceed the temporary
         // tight 5s action timeout under load. Use a generous ceiling for init only, then enforce the
         // requested 5s for all subsequent designer interaction steps (tree/palette/canvas clicks etc.).
-        const int StartupMs = 45_000;
+        const int StartupMs = 60_000;
         _designer = await ctx.StartKernelDesignerBrowserAsync((5, firstLabel), (6, secondLabel));
+        // Raise defaults for the duration of the heavy init (NewPageAsync, GotoReady, WaitReady, login waits etc.)
+        // so they don't flake on the temp 5s setting. Restore strict ActionMs immediately after for the scenario body.
+        ctx.Page!.SetDefaultTimeout(StartupMs);
+        ctx.Page!.SetDefaultNavigationTimeout(StartupMs);
         SeedDesignerAdmin();
-        await LoginDesignerAdminAsync(StartupMs);
+        await LoginDesignerAdminAsync();
         ctx.Page!.SetDefaultTimeout(TestTimeouts.ActionMs);
         ctx.Page!.SetDefaultNavigationTimeout(TestTimeouts.ActionMs);
     }

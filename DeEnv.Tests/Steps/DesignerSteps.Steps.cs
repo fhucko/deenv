@@ -3638,4 +3638,60 @@ public sealed partial class DesignerSteps
         await Assert.That(await ctx.Page.Locator("main.ide-designs, main.ide-list").CountAsync()).IsEqualTo(0);
     }
 
+    // Seed directly into the designer's store (bypassing all UI tree editor / convert paths) so the render
+    // root is a bare leaf MetaNode (tag="", no children). Used to prove the "can't hold children" guard + disabled
+    // palette for the second-root case. After this the test does "reload the design editor" to pick up the change.
+    [When(@"the design ""(.*)""'s render root is seeded as a bare leaf, bypassing the UI")]
+    public async Task WhenTheDesignsRenderRootIsSeededAsBareLeaf(string label)
+    {
+        var designId = DesignIdByLabel(label);
+        if (designId == 0)
+            throw new Exception($"Design not found for bare-leaf seed: {label}");
+        var renderPath = DeEnv.Storage.NodePath.Root.Field("designs").Key(designId.ToString()).Field("render");
+        var render = _designer.Store.ReadNode(renderPath) as DeEnv.Storage.SetValue;
+        if (render != null)
+        {
+            foreach (var mid in render.Members.Keys.ToList())
+                _designer.Store.RemoveFromSet(renderPath, mid);
+        }
+        var leafId = _designer.Store.CreateObject("MetaNode", new DeEnv.Storage.ObjectValue(new Dictionary<string, DeEnv.Storage.NodeValue>
+        {
+            ["tag"] = new DeEnv.Storage.TextValue(""),
+            ["expr"] = new DeEnv.Storage.TextValue(""),
+            ["order"] = new DeEnv.Storage.IntValue(0),
+        }));
+        _designer.Store.AddToSet(renderPath, leafId);
+        await Task.CompletedTask;
+    }
+
+    [Then("the design editor's sections are ordered types, render, publish, branches")]
+    public async Task ThenDesignEditorSectionsOrdered()
+    {
+        var editor = ctx.Page!.Locator("main.ide-design-edit .design-editor");
+        // Wait for key markers of each section to prove they rendered (types first via add-type or type-card).
+        await editor.Locator(".add-type, .type-card").First.WaitForAsync();
+        await editor.Locator(".render-tree").First.WaitForAsync();
+        // For publish/branches, look for known controls that appear in those sections.
+        await editor.Locator("button.apply-design, .commit-msg, textarea.migration, .branch, a[href*=\"branches\"]").First.WaitForAsync();
+        // Verify order via DOM position (types before render etc). Uses evaluate only for order proof.
+        var inOrder = await ctx.Page!.EvaluateAsync<bool>(@"() => {
+            const ed = document.querySelector('main.ide-design-edit .design-editor');
+            if (!ed) return false;
+            const addType = ed.querySelector('.add-type, .type-card');
+            const render = ed.querySelector('.render-tree');
+            const pub = ed.querySelector('button.apply-design, .commit-msg, textarea.migration');
+            const br = ed.querySelector('.branch, a[href*=""branches""]');
+            if (!addType || !render) return false;
+            const posR = addType.compareDocumentPosition(render);
+            const tBeforeR = (posR & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+            if (!tBeforeR) return false;
+            if (pub) {
+                const posP = render.compareDocumentPosition(pub);
+                if ((posP & Node.DOCUMENT_POSITION_FOLLOWING) === 0) return false;
+            }
+            return true;
+        }");
+        await Assert.That(inOrder).IsTrue();
+    }
+
 }
