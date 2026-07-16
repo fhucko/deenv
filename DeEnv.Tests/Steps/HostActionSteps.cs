@@ -109,9 +109,18 @@ public sealed class HostActionSteps
     // sys.commitDesign — writing through the store seam directly — is the only path that can ever create
     // or move one. A leading newline so it concatenates after MetaTypes as its own section.
     private const string SysAdminAccess =
-        "\n\naccess\n    sys\n        * where currentUser.role == \"Admin\"\n" +
-        "    Commit\n        create edit delete where false\n" +
-        "    Branch\n        create edit delete where false\n";
+        """
+
+
+        access
+            sys
+                * where currentUser.role == "Admin"
+            Commit
+                create edit delete where false
+            Branch
+                create edit delete where false
+
+        """;
 
     // A designer-shaped meta with NO access section — the shape-authority-hole scenario: an instance that
     // HAS the designer shape and calls host actions but declares no `sys` rule must reject for everyone.
@@ -147,10 +156,13 @@ public sealed class HostActionSteps
     // app must keep this `fn render()` (the WHOLE app is projected, not just its types), so the
     // generic UI is NOT substituted.
     private const string CustomUiSection =
-        "ui\n" +
-        "    fn render()\n" +
-        "        return <main class=\"item-app\">\n" +
-        "            \"Items\"\n";
+        """
+        ui
+            fn render()
+                return <main class="item-app">
+                    "Items"
+
+        """;
 
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "deenv-hostaction-" + Guid.NewGuid().ToString("N"));
     private string _metaAppPath = "";

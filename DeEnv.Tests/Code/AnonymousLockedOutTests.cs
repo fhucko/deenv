@@ -20,15 +20,18 @@ public sealed class AnonymousLockedOutTests
     // variable. Each rule line is placed at the 8-space rule indent under the `Milestone` type block.
     private static IReadOnlyList<AccessRule> Rules(params string[] ruleLines) =>
         InstanceDescriptionLoader.Load(
-            "types\n" +
-            "    Db\n" +
-            "        milestones set of Milestone\n" +
-            "    Milestone\n" +
-            "        title text\n" +
-            "        status text\n" +
-            "\n" +
-            "access\n" +
-            "    Milestone\n" +
+            """
+            types
+                Db
+                    milestones set of Milestone
+                Milestone
+                    title text
+                    status text
+
+            access
+                Milestone
+
+            """ +
             string.Concat(ruleLines.Select(l => "        " + l + "\n"))).Rules ?? [];
 
     private static bool Locked(params string[] ruleLines) => AccessFloor.AnonymousLockedOut(Rules(ruleLines));

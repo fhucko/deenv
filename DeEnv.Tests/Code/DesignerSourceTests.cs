@@ -281,7 +281,14 @@ public sealed class DesignerSourceTests
 
         // The exact canonical render fn the printer produces for the equivalent hand-written UI.
         var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(
-            "ui\n    fn render()\n        return <main class=\"hello\">\n            <h1>\n                \"Hi\"\n"));
+            """
+            ui
+                fn render()
+                    return <main class="hello">
+                        <h1>
+                            "Hi"
+
+            """));
         await Assert.That(projected).Contains(expectedUi.TrimEnd('\n'));
     }
 
@@ -295,7 +302,13 @@ public sealed class DesignerSourceTests
         var main = MakeNode("main");
         var render = MakeSet(main);
         var design = MakeDesign("clash",
-            ui: "ui\n    fn render()\n        return <main>\n            \"x\"\n",
+            ui: """
+                ui
+                    fn render()
+                        return <main>
+                            "x"
+
+                """,
             types: types, render: render);
 
         var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
@@ -314,8 +327,15 @@ public sealed class DesignerSourceTests
     public async Task ImportRender_mints_the_row_tree_and_round_trips()
     {
         // <main class="hello" id="root"> with a nested <h1>"Hi" AND a bare-symbol expression leaf `db.greeting`.
-        var ui = "ui\n    fn render()\n        return <main class=\"hello\" id=\"root\">\n"
-               + "            <h1>\n                \"Hi\"\n            db.greeting\n";
+        var ui = """
+            ui
+                fn render()
+                    return <main class="hello" id="root">
+                        <h1>
+                            "Hi"
+                        db.greeting
+
+            """;
 
         var design = ImportRenderForTest("s1b", ui);
 
@@ -357,13 +377,21 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ImportRender_converts_a_foreach_loop_and_an_if_else_to_structured_rows_and_round_trips()
     {
-        var ui = "ui\n    fn render()\n        return <main>\n"
-               + "            foreach note in db.notes\n"
-               + "                <li>\n                    note.title\n"
-               + "            if db.greeting == \"hi\"\n"
-               + "                <p>\n                    \"hello\"\n"
-               + "            else\n"
-               + "                <p>\n                    \"bye\"\n";
+        var ui = """
+            ui
+                fn render()
+                    return <main>
+                        foreach note in db.notes
+                            <li>
+                                note.title
+                        if db.greeting == "hi"
+                            <p>
+                                "hello"
+                        else
+                            <p>
+                                "bye"
+
+            """;
 
         var design = ImportRenderForTest("forif", ui);
 
@@ -402,13 +430,21 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ImportRender_converts_an_else_if_chain_to_a_nested_if_row_and_round_trips()
     {
-        var ui = "ui\n    fn render()\n        return <main>\n"
-               + "            if db.a\n"
-               + "                <p>\n                    \"A\"\n"
-               + "            else if db.b\n"
-               + "                <p>\n                    \"B\"\n"
-               + "            else\n"
-               + "                <p>\n                    \"C\"\n";
+        var ui = """
+            ui
+                fn render()
+                    return <main>
+                        if db.a
+                            <p>
+                                "A"
+                        else if db.b
+                            <p>
+                                "B"
+                        else
+                            <p>
+                                "C"
+
+            """;
 
         var design = ImportRenderForTest("elseif", ui);
 
@@ -549,7 +585,14 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ImportRender_converts_a_top_level_var_to_a_MetaVar_row_and_round_trips()
     {
-        var ui = "ui\n    var count = 0\n    fn render()\n        return <main>\n            \"hi\"\n";
+        var ui = """
+            ui
+                var count = 0
+                fn render()
+                    return <main>
+                        "hi"
+
+            """;
         var design = ImportRenderForTest("vars", ui);
 
         await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
@@ -572,10 +615,18 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ImportRender_converts_a_helper_and_a_component_function_to_MetaFn_rows_and_round_trips()
     {
-        var ui = "ui\n"
-               + "    fn helperLabel(active)\n        return active ? \"Yes\" : \"No\"\n"
-               + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
-               + "    fn render()\n        return <main>\n            \"hi\"\n";
+        var ui = """
+            ui
+                fn helperLabel(active)
+                    return active ? "Yes" : "No"
+                fn NoteCard(note)
+                    return <li>
+                        note.title
+                fn render()
+                    return <main>
+                        "hi"
+
+            """;
         var design = ImportRenderForTest("fns", ui);
 
         await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
@@ -611,7 +662,15 @@ public sealed class DesignerSourceTests
         var store = new JsonFileInstanceStore(storePath, meta);
         try
         {
-            var ui = "ui\n    server fn secretHelper()\n        return \"shh\"\n    fn render()\n        return <main>\n            \"hi\"\n";
+            var ui = """
+                ui
+                    server fn secretHelper()
+                        return "shh"
+                    fn render()
+                        return <main>
+                            "hi"
+
+                """;
             var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
             {
                 ["label"] = new TextValue("serveronly"), ["ui"] = new TextValue(ui),
@@ -643,7 +702,15 @@ public sealed class DesignerSourceTests
         var store = new JsonFileInstanceStore(storePath, meta);
         try
         {
-            var ui = "ui\n    fn makeCounter()\n        return () => 5\n    fn render()\n        return <main>\n            \"hi\"\n";
+            var ui = """
+                ui
+                    fn makeCounter()
+                        return () => 5
+                    fn render()
+                        return <main>
+                            "hi"
+
+                """;
             var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
             {
                 ["label"] = new TextValue("lambda"), ["ui"] = new TextValue(ui),
@@ -675,8 +742,16 @@ public sealed class DesignerSourceTests
         var store = new JsonFileInstanceStore(storePath, meta);
         try
         {
-            var ui = "ui\n    fn helperLabel(active)\n        var x = active\n        return x ? \"Yes\" : \"No\"\n"
-                   + "    fn render()\n        return <main>\n            \"hi\"\n";
+            var ui = """
+                ui
+                    fn helperLabel(active)
+                        var x = active
+                        return x ? "Yes" : "No"
+                    fn render()
+                        return <main>
+                            "hi"
+
+                """;
             var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
             {
                 ["label"] = new TextValue("multistmt"), ["ui"] = new TextValue(ui),
@@ -710,9 +785,17 @@ public sealed class DesignerSourceTests
         var store = new JsonFileInstanceStore(storePath, meta);
         try
         {
-            var ui = "ui\n    fn helperLabel(active)\n        return \"a\"\n"
-                   + "    fn helperLabel(active)\n        return \"b\"\n"
-                   + "    fn render()\n        return <main>\n            \"hi\"\n";
+            var ui = """
+                ui
+                    fn helperLabel(active)
+                        return "a"
+                    fn helperLabel(active)
+                        return "b"
+                    fn render()
+                        return <main>
+                            "hi"
+
+                """;
             var designId = store.CreateObject("Design", new ObjectValue(new Dictionary<string, NodeValue>
             {
                 ["label"] = new TextValue("dupimport"), ["ui"] = new TextValue(ui),
@@ -938,7 +1021,13 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ImportRender_round_trips_a_handler_attribute()
     {
-        var ui = "ui\n    fn render()\n        return <button onClick={() => db.greeting = \"hi\"}>\n            \"Click\"\n";
+        var ui = """
+            ui
+                fn render()
+                    return <button onClick={() => db.greeting = "hi"}>
+                        "Click"
+
+            """;
         var design = ImportRenderForTest("handler", ui);
 
         await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
@@ -989,7 +1078,13 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task A_ui_section_canonicalizes_through_parse_then_print()
     {
-        var messy = "ui\n  fn render()\n    return <main class=\"x\">\n      \"hi\"\n"; // 2-space nesting
+        var messy = """
+            ui
+              fn render()
+                return <main class="x">
+                  "hi"
+
+            """; // 2-space nesting
         var canonical = AppPrint.PrintUi(CodeParse.ParseUiSection(messy));
 
         await Assert.That(canonical).Contains("\n    fn render()");   // re-indented to the canonical 4 spaces
@@ -1005,8 +1100,20 @@ public sealed class DesignerSourceTests
     [Test]
     public async Task ProjectDesignDb_canonicalizes_the_ui_section()
     {
-        var messyUi = "ui\n  fn render()\n    return <main class=\"x\">\n      \"hi\"\n";
-        var appDoc = "types\n    Db\n        greeting text\n\n" + messyUi;
+        var messyUi = """
+            ui
+              fn render()
+                return <main class="x">
+                  "hi"
+
+            """;
+        var appDoc = """
+            types
+                Db
+                    greeting text
+
+
+            """ + messyUi;
 
         // Use DesignFromText (the textual reverse) to get a Design carrying the non-canonical ui verbatim,
         // then ProjectDesignDb (which canonicalizes only the ui section).

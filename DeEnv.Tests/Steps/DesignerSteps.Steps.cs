@@ -1312,7 +1312,14 @@ public sealed partial class DesignerSteps
     // AppPrint.PrintUi emits and SchemaBridge.ImportRender re-parses via ParseUiSection (which expects the
     // `ui` header). So author the whole section, render body indented under `fn render()`.
     private const string SimpleConvertibleRender =
-        "ui\n    fn render()\n        return <main class=\"greeting\">\n            <h1>\n                \"Hi\"\n";
+        """
+        ui
+            fn render()
+                return <main class="greeting">
+                    <h1>
+                        "Hi"
+
+        """;
 
     [When("I author a simple convertible render into the design's UI")]
     public async Task WhenAuthorSimpleRender()
@@ -1361,7 +1368,14 @@ public sealed partial class DesignerSteps
     // so the tree editor's nesting + leaf handling are both exercised. Same authoring plumbing as the
     // simple render: fill the `ui` textarea, poll the store for the write.
     private const string NestedConvertibleRender =
-        "ui\n    fn render()\n        return <main class=\"x\">\n            <h1>\n                leaf\n";
+        """
+        ui
+            fn render()
+                return <main class="x">
+                    <h1>
+                        leaf
+
+        """;
 
     [When("I author a nested convertible render into the design's UI")]
     public async Task WhenAuthorNestedRender()
@@ -1378,7 +1392,14 @@ public sealed partial class DesignerSteps
     // (the bare `leaf` cannot resolve, which is fine for E1's tree-recursion proof but blocks a projection
     // check). Same authoring plumbing (fill the ui textarea, poll the store).
     private const string ProjectableNestedRender =
-        "ui\n    fn render()\n        return <main class=\"x\">\n            <h1>\n                db.greeting\n";
+        """
+        ui
+            fn render()
+                return <main class="x">
+                    <h1>
+                        db.greeting
+
+        """;
 
     [When("I author a projectable nested render into the design's UI")]
     public async Task WhenAuthorProjectableNestedRender()
@@ -1394,7 +1415,13 @@ public sealed partial class DesignerSteps
     // itself is never the cause of the evalContext failure). Wraps the leaf in <h1> so the existing
     // ThenCanvasShowsEvaluatedText step (`.design-canvas h1`) can assert the post-fix evaluated text too.
     private const string LiteralConvertibleRender =
-        "ui\n    fn render()\n        return <h1>\n            \"Hello\"\n";
+        """
+        ui
+            fn render()
+                return <h1>
+                    "Hello"
+
+        """;
 
     [When("I author a literal convertible render into the design's UI")]
     public async Task WhenAuthorLiteralRender()
@@ -1411,7 +1438,16 @@ public sealed partial class DesignerSteps
     // element) besides `fn render()` — the shape F1's import lifts the old refusal for. Same authoring
     // plumbing as the other convertible-render fixtures (fill the `ui` textarea, poll the store).
     private const string ComponentConvertibleRender =
-        "ui\n    fn NoteCard(note)\n        return <li>\n            note.title\n    fn render()\n        return <main>\n            \"hi\"\n";
+        """
+        ui
+            fn NoteCard(note)
+                return <li>
+                    note.title
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a convertible render with a component function into the design's UI")]
     public async Task WhenAuthorComponentRender()
@@ -1674,7 +1710,16 @@ public sealed partial class DesignerSteps
     // `sys.schema("Db")` — that builtin now REVIVES from the seeded cache, so it moved to the seeding
     // scenarios below; this fixture keeps testing a boundary that is STILL real.)
     private const string AmbientReadingComponentConvertibleRender =
-        "ui\n    fn Broken()\n        return <div>\n            currentUser\n    fn render()\n        return <main>\n            \"hi\"\n";
+        """
+        ui
+            fn Broken()
+                return <div>
+                    currentUser
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a convertible render with an ambient-reading component into the design's UI")]
     public async Task WhenAuthorAmbientReadingComponentRender()
@@ -1698,9 +1743,19 @@ public sealed partial class DesignerSteps
     // scenarios click-and-observe, so they need the reactive shape. A SEPARATE fixture (not editing the
     // existing one) keeps the already-reviewed W1a scenario untouched.
     private const string ReactiveCounterConvertibleRender =
-        "ui\n"
-        + "    fn Counter()\n        var state = { count: 0 }\n        fn render()\n            return <button onClick={() => state.count = state.count + 1}>\n                state.count\n        return render\n"
-        + "    fn render()\n        return <main>\n            \"hi\"\n";
+        """
+        ui
+            fn Counter()
+                var state = { count: 0 }
+                fn render()
+                    return <button onClick={() => state.count = state.count + 1}>
+                        state.count
+                return render
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a convertible render with a reactive Counter component into the design's UI")]
     public async Task WhenAuthorReactiveCounterRender()
@@ -1719,20 +1774,23 @@ public sealed partial class DesignerSteps
     // container-level click swallow (workbench.ts ensureInstanceContent) stops it reaching the page's
     // document-level interceptNavigation.
     private const string TwoWayComponentConvertibleRender =
-        "ui\n"
-        + "    fn TextBox()\n"
-        + "        var state = { text: \"\" }\n"
-        + "        fn render()\n"
-        + "            return <div>\n"
-        + "                <input class=\"tb-input\" value={state.text}>\n"
-        + "                <span class=\"tb-echo\">\n"
-        + "                    state.text\n"
-        + "                <a class=\"tb-link\" href=\"/designs\">\n"
-        + "                    \"Go to designs\"\n"
-        + "        return render\n"
-        + "    fn render()\n"
-        + "        return <main>\n"
-        + "            \"hi\"\n";
+        """
+        ui
+            fn TextBox()
+                var state = { text: "" }
+                fn render()
+                    return <div>
+                        <input class="tb-input" value={state.text}>
+                        <span class="tb-echo">
+                            state.text
+                        <a class="tb-link" href="/designs">
+                            "Go to designs"
+                return render
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a convertible render with a two-way-bound TextBox component into the design's UI")]
     public async Task WhenAuthorTwoWayComponentRender()
@@ -1748,7 +1806,16 @@ public sealed partial class DesignerSteps
     // ONLY the dispatch bracket's wsHooks-null is what stops a card's click from really logging the
     // operator's own page session out.
     private const string LogoutComponentConvertibleRender =
-        "ui\n    fn LogoutButton()\n        return <button class=\"wb-logout\" onClick={() => sys.logout()}>\n            \"Log out (sandboxed)\"\n    fn render()\n        return <main>\n            \"hi\"\n";
+        """
+        ui
+            fn LogoutButton()
+                return <button class="wb-logout" onClick={() => sys.logout()}>
+                    "Log out (sandboxed)"
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a convertible render with a sandboxed logout button component into the design's UI")]
     public async Task WhenAuthorLogoutComponentRender()
@@ -1768,10 +1835,25 @@ public sealed partial class DesignerSteps
     // workbench sandbox raises "Variable currentUser not found" (same message as ambient-at-render).
     // Stateful setup/view shape so structured import keeps a live onClick (same as Counter).
     private const string ThrowerAndCounterConvertibleRender =
-        "ui\n"
-        + "    fn Thrower()\n        var state = { n: 0 }\n        fn render()\n            return <button class=\"wb-throw\" onClick={() => state.n = currentUser}>\n                \"boom\"\n        return render\n"
-        + "    fn Counter()\n        var state = { count: 0 }\n        fn render()\n            return <button onClick={() => state.count = state.count + 1}>\n                state.count\n        return render\n"
-        + "    fn render()\n        return <main>\n            \"hi\"\n";
+        """
+        ui
+            fn Thrower()
+                var state = { n: 0 }
+                fn render()
+                    return <button class="wb-throw" onClick={() => state.n = currentUser}>
+                        "boom"
+                return render
+            fn Counter()
+                var state = { count: 0 }
+                fn render()
+                    return <button onClick={() => state.count = state.count + 1}>
+                        state.count
+                return render
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a convertible render with a throwing component and a Counter component into the design's UI")]
     public async Task WhenAuthorThrowerAndCounterRender()
@@ -1788,7 +1870,15 @@ public sealed partial class DesignerSteps
     // generic pattern the v1 boundary excluded until the private cache is seeded from the design's OWN
     // rows (BuildEvalContext's `types` payload). No var/setup split needed (single-return, stateless).
     private const string SchemaFieldComponentConvertibleRender =
-        "ui\n    fn Editor()\n        return <Field obj={sys.new(sys.schema(\"Note\"))} desc={sys.schema(\"Note\", \"title\")}>\n    fn render()\n        return <main>\n            \"hi\"\n";
+        """
+        ui
+            fn Editor()
+                return <Field obj={sys.new(sys.schema("Note"))} desc={sys.schema("Note", "title")}>
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a convertible render with a schema-backed Field component into the design's UI")]
     public async Task WhenAuthorSchemaFieldComponentRender()
@@ -1802,7 +1892,18 @@ public sealed partial class DesignerSteps
     // sys.extent("Note") over the seed data — the instance's OWN deep-copied "notes" set IS the extent
     // (seedExtentCache's per-instance client-side derivation).
     private const string ExtentListingComponentConvertibleRender =
-        "ui\n    fn Lister()\n        return <ul>\n            foreach n in sys.extent(\"Note\")\n                <li>\n                    n.title\n    fn render()\n        return <main>\n            \"hi\"\n";
+        """
+        ui
+            fn Lister()
+                return <ul>
+                    foreach n in sys.extent("Note")
+                        <li>
+                            n.title
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a convertible render with an extent-listing component into the design's UI")]
     public async Task WhenAuthorExtentListingComponentRender()
@@ -1817,16 +1918,21 @@ public sealed partial class DesignerSteps
     // <Field> two-way-binds into it (sys.field's setValue, the SAME idiom RefEditor/ObjectForm use
     // throughout the library), with an echo <span> making the write directly observable per instance.
     private const string StatefulSchemaFieldComponentConvertibleRender =
-        "ui\n"
-        + "    fn Editor()\n"
-        + "        var state = { draft: sys.new(sys.schema(\"Note\")) }\n"
-        + "        fn render()\n"
-        + "            return <div>\n"
-        + "                <Field obj={state.draft} desc={sys.schema(\"Note\", \"title\")}>\n"
-        + "                <span class=\"echo\">\n"
-        + "                    sys.field(state.draft, \"title\")\n"
-        + "        return render\n"
-        + "    fn render()\n        return <main>\n            \"hi\"\n";
+        """
+        ui
+            fn Editor()
+                var state = { draft: sys.new(sys.schema("Note")) }
+                fn render()
+                    return <div>
+                        <Field obj={state.draft} desc={sys.schema("Note", "title")}>
+                        <span class="echo">
+                            sys.field(state.draft, "title")
+                return render
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a convertible render with a stateful schema-backed Editor component into the design's UI")]
     public async Task WhenAuthorStatefulSchemaFieldComponentRender()
@@ -1851,19 +1957,24 @@ public sealed partial class DesignerSteps
     // refuses a component with an EXTRA fn alongside render() — component-workbench's own "GenericUi's
     // ConfirmButton/KebabMenu" import gap) — the handler is an inline lambda.
     private const string ExtentAddingComponentConvertibleRender =
-        "ui\n"
-        + "    fn AddNote()\n"
-        + "        var noteDesc = sys.schema(\"Note\")\n"
-        + "        fn render()\n"
-        + "            return <div>\n"
-        + "                <button onClick={() => db.notes.add(sys.new(noteDesc))}>\n"
-        + "                    \"Add\"\n"
-        + "                <ul>\n"
-        + "                    foreach n in sys.extent(\"Note\")\n"
-        + "                        <li>\n"
-        + "                            n.title\n"
-        + "        return render\n"
-        + "    fn render()\n        return <main>\n            \"hi\"\n";
+        """
+        ui
+            fn AddNote()
+                var noteDesc = sys.schema("Note")
+                fn render()
+                    return <div>
+                        <button onClick={() => db.notes.add(sys.new(noteDesc))}>
+                            "Add"
+                        <ul>
+                            foreach n in sys.extent("Note")
+                                <li>
+                                    n.title
+                return render
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a convertible render with an extent-adding component into the design's UI")]
     public async Task WhenAuthorExtentAddingComponentRender()
@@ -1879,7 +1990,15 @@ public sealed partial class DesignerSteps
     // scope alongside the design's own ctx.fns). Stateless wrapper (no var needed — a fresh sys.new draft
     // per render is fine; this scenario never clicks the select).
     private const string RefSelectComponentConvertibleRender =
-        "ui\n    fn Picker()\n        return <RefSelect parent={sys.new(sys.schema(\"Db\"))} prop=\"pick\" candidates={sys.extent(\"Note\")} labelProp=\"title\">\n    fn render()\n        return <main>\n            \"hi\"\n";
+        """
+        ui
+            fn Picker()
+                return <RefSelect parent={sys.new(sys.schema("Db"))} prop="pick" candidates={sys.extent("Note")} labelProp="title">
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a convertible render with a RefSelect component into the design's UI")]
     public async Task WhenAuthorRefSelectComponentRender()
@@ -1967,9 +2086,19 @@ public sealed partial class DesignerSteps
     // var, a nested `fn render()`, `return render`) besides `fn render()` — the shape V1's import lifts
     // the lambda-return refusal for. Same authoring plumbing as the other convertible-render fixtures.
     private const string StatefulComponentConvertibleRender =
-        "ui\n"
-        + "    fn Counter()\n        var count = 0\n        fn render()\n            return <button onClick={() => count = count + 1}>\n                count\n        return render\n"
-        + "    fn render()\n        return <main>\n            \"hi\"\n";
+        """
+        ui
+            fn Counter()
+                var count = 0
+                fn render()
+                    return <button onClick={() => count = count + 1}>
+                        count
+                return render
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a convertible render with a stateful Counter component into the design's UI")]
     public async Task WhenAuthorStatefulComponentRender()
@@ -2053,9 +2182,17 @@ public sealed partial class DesignerSteps
     // `foreach n in db.notes` — the exact shape F2's canvas walk expands. Same authoring plumbing as the
     // other convertible-render fixtures (fill the `ui` textarea, poll the store).
     private const string ComponentInvokingConvertibleRender =
-        "ui\n"
-        + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
-        + "    fn render()\n        return <ul>\n            foreach n in db.notes\n                <NoteCard note={n}>\n";
+        """
+        ui
+            fn NoteCard(note)
+                return <li>
+                    note.title
+            fn render()
+                return <ul>
+                    foreach n in db.notes
+                        <NoteCard note={n}>
+
+        """;
 
     [When("I author a component-invoking convertible render into the design's UI")]
     public async Task WhenAuthorComponentInvokingRender()
@@ -2069,7 +2206,17 @@ public sealed partial class DesignerSteps
     // Badge is param-less so a palette insert (no auto-args) still expands to readable canvas content.
     // Render carries <h1>"Hello"</h1> so leaf-sibling / selection scenarios can target that leaf.
     private const string PaletteTestConvertibleRender =
-        "ui\n    fn Badge()\n        return <span>\n            \"Badge\"\n    fn render()\n        return <main>\n            <h1>\n                \"Hello\"\n";
+        """
+        ui
+            fn Badge()
+                return <span>
+                    "Badge"
+            fn render()
+                return <main>
+                    <h1>
+                        "Hello"
+
+        """;
 
     [When("I author a palette-test convertible render into the design's UI")]
     public async Task WhenAuthorPaletteTestRender()
@@ -2080,7 +2227,14 @@ public sealed partial class DesignerSteps
     }
 
     private const string SelectionTestConvertibleRender =
-        "ui\n    fn render()\n        return <main>\n            <h1>\n                \"Hello\"\n";
+        """
+        ui
+            fn render()
+                return <main>
+                    <h1>
+                        "Hello"
+
+        """;
 
     [When("I author a selection-test convertible render into the design's UI")]
     public async Task WhenAuthorSelectionTestRender()
@@ -2092,7 +2246,14 @@ public sealed partial class DesignerSteps
 
     // Literal <a href> inside the canvas — S4a must select the row, not navigate the designer page.
     private const string AnchorConvertibleRender =
-        "ui\n    fn render()\n        return <main>\n            <a href=\"/elsewhere\">\n                \"Link\"\n";
+        """
+        ui
+            fn render()
+                return <main>
+                    <a href="/elsewhere">
+                        "Link"
+
+        """;
 
     [When("I author an anchor convertible render into the design's UI")]
     public async Task WhenAuthorAnchorConvertibleRender()
@@ -2109,14 +2270,56 @@ public sealed partial class DesignerSteps
     // Badge is a design component (param-less) so the palette has an insert target without
     // relying on library eval — same as WhenAuthorPaletteTestRender.
     private const string LongPaletteTestConvertibleRender =
-        "ui\n    fn Badge()\n        return <span>\n            \"Badge\"\n    fn render()\n        return <main>\n" +
-        "            <p>\n                \"1\"\n            <p>\n                \"2\"\n            <p>\n                \"3\"\n" +
-        "            <p>\n                \"4\"\n            <p>\n                \"5\"\n            <p>\n                \"6\"\n" +
-        "            <p>\n                \"7\"\n            <p>\n                \"8\"\n            <p>\n                \"9\"\n" +
-        "            <p>\n                \"10\"\n            <p>\n                \"11\"\n            <p>\n                \"12\"\n" +
-        "            <p>\n                \"13\"\n            <p>\n                \"14\"\n            <p>\n                \"15\"\n" +
-        "            <p>\n                \"16\"\n            <p>\n                \"17\"\n            <p>\n                \"18\"\n" +
-        "            <p>\n                \"19\"\n            <p>\n                \"20\"\n            \"end\"\n";
+        """
+        ui
+            fn Badge()
+                return <span>
+                    "Badge"
+            fn render()
+                return <main>
+                    <p>
+                        "1"
+                    <p>
+                        "2"
+                    <p>
+                        "3"
+                    <p>
+                        "4"
+                    <p>
+                        "5"
+                    <p>
+                        "6"
+                    <p>
+                        "7"
+                    <p>
+                        "8"
+                    <p>
+                        "9"
+                    <p>
+                        "10"
+                    <p>
+                        "11"
+                    <p>
+                        "12"
+                    <p>
+                        "13"
+                    <p>
+                        "14"
+                    <p>
+                        "15"
+                    <p>
+                        "16"
+                    <p>
+                        "17"
+                    <p>
+                        "18"
+                    <p>
+                        "19"
+                    <p>
+                        "20"
+                    "end"
+
+        """;
 
     [When("I author a long palette-test convertible render into the design's UI")]
     public async Task WhenAuthorLongPaletteTestRender()
@@ -2145,7 +2348,13 @@ public sealed partial class DesignerSteps
     // textarea, poll the store) as the other convertible-render fixtures, scoped to THIS scenario's
     // design label ("scratchcomp").
     private const string BareConvertibleRender =
-        "ui\n    fn render()\n        return <main>\n            \"hi\"\n";
+        """
+        ui
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
 
     [When("I author a bare convertible render into the design's UI")]
     public async Task WhenAuthorBareRender()
@@ -2407,7 +2616,7 @@ public sealed partial class DesignerSteps
     {
         var parentRow = TreeElementRow(parentTag);
         await parentRow.Locator($":scope > .node-children > .node-element:last-child", new() {
-            Has = ctx.Page.Locator($":scope > .node-tag-row > input.node-tag[value={CssString(childTag)}]")
+            Has = ctx.Page!.Locator($":scope > .node-tag-row > input.node-tag[value={CssString(childTag)}]")
         }).First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
@@ -2416,7 +2625,7 @@ public sealed partial class DesignerSteps
     {
         var forRow = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-for").First;
         await forRow.Locator($":scope > .node-children > .node-element:last-child", new() {
-            Has = ctx.Page.Locator($":scope > .node-tag-row > input.node-tag[value={CssString(childTag)}]")
+            Has = ctx.Page!.Locator($":scope > .node-tag-row > input.node-tag[value={CssString(childTag)}]")
         }).First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
@@ -2860,9 +3069,19 @@ public sealed partial class DesignerSteps
     // the identity pin. Same shape also covers the "root with more than one child" disabled case (main
     // itself has two children, so its own unwrap stays disabled).
     private const string UnwrapTestRender =
-        "ui\n    fn render()\n        return <main>\n            <section>\n                <h1>\n"
-        + "                    \"Title\"\n                <p>\n                    \"Body\"\n"
-        + "            <footer>\n                \"Bye\"\n";
+        """
+        ui
+            fn render()
+                return <main>
+                    <section>
+                        <h1>
+                            "Title"
+                        <p>
+                            "Body"
+                    <footer>
+                        "Bye"
+
+        """;
 
     [When("I author an unwrap-test convertible render into the design's UI")]
     public async Task WhenAuthorUnwrapTestRender()
@@ -2877,7 +3096,14 @@ public sealed partial class DesignerSteps
     // The root has exactly ONE element child, so unwrapping the ROOT is legal — <button> becomes the new
     // sole root, keeping its own stored id.
     private const string WrappedRootRender =
-        "ui\n    fn render()\n        return <div>\n            <button>\n                \"Click\"\n";
+        """
+        ui
+            fn render()
+                return <div>
+                    <button>
+                        "Click"
+
+        """;
 
     [When("I author a wrapped-root convertible render into the design's UI")]
     public async Task WhenAuthorWrappedRootRender()
@@ -3093,7 +3319,15 @@ public sealed partial class DesignerSteps
     // (S1b previously REFUSED this; it now mints a `kind="for"` row). Same authoring plumbing as the other
     // convertible-render fixtures: fill the `ui` textarea, poll the store for the write.
     private const string ForLoopConvertibleRender =
-        "ui\n    fn render()\n        return <main class=\"x\">\n            foreach note in db.notes\n                <li>\n                    note.title\n";
+        """
+        ui
+            fn render()
+                return <main class="x">
+                    foreach note in db.notes
+                        <li>
+                            note.title
+
+        """;
 
     [When("I author a for-loop convertible render into the design's UI")]
     public async Task WhenAuthorForLoopRender()
@@ -3176,16 +3410,21 @@ public sealed partial class DesignerSteps
     // and a two-note seed, so after Convert the WITH-CTX canvas evaluates the loop (two <li>s with real
     // titles) and the if (the taken branch). Same authoring plumbing as the other fixtures.
     private const string ForAndIfConvertibleRender =
-        "ui\n    fn render()\n        return <main class=\"x\">\n" +
-        "            foreach note in db.notes\n" +
-        "                <li>\n" +
-        "                    note.title\n" +
-        "            if db.flag\n" +
-        "                <p class=\"on\">\n" +
-        "                    \"ON\"\n" +
-        "            else\n" +
-        "                <p class=\"off\">\n" +
-        "                    \"OFF\"\n";
+        """
+        ui
+            fn render()
+                return <main class="x">
+                    foreach note in db.notes
+                        <li>
+                            note.title
+                    if db.flag
+                        <p class="on">
+                            "ON"
+                    else
+                        <p class="off">
+                            "OFF"
+
+        """;
 
     [When("I author a for-and-if convertible render into the design's UI")]
     public async Task WhenAuthorForAndIfRender()
@@ -3230,12 +3469,21 @@ public sealed partial class DesignerSteps
     // assertion target), the component via a `foreach`-driven tag invocation (the F2 fixture, proving F3
     // and F2 coexist on one canvas). Same authoring plumbing as the other convertible-render fixtures.
     private const string CallEvalConvertibleRender =
-        "ui\n"
-        + "    fn fmtGreeting(name)\n        return \"Hi \" + name\n"
-        + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
-        + "    fn render()\n        return <main>\n"
-        + "            <span class=\"greeting\">\n                fmtGreeting(db.greeting)\n"
-        + "            foreach n in db.notes\n                <NoteCard note={n}>\n";
+        """
+        ui
+            fn fmtGreeting(name)
+                return "Hi " + name
+            fn NoteCard(note)
+                return <li>
+                    note.title
+            fn render()
+                return <main>
+                    <span class="greeting">
+                        fmtGreeting(db.greeting)
+                    foreach n in db.notes
+                        <NoteCard note={n}>
+
+        """;
 
     [When("I author a call-eval convertible render into the design's UI")]
     public async Task WhenAuthorCallEvalRender()
@@ -3280,10 +3528,22 @@ public sealed partial class DesignerSteps
     // ROOT (design.vars) and ExpandFn's own bodyBindings (a MetaFn's vars). Same authoring plumbing as
     // the other convertible-render fixtures.
     private const string InitStateConvertibleRender =
-        "ui\n"
-        + "    var greeting = \"hi\"\n"
-        + "    fn Counter()\n        var count = 0\n        fn render()\n            return <button onClick={() => count = count + 1}>\n                count\n        return render\n"
-        + "    fn render()\n        return <main>\n            <Counter>\n            <span>\n                greeting\n";
+        """
+        ui
+            var greeting = "hi"
+            fn Counter()
+                var count = 0
+                fn render()
+                    return <button onClick={() => count = count + 1}>
+                        count
+                return render
+            fn render()
+                return <main>
+                    <Counter>
+                    <span>
+                        greeting
+
+        """;
 
     [When("I author a convertible render with a design var and an invoked Counter component into the design's UI")]
     public async Task WhenAuthorInitStateRender()

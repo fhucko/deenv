@@ -533,7 +533,13 @@ public sealed class DesignMergeSteps
             ["initialData"] = new TextValue(""),
             ["access"]      = new TextValue(""),
             ["common"]      = new TextValue(""),
-            ["ui"]          = new TextValue("ui\n    fn render()\n        return <main>\n            \"Items\"\n"),
+            ["ui"]          = new TextValue("""
+                ui
+                    fn render()
+                        return <main>
+                            "Items"
+
+                """),
         }));
         _designer.AddToSet(NodePath.Root.Field("designs"), _designId);
 

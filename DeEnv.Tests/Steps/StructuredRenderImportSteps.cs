@@ -87,32 +87,52 @@ public sealed class StructuredRenderImportSteps
 
     [Given("a design whose `ui` text is a fn render\\() returning <main class=\"hello\"> containing an <h1> whose child is the text \"Hi\"")]
     public void GivenNestedRenderDesign() => SeedDesign(
-        "ui\n    fn render()\n        return <main class=\"hello\">\n            <h1>\n                \"Hi\"\n");
+        """
+        ui
+            fn render()
+                return <main class="hello">
+                    <h1>
+                        "Hi"
+
+        """);
 
     // S6a: `foreach`/`if` render forms now IMPORT to structured `kind="for"`/`kind="if"` rows (the refusal
     // lifted). This design's render has a foreach loop over `db.notes` AND an if/else keyed off `db.greeting`
     // — the load-bearing round-trip proof (import → structured rows → project back ≡ canonical original).
     [Given("a design whose `ui` text is a fn render\\(\\) whose body has a foreach loop and an if with an else branch")]
     public void GivenForeachAndIfRenderDesign() => SeedDesign(
-        "ui\n    fn render()\n        return <main>\n" +
-        "            foreach note in db.notes\n" +
-        "                <li>\n" +
-        "                    note.title\n" +
-        "            if db.greeting == \"hi\"\n" +
-        "                <p>\n" +
-        "                    \"hello\"\n" +
-        "            else\n" +
-        "                <p>\n" +
-        "                    \"bye\"\n");
+        """
+        ui
+            fn render()
+                return <main>
+                    foreach note in db.notes
+                        <li>
+                            note.title
+                    if db.greeting == "hi"
+                        <p>
+                            "hello"
+                    else
+                        <p>
+                            "bye"
+
+        """);
 
     // M12 F1: a `ui` with `fn render()` + a scalar HELPER fn (single-return ternary) + a COMPONENT fn
     // (single-return element with a param) — the load-bearing shape structured fns import.
     [Given("a design whose `ui` text is a fn render\\(\\) plus a scalar helper function and a component function with a param")]
     public void GivenHelperAndComponentDesign() => SeedDesign(
-        "ui\n"
-        + "    fn helperLabel(active)\n        return active ? \"Yes\" : \"No\"\n"
-        + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
-        + "    fn render()\n        return <main>\n            \"hi\"\n");
+        """
+        ui
+            fn helperLabel(active)
+                return active ? "Yes" : "No"
+            fn NoteCard(note)
+                return <li>
+                    note.title
+            fn render()
+                return <main>
+                    "hi"
+
+        """);
 
     // M12 V1: a `ui` with a TOP-LEVEL var, a stateless component (NoteCard), AND a real stateful setup/view
     // component (Counter — the canonical shape confirmed against reality: a state var, a nested unparameterized
@@ -120,35 +140,83 @@ public sealed class StructuredRenderImportSteps
     // two refusals for.
     [Given("a design whose `ui` text has a top-level var, a stateless component, and a stateful Counter component")]
     public void GivenVarsAndStatefulComponentDesign() => SeedDesign(
-        "ui\n"
-        + "    var greeting = \"hi\"\n"
-        + "    fn NoteCard(note)\n        return <li>\n            note.title\n"
-        + "    fn Counter()\n        var count = 0\n        fn render()\n            return <button onClick={() => count = count + 1}>\n                count\n        return render\n"
-        + "    fn render()\n        return <main>\n            \"hi\"\n");
+        """
+        ui
+            var greeting = "hi"
+            fn NoteCard(note)
+                return <li>
+                    note.title
+            fn Counter()
+                var count = 0
+                fn render()
+                    return <button onClick={() => count = count + 1}>
+                        count
+                return render
+            fn render()
+                return <main>
+                    "hi"
+
+        """);
 
     // Refusal fixtures: import must leave the design entirely UNTOUCHED (nothing minted, `ui` unchanged).
 
     [Given("a design whose `ui` text is a fn render\\(\\) plus a server-only function")]
     public void GivenServerOnlyDesign() => SeedDesign(
-        "ui\n    server fn secretHelper()\n        return \"shh\"\n    fn render()\n        return <main>\n            \"hi\"\n");
+        """
+        ui
+            server fn secretHelper()
+                return "shh"
+            fn render()
+                return <main>
+                    "hi"
+
+        """);
 
     [Given("a design whose `ui` text is a fn render\\(\\) plus a function returning a lambda")]
     public void GivenLambdaReturnDesign() => SeedDesign(
-        "ui\n    fn makeCounter()\n        return () => 5\n    fn render()\n        return <main>\n            \"hi\"\n");
+        """
+        ui
+            fn makeCounter()
+                return () => 5
+            fn render()
+                return <main>
+                    "hi"
+
+        """);
 
     [Given("a design whose `ui` text is a fn render\\(\\) plus a function with multiple statements")]
     public void GivenMultiStatementDesign() => SeedDesign(
-        "ui\n    fn helperLabel(active)\n        var x = active\n        return x ? \"Yes\" : \"No\"\n"
-        + "    fn render()\n        return <main>\n            \"hi\"\n");
+        """
+        ui
+            fn helperLabel(active)
+                var x = active
+                return x ? "Yes" : "No"
+            fn render()
+                return <main>
+                    "hi"
+
+        """);
 
     // M12 V1: a stateful component carrying an EXTRA named helper function (`doConfirm`, GenericUi's real
     // ConfirmButton shape) besides its state var and nested render — outside the accepted shape (MetaVar has
     // a row for a state VAR, not a nested helper FUNCTION), so the whole import must still refuse.
     [Given("a design whose `ui` text is a fn render\\(\\) plus a stateful component with an extra helper function")]
     public void GivenStatefulWithExtraHelperDesign() => SeedDesign(
-        "ui\n"
-        + "    fn ConfirmButton()\n        var confirming = false\n        fn doConfirm()\n            confirming = false\n        fn render()\n            return <span>\n                \"x\"\n        return render\n"
-        + "    fn render()\n        return <main>\n            \"hi\"\n");
+        """
+        ui
+            fn ConfirmButton()
+                var confirming = false
+                fn doConfirm()
+                    confirming = false
+                fn render()
+                    return <span>
+                        "x"
+                return render
+            fn render()
+                return <main>
+                    "hi"
+
+        """);
 
     // M12 V1: a stateful component whose direct return is a LAMBDA (`return () => count`, no named nested
     // `render()`) — grammar-legal but never the shape any real code uses; V1 only imports the observed
@@ -156,8 +224,16 @@ public sealed class StructuredRenderImportSteps
     // nor the stateful shape), so this stays refused.
     [Given("a design whose `ui` text is a fn render\\(\\) plus a function with a state var and a direct lambda return")]
     public void GivenStateVarWithDirectLambdaReturnDesign() => SeedDesign(
-        "ui\n    fn Counter()\n        var count = 0\n        return () => count\n"
-        + "    fn render()\n        return <main>\n            \"hi\"\n");
+        """
+        ui
+            fn Counter()
+                var count = 0
+                return () => count
+            fn render()
+                return <main>
+                    "hi"
+
+        """);
 
     private void SeedDesign(string uiText)
     {

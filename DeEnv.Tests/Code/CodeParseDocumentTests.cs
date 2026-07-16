@@ -170,20 +170,23 @@ public sealed class CodeParseDesignTests
     public async Task A_document_maps_common_and_ui_onto_the_schema_sections()
     {
         var (common, ui) = CodeParse.ParseDesign(
-            "common\n" +
-            "    server fn hash(p)\n" +
-            "        return p\n" +
-            "    fn double(n)\n" +
-            "        return n * 2\n" +
-            "\n" +
-            "ui\n" +
-            "    var path = \"/\"\n" +
-            "    var selected\n" +
-            "    fn pick(u)\n" +
-            "        selected = u\n" +
-            "    fn render()\n" +
-            "        return <main>\n" +
-            "            \"hello\"\n");
+            """
+            common
+                server fn hash(p)
+                    return p
+                fn double(n)
+                    return n * 2
+
+            ui
+                var path = "/"
+                var selected
+                fn pick(u)
+                    selected = u
+                fn render()
+                    return <main>
+                        "hello"
+
+            """);
 
         await Assert.That(common!.Functions!.Count).IsEqualTo(2);
         await Assert.That(common.Functions[0].Name).IsEqualTo("hash");
@@ -207,12 +210,15 @@ public sealed class CodeParseDesignTests
         // No `fn render()` is fine: the self-hosted generic UI is the default. A ui section
         // may still carry vars/helpers the generic library does not use.
         var desc = InstanceDescriptionLoader.Load(
-            "types\n" +
-            "    Db\n" +
-            "        note text\n" +
-            "\n" +
-            "ui\n" +
-            "    var selected = \"x\"\n");
+            """
+            types
+                Db
+                    note text
+
+            ui
+                var selected = "x"
+
+            """);
         await Assert.That(desc.Ui!.Render).IsNull();
     }
 
@@ -220,11 +226,14 @@ public sealed class CodeParseDesignTests
     public async Task A_document_parse_error_reports_its_line()
     {
         var ex = await Assert.That(() => CodeParse.ParseDesign(
-            "ui\n" +
-            "    var path = \"/\"\n" +
-            "    fn render()\n" +
-            "        return <main>\n" +
-            "            oops =\n"))
+            """
+            ui
+                var path = "/"
+                fn render()
+                    return <main>
+                        oops =
+
+            """))
             .Throws<CodeParseException>();
         await Assert.That(ex!.Message).Contains("line 5");
     }

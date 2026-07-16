@@ -46,8 +46,9 @@ public sealed class CommitDictTests
             using var reply = JsonDocument.Parse(replyText);
             await Assert.That(reply.RootElement.TryGetProperty("error", out _)).IsFalse();
 
-            var dict = (DictionaryValue)store.ReadById(1).Value.Fields.Fields["meta"];
-            await Assert.That(dict.Entries.TryGetValue(new TextValue("theme"), out var v)).IsTrue();
+            var dict = (DictionaryValue)ReadFields(store, 1)["meta"];
+            if (!dict.Entries.TryGetValue(new TextValue("theme"), out var v) || v is null)
+                throw new InvalidOperationException("missing dict entry theme");
             await Assert.That(v).IsEqualTo((NodeValue)new TextValue("dark"));
         }
         finally
@@ -80,7 +81,7 @@ public sealed class CommitDictTests
                 }
                 """);
 
-            var before = (DictionaryValue)store.ReadById(1).Value.Fields.Fields["meta"];
+            var before = (DictionaryValue)ReadFields(store, 1)["meta"];
             await Assert.That(before.Entries.ContainsKey(new TextValue("theme"))).IsTrue();
 
             var removeReply = ws.ProcessMessage($$"""
@@ -92,7 +93,7 @@ public sealed class CommitDictTests
             using var removeJson = JsonDocument.Parse(removeReply);
             await Assert.That(removeJson.RootElement.TryGetProperty("error", out _)).IsFalse();
 
-            var after = (DictionaryValue)store.ReadById(1).Value.Fields.Fields["meta"];
+            var after = (DictionaryValue)ReadFields(store, 1)["meta"];
             await Assert.That(after.Entries.ContainsKey(new TextValue("theme"))).IsFalse();
         }
         finally
@@ -163,7 +164,7 @@ public sealed class CommitDictTests
             await Assert.That(reply.RootElement.TryGetProperty("error", out _)).IsTrue();
 
             // Nothing was applied: the owner's dict is still empty.
-            var dict = (DictionaryValue)store.ReadById(1).Value.Fields.Fields["meta"];
+            var dict = (DictionaryValue)ReadFields(store, 1)["meta"];
             await Assert.That(dict.Entries.ContainsKey(new TextValue("theme"))).IsFalse();
         }
         finally
@@ -208,8 +209,9 @@ public sealed class CommitDictTests
             using (var add = JsonDocument.Parse(addReply))
                 await Assert.That(add.RootElement.TryGetProperty("error", out _)).IsFalse();
 
-            var dict = (DictionaryValue)store.ReadById(1).Value.Fields.Fields["configs"];
-            await Assert.That(dict.Entries.TryGetValue(new TextValue("api"), out var apiVal)).IsTrue();
+            var dict = (DictionaryValue)ReadFields(store, 1)["configs"];
+            if (!dict.Entries.TryGetValue(new TextValue("api"), out var apiVal) || apiVal is null)
+                throw new InvalidOperationException("missing dict entry api");
             var api = (ObjectValue)apiVal;
             await Assert.That(((TextValue)api.Fields["name"]).Text).IsEqualTo("Api");
             await Assert.That(((IntValue)api.Fields["port"]).Value).IsEqualTo(8080);
@@ -228,12 +230,11 @@ public sealed class CommitDictTests
             using (var rw = JsonDocument.Parse(rewriteReply))
                 await Assert.That(rw.RootElement.TryGetProperty("error", out _)).IsFalse();
 
-            var api2 = (ObjectValue)((DictionaryValue)store.ReadById(1).Value.Fields.Fields["configs"])
-                .Entries[new TextValue("api")];
+            var configs = (DictionaryValue)ReadFields(store, 1)["configs"];
+            var api2 = (ObjectValue)configs.Entries[new TextValue("api")];
             await Assert.That(((IntValue)api2.Fields["port"]).Value).IsEqualTo(9090);
             // Exactly ONE entry remains under the "api" key (the rewrite replaced, not appended).
-            await Assert.That(
-                ((DictionaryValue)store.ReadById(1).Value.Fields.Fields["configs"]).Entries.Count).IsEqualTo(1);
+            await Assert.That(configs.Entries.Count).IsEqualTo(1);
 
             // dictRemove drops the entry.
             var rmReply = ws.ProcessMessage($$"""
@@ -244,7 +245,7 @@ public sealed class CommitDictTests
                 """);
             using (var rm = JsonDocument.Parse(rmReply))
                 await Assert.That(rm.RootElement.TryGetProperty("error", out _)).IsFalse();
-            var dictAfter = (DictionaryValue)store.ReadById(1).Value.Fields.Fields["configs"];
+            var dictAfter = (DictionaryValue)ReadFields(store, 1)["configs"];
             await Assert.That(dictAfter.Entries.ContainsKey(new TextValue("api"))).IsFalse();
         }
         finally
@@ -252,6 +253,12 @@ public sealed class CommitDictTests
             if (File.Exists(dataPath)) File.Delete(dataPath);
             CleanupLogGenesis(dataPath);
         }
+    }
+
+    private static IReadOnlyDictionary<string, NodeValue> ReadFields(IInstanceStore store, int id)
+    {
+        var hit = store.ReadById(id) ?? throw new InvalidOperationException($"missing object {id}");
+        return hit.Fields.Fields;
     }
 
     private static void CleanupLogGenesis(string dataPath)

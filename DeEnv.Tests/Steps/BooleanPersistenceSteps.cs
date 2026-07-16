@@ -11,7 +11,13 @@ namespace DeEnv.Tests.Steps;
 public sealed class BooleanPersistenceSteps(InstanceContext ctx)
 {
     // The root must be an object type; the single boolean is a field on it.
-    private const string BoolJson = "types\n    Db\n        ready bool\n";
+    private const string BoolJson =
+        """
+        types
+            Db
+                ready bool
+
+        """;
     private static readonly NodePath ReadyPath = NodePath.FromSegments(["ready"]);
 
     private void Seed(bool ready)

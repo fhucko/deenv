@@ -254,19 +254,24 @@ public sealed class WorkbenchDeepCopyTests
         // available" no matter how the cache was seeded; this pins the same idiom the DesignerSteps fixture
         // uses, ExtentAddingComponentConvertibleRender).
         var ui = CodeParse.ParseUiSection(
-            "ui\n"
-            + "    fn AddNote()\n"
-            + "        var noteDesc = sys.schema(\"Note\")\n"
-            + "        fn render()\n"
-            + "            return <div>\n"
-            + "                <button onClick={() => db.notes.add(sys.new(noteDesc))}>\n"
-            + "                    \"Add\"\n"
-            + "                <ul>\n"
-            + "                    foreach n in sys.extent(\"Note\")\n"
-            + "                        <li>\n"
-            + "                            n.title\n"
-            + "        return render\n"
-            + "    fn render()\n        return <main>\n            \"hi\"\n");
+            """
+            ui
+                fn AddNote()
+                    var noteDesc = sys.schema("Note")
+                    fn render()
+                        return <div>
+                            <button onClick={() => db.notes.add(sys.new(noteDesc))}>
+                                "Add"
+                            <ul>
+                                foreach n in sys.extent("Note")
+                                    <li>
+                                        n.title
+                    return render
+                fn render()
+                    return <main>
+                        "hi"
+
+            """);
         var addNote = ui.Functions!.First(f => f.Name == "AddNote");
         var addNoteAst = JsonSerializer.Serialize<ICodeValue>(addNote, SchemaJson.Options);
 
