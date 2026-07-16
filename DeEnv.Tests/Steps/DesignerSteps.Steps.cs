@@ -3731,29 +3731,26 @@ public sealed partial class DesignerSteps
     [Then("the design editor's sections are ordered types, render, publish, branches")]
     public async Task ThenDesignEditorSectionsOrdered()
     {
+        // Markers must match designEditor in instances/1/app.deenv: types (.add-type), structured
+        // render (.render-section / .render-tree), publishSection (.publish-section), branchSection
+        // (.branch-section). NOT instance-page apply-design, and NOT .branch (that matches if/else
+        // .node-branch rows inside the render tree).
         var editor = ctx.Page!.Locator("main.ide-design-edit .design-editor");
-        // Wait for key markers of each section to prove they rendered (types first via add-type or type-card).
         await editor.Locator(".add-type, .type-card").First.WaitForAsync();
-        await editor.Locator(".render-tree").First.WaitForAsync();
-        // For publish/branches, look for known controls that appear in those sections.
-        await editor.Locator("button.apply-design, .commit-msg, textarea.migration, .branch, a[href*=\"branches\"]").First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
-        // Verify order via DOM position (types before render etc). Uses evaluate only for order proof.
+        await editor.Locator(".render-section, .render-tree").First.WaitForAsync();
+        await editor.Locator(".publish-section").First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
+        await editor.Locator(".branch-section").First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
+        // Order proof: types before render before publish before branches (commit-bar may sit above types).
         var inOrder = await ctx.Page!.EvaluateAsync<bool>(@"() => {
             const ed = document.querySelector('main.ide-design-edit .design-editor');
             if (!ed) return false;
-            const addType = ed.querySelector('.add-type, .type-card');
-            const render = ed.querySelector('.render-tree');
-            const pub = ed.querySelector('button.apply-design, .commit-msg, textarea.migration');
-            const br = ed.querySelector('.branch, a[href*=""branches""]');
-            if (!addType || !render) return false;
-            const posR = addType.compareDocumentPosition(render);
-            const tBeforeR = (posR & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-            if (!tBeforeR) return false;
-            if (pub) {
-                const posP = render.compareDocumentPosition(pub);
-                if ((posP & Node.DOCUMENT_POSITION_FOLLOWING) === 0) return false;
-            }
-            return true;
+            const types = ed.querySelector('.add-type, .type-card');
+            const render = ed.querySelector('.render-section, .render-tree');
+            const pub = ed.querySelector('.publish-section');
+            const br = ed.querySelector('.branch-section');
+            if (!types || !render || !pub || !br) return false;
+            const follows = (a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+            return follows(types, render) && follows(render, pub) && follows(pub, br);
         }");
         await Assert.That(inOrder).IsTrue();
     }
