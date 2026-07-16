@@ -534,11 +534,38 @@ public sealed class WsHandler
                 // The WRITE chokepoint (M-auth `password`): hash any password-typed plaintext BEFORE the store —
                 // a staged `User` create can never skip hashing (a SECURITY must), same as every other create path.
                 createBatch.Add(new CommitCreate(tempId, typeName, HashPasswordFields(typeName, fields)));
+
+                // Nested set links from the create value (wrapNode ships children:[{refId}] via objectOf).
+                // ExecObjectValue(allowSets:true) skips nested collections for scalar field storage; rehydrate
+                // them here as SetLinkByPropMutation so an existing node lands inside the fresh owner in the
+                // SAME CommitBatch. Without this, wrap's parentSet.remove GCs the node (unlink with no
+                // surviving parent) while the client still shows the optimistic tree.
+                if (valueEl.TryGetProperty("props", out var nestProps) && nestProps.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var p in nestProps.EnumerateObject())
+                    {
+                        var propDef = typeDef.Props?.FirstOrDefault(d => d.Name == p.Name);
+                        if (propDef is not { Cardinality: Cardinality.Set }) continue;
+                        if (p.Value.ValueKind != JsonValueKind.Object) continue;
+                        if (!p.Value.TryGetProperty("type", out var arrType) || arrType.GetString() != "array") continue;
+                        if (!p.Value.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array) continue;
+                        foreach (var item in items.EnumerateArray())
+                        {
+                            if (!item.TryGetProperty("refId", out var refEl) || refEl.ValueKind != JsonValueKind.Number)
+                                continue;
+                            var memberRef = Resolve(session, refEl.GetInt32());
+                            if (memberRef >= 0 && _store.ReadById(memberRef) is { } linked)
+                                RequireWrite(floor, "create", linked.TypeName,
+                                    Code.AccessFloor.ScalarObject(linked.TypeName, memberRef, linked.Fields, _desc));
+                            extraMutations.Add(new SetLinkByPropMutation(tempId, p.Name, memberRef));
+                        }
+                    }
+                }
             }
 
         // ── edits: validate each exactly as Step A / HandleObjectPropChange (an edit of an EXISTING object).
         var mutations = new List<CommitMutation>();
-        mutations.AddRange(extraMutations); // the T2.2 (owner,prop) set-link / set-unlink ops
+        mutations.AddRange(extraMutations); // the T2.2 (owner,prop) set-link / set-unlink ops + nested create links
         foreach (var editEl in editsEl.EnumerateArray())
         {
             if (!editEl.TryGetProperty("objectId", out var idEl) || idEl.ValueKind != JsonValueKind.Number)

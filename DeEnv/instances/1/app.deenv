@@ -490,9 +490,8 @@ ui
         var site = locateNode(design, sys.id(node))
         if site == null
             return null
-        var wrapper = newNode("", "div", site.node.order)
+        var wrapper = { kind: "", tag: "div", expr: "", item: "", collection: "", condition: "", order: site.node.order, attrs: [], children: [site.node], elseChildren: [] }
         site.parentSet.add(wrapper)
-        wrapper.children.add(site.node)
         site.parentSet.remove(site.node)
         selectNode(wrapper)
         revealSelected = revealSelected + 1

@@ -1617,14 +1617,48 @@ public sealed class SsrRenderer
         }
         catch (Exception ex)
         {
-            // An invalid/unloadable design must not break the canvas — degrade to an empty context (every
-            // expr chips) and log the FULL detail regardless of family. The structural canvas still paints.
-            // `error` carries the already-formatted banner text (M12 eval-degrade-banner) so the canvas
-            // walk (both twins) just displays it verbatim — see DegradeBannerText.
+            // An invalid/unloadable design must not break the canvas — degrade db/exprs/fns/types to empty
+            // (every expr chips) and log the FULL detail regardless of family. The structural canvas still
+            // paints. `error` carries the already-formatted banner text (M12 eval-degrade-banner).
+            // STILL ship lib + libNames: the standard library does not depend on this design's projection
+            // (GenericUi.StdlibSource), and the component palette lists insert targets from libNames. A
+            // bare-leaf render root (SchemaValidationException: root must be an element) is a common
+            // authoring mid-state — without libNames the palette would be empty and "disabled insert"
+            // would be untestable/unusable (no buttons to disable).
             Console.Error.WriteLine($"evalContext of design {design.Id} failed: {ex}");
-            return Obj(("db", empty), ("exprs", empty), ("fns", empty), ("types", empty), ("lib", empty),
-                ("libNames", EmptyArr()), ("ambients", empty), ("params", empty),
-                ("error", new ExecText { Value = DegradeBannerText(ex) }));
+            try
+            {
+                var effective = GenericUi.Effective(new InstanceDescription());
+                var lib = new Dictionary<string, IExecValue>();
+                foreach (var fn in effective.Ui?.Functions ?? [])
+                {
+                    if (fn.Name is not { Length: > 0 } || !effective.SystemNames.Contains(fn.Name)) continue;
+                    var libJson = JsonSerializer.Serialize<ICodeValue>(fn, SchemaJson.Options);
+                    lib[fn.Name] = Obj(("ast", new ExecText { Value = libJson }));
+                }
+                var libObj = new ExecObject { Id = --context.LastId.Value, Constant = true, Props = lib };
+                var libNamesArr = new ExecArray
+                {
+                    Items = (effective.Ui?.Functions ?? [])
+                        .Where(fn => fn.Name is { Length: > 0 } && effective.SystemNames.Contains(fn.Name)
+                            && ComponentReturnsElement(fn))
+                        .Select(fn => fn.Name!)
+                        .OrderBy(n => n, StringComparer.Ordinal)
+                        .Select((n, i) => new ExecItem { Key = i, Value = new ExecText { Value = n } })
+                        .ToList(),
+                    Id = --context.LastId.Value,
+                    Kind = ArrayKind.List,
+                };
+                return Obj(("db", empty), ("exprs", empty), ("fns", empty), ("types", empty), ("lib", libObj),
+                    ("libNames", libNamesArr), ("ambients", empty), ("params", empty),
+                    ("error", new ExecText { Value = DegradeBannerText(ex) }));
+            }
+            catch
+            {
+                return Obj(("db", empty), ("exprs", empty), ("fns", empty), ("types", empty), ("lib", empty),
+                    ("libNames", EmptyArr()), ("ambients", empty), ("params", empty),
+                    ("error", new ExecText { Value = DegradeBannerText(ex) }));
+            }
         }
     }
 

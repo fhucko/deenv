@@ -2103,20 +2103,28 @@ public sealed partial class DesignerSteps
     }
 
     // Long variant for scroll-into-view tests: enough rows that a root-level insert lands below the fold.
+    // Multi-line children (same shape every other convertible fixture uses). One-line
+    // `<p>"1"</p>` does not parse as an importable `return <element>` tree, so convert
+    // never flips the editor into `.render-tree` mode and the scroll scenario hung 60s.
+    // Badge is a design component (param-less) so the palette has an insert target without
+    // relying on library eval — same as WhenAuthorPaletteTestRender.
     private const string LongPaletteTestConvertibleRender =
-        "ui\n    fn render()\n        return <main>\n" +
-        "            <p>\"1\"</p>\n            <p>\"2\"</p>\n            <p>\"3\"</p>\n            <p>\"4\"</p>\n            <p>\"5\"</p>\n" +
-        "            <p>\"6\"</p>\n            <p>\"7\"</p>\n            <p>\"8\"</p>\n            <p>\"9\"</p>\n            <p>\"10\"</p>\n" +
-        "            <p>\"11\"</p>\n            <p>\"12\"</p>\n            <p>\"13\"</p>\n            <p>\"14\"</p>\n            <p>\"15\"</p>\n" +
-        "            <p>\"16\"</p>\n            <p>\"17\"</p>\n            <p>\"18\"</p>\n            <p>\"19\"</p>\n            <p>\"20\"</p>\n" +
-        "            \"end\"\n";
+        "ui\n    fn Badge()\n        return <span>\n            \"Badge\"\n    fn render()\n        return <main>\n" +
+        "            <p>\n                \"1\"\n            <p>\n                \"2\"\n            <p>\n                \"3\"\n" +
+        "            <p>\n                \"4\"\n            <p>\n                \"5\"\n            <p>\n                \"6\"\n" +
+        "            <p>\n                \"7\"\n            <p>\n                \"8\"\n            <p>\n                \"9\"\n" +
+        "            <p>\n                \"10\"\n            <p>\n                \"11\"\n            <p>\n                \"12\"\n" +
+        "            <p>\n                \"13\"\n            <p>\n                \"14\"\n            <p>\n                \"15\"\n" +
+        "            <p>\n                \"16\"\n            <p>\n                \"17\"\n            <p>\n                \"18\"\n" +
+        "            <p>\n                \"19\"\n            <p>\n                \"20\"\n            \"end\"\n";
 
     [When("I author a long palette-test convertible render into the design's UI")]
     public async Task WhenAuthorLongPaletteTestRender()
     {
         await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(LongPaletteTestConvertibleRender);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
-            o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == LongPaletteTestConvertibleRender));
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "palettescroll" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == LongPaletteTestConvertibleRender));
     }
 
     // Edit the named component's body LEAF expr input (its `.fn-body` holds the SAME recursive
