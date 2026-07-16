@@ -1515,21 +1515,34 @@ public sealed partial class DesignerSteps
         await ConfigRow(index).Locator("button.add-attr").ClickAsync();
 
     [When("I set configuration {int}'s arg {int} name to {string}")]
-    public async Task WhenSetConfigurationArgName(int useIndex, int argIndex, string name) =>
+    public async Task WhenSetConfigurationArgName(int useIndex, int argIndex, string name)
+    {
         await ConfigRow(useIndex).Locator("input.node-attr-name").Nth(argIndex).FillAsync(name);
+        // Journaled autosave: the workbench binds attrs by the *stored* name. Without this wait, a
+        // rename ("nope" → "note") can still be "nope" on the server when the value step refreshes
+        // evalContext — param `note` then binds null and the preview mounts an empty <li> forever.
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaAttr").Values
+            .Any(o => o.Fields.TryGetValue("name", out var v)
+                && v is DeEnv.Storage.TextValue t && t.Text == name));
+    }
 
     [When("I set configuration {int}'s arg {int} value to {string}")]
     public async Task WhenSetConfigurationArgValue(int useIndex, int argIndex, string value)
     {
         var row = ConfigRow(useIndex);
+        // Pair name+value on the same MetaAttr before refresh: a value-only wait can pass while the
+        // name is still a prior typo (the Configurations scenario renames nope→note right before this).
+        var name = await row.Locator("input.node-attr-name").Nth(argIndex).InputValueAsync();
         var input = row.Locator("input.node-attr-value").Nth(argIndex);
         await input.FillAsync(value);
         // Binding must hit the designer store BEFORE refresh-eval: BuildEvalContext collects MetaUse arg
         // sources from the store; a premature refresh ships exprs without this value and the workbench
         // mounts with note unbound → empty <li> forever (no auto re-parse of use-args until another edit).
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaAttr").Values
-            .Any(o => o.Fields.TryGetValue("value", out var v)
-                && v is DeEnv.Storage.TextValue t && t.Text == value));
+            .Any(o => o.Fields.TryGetValue("value", out var vv)
+                && vv is DeEnv.Storage.TextValue vt && vt.Text == value
+                && o.Fields.TryGetValue("name", out var nv)
+                && nv is DeEnv.Storage.TextValue nt && nt.Text == name));
         // Force a new evalContext so ctx.exprs includes the arg source, then Reset the live instance so
         // the workbench re-binds args against a fresh seed copy (argsSignature may already match if the
         // client had the value before the AST shipped, leaving an empty first mount stuck).
