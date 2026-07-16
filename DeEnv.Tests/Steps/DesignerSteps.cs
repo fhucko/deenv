@@ -27,19 +27,14 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
     [Given("the operator IDE is running on a kernel hosting instances {string} and {string}")]
     public async Task GivenIdeRunning(string firstLabel, string secondLabel)
     {
-        // Startup (kernel boot + first browser navigation + login) can legitimately exceed the temporary
-        // tight 5s action timeout under load. Use a generous ceiling for init only, then enforce the
-        // requested 5s for all subsequent designer interaction steps (tree/palette/canvas clicks etc.).
-        const int StartupMs = 60_000;
+        // Kernel boot + first navigation + login can sit at the multi-hop ceiling; scenario body uses
+        // DesignerActionMs for locator actions (see TestTimeouts).
         _designer = await ctx.StartKernelDesignerBrowserAsync((5, firstLabel), (6, secondLabel));
-        // Raise defaults for the duration of the heavy init (NewPageAsync, GotoReady, WaitReady, login waits etc.)
-        // so they don't flake on the temp 5s setting. Restore strict ActionMs immediately after for the scenario body.
-        ctx.Page!.SetDefaultTimeout(StartupMs);
-        ctx.Page!.SetDefaultNavigationTimeout(StartupMs);
+        ctx.Page!.SetDefaultTimeout(TestTimeouts.DesignerTestMs);
+        ctx.Page!.SetDefaultNavigationTimeout(TestTimeouts.DesignerTestMs);
         SeedDesignerAdmin();
         await LoginDesignerAdminAsync();
-        ctx.Page!.SetDefaultTimeout(TestTimeouts.ActionMs);
-        ctx.Page!.SetDefaultNavigationTimeout(TestTimeouts.ActionMs);
+        ApplyDesignerPageTimeouts();
     }
 
     [Given("the anonymous operator IDE is running on a kernel hosting instances {string} and {string}")]
@@ -48,8 +43,13 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
         _designer = await ctx.StartKernelDesignerBrowserAsync((5, firstLabel), (6, secondLabel));
         SeedDesignerAdmin();
         // Anonymous path skips the login form in this harness.
-        ctx.Page!.SetDefaultTimeout(TestTimeouts.ActionMs);
-        ctx.Page!.SetDefaultNavigationTimeout(TestTimeouts.ActionMs);
+        ApplyDesignerPageTimeouts();
+    }
+
+    private void ApplyDesignerPageTimeouts()
+    {
+        ctx.Page!.SetDefaultTimeout(TestTimeouts.DesignerActionMs);
+        ctx.Page!.SetDefaultNavigationTimeout(TestTimeouts.DesignerTestMs);
     }
 
     private void SeedDesignerAdmin()
@@ -117,7 +117,7 @@ public sealed partial class DesignerSteps(InstanceContext ctx)
 
     private static Task EventuallyAsync(
         Func<bool> condition,
-        int timeoutMs = 120_000,
+        int timeoutMs = TestTimeouts.DesignerTestMs,
         [System.Runtime.CompilerServices.CallerArgumentExpression(nameof(condition))] string what = "")
         => Polling.EventuallyAsync(condition, what, timeoutMs);
 

@@ -7,6 +7,18 @@ public static class TestTimeouts
 
     /// <summary>Timeout (ms) for the overall test (page default timeout etc.).</summary>
     public const int TestMs = 30_000;
+
+    /// <summary>
+    /// Designer (kernel + IDE) per-action Playwright ceiling. Higher than <see cref="ActionMs"/> because
+    /// designer steps share a heavy parallel fleet (kernel boot, live preview, WS autosave).
+    /// </summary>
+    public const int DesignerActionMs = 30_000;
+
+    /// <summary>
+    /// Designer multi-hop / store-poll ceiling (EventuallyAsync default, convert→tree attach, deploy file
+    /// polls). Higher than <see cref="TestMs"/> for the same peak-suite reasons as <see cref="DesignerActionMs"/>.
+    /// </summary>
+    public const int DesignerTestMs = 60_000;
 }
 
 /// <summary>

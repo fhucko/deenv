@@ -1007,7 +1007,7 @@ public sealed partial class DesignerSteps
             var store = ctx.Kernel!.Instances.Single(i => i.Spec.App == label).Store;
             return store.ReadExtent(typeName).Values.Any(o =>
                 o.Fields.TryGetValue("text", out var v) && v is DeEnv.Storage.TextValue t && t.Text == text);
-        }, timeoutMs: 30000);
+        });
 
     // ──── B4 — branches + merge from the design editor ─────────────────────────────────────────────────────────
 
@@ -1057,8 +1057,8 @@ public sealed partial class DesignerSteps
         // value={propName}: under load a remap/SSR paint can clear the name from the input, the
         // value-filter matches nothing, and Evaluate hung on a missing locator for the whole deadline.
         //
-        // Under load, two failure modes show up as the same 120s MetaProp timeout (incl. W1b Counter
-        // scenarios that only need a Db.note field before authoring):
+        // Under load, two failure modes show up as the same DesignerTestMs MetaProp timeout (incl. W1b
+        // Counter scenarios that only need a Db.note field before authoring):
         //  1) arrayAdd never lands — propChange is dropped until the row is in pendingAdds (ws.ts).
         //  2) name write races remap — first write lost; re-fire after positive id is required.
         // Re-click + Field when the extent count never grows; re-fire name while count grew but name empty.
@@ -1067,7 +1067,7 @@ public sealed partial class DesignerSteps
         var nameInput = card.Locator(".prop-row").Last.Locator("input.prop-name");
         await nameInput.WaitForAsync();
         await nameInput.FillAsync(propName);
-        var deadline = DateTime.UtcNow.AddMilliseconds(120_000);
+        var deadline = DateTime.UtcNow.AddMilliseconds(TestTimeouts.DesignerTestMs);
         var lastRecreate = DateTime.UtcNow;
         while (DateTime.UtcNow < deadline)
         {
@@ -1096,7 +1096,7 @@ public sealed partial class DesignerSteps
             await Task.Delay(50);
         }
         throw new TimeoutException(
-            $"Timed out after 120000ms waiting for MetaProp name '{propName}' in the designer store.");
+            $"Timed out after {TestTimeouts.DesignerTestMs}ms waiting for MetaProp name '{propName}' in the designer store.");
     }
 
     // Rename a prop on a named type via its bound name input; wait for the client edit + the autosave, so a
@@ -1222,7 +1222,7 @@ public sealed partial class DesignerSteps
                 }
             }
             return false;
-        }, timeoutMs: 30000);
+        });
 
     // The branch working copy's Design id, resolved from the designer's store: a Branch named `name` whose
     // workingCopy reference names a Design row.
@@ -1294,7 +1294,7 @@ public sealed partial class DesignerSteps
         // (present in DOM) so we can read its value even while hidden; the scenario only asserts the
         // editor surface carries the design's ui source, not that the details is open.
         await ta.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
-        var deadline = DateTime.UtcNow.AddMilliseconds(TestTimeouts.ActionMs);
+        var deadline = DateTime.UtcNow.AddMilliseconds(TestTimeouts.DesignerActionMs);
         string val = "";
         while (DateTime.UtcNow < deadline)
         {
@@ -2082,9 +2082,12 @@ public sealed partial class DesignerSteps
         var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card", new() {
             Has = ctx.Page.Locator($"input.fn-name[value=\"{fnName}\"]")
         });
-        // After convert, the fn-cards may take time to appear in the components section.
-        // Give 60s so the card is attached before trying to click its add-use.
-        await card.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached, Timeout = 60000 });
+        // After convert, the fn-cards may take time to appear — multi-hop ceiling (page default is action).
+        await card.WaitForAsync(new()
+        {
+            State = Microsoft.Playwright.WaitForSelectorState.Attached,
+            Timeout = TestTimeouts.DesignerTestMs,
+        });
         await card.Locator(".add-use").ClickAsync();
     }
 
@@ -2827,7 +2830,12 @@ public sealed partial class DesignerSteps
         // The detailed nodes may take longer to populate; we just need the container to be present
         // so subsequent "add-configuration" etc. are ready.
         var tree = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree").First;
-        await tree.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached, Timeout = 60000 });
+        // Convert → refetch → structured tree is multi-hop (page default is DesignerActionMs only).
+        await tree.WaitForAsync(new()
+        {
+            State = Microsoft.Playwright.WaitForSelectorState.Attached,
+            Timeout = TestTimeouts.DesignerTestMs,
+        });
     }
 
     // The tree editor renders element nodes outermost-first; the ROOT is the first .node-element, so its
@@ -3118,7 +3126,7 @@ public sealed partial class DesignerSteps
                 .Where(n => n != null)
                 .ToHashSet();
             return expected.All(e => have.Contains(e));
-        }, timeoutMs: 60000);
+        });
     }
 
     [When("I click move-down on configuration {int}")]
@@ -3717,7 +3725,7 @@ public sealed partial class DesignerSteps
         // a saturated full suite — a wide window keeps it deterministic under peak load.
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
         await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
-            && File.ReadAllText(target.Spec.SchemaPath).Contains(typeName), timeoutMs: 30000);
+            && File.ReadAllText(target.Spec.SchemaPath).Contains(typeName));
     }
 
     [Then("the {string} instance's app document declares {string}")]
@@ -3726,10 +3734,10 @@ public sealed partial class DesignerSteps
         // Apply deployed the projected app document; assert it contains the given prop declaration
         // (e.g. "checked set of TodoList" / "text dict of text by text") -- the canonical AppPrint
         // form of a collection-shaped prop, proving cardinality + key type flowed through projection.
-        // Wide window: the deploy projects the WHOLE app + resets data, run under peak full-suite load.
+        // DesignerTestMs: the deploy projects the WHOLE app + resets data under peak full-suite load.
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
         await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
-            && File.ReadAllText(target.Spec.SchemaPath).Contains(declaration), timeoutMs: 30000);
+            && File.ReadAllText(target.Spec.SchemaPath).Contains(declaration));
     }
 
 
@@ -3743,7 +3751,7 @@ public sealed partial class DesignerSteps
             var source = File.ReadAllText(target.Spec.SchemaPath);
             return source.Contains($"    {subject}\n        {verb}", StringComparison.Ordinal)
                 || source.Contains($"    {subject}\r\n        {verb}", StringComparison.Ordinal);
-        }, timeoutMs: 30000);
+        });
     }
 
     [Then("the design's type {string} is an enum with values {string}")]
