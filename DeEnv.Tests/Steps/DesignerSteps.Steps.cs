@@ -1530,8 +1530,13 @@ public sealed partial class DesignerSteps
         await EventuallyAsync(() => _designer.Store.ReadExtent("MetaAttr").Values
             .Any(o => o.Fields.TryGetValue("value", out var v)
                 && v is DeEnv.Storage.TextValue t && t.Text == value));
-        // Force a new evalContext so ctx.exprs includes the arg source and the workbench remounts.
+        // Force a new evalContext so ctx.exprs includes the arg source, then Reset the live instance so
+        // the workbench re-binds args against a fresh seed copy (argsSignature may already match if the
+        // client had the value before the AST shipped, leaving an empty first mount stuck).
         await ctx.Page!.Locator("main.ide-design-edit .design-editor button.refresh-eval").First.ClickAsync();
+        var reset = LiveInstancePreview(useIndex).Locator(".workbench-instance-reset");
+        if (await reset.CountAsync() > 0)
+            await reset.ClickAsync();
     }
 
     // ux review — a typo'd arg name is currently byte-identical to no arg at all (both bind ExecNull);
