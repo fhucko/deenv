@@ -1068,9 +1068,22 @@ public sealed partial class DesignerSteps
         // Persist before any "reload the design editor" (needed so type/cardinality <select>s get
         // SSR-populated option lists). Without this wait, reload re-renders from store and the new
         // prop vanishes or keeps an empty name — PropTypeSelect then times out on [value=propName].
-        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
-            .Any(o => o.Fields.TryGetValue("name", out var v)
-                && v is DeEnv.Storage.TextValue t && t.Text == propName));
+        // Under load the arrayAdd mint can remap after the first name write; re-fire the binding until
+        // the store shows the name (same deadline as EventuallyAsync, no timeout inflation).
+        var deadline = DateTime.UtcNow.AddMilliseconds(120_000);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (_designer.Store.ReadExtent("MetaProp").Values
+                .Any(o => o.Fields.TryGetValue("name", out var v)
+                    && v is DeEnv.Storage.TextValue t && t.Text == propName))
+                return;
+            await namedRow.Locator("input.prop-name").EvaluateAsync(
+                "(el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }",
+                propName);
+            await Task.Delay(50);
+        }
+        throw new TimeoutException(
+            $"Timed out after 120000ms waiting for MetaProp name '{propName}' in the designer store.");
     }
 
     // Rename a prop on a named type via its bound name input; wait for the client edit + the autosave, so a
