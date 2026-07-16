@@ -1689,7 +1689,15 @@ public sealed partial class DesignerSteps
             else
             {
                 var live = content.Locator($"{tag}:not([data-node])", new() { HasTextString = text }).First;
-                await live.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Visible });
+                // <option> (and similar) are in the accessibility tree but Playwright does not treat them
+                // as Visible unless the <select> is open — RefSelect seedlib asserts option text while the
+                // closed select already lists Alpha/Beta in the DOM (failure dump had the option present).
+                // Attached is the real contract for those tags; Visible for ordinary content (buttons, li).
+                var state = tag.Equals("option", StringComparison.OrdinalIgnoreCase)
+                    || tag.Equals("optgroup", StringComparison.OrdinalIgnoreCase)
+                    ? Microsoft.Playwright.WaitForSelectorState.Attached
+                    : Microsoft.Playwright.WaitForSelectorState.Visible;
+                await live.WaitForAsync(new() { State = state });
             }
         }
         catch (TimeoutException ex)
