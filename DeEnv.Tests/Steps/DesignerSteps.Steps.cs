@@ -1667,30 +1667,36 @@ public sealed partial class DesignerSteps
         var preview = row.Locator(".use-preview");
         // Live mount only: static U1 renderTree stamps data-node on every element; the real workbench
         // never does. Scope to .workbench-instance-content so toolbar chrome can't satisfy the assert.
-        // HasTextString is exact and fails for the empty-string case (Field sibling echo), so empty
-        // uses a trimmed-text WaitForFunction; non-empty uses the native locator (TESTING.md).
+        //
+        // Empty text: Playwright HasTextString("") does NOT match empty elements (Field isolation
+        // scenario — sibling echo <span class="echo"></span> is present but the locator never
+        // resolves). Poll trimmed textContent instead. Non-empty: native HasTextString (TESTING.md).
         try
         {
+            var content = preview.Locator(".workbench-instance-content");
+            await content.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
             if (text.Length == 0)
             {
+                // Prefer the fixture echo when present (schema Field scenarios); else any empty live tag.
                 await ctx.Page!.WaitForFunctionAsync(
                     $"() => {{ const rows = document.querySelectorAll('main.ide-design-edit .design-editor .components-section .fn-uses .use-row'); " +
                     $"const r = rows[{index}]; if (r == null) return false; " +
                     $"const content = r.querySelector('.use-preview .workbench-instance-content'); if (content == null) return false; " +
+                    $"const echo = content.querySelector('span.echo'); " +
+                    $"if (echo != null && !echo.hasAttribute('data-node')) return (echo.textContent ?? '').trim() === ''; " +
                     $"return [...content.querySelectorAll({JsString(tag)})].some(e => !e.hasAttribute('data-node') && (e.textContent ?? '').trim() === ''); }}");
             }
             else
             {
-                var live = preview.Locator($".workbench-instance-content {tag}:not([data-node])",
-                    new() { HasTextString = text }).First;
+                var live = content.Locator($"{tag}:not([data-node])", new() { HasTextString = text }).First;
                 await live.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Visible });
             }
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex)
         {
             var previewHtml = await preview.InnerHTMLAsync();
             throw new TimeoutException(
-                $"Configuration {index}'s live instance did not show <{tag}> reading '{text}'. Actual preview: {previewHtml}");
+                $"Configuration {index}'s live instance did not show <{tag}> reading '{text}'. Actual preview: {previewHtml}", ex);
         }
     }
 
@@ -2089,8 +2095,18 @@ public sealed partial class DesignerSteps
     }
 
     [When("I type {string} into configuration {int}'s live instance input")]
-    public async Task WhenTypeIntoConfigurationLiveInstanceInput(string text, int index) =>
-        await LiveInstancePreview(index).Locator(".workbench-instance-content input").First.FillAsync(text);
+    public async Task WhenTypeIntoConfigurationLiveInstanceInput(string text, int index)
+    {
+        // Live Field/input only — a static renderTree input is not two-way-wired under the sandbox, so
+        // FillAsync would "succeed" while the echo span never updates and the Then times out.
+        var content = LiveInstancePreview(index).Locator(".workbench-instance-content");
+        await content.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
+        var input = content.Locator("input:not([data-node])").First;
+        await input.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Visible });
+        await input.FillAsync(text);
+        // Prove the two-way bind wrote the model (input value), not only that Playwright typed.
+        await Microsoft.Playwright.Assertions.Expect(input).ToHaveValueAsync(text);
+    }
 
     [When("I click configuration {int}'s live instance Reset button")]
     public async Task WhenClickConfigurationLiveInstanceReset(int index)
