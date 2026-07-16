@@ -3714,8 +3714,7 @@ public sealed partial class DesignerSteps
         // Apply also deployed: it wrote the projected app document onto the target instance's app doc (its
         // own sovereign id-dir). Poll it (the WS host-action + file write is async) until the type appears.
         // The deploy projects the WHOLE app and resets the target store, so it can run long at the tail of
-        // a saturated full suite — a wide window keeps it deterministic (this feature's 8 kernel-backed
-        // browser scenarios run [NotInParallel], so the last one's deploy lands under peak load).
+        // a saturated full suite — a wide window keeps it deterministic under peak load.
         var target = ctx.Kernel!.Instances.Single(i => i.Spec.App == label);
         await EventuallyAsync(() => File.Exists(target.Spec.SchemaPath)
             && File.ReadAllText(target.Spec.SchemaPath).Contains(typeName), timeoutMs: 30000);
