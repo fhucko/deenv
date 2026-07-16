@@ -85,11 +85,36 @@ public sealed class LoginUiSteps(InstanceContext ctx)
 
     // Once logged in, the generic render shows the <UserMenu> (name + Log out, plus admin controls). Waits
     // for it (the login refetch is async) — proving the post-login chrome replaced the sign-in control.
+    //
+    // Public-roadmap path (create-user e2e): SignInBar embeds LoginForm; after login both must be gone
+    // (stale sign-in / login-form chrome is the same swap class as the locked-gate LoginForm). Ceiling
+    // TestMs for peak-suite WS; dump #app on failure.
     [Then("the user menu is shown")]
     public async Task ThenUserMenuShown()
     {
-        await ctx.Page!.Locator(".user-menu").WaitForAsync();
-        await Assert.That(await ctx.Page.Locator(".sign-in-bar").CountAsync()).IsEqualTo(0);
+        var page = ctx.Page!;
+        try
+        {
+            await page.Locator(".user-menu").WaitForAsync(new()
+            {
+                State = WaitForSelectorState.Visible,
+                Timeout = TestTimeouts.TestMs,
+            });
+            await page.WaitForFunctionAsync(
+                "() => !document.querySelector('#app .sign-in-bar') && !document.querySelector('#app .login-form')",
+                null,
+                new() { Timeout = TestTimeouts.TestMs });
+        }
+        catch (TimeoutException ex)
+        {
+            var app = await page.Locator("#app").InnerHTMLAsync();
+            throw new TimeoutException(
+                $"user-menu never fully replaced sign-in chrome after login " +
+                $"(user-menu: {await page.Locator(".user-menu").CountAsync()}, " +
+                $"sign-in-bar: {await page.Locator(".sign-in-bar").CountAsync()}, " +
+                $"login-form: {await page.Locator(".login-form").CountAsync()}). " +
+                $"#app (first 1200):\n{app[..Math.Min(1200, app.Length)]}", ex);
+        }
     }
 
     // Open the path as an ANONYMOUS visitor (a fresh page on the shared browser — no principal bound, the
@@ -126,6 +151,10 @@ public sealed class LoginUiSteps(InstanceContext ctx)
     // Log in THROUGH the form: fill the bound inputs and click Submit (which calls sys.login). Gate on full
     // readiness first (data-ready) — the WS must be open + the session claimed before sys.login is sent and
     // its reply can drive the refetch (an interim mutation-readiness gate, like every other mutating step).
+    //
+    // After Submit, wait until the form is gone (success → refetch bound principal) OR #__error is shown
+    // (wrong password). Without this, the next Then races the multi-hop login reply under parallel load —
+    // create-user e2e timed out 30s on ".user-menu" with the form still in flight.
     [When("the visitor logs in through the form as {string} with password {string}")]
     public async Task WhenLogsInThroughForm(string name, string password)
     {
@@ -134,6 +163,20 @@ public sealed class LoginUiSteps(InstanceContext ctx)
         await page.Locator(".login-form input.name").FillAsync(name);
         await page.Locator(".login-form input.password").FillAsync(password);
         await page.Locator(".login-form button.login-submit").ClickAsync();
+        try
+        {
+            await page.WaitForFunctionAsync(
+                "() => !document.querySelector('#app .login-form') || document.querySelector('#__error')",
+                null,
+                new() { Timeout = TestTimeouts.TestMs });
+        }
+        catch (TimeoutException ex)
+        {
+            var app = await page.Locator("#app").InnerHTMLAsync();
+            throw new TimeoutException(
+                "Login submit never settled (form still present, no #__error). " +
+                $"#app (first 1200):\n{app[..Math.Min(1200, app.Length)]}", ex);
+        }
     }
 
     // The login success refetches and the page re-renders as the bound admin: the ruled data appears. Poll
