@@ -1588,11 +1588,20 @@ public sealed partial class DesignerSteps
         // Use WaitForFunction *only* for the !data-node negation (live mounted content vs. static renderTree
         // pre-mount body that stamps data-node on everything). All other presence/text is expressed with
         // native Locator + HasTextString per TESTING.md. The function is scoped to the row for stability.
-        await ctx.Page!.WaitForFunctionAsync(
-            $"() => {{ const rows = document.querySelectorAll('main.ide-design-edit .design-editor .components-section .fn-uses .use-row'); " +
-            $"const r = rows[{index}]; if (r == null) return false; " +
-            $"const preview = r.querySelector('.use-preview'); if (preview == null) return false; " +
-            $"return [...preview.querySelectorAll({JsString(tag)})].some(e => e.textContent === {JsString(text)} && !e.hasAttribute('data-node')); }}");
+        try
+        {
+            await ctx.Page!.WaitForFunctionAsync(
+                $"() => {{ const rows = document.querySelectorAll('main.ide-design-edit .design-editor .components-section .fn-uses .use-row'); " +
+                $"const r = rows[{index}]; if (r == null) return false; " +
+                $"const preview = r.querySelector('.use-preview'); if (preview == null) return false; " +
+                $"return [...preview.querySelectorAll({JsString(tag)})].some(e => e.textContent === {JsString(text)} && !e.hasAttribute('data-node')); }}");
+        }
+        catch (TimeoutException)
+        {
+            var previewHtml = await preview.InnerHTMLAsync();
+            throw new TimeoutException(
+                $"Configuration {index}'s live instance did not show <{tag}> reading '{text}'. Actual preview: {previewHtml}");
+        }
     }
 
     // The v1 fidelity boundary made honest (design doc): a component whose render throws shows the REAL
@@ -1730,7 +1739,7 @@ public sealed partial class DesignerSteps
     // `var state = { count: 0 }`, not a bare scalar), in ONE design: proves a throwing instance's handler
     // error never touches a SIBLING instance's own liveness, nor the page's.
     // Code has no `throw` statement — the handler assigns from the unseeded ambient `currentUser` so the
-    // runtime raises "Variable currentUser not found" (same message as the ambient-at-render scenario).
+    // workbench sandbox raises "Variable currentUser not found" (same message as ambient-at-render).
     // Stateful setup/view shape so structured import keeps a live onClick (same as Counter).
     private const string ThrowerAndCounterConvertibleRender =
         "ui\n"
@@ -1869,11 +1878,13 @@ public sealed partial class DesignerSteps
             await els.Nth(count - 1).WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
-    // Locate a configuration's live-instance `.use-preview` panel by GLOBAL document order — the existing
-    // convention these steps already use (`.use-row` is queried unscoped by fn-card, so index 0/1/… tracks
-    // DOCUMENT order across however many component cards a scenario has, matching authored fn order).
+    // Locate a configuration's live-instance `.use-preview` by GLOBAL document order of `.use-row`
+    // (across every fn-card). Must match ThenConfigurationLiveInstanceShowsElement / ShowsError — those
+    // query unscoped `.fn-uses .use-row`. Scoping to ComponentCard().Last (the prior body) made multi-
+    // component scenarios click Counter when the Gherkin said configuration 0 = Thrower.
     private Microsoft.Playwright.ILocator LiveInstancePreview(int index) =>
-        ComponentCard().Locator(".fn-uses .use-row").Nth(index).Locator(".use-preview");
+        ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row")
+            .Nth(index).Locator(".use-preview");
 
     // Scope the add-configuration click to ONE named component card — needed once a scenario has more than
     // one `.fn-card` (the existing unscoped "I click the add-configuration button" step is deliberately
