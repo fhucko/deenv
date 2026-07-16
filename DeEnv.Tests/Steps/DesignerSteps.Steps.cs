@@ -1505,20 +1505,14 @@ public sealed partial class DesignerSteps
         var row = ConfigRow(useIndex);
         var input = row.Locator("input.node-attr-value").Nth(argIndex);
         await input.FillAsync(value);
-        // Dispatch events to ensure any input binding listeners (for two-way value={ } on .node-attr-value) fire and update the model.
-        await input.DispatchEventAsync("input");
-        await input.DispatchEventAsync("change");
-        await input.WaitForAsync();
-        // Force refresh of evals so the use-preview's renderTree re-computes with the current arg binding.
-        var refresh = ctx.Page!.Locator("button.refresh-eval").First;
-        if (await refresh.CountAsync() > 0)
-        {
-            await refresh.ClickAsync();
-        }
-        else
-        {
-            await ctx.Page!.EvaluateAsync("() => { if (typeof evalRefresh !== 'undefined') evalRefresh = (evalRefresh|0) + 1; else if (window.evalRefresh !== undefined) window.evalRefresh = (window.evalRefresh|0) + 1; }");
-        }
+        // Binding must hit the designer store BEFORE refresh-eval: BuildEvalContext collects MetaUse arg
+        // sources from the store; a premature refresh ships exprs without this value and the workbench
+        // mounts with note unbound → empty <li> forever (no auto re-parse of use-args until another edit).
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaAttr").Values
+            .Any(o => o.Fields.TryGetValue("value", out var v)
+                && v is DeEnv.Storage.TextValue t && t.Text == value));
+        // Force a new evalContext so ctx.exprs includes the arg source and the workbench remounts.
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.refresh-eval").First.ClickAsync();
     }
 
     // ux review — a typo'd arg name is currently byte-identical to no arg at all (both bind ExecNull);
@@ -2040,8 +2034,10 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ComponentInvokingConvertibleRender));
     }
 
+    // Badge is param-less so a palette insert (no auto-args) still expands to readable canvas content —
+    // proving F2 expansion of a design component, not a literal <Badge> chip.
     private const string PaletteTestConvertibleRender =
-        "ui\n    fn Badge(label)\n        return <span>\n            label\n    fn render()\n        return <main>\n            \"hi\"\n";
+        "ui\n    fn Badge()\n        return <span>\n            \"Badge\"\n    fn render()\n        return <main>\n            \"hi\"\n";
 
     [When("I author a palette-test convertible render into the design's UI")]
     public async Task WhenAuthorPaletteTestRender()
@@ -2172,7 +2168,10 @@ public sealed partial class DesignerSteps
             Has = ctx.Page.Locator($"input.node-tag[value={CssString(tag)}]")
         });
         await row.First.WaitForAsync();
-        await row.First.ClickAsync();
+        // Dispatch on the row div (selectNode is its onClick). A normal ClickAsync often hits the nested
+        // <input.node-tag> first; under some remounts the parent handler does not fire, so selection never
+        // lands and the follow-up Then times out waiting for .is-selected.
+        await row.First.EvaluateAsync("el => el.click()");
     }
 
     [When(@"I click the tree editor's leaf row reading ""(.*)""")]
@@ -2308,9 +2307,27 @@ public sealed partial class DesignerSteps
     [Then(@"the tree editor's ""(.*)"" element row is selected")]
     public async Task ThenTheTreeEditorsElementRowIsSelected(string tag)
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element.is-selected", new() {
+        var selected = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element.is-selected", new() {
             Has = ctx.Page.Locator($"input.node-tag[value={CssString(tag)}]")
-        }).First.WaitForAsync();
+        }).First;
+        try
+        {
+            // Attached is enough — selection is a class on the row, not a visibility contract.
+            await selected.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
+        }
+        catch (TimeoutException)
+        {
+            var classes = await ctx.Page!.EvaluateAsync<string>(
+                $@"() => {{
+                    const rows = [...document.querySelectorAll('main.ide-design-edit .design-editor .render-tree .node-element')];
+                    return rows.map(r => {{
+                        const inp = r.querySelector('input.node-tag');
+                        return (inp ? inp.value : '?') + ':' + r.className;
+                    }}).join(' | ');
+                }}");
+            throw new TimeoutException(
+                $"Tree editor row '{tag}' was not selected. Row classes: {classes}");
+        }
     }
 
     [Then(@"the tree editor's (for|if) row is selected")]
@@ -2412,8 +2429,10 @@ public sealed partial class DesignerSteps
     [Then(@"the design canvas contains a literal ""(.*)"" element")]
     public async Task ThenTheDesignCanvasContainsALiteralElement(string tag)
     {
-        // A library component renders literally (the tag itself, not expanded), and typically without data-node or with special.
-        await ctx.Page!.Locator($".design-canvas {tag}").First.WaitForAsync();
+        // A library component renders literally (the tag itself, not expanded). Custom elements like
+        // <SetTable> are often not "visible" to Playwright (empty/unknown box), so wait for Attached.
+        await ctx.Page!.Locator($".design-canvas {tag}").First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     [When("I set the new component's name to {string}")]
@@ -2990,9 +3009,11 @@ public sealed partial class DesignerSteps
     [When("I set the design's initial data to:")]
     public async Task WhenSetInitialData(string initialData)
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-initial").FillAsync(initialData);
+        // Gherkin on Windows may pass CRLF; the app-document / seed parser expects LF section text.
+        var normalized = initialData.Replace("\r\n", "\n").Replace("\r", "\n");
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-initial").FillAsync(normalized);
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
-            o.Fields.TryGetValue("initialData", out var iv) && iv is DeEnv.Storage.TextValue it && it.Text == initialData));
+            o.Fields.TryGetValue("initialData", out var iv) && iv is DeEnv.Storage.TextValue it && it.Text == normalized));
     }
 
     // The render's one leaf (imported from `{db.greeting}` under <h1>) — a plain journaled edit, the same
