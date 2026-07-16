@@ -455,11 +455,11 @@ public sealed partial class DesignerSteps
     public async Task WhenOpenMissingDesign()
     {
         // Navigate straight to a design-editor URL whose id resolves to no design in db.designs (a high id
-        // that the seeded library never reaches). The editor page renders its heading + Back link, then a
-        // not-found message because the foreach finds no match.
+        // that the seeded library never reaches). The shell renders heading + Back; the body is the
+        // not-found message — NOT `.design-editor` (that only mounts when a design id matches).
         await ctx.Page!.GotoReadyAsync(ctx.DesignerUrl("/designs/999999"));
         await ctx.Page!.WaitForSelectorAsync("main.ide-design-edit");
-        await ctx.Page.Locator("main.ide-design-edit .design-editor").WaitForAsync();
+        await ctx.Page.Locator("main.ide-design-edit .not-found").WaitForAsync();
     }
 
     // ──── Then ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1055,6 +1055,8 @@ public sealed partial class DesignerSteps
         });
         await card.Locator("button.add-prop").ClickAsync();
         var newRow = card.Locator(".prop-row").Last;
+        // Wait for the optimistic empty row before naming (create must be in the client model).
+        await newRow.Locator("input.prop-name").WaitForAsync();
         await newRow.Locator("input.prop-name").FillAsync(propName);
         // Wait for the binding to reflect the name back into the input (value attr), like the type-name
         // step does. This ensures the client model updated before we wait for the server store.
@@ -1339,7 +1341,8 @@ public sealed partial class DesignerSteps
         // RESULT — the structured render section — is first-class, OUTSIDE this disclosure.
         var btn = ctx.Page!.Locator("main.ide-design-edit .design-editor button.convert-render").First;
         await btn.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
-        await btn.ClickAsync();
+        // Dispatch click without actionability/visibility gates — the disclosure can re-close mid-wait.
+        await btn.EvaluateAsync("el => el.click()");
     }
 
     // ──── M12 E1 — the structured-render TREE EDITOR (recursive renderNodeEditor) ────────────────────────────────────
@@ -1599,7 +1602,19 @@ public sealed partial class DesignerSteps
     {
         var preview = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row").Nth(index)
             .Locator(".use-preview");
-        await preview.Locator(".instance-error", new() { HasTextString = message }).First.WaitForAsync();
+        try
+        {
+            await preview.Locator(".instance-error", new() { HasTextString = message }).First.WaitForAsync();
+        }
+        catch (TimeoutException)
+        {
+            var previewHtml = await preview.InnerHTMLAsync();
+            var anyErr = preview.Locator(".instance-error");
+            var errText = await anyErr.CountAsync() > 0 ? await anyErr.First.InnerTextAsync() : "(no .instance-error)";
+            throw new TimeoutException(
+                $"Configuration {index}'s live instance did not show error '{message}'. " +
+                $"Any error text: {errText}. Actual preview: {previewHtml}");
+        }
     }
 
     // Stamps the mounted instance's first element with a test-only marker — the opaque-container pin: an
@@ -1714,9 +1729,12 @@ public sealed partial class DesignerSteps
     // alongside an ordinary REACTIVE Counter (see ReactiveCounterConvertibleRender's doc comment —
     // `var state = { count: 0 }`, not a bare scalar), in ONE design: proves a throwing instance's handler
     // error never touches a SIBLING instance's own liveness, nor the page's.
+    // Code has no `throw` statement — the handler assigns from the unseeded ambient `currentUser` so the
+    // runtime raises "Variable currentUser not found" (same message as the ambient-at-render scenario).
+    // Stateful setup/view shape so structured import keeps a live onClick (same as Counter).
     private const string ThrowerAndCounterConvertibleRender =
         "ui\n"
-        + "    fn Thrower()\n        return <button class=\"wb-throw\" onClick={() => { throw \"boom error\" }}>\n            \"boom\"\n"
+        + "    fn Thrower()\n        var state = { n: 0 }\n        fn render()\n            return <button class=\"wb-throw\" onClick={() => state.n = currentUser}>\n                \"boom\"\n        return render\n"
         + "    fn Counter()\n        var state = { count: 0 }\n        fn render()\n            return <button onClick={() => state.count = state.count + 1}>\n                state.count\n        return render\n"
         + "    fn render()\n        return <main>\n            \"hi\"\n";
 

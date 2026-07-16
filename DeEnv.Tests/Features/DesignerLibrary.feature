@@ -545,7 +545,7 @@ Feature: Designer - Library and Navigation
     And configuration 0's live instance shows a "button" element reading "boom"
     And configuration 1's live instance shows a "button" element reading "0"
     When I click configuration 0's live instance button
-    Then configuration 0's live instance shows the error "boom error"
+    Then configuration 0's live instance shows the error "Variable currentUser not found"
     When I click configuration 1's live instance button
     Then configuration 1's live instance shows a "button" element reading "1"
     When I rename the design's label to "throwme-renamed"
