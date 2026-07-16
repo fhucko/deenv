@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Sockets;
 using DeEnv.Http;
 using DeEnv.Instance;
 using DeEnv.Storage;
@@ -38,38 +37,67 @@ public sealed class TestInstanceServer : IAsyncDisposable
         // its identity form (links + path are root-relative, the asset URL has no prefix) — exactly
         // the behavior-preserving case. The page targets the asset port (injected as the asset
         // authority host:port). The kernel-hosted path-mounted case is exercised by Kernel.feature.
-        var appPort = GetFreePort();
-        var assetPort = GetFreePort();
-        var blobPool = new FileBlobPool(AppPaths.BlobsDirForDataPath(dataFilePath));
-        var auth = TokenAuth.ForDataHome(Path.GetDirectoryName(dataFilePath)!);
-        var (appApp, assetApp) = InstanceApp.Build(Store, description, mountBase: "/", assetPort: assetPort,
-            instanceId: InstanceId, auth: auth, blobPool: blobPool);
+        //
+        // Bind under PortAllocator's residual-TOCTOU retry: Next() verifies bindable then releases,
+        // and a sibling can grab the port before GenHTTP binds (Access login UI under parallel load
+        // surfaces this as BindingException → later "user menu" steps skipped). Kernel host already
+        // uses StartWithBindRetryAsync; this path must match.
+        await PortAllocator.StartWithBindRetryAsync(async () =>
+        {
+            await StopHostsAsync();
+            var appPort = GetFreePort();
+            var assetPort = GetFreePort();
+            var blobPool = new FileBlobPool(AppPaths.BlobsDirForDataPath(dataFilePath));
+            var auth = TokenAuth.ForDataHome(Path.GetDirectoryName(dataFilePath)!);
+            var (appApp, assetApp) = InstanceApp.Build(Store, description, mountBase: "/", assetPort: assetPort,
+                instanceId: InstanceId, auth: auth, blobPool: blobPool);
 
-        // Bind loopback-only (127.0.0.1), not all interfaces: tests are driven by Playwright over
-        // localhost, and an all-interfaces listener trips the Windows Defender Firewall prompt — which
-        // re-fires for every new executable path (e.g. running from a fresh git worktree). Loopback
-        // listeners are firewall-exempt. (Production keeps all-interfaces unless DEENV_BIND=loopback.)
-        _infraHost = Host.Create()
-                    .Handler(assetApp)
-                    .Defaults(secureUpgrade: false, strictTransport: false)
-                    .Bind(IPAddress.Loopback, (ushort)assetPort, dualStack: false);
+            // Bind loopback-only (127.0.0.1), not all interfaces: tests are driven by Playwright over
+            // localhost, and an all-interfaces listener trips the Windows Defender Firewall prompt — which
+            // re-fires for every new executable path (e.g. running from a fresh git worktree). Loopback
+            // listeners are firewall-exempt. (Production keeps all-interfaces unless DEENV_BIND=loopback.)
+            _infraHost = Host.Create()
+                        .Handler(assetApp)
+                        .Defaults(secureUpgrade: false, strictTransport: false)
+                        .Bind(IPAddress.Loopback, (ushort)assetPort, dualStack: false);
 
-        _appHost = Host.Create()
-                    .Handler(appApp)
-                    // Plain HTTP for tests: no HTTPS endpoint, so don't upgrade/redirect.
-                    .Defaults(secureUpgrade: false, strictTransport: false)
-                    .Bind(IPAddress.Loopback, (ushort)appPort, dualStack: false);
+            _appHost = Host.Create()
+                        .Handler(appApp)
+                        // Plain HTTP for tests: no HTTPS endpoint, so don't upgrade/redirect.
+                        .Defaults(secureUpgrade: false, strictTransport: false)
+                        .Bind(IPAddress.Loopback, (ushort)appPort, dualStack: false);
 
-        await _infraHost.StartAsync();
-        await _appHost.StartAsync();
-        BaseUrl = $"http://localhost:{appPort}";
-        AssetBaseUrl = $"http://localhost:{assetPort}";
+            try
+            {
+                await _infraHost.StartAsync();
+                await _appHost.StartAsync();
+            }
+            catch
+            {
+                // Partial start (infra up, app bind lost the race) must release before retry.
+                await StopHostsAsync();
+                throw;
+            }
+
+            BaseUrl = $"http://localhost:{appPort}";
+            AssetBaseUrl = $"http://localhost:{assetPort}";
+        });
     }
 
-    public async ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync() => await StopHostsAsync();
+
+    private async Task StopHostsAsync()
     {
-        if (_appHost != null) await _appHost.StopAsync();
-        if (_infraHost != null) await _infraHost.StopAsync();
+        if (_appHost != null)
+        {
+            try { await _appHost.StopAsync(); } catch { /* best-effort on bind-retry cleanup */ }
+            _appHost = null;
+        }
+        if (_infraHost != null)
+        {
+            try { await _infraHost.StopAsync(); } catch { /* best-effort on bind-retry cleanup */ }
+            _infraHost = null;
+        }
     }
 
     // A genuinely free TCP port, never handed out twice this run (see PortAllocator) — so two parallel
