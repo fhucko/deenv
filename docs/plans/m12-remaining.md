@@ -8,6 +8,15 @@ not speculation), slices, and the decisions still open. Order below = the recomm
 build order; W2 and the hybrid editor are user-gated entry points that can be pulled
 whenever wanted.*
 
+**Status audit 2026-07-16** (code + plan recon against main): S4a/b and S5a/b/c **still
+DONE** in live code (`instances/1/app.deenv`, `ui.ts`, `SsrRenderer`). Remaining ladder
+items (per-use ambients, W2, hybrid editor, independent tracks) are **NOT STARTED**
+except chip `task_074f6ccf` (scalar-var reactivity) which **landed**. Do not confuse the
+reserved-empty `evalContext.ambients` / `params` payload keys with MetaUse per-use
+ambients — those keys are empty placeholders, not this feature. S5c *mechanism* prose
+below was written pre–unified-commit; the product ops live (wrap/unwrap via ordinary
+commit / set membership), only the old MOVE/two-FIFO story is stale.
+
 ## Where M12 stands
 
 Landed: structured rows for the whole ui surface (render tree, for/if, component fns,
@@ -17,13 +26,20 @@ shipped ASTs + the real twin; init-evaluated state; loops/branches; component ex
 call-position eval + the fingerprint staleness banner; the degrade banner; auto-live
 expression editing via the parseExprs op), and the component workbench (configurations as
 live sandboxed instances: real state, real handlers, Reset, schema/extent/lib seeding —
-"airtight at the wire seam"). Guards in force: no-second-engine, canvas-never-lies,
+"airtight at the wire seam"). **Also landed (S4+S5 ladder):** canvas/tree selection
+(`selecttarget`, bidirectional highlight, Escape, page reorder types→render→publish→
+branches), structure ops (▲/▼ `moveRow`, palette + insert-at-selection via `libNames`/
+`ComponentReturnsElement`, wrap/unwrap), plus component-local bare scalar `var`
+reactivity (chip `task_074f6ccf`). Guards in force: no-second-engine, canvas-never-lies,
 empty-deps eval-ctx memo, printer fixpoint, plus the foreclosure list in
 visual-designer.md.
 
+**Next buildable rung:** §3 per-use ambients. W2 remains user-gated; hybrid editor needs
+its own design session first.
+
 ---
 
-## 1. S4 — selection: the canvas becomes the editor (NEXT)
+## 1. S4 — selection: the canvas becomes the editor ✅ DONE
 
 **Goal.** Click any element in the canvas (or a workbench card) → the producing row is
 selected → its editor scrolls into view / an inspector form opens → edits flow through
@@ -175,21 +191,31 @@ unknowns and W1c seeds lib for workbench cards).
   monotonically). PLUS a third find in the fold: resolving the insert target inside
   the handler ran evalContext under memoBypass = every insert a guaranteed multi-round
   action-miss; target now resolves at render time into the button closures.
-- **S5c — wrap/unwrap. ✅ DONE 2026-07-11.** MOVE links an existing object into a set;
-  unwrap splices children and densely renumbers the parent; wrap mints a `<div>` whose
-  nested `children` payload carries the selected row as `{refId}`. The server validates
-  the referenced object's existence/type/write floor and commits wrapper creation,
-  nested adoption, and parent link in one existing `CommitBatch` (one fsync, no
-  storage-interface change); the old parent membership is then removed by the existing
-  MOVE-style second FIFO commit. The brief double-membership window is the accepted
-  single-user ceiling; make unlink part of the batch only when multi-user observation
-  matters. Tests pin identity preservation, rejection without an orphan, reload, and
-  canonical projection.
+- **S5c — wrap/unwrap. ✅ DONE 2026-07-11.** Product ops live as `wrapNode` / `unwrapNode`
+  in `instances/1/app.deenv` (mint wrapper, splice children, renumber, identity-preserving).
+  **Mechanism note (audit 2026-07-16):** the original write-up described MOVE + nested
+  `{refId}` + a two-FIFO commit window. Post–unified-commit (2026-07-12+), wrap/unwrap
+  ride ordinary `commit` / set membership — capability unchanged; do not re-introduce a
+  NestedSetLinks specialization. Tests pin identity preservation, rejection without an
+  orphan, reload, and canonical projection.
 
-**Open decisions.** None for S5. Drag-and-drop is explicitly NOT v1 (buttons/menus
-first, DnD is polish).
+**Open decisions.** None for S5 core. Drag-and-drop is explicitly NOT v1 (buttons/menus
+first, DnD is polish). **S5a ledger still open:** object FIELD reorder on `type.props`
+(needs props display foreach sorted first — same `task_d7c6ed6a` precondition family).
 
-## 3. Per-use ambients (closes the last preview boundary)
+## 3. Per-use ambients (closes the last preview boundary) ← NEXT
+
+**Status (2026-07-16 audit): NOT STARTED.**
+
+- Designer schema `MetaUse` is still `{ name, args set of MetaAttr, order }` only
+  (`DeEnv/instances/1/app.deenv`) — no `ambients` container.
+- Workbench sandbox still parent-less / no ambient (`workbench.ts` comments: until
+  per-use ambients land); Reset + deep-copy isolation exist, not ambient binding.
+- `sys.evalContext` ships **reserved-empty** `ambients`/`params` objects
+  (`SsrRenderer.BuildEvalContext` / twins) — naming collision risk, **not** this feature.
+- Designer features still pin the error path: configuration live instance shows
+  `"Variable currentUser not found"` (`DesignerComponents.feature`,
+  `DesignerLibrary.feature`).
 
 **Goal.** A configuration can specify its ambients — `currentUser`, `path` — so
 components reading them preview instead of erroring; the user's original vision
@@ -209,7 +235,16 @@ honestly); whether an unset ambient still errors (yes — canvas-never-lies) or 
 
 **Effort class:** small — one schema addition + two binding sites + pin flips.
 
+**Do not confuse with:** language-level `ambient name = value` (data-context / staging
+`ctx` — already shipped) or live-app SSR `currentUser` (real system var on real pages).
+This rung is **per MetaUse configuration** fakes for designer preview only.
+
 ## 4. W2 — the state-changes list (USER-GATED; pull whenever wanted)
+
+**Status (2026-07-16 audit): NOT STARTED.** Workbench has **Reset only** (dispose +
+remount from seed) + `deepCopySeed` foundation. No history array, cursor, ‹ › scrub,
+truncate-forward, or throw-auto-restore. Throw path still keeps partial writes; Reset is
+the recovery (stated v1 divergence — W2 retires it).
 
 **Goal (user's words).** "later even with state changes list that would allow moving
 back and forth" — per-instance history of state snapshots, scrub back/forth.
@@ -238,6 +273,11 @@ history depth cap (a constant, e.g. 50).
 applySeed, the bracket).
 
 ## 5. The hybrid text/AST editor (+ the client parser) — the big rung
+
+**Status (2026-07-16 audit): NOT STARTED.** No client parser, WASM CodeParse bundle, or
+text↔row tether. Landed bridge only: remote `parseExprs` WS op (expression auto-live).
+Fn-body call-position values still fingerprint-banner-gate ("Components changed — call
+results may be stale. Refresh values.") — that dies with this rung, not a separate build.
 
 **Goal.** The code editor becomes a REAL text editor (real caret/selection/paste/
 transient garbage, syntax + semantic coloring, error underlines) whose text is
@@ -272,20 +312,26 @@ part of this rung's foundation rather than a separate S2 slice).
 
 ## 6. Independent tracks (not sequenced, grab when relevant)
 
-- **S1c — MergeTags**: render/fn/var/use rows become branch-mergeable like types
-  (per-row-kind 3-way merge + conflict-capable child order — the versioning track's
-  half of M12; needed before two branches edit the same render).
-- **S2 — click-to-source on REAL pages**: provenance stamping in live apps (the canvas
-  has data-node; real pages don't) — a debugging win, partially subsumed by the hybrid
-  editor's spans; keep deferred until wanted.
-- **S7 — styling/theming seam**: its own design session first (per-app tokens over
-  ViewChromeCss); the inspector can edit class/style through S4 with zero new machinery
-  meanwhile.
-- **Lib payload shipped once** (W1c note): `ctx.lib` is design-independent but re-ships
-  per (design, refreshKey) — move to a shared/once payload when it matters.
-- **Auto-live for fn bodies**: call-position values still banner-gate on fn-body edits
-  (re-projection class); dies naturally with the client parser (local re-projection) —
-  don't build separately.
+Statuses as of 2026-07-16 audit unless noted.
+
+- **S1c — MergeTags** — **NOT STARTED.** `DesignMerger` does types/props lineage + whole
+  fn/var/access/initialData by name-keyed **printed text**, not per MetaNode/MetaAttr/
+  MetaFn/MetaVar/MetaUse row merge or conflict-capable child order. Needed before two
+  branches edit the same structured render.
+- **S2 — click-to-source on REAL pages** — **NOT STARTED** (canvas spine only).
+  `data-node` + `selecttarget` exist on the design canvas; live app/SSR tag render does
+  not stamp provenance. Debugging win; partially subsumed by hybrid-editor spans; keep
+  deferred until wanted.
+- **S7 — styling/theming seam** — **NOT STARTED.** Single hardcoded `ViewChromeCss` in
+  `SsrRenderer`. Own design session first (per-app tokens); inspector can edit class/
+  style through S4 with zero new machinery meanwhile.
+- **Lib payload shipped once** (W1c note) — **NOT STARTED.** `ctx.lib` + `libNames` still
+  embed per `BuildEvalContext` / (design, refreshKey). Move to shared/once when it
+  matters.
+- **Auto-live for fn bodies** — **NOT STARTED** as a separate product (expression
+  auto-live via `parseExprs` **is** landed). Call-position values still banner-gate on
+  fn-body edits; dies with the client parser — don't build separately.
+- **S5a ledger — type.props field reorder** — **NOT STARTED** (see §2).
 - **Extent-removal cascade pin** (W1c cheap-pin ledger); **same-name nested-loop
   shadowing + scalar-collection degrade conformance pins** (S6b ledger); **empty-canvas
   hint + sticky/side-by-side canvas layout** (UX ledger); **validator-message
@@ -294,17 +340,21 @@ part of this rung's foundation rather than a separate S2 slice).
 
 ## 7. Owned by chips (not this spec)
 
-- task_074f6ccf — component-local scalar `var` reactivity (both twins + conformance;
-  a real language gap, live pages too).
-- task_43f1c4e3 — the WhenAddField store-poll + publish-caption click-intercept flakes
-  (the intercept may be a real layout bug).
-- task_d7c6ed6a — foreach-over-`.orderBy` VNA crash tolerance (unblocks restoring
-  orderBy on the vars/fns display foreach).
+- **task_074f6ccf — component-local scalar `var` reactivity — ✅ DONE** (`d1f8205` and
+  follow-through: both twins + `ScalarVarReactivityTests` + SelfHostedUi browser pin).
+- **task_43f1c4e3 — WhenAddField / publish-caption flakes — PARTIAL.** Test-layer
+  hardening only (retries, locators, convert-click workarounds in DesignerSteps). No
+  product fix proving the intercept/layout root cause is gone; may still flake under
+  peak suite load.
+- **task_d7c6ed6a — foreach-over-`.orderBy` VNA crash tolerance — NOT STARTED.** Still
+  blocks restoring `orderBy` on the vars/fns (and props) display foreach; designer
+  features still skip ordered display "pending" this chip.
 
 ## Recommended order
 
-S4a → S4b (+page reorder) → S5a-c → per-use ambients → [W2 whenever the user calls it]
-→ the hybrid-editor design session (+ client-parser decision) → S1c/S2/S7 as their
-tracks demand. Every rung keeps the standing process: worktree per slice, Gherkin first,
-twin lockstep where evaluation is touched, the three-review gate for UI slices,
-interleaved-rate flake judgment, docs + memory synced at landing.
+~~S4a → S4b (+page reorder) → S5a-c~~ **DONE** → **per-use ambients (NEXT)** →
+[W2 whenever the user calls it] → the hybrid-editor design session (+ client-parser
+decision) → S1c/S2/S7 as their tracks demand. Every rung keeps the standing process:
+worktree per slice, Gherkin first, twin lockstep where evaluation is touched, the
+three-review gate for UI slices, interleaved-rate flake judgment, docs + memory synced
+at landing.
