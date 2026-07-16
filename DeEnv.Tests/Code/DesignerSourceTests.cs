@@ -578,6 +578,38 @@ public sealed class DesignerSourceTests
         await Assert.That(sources).Contains("db.firstNote");
     }
 
+    // M12 per-use ambients: MetaUse.ambients value sources are not in any render/fn-body tree — same
+    // collector-invariant as use-args. Without CollectUseAmbientSources, a non-literal ambient fake
+    // would miss ctx.exprs on first paint forever.
+    [Test]
+    public async Task RenderExprSources_collects_a_source_reachable_only_via_a_fn_use_ambient()
+    {
+        var (types, _) = MinimalDbTypes();
+        var fnBody = MakeNode("div", order: 0);
+        var useAmbient = MakeAttr("currentUser", "{ role: \"Admin\" }", 0);
+        var use = new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue("sample"),
+            ["order"] = new IntValue(0),
+            ["args"] = MakeSet(),
+            ["ambients"] = MakeSet(useAmbient),
+        });
+        var fn = new ObjectValue(new Dictionary<string, NodeValue>
+        {
+            ["name"] = new TextValue("Greeter"),
+            ["params"] = new TextValue(""),
+            ["order"] = new IntValue(0),
+            ["body"] = MakeSet(fnBody),
+            ["uses"] = MakeSet(use),
+        });
+        var main = MakeNode("main", order: 0);
+        var design = MakeDesign("collectambient", ui: "", types: types, render: MakeSet(main), fns: MakeSet(fn));
+
+        var sources = SchemaBridge.RenderExprSources(design);
+
+        await Assert.That(sources).Contains("{ role: \"Admin\" }");
+    }
+
     // M12 V1 LIFTS the old refusal this test used to cover (a `ui` section carrying top-level `var`s
     // besides `fn render()`): a top-level var now imports to a Design.vars MetaVar row instead of blocking
     // the whole import. Nothing is dropped; the round-trip proof lives in StructuredRenderImport.feature +

@@ -1561,12 +1561,13 @@ public sealed partial class DesignerSteps
 
     [When("I add an arg to configuration {int}")]
     public async Task WhenAddConfigurationArg(int index) =>
-        await ConfigRow(index).Locator("button.add-attr").ClickAsync();
+        await ConfigRow(index).Locator(".use-args button.add-attr").ClickAsync();
 
     [When("I set configuration {int}'s arg {int} name to {string}")]
     public async Task WhenSetConfigurationArgName(int useIndex, int argIndex, string name)
     {
-        await ConfigRow(useIndex).Locator("input.node-attr-name").Nth(argIndex).FillAsync(name);
+        // Scope under .use-args so ambient MetaAttr rows (same attrRow classes) never cross-index.
+        await ConfigRow(useIndex).Locator(".use-args input.node-attr-name").Nth(argIndex).FillAsync(name);
         // Journaled autosave: the workbench binds attrs by the *stored* name. Without this wait, a
         // rename ("nope" → "note") can still be "nope" on the server when the value step refreshes
         // evalContext — param `note` then binds null and the preview mounts an empty <li> forever.
@@ -1578,11 +1579,11 @@ public sealed partial class DesignerSteps
     [When("I set configuration {int}'s arg {int} value to {string}")]
     public async Task WhenSetConfigurationArgValue(int useIndex, int argIndex, string value)
     {
-        var row = ConfigRow(useIndex);
+        var args = ConfigRow(useIndex).Locator(".use-args");
         // Pair name+value on the same MetaAttr before refresh: a value-only wait can pass while the
         // name is still a prior typo (the Configurations scenario renames nope→note right before this).
-        var name = await row.Locator("input.node-attr-name").Nth(argIndex).InputValueAsync();
-        var input = row.Locator("input.node-attr-value").Nth(argIndex);
+        var name = await args.Locator("input.node-attr-name").Nth(argIndex).InputValueAsync();
+        var input = args.Locator("input.node-attr-value").Nth(argIndex);
         await input.FillAsync(value);
         // Binding must hit the designer store BEFORE refresh-eval: BuildEvalContext collects MetaUse arg
         // sources from the store; a premature refresh ships exprs without this value and the workbench
@@ -1593,8 +1594,64 @@ public sealed partial class DesignerSteps
                 && o.Fields.TryGetValue("name", out var nv)
                 && nv is DeEnv.Storage.TextValue nt && nt.Text == name));
         // Force a new evalContext so ctx.exprs includes the arg source, then Reset the live instance so
-        // the workbench re-binds args against a fresh seed copy (argsSignature may already match if the
+        // the workbench re-binds args against a fresh seed copy (config signature may already match if the
         // client had the value before the AST shipped, leaving an empty first mount stuck).
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.refresh-eval").First.ClickAsync();
+        var reset = LiveInstancePreview(useIndex).Locator(".workbench-instance-reset");
+        if (await reset.CountAsync() > 0)
+            await reset.ClickAsync();
+    }
+
+    [When("I add an ambient to configuration {int}")]
+    public async Task WhenAddConfigurationAmbient(int index) =>
+        await ConfigRow(index).Locator(".use-ambients button.add-ambient").ClickAsync();
+
+    [When("I set configuration {int}'s ambient {int} name to {string}")]
+    public async Task WhenSetConfigurationAmbientName(int useIndex, int ambientIndex, string name)
+    {
+        await ConfigRow(useIndex).Locator(".use-ambients input.node-attr-name").Nth(ambientIndex).FillAsync(name);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaAttr").Values
+            .Any(o => o.Fields.TryGetValue("name", out var v)
+                && v is DeEnv.Storage.TextValue t && t.Text == name));
+    }
+
+    // Quote-wrapping helper: Gherkin string escaping of "Admin" is fragile across parsers (often lands
+    // as backslash-quotes, which are not Code string literals). Prefer this for simple string fakes.
+    [When("I set configuration {int}'s ambient {int} value to a quoted string {word}")]
+    public Task WhenSetConfigurationAmbientQuotedString(int useIndex, int ambientIndex, string raw) =>
+        WhenSetConfigurationAmbientValue(useIndex, ambientIndex, "\"" + raw + "\"");
+
+    [When("I set configuration {int}'s ambient {int} value to {string}")]
+    public async Task WhenSetConfigurationAmbientValue(int useIndex, int ambientIndex, string value)
+    {
+        var ambients = ConfigRow(useIndex).Locator(".use-ambients");
+        var name = await ambients.Locator("input.node-attr-name").Nth(ambientIndex).InputValueAsync();
+        var input = ambients.Locator("input.node-attr-value").Nth(ambientIndex);
+        await input.FillAsync(value);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaAttr").Values
+            .Any(o => o.Fields.TryGetValue("value", out var vv)
+                && vv is DeEnv.Storage.TextValue vt && vt.Text == value
+                && o.Fields.TryGetValue("name", out var nv)
+                && nv is DeEnv.Storage.TextValue nt && nt.Text == name));
+        // Pin that some MetaUse.ambients set actually contains a row with this name+value (not an orphan
+        // MetaAttr). The extent-only wait above can pass while set membership is still catching up — without
+        // this, workbench bindUseAmbients still sees an empty ambients array and the fake never lands.
+        await EventuallyAsync(() =>
+        {
+            foreach (var use in _designer.Store.ReadExtent("MetaUse").Values)
+            {
+                if (use.Fields.GetValueOrDefault("ambients") is not DeEnv.Storage.SetValue set) continue;
+                foreach (var id in set.Members.Keys)
+                {
+                    if (!_designer.Store.ReadExtent("MetaAttr").TryGetValue(id, out var attr)) continue;
+                    if (attr.Fields.GetValueOrDefault("name") is DeEnv.Storage.TextValue nt && nt.Text == name
+                        && attr.Fields.GetValueOrDefault("value") is DeEnv.Storage.TextValue vt && vt.Text == value)
+                        return true;
+                }
+            }
+            return false;
+        });
+        // Ship ambient source into ctx.exprs, then Reset so bindUseAmbients re-runs against a fresh mount.
         await ctx.Page!.Locator("main.ide-design-edit .design-editor button.refresh-eval").First.ClickAsync();
         var reset = LiveInstancePreview(useIndex).Locator(".workbench-instance-reset");
         if (await reset.CountAsync() > 0)
@@ -1605,11 +1662,11 @@ public sealed partial class DesignerSteps
     // the hint span (`.attr-name-hint`) is a SIBLING right after that specific arg's `.node-attr` row
     // (attrRow's own markup, shared with the tree editor, carries no such hint — it is layered on only
     // at THIS call site), so it is found via nextElementSibling off the Nth `.node-attr`, not nested
-    // inside it.
+    // inside it. Scoped under .use-args so ambient rows never collide.
     [Then("configuration {int}'s arg {int} shows the {string} hint")]
     public async Task ThenConfigurationArgShowsHint(int useIndex, int argIndex, string hintText)
     {
-        var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row").Nth(useIndex);
+        var row = ConfigRow(useIndex).Locator(".use-args");
         var attr = row.Locator(".node-attr").Nth(argIndex);
         // The hint is emitted as the next sibling after its attr div when present.
         var hint = attr.Locator("xpath=following-sibling::span[contains(@class, 'attr-name-hint')]");
@@ -1620,7 +1677,7 @@ public sealed partial class DesignerSteps
     [Then("configuration {int}'s arg {int} shows no hint")]
     public async Task ThenConfigurationArgShowsNoHint(int useIndex, int argIndex)
     {
-        var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row").Nth(useIndex);
+        var row = ConfigRow(useIndex).Locator(".use-args");
         var attr = row.Locator(".node-attr").Nth(argIndex);
         var hint = attr.Locator("xpath=following-sibling::span[contains(@class, 'attr-name-hint')]");
         // Either no following sibling hint, or it is detached/not matching.
@@ -1745,12 +1802,9 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row").Nth(index)
             .Locator(".use-preview [data-test-marker='kept']").First.WaitForAsync();
 
-    // A component that reads an AMBIENT (currentUser) — still a miss against the workbench sandbox's
-    // parent-less scope even after M12 W1c seeds schema:/extent:/canWrite:/canRead: (per-use ambients are a
-    // LATER rung, per component-workbench.md's stated v1 fidelity boundary), proving the driver surfaces
-    // the REAL interpreter error rather than rendering blank. (Before W1c this fixture called
-    // `sys.schema("Db")` — that builtin now REVIVES from the seeded cache, so it moved to the seeding
-    // scenarios below; this fixture keeps testing a boundary that is STILL real.)
+    // A component that reads an AMBIENT (currentUser) with NO MetaUse.ambients fake — still a miss
+    // against the workbench sandbox (canvas-never-lies). Isolation scenarios pin the error path;
+    // happy-path uses GreeterAmbientReadingComponentConvertibleRender + an authored ambient row.
     private const string AmbientReadingComponentConvertibleRender =
         """
         ui
@@ -1770,6 +1824,29 @@ public sealed partial class DesignerSteps
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
             o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "brokencomp" }
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == AmbientReadingComponentConvertibleRender));
+    }
+
+    // Happy-path ambient fixture: reads currentUser (string fake "Admin") — assertable text; object-shaped
+    // fakes ({ role: "Admin" }) are also supported by the binder but string is the cheapest pin.
+    private const string GreeterAmbientReadingComponentConvertibleRender =
+        """
+        ui
+            fn Greeter()
+                return <div class="who">
+                    currentUser
+            fn render()
+                return <main>
+                    "hi"
+
+        """;
+
+    [When("I author a convertible render with a greeter ambient-reading component into the design's UI")]
+    public async Task WhenAuthorGreeterAmbientReadingComponentRender()
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(GreeterAmbientReadingComponentConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "ambientfake" }
+            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == GreeterAmbientReadingComponentConvertibleRender));
     }
 
     // ──── M12 W1b — the live-instance driver: events + Reset through the dispatch bracket ────────────────────────

@@ -600,6 +600,7 @@ public static class SchemaBridge
                     CollectExprSources(bodyRoot, sources);
                 CollectVarInitSources(fn, sources);
                 CollectUseArgSources(fn, sources);
+                CollectUseAmbientSources(fn, sources);
             }
         CollectVarInitSources(d, sources);
         return sources;
@@ -621,6 +622,17 @@ public static class SchemaBridge
     {
         foreach (var use in OrderedObjects(fn.Fields.GetValueOrDefault("uses")))
             foreach (var a in OrderedObjects(use.Fields.GetValueOrDefault("args")))
+                if (TextField(a, "value") is { Length: > 0 } value) into.Add(value);
+    }
+
+    // M12 per-use ambients — same flat walk as CollectUseArgSources, over MetaUse.ambients. Ambient value
+    // sources (e.g. `{ role: "Admin" }`, `"/items/1"`) must ship in ctx.exprs so workbench/expandFn can
+    // eval them on first paint. A use never appears in a render/fn-body tree, so CollectExprSources never
+    // sees these rows.
+    private static void CollectUseAmbientSources(ObjectValue fn, List<string> into)
+    {
+        foreach (var use in OrderedObjects(fn.Fields.GetValueOrDefault("uses")))
+            foreach (var a in OrderedObjects(use.Fields.GetValueOrDefault("ambients")))
                 if (TextField(a, "value") is { Length: > 0 } value) into.Add(value);
     }
 

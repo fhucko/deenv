@@ -219,28 +219,56 @@ function ctxHasAst(ctx: ExecObject, text: string): boolean {
     return entry != null && entry.type === "object" && entry.props["ast"]?.type === "text";
 }
 
-// The MetaUse's current args as an ORDER-sorted (name, value-source, AST-availability) signature — the
-// page-side remount trigger (design doc grill fix: deps recorded during a driver render land in the
-// PRIVATE cache, which a page-side arg edit never invalidates, so the mount hook must independently detect
-// the edit each pass). The AST-availability flag matters on its OWN, not just the source text: a
-// just-typed arg (or a freshly-created configuration) MISSES against ctx.exprs on its first mount attempt
-// (the auto-live parse-op's round trip hasn't landed yet) — that miss is INSIDE the wsHooks-null bracket,
-// so it deliberately never queues a request (see renderWorkbenchInstance's lookupCtxAst calls); the request
-// that DOES land comes from the STILL-COMPUTED static preview elsewhere on the page (U1's own
-// sys.renderTree call, un-bracketed, whose OWN evalCtxExpr miss reports it normally). Once that reply
-// merges the AST in, the source TEXT hasn't changed — so without this flag the signature would stay
-// identical and the driver would stay stuck showing whatever it bound (null, or a real error) on the
-// missed first attempt forever. Length-prefixed fields (the argKey `"t" + v.value.length + ":" + v.value`
-// idiom) so no separator choice can produce a false negative across a real edit.
-function useArgsSignature(use: ExecObject, ctx: ExecObject): string {
-    const argsV = use.props["args"];
-    if (argsV == null || argsV.type !== "array") return "";
-    const rows = argsV.items.map(i => i.value).filter((v): v is ExecObject => v.type === "object");
+// One MetaAttr family (args or ambients) as an ORDER-sorted (name, value-source, AST-availability)
+// signature fragment. Length-prefixed fields so no separator choice can produce a false negative.
+function metaAttrRowsSignature(use: ExecObject, setProp: string, ctx: ExecObject): string {
+    const setV = use.props[setProp];
+    if (setV == null || setV.type !== "array") return "";
+    const rows = setV.items.map(i => i.value).filter((v): v is ExecObject => v.type === "object");
     rows.sort((a, b) => propInt(a, "order") - propInt(b, "order"));
     return rows.map(a => {
         const name = propText(a, "name"), val = propText(a, "value");
         return "n" + name.length + ":" + name + "v" + val.length + ":" + val + "a" + (ctxHasAst(ctx, val) ? "1" : "0");
     }).join("|");
+}
+
+// The MetaUse's current args + ambients as an ORDER-sorted (name, value-source, AST-availability)
+// signature — the page-side remount trigger (design doc grill fix: deps recorded during a driver render
+// land in the PRIVATE cache, which a page-side arg/ambient edit never invalidates, so the mount hook must
+// independently detect the edit each pass). The AST-availability flag matters on its OWN, not just the
+// source text: a just-typed arg/ambient (or a freshly-created configuration) MISSES against ctx.exprs on
+// its first mount attempt (the auto-live parse-op's round trip hasn't landed yet) — that miss is INSIDE the
+// wsHooks-null bracket, so it deliberately never queues a request (see renderWorkbenchInstance's
+// lookupCtxAst / evalCtxExpr calls); the request that DOES land comes from the STILL-COMPUTED static
+// preview elsewhere on the page (U1's own sys.renderTree call, un-bracketed, whose OWN evalCtxExpr miss
+// reports it normally). Once that reply merges the AST in, the source TEXT hasn't changed — so without this
+// flag the signature would stay identical and the driver would stay stuck showing whatever it bound (null,
+// or a real error) on the missed first attempt forever.
+function useConfigSignature(use: ExecObject, ctx: ExecObject): string {
+    return metaAttrRowsSignature(use, "args", ctx) + "#" + metaAttrRowsSignature(use, "ambients", ctx);
+}
+
+// Bind MetaUse.ambients into the sandbox scope as read-only root vars (live-page system-var shape —
+// currentUser/path), NOT language ambient frames and NOT ctx.props.ambients. Skip empty name, empty
+// value, and `status` (save lifecycle — not fakeable). Missing AST / eval miss → leave unbound so a read
+// still surfaces the real Variable-not-found error (canvas-never-lies).
+function bindUseAmbients(use: ExecObject, ctx: ExecObject, evalScope: ExecScope): void {
+    const ambientsV = use.props["ambients"];
+    if (ambientsV == null || ambientsV.type !== "array") return;
+    const rows = ambientsV.items.map(i => i.value).filter((v): v is ExecObject => v.type === "object");
+    rows.sort((a, b) => propInt(a, "order") - propInt(b, "order"));
+    for (const a of rows) {
+        const name = propText(a, "name");
+        if (name.length === 0 || name === "status") continue;
+        const val = propText(a, "value");
+        if (val.length === 0) continue;
+        // Tier-0 literals need no ctx.exprs entry (same as expandFn param binding); non-literals need a
+        // shipped AST via CollectUseAmbientSources → BuildEvalContext.
+        const lit = literalValue(val);
+        if (lit != null) { evalScope.items[name] = { value: lit, isReadOnly: true }; continue; }
+        const evaluated = evalCtxExpr(val, ctx);
+        if (evaluated != null) evalScope.items[name] = { value: evaluated, isReadOnly: true };
+    }
 }
 
 // Locate a MetaUse row by its object id, straight off the page's OWN live `db` graph (this instance's
@@ -345,6 +373,9 @@ function renderWorkbenchInstance(fn: ExecObject, use: ExecObject, ctx: ExecObjec
     // (bindCtxFns, next) shadows one — mirrors a real app's own scope nesting inside the library scope.
     bindFnMap(ctx.props["lib"], evalScope);
     bindCtxFns(ctx, evalScope);
+    // Per-use ambients (currentUser/path/…) as RO scope roots — same outer position as live SSR system
+    // vars. Params still bind on the call child scope and shadow a same-named ambient.
+    bindUseAmbients(use, ctx, evalScope);
     const component = evalScope.items[fnName]?.value;
     if (component == null || component.type !== "fn") return { tags: [], errorMessage: "Component not found." };
 
@@ -509,7 +540,7 @@ function mountOneWorkbenchInstance(useId: number, container: HTMLElement): void 
     if (inputs == null) return;
     const { fn, use, ctx, ctxKey } = inputs;
 
-    const argsSignature = useArgsSignature(use, ctx);
+    const argsSignature = useConfigSignature(use, ctx);
     const existing = workbenchInstances.get(useId);
     if (existing != null && existing.argsSignature === argsSignature && existing.ctxKey === ctxKey) return; // unchanged — leave mounted
 
@@ -539,7 +570,7 @@ function resetWorkbenchInstance(useId: number, container: HTMLElement): void {
     const inputs = locateInstanceInputs(useId);
     if (inputs == null) return; // the row is gone — nothing to remount; the next mount pass will clean up the container
     const { fn, use, ctx, ctxKey } = inputs;
-    const instance = newWorkbenchInstance(useArgsSignature(use, ctx), ctxKey, ctx);
+    const instance = newWorkbenchInstance(useConfigSignature(use, ctx), ctxKey, ctx);
     workbenchInstances.set(useId, instance);
     runInstanceRenderPass(useId, fn, use, ctx, instance, container);
 }
@@ -559,9 +590,9 @@ function rerenderWorkbenchInstance(useId: number, container: HTMLElement): void 
 }
 
 // The context a dispatched handler (or a select's onChange fn) runs under: the INSTANCE's own persisted
-// id-minting counter (see WorkbenchInstance.lastId), no ambient (the v1 fidelity boundary — path/
-// currentUser/ambient reads are real "Variable not found" errors until per-use ambients land, same as a
-// render's own sandboxContext).
+// id-minting counter (see WorkbenchInstance.lastId). ExecContext.ambient stays null — per-use fakes bind
+// into the component scope at render (bindUseAmbients), and handlers close over that setup scope. An
+// ambient edit remounts via useConfigSignature so fakes refresh.
 function instanceHandlerContext(useId: number): ExecContext {
     const instance = workbenchInstances.get(useId);
     return { lastId: instance?.lastId ?? { value: 0 }, ambient: null };

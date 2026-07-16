@@ -203,19 +203,17 @@ unknowns and W1c seeds lib for workbench cards).
 first, DnD is polish). **S5a ledger still open:** object FIELD reorder on `type.props`
 (needs props display foreach sorted first — same `task_d7c6ed6a` precondition family).
 
-## 3. Per-use ambients (closes the last preview boundary) ← NEXT
+## 3. Per-use ambients (closes the last preview boundary) ✅ DONE 2026-07-16
 
-**Status (2026-07-16 audit): NOT STARTED.**
+**Status: DONE** — plan `docs/plans/2026-07-16-per-use-ambients.md`.
 
-- Designer schema `MetaUse` is still `{ name, args set of MetaAttr, order }` only
-  (`DeEnv/instances/1/app.deenv`) — no `ambients` container.
-- Workbench sandbox still parent-less / no ambient (`workbench.ts` comments: until
-  per-use ambients land); Reset + deep-copy isolation exist, not ambient binding.
-- `sys.evalContext` ships **reserved-empty** `ambients`/`params` objects
-  (`SsrRenderer.BuildEvalContext` / twins) — naming collision risk, **not** this feature.
-- Designer features still pin the error path: configuration live instance shows
-  `"Variable currentUser not found"` (`DesignerComponents.feature`,
-  `DesignerLibrary.feature`).
+- `MetaUse.ambients set of MetaAttr` + Configurations UI (`.use-args` / `.use-ambients`)
+- `SchemaBridge.CollectUseAmbientSources` → `ctx.exprs`
+- Workbench `bindUseAmbients` + `useConfigSignature` remount on ambient edit
+- Static `expandFn` / `ExpandFn` optional `ambients` on synth use-preview nodes
+- Isolation pins kept (unseeded → error); happy path: currentUser fake → `Admin`
+- Binds as RO scope vars (not `evalContext.ambients` bag, not language ambient frames)
+- `status` skipped as non-fakeable; free-form names otherwise
 
 **Goal.** A configuration can specify its ambients — `currentUser`, `path` — so
 components reading them preview instead of erroring; the user's original vision

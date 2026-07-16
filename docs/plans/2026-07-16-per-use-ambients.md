@@ -1,5 +1,7 @@
 # Implementation Plan
 
+**Status: IMPLEMENTED 2026-07-16** (workbench bind + collector + schema/UI + happy-path pin; isolation pins kept).
+
 ## Goal
 
 Per MetaUse configuration, authors can declare ambient fakes (`currentUser`, `path`, and any other free-form names) that bind as real read-only sandbox/canvas scope vars so designer previews evaluate instead of erroring — while missing ambients still surface the real `Variable … not found` error (canvas-never-lies).

@@ -1429,6 +1429,22 @@ function expandFn(fn: ExecObject, bodyRoot: ExecObject, invocationNode: ExecObje
     const paramNames = readNodeText(fn, "params", context).split(",").map(p => p.trim()).filter(p => p.length > 0);
     const attrs = orderedMembers(invocationNode, "attrs", context);
     const bodyBindings: { [name: string]: ExecValue } = {};
+    // M12 per-use ambients — optional set on a synthesized use-preview invocation only (real MetaNodes
+    // never carry `ambients`). Bind FIRST so params can shadow (live system-under-call semantics).
+    // Evaluate under db+fns only (no callerBindings) — matches workbench isolation. Skip empty name,
+    // empty value, and `status`. Miss → leave unbound so a body reference chips.
+    if (ctx != null) {
+        for (const a of orderedMembersOptional(invocationNode, "ambients", context)) {
+            const name = readNodeText(a, "name", context);
+            if (name.length === 0 || name === "status") continue;
+            const value = readNodeText(a, "value", context);
+            if (value.length === 0) continue;
+            const lit = literalValue(value);
+            if (lit != null) { bodyBindings[name] = lit; continue; }
+            const evaluated = evalCtxExpr(value, ctx);
+            if (evaluated != null) bodyBindings[name] = evaluated;
+        }
+    }
     for (const paramName of paramNames) {
         if (paramName === "key") { bodyBindings[paramName] = { type: "null" }; continue; } // reserved, never bound
         const attr = attrs.find(a => readNodeText(a, "name", context) === paramName);

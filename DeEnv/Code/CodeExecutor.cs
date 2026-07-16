@@ -1318,6 +1318,23 @@ public sealed class CodeExecutor
             .Split(',').Select(p => p.Trim()).Where(p => p.Length > 0).ToArray();
         var attrs = OrderedMembers(invocationNode, "attrs", context);
         var bodyBindings = new Dictionary<string, IExecValue>();
+        // M12 per-use ambients — optional set on a synthesized use-preview invocation only (real MetaNodes
+        // never carry `ambients`). Bind FIRST so params can shadow (live system-under-call semantics).
+        // Evaluate under db+fns only (no callerBindings) — matches workbench isolation. Skip empty name,
+        // empty value, and `status`. Miss → leave unbound so a body reference chips.
+        if (ctx != null)
+        {
+            foreach (var a in OrderedMembersOptional(invocationNode, "ambients", context))
+            {
+                var name = ReadNodeText(a, "name", context);
+                if (name.Length == 0 || name == "status") continue;
+                var value = ReadNodeText(a, "value", context);
+                if (value.Length == 0) continue;
+                if (LiteralValue(value) is { } lit) { bodyBindings[name] = lit; continue; }
+                if (EvaluateCtxExpr(value, ctx, context) is { } evaluated)
+                    bodyBindings[name] = evaluated;
+            }
+        }
         foreach (var paramName in paramNames)
         {
             if (paramName == "key") { bodyBindings[paramName] = new ExecNull(); continue; } // reserved, never bound

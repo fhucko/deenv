@@ -518,11 +518,11 @@ Feature: Designer - Library and Navigation
     Then the design editor shows the design's label "logoutme-renamed"
 
 
-  # A throwing handler (an unseeded-ambient read, the same v1 fidelity boundary as render time — W1c seeds
-  # schema/extent but NOT ambients) renders the REAL error into its own card — never a rollback, never a
-  # page-wide crash, and a SIBLING instance (a different component, in this design) stays fully interactive,
-  # proving the isolation bracket is per-dispatch, not something one broken handler can wedge for the whole
-  # page.
+  # A throwing handler (an unseeded ambient read — no MetaUse.ambients fake authored, so currentUser is
+  # still unbound; W1c seeds schema/extent only) renders the REAL error into its own card — never a
+  # rollback, never a page-wide crash, and a SIBLING instance (a different component, in this design)
+  # stays fully interactive, proving the isolation bracket is per-dispatch, not something one broken
+  # handler can wedge for the whole page.
   @m12 @single-user @m12-live-isolation
   # NOTE (per 2026-07-15 analysis + grill): This scenario (and sibling ambient error) intentionally proves
   # cross-card + page isolation *within a single kernel boot + single page render*. The multiple live

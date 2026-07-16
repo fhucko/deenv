@@ -436,10 +436,9 @@ Feature: Designer - Components and Live Previews
     Then configuration 0's live instance shows a "li" element reading "Beta"
 
 
-  # The v1 fidelity boundary, made honest not silent: a component reading an AMBIENT (currentUser — no
-  # per-use ambients yet, unlike schema/extent which W1c now SEEDS — see the W1c section below) ALWAYS
-  # misses against the workbench's sandbox scope — the driver shows the real interpreter error rather than
-  # a blank card, and the page keeps working (a second configuration can still be added).
+  # Unseeded ambient = no MetaUse.ambients rows authored → still a real Variable-not-found error
+  # (canvas-never-lies). Per-use ambients are opt-in fakes on the configuration; isolation keeps the
+  # miss when none are provided. The page stays alive (a second configuration can still be added).
   @m12 @single-user @m12-live-isolation
   # NOTE (per 2026-07-15 analysis + grill): This scenario (and the throwing sibling error in DesignerLibrary)
   # intentionally proves cross-card + page isolation *within a single kernel boot + single page render*.
@@ -462,6 +461,27 @@ Feature: Designer - Components and Live Previews
     Then component configurations shows 2 rows
 
 
+  # Per-use ambients: author a currentUser fake on the configuration → live instance renders instead of erroring.
+  @m12 @single-user
+  Scenario: A configuration ambient fake for currentUser makes the live instance render instead of erroring
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "ambientfake"
+    And I edit the design "ambientfake"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a greeter ambient-reading component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    And I add an ambient to configuration 0
+    And I set configuration 0's ambient 0 name to "currentUser"
+    And I set configuration 0's ambient 0 value to a quoted string Admin
+    Then configuration 0's live instance shows a "div" element reading "Admin"
+
+
   # ──── M12 W1c — sandbox cache seeding: schema:/extent:/canWrite:/canRead: + library binding ──────────────
   #
   # W1a/W1b always missed a store-backed builtin (sys.schema/sys.new/sys.extent/sys.canWrite/sys.canRead)
@@ -473,8 +493,8 @@ Feature: Designer - Components and Live Previews
   # private cache from `types` at mount/Reset/every render pass (extent: re-derived every pass from the
   # instance's OWN db copy, so a handler's write stays visible — see seedExtentCache's own comment).
   # canWrite/canRead ship unconditionally true (no access floor to evaluate in a sandbox previewing the
-  # operator's own design). Ambients (currentUser/path) remain the ONE still-real fidelity gap (the two
-  # scenarios above this section).
+  # operator's own design). Ambients (currentUser/path) are opt-in per MetaUse.ambients (seeded above when
+  # authored; unseeded still errors — isolation pin).
   @m12 @single-user
   Scenario: A component composing Field over sys.schema renders the real field editor in its configuration card
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"

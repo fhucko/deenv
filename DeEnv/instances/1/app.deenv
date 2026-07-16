@@ -49,6 +49,7 @@ types
     MetaUse
         name text
         args set of MetaAttr
+        ambients set of MetaAttr
         order int
     MetaType
         name text
@@ -242,10 +243,13 @@ ui
         return ""
 
     fn addUse(f)
-        f.uses.add({ name: "", args: [], order: orderForAppend(f.uses) })
+        f.uses.add({ name: "", args: [], ambients: [], order: orderForAppend(f.uses) })
 
     fn addUseArg(u)
         u.args.add({ name: "", value: "", order: orderForAppend(u.args) })
+
+    fn addUseAmbient(u)
+        u.ambients.add({ name: "", value: "", order: orderForAppend(u.ambients) })
 
     fn useNameHint(u)
         if u.name == ""
@@ -257,6 +261,11 @@ ui
             return ""
         if sys.hasParam(f.params, a.name) == false
             return "no such param"
+        return ""
+
+    fn useAmbientNameHint(a)
+        if a.name == "status"
+            return "not fakeable (save lifecycle)"
         return ""
 
     fn addRow(coll)
@@ -824,7 +833,7 @@ ui
                                         <span class="fn-uses-heading">
                                             "Configurations"
                                         <p class="render-caption">
-                                            "Named example setups — each previews this component with its args bound against seed data."
+                                            "Named example setups — each previews this component with args and ambient fakes bound against seed data."
                                         foreach u in f.uses.orderBy(u => u.order)
                                             <div class="use-row">
                                                 <input class="use-name" value={u.name} placeholder={"e.g. empty, long list"}>
@@ -837,20 +846,30 @@ ui
                                                 if useNameHint(u) != ""
                                                     <span class="use-name-hint">
                                                         useNameHint(u)
-                                                foreach a in u.args.orderBy(a => a.order)
-                                                    attrRow(u.args, a)
-                                                    if useArgNameHint(f, a) != ""
-                                                        <span class="attr-name-hint">
-                                                            useArgNameHint(f, a)
-                                                <div class="node-add-row">
-                                                    <button class="add-attr" onClick={() => addUseArg(u)}>
-                                                        "+ arg"
+                                                <div class="use-args">
+                                                    foreach a in u.args.orderBy(a => a.order)
+                                                        attrRow(u.args, a)
+                                                        if useArgNameHint(f, a) != ""
+                                                            <span class="attr-name-hint">
+                                                                useArgNameHint(f, a)
+                                                    <div class="node-add-row">
+                                                        <button class="add-attr" onClick={() => addUseArg(u)}>
+                                                            "+ arg"
+                                                <div class="use-ambients">
+                                                    foreach a in u.ambients.orderBy(a => a.order)
+                                                        attrRow(u.ambients, a)
+                                                        if useAmbientNameHint(a) != ""
+                                                            <span class="attr-name-hint ambient-name-hint">
+                                                                useAmbientNameHint(a)
+                                                    <div class="node-add-row">
+                                                        <button class="add-ambient" onClick={() => addUseAmbient(u)}>
+                                                            "+ ambient"
                                                 <div class="use-preview-label">
                                                     u.name != "" ? u.name : "Preview"
                                                 <p class="workbench-note">
                                                     "Host actions and saves are disabled in preview."
                                                 <section class="design-canvas use-preview" instancemount={sys.id(u)}>
-                                                    sys.renderTree({ kind: "", tag: f.name, expr: "", attrs: u.args, children: [] }, sys.evalContext(design, evalRefresh), design)
+                                                    sys.renderTree({ kind: "", tag: f.name, expr: "", attrs: u.args, ambients: u.ambients, children: [] }, sys.evalContext(design, evalRefresh), design)
                                         <button class="add-use" onClick={() => addUse(f)}>
                                             "+ Configuration"
                             <button class="add-fn" onClick={() => addFn(design)}>
