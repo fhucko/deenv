@@ -1,4 +1,4 @@
-using Microsoft.Playwright;
+﻿using Microsoft.Playwright;
 using TUnit.Core;
 
 namespace DeEnv.Tests.TestSupport;
@@ -7,8 +7,8 @@ namespace DeEnv.Tests.TestSupport;
 /// <summary>
 /// One Playwright driver + one Chromium (headless except when debugging in VS) for the WHOLE test run. Spawning the driver (a Node
 /// process) and a browser process costs hundreds of ms each; doing it per scenario dominated the suite.
-/// Each scenario/test gets a fresh <see cref="IBrowserContext"/> instead — full cookie/storage/cache
-/// isolation, a few ms to create — so there is no isolation regression (the server + store are already
+/// Each scenario/test gets a fresh <see cref="IBrowserContext"/> instead â€” full cookie/storage/cache
+/// isolation, a few ms to create â€” so there is no isolation regression (the server + store are already
 /// per-scenario). Browsers are built for many concurrent contexts, so this is safe under TUnit's
 /// parallel execution.
 /// </summary>
@@ -18,9 +18,8 @@ public static class SharedBrowser
     private static IPlaywright? _playwright;
     private static IBrowser? _browser;
 
-    // No limit on concurrent browser pages/contexts (per user request).
-    // TUnit default parallelism applies. The single shared browser (Gate above) is still created once.
-    // (PageGate semaphore for per-context cap was removed.)
+    // Concurrent pages follow assembly ParallelLimiter (GlobalParallelLimit = 3). One shared
+    // Chromium; Gate only serializes the one-time browser launch.
 
     private static async Task<IBrowser> BrowserAsync()
     {
@@ -76,3 +75,4 @@ public static class SharedBrowser
         _playwright = null;
     }
 }
+
