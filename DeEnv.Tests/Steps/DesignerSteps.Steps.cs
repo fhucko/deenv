@@ -1054,22 +1054,16 @@ public sealed partial class DesignerSteps
             Has = ctx.Page.Locator($"input.type-name[value={CssString(typeName)}]")
         });
         await card.Locator("button.add-prop").ClickAsync();
-        var newRow = card.Locator(".prop-row").Last;
-        // Wait for the optimistic empty row before naming (create must be in the client model).
-        await newRow.Locator("input.prop-name").WaitForAsync();
-        await newRow.Locator("input.prop-name").FillAsync(propName);
-        // Wait for the binding to reflect the name back into the input (value attr), like the type-name
-        // step does. This ensures the client model updated before we wait for the server store.
-        var namedRow = card.Locator(".prop-row", new() {
-            Has = ctx.Page.Locator($"input.prop-name[value={CssString(propName)}]")
-        });
-        await namedRow.WaitForAsync();
-        await Assert.That(await namedRow.Locator("input.prop-name").InputValueAsync()).IsEqualTo(propName);
+        // Always the LAST prop-row of THIS type card — the just-added field. Do not re-locate by
+        // value={propName}: under load a remap/SSR paint can clear the name from the input, the
+        // value-filter matches nothing, and Evaluate hung on a missing locator for the whole deadline.
+        var nameInput = card.Locator(".prop-row").Last.Locator("input.prop-name");
+        await nameInput.WaitForAsync();
+        await nameInput.FillAsync(propName);
         // Persist before any "reload the design editor" (needed so type/cardinality <select>s get
-        // SSR-populated option lists). Without this wait, reload re-renders from store and the new
-        // prop vanishes or keeps an empty name — PropTypeSelect then times out on [value=propName].
-        // Under load the arrayAdd mint can remap after the first name write; re-fire the binding until
-        // the store shows the name (same deadline as EventuallyAsync, no timeout inflation).
+        // SSR-populated option lists). Under load the arrayAdd mint can remap after the first name
+        // write; re-fire the binding on the last-row input until the store shows the name (same
+        // deadline as EventuallyAsync, no timeout inflation).
         var deadline = DateTime.UtcNow.AddMilliseconds(120_000);
         while (DateTime.UtcNow < deadline)
         {
@@ -1077,7 +1071,8 @@ public sealed partial class DesignerSteps
                 .Any(o => o.Fields.TryGetValue("name", out var v)
                     && v is DeEnv.Storage.TextValue t && t.Text == propName))
                 return;
-            await namedRow.Locator("input.prop-name").EvaluateAsync(
+            nameInput = card.Locator(".prop-row").Last.Locator("input.prop-name");
+            await nameInput.EvaluateAsync(
                 "(el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }",
                 propName);
             await Task.Delay(50);
