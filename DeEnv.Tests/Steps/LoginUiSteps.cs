@@ -30,6 +30,10 @@ public sealed class LoginUiSteps(InstanceContext ctx)
     [Given("the access-fixture app is served with the admin password {string}")]
     public async Task GivenServedWithPassword(string password)
     {
+        // Fresh data file: Access.feature Background already opened a JsonFileInstanceStore on
+        // ctx.DataFilePath; reusing that path under a second live store/server races under parallel
+        // load (password seed / genesis). Same pattern as action-miss / menu-keying fixtures.
+        ctx.DataFilePath = Path.Combine(Path.GetTempPath(), "deenv-loginui-" + Guid.NewGuid().ToString("N") + ".json");
         ctx.Description = InstanceContext.AccessFixtureDb();
         ctx.Server = new TestInstanceServer();
         await ctx.Server.StartAsync(ctx.Description, ctx.DataFilePath);
@@ -51,6 +55,7 @@ public sealed class LoginUiSteps(InstanceContext ctx)
     [Given("the access-fixture app is served as a public roadmap with admin password {string}")]
     public async Task GivenServedPublicWithPassword(string password)
     {
+        ctx.DataFilePath = Path.Combine(Path.GetTempPath(), "deenv-loginui-pub-" + Guid.NewGuid().ToString("N") + ".json");
         ctx.Description = InstanceContext.AccessPublicFixtureDb();
         ctx.Server = new TestInstanceServer();
         await ctx.Server.StartAsync(ctx.Description, ctx.DataFilePath);
@@ -88,12 +93,14 @@ public sealed class LoginUiSteps(InstanceContext ctx)
     }
 
     // Open the path as an ANONYMOUS visitor (a fresh page on the shared browser — no principal bound, the
-    // default WS session). Waits for hydration so the form's handlers are attached before the test acts.
+    // default WS session). Full data-ready (not only hydration): sys.login's reply drives a refetch that
+    // needs a claimed WS — same gate LoginViewSwapTests and mutating steps use.
     [Given("an anonymous visitor opens {string}")]
     public async Task GivenAnonymousOpens(string path)
     {
         ctx.Page = await SharedBrowser.NewPageAsync(ctx.BaseUrl);
         await ctx.Page.GotoReadyAsync(path);
+        await ctx.Page.WaitReadyAsync();
     }
 
     [When("the visitor opens a fresh page at {string}")]
@@ -131,11 +138,29 @@ public sealed class LoginUiSteps(InstanceContext ctx)
 
     // The login success refetches and the page re-renders as the bound admin: the ruled data appears. Poll
     // the live DOM (the WS round-trip + refetch is async) — no fixed sleep.
+    //
+    // Two conditions (LoginViewSwapTests): (1) the gate LoginForm is GONE — a stale `comp:` cache can keep
+    // the form mounted after a successful login so ruled data never paints; (2) the text is present.
+    // Ceiling TestMs (peak-suite WS), not ActionMs — same multi-hop class as action-miss / Polling.
     [Then("{string} eventually appears")]
     public async Task ThenEventuallyAppears(string text)
     {
-        await ctx.Page!.WaitForFunctionAsync(
-            "t => document.body.innerText.includes(t)", text);
+        var page = ctx.Page!;
+        try
+        {
+            await page.WaitForFunctionAsync(
+                "t => !document.querySelector('#app .login-form') && document.body.innerText.includes(t)",
+                text,
+                new() { Timeout = TestTimeouts.TestMs });
+        }
+        catch (TimeoutException ex)
+        {
+            var formCount = await page.Locator("#app .login-form").CountAsync();
+            var app = await page.Locator("#app").InnerHTMLAsync();
+            throw new TimeoutException(
+                $"'{text}' never appeared after login (login-form still in #app: {formCount > 0}). " +
+                $"#app (first 1200):\n{app[..Math.Min(1200, app.Length)]}", ex);
+        }
     }
 
     // A wrong password now surfaces on the SAME global rejection banner (uiStatic.lastError, id="__error")
