@@ -2182,15 +2182,17 @@ public sealed partial class DesignerSteps
         await ctx.Page!.Locator($".design-canvas {tag}[data-node]", new() { HasTextString = text }).First.ClickAsync();
     }
 
+    // Own tag input only — a bare input.node-tag[value=h1] would also match an ANCESTOR .node-element
+    // that contains a nested h1, so nested selection asserts would lie (main matched as "h1 selected").
+    private Microsoft.Playwright.ILocator TreeElementRow(string tag) =>
+        ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element", new() {
+            Has = ctx.Page.Locator($":scope > .node-tag-row > input.node-tag[value={CssString(tag)}]")
+        });
+
     [When(@"I click the tree editor's ""(.*)"" element row")]
     public async Task WhenIClickTheTreeEditorsElementRow(string tag)
     {
-        // Locate the row by the node-tag INPUT's value attribute (which the runtime mirrors).
-        // Using the attribute inside Has (rather than HasTextString) because <input> value lives in the attr/property,
-        // not inner text content. This matches how other tag-based row locators were cleaned up.
-        var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element", new() {
-            Has = ctx.Page.Locator($"input.node-tag[value={CssString(tag)}]")
-        });
+        var row = TreeElementRow(tag);
         await row.First.WaitForAsync();
         // Dispatch on the row div (selectNode is its onClick). A normal ClickAsync often hits the nested
         // <input.node-tag> first; under some remounts the parent handler does not fire, so selection never
@@ -2316,24 +2318,21 @@ public sealed partial class DesignerSteps
     [Then(@"the tree editor's ""(.*)"" element row is not selected")]
     public async Task ThenTheTreeEditorsElementRowIsNotSelected(string tag)
     {
-        var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element", new() {
-            Has = ctx.Page.Locator($"input.node-tag[value={CssString(tag)}]")
-        });
-        await row.Locator(":scope.is-selected").First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
+        await TreeElementRow(tag).Locator(":scope.is-selected").First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Detached });
     }
 
     [Then(@"the design canvas's ""(.*)"" element is selected")]
     public async Task ThenTheDesignCanvasElementIsSelected(string tag)
     {
-        await ctx.Page!.Locator($".design-canvas {tag}[data-node].is-selected").First.WaitForAsync();
+        await ctx.Page!.Locator($".design-canvas {tag}[data-node].is-selected").First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     [Then(@"the tree editor's ""(.*)"" element row is selected")]
     public async Task ThenTheTreeEditorsElementRowIsSelected(string tag)
     {
-        var selected = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element.is-selected", new() {
-            Has = ctx.Page.Locator($"input.node-tag[value={CssString(tag)}]")
-        }).First;
+        var selected = TreeElementRow(tag).And(ctx.Page!.Locator(".is-selected")).First;
         try
         {
             // Attached is enough — selection is a class on the row, not a visibility contract.
@@ -2345,7 +2344,7 @@ public sealed partial class DesignerSteps
                 $@"() => {{
                     const rows = [...document.querySelectorAll('main.ide-design-edit .design-editor .render-tree .node-element')];
                     return rows.map(r => {{
-                        const inp = r.querySelector('input.node-tag');
+                        const inp = r.querySelector(':scope > .node-tag-row > input.node-tag');
                         return (inp ? inp.value : '?') + ':' + r.className;
                     }}).join(' | ');
                 }}");
