@@ -1053,28 +1053,46 @@ public sealed partial class DesignerSteps
         var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card", new() {
             Has = ctx.Page.Locator($"input.type-name[value={CssString(typeName)}]")
         });
-        await card.Locator("button.add-prop").ClickAsync();
         // Always the LAST prop-row of THIS type card — the just-added field. Do not re-locate by
         // value={propName}: under load a remap/SSR paint can clear the name from the input, the
         // value-filter matches nothing, and Evaluate hung on a missing locator for the whole deadline.
+        //
+        // Under load, two failure modes show up as the same 120s MetaProp timeout (incl. W1b Counter
+        // scenarios that only need a Db.note field before authoring):
+        //  1) arrayAdd never lands — propChange is dropped until the row is in pendingAdds (ws.ts).
+        //  2) name write races remap — first write lost; re-fire after positive id is required.
+        // Re-click + Field when the extent count never grows; re-fire name while count grew but name empty.
+        var propsBefore = _designer.Store.ReadExtent("MetaProp").Values.Count();
+        await card.Locator("button.add-prop").ClickAsync();
         var nameInput = card.Locator(".prop-row").Last.Locator("input.prop-name");
         await nameInput.WaitForAsync();
         await nameInput.FillAsync(propName);
-        // Persist before any "reload the design editor" (needed so type/cardinality <select>s get
-        // SSR-populated option lists). Under load the arrayAdd mint can remap after the first name
-        // write; re-fire the binding on the last-row input until the store shows the name (same
-        // deadline as EventuallyAsync, no timeout inflation).
         var deadline = DateTime.UtcNow.AddMilliseconds(120_000);
+        var lastRecreate = DateTime.UtcNow;
         while (DateTime.UtcNow < deadline)
         {
             if (_designer.Store.ReadExtent("MetaProp").Values
                 .Any(o => o.Fields.TryGetValue("name", out var v)
                     && v is DeEnv.Storage.TextValue t && t.Text == propName))
                 return;
-            nameInput = card.Locator(".prop-row").Last.Locator("input.prop-name");
-            await nameInput.EvaluateAsync(
-                "(el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }",
-                propName);
+
+            var propsNow = _designer.Store.ReadExtent("MetaProp").Values.Count();
+            // No create in the store for ~2s → the first "+ Field" / arrayAdd was lost under load; mint again.
+            if (propsNow <= propsBefore && (DateTime.UtcNow - lastRecreate).TotalMilliseconds > 2000)
+            {
+                await card.Locator("button.add-prop").ClickAsync();
+                lastRecreate = DateTime.UtcNow;
+                nameInput = card.Locator(".prop-row").Last.Locator("input.prop-name");
+                await nameInput.WaitForAsync();
+                await nameInput.FillAsync(propName);
+            }
+            else
+            {
+                nameInput = card.Locator(".prop-row").Last.Locator("input.prop-name");
+                await nameInput.EvaluateAsync(
+                    "(el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }",
+                    propName);
+            }
             await Task.Delay(50);
         }
         throw new TimeoutException(
@@ -1647,16 +1665,26 @@ public sealed partial class DesignerSteps
     {
         var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row").Nth(index);
         var preview = row.Locator(".use-preview");
-        // Use WaitForFunction *only* for the !data-node negation (live mounted content vs. static renderTree
-        // pre-mount body that stamps data-node on everything). All other presence/text is expressed with
-        // native Locator + HasTextString per TESTING.md. The function is scoped to the row for stability.
+        // Live mount only: static U1 renderTree stamps data-node on every element; the real workbench
+        // never does. Scope to .workbench-instance-content so toolbar chrome can't satisfy the assert.
+        // HasTextString is exact and fails for the empty-string case (Field sibling echo), so empty
+        // uses a trimmed-text WaitForFunction; non-empty uses the native locator (TESTING.md).
         try
         {
-            await ctx.Page!.WaitForFunctionAsync(
-                $"() => {{ const rows = document.querySelectorAll('main.ide-design-edit .design-editor .components-section .fn-uses .use-row'); " +
-                $"const r = rows[{index}]; if (r == null) return false; " +
-                $"const preview = r.querySelector('.use-preview'); if (preview == null) return false; " +
-                $"return [...preview.querySelectorAll({JsString(tag)})].some(e => e.textContent === {JsString(text)} && !e.hasAttribute('data-node')); }}");
+            if (text.Length == 0)
+            {
+                await ctx.Page!.WaitForFunctionAsync(
+                    $"() => {{ const rows = document.querySelectorAll('main.ide-design-edit .design-editor .components-section .fn-uses .use-row'); " +
+                    $"const r = rows[{index}]; if (r == null) return false; " +
+                    $"const content = r.querySelector('.use-preview .workbench-instance-content'); if (content == null) return false; " +
+                    $"return [...content.querySelectorAll({JsString(tag)})].some(e => !e.hasAttribute('data-node') && (e.textContent ?? '').trim() === ''); }}");
+            }
+            else
+            {
+                var live = preview.Locator($".workbench-instance-content {tag}:not([data-node])",
+                    new() { HasTextString = text }).First;
+                await live.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Visible });
+            }
         }
         catch (TimeoutException)
         {
@@ -2048,18 +2076,35 @@ public sealed partial class DesignerSteps
 
     // Click the previewed component's OWN root element — scoped to `.workbench-instance-content` so it can
     // never hit the sibling toolbar's Reset button (`.workbench-instance-reset`), even though both live
-    // inside the same `.use-preview` container.
+    // inside the same `.use-preview` container. Only the LIVE mount (`:not([data-node])`) — a static
+    // renderTree button is inert under the sandbox; clicking it before mount leaves count stuck and a
+    // later "reading 2" Then times out.
     [When("I click configuration {int}'s live instance button")]
-    public async Task WhenClickConfigurationLiveInstanceButton(int index) =>
-        await LiveInstancePreview(index).Locator(".workbench-instance-content button").First.ClickAsync();
+    public async Task WhenClickConfigurationLiveInstanceButton(int index)
+    {
+        var btn = LiveInstancePreview(index)
+            .Locator(".workbench-instance-content button:not([data-node])").First;
+        await btn.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Visible });
+        await btn.ClickAsync();
+    }
 
     [When("I type {string} into configuration {int}'s live instance input")]
     public async Task WhenTypeIntoConfigurationLiveInstanceInput(string text, int index) =>
         await LiveInstancePreview(index).Locator(".workbench-instance-content input").First.FillAsync(text);
 
     [When("I click configuration {int}'s live instance Reset button")]
-    public async Task WhenClickConfigurationLiveInstanceReset(int index) =>
-        await LiveInstancePreview(index).Locator(".workbench-instance-reset").ClickAsync();
+    public async Task WhenClickConfigurationLiveInstanceReset(int index)
+    {
+        var preview = LiveInstancePreview(index);
+        var reset = preview.Locator(".workbench-instance-reset");
+        await reset.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Visible });
+        await reset.ClickAsync();
+        // Remount is sync in workbench.ts; wait for the component root under content (a direct child)
+        // so the follow-up Then is not racing an empty content shell. Do not use :not([data-node])
+        // alone — the content div itself has no data-node and would match immediately.
+        await preview.Locator(".workbench-instance-content > *").First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
+    }
 
     // The anchor-containment pin (arch review fold): a previewed component's own in-app `<a href>` — no
     // onClick, so nothing in instanceWiring stops it — must not navigate the page. The click's OWN

@@ -453,7 +453,8 @@ Feature: Designer - Library and Navigation
     And configuration 0's live instance shows a "button" element reading "0"
     And configuration 1's live instance shows a "button" element reading "0"
     When I click configuration 0's live instance button
-    And I click configuration 0's live instance button
+    Then configuration 0's live instance shows a "button" element reading "1"
+    When I click configuration 0's live instance button
     Then configuration 0's live instance shows a "button" element reading "2"
     And configuration 1's live instance shows a "button" element reading "0"
     When I click configuration 0's live instance Reset button
