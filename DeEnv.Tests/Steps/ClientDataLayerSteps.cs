@@ -145,6 +145,11 @@ public sealed class ClientDataLayerSteps(InstanceContext ctx)
     // data, and the increment landed on the visible `a` (0 → 1). Wait for the async round-trip (refetch
     // harvest + merge + re-invoke tx + render patch) to update the live DOM text. A plain one-shot read
     // after click races the WS; use Playwright's text expectation which polls.
+    //
+    // Ceiling is TestMs (30s), NOT ActionMs (10s): this is a multi-hop WS outcome (click → VNA abort →
+    // refetch with handlerFn/slot → server harvest → merge → re-invoke → commit → paint), the same class
+    // Polling.EventuallyAsync sizes for peak full-suite load. Under parallel suite pressure the hop can
+    // exceed 10s while still completing; ActionMs is for single locator actionability, not this loop.
     [Then("the counter eventually reads {int}")]
     public async Task ThenCounterEventuallyReads(int value)
     {
@@ -153,7 +158,7 @@ public sealed class ClientDataLayerSteps(InstanceContext ctx)
         {
             await counter.WaitForAsync();
             await Microsoft.Playwright.Assertions.Expect(counter)
-                .ToHaveTextAsync(value.ToString(), new() { Timeout = TestTimeouts.ActionMs });
+                .ToHaveTextAsync(value.ToString(), new() { Timeout = TestTimeouts.TestMs });
         }
         catch (Exception ex) when (ex is TimeoutException or Microsoft.Playwright.PlaywrightException)
         {
