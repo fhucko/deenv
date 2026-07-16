@@ -1045,7 +1045,8 @@ public sealed partial class DesignerSteps
     }
 
     // Add a field to a named type: click that type-card's "+ Field", then name the just-added (empty-name)
-    // prop. Waits for the client edit AND the autosave to the designer's store (a later commit snapshots it).
+    // prop. Waits for the client edit AND the autosave to the designer's store — a later reload / commit
+    // re-reads the store (SSR prop rows draw value={prop.name} from persisted MetaProp rows).
     [When("I add a field {string} to the type {string}")]
     public async Task WhenAddField(string propName, string typeName)
     {
@@ -1062,11 +1063,12 @@ public sealed partial class DesignerSteps
         });
         await namedRow.WaitForAsync();
         await Assert.That(await namedRow.Locator("input.prop-name").InputValueAsync()).IsEqualTo(propName);
-        // We rely on the DOM reflection as proof that the client edit happened.
-        // For new designs the live sync to the designer's store for the prop name can be slow/flaky
-        // (even after 2 min in some runs), but the subsequent live authoring/preview steps only need
-        // the client model. The store wait was to ensure a later commit would snapshot it; we drop it
-        // here to keep the test stable under the temp 5 s regime while still asserting the edit succeeded.
+        // Persist before any "reload the design editor" (needed so type/cardinality <select>s get
+        // SSR-populated option lists). Without this wait, reload re-renders from store and the new
+        // prop vanishes or keeps an empty name — PropTypeSelect then times out on [value=propName].
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
+            .Any(o => o.Fields.TryGetValue("name", out var v)
+                && v is DeEnv.Storage.TextValue t && t.Text == propName));
     }
 
     // Rename a prop on a named type via its bound name input; wait for the client edit + the autosave, so a
@@ -1088,7 +1090,10 @@ public sealed partial class DesignerSteps
             Has = ctx.Page.Locator($"input.prop-name[value={CssString(to)}]")
         }).Locator("input.prop-name");
         await Assert.That(await renamedInput.InputValueAsync()).IsEqualTo(to);
-        // Rely on DOM reflection for the rename (same rationale as add-field for new designs).
+        // Same store wait as add-field: rename must land before a reload/commit re-reads MetaProp.
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values
+            .Any(o => o.Fields.TryGetValue("name", out var v)
+                && v is DeEnv.Storage.TextValue t && t.Text == to));
     }
 
     // Grant a read rule on a type for the branch (reusing the slice-5 store-level access mutation): append an
