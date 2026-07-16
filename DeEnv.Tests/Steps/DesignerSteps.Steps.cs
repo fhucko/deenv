@@ -2082,6 +2082,18 @@ public sealed partial class DesignerSteps
             o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == SelectionTestConvertibleRender));
     }
 
+    // Literal <a href> inside the canvas — S4a must select the row, not navigate the designer page.
+    private const string AnchorConvertibleRender =
+        "ui\n    fn render()\n        return <main>\n            <a href=\"/elsewhere\">\n                \"Link\"\n";
+
+    [When("I author an anchor convertible render into the design's UI")]
+    public async Task WhenAuthorAnchorConvertibleRender()
+    {
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(AnchorConvertibleRender);
+        await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
+            o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == AnchorConvertibleRender));
+    }
+
     // Long variant for scroll-into-view tests: enough rows that a root-level insert lands below the fold.
     private const string LongPaletteTestConvertibleRender =
         "ui\n    fn render()\n        return <main>\n" +
@@ -2377,12 +2389,10 @@ public sealed partial class DesignerSteps
     [Then(@"the tree editor's ""(.*)"" element row is the last child of the ""(.*)"" element row")]
     public async Task ThenTheTreeEditorsElementRowIsTheLastChild(string childTag, string parentTag)
     {
-        var parentRow = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-element", new() {
-            Has = ctx.Page.Locator($"input.node-tag[value={CssString(parentTag)}]")
-        });
+        var parentRow = TreeElementRow(parentTag);
         await parentRow.Locator($":scope > .node-children > .node-element:last-child", new() {
-            Has = ctx.Page.Locator($"input.node-tag[value={CssString(childTag)}]")
-        }).WaitForAsync();
+            Has = ctx.Page.Locator($":scope > .node-tag-row > input.node-tag[value={CssString(childTag)}]")
+        }).First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     [Then(@"the tree editor's ""(.*)"" element row is the last child of the for row")]
@@ -2390,8 +2400,8 @@ public sealed partial class DesignerSteps
     {
         var forRow = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-for").First;
         await forRow.Locator($":scope > .node-children > .node-element:last-child", new() {
-            Has = ctx.Page.Locator($"input.node-tag[value={CssString(childTag)}]")
-        }).WaitForAsync();
+            Has = ctx.Page.Locator($":scope > .node-tag-row > input.node-tag[value={CssString(childTag)}]")
+        }).First.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     [When("I open the component palette")]
