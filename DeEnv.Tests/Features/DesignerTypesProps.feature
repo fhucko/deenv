@@ -14,11 +14,12 @@ Feature: Designer - Types and Props Editor
 
   # A prop's cardinality (single / set / dictionary) -- and a dictionary's key type -- are editable in
   # the designer, not just authorable in the .app text. A set's element must be an object type; a
-  # dictionary carries a key type. Picking them and applying deploys the collection-shaped props through
-  # the same projection the seeds use, so the designer can author the whole data model (sets/dicts), not
-  # only single-valued props.
+  # dictionary carries a key type. LIGHT like the enum/multiline authoring scenarios: prove the editor
+  # captures the shape AND that SchemaBridge.ProjectDesignDb prints the canonical collection form
+  # ("set of X" / "dict of Y by Z"). Full apply + file deploy is covered by DesignerCommitPublish
+  # ("Applying a different design records it and deploys it") — no open-instance / apply / 30s file-poll here.
   @milestone-10 @single-user
-  Scenario: A prop's cardinality and key type are editable and deploy
+  Scenario: A prop's cardinality and key type are editable and project
     Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
     When I open the designs list
     And I edit the design "todo"
@@ -26,10 +27,10 @@ Feature: Designer - Types and Props Editor
     And I set the prop "checked" cardinality to "set"
     And I set the prop "text" cardinality to "dictionary"
     And I set the prop "text" key type to "text"
-    When I open the instance "todo"
-    And I apply the design
-    Then the "todo" instance's app document declares "checked set of TodoList"
-    And the "todo" instance's app document declares "text dict of text by text"
+    Then the design's prop "checked" is a set of "TodoList"
+    And the design's prop "text" is a dict of "text" by "text"
+    And projecting design "todo" declares "checked set of TodoList"
+    And projecting design "todo" declares "text dict of text by text"
 
 
   # An enum type's value list is authorable in the designer, not just in the .app text: adding a type,

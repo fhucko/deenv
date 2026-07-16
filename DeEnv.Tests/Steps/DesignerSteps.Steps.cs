@@ -3343,6 +3343,41 @@ public sealed partial class DesignerSteps
             o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
             && (!o.Fields.TryGetValue("multiline", out var v) || v is not DeEnv.Storage.BoolValue { Value: true })));
 
+    // LIGHT authoring seam (cardinality / key type): the designer store has the shape; no apply/file poll.
+    // Match by prop name only (same as the When steps that wrote these fields) — unique in the todo design.
+    [Then("the design's prop {string} is a set of {string}")]
+    public async Task ThenDesignerPropIsSetOf(string propName, string elementType) =>
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values.Any(o =>
+            o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
+            && o.Fields.TryGetValue("type", out var ty) && ty is DeEnv.Storage.TextValue tt && tt.Text == elementType
+            && o.Fields.TryGetValue("cardinality", out var c) && c is DeEnv.Storage.TextValue ct && ct.Text == "set"));
+
+    [Then("the design's prop {string} is a dict of {string} by {string}")]
+    public async Task ThenDesignerPropIsDictOf(string propName, string valueType, string keyType) =>
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaProp").Values.Any(o =>
+            o.Fields.TryGetValue("name", out var n) && n is DeEnv.Storage.TextValue nt && nt.Text == propName
+            && o.Fields.TryGetValue("type", out var ty) && ty is DeEnv.Storage.TextValue tt && tt.Text == valueType
+            && o.Fields.TryGetValue("cardinality", out var c) && c is DeEnv.Storage.TextValue ct && ct.Text == "dictionary"
+            && o.Fields.TryGetValue("keyType", out var k) && k is DeEnv.Storage.TextValue kt && kt.Text == keyType));
+
+    // DURABLE projection (no open-instance / apply / disk poll): ProjectDesignDb on the live Design node —
+    // the same walk publish/apply uses. Proves collection-shaped authoring survives the projector.
+    [Then("projecting design {string} declares {string}")]
+    public async Task ThenProjectedDesignDeclares(string label, string declaration) =>
+        await EventuallyAsync(() =>
+        {
+            var designId = DesignIdByLabel(label);
+            if (designId == 0) return false;
+            var design = _designer.Store.ReadNode(DeEnv.Storage.NodePath.Root.Field("designs").Key(designId.ToString()));
+            if (design == null) return false;
+            try
+            {
+                var projected = DeEnv.Designer.SchemaBridge.ProjectDesignDb(design);
+                return projected.Contains(declaration, StringComparison.Ordinal);
+            }
+            catch { return false; }
+        });
+
     [Then("the design {string} has no unnamed type")]
     public async Task ThenNoUnnamedType(string label)
     {
