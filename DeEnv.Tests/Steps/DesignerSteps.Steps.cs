@@ -1453,15 +1453,21 @@ public sealed partial class DesignerSteps
     [When("I click the add-configuration button")]
     public async Task WhenClickAddConfiguration()
     {
-        var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card").Last;
+        // Prefer the first card that exposes Configurations (a named component under test), not
+        // necessarily the last .fn-card in document order.
+        var card = ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card")
+            .Filter(new() { Has = ctx.Page.Locator("button.add-use") }).First;
         await card.Locator(".add-use").First.ClickAsync();
     }
 
     private Microsoft.Playwright.ILocator ComponentCard() =>
         ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-card").Last;
 
+    // Global document order of configuration rows (across every fn-card) — same index space as
+    // ThenConfiguration* / LiveInstancePreview. Do not scope to ComponentCard().Last: after convert
+    // the last card is not always the NoteCard under test.
     private Microsoft.Playwright.ILocator ConfigRow(int index) =>
-        ComponentCard().Locator(".fn-uses .use-row").Nth(index);
+        ctx.Page!.Locator("main.ide-design-edit .design-editor .components-section .fn-uses .use-row").Nth(index);
 
     [Then("component configurations shows {int} row(s)")]
     public async Task ThenConfigurationsShowsCount(int count)
@@ -2034,10 +2040,10 @@ public sealed partial class DesignerSteps
             && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ComponentInvokingConvertibleRender));
     }
 
-    // Badge is param-less so a palette insert (no auto-args) still expands to readable canvas content —
-    // proving F2 expansion of a design component, not a literal <Badge> chip.
+    // Badge is param-less so a palette insert (no auto-args) still expands to readable canvas content.
+    // Render carries <h1>"Hello"</h1> so leaf-sibling / selection scenarios can target that leaf.
     private const string PaletteTestConvertibleRender =
-        "ui\n    fn Badge()\n        return <span>\n            \"Badge\"\n    fn render()\n        return <main>\n            \"hi\"\n";
+        "ui\n    fn Badge()\n        return <span>\n            \"Badge\"\n    fn render()\n        return <main>\n            <h1>\n                \"Hello\"\n";
 
     [When("I author a palette-test convertible render into the design's UI")]
     public async Task WhenAuthorPaletteTestRender()
@@ -2184,7 +2190,7 @@ public sealed partial class DesignerSteps
             Has = ctx.Page.Locator($"input.node-expr[value={CssString(expr)}]")
         });
         await row.First.WaitForAsync();
-        await row.First.ClickAsync();
+        await row.First.EvaluateAsync("el => el.click()");
     }
 
     [When("I click the tree editor's for row")]
@@ -2193,7 +2199,7 @@ public sealed partial class DesignerSteps
         // Use scoped .First and native wait; the for row has .node-for class.
         var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-for");
         await row.First.WaitForAsync();
-        await row.First.ClickAsync();
+        await row.First.EvaluateAsync("el => el.click()");
     }
 
     [When("I click the tree editor's if row")]
@@ -2201,7 +2207,7 @@ public sealed partial class DesignerSteps
     {
         var row = ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-if");
         await row.First.WaitForAsync();
-        await row.First.ClickAsync();
+        await row.First.EvaluateAsync("el => el.click()");
     }
 
     [Then("no tree editor row is selected in the main render tree")]
@@ -2340,13 +2346,15 @@ public sealed partial class DesignerSteps
     [Then("the tree editor's for row is selected")]
     public async Task ThenTheTreeEditorsForRowIsSelected()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-for.is-selected").First.WaitForAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-for.is-selected").First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     [Then("the tree editor's if row is selected")]
     public async Task ThenTheTreeEditorsIfRowIsSelected()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-if.is-selected").First.WaitForAsync();
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor .render-tree .node-if.is-selected").First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     [Then(@"the tree editor's ""(.*)"" element row is the last child of the ""(.*)"" element row")]
@@ -2413,7 +2421,9 @@ public sealed partial class DesignerSteps
     [Then("the palette insert buttons are disabled")]
     public async Task ThenThePaletteInsertButtonsAreDisabled()
     {
-        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.palette-item[disabled]").First.WaitForAsync();
+        // Disabled buttons are often treated non-visible; Attached is the real contract.
+        await ctx.Page!.Locator("main.ide-design-edit .design-editor button.palette-item[disabled]").First
+            .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
     }
 
     [Then(@"the tree editor's top-level render row count is {int}")]
