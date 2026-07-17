@@ -32,6 +32,17 @@ function isWorkbenchMountContainer(tag: ExecTag): boolean {
 // One mounted instance's bookkeeping — enough to decide, on the NEXT commitRender pass, whether this
 // container's instance is still current (idempotent — left alone) or must be torn down and rebuilt
 // (a REMOUNT: a fresh private cache + a fresh db copy, exactly like a first mount, never a partial patch).
+// M12 W2 — one point-in-time snapshot of a workbench instance (component locals + local db + lastId).
+// Plain deep-copied graphs; history entries are immutable after capture (restore re-copies out of them).
+interface WorkbenchSnapshot {
+    db: ExecValue | null;
+    // setup-slot key → local var name → value (fns skipped; state objects deep-copied)
+    locals: { [slotKey: string]: { [name: string]: ExecValue } };
+    lastId: number;
+}
+
+const WORKBENCH_HISTORY_CAP = 50;
+
 interface WorkbenchInstance {
     argsSignature: string; // the use's current (name, value) args — an edit remounts (the page-side signature; see the design doc's grill fix)
     ctxKey: string; // the evalContext cache key this instance was built from — a Refresh mints a new one, so this doubles as the "ctx generation"
@@ -52,6 +63,10 @@ interface WorkbenchInstance {
     // extent walk below. null only when the eval context shipped no seed db at all (an unusual/degraded
     // context — the render then simply has no `db` var, matching the pre-W1c behavior).
     db: ExecValue | null;
+    // M12 W2 — per-instance state-changes list (scrub back/forth). history[cursor] is the restored tip;
+    // a new handler mutation truncates any forward entries then appends. Cap WORKBENCH_HISTORY_CAP.
+    history: WorkbenchSnapshot[];
+    cursor: number;
 }
 
 // Keyed by the use row's object id (the SAME id the container's instancemount attribute carries).
@@ -103,6 +118,98 @@ function deepCopySeed(value: ExecValue, seen: Map<ExecObject | ExecArray, ExecOb
 function deepCopyDbFromCtx(ctx: ExecObject): ExecValue | null {
     const seedDb = ctx.props["db"];
     return seedDb != null ? deepCopySeed(seedDb, new Map()) : null;
+}
+
+// ── M12 W2 state-changes list (history scrub) ──────────────────────────────────────────────────────────
+
+// Capture component locals from setup-slot cache entries (skip :view slots and fn-typed bindings) plus
+// the instance db + lastId. Each value is deep-copied so later mutations never rewrite history entries.
+function captureWorkbenchSnapshot(instance: WorkbenchInstance): WorkbenchSnapshot {
+    const locals: { [slotKey: string]: { [name: string]: ExecValue } } = {};
+    for (const [key, entry] of instance.cache) {
+        if (key.endsWith(":view")) continue;
+        if (entry.result.type !== "fn") continue;
+        const scope = entry.result.scope;
+        if (scope == null) continue;
+        const vars: { [name: string]: ExecValue } = {};
+        for (const name of Object.keys(scope.items)) {
+            const v = scope.items[name].value;
+            if (v.type === "fn" || v.type === "sysFn") continue;
+            vars[name] = deepCopySeed(v, new Map());
+        }
+        if (Object.keys(vars).length > 0) locals[key] = vars;
+    }
+    return {
+        db: instance.db != null ? deepCopySeed(instance.db, new Map()) : null,
+        locals,
+        lastId: instance.lastId.value,
+    };
+}
+
+// Write a snapshot back into the live instance (db + setup locals + lastId) and stale every :view so the
+// next render pass recomputes over the restored graphs. History entry itself is left intact (we re-copy
+// out of it).
+function restoreWorkbenchSnapshot(instance: WorkbenchInstance, snap: WorkbenchSnapshot): void {
+    instance.db = snap.db != null ? deepCopySeed(snap.db, new Map()) : null;
+    instance.lastId.value = snap.lastId;
+    for (const slotKey of Object.keys(snap.locals)) {
+        const entry = instance.cache.get(slotKey);
+        if (entry == null || entry.result.type !== "fn") continue;
+        const scope = entry.result.scope;
+        if (scope == null) continue;
+        const vars = snap.locals[slotKey];
+        for (const name of Object.keys(vars))
+            if (name in scope.items)
+                scope.items[name].value = deepCopySeed(vars[name], new Map());
+    }
+    for (const [key, entry] of instance.cache)
+        if (key.endsWith(":view")) entry.stale = true;
+}
+
+// After a successful handler mutation: drop any forward history past cursor, append current state, cap.
+function recordWorkbenchHistory(instance: WorkbenchInstance): void {
+    if (instance.cursor < instance.history.length - 1)
+        instance.history = instance.history.slice(0, instance.cursor + 1);
+    instance.history.push(captureWorkbenchSnapshot(instance));
+    while (instance.history.length > WORKBENCH_HISTORY_CAP) {
+        instance.history.shift();
+        instance.cursor = Math.max(0, instance.cursor - 1);
+    }
+    instance.cursor = instance.history.length - 1;
+}
+
+// Seed history with the post-mount initial state (once). Enables scrubbing back to "as first rendered"
+// without a full Reset dispose.
+function ensureInitialHistory(instance: WorkbenchInstance): void {
+    if (instance.history.length > 0) return;
+    instance.history.push(captureWorkbenchSnapshot(instance));
+    instance.cursor = 0;
+}
+
+// Toolbar chrome: ‹ › + "i/n" position. Built once with the toolbar; refreshed after every history change.
+function updateHistoryChrome(container: HTMLElement, instance: WorkbenchInstance): void {
+    const back = container.querySelector(":scope > .workbench-instance-toolbar .workbench-history-back") as HTMLButtonElement | null;
+    const fwd = container.querySelector(":scope > .workbench-instance-toolbar .workbench-history-fwd") as HTMLButtonElement | null;
+    const pos = container.querySelector(":scope > .workbench-instance-toolbar .workbench-history-pos") as HTMLElement | null;
+    if (back == null || fwd == null || pos == null) return;
+    const n = instance.history.length;
+    back.disabled = instance.cursor <= 0 || n === 0;
+    fwd.disabled = instance.cursor >= n - 1 || n === 0;
+    pos.textContent = n === 0 ? "" : (instance.cursor + 1) + "/" + n;
+}
+
+function scrubWorkbenchHistory(useId: number, container: HTMLElement, dir: number): void {
+    const instance = workbenchInstances.get(useId);
+    if (instance == null) return;
+    const next = instance.cursor + dir;
+    if (next < 0 || next >= instance.history.length) return;
+    instance.cursor = next;
+    restoreWorkbenchSnapshot(instance, instance.history[next]);
+    const inputs = locateInstanceInputs(useId);
+    if (inputs != null)
+        runInstanceRenderPass(useId, inputs.fn, inputs.use, inputs.ctx, instance, container);
+    else
+        updateHistoryChrome(container, instance);
 }
 
 // ── W1c cache seeding (docs/plans/component-workbench.md "The v1 fidelity boundary" — the fast-follow)
@@ -437,12 +544,28 @@ function ensureInstanceContent(container: HTMLElement, useId: number): HTMLEleme
     container.textContent = ""; // replace the static pre-mount body (the U1 sys.renderTree walk / SSR) — this runs synchronously inside the SAME commitRender that painted it (see mountWorkbenchInstances), so it is never actually seen on screen
     const toolbar = document.createElement("div");
     toolbar.className = "workbench-instance-toolbar";
+    // M12 W2 — state-changes scrub (‹ › + position), then Reset. Framework chrome outside reconciler.
+    const backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.className = "workbench-history-back";
+    backBtn.textContent = "‹";
+    backBtn.title = "Previous state";
+    backBtn.onclick = () => scrubWorkbenchHistory(useId, container, -1);
+    toolbar.appendChild(backBtn);
+    const pos = document.createElement("span");
+    pos.className = "workbench-history-pos";
+    toolbar.appendChild(pos);
+    const fwdBtn = document.createElement("button");
+    fwdBtn.type = "button";
+    fwdBtn.className = "workbench-history-fwd";
+    fwdBtn.textContent = "›";
+    fwdBtn.title = "Next state";
+    fwdBtn.onclick = () => scrubWorkbenchHistory(useId, container, 1);
+    toolbar.appendChild(fwdBtn);
     const resetBtn = document.createElement("button");
     resetBtn.type = "button";
     resetBtn.className = "workbench-instance-reset";
     resetBtn.textContent = "Reset";
-    // Framework chrome, not app.deenv markup (app docs have no host-DOM/comment syntax to author this in
-    // anyway) — a plain DOM handler, entirely outside the reconciler/event-wiring machinery below.
     resetBtn.onclick = () => resetWorkbenchInstance(useId, container);
     toolbar.appendChild(resetBtn);
     container.appendChild(toolbar);
@@ -530,6 +653,9 @@ function runInstanceRenderPass(useId: number, fn: ExecObject, use: ExecObject, c
     // machinery (data-key, refreshAttributes) is what makes an <input>'s uncommitted keystroke/focus
     // survive its own repaint.
     updateChildren(content, children, result.errorMessage != null ? noWiring : instanceWiring(useId, container));
+    // W2: seed history after the first successful paint (setup has run; locals+db are the "as first rendered" tip).
+    if (result.errorMessage == null) ensureInitialHistory(instance);
+    updateHistoryChrome(container, instance);
 }
 
 // Mount (or, on a real change, remount) ONE workbench container. Idempotent: an already-current instance
@@ -557,7 +683,7 @@ function mountOneWorkbenchInstance(useId: number, container: HTMLElement): void 
 // minted here (not per render — see WorkbenchInstance.db) so a handler's write and seedExtentCache's later
 // walk both see, and mutate, the SAME graph as the mounted component's own setup.
 function newWorkbenchInstance(argsSignature: string, ctxKey: string, ctx: ExecObject): WorkbenchInstance {
-    return { argsSignature, ctxKey, cache: new Map(), lastId: { value: 0 }, db: deepCopyDbFromCtx(ctx) };
+    return { argsSignature, ctxKey, cache: new Map(), lastId: { value: 0 }, db: deepCopyDbFromCtx(ctx), history: [], cursor: 0 };
 }
 
 // Reset (component-workbench.md's user-picked semantics): DISPOSE the whole sandbox — the private
@@ -622,24 +748,30 @@ function instanceHandlerContext(useId: number): ExecContext {
 // even reach a journal-pushing hook (they no-op at `wsHooks?.…`), so nothing was ever staged to undo. v1's
 // STATED divergence (design doc, not silently accepted): a throw — a genuine bug or a VNA alike, "action:
 // undefined" honesty either way — renders the REAL error into the card and leaves whatever partial writes
-// already landed in place. Reset is the recovery, not an automatic rollback.
+// already landed in place. W2: a throw restores the pre-handler snapshot (auto-rollback); success records
+// a new history tip (truncating any forward scrub branch). Reset remains the full dispose recovery.
 function runInstanceHandler(useId: number, container: HTMLElement, body: () => void): void {
     const instance = workbenchInstances.get(useId);
     if (instance == null) return; // torn down mid-dispatch (Reset, a removed use row, navigation away) — nothing to run
 
+    // Snapshot BEFORE the handler so a throw can roll back partial writes (W2 retires the v1 "keep partials" divergence).
+    const pre = captureWorkbenchSnapshot(instance);
     let errorMessage: string | null = null;
     withSandboxGlobals(instance, useId, { memoBypass: true }, () => {
         try { body(); } catch (e) { errorMessage = e instanceof Error ? e.message : String(e); }
     });
 
     if (errorMessage != null) {
+        restoreWorkbenchSnapshot(instance, pre);
         // Render the real error directly (never through a normal re-render, which — over honestly partial
         // state — could itself throw a DIFFERENT, more confusing error, or silently succeed and hide that
         // something went wrong this click). noWiring: an error card is never interactive.
         const content = ensureInstanceContent(container, useId);
         updateChildren(content, [instanceErrorTag(errorMessage)], noWiring);
+        updateHistoryChrome(container, instance);
         return;
     }
+    recordWorkbenchHistory(instance);
     rerenderWorkbenchInstance(useId, container);
 }
 

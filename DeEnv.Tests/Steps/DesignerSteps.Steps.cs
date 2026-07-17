@@ -1880,9 +1880,9 @@ public sealed partial class DesignerSteps
     public async Task WhenAuthorReactiveCounterRender()
     {
         await ctx.Page!.Locator("main.ide-design-edit .design-editor textarea.design-ui").FillAsync(ReactiveCounterConvertibleRender);
+        // Any design label — scenarios reuse this fixture under different names (wbcounterme, wbhistory, …).
         await EventuallyAsync(() => _designer.Store.ReadExtent("Design").Values.Any(o =>
-            o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue { Text: "wbcounterme" }
-            && o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ReactiveCounterConvertibleRender));
+            o.Fields.TryGetValue("ui", out var uv) && uv is DeEnv.Storage.TextValue ut && ut.Text == ReactiveCounterConvertibleRender));
     }
 
     // A two-way-bound local var (`value={state.text}`) inside a stateful component — the shape wireEvents'
@@ -2208,6 +2208,30 @@ public sealed partial class DesignerSteps
         // alone — the content div itself has no data-node and would match immediately.
         await preview.Locator(".workbench-instance-content > *").First
             .WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Attached });
+    }
+
+    // M12 W2 — state-changes scrub chrome on the workbench toolbar.
+    [When("I click configuration {int}'s history back")]
+    public async Task WhenClickConfigurationHistoryBack(int index)
+    {
+        var btn = LiveInstancePreview(index).Locator(".workbench-history-back");
+        await btn.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Visible });
+        await btn.ClickAsync();
+    }
+
+    [When("I click configuration {int}'s history forward")]
+    public async Task WhenClickConfigurationHistoryForward(int index)
+    {
+        var btn = LiveInstancePreview(index).Locator(".workbench-history-fwd");
+        await btn.WaitForAsync(new() { State = Microsoft.Playwright.WaitForSelectorState.Visible });
+        await btn.ClickAsync();
+    }
+
+    [Then("configuration {int}'s history position reads {string}")]
+    public async Task ThenConfigurationHistoryPositionReads(int index, string expected)
+    {
+        var pos = LiveInstancePreview(index).Locator(".workbench-history-pos");
+        await Microsoft.Playwright.Assertions.Expect(pos).ToHaveTextAsync(expected);
     }
 
     // The anchor-containment pin (arch review fold): a previewed component's own in-app `<a href>` — no

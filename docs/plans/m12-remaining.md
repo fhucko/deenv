@@ -237,12 +237,12 @@ honestly); whether an unset ambient still errors (yes — canvas-never-lies) or 
 `ctx` — already shipped) or live-app SSR `currentUser` (real system var on real pages).
 This rung is **per MetaUse configuration** fakes for designer preview only.
 
-## 4. W2 — the state-changes list (USER-GATED; pull whenever wanted)
+## 4. W2 — the state-changes list ✅ DONE 2026-07-16
 
-**Status (2026-07-16 audit): NOT STARTED.** Workbench has **Reset only** (dispose +
-remount from seed) + `deepCopySeed` foundation. No history array, cursor, ‹ › scrub,
-truncate-forward, or throw-auto-restore. Throw path still keeps partial writes; Reset is
-the recovery (stated v1 divergence — W2 retires it).
+**Status: DONE** (W2a+W2b together). WorkbenchInstance carries `history[]` + `cursor`;
+after each successful handler, snapshot (locals+db+lastId) appends with forward truncate
++ cap 50; toolbar ‹ › + `i/n`; throw restores the pre-handler snapshot (auto-rollback).
+Reset still full dispose. Pin: DesignerLibrary scrub scenario.
 
 **Goal (user's words).** "later even with state changes list that would allow moving
 back and forth" — per-instance history of state snapshots, scrub back/forth.

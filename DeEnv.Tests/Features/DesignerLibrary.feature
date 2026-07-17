@@ -462,6 +462,40 @@ Feature: Designer - Library and Navigation
     And configuration 1's live instance shows a "button" element reading "0"
 
 
+  # M12 W2 — state-changes list: scrub ‹ › across handler snapshots (not a full Reset dispose).
+  @m12 @single-user
+  Scenario: A workbench instance can scrub back and forth through its state-change history
+    Given the operator IDE is running on a kernel hosting instances "todo" and "crm"
+    When I open the designs list
+    And I create a design named "wbhistory"
+    And I edit the design "wbhistory"
+    And I add a type to the design
+    And I name the just-added type "Db"
+    And I add a field "note" to the type "Db"
+    When I ensure the Advanced code disclosure is open
+    And I author a convertible render with a reactive Counter component into the design's UI
+    When I click Convert to structured
+    Then the design editor eventually shows the structured render tree editor
+    When I click the add-configuration button
+    Then configuration 0's live instance shows a "button" element reading "0"
+    When I click configuration 0's live instance button
+    Then configuration 0's live instance shows a "button" element reading "1"
+    When I click configuration 0's live instance button
+    Then configuration 0's live instance shows a "button" element reading "2"
+    And configuration 0's history position reads "3/3"
+    When I click configuration 0's history back
+    Then configuration 0's live instance shows a "button" element reading "1"
+    And configuration 0's history position reads "2/3"
+    When I click configuration 0's history back
+    Then configuration 0's live instance shows a "button" element reading "0"
+    And configuration 0's history position reads "1/3"
+    When I click configuration 0's history forward
+    Then configuration 0's live instance shows a "button" element reading "1"
+    When I click configuration 0's live instance button
+    Then configuration 0's live instance shows a "button" element reading "2"
+    And configuration 0's history position reads "3/3"
+
+
   # Two-way binding (value= state writes) through the SAME dispatch bracket the click path uses, plus the
   # bracket-restore proof: the page's own editing (a design rename, an admin-gated autosave) still works
   # right after an instance's handler ran. Also carries the ANCHOR-CONTAINMENT pin (arch review fold): the

@@ -900,10 +900,12 @@ public sealed class SsrRenderer
            previewed component's OWN rendered tree from the toolbar, one level deeper, so the reconciler
            can never confuse the Reset button with the component's own root element (e.g. Counter's root
            IS a `<button>`). */
-        .workbench-instance-toolbar { display: flex; justify-content: flex-end; margin-bottom: 0.4rem; }
-        .workbench-instance-reset { font-size: 0.76rem; padding: 0.15rem 0.5rem; background: var(--surface);
+        .workbench-instance-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 0.25rem; margin-bottom: 0.4rem; }
+        .workbench-instance-reset, .workbench-history-back, .workbench-history-fwd { font-size: 0.76rem; padding: 0.15rem 0.5rem; background: var(--surface);
           border: 1px solid var(--border); border-radius: 4px; color: var(--muted); cursor: pointer; }
-        .workbench-instance-reset:hover { border-color: var(--muted); color: var(--text); }
+        .workbench-instance-reset:hover, .workbench-history-back:hover, .workbench-history-fwd:hover { border-color: var(--muted); color: var(--text); }
+        .workbench-history-back:disabled, .workbench-history-fwd:disabled { opacity: 0.4; cursor: default; }
+        .workbench-history-pos { font-size: 0.72rem; color: var(--muted); min-width: 2.2em; text-align: center; }
         /* Raw code areas tucked behind a disclosure so the type editor reads as just types by default. */
         details.code-areas { margin-top: 1.4rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
         details.code-areas summary.code-summary { font-weight: 600; color: var(--muted); cursor: pointer; padding: 0.3rem 0; }
