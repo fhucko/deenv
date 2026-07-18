@@ -925,8 +925,9 @@ unchanged" — see below.)
 ### Slice 4: objects-that-hold-sets self-host (inline tables, nested path-walk)
 
 The navigation model was settled here: **keep nested path-walk URLs**, because a
-**set is a dictionary keyed by member identity** (which is why M5 dropped positional
-arrays) — so `/notes/3` is a stable dictionary-entry access, not a positional
+**set is identity-keyed unique membership** (URLs never use list indices — lists
+address object members by id + membership too) — so `/notes/3` is a stable
+membership access, not a positional
 fiction. (An identity-addressed `/` + `/~/<id>` design was drafted and rejected: the
 user wanted path-walk kept.)
 
