@@ -1061,7 +1061,7 @@ public sealed class PublishSteps
     {
         var design = store.ReadById(_designId) is ("Design", var d) ? d
             : throw new InvalidOperationException("No design row.");
-        var snap = SchemaBridge.Snapshot(design);
+        var snap = SchemaBridge.Snapshot(design, store);
         var commitsSetId = (store.ReadNode(NodePath.Root.Field("commits")) as SetValue)?.Id
             ?? throw new InvalidOperationException("No commits set.");
         const int temp = -1;

@@ -408,7 +408,7 @@ public sealed class DesignMergeSteps
         // SAME validate-then-print path a real designer page composes through).
         var fresh = FreshDesigner();
         var cloneDesign = fresh.ReadById(_branchDesignId)!.Value.Fields;
-        var snap = SchemaBridge.Snapshot(cloneDesign); // throws if the clone is malformed
+        var snap = SchemaBridge.Snapshot(cloneDesign, fresh); // list slots need store to resolve refs
         await Assert.That(snap.Text.Length).IsGreaterThan(0);
     }
 

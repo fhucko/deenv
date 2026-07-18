@@ -1098,7 +1098,7 @@ public sealed class HostActionSteps
         var commit = CommitByMessage(_lastCommitMessage);
         var idMap = (DictionaryValue)commit.Fields.Fields["idMap"];
         var design = _designer.ReadNode(NodePath.Root.Field("designs").Key(_designId.ToString()))!;
-        var expected = SchemaBridge.Snapshot(design).IdMap;
+        var expected = SchemaBridge.Snapshot(design, _designer).IdMap;
         await Assert.That(idMap.Entries.Count).IsEqualTo(expected.Count);
         foreach (var (path, id) in expected)
         {
