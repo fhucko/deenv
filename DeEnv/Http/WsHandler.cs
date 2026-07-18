@@ -1303,8 +1303,11 @@ public sealed class WsHandler
             {
                 var propDef = type.Props?.FirstOrDefault(d => d.Name == p.Name)
                     ?? throw new InvalidOperationException($"Type '{type.Name}' has no field '{p.Name}'.");
-                if (allowSets && propDef.Cardinality == Cardinality.Set && p.Value.ValueKind == JsonValueKind.Object
-                    && p.Value.TryGetProperty("type", out var setType) && setType.GetString() == "set")
+                // Nested collections on create are never applied inline — the store mints empty
+                // set/list/dict containers (BuildFields). Client objectOf may still ship them as
+                // { type:"set"|"list"|"dict", items:[] } (historically always "set"). Skip ALL
+                // collection cardinalities here; only scalars land in the create's field bag.
+                if (allowSets && propDef.Cardinality is Cardinality.Set or Cardinality.List or Cardinality.Dictionary)
                     continue;
                 if (propDef.Cardinality != Cardinality.Single || _desc.ScalarBaseOf(propDef.Type) is not { } baseType)
                     throw new InvalidOperationException($"Field '{p.Name}' on '{type.Name}' is not a scalar field.");

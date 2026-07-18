@@ -1,5 +1,8 @@
+using System.Text.Json;
+using DeEnv.Http;
 using DeEnv.Instance;
 using DeEnv.Storage;
+using DeEnv.Tests.TestSupport;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TUnit.Core;
@@ -116,6 +119,74 @@ public sealed class DurableListOpsTests
             var tags2 = (ListValue)store2.ReadById(1)!.Value.Fields.Fields["tags"];
             await Assert.That(((TextValue)tags2.Items[0]).Text).IsEqualTo("a");
             await Assert.That(tags2.Id).IsEqualTo(tagsId);
+        }
+        finally { Cleanup(path); }
+    }
+
+    [Test]
+    public async Task Create_Design_with_nested_list_wire_shape_then_listInsert_MetaType()
+    {
+        // Regression: nested list props on create wire must be skipped (like set), or create fails.
+        var desc = InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    designs set of Design
+                Design
+                    label text
+                    types list of MetaType
+                MetaType
+                    name text
+                    props list of MetaProp
+                MetaProp
+                    name text
+            """);
+        var path = TempPath();
+        try
+        {
+            var store = new JsonFileInstanceStore(path, desc);
+            var sessions = new ClientSessionStore();
+            var session = sessions.Create();
+            var ws = new WsHandler(store, desc, sessions);
+            var designsSetId = ((SetValue)store.ReadNode(NodePath.Root.Field("designs"))!).Id;
+
+            var createDesign = """
+                {"op":"commit","clientId":"CLIENT","edits":[],"creates":[{
+                  "tempId":-1,
+                  "value":{"props":{
+                    "label":{"type":"text","value":"pageorder"},
+                    "types":{"type":"list","items":[]}
+                  }}
+                }],"relations":[{"kind":"setAdd","setId":SETID,"childId":-1}]}
+                """.Replace("CLIENT", session.Id).Replace("SETID", designsSetId.ToString());
+            var reply1 = ws.ProcessMessage(createDesign);
+            using (var doc = JsonDocument.Parse(reply1))
+            {
+                if (doc.RootElement.TryGetProperty("error", out var err))
+                    throw new Exception("create Design failed: " + err.GetString());
+            }
+
+            var designId = store.ReadExtent("Design").Keys.Max();
+            var typesListId = ((ListValue)store.ReadById(designId)!.Value.Fields.Fields["types"]).Id;
+
+            var createType = """
+                {"op":"commit","clientId":"CLIENT","edits":[],"creates":[{
+                  "tempId":-2,
+                  "value":{"props":{
+                    "name":{"type":"text","value":"Thing"},
+                    "props":{"type":"list","items":[]}
+                  }}
+                }],"relations":[{"kind":"listInsert","listId":LISTID,"index":0,"value":{"type":"object","id":-2}}]}
+                """.Replace("CLIENT", session.Id).Replace("LISTID", typesListId.ToString());
+            var reply2 = ws.ProcessMessage(createType);
+            using (var doc = JsonDocument.Parse(reply2))
+            {
+                if (doc.RootElement.TryGetProperty("error", out var err))
+                    throw new Exception("listInsert MetaType failed: " + err.GetString());
+            }
+
+            await Assert.That(store.ReadExtent("MetaType").Values.Any(o =>
+                o.Fields.GetValueOrDefault("name") is TextValue { Text: "Thing" })).IsTrue();
+            await Assert.That(((ListValue)store.ReadById(designId)!.Value.Fields.Fields["types"]).Items.Count).IsEqualTo(1);
         }
         finally { Cleanup(path); }
     }

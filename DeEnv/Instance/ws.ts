@@ -2047,10 +2047,11 @@ function objectOf(value: ExecValue): object {
     if (value.type === "object")
         for (const [name, v] of Object.entries(value.props))
             if (v.type === "int" || v.type === "bool" || v.type === "text") props[name] = scalarOf(v);
-            // Nested membership for create: accept ANY collection shape (a Code array literal is an
-            // ExecList; a durable set prop is ExecSet). The server only applies nested links on
-            // Cardinality.Set props and expects wire type "set" (see WsHandler create nest walk).
-            else if (isCollection(v)) props[name] = { type: "set", items: v.items
+            // Nested collections on create: ship kind tag matching runtime (set|dict|list). Server
+            // skips all collection cardinalities and mints empty containers (BuildFields); positive-id
+            // members here are residual (nested links go via relations). Empty collections still ship
+            // so the prop is present — list props must not be mis-tagged as "set" (create used to fail).
+            else if (isCollection(v)) props[name] = { type: v.type, items: v.items
                 .filter(i => i.value.type === "object" && i.value.id > 0)
                 .map(i => ({ refId: (i.value as ExecObject).id })) };
     return { props };

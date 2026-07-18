@@ -315,8 +315,11 @@ public sealed partial class DesignerSteps
     [When("I add a type to the design")]
     public async Task WhenAddType()
     {
+        var before = _designer.Store.ReadExtent("MetaType").Count;
         await ctx.Page!.Locator("main.ide-design-edit .design-editor button.add-type", new() { HasTextString = "+ Type" }).ClickAsync();
         await ctx.Page!.Locator("main.ide-design-edit .design-editor .type-card").Last.WaitForAsync();
+        // Persist must land (create+listInsert) — optimistic UI alone is not enough for later store asserts.
+        await EventuallyAsync(() => _designer.Store.ReadExtent("MetaType").Count > before);
     }
 
     [When("I remove the just-added unnamed type")]
@@ -1210,13 +1213,13 @@ public sealed partial class DesignerSteps
                 var design = _designer.Store.ReadById(designId);
                 if (design is null || design.Value.TypeName != "Design") continue;
                 if (design.Value.Fields.Fields.GetValueOrDefault("label") is not DeEnv.Storage.TextValue { Text: var lbl } || lbl != designLabel) continue;
-                if (design.Value.Fields.Fields.GetValueOrDefault("types") is not DeEnv.Storage.SetValue typesSet) continue;
-                foreach (var typeId in typesSet.Members.Keys)
+                if (design.Value.Fields.Fields.GetValueOrDefault("types") is not DeEnv.Storage.ListValue typesList) continue;
+                foreach (var typeId in DesignerListHelpers.ObjectMemberIds(typesList))
                 {
                     if (!metaTypes.TryGetValue(typeId, out var mt)) continue;
                     if (mt.Fields.GetValueOrDefault("name") is not DeEnv.Storage.TextValue { Text: var tn } || tn != typeName) continue;
-                    if (mt.Fields.GetValueOrDefault("props") is not DeEnv.Storage.SetValue propsSet) continue;
-                    if (propsSet.Members.Keys.Any(pid => metaProps.TryGetValue(pid, out var mp)
+                    if (mt.Fields.GetValueOrDefault("props") is not DeEnv.Storage.ListValue propsList) continue;
+                    if (DesignerListHelpers.ObjectMemberIds(propsList).Any(pid => metaProps.TryGetValue(pid, out var mp)
                         && mp.Fields.GetValueOrDefault("name") is DeEnv.Storage.TextValue { Text: var pn } && pn == propName))
                         return true;
                 }
@@ -1273,10 +1276,10 @@ public sealed partial class DesignerSteps
         {
             var design = _designer.Store.ReadExtent("Design").Values.FirstOrDefault(o =>
                 o.Fields.TryGetValue("label", out var lv) && lv is DeEnv.Storage.TextValue lt && lt.Text == designLabel);
-            if (design is null || !design.Fields.TryGetValue("types", out var tv) || tv is not DeEnv.Storage.SetValue set)
+            if (design is null || !design.Fields.TryGetValue("types", out var tv) || tv is not DeEnv.Storage.ListValue typesList)
                 return false;
             var metaTypes = _designer.Store.ReadExtent("MetaType");
-            return set.Members.Keys.Any(id => metaTypes.TryGetValue(id, out var mt)
+            return DesignerListHelpers.ObjectMemberIds(typesList).Any(id => metaTypes.TryGetValue(id, out var mt)
                 && mt.Fields.TryGetValue("name", out var nv) && nv is DeEnv.Storage.TextValue nt && nt.Text == typeName);
         });
     }
@@ -1640,8 +1643,8 @@ public sealed partial class DesignerSteps
         {
             foreach (var use in _designer.Store.ReadExtent("MetaUse").Values)
             {
-                if (use.Fields.GetValueOrDefault("ambients") is not DeEnv.Storage.SetValue set) continue;
-                foreach (var id in set.Members.Keys)
+                if (use.Fields.GetValueOrDefault("ambients") is not DeEnv.Storage.ListValue ambientsList) continue;
+                foreach (var id in DesignerListHelpers.ObjectMemberIds(ambientsList))
                 {
                     if (!_designer.Store.ReadExtent("MetaAttr").TryGetValue(id, out var attr)) continue;
                     if (attr.Fields.GetValueOrDefault("name") is DeEnv.Storage.TextValue nt && nt.Text == name
@@ -3332,8 +3335,9 @@ public sealed partial class DesignerSteps
             var designId = DesignIdByLabel(label);
             if (designId == 0) return false;
             var render = _designer.Store.ReadNode(DeEnv.Storage.NodePath.Root.Field("designs")
-                .Key(designId.ToString()).Field("render")) as DeEnv.Storage.SetValue;
-            return render != null && render.Members.Count == 1 && render.Members.ContainsKey(_capturedNodeIds[tag]);
+                .Key(designId.ToString()).Field("render")) as DeEnv.Storage.ListValue;
+            return render != null && render.Items.Count == 1
+                && DesignerListHelpers.ObjectMemberIds(render).Contains(_capturedNodeIds[tag]);
         });
 
     [When("I click unwrap on the root node's child {int}")]
@@ -4257,19 +4261,20 @@ public sealed partial class DesignerSteps
         if (designId == 0)
             throw new Exception($"Design not found for bare-leaf seed: {label}");
         var renderPath = DeEnv.Storage.NodePath.Root.Field("designs").Key(designId.ToString()).Field("render");
-        var render = _designer.Store.ReadNode(renderPath) as DeEnv.Storage.SetValue;
-        if (render != null)
-        {
-            foreach (var mid in render.Members.Keys.ToList())
-                _designer.Store.RemoveFromSet(renderPath, mid);
-        }
         var leafId = _designer.Store.CreateObject("MetaNode", new DeEnv.Storage.ObjectValue(new Dictionary<string, DeEnv.Storage.NodeValue>
         {
             ["tag"] = new DeEnv.Storage.TextValue(""),
             ["expr"] = new DeEnv.Storage.TextValue(""),
-            ["order"] = new DeEnv.Storage.IntValue(0),
         }));
-        _designer.Store.AddToSet(renderPath, leafId);
+        // Clear existing roots then append bare leaf (render is a list).
+        var render = _designer.Store.ReadNode(renderPath) as DeEnv.Storage.ListValue;
+        if (render != null)
+        {
+            for (var i = render.Items.Count - 1; i >= 0; i--)
+                _designer.Store.CommitBatch([], [new DeEnv.Storage.ListRemoveAtMutation(render.Id, i)]);
+            render = (DeEnv.Storage.ListValue)_designer.Store.ReadNode(renderPath)!;
+            _designer.Store.CommitBatch([], [new DeEnv.Storage.ListInsertMutation(render.Id, 0, new DeEnv.Storage.StoredRef("MetaNode", leafId))]);
+        }
         await Task.CompletedTask;
     }
 
