@@ -8,6 +8,11 @@
     <RootNamespace>DeEnv</RootNamespace>
   </PropertyGroup>
 
+  <!-- Tests exercise internal store reshape/apply helpers (TransformDb, MigrateTowardSchema, …). -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="DeEnv.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.TypeScript.MSBuild" Version="5.8.3" PrivateAssets="All" />
     <PackageReference Include="GenHTTP.Core" Version="10.5.3" />

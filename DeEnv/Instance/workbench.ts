@@ -86,7 +86,7 @@ let fakeIdCounter = 1_000_000_000;
 // the shipped seed the STATIC preview elsewhere on the page still reads). `seen` preserves shared/cyclic
 // structure within ONE copy (a graph reachable two ways stays reachable two ways, at the SAME copy).
 // Scalars (int/text/bool/null) and any non-data value pass through unchanged — a seed graph is plain data.
-function deepCopySeed(value: ExecValue, seen: Map<ExecObject | ExecArray, ExecObject | ExecArray>): ExecValue {
+function deepCopySeed(value: ExecValue, seen: Map<ExecObject | ExecCollection, ExecObject | ExecCollection>): ExecValue {
     if (value.type === "object") {
         const existing = seen.get(value);
         if (existing != null) return existing as ExecObject;
@@ -95,17 +95,23 @@ function deepCopySeed(value: ExecValue, seen: Map<ExecObject | ExecArray, ExecOb
         for (const key of Object.keys(value.props)) copy.props[key] = deepCopySeed(value.props[key], seen);
         return copy;
     }
-    if (value.type === "array") {
+    if (isCollection(value)) {
         const existing = seen.get(value);
-        if (existing != null) return existing as ExecArray;
-        const copy: ExecArray = { type: "array", kind: value.kind, items: [], id: fakeIdCounter++, elementTypeName: value.elementTypeName, sourcePath: value.sourcePath, ownerRef: value.ownerRef, dictProp: value.dictProp };
+        if (existing != null) return existing as ExecCollection;
+        const copy: ExecCollection = value.type === "dict"
+            ? { type: "dict", items: [], id: fakeIdCounter++, elementTypeName: value.elementTypeName, sourcePath: value.sourcePath, ownerRef: value.ownerRef, dictProp: value.dictProp }
+            : value.type === "set"
+                ? { type: "set", items: [], id: fakeIdCounter++, elementTypeName: value.elementTypeName }
+                : { type: "list", items: [], id: fakeIdCounter++, elementTypeName: value.elementTypeName };
         seen.set(value, copy);
         copy.items = value.items.map(item => {
             const v = deepCopySeed(item.value, seen);
-            // A set/dict member's reconciliation key mirrors its (now re-minted) object id, the same
-            // invariant executeTagForEach reads at render time; a list/scalar item keeps its original key
-            // (a plain positional index — no re-mint needed, never read as an identity elsewhere).
-            return { key: v.type === "object" ? v.id : item.key, value: v };
+            // List always keeps ordinal keys (duplicate object slots stay independent). Set/dict:
+            // object id when present for identity-stable reconciliation.
+            const key = value.type === "list"
+                ? item.key
+                : (v.type === "object" ? v.id : item.key);
+            return { key, value: v };
         });
         return copy;
     }
@@ -282,12 +288,12 @@ function seedExtentCache(instance: WorkbenchInstance, typesV: ExecValue | undefi
     for (const key of Object.keys(typesV.props)) {
         if (key.includes("/")) continue; // a "Type/prop" descriptor key, not a type name
         const bucket = byType.get(key);
-        const items: ExecArrayItem[] = bucket != null ? Array.from(bucket.members.values()).map(o => ({ key: o.id, value: o })) : [];
+        const items: ExecCollectionItem[] = bucket != null ? Array.from(bucket.members.values()).map(o => ({ key: o.id, value: o })) : [];
         const deps: CacheDeps = { props: [], members: bucket?.arrayIds ?? [], vars: [] };
         // A fresh transient id every pass (mirrors DbBridge.LoadExtent's own `--context.LastId.Value` mint)
         // — instance.lastId is the SAME id-minting counter renderWorkbenchInstance's sandboxContext uses,
         // so an extent array's id can never collide with anything else this instance ever mints.
-        instance.cache.set("extent:" + key, { result: { type: "array", kind: "list", items, id: --instance.lastId.value }, deps, stale: false });
+        instance.cache.set("extent:" + key, { result: { type: "list", items, id: --instance.lastId.value }, deps, stale: false });
     }
 }
 
@@ -296,17 +302,17 @@ function seedExtentCache(instance: WorkbenchInstance, typesV: ExecValue | undefi
 // shared graph, mirroring deepCopySeed's own seen-map. Object members only (a scalar dict's entries are
 // wrapper objects keyed by a SCALAR elementTypeName like "text"/"int", which never matches a declared
 // object type name, so they naturally never populate any bucket a caller asks about).
-function collectExtentMembers(value: ExecValue, byType: Map<string, ExtentBucket>, seen: Set<ExecObject | ExecArray>): void {
+function collectExtentMembers(value: ExecValue, byType: Map<string, ExtentBucket>, seen: Set<ExecObject | ExecCollection>): void {
     if (value.type === "object") {
         if (seen.has(value)) return;
         seen.add(value);
         for (const key of Object.keys(value.props)) collectExtentMembers(value.props[key], byType, seen);
         return;
     }
-    if (value.type === "array") {
+    if (isCollection(value)) {
         if (seen.has(value)) return;
         seen.add(value);
-        if ((value.kind === "set" || value.kind === "dict") && value.elementTypeName) {
+        if ((value.type === "set" || value.type === "dict") && value.elementTypeName) {
             let bucket = byType.get(value.elementTypeName);
             if (bucket == null) byType.set(value.elementTypeName, bucket = { members: new Map(), arrayIds: [] });
             bucket.arrayIds.push(value.id);
@@ -330,7 +336,7 @@ function ctxHasAst(ctx: ExecObject, text: string): boolean {
 // signature fragment. Length-prefixed fields so no separator choice can produce a false negative.
 function metaAttrRowsSignature(use: ExecObject, setProp: string, ctx: ExecObject): string {
     const setV = use.props[setProp];
-    if (setV == null || setV.type !== "array") return "";
+    if (setV == null || !isCollection(setV)) return "";
     const rows = setV.items.map(i => i.value).filter((v): v is ExecObject => v.type === "object");
     rows.sort((a, b) => propInt(a, "order") - propInt(b, "order"));
     return rows.map(a => {
@@ -361,7 +367,7 @@ function useConfigSignature(use: ExecObject, ctx: ExecObject): string {
 // still surfaces the real Variable-not-found error (canvas-never-lies).
 function bindUseAmbients(use: ExecObject, ctx: ExecObject, evalScope: ExecScope): void {
     const ambientsV = use.props["ambients"];
-    if (ambientsV == null || ambientsV.type !== "array") return;
+    if (ambientsV == null || !isCollection(ambientsV)) return;
     const rows = ambientsV.items.map(i => i.value).filter((v): v is ExecObject => v.type === "object");
     rows.sort((a, b) => propInt(a, "order") - propInt(b, "order"));
     for (const a of rows) {
@@ -388,15 +394,15 @@ function findUseRow(useId: number): { design: ExecObject; fn: ExecObject; use: E
     const dbItem = uiStatic.state.scope.items["db"];
     if (dbItem == null || dbItem.value.type !== "object") return null;
     const designsV = dbItem.value.props["designs"];
-    if (designsV == null || designsV.type !== "array") return null;
+    if (designsV == null || !isCollection(designsV)) return null;
     for (const d of designsV.items) {
         if (d.value.type !== "object") continue;
         const fnsV = d.value.props["fns"];
-        if (fnsV == null || fnsV.type !== "array") continue;
+        if (fnsV == null || !isCollection(fnsV)) continue;
         for (const f of fnsV.items) {
             if (f.value.type !== "object") continue;
             const usesV = f.value.props["uses"];
-            if (usesV == null || usesV.type !== "array") continue;
+            if (usesV == null || !isCollection(usesV)) continue;
             for (const u of usesV.items)
                 if (u.value.type === "object" && u.value.id === useId) return { design: d.value, fn: f.value, use: u.value };
         }
@@ -492,7 +498,7 @@ function renderWorkbenchInstance(fn: ExecObject, use: ExecObject, ctx: ExecObjec
     // source with no shipped AST yet (auto-live parse-op territory) is left OUT of the attributes array —
     // matching runtime truth: an absent attr binds the param to null, never a guessed value.
     const argsV = use.props["args"];
-    const argRows = argsV != null && argsV.type === "array"
+    const argRows = argsV != null && isCollection(argsV)
         ? argsV.items.map(i => i.value).filter((v): v is ExecObject => v.type === "object").sort((a, b) => propInt(a, "order") - propInt(b, "order"))
         : [];
     const attributes: CodeTagAttribute[] = [];
@@ -512,7 +518,7 @@ function renderWorkbenchInstance(fn: ExecObject, use: ExecObject, ctx: ExecObjec
             // before this call) — an honest empty view never touches it. See the doc comment above.
             return needsServerData ? { tags: [], errorMessage: "Value not available" } : { tags: [], errorMessage: null };
         }
-        return { tags: view.type === "array" ? view.items.map(i => i.value) : [view], errorMessage: null };
+        return { tags: isCollection(view) ? view.items.map(i => i.value) : [view], errorMessage: null };
     } catch (e) {
         return { tags: [], errorMessage: e instanceof Error ? e.message : String(e) };
     }

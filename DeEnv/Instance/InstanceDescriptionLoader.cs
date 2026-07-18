@@ -165,13 +165,18 @@ public static class InstanceDescriptionLoader
                     // the WS write hash is the only hashing path), which is never wanted. The first admin's
                     // credential is seeded out-of-band (AdminSeed, env-var); a password is set/changed through
                     // the gated form edit. So seeding one in the document is a load error, caught here.
-                    if (prop.Cardinality == Cardinality.Single && prop.Type == "password")
+                    // Same forbid for a list-of-password (every slot would be plaintext-in-source).
+                    if (prop.Type == "password"
+                        && prop.Cardinality is Cardinality.Single or Cardinality.List)
                         throw new SchemaValidationException(
                             $"initialData entry '{typeName}/{idText}' sets the `password`-typed field " +
                             $"'{field.Name}': a password may not be seeded in the app document (it would be " +
                             $"plaintext in source). Set it via the gated form edit, or seed an admin out-of-band.");
 
                     if (prop.Cardinality == Cardinality.Set)
+                        foreach (var m in field.Value.EnumerateArray())
+                            RequireRef(seed, prop.Type, m.GetInt32(), $"{typeName}/{idText}.{field.Name}");
+                    else if (prop.Cardinality == Cardinality.List && desc.IsObjectType(prop.Type))
                         foreach (var m in field.Value.EnumerateArray())
                             RequireRef(seed, prop.Type, m.GetInt32(), $"{typeName}/{idText}.{field.Name}");
                     else if (prop.Cardinality == Cardinality.Single && desc.IsObjectType(prop.Type))
@@ -197,7 +202,7 @@ public static class InstanceDescriptionLoader
                 $"Prop '{prop.Name}' on type '{typeName}' references unknown type '{prop.Type}'.");
 
         // `multiline` is a presentation attribute for a single text prop only. The grammar already
-        // confines it to a single prop (a set/dict never parses it), so this guards the remaining
+        // confines it to a single prop (a set/dict/list never parses it), so this guards the remaining
         // case: a single non-text prop (`boss User multiline`). Rejected with a clear message,
         // matching how the other structural prop constraints are enforced here.
         if (prop.Multiline && (prop.Cardinality != Cardinality.Single || prop.Type != "text"))
@@ -245,6 +250,16 @@ public static class InstanceDescriptionLoader
                 throw new SchemaValidationException(
                     $"Prop '{prop.Name}' on type '{typeName}' is a set and cannot declare keyType " +
                     $"(set members are keyed by their own identity).");
+        }
+
+        // A list is an ordered sequence of slots: object refs (duplicates allowed) OR scalars
+        // (including password/image). No keyType. Intentional asymmetry with set (object-only).
+        if (prop.Cardinality == Cardinality.List)
+        {
+            if (prop.KeyType != null)
+                throw new SchemaValidationException(
+                    $"Prop '{prop.Name}' on type '{typeName}' is a list and cannot declare keyType " +
+                    $"(list slots are ordered, not keyed).");
         }
     }
 }

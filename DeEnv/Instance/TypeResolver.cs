@@ -35,10 +35,11 @@ public sealed class TypeResolver
 
         foreach (var segment in path.Segments)
         {
-            if (currentCardinality == Cardinality.Dictionary || currentCardinality == Cardinality.Set)
+            if (currentCardinality is Cardinality.Dictionary or Cardinality.Set or Cardinality.List)
             {
-                // Segment addresses a member: a dictionary key, or a set member's
-                // identity. Either way, descend into the (single) element.
+                // Segment addresses a member: a dictionary key, a set member's identity,
+                // or a list object-member id (membership ≥1 — never an index). Either way,
+                // descend into the (single) element.
                 currentCardinality = Cardinality.Single;
                 currentKeyTypeName = null;
                 lastWasReference = false; // a member, not a reference field
@@ -54,7 +55,7 @@ public sealed class TypeResolver
 
                 currentType = resolved;
                 currentCardinality = prop.Cardinality;
-                // Only a dictionary carries a key type; single and set do not.
+                // Only a dictionary carries a key type; single/set/list do not.
                 currentKeyTypeName = prop.Cardinality == Cardinality.Dictionary ? (prop.KeyType ?? "text") : null;
                 lastWasReference = prop.Cardinality == Cardinality.Single && resolved.BaseType == BaseType.Object;
             }
@@ -81,7 +82,7 @@ public sealed class TypeResolver
         {
             if (currentCardinality == Cardinality.Dictionary)
                 return true;
-            if (currentCardinality == Cardinality.Set)
+            if (currentCardinality is Cardinality.Set or Cardinality.List)
             {
                 currentCardinality = Cardinality.Single;
                 continue;

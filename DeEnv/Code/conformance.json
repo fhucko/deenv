@@ -2250,7 +2250,7 @@
     },
     {
       "name": "sys.renderTree with ctx.fns — a component called in expression position (plain call syntax, legal at runtime) SPLICES its tag as content (M12 F3)",
-      "comment": "NoteCard(title) returns <li>{title}</li> — an ordinary CodeTag executed by the REAL interpreter (TryResolveComponent has nothing named \"li\" in scope, so it's a plain element). NoteCard(\"Hi\") evaluates to an ExecTag, not a scalar — BuildRenderTree/renderTreeNode splice it as CONTENT (an ExecArray riding the leaf row's own id, the F2 idiom) instead of ChildText's usual (empty) non-scalar fallback, so the canvas shows the real <li>Hi</li>, not a chip and not nothing.",
+      "comment": "NoteCard(title) returns <li>{title}</li> — an ordinary CodeTag executed by the REAL interpreter (TryResolveComponent has nothing named \"li\" in scope, so it's a plain element). NoteCard(\"Hi\") evaluates to an ExecTag, not a scalar — BuildRenderTree/renderTreeNode splice it as CONTENT (an ExecList riding the leaf row's own id, the F2 idiom) instead of ChildText's usual (empty) non-scalar fallback, so the canvas shows the real <li>Hi</li>, not a chip and not nothing.",
       "expr": {"type": "call", "fn": {"type": "infixOp", "op": "objectProp", "left": {"type": "symbol", "name": "sys"}, "right": {"type": "symbol", "name": "renderTree"}}, "params": [{"type": "object", "props": [{"name": "tag", "value": {"type": "text", "value": "div"}}, {"name": "expr", "value": {"type": "text", "value": ""}}, {"name": "order", "value": {"type": "int", "value": 0}}, {"name": "attrs", "value": {"type": "array", "items": []}}, {"name": "children", "value": {"type": "array", "items": [{"type": "object", "props": [{"name": "tag", "value": {"type": "text", "value": ""}}, {"name": "expr", "value": {"type": "text", "value": "NoteCard(\"Hi\")"}}, {"name": "order", "value": {"type": "int", "value": 0}}]}]}}]}, {"type": "object", "props": [{"name": "db", "value": {"type": "object", "props": []}}, {"name": "exprs", "value": {"type": "object", "props": [{"name": "NoteCard(\"Hi\")", "value": {"type": "object", "props": [{"name": "text", "value": {"type": "text", "value": "NoteCard(\"Hi\")"}}, {"name": "ast", "value": {"type": "text", "value": "{\"type\": \"call\", \"fn\": {\"type\": \"symbol\", \"name\": \"NoteCard\"}, \"params\": [{\"type\": \"text\", \"value\": \"Hi\"}]}"}}]}}]}}, {"name": "fns", "value": {"type": "object", "props": [{"name": "NoteCard", "value": {"type": "object", "props": [{"name": "ast", "value": {"type": "text", "value": "{\"type\": \"fn\", \"name\": \"NoteCard\", \"params\": [{\"name\": \"title\"}], \"body\": {\"type\": \"block\", \"statements\": [{\"type\": \"return\", \"value\": {\"type\": \"tag\", \"name\": \"li\", \"attributes\": [], \"children\": [{\"type\": \"symbol\", \"name\": \"title\"}]}}]}}"}}, {"name": "fp", "value": {"type": "text", "value": "n/a"}}]}}]}}]}]},
       "expect": {"kind": "tag", "value": "<div data-node=\"-5\"><li>Hi</li></div>"}
     },
@@ -2846,6 +2846,74 @@
         "params": [ { "type": "text", "value": "abc123.png" } ]
       },
       "expect": { "kind": "text", "value": "/abc123.png" }
+    },
+    {
+      "name": "list add appends (ephemeral)",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "varDec", "name": "xs", "value": { "type": "array", "items": [ { "type": "int", "value": 1 }, { "type": "int", "value": 2 } ] } },
+        { "type": "call", "params": [ { "type": "int", "value": 3 } ], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "xs" }, "right": { "type": "symbol", "name": "add" } } },
+        { "type": "return", "value": { "type": "symbol", "name": "xs" } }
+      ] } } },
+      "expect": { "kind": "intList", "value": [ 1, 2, 3 ] }
+    },
+    {
+      "name": "list insert at index (ephemeral)",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "varDec", "name": "xs", "value": { "type": "array", "items": [ { "type": "int", "value": 1 }, { "type": "int", "value": 3 } ] } },
+        { "type": "call", "params": [ { "type": "int", "value": 1 }, { "type": "int", "value": 2 } ], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "xs" }, "right": { "type": "symbol", "name": "insert" } } },
+        { "type": "return", "value": { "type": "symbol", "name": "xs" } }
+      ] } } },
+      "expect": { "kind": "intList", "value": [ 1, 2, 3 ] }
+    },
+    {
+      "name": "list move reorders (ephemeral)",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "varDec", "name": "xs", "value": { "type": "array", "items": [ { "type": "int", "value": 1 }, { "type": "int", "value": 2 }, { "type": "int", "value": 3 } ] } },
+        { "type": "call", "params": [ { "type": "int", "value": 0 }, { "type": "int", "value": 2 } ], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "xs" }, "right": { "type": "symbol", "name": "move" } } },
+        { "type": "return", "value": { "type": "symbol", "name": "xs" } }
+      ] } } },
+      "expect": { "kind": "intList", "value": [ 2, 3, 1 ] }
+    },
+    {
+      "name": "list removeAt drops by index (ephemeral)",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "varDec", "name": "xs", "value": { "type": "array", "items": [ { "type": "int", "value": 1 }, { "type": "int", "value": 2 }, { "type": "int", "value": 3 } ] } },
+        { "type": "call", "params": [ { "type": "int", "value": 1 } ], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "xs" }, "right": { "type": "symbol", "name": "removeAt" } } },
+        { "type": "return", "value": { "type": "symbol", "name": "xs" } }
+      ] } } },
+      "expect": { "kind": "intList", "value": [ 1, 3 ] }
+    },
+    {
+      "name": "list removeFirst / removeLast (ephemeral)",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "varDec", "name": "xs", "value": { "type": "array", "items": [ { "type": "int", "value": 1 }, { "type": "int", "value": 2 }, { "type": "int", "value": 3 } ] } },
+        { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "xs" }, "right": { "type": "symbol", "name": "removeFirst" } } },
+        { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "xs" }, "right": { "type": "symbol", "name": "removeLast" } } },
+        { "type": "return", "value": { "type": "symbol", "name": "xs" } }
+      ] } } },
+      "expect": { "kind": "intList", "value": [ 2 ] }
+    },
+    {
+      "name": "list removeAll clears (ephemeral)",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "varDec", "name": "xs", "value": { "type": "array", "items": [ { "type": "int", "value": 1 }, { "type": "int", "value": 2 } ] } },
+        { "type": "call", "params": [], "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "xs" }, "right": { "type": "symbol", "name": "removeAll" } } },
+        { "type": "return", "value": { "type": "symbol", "name": "xs" } }
+      ] } } },
+      "expect": { "kind": "intList", "value": [] }
+    },
+    {
+      "name": "list removeWhere keeps non-matching order (ephemeral)",
+      "expr": { "type": "call", "params": [], "fn": { "type": "fn", "params": [], "body": { "type": "block", "statements": [
+        { "type": "varDec", "name": "xs", "value": { "type": "array", "items": [ { "type": "int", "value": 1 }, { "type": "int", "value": 2 }, { "type": "int", "value": 3 }, { "type": "int", "value": 4 } ] } },
+        { "type": "call", "params": [ { "type": "fn", "params": [ { "name": "x" } ], "body": { "type": "block", "statements": [
+          { "type": "return", "value": { "type": "infixOp", "op": "equals",
+            "left": { "type": "infixOp", "op": "modulo", "left": { "type": "symbol", "name": "x" }, "right": { "type": "int", "value": 2 } },
+            "right": { "type": "int", "value": 0 } } } ] } } ],
+          "fn": { "type": "infixOp", "op": "objectProp", "left": { "type": "symbol", "name": "xs" }, "right": { "type": "symbol", "name": "removeWhere" } } },
+        { "type": "return", "value": { "type": "symbol", "name": "xs" } }
+      ] } } },
+      "expect": { "kind": "intList", "value": [ 1, 3 ] }
     }
   ]
 }

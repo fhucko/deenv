@@ -28,7 +28,7 @@ const uiStatic: {
     // The client mirrors the server's framework values (db, path) + app vars in one flat
     // top scope; resolution is by name, so the server's system/app split is observationally
     // the same here. isTop marks it reactive (matching the server's IsTop check).
-    state: { objects: {}, arrays: {}, scope: { items: {}, parent: null, isTop: true }, localToServerIds: {}, serverToLocalIds: {} },
+    state: { objects: {}, collections: {}, scope: { items: {}, parent: null, isTop: true }, localToServerIds: {}, serverToLocalIds: {} },
     cache: new Map(),
     clientId: "",
     lastError: null,

@@ -1013,7 +1013,7 @@ public sealed class SelfHostedUiSteps(InstanceContext ctx)
             """
             () => {
                 mergeState({
-                    leaves: { objects: {}, arrays: {} },
+                    leaves: { objects: {}, collections: {} },
                     scope: { query: { isReadOnly: false, value: { type: "simple", value: { type: "text", value: "" } } } },
                     cache: []
                 });

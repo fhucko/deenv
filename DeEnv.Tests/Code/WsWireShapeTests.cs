@@ -164,13 +164,13 @@ public sealed class WsWireShapeTests
                 {
                     TempId = -1,
                     RealId = 42,
-                    Collections = new() { ["lines"] = new CollectionInfo { Id = 43, ElementTypeName = "Line" } },
+                    Collections = new() { ["lines"] = new CollectionInfo { Id = 43, ElementTypeName = "Line", Kind = "set" } },
                 },
             },
             NewVersion = 5,
         };
         await Assert.That(Serialize(withMap)).IsEqualTo(
-            """{"op":"commit","ok":true,"idMap":[{"tempId":-1,"realId":42,"collections":{"lines":{"id":43,"elementTypeName":"Line"}}}],"newVersion":5}""");
+            """{"op":"commit","ok":true,"idMap":[{"tempId":-1,"realId":42,"collections":{"lines":{"id":43,"elementTypeName":"Line","kind":"set"}}}],"newVersion":5}""");
     }
 
     // ── outgoing: the simple ok responses ────────────────────────────────────────────────

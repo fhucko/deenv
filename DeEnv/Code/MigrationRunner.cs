@@ -81,7 +81,7 @@ public static class MigrationRunner
                 case ExecObject o:
                     foreach (var child in o.Props.Values) Walk(child);
                     break;
-                case ExecArray a:
+                case IExecCollection a:
                     foreach (var item in a.Items) Walk(item.Value);
                     break;
             }
@@ -150,7 +150,7 @@ public static class MigrationRunner
         ExecText => "Text",
         ExecBool => "Bool",
         ExecNull => "Null",
-        ExecArray => "collection",
+        IExecCollection => "collection",
         ExecObject => "object",
         _ => value.GetType().Name,
     };

@@ -1,11 +1,11 @@
 namespace DeEnv.Code;
 
 // Runtime values produced by the interpreter. Adapted onto the M5 object model:
-// objects carry their TypeName and an intrinsic Id; collections are a single
-// kind-tagged ExecArray — the *Code array* — used byte-for-byte the same on the
-// server, the wire, and the client (no per-side collection type, no transform).
+// objects carry their TypeName and an intrinsic Id; collections are three sealed
+// types — ExecSet / ExecDict / ExecList — used byte-for-byte the same on the
+// server, the wire, and the client (no residual ArrayKind tag).
 //
-// Identity is the id sign: a positive Id means persisted (a db extent/set id),
+// Identity is the id sign: a positive Id means persisted (a db extent/set/list id),
 // a negative Id means transient (a render-local literal/result, not yet saved).
 // So "is this in the db?" is simply `Id > 0` — there is no separate flag.
 
@@ -70,55 +70,75 @@ public sealed class ExecObject : IExecValue
 
     // A provably-constant, user-data-FREE value (a sys.schema descriptor: built from schema
     // metadata only, in a fresh empty scope, so it cannot reference db). ClientState ships a
-    // Constant object/array WHOLE — every prop, every item, recursively — because a consumer
+    // Constant object/collection WHOLE — every prop, every item, recursively — because a consumer
     // (sys.new / a generic-UI walk) reads its full interior and there is nothing private inside.
-    // Default false: an ordinary minted object/array stays ACCESS-SCOPED (ships only what was
+    // Default false: an ordinary minted object/collection stays ACCESS-SCOPED (ships only what was
     // displayed), so a where/orderBy/literal collection never spills its undisplayed membership.
     public bool Constant { get; set; }
 
     object IExecValue.Value => this;
 }
 
-// How a Code array behaves: a db-backed identity-keyed set, a keyed dictionary, or a
-// transient ordered list (a where/orderBy result or an array literal). All three are
-// the same ExecArray shape; only iteration/mutation semantics differ by kind.
-public enum ArrayKind { Set, Dict, List }
+// Thin shared surface for the three sealed collection types. Wire/DT type tags are
+// "set" | "dict" | "list" (not type:"array" + kind).
+public interface IExecCollection : IExecValue
+{
+    int Id { get; set; }
+    List<ExecItem> Items { get; set; }
+    string? ElementTypeName { get; set; }
+    bool Constant { get; set; }
+}
 
-// A Code array: one collection type for every kind. A db set/dict has a positive,
-// persistent Id (its stable intrinsic identity — a single set may be reached by many
-// reference paths but has one Id); a list has a render-local negative Id. add/remove
-// on a set write through IInstanceStore by Id; ElementTypeName is the member type
-// (set/dict only) used when persisting a freshly-created member.
-public sealed class ExecArray : IExecValue
+// A db-backed identity-keyed set. Positive Id when durable (its stable intrinsic identity —
+// a single set may be reached by many reference paths but has one Id). add/remove write
+// through IInstanceStore by Id; ElementTypeName is the member type used when persisting a
+// freshly-created member.
+public sealed class ExecSet : IExecCollection
 {
     public required int Id { get; set; }
-    public required ArrayKind Kind { get; set; }
     public required List<ExecItem> Items { get; set; }
     public string? ElementTypeName { get; set; }
-
-    // A dictionary's source URL path (e.g. "/settings"). Dictionaries persist through the
-    // PATH-addressed store/WS ops (addEntry/removeEntry) — a dict entry's address IS its
-    // key under a path (M5), unlike a set member reached by its own identity. Set/list are
-    // null. Ships to the client so its add/remove sends carry the path.
-    public string? SourcePath { get; set; }
-
-    // T6b-4b (R7 addressing): a dictionary array carries the address of its owner so client edits
-    // (entryAdd/entryRemove) can build id-addressed `dictAdd`/`dictRemove` relations. OwnerRef =
-    // the owner object's id; DictProp = the owner's dictionary-typed prop name.
-    public int? OwnerRef { get; set; }
-    public string? DictProp { get; set; }
-
-    // Part of a provably-constant, user-data-free value (a sys.schema descriptor's nested array,
-    // e.g. `props`/`values`/`valueProps`). ClientState ships a Constant array WHOLE — every item —
-    // since the descriptor's consumer walks all of it and there is nothing private inside. Default
-    // false: a where/orderBy result or an array literal stays ACCESS-SCOPED (ships only displayed
-    // items), so an undisplayed row's membership never leaks. See ExecObject.Constant.
     public bool Constant { get; set; }
 
     object IExecValue.Value => this;
 }
 
-// One (key, value) pair in a Code array. Key is the item's identity within the array:
+// A keyed dictionary. Dictionaries persist through PATH-addressed store/WS ops
+// (addEntry/removeEntry) — a dict entry's address IS its key under a path (M5).
+// SourcePath / OwnerRef / DictProp carry R7 addressing for id-based dictAdd/dictRemove.
+public sealed class ExecDict : IExecCollection
+{
+    public required int Id { get; set; }
+    public required List<ExecItem> Items { get; set; }
+    public string? ElementTypeName { get; set; }
+
+    // A dictionary's source URL path (e.g. "/settings"). Null for set/list.
+    public string? SourcePath { get; set; }
+
+    // T6b-4b (R7 addressing): OwnerRef = the owner object's id; DictProp = the owner's
+    // dictionary-typed prop name.
+    public int? OwnerRef { get; set; }
+    public string? DictProp { get; set; }
+
+    public bool Constant { get; set; }
+
+    object IExecValue.Value => this;
+}
+
+// An ordered sequence. Positive Id when durable (a stored list prop); negative when
+// ephemeral (where/orderBy result or a Code array literal). ExecItem.Key is the ordinal
+// 0..n-1 — never a member object id (duplicate object slots must not collapse).
+public sealed class ExecList : IExecCollection
+{
+    public required int Id { get; set; }
+    public required List<ExecItem> Items { get; set; }
+    public string? ElementTypeName { get; set; }
+    public bool Constant { get; set; }
+
+    object IExecValue.Value => this;
+}
+
+// One (key, value) pair in a collection. Key is the item's identity within the collection:
 // a set member's intrinsic object id, a dict key, or a list ordinal.
 public sealed class ExecItem
 {
@@ -140,7 +160,7 @@ public sealed class ExecFunction : IExecValue
 // A built-in collection method (add / remove / where / orderBy) bound to its target.
 public sealed class ExecSysFunction : IExecValue
 {
-    public required ExecArray Target { get; set; }
+    public required IExecCollection Target { get; set; }
     public required string Method { get; set; }
     object IExecValue.Value => this;
 }
@@ -170,11 +190,13 @@ public sealed class ExecCtx : IExecValue
 // here — so the kernel floor decides over server-resolved data. Twin of codeExec.ts's StagedCreate.
 public sealed record StagedCreate(ExecObject Draft, CreateJoin Join);
 
-// Where a staged create attaches: into a set (set.add) or onto a single-reference field (setRef). A closed
-// union; the conformance harness only exercises the set join (the C# server no-ops setRef). Twin of CreateJoin.
+// Where a staged create attaches: into a set (set.add), onto a single-reference field (setRef), or into a
+// list slot (list.insert/add). A closed union; the conformance harness exercises set + list joins (the C#
+// server no-ops setRef). Twin of CreateJoin.
 public abstract record CreateJoin;
-public sealed record SetJoin(ExecArray Set) : CreateJoin;
+public sealed record SetJoin(ExecSet Set) : CreateJoin;
 public sealed record RefJoin(ExecObject Parent, string Prop) : CreateJoin;
+public sealed record ListInsertJoin(ExecList List, int Index) : CreateJoin;
 
 // `ctx.new` / `ctx.commit` / `ctx.discard` bound to their context — invoked via a call.
 public sealed class ExecCtxMethod : IExecValue
@@ -235,7 +257,7 @@ public sealed class LastId
 public sealed class LeafFrame
 {
     public HashSet<(ExecObject, string?)> Props { get; } = [];
-    public HashSet<(ExecArray, ExecItem?)> Items { get; } = [];
+    public HashSet<(IExecCollection, ExecItem?)> Items { get; } = [];
 }
 
 public sealed class ExecContext
@@ -246,7 +268,7 @@ public sealed class ExecContext
     // shipped to the client. Inside a computation, reads become dependencies instead
     // (plus pending leaves — see LeafFrame).
     public HashSet<(ExecObject, string?)> AccessedObjectProps { get; set; } = [];
-    public HashSet<(ExecArray, ExecItem?)> AccessedItems { get; set; } = [];
+    public HashSet<(IExecCollection, ExecItem?)> AccessedItems { get; set; } = [];
 
     // ── memoization (Stage 4) ────────────────────────────────────────────────────
     // Computation results captured while rendering, keyed by (function, args), for

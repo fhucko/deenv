@@ -252,6 +252,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             SetLink(_, var memberId) => memberId,
             SetUnlink(_, var memberId) => memberId,
             DictSet or DictRemove or RootWrite => (int?)null,
+            // List ops bump the list OWNER live (like dict); no per-list member attribution here.
+            ListReplace or ListInsert or ListRemoveAt or ListMove => (int?)null,
             _ => null,
         })
         .Where(id => id is not null)
@@ -324,6 +326,21 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     if (i + 1 == segs.Count - 1) return BuildObject(mo, elemType);
                     curObj = mo; curType = elemType; i++; continue;
                 }
+                case Cardinality.List:
+                {
+                    var list = curObj.Fields.GetValueOrDefault(prop.Name) as StoredList;
+                    if (last) return BuildListValue(list, elemType);
+
+                    // Next segment is member object id (membership ≥1), never an index.
+                    // Scalar lists have no child URL — only object-element lists descend.
+                    if (elemType.BaseType != BaseType.Object) return null;
+                    var memberId = ParseSeg(segs[i + 1]);
+                    var member = list?.Items.OfType<StoredRef>().FirstOrDefault(r => r.Id == memberId);
+                    var mo = member == null ? null : ResolveRef(member);
+                    if (mo == null) return null;
+                    if (i + 1 == segs.Count - 1) return BuildObject(mo, elemType);
+                    curObj = mo; curType = elemType; i++; continue;
+                }
                 case Cardinality.Dictionary:
                 {
                     var dict = curObj.Fields.GetValueOrDefault(prop.Name) as StoredDict;
@@ -375,6 +392,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 case Cardinality.Set:
                     map[prop.Name] = BuildSetValue(obj.Fields.GetValueOrDefault(prop.Name) as StoredSet, elemType);
                     break;
+                case Cardinality.List:
+                    map[prop.Name] = BuildListValue(obj.Fields.GetValueOrDefault(prop.Name) as StoredList, elemType);
+                    break;
                 case Cardinality.Dictionary:
                     map[prop.Name] = BuildDictionary(obj.Fields.GetValueOrDefault(prop.Name) as StoredDict, elemType, prop.KeyType ?? "text");
                     break;
@@ -405,6 +425,27 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 if (v is StoredRef objRef && BuildObjectFromRef(objRef, elemType) is { } obj)
                     members[k] = obj;
         return new SetValue(set?.Id ?? 0, members);
+    }
+
+    // Object slots stay as ReferenceValue so the member id is preserved for DbBridge / URL
+    // membership (ObjectValue alone carries no id). Scalar slots are the leaf NodeValue.
+    private ListValue BuildListValue(StoredList? list, TypeDefinition elemType)
+    {
+        var items = new List<NodeValue>();
+        if (list != null)
+            foreach (var v in list.Items)
+            {
+                if (elemType.BaseType == BaseType.Object)
+                {
+                    if (v is StoredRef objRef)
+                        items.Add(new ReferenceValue(objRef.Id, objRef.TypeName));
+                }
+                else if (v is StoredLeaf leaf)
+                {
+                    items.Add(leaf.Scalar);
+                }
+            }
+        return new ListValue(list?.Id ?? 0, items);
     }
 
     private DictionaryValue BuildDictionary(StoredDict? dict, TypeDefinition elemType, string keyType)
@@ -610,6 +651,21 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                             is not { Cardinality: Cardinality.Dictionary })
                             throw new InvalidOperationException($"'{dictOwnerType}' has no dictionary prop '{prop}'.");
                         break;
+                    case ListReplaceMutation(var listId, var items):
+                        if (FindListNode(listId) is null) throw new InvalidOperationException($"No list with id {listId}.");
+                        foreach (var it in items)
+                            if (it is StoredRef r) RequireResolvable(r.Id);
+                        break;
+                    case ListInsertMutation(var listId, _, var item):
+                        if (FindListNode(listId) is null) throw new InvalidOperationException($"No list with id {listId}.");
+                        if (item is StoredRef ir) RequireResolvable(ir.Id);
+                        break;
+                    case ListRemoveAtMutation(var listId, _):
+                        if (FindListNode(listId) is null) throw new InvalidOperationException($"No list with id {listId}.");
+                        break;
+                    case ListMoveMutation(var listId, _, _):
+                        if (FindListNode(listId) is null) throw new InvalidOperationException($"No list with id {listId}.");
+                        break;
                 }
 
             // The FIELD-LEVEL overlap check (M13 slice 6 — DECISIONS.md / app-versioning-design.md §2 + §0's
@@ -707,9 +763,17 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 var type = _desc.FindType(c.TypeName)!;
                 var collections = new Dictionary<string, CommitCollection>();
                 foreach (var prop in type.Props ?? [])
+                {
                     if (prop.Cardinality == Cardinality.Set
                         && minted.Fields.GetValueOrDefault(prop.Name) is StoredSet sv)
-                        collections[prop.Name] = new CommitCollection(sv.Id, prop.Type);
+                        collections[prop.Name] = new CommitCollection(sv.Id, prop.Type, "set");
+                    else if (prop.Cardinality == Cardinality.Dictionary
+                        && minted.Fields.GetValueOrDefault(prop.Name) is StoredDict dv)
+                        collections[prop.Name] = new CommitCollection(dv.Id, prop.Type, "dict");
+                    else if (prop.Cardinality == Cardinality.List
+                        && minted.Fields.GetValueOrDefault(prop.Name) is StoredList lv)
+                        collections[prop.Name] = new CommitCollection(lv.Id, prop.Type, "list");
+                }
                 results.Add(new CommitCreateResult(c.TempId, realId, collections));
                 BumpVersion(realId); // a create's own first version (so a later stale-base check sees it if edited)
             }
@@ -905,6 +969,64 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         }
                         break;
                     }
+                    case ListReplaceMutation(var listId, var items):
+                    {
+                        var list = FindListNode(listId)
+                            ?? throw new InvalidOperationException($"No list with id {listId}.");
+                        StoredValue ResolveItem(StoredValue v) => v is StoredRef r
+                            ? new StoredRef(r.TypeName, ResolveRefId(r.Id)) : v;
+                        var resolved = items.Select(ResolveItem).ToList();
+                        var oldSnapshot = list.Items.ToList();
+                        _pending.Add(new ListReplace(list.Id, oldSnapshot, resolved));
+                        list.Items.Clear();
+                        list.Items.AddRange(resolved);
+                        BumpListOwner(listId);
+                        break;
+                    }
+                    case ListInsertMutation(var listId, var index, var item):
+                    {
+                        var list = FindListNode(listId)
+                            ?? throw new InvalidOperationException($"No list with id {listId}.");
+                        if (index < 0 || index > list.Items.Count)
+                            throw new InvalidOperationException(
+                                $"List insert index {index} out of range for list {listId} (len {list.Items.Count}).");
+                        var resolved = item is StoredRef ir
+                            ? new StoredRef(ir.TypeName, ResolveRefId(ir.Id)) : item;
+                        _pending.Add(new ListInsert(list.Id, index, resolved));
+                        list.Items.Insert(index, resolved);
+                        BumpListOwner(listId);
+                        break;
+                    }
+                    case ListRemoveAtMutation(var listId, var index):
+                    {
+                        var list = FindListNode(listId)
+                            ?? throw new InvalidOperationException($"No list with id {listId}.");
+                        if (index < 0 || index >= list.Items.Count)
+                            throw new InvalidOperationException(
+                                $"List removeAt index {index} out of range for list {listId} (len {list.Items.Count}).");
+                        var old = list.Items[index];
+                        _pending.Add(new ListRemoveAt(list.Id, index, old));
+                        list.Items.RemoveAt(index);
+                        BumpListOwner(listId);
+                        break;
+                    }
+                    case ListMoveMutation(var listId, var from, var to):
+                    {
+                        var list = FindListNode(listId)
+                            ?? throw new InvalidOperationException($"No list with id {listId}.");
+                        if (from < 0 || from >= list.Items.Count || to < 0 || to >= list.Items.Count)
+                            throw new InvalidOperationException(
+                                $"List move from={from} to={to} out of range for list {listId} (len {list.Items.Count}).");
+                        if (from != to)
+                        {
+                            _pending.Add(new ListMove(list.Id, from, to));
+                            var moved = list.Items[from];
+                            list.Items.RemoveAt(from);
+                            list.Items.Insert(to, moved);
+                            BumpListOwner(listId);
+                        }
+                        break;
+                    }
                 }
 
             // GC once, at the very end of the commit, and ONLY when this batch actually detached something
@@ -920,7 +1042,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             // When the storage-engine milestone lands (AGENTS.md ground rule #8 / VISION pillar 5), promote
             // this to a background/scheduled sweep — this single call site is the only place to move.
             if (mutations.Any(m => m is SetRemoveMutation or SetUnlinkByPropMutation
-                                  or DictRemoveMutation))
+                                  or DictRemoveMutation
+                                  or ListRemoveAtMutation or ListReplaceMutation))
                 CollectGarbage();
 
             Save(); // one atomic file write for the whole changeset
@@ -992,6 +1115,17 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 if (i + 1 >= segs.Count) return null;
                 var member = (curObj.Fields.GetValueOrDefault(prop.Name) as StoredSet)
                     ?.Members.GetValueOrDefault(ParseSeg(segs[i + 1])) as StoredRef;
+                var mo = member == null ? null : ResolveRef(member);
+                if (mo == null) return null;
+                curObj = mo; curType = elemType; i++; continue;
+            }
+            if (prop.Cardinality == Cardinality.List)
+            {
+                // Member segment is object id (membership ≥1), never index. Scalar lists don't descend.
+                if (i + 1 >= segs.Count || elemType.BaseType != BaseType.Object) return null;
+                var memberId = ParseSeg(segs[i + 1]);
+                var member = (curObj.Fields.GetValueOrDefault(prop.Name) as StoredList)
+                    ?.Items.OfType<StoredRef>().FirstOrDefault(r => r.Id == memberId);
                 var mo = member == null ? null : ResolveRef(member);
                 if (mo == null) return null;
                 curObj = mo; curType = elemType; i++; continue;
@@ -1112,6 +1246,38 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         }
     }
 
+    public string? ListElementType(int listId)
+    {
+        lock (_sync)
+        {
+            foreach (var (typeName, pool) in _db.Extents)
+                if (_desc.FindType(typeName) is { } type)
+                    foreach (var entry in pool.Values)
+                        foreach (var prop in type.Props ?? [])
+                            if (prop.Cardinality == Cardinality.List
+                                && entry.Fields.GetValueOrDefault(prop.Name) is StoredList list
+                                && list.Id == listId)
+                                return prop.Type;
+            return null;
+        }
+    }
+
+    public int? ListOwnerId(int listId)
+    {
+        lock (_sync) return FindListOwnerId(listId);
+    }
+
+    // Object id at list[index] when that slot is an object ref; null for scalar/missing/OOB.
+    public int? ListObjectIdAt(int listId, int index)
+    {
+        lock (_sync)
+        {
+            if (FindListNode(listId) is not { } list) return null;
+            if (index < 0 || index >= list.Items.Count) return null;
+            return list.Items[index] is StoredRef r ? r.Id : null;
+        }
+    }
+
     public string? SingleReferenceTargetType(string ownerTypeName, string prop)
     {
         lock (_sync)
@@ -1137,6 +1303,35 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     if (fv is StoredSet set && set.Id == setId)
                         return set;
         return null;
+    }
+
+    // Locate a list node by its intrinsic id (lists live in object fields, in extents).
+    private StoredList? FindListNode(int listId)
+    {
+        foreach (var (_, pool) in _db.Extents)
+            foreach (var entry in pool.Values)
+                foreach (var fv in entry.Fields.Values)
+                    if (fv is StoredList list && list.Id == listId)
+                        return list;
+        return null;
+    }
+
+    // Owner object id of a list (for version bump). Null only if the list is unreachable (should not happen
+    // after pre-validation found the list).
+    private int? FindListOwnerId(int listId)
+    {
+        foreach (var (_, pool) in _db.Extents)
+            foreach (var entry in pool.Values)
+                foreach (var fv in entry.Fields.Values)
+                    if (fv is StoredList list && list.Id == listId)
+                        return entry.Id;
+        return null;
+    }
+
+    private void BumpListOwner(int listId)
+    {
+        if (FindListOwnerId(listId) is { } ownerId) BumpVersion(ownerId);
+        else BumpVersion();
     }
 
     // The shared set-membership core, used by BOTH the standalone AddToSet/RemoveFromSet (by id) and the
@@ -1289,15 +1484,48 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         if (converted is null) unconvertible.Add($"{typeName}/{id}.{name}");
                         changed = true;
                     }
-                    // Cardinality change → reshape the stored value (same-name). single object ref -> set:
-                    // wrap the one reference into a fresh one-member set (lossless one -> many). The reverse
-                    // (set -> single) and dictionary combos are left for the apply to reseed.
+                    // Cardinality change → reshape the stored value (same-name). single object ref -> set/list:
+                    // wrap the one reference into a fresh one-member collection (lossless one -> many).
+                    // set -> list: order-by-id. list -> set: dedupe by id. Other combos reseed.
                     else if (prop.Cardinality == Cardinality.Set
                              && desc.IsObjectType(prop.Type)
                              && obj.Fields[name] is StoredRef objRef)
                     {
                         obj.Fields[name] = new StoredSet(MintCollectionId(db),
                             new Dictionary<int, StoredValue> { [objRef.Id] = objRef });
+                        changed = true;
+                    }
+                    else if (prop.Cardinality == Cardinality.List
+                             && obj.Fields[name] is StoredRef listRef)
+                    {
+                        obj.Fields[name] = new StoredList(MintCollectionId(db), [listRef]);
+                        changed = true;
+                    }
+                    else if (prop.Cardinality == Cardinality.List
+                             && obj.Fields[name] is StoredLeaf listLeaf)
+                    {
+                        obj.Fields[name] = new StoredList(MintCollectionId(db), [listLeaf]);
+                        changed = true;
+                    }
+                    else if (prop.Cardinality == Cardinality.List
+                             && desc.IsObjectType(prop.Type)
+                             && obj.Fields[name] is StoredSet fromSet)
+                    {
+                        var ordered = fromSet.Members.Values.OfType<StoredRef>()
+                            .OrderBy(r => r.Id)
+                            .Select(r => (StoredValue)r)
+                            .ToList();
+                        obj.Fields[name] = new StoredList(MintCollectionId(db), ordered);
+                        changed = true;
+                    }
+                    else if (prop.Cardinality == Cardinality.Set
+                             && desc.IsObjectType(prop.Type)
+                             && obj.Fields[name] is StoredList fromList)
+                    {
+                        var members = new Dictionary<int, StoredValue>();
+                        foreach (var item in fromList.Items.OfType<StoredRef>())
+                            members[item.Id] = item; // dedupe by object id
+                        obj.Fields[name] = new StoredSet(MintCollectionId(db), members);
                         changed = true;
                     }
                 }
@@ -1469,10 +1697,43 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     writes.Add(new FieldWrite(obj.Id, card.PropName, objRef, newSet));
                     obj.Fields[card.PropName] = newSet;
                 }
+                else if (card.FromCardinality == Cardinality.Single && card.ToCardinality == Cardinality.List
+                    && obj.Fields.TryGetValue(card.PropName, out var singleForList)
+                    && singleForList is StoredRef or StoredLeaf)
+                {
+                    // single → list: wrap one value/ref into a one-slot list (lossless).
+                    var newList = new StoredList(MintCollectionId(db), [singleForList]);
+                    writes.Add(new FieldWrite(obj.Id, card.PropName, singleForList, newList));
+                    obj.Fields[card.PropName] = newList;
+                }
+                else if (card.FromCardinality == Cardinality.Set && card.ToCardinality == Cardinality.List
+                    && obj.Fields.GetValueOrDefault(card.PropName) is StoredSet setForList)
+                {
+                    // set → list: synthetic order by member id (no authored migration).
+                    var ordered = setForList.Members.Values.OfType<StoredRef>()
+                        .OrderBy(r => r.Id)
+                        .Select(r => (StoredValue)r)
+                        .ToList();
+                    var newList = new StoredList(MintCollectionId(db), ordered);
+                    writes.Add(new FieldWrite(obj.Id, card.PropName, setForList, newList));
+                    obj.Fields[card.PropName] = newList;
+                }
+                else if (card.FromCardinality == Cardinality.List && card.ToCardinality == Cardinality.Set
+                    && obj.Fields.GetValueOrDefault(card.PropName) is StoredList listForSet
+                    && listForSet.Items.All(i => i is StoredRef))
+                {
+                    // list → set: dedupe by object id.
+                    var members = new Dictionary<int, StoredValue>();
+                    foreach (var item in listForSet.Items.OfType<StoredRef>())
+                        members[item.Id] = item;
+                    var newSet = new StoredSet(MintCollectionId(db), members);
+                    writes.Add(new FieldWrite(obj.Id, card.PropName, listForSet, newSet));
+                    obj.Fields[card.PropName] = newSet;
+                }
                 else if (obj.Fields.TryGetValue(card.PropName, out var oldValue))
                 {
                     // Drop the old-shaped value to the NEW shape's default (matching BuildFields: an empty
-                    // Set/Dict with a fresh id, an unset single object ref = absent, a scalar single's
+                    // Set/Dict/List with a fresh id, an unset single object ref = absent, a scalar single's
                     // default leaf), so the remount's startup guard passes. Logged as a FieldWrite carrying
                     // the OLD value (recoverable), and flagged as a destructive drop.
                     var newDefault = NewShapeDefault(card.PropName, card.ToCardinality, card.TypeName, targetDesc, db);
@@ -1593,6 +1854,33 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                                         dict.Entries[key] = newEntryRef;
                                     }
                                 break;
+                            case StoredList list:
+                                // List slots: refresh StoredRef type names in place. No dedicated list
+                                // LogWrite yet (Slice 3); FieldWrite of the whole list would work but
+                                // renaming the element type is the same in-memory refresh set uses via
+                                // SetUnlink+SetLink — for lists we rewrite slots and log a FieldWrite of
+                                // the whole list so replay sees the new type names.
+                                {
+                                    var changed = false;
+                                    var newItems = new List<StoredValue>(list.Items.Count);
+                                    foreach (var item in list.Items)
+                                    {
+                                        if (item is StoredRef listRef
+                                            && renameMap.TryGetValue(listRef.TypeName, out var newListType))
+                                        {
+                                            newItems.Add(listRef with { TypeName = newListType });
+                                            changed = true;
+                                        }
+                                        else newItems.Add(item);
+                                    }
+                                    if (changed)
+                                    {
+                                        var newList = new StoredList(list.Id, newItems);
+                                        writes.Add(new FieldWrite(obj.Id, name, list, newList));
+                                        obj.Fields[name] = newList;
+                                    }
+                                }
+                                break;
                         }
         }
 
@@ -1648,6 +1936,10 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 foreach (var entry in d.Entries.Values)
                     CollectRefIds(entry, ids);
                 break;
+            case StoredList l:
+                foreach (var item in l.Items)
+                    CollectRefIds(item, ids);
+                break;
         }
     }
 
@@ -1680,6 +1972,24 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 .Where(setRef => RefReachable(setRef, prop.Type, db, plannedRefs))
                 .ToDictionary(setRef => setRef.Id, setRef => (StoredValue)(setRef with { TypeName = prop.Type }));
             return new StoredSet(MintCollectionId(db), members);
+        }
+        if (prop.Cardinality == Cardinality.List && oldValue is StoredList oldList)
+        {
+            var items = new List<StoredValue>();
+            foreach (var item in oldList.Items)
+            {
+                if (targetDesc.IsObjectType(prop.Type))
+                {
+                    if (item is StoredRef listRef && RefReachable(listRef, prop.Type, db, plannedRefs))
+                        items.Add(listRef with { TypeName = prop.Type });
+                }
+                else if (item is StoredLeaf listLeaf)
+                {
+                    var converted = ConvertScalar(listLeaf.Scalar, prop.Type, targetDesc);
+                    items.Add(new StoredLeaf(converted ?? DefaultBase(LeafBase(prop.Type, targetDesc))));
+                }
+            }
+            return new StoredList(MintCollectionId(db), items);
         }
         if (prop.Cardinality == Cardinality.Dictionary && oldValue is StoredDict oldDict)
         {
@@ -1733,15 +2043,16 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     }
 
     // The value a freshly-created object would carry for `propName` under its NEW cardinality (mirrors
-    // BuildFields exactly): an empty StoredSet/StoredDict (each with a fresh minted id), null for an unset
-    // single OBJECT reference (the caller REMOVES the key — an unset single ref is absent), or the scalar
-    // default leaf for a single scalar. Used when a boundary apply must drop an un-carriable reshape's
-    // old value to the new shape so the remount's startup guard passes (fix 2).
+    // BuildFields exactly): an empty StoredSet/StoredDict/StoredList (each with a fresh minted id), null
+    // for an unset single OBJECT reference (the caller REMOVES the key — an unset single ref is absent),
+    // or the scalar default leaf for a single scalar. Used when a boundary apply must drop an un-carriable
+    // reshape's old value to the new shape so the remount's startup guard passes (fix 2).
     private static StoredValue? NewShapeDefault(
         string propName, Cardinality toCardinality, string typeName, InstanceDescription targetDesc, Db db)
     {
         if (toCardinality == Cardinality.Set) return new StoredSet(MintCollectionId(db), new());
         if (toCardinality == Cardinality.Dictionary) return new StoredDict(MintCollectionId(db), new());
+        if (toCardinality == Cardinality.List) return new StoredList(MintCollectionId(db), new());
         // Single: an object ref is absent (null → the caller removes the key); a scalar gets its default.
         var propType = targetDesc.FindType(typeName)?.Props?.FirstOrDefault(p => p.Name == propName)?.Type;
         if (propType is null || targetDesc.IsObjectType(propType)) return null;
@@ -2286,7 +2597,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
         return id;
     }
 
-    // A field map with every StoredSet/StoredDict value cloned (fresh Members/Entries dictionaries) —
+    // A field map with every StoredSet/StoredDict/StoredList value cloned (fresh Members/Entries/Items) —
     // StoredLeaf/StoredRef are immutable records, safe to share. Used ONLY for the log's Create snapshot
     // (see MintObject) so it can never alias a value the live extent entry goes on to mutate.
     private static Dictionary<string, StoredValue> DeepCloneFields(Dictionary<string, StoredValue> fields)
@@ -2297,6 +2608,7 @@ public sealed class JsonFileInstanceStore : IInstanceStore
             {
                 StoredSet s => new StoredSet(s.Id, new Dictionary<int, StoredValue>(s.Members)),
                 StoredDict d => new StoredDict(d.Id, new Dictionary<string, StoredValue>(d.Entries)),
+                StoredList l => new StoredList(l.Id, new List<StoredValue>(l.Items)),
                 _ => v, // StoredLeaf / StoredRef: immutable, safe to share
             };
         return clone;
@@ -2313,6 +2625,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 fields[prop.Name] = new StoredSet(MintId(), new());
             else if (prop.Cardinality == Cardinality.Dictionary)
                 fields[prop.Name] = new StoredDict(MintId(), new());
+            else if (prop.Cardinality == Cardinality.List)
+                fields[prop.Name] = new StoredList(MintId(), new());
             else if (!_desc.IsObjectType(prop.Type))
                 fields[prop.Name] = provided.Fields.TryGetValue(prop.Name, out var v)
                     ? new StoredLeaf(v)
@@ -2428,6 +2742,9 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                     break;
                 case StoredDict d:
                     foreach (var v in d.Entries.Values) Mark(v);
+                    break;
+                case StoredList l:
+                    foreach (var v in l.Items) Mark(v);
                     break;
                 case StoredLeaf:
                     break; // scalar leaves reference nothing
@@ -2580,6 +2897,27 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         foreach (var m in f.EnumerateArray())
                             members[m.GetInt32()] = new StoredRef(prop.Type, m.GetInt32());
                     result[prop.Name] = new StoredSet(MintId(), members);
+                    break;
+                }
+                case Cardinality.List:
+                {
+                    var items = new List<StoredValue>();
+                    if (has)
+                    {
+                        if (_desc.IsObjectType(prop.Type))
+                        {
+                            // Ordered id array; duplicates allowed (same id in two slots → two items).
+                            foreach (var m in f.EnumerateArray())
+                                items.Add(new StoredRef(prop.Type, m.GetInt32()));
+                        }
+                        else
+                        {
+                            var bt = ResolveTypeDef(prop.Type).BaseType;
+                            foreach (var m in f.EnumerateArray())
+                                items.Add(new StoredLeaf(SeededScalar(m, bt)));
+                        }
+                    }
+                    result[prop.Name] = new StoredList(MintId(), items);
                     break;
                 }
                 case Cardinality.Dictionary:

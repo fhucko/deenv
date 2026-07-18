@@ -129,6 +129,7 @@ public static class DesignerSeed
             {
                 Cardinality.Set => "set",
                 Cardinality.Dictionary => "dictionary",
+                Cardinality.List => "list",
                 _ => "single",
             }),
             ["multiline"] = new BoolValue(prop.Multiline),
@@ -312,6 +313,7 @@ public static class DesignerSeed
                 {
                     Cardinality.Set => "set",
                     Cardinality.Dictionary => "dictionary",
+                    Cardinality.List => "list",
                     _ => "single",
                 },
                 // The `multiline` presentation flag (a single text prop's textarea toggle) round-trips

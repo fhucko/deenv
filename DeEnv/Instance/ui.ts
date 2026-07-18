@@ -766,7 +766,7 @@ function refreshAttributes(el: HTMLElement, tag: ExecTag): void {
     const preserveOpen = preservesOpenAttr(el, tag);
     for (const [name, result] of Object.entries(tag.attributes)) {
         const v = result.value;
-        if (v.type === "fn" || v.type === "sysFn" || v.type === "object" || v.type === "array") continue;
+        if (v.type === "fn" || v.type === "sysFn" || v.type === "object" || isCollection(v)) continue;
         if (isEventAttribute(name)) { el.removeAttribute(name); continue; }
         const raw = v.type === "null" ? null : (v as ExecInt | ExecBool | ExecText).value;
 
@@ -837,7 +837,7 @@ function syncSelectValue(el: HTMLElement, tag: ExecTag): void {
     const value = tag.attributes["value"];
     if (value == null) return;
     const v = value.value;
-    if (v.type === "fn" || v.type === "sysFn" || v.type === "object" || v.type === "array") return;
+    if (v.type === "fn" || v.type === "sysFn" || v.type === "object" || isCollection(v)) return;
     const text = v.type === "null" ? "" : String((v as ExecInt | ExecBool | ExecText).value);
     if ((el as HTMLSelectElement).value !== text) (el as HTMLSelectElement).value = text;
 }
@@ -945,7 +945,7 @@ function isRenderable(v: ExecValue): boolean {
 function flatten(items: ExecTagChild[]): ExecValue[] {
     const result: ExecValue[] = [];
     for (const item of items) {
-        if (item.type === "array") result.push(...flatten(item.items.map(p => p.value)));
+        if (isCollection(item)) result.push(...flatten(item.items.map(p => p.value)));
         else result.push(item);
     }
     return result;

@@ -528,6 +528,9 @@ function flushHandlerTx(): void {
         pendingCommitCreates.set(c.draft.id, { join: c.join, obj: c.draft });
         wireCreates.push({ tempId: c.draft.id, value: objectOf(c.draft) });
         if (c.join.kind === "setAdd") wireRelations.push({ kind: "setAdd", setId: c.join.set.id, childId: c.draft.id });
+        else if (c.join.kind === "listInsert")
+            wireRelations.push({ kind: "listInsert", listId: c.join.list.id, index: c.join.index,
+                value: { type: "object", id: c.draft.id } });
         else wireRelations.push({ kind: "refSet", parentId: c.join.parent.id, prop: c.join.prop, childId: c.draft.id });
     }
     if (relations != null) for (const r of relations) wireRelations.push(r.wire);
@@ -549,7 +552,8 @@ function flushHandlerTx(): void {
         onReject: () => { if (creates != null) for (const c of creates) pendingCommitCreates.delete(c.draft.id); },
         roots: [...(edits ?? []).map(e => e.obj),
                 ...(creates != null ? creates.map(c => c.draft) : []),
-                ...(creates != null ? creates.map(c => c.join.kind === "setAdd" ? c.join.set : c.join.parent) : []),
+                ...(creates != null ? creates.map(c => c.join.kind === "setAdd" ? c.join.set
+                    : c.join.kind === "listInsert" ? c.join.list : c.join.parent) : []),
                 ...(relations != null ? relations.flatMap(r => r.roots) : [])],
     });
     committingCtx = prevCommitting;
@@ -627,6 +631,11 @@ function dropStagedCreate(c: StagedCreate): void {
         const i = c.join.set.items.findIndex(it => it.value === c.draft);
         if (i >= 0) c.join.set.items.splice(i, 1);
         invalidateMember(c.join.set.id);
+    } else if (c.join.kind === "listInsert") {
+        const i = c.join.list.items.findIndex(it => it.value === c.draft);
+        if (i >= 0) c.join.list.items.splice(i, 1);
+        for (let k = 0; k < c.join.list.items.length; k++) c.join.list.items[k].key = k;
+        invalidateMember(c.join.list.id);
     } else {
         if (c.join.parent.props[c.join.prop] === c.draft) c.join.parent.props[c.join.prop] = { type: "null" };
         invalidateProp(c.join.parent.id, c.join.prop);
@@ -640,6 +649,13 @@ function restageCreate(c: StagedCreate): void {
         if (!c.join.set.items.some(it => it.value === c.draft))
             c.join.set.items.push({ key: c.draft.id, value: c.draft });
         invalidateMember(c.join.set.id);
+    } else if (c.join.kind === "listInsert") {
+        if (!c.join.list.items.some(it => it.value === c.draft)) {
+            c.join.list.items.splice(Math.min(c.join.index, c.join.list.items.length), 0,
+                { key: c.join.index, value: c.draft });
+            for (let k = 0; k < c.join.list.items.length; k++) c.join.list.items[k].key = k;
+        }
+        invalidateMember(c.join.list.id);
     } else {
         c.join.parent.props[c.join.prop] = c.draft;
         invalidateProp(c.join.parent.id, c.join.prop);
@@ -797,6 +813,28 @@ function connectWs(): void {
             // IS sent: the server resolves the transient id through the add's remap, so a field edited
             // before the round-trip returns still saves.
             if (obj.id <= 0 && !pendingAdds.has(obj.id)) return;
+            // List-prop assign (where/orderBy result or whole-list rebuild) → listReplace same positive id.
+            // value was coalesced onto the durable list id in codeExec; before holds the prior list snapshot.
+            if (value.type === "list" && before != null && before.type === "list" && before.id > 0) {
+                const list = value as ExecList;
+                const msgId = nextWsMsgId++;
+                const beforeItems = before.items.slice();
+                const afterItems = list.items.slice();
+                const undo = () => { list.items = beforeItems.map((it, i) => ({ key: i, value: it.value })); invalidateMember(list.id); obj.props[prop] = before; invalidateProp(obj.id, prop); };
+                const redo = () => { list.items = afterItems.map((it, i) => ({ key: i, value: it.value })); invalidateMember(list.id); obj.props[prop] = list; invalidateProp(obj.id, prop); };
+                const roots: ExecValue[] = [obj, list];
+                const wire = () => ({ kind: "listReplace", listId: list.id, items: afterItems.map(listSlotWire) });
+                if (commitRelations != null) {
+                    recordMutation({ msgId, undo, redo, roots });
+                    commitRelations.push({ wire: wire(), journalMsgId: msgId, undo, redo, roots });
+                    return;
+                }
+                recordMutation({ msgId, undo, redo, roots });
+                wsHooks.beginCommit(currentExecCtx);
+                try { commitRelations!.push({ wire: wire(), journalMsgId: msgId, undo, redo, roots }); }
+                finally { wsHooks.endCommit(); }
+                return;
+            }
             // Inside a commit bracket (beginCommit..endCommit): buffer the edit into the batch.
             // The local optimistic write (obj.props[prop] = val) and the cache invalidation have
             // already happened in codeExec.ts before this hook fires, so the render is already correct;
@@ -924,7 +962,7 @@ function connectWs(): void {
             // Route the mint through `commitCreate` so it lands via the `commit` pipeline, mirroring the
             // existing-member LINK branch above: buffer into an open bracket, else micro-bracket ONE commit
             // (all top-level via ambient ctx).
-            const mintCreate = () => { wsHooks.commitCreate(item.value as ExecObject, { kind: "setAdd", set: arr }); };
+            const mintCreate = () => { wsHooks.commitCreate(item.value as ExecObject, { kind: "setAdd", set: arr as ExecSet }); };
             if (commitCreates != null) {
                 recordMutation({ msgId, undo, redo, onReject: () => pendingAdds.delete(item.key), roots });
                 mintCreate();
@@ -971,7 +1009,8 @@ function connectWs(): void {
             // addressing). Object entries ship as { props: {...} } (objectOf); scalar entries
             // ship tagged { type, value } (scalarOf) — the shape dictAdd's parse expects.
             const wireValue = value.type === "object" ? objectOf(value) : scalarOf(value);
-            const dictAdd = () => ({ kind: "dictAdd", owner: arr.ownerRef, prop: arr.dictProp, key, value: wireValue });
+            const dict = arr as ExecDict;
+            const dictAdd = () => ({ kind: "dictAdd", owner: dict.ownerRef, prop: dict.dictProp, key, value: wireValue });
             if (commitRelations != null) {
                 recordMutation({ msgId, undo, redo, roots });
                 commitRelations.push({ wire: dictAdd(), journalMsgId: msgId, undo, redo, roots });
@@ -989,7 +1028,8 @@ function connectWs(): void {
             const redo = () => { const i = arr.items.indexOf(item); if (i >= 0) arr.items.splice(i, 1); invalidateMember(arr.id); };
             const roots: ExecValue[] = [arr, item.value];
             // Route to the id-addressed `dictRemove` commit relation. All via commit (no live removeEntry).
-            const dictRemove = () => ({ kind: "dictRemove", owner: arr.ownerRef, prop: arr.dictProp, key });
+            const dict = arr as ExecDict;
+            const dictRemove = () => ({ kind: "dictRemove", owner: dict.ownerRef, prop: dict.dictProp, key });
             if (commitRelations != null) {
                 recordMutation({ msgId, undo, redo, roots });
                 commitRelations.push({ wire: dictRemove(), journalMsgId: msgId, undo, redo, roots });
@@ -1000,6 +1040,123 @@ function connectWs(): void {
             try {
                 commitRelations!.push({ wire: dictRemove(), journalMsgId: msgId, undo, redo, roots });
             } finally { wsHooks.endCommit(); }
+        },
+        // Durable list mutators → unified-commit relations (no listVersion / expectedListVersion).
+        listInsert: (list, index, item) => {
+            const msgId = nextWsMsgId++;
+            const undo = () => {
+                const i = list.items.indexOf(item);
+                if (i >= 0) list.items.splice(i, 1);
+                for (let k = 0; k < list.items.length; k++) list.items[k].key = k;
+                invalidateMember(list.id);
+            };
+            const redo = () => {
+                list.items.splice(Math.min(index, list.items.length), 0, item);
+                for (let k = 0; k < list.items.length; k++) list.items[k].key = k;
+                invalidateMember(list.id);
+            };
+            const roots: ExecValue[] = [list, item.value];
+            // New draft → create + listInsert join; existing/scalar → bare listInsert relation.
+            if (item.value.type === "object" && item.value.id < 0) {
+                const mint = () => { wsHooks.commitCreate(item.value as ExecObject, { kind: "listInsert", list, index }); };
+                if (commitCreates != null) {
+                    recordMutation({ msgId, undo, redo, roots });
+                    mint();
+                    return;
+                }
+                recordMutation({ msgId, undo, redo, roots });
+                wsHooks.beginCommit(currentExecCtx);
+                try { mint(); } finally { wsHooks.endCommit(); }
+                return;
+            }
+            const wire = () => ({ kind: "listInsert", listId: list.id, index, value: listSlotWire(item) });
+            if (commitRelations != null) {
+                recordMutation({ msgId, undo, redo, roots });
+                commitRelations.push({ wire: wire(), journalMsgId: msgId, undo, redo, roots });
+                return;
+            }
+            recordMutation({ msgId, undo, redo, roots });
+            wsHooks.beginCommit(currentExecCtx);
+            try { commitRelations!.push({ wire: wire(), journalMsgId: msgId, undo, redo, roots }); }
+            finally { wsHooks.endCommit(); }
+        },
+        listRemoveAt: (list, index, item) => {
+            const msgId = nextWsMsgId++;
+            const undo = () => {
+                list.items.splice(Math.min(index, list.items.length), 0, item);
+                for (let k = 0; k < list.items.length; k++) list.items[k].key = k;
+                invalidateMember(list.id);
+            };
+            const redo = () => {
+                const i = list.items.indexOf(item);
+                if (i >= 0) list.items.splice(i, 1);
+                for (let k = 0; k < list.items.length; k++) list.items[k].key = k;
+                invalidateMember(list.id);
+            };
+            const roots: ExecValue[] = [list, item.value];
+            const wire = () => ({ kind: "listRemoveAt", listId: list.id, index });
+            if (commitRelations != null) {
+                recordMutation({ msgId, undo, redo, roots });
+                commitRelations.push({ wire: wire(), journalMsgId: msgId, undo, redo, roots });
+                return;
+            }
+            recordMutation({ msgId, undo, redo, roots });
+            wsHooks.beginCommit(currentExecCtx);
+            try { commitRelations!.push({ wire: wire(), journalMsgId: msgId, undo, redo, roots }); }
+            finally { wsHooks.endCommit(); }
+        },
+        listMove: (list, from, to) => {
+            const msgId = nextWsMsgId++;
+            const undo = () => {
+                // Inverse move: put the item back (to → from).
+                if (from === to) return;
+                const item = list.items[to];
+                list.items.splice(to, 1);
+                list.items.splice(from, 0, item);
+                for (let k = 0; k < list.items.length; k++) list.items[k].key = k;
+                invalidateMember(list.id);
+            };
+            const redo = () => {
+                if (from === to) return;
+                const item = list.items[from];
+                list.items.splice(from, 1);
+                list.items.splice(to, 0, item);
+                for (let k = 0; k < list.items.length; k++) list.items[k].key = k;
+                invalidateMember(list.id);
+            };
+            const roots: ExecValue[] = [list];
+            const wire = () => ({ kind: "listMove", listId: list.id, from, to });
+            if (commitRelations != null) {
+                recordMutation({ msgId, undo, redo, roots });
+                commitRelations.push({ wire: wire(), journalMsgId: msgId, undo, redo, roots });
+                return;
+            }
+            recordMutation({ msgId, undo, redo, roots });
+            wsHooks.beginCommit(currentExecCtx);
+            try { commitRelations!.push({ wire: wire(), journalMsgId: msgId, undo, redo, roots }); }
+            finally { wsHooks.endCommit(); }
+        },
+        listReplace: (list, before, after) => {
+            const msgId = nextWsMsgId++;
+            const undo = () => {
+                list.items = before.map((it, i) => ({ key: i, value: it.value }));
+                invalidateMember(list.id);
+            };
+            const redo = () => {
+                list.items = after.map((it, i) => ({ key: i, value: it.value }));
+                invalidateMember(list.id);
+            };
+            const roots: ExecValue[] = [list, ...after.map(i => i.value), ...before.map(i => i.value)];
+            const wire = () => ({ kind: "listReplace", listId: list.id, items: after.map(listSlotWire) });
+            if (commitRelations != null) {
+                recordMutation({ msgId, undo, redo, roots });
+                commitRelations.push({ wire: wire(), journalMsgId: msgId, undo, redo, roots });
+                return;
+            }
+            recordMutation({ msgId, undo, redo, roots });
+            wsHooks.beginCommit(currentExecCtx);
+            try { commitRelations!.push({ wire: wire(), journalMsgId: msgId, undo, redo, roots }); }
+            finally { wsHooks.endCommit(); }
         },
         // A SERVER-ONLY host action (sys.publish): the server alone runs the effect, so this stages
         // NOTHING locally and pushes NO journal entry (there is no optimistic state to roll back). It
@@ -1082,6 +1239,9 @@ function connectWs(): void {
                 wireCreates.push({ tempId: c.draft.id, value: objectOf(c.draft) });
                 if (c.join.kind === "setAdd")
                     wireRelations.push({ kind: "setAdd", setId: c.join.set.id, childId: c.draft.id });
+                else if (c.join.kind === "listInsert")
+                    wireRelations.push({ kind: "listInsert", listId: c.join.list.id, index: c.join.index,
+                        value: { type: "object", id: c.draft.id } });
                 else
                     wireRelations.push({ kind: "refSet", parentId: c.join.parent.id, prop: c.join.prop, childId: c.draft.id });
             }
@@ -1119,7 +1279,8 @@ function connectWs(): void {
                     // marks it alive until this entry retires (it must survive for the undo to drop it).
                     onReject: () => { for (const c of creates) pendingCommitCreates.delete(c.draft.id); },
                     roots: [...edits.map(e => e.obj), ...creates.map(c => c.draft),
-                            ...creates.map(c => c.join.kind === "setAdd" ? c.join.set : c.join.parent),
+                            ...creates.map(c => c.join.kind === "setAdd" ? c.join.set
+                                : c.join.kind === "listInsert" ? c.join.list : c.join.parent),
                             ...relations.flatMap(r => r.roots)],   // T3: keep linked/unlinked arrays alive for undo
                 });
                 committingCtx = prevCommitting;
@@ -1244,8 +1405,8 @@ function connectWs(): void {
 }
 
 function onWsMessage(msg: { op?: string; id?: number; tempId?: number; newId?: number; ok?: boolean;
-                            collections?: { [prop: string]: { id: number; elementTypeName?: string } };
-                            idMap?: { tempId: number; realId: number; collections?: { [prop: string]: { id: number; elementTypeName?: string } } }[];
+                            collections?: { [prop: string]: { id: number; elementTypeName?: string; kind?: string } };
+                            idMap?: { tempId: number; realId: number; collections?: { [prop: string]: { id: number; elementTypeName?: string; kind?: string } } }[];
                             newVersion?: number;
                             sessionAlive?: boolean;
                             conflicts?: WireConflict[];
@@ -1647,7 +1808,7 @@ function slotState(): { [slotKey: string]: { [name: string]: object } } {
             // fresh). Nothing does this today; if a component adds it, fail HERE with a clear message rather
             // than silently dropping it → a mystery empty render downstream. (A collection NESTED in a draft —
             // a fresh `sys.new` set prop — is the benign case transientPropsOf skips; see its note.)
-            if (v.type === "array")
+            if (isCollection(v))
                 throw new Error(`slotState: component view-state local '${name}' is a collection — a `
                     + `client-only transient collection in a component's var state is not shipped yet (it `
                     + `would re-introduce collection identity). Nest store-backed data, or extend slotState.`);
@@ -1687,7 +1848,7 @@ function stateValueOf(v: ExecValue): object {
 function transientPropsOf(value: ExecObject): { [name: string]: object } {
     const props: { [name: string]: object } = {};
     for (const [name, v] of Object.entries(value.props))
-        if (v.type !== "array") props[name] = stateValueOf(v);
+        if (!isCollection(v)) props[name] = stateValueOf(v);
     return props;
 }
 
@@ -1697,8 +1858,8 @@ function transientPropsOf(value: ExecObject): { [name: string]: object } {
 // props with their own intrinsic ids — re-key the transient arrays to them, so adds
 // into them persist too. A re-render refreshes the row's data-key.
 function remapAddedId(arrayId: number, tempId: number, realId: number,
-                      collections?: { [prop: string]: { id: number; elementTypeName?: string } }): void {
-    const arr = uiStatic.state.arrays[arrayId];
+                      collections?: { [prop: string]: { id: number; elementTypeName?: string; kind?: string } }): void {
+    const arr = uiStatic.state.collections[arrayId];
     const item = arr?.items.find(i => i.key === tempId);
     if (item) {
         item.key = realId;
@@ -1727,16 +1888,20 @@ function remapAddedId(arrayId: number, tempId: number, realId: number,
 // or a ref target) — a ref-created object has no parent array, so the id/collections/maps re-key is exactly
 // what it needs (its containing field already points at the same object instance, whose id we mutate here).
 function rekeyCreatedObject(obj: ExecObject, tempId: number, realId: number,
-                            collections?: { [prop: string]: { id: number; elementTypeName?: string } }): void {
+                            collections?: { [prop: string]: { id: number; elementTypeName?: string; kind?: string } }): void {
     obj.id = realId;
     uiStatic.state.objects[realId] = obj;
     for (const [prop, coll] of Object.entries(collections ?? {})) {
         const propArr = obj.props[prop];
-        if (propArr?.type === "array") {
+        if (propArr != null && isCollection(propArr)) {
             propArr.id = coll.id;
-            propArr.kind = "set";
+            // Preserve set|dict|list from the server create map (do not force set).
+            const kind = coll.kind === "dict" || coll.kind === "list" || coll.kind === "set"
+                ? coll.kind
+                : propArr.type;
+            (propArr as { type: "set" | "dict" | "list" }).type = kind;
             propArr.elementTypeName = coll.elementTypeName;
-            uiStatic.state.arrays[coll.id] = propArr;
+            uiStatic.state.collections[coll.id] = propArr;
         }
     }
     registerRemap(tempId, realId);
@@ -1778,7 +1943,7 @@ function patchScalarVarsOnRemap(tempId: number, realId: number): void {
 // using the per-create `collections` the server shipped so nested sets persist. The commit's journal entry has
 // already retired (commitJournal on the ok). One re-render after the whole batch refreshes every re-keyed row.
 function applyCommitRemap(idMap: { tempId: number; realId: number;
-                                   collections?: { [prop: string]: { id: number; elementTypeName?: string } } }[]): void {
+                                   collections?: { [prop: string]: { id: number; elementTypeName?: string; kind?: string } } }[]): void {
     for (const m of idMap) {
         const pending = pendingCommitCreates.get(m.tempId);
         const obj = pending?.obj ?? (uiStatic.state.objects[m.tempId] as ExecValue | undefined);
@@ -1788,7 +1953,7 @@ function applyCommitRemap(idMap: { tempId: number; realId: number;
             if (join.kind === "setAdd") {
                 invalidateMember(join.set.id);
                 // Dedup same as live remap: merge may have added the positive id version separately.
-                const arr = uiStatic.state.arrays[join.set.id];
+                const arr = uiStatic.state.collections[join.set.id];
                 // Find the item by the obj we just rekeyed (its key may still be temp in batch case).
                 const item = arr?.items.find(i => i.value === pending.obj);
                 if (item && arr) {
@@ -1800,6 +1965,9 @@ function applyCommitRemap(idMap: { tempId: number; realId: number;
                         }
                     }
                 }
+            } else if (join.kind === "listInsert") {
+                // List slots keep ordinal keys (not object id) — just invalidate after remap.
+                invalidateMember(join.list.id);
             } else {
                 invalidateProp(join.parent.id, join.prop);
             }
@@ -1845,6 +2013,12 @@ function wsSendText(text: string): void {
     else codeWsOutbox.push(text);
 }
 
+// A list slot as the wire value listInsert/listReplace parse: object ref {type:"object",id} or tagged scalar.
+function listSlotWire(item: ExecCollectionItem): object {
+    if (item.value.type === "object") return { type: "object", id: item.value.id };
+    return scalarOf(item.value);
+}
+
 // A scalar (or shallow structured) ExecValue as the wire { type, value } the server expects. Scalars ship as
 // { type, value }; an ARRAY ships as { type:"array", items:[...] } and an OBJECT as { type:"object",
 // props:{ name: … } }, recursing so a Code array-of-objects-of-scalars crosses NATIVELY (M13 Track-B B4 — the
@@ -1856,7 +2030,7 @@ function wsSendText(text: string): void {
 function scalarOf(value: ExecValue): object {
     switch (value.type) {
         case "int": case "bool": case "text": return { type: value.type, value: value.value };
-        case "array": return { type: "array", items: value.items.map(i => scalarOf(i.value)) };
+        case "set": case "dict": case "list": return { type: value.type, items: value.items.map(i => scalarOf(i.value)) };
         case "object": {
             const props: { [name: string]: object } = {};
             for (const [name, v] of Object.entries(value.props)) props[name] = scalarOf(v);
@@ -1873,7 +2047,10 @@ function objectOf(value: ExecValue): object {
     if (value.type === "object")
         for (const [name, v] of Object.entries(value.props))
             if (v.type === "int" || v.type === "bool" || v.type === "text") props[name] = scalarOf(v);
-            else if (v.type === "array") props[name] = { type: "array", items: v.items
+            // Nested membership for create: accept ANY collection shape (a Code array literal is an
+            // ExecList; a durable set prop is ExecSet). The server only applies nested links on
+            // Cardinality.Set props and expects wire type "set" (see WsHandler create nest walk).
+            else if (isCollection(v)) props[name] = { type: "set", items: v.items
                 .filter(i => i.value.type === "object" && i.value.id > 0)
                 .map(i => ({ refId: (i.value as ExecObject).id })) };
     return { props };

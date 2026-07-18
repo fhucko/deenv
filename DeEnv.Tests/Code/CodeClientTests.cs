@@ -313,7 +313,7 @@ public sealed class CodeClientTests
                         state: {
                             leaves: {
                                 objects: { {{itemId}}: { props: { name: { type: "simple", value: { type: "text", value: "a" } } } } },
-                                arrays: {}
+                                collections: {}
                             },
                             scope: {},
                             cache: []
@@ -672,13 +672,13 @@ public sealed class CodeClientTests
 
                     // DEAD: detached object + array, referenced by nothing.
                     st.objects[7000] = { type: "object", id: 7000, props: { tag: { type: "text", value: "dead" } } };
-                    st.arrays[7001] = { type: "array", id: 7001, kind: "list", items: [] };
+                    st.collections[7001] = { type: "list", id: 7001, items: [] };
 
                     // CACHE root: a detached array (7010) → detached object (7011), held by a memo entry result.
                     const cacheObj = { type: "object", id: 7011, props: { tag: { type: "text", value: "cache" } } };
-                    const cacheArr = { type: "array", id: 7010, kind: "list", items: [{ key: 1, value: cacheObj }] };
+                    const cacheArr = { type: "list", id: 7010, items: [{ key: 1, value: cacheObj }] };
                     st.objects[7011] = cacheObj;
-                    st.arrays[7010] = cacheArr;
+                    st.collections[7010] = cacheArr;
                     uiStatic.cache.set("test:cacheResult", { result: cacheArr, deps: { props: [], members: [], vars: [] }, stale: false });
 
                     // JOURNAL root: a detached object (7020) pinned ONLY by a pending journal entry (an
@@ -692,7 +692,7 @@ public sealed class CodeClientTests
                     resetViewState();
 
                     const has = (id) => st.objects[id] != null;
-                    const hasArr = (id) => st.arrays[id] != null;
+                    const hasArr = (id) => st.collections[id] != null;
                     return [
                         `deadObj=${has(7000)}`, `deadArr=${hasArr(7001)}`,   // expect false, false (swept)
                         `scope=${has(aId)}`,                                  // expect true  (db graph)

@@ -24,7 +24,7 @@ namespace DeEnv.Instance;
 // of its own; every value switch simply maps Image → Text (mirroring Enum/Password → Text).
 public enum BaseType { Bool, Int, Decimal, Text, Date, DateTime, Object, Enum, Password, Image }
 
-public enum Cardinality { Single, Dictionary, Set }
+public enum Cardinality { Single, Dictionary, Set, List }
 
 // Plain-data records. All JSON casing comes from SchemaJson.Options (camelCase
 // property policy + string-enum converter) — no per-property attributes, no logic.

@@ -54,7 +54,7 @@ public sealed class PublishReportCodeTests
         var value = (ExecObject)PublishReportCode.Build(report, targetVersion: 10, new ExecContext());
 
         await Assert.That(((ExecBool)value.Props["isEmpty"]).Value).IsFalse();
-        var restorations = (ExecArray)value.Props["restorations"];
+        var restorations = (IExecCollection)value.Props["restorations"];
         await Assert.That(((ExecText)restorations.Items[0].Value).Value).IsEqualTo("Item/1.note");
     }
 }

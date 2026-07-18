@@ -302,7 +302,7 @@ public static class GenericUi
                 return render
 
             fn ObjectForm(obj, meta, base, autosave, join, body, onSave, onCancel)
-                var live = autosave == true || (join == null && !meta.props.any(p => p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary"))
+                var live = autosave == true || (join == null && !meta.props.any(p => p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "list"))
                 ambient ctx = ctx.new(live)
                 fn save()
                     if join != null
@@ -318,7 +318,7 @@ public static class GenericUi
                         ctx.discard()
                 fn render()
                     var canEdit = sys.canWrite(meta.name, "edit")
-                    var hasFields = meta.props.any(p => p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary")
+                    var hasFields = meta.props.any(p => p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "list")
                     if join != null
                         return <div class="create-form">
                             <h3>
@@ -328,7 +328,7 @@ public static class GenericUi
                                 body(obj)
                             else
                                 foreach p in meta.props
-                                    if p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary"
+                                    if p.baseType != "object" && p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "list"
                                         <Field obj={obj} desc={p}>
                             <div class="create-actions">
                                 <button class="create-save" onClick={save}>
@@ -463,7 +463,7 @@ public static class GenericUi
                                     <th>
                                         sys.humanize(desc.labelProp)
                                     foreach p in desc.props
-                                        if p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "password" && p.name != desc.labelProp && p.multiline != true
+                                        if p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "list" && p.baseType != "password" && p.name != desc.labelProp && p.multiline != true
                                             <th>
                                                 sys.humanize(p.name)
                                 if rowActions != null || sys.canWrite(desc.name, "delete")
@@ -505,7 +505,7 @@ public static class GenericUi
                                                 <span class="row-link">
                                                     sys.field(m, desc.labelProp)
                                         foreach p in desc.props
-                                            if p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "password" && p.name != desc.labelProp && p.multiline != true
+                                            if p.baseType != "set" && p.baseType != "dictionary" && p.baseType != "list" && p.baseType != "password" && p.name != desc.labelProp && p.multiline != true
                                                 <td>
                                                     if p.baseType == "bool"
                                                         <span class="bool-cell">
@@ -862,6 +862,9 @@ public static class GenericUi
         }
         if (p.Cardinality == Cardinality.Set)
             return Obj(("name", Text(p.Name)), ("baseType", Text("set")), ("element", Text(p.Type)), MultilineField(false));
+        if (p.Cardinality == Cardinality.List)
+            return Obj(("name", Text(p.Name)), ("baseType", Text("list")), ("element", Text(p.Type)),
+                ("isScalar", new CodeBool { Value = !desc.IsObjectType(p.Type) }), MultilineField(false));
         if (desc.IsObjectType(p.Type))
             return Obj(("name", Text(p.Name)), ("baseType", Text("object")), ("target", Text(p.Type)), MultilineField(false));
         // An enum scalar prop: { name, baseType: "enum", values: [...] } so objectForm renders a

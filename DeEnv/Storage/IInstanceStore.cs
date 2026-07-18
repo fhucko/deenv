@@ -106,6 +106,12 @@ public interface IInstanceStore
     // The declared element type of the set carrying this intrinsic id, or null when
     // no set does. Lets a mutation be validated against the schema before it lands.
     string? SetElementType(int setId);
+    // The declared element type of the list carrying this intrinsic id, or null when no list does.
+    string? ListElementType(int listId);
+    // Owner extent object id of the list, or null when no list does (for ACL edit-owner checks).
+    int? ListOwnerId(int listId);
+    // Object id at list[index] when that slot is an object ref; null for scalar/missing/OOB.
+    int? ListObjectIdAt(int listId, int index);
 
     // The declared target type of a single-reference prop, or null when the owner
     // type/prop is absent or not a single object reference.
@@ -244,12 +250,23 @@ public sealed record SetUnlinkByPropMutation(int OwnerRef, string Prop, int Memb
 // DictRemoveMutation arm in CommitBatch's prevalidation pass). The apply arm lands in T2; here it is only
 // declared + pre-validated.
 public sealed record DictRemoveMutation(int OwnerRef, string Prop, NodeValue Key) : CommitMutation;
+// Whole-list replace (assign where/orderBy, removeAll, removeWhere rebuild). Keeps the list's intrinsic id.
+// Items are StoredRef (object slots; id may be a temp create resolved in-batch) or StoredLeaf (scalar slots).
+// No list-level OCC (expectedListVersion deferred with general multi-user concurrency).
+public sealed record ListReplaceMutation(int ListId, IReadOnlyList<StoredValue> Items) : CommitMutation;
+// Insert one slot at Index (append = Index == current length). Item is StoredRef or StoredLeaf as above.
+public sealed record ListInsertMutation(int ListId, int Index, StoredValue Item) : CommitMutation;
+// Drop the slot at Index (order of remaining slots preserved).
+public sealed record ListRemoveAtMutation(int ListId, int Index) : CommitMutation;
+// Reorder: take the slot at From and place it at final index To.
+public sealed record ListMoveMutation(int ListId, int From, int To) : CommitMutation;
 
 // The result of minting one create in a commit batch: the tempId→realId mapping plus the minted object's
 // nested COLLECTION props (their own intrinsic ids + element types), so the caller re-keys the client's
 // optimistic transient arrays (else later adds into them would silently not persist — mirrors arrayAdd).
 public sealed record CommitCreateResult(int TempId, int RealId, IReadOnlyDictionary<string, CommitCollection> Collections);
-public sealed record CommitCollection(int Id, string ElementTypeName);
+// Kind is the runtime/wire collection tag: "set" | "dict" | "list" (client must not assume set).
+public sealed record CommitCollection(int Id, string ElementTypeName, string Kind);
 
 // A whole commit's result: the per-create remaps + the post-commit store Version, both captured under the
 // store's single lock (review finding 3) so the reply's newVersion is the exact version this commit

@@ -319,7 +319,7 @@ public sealed class CodeExecutorTests
         Run(scope, exec, ctx, new CodeVarDec { Name = "arr", Value = arr });
         var filtered = new CodeCall { Fn = Prop(Sym("arr"), "where"), Params = [predicate] };
         var ordered = new CodeCall { Fn = Prop(filtered, "orderBy"), Params = [keySelector] };
-        var result = (ExecArray)exec.ExecuteValue(ordered, scope, ctx);
+        var result = (IExecCollection)exec.ExecuteValue(ordered, scope, ctx);
 
         var ps = result.Items.Select(i => ((ExecInt)((ExecObject)i.Value).Props["p"]).Value).ToList();
         await Assert.That(ps).IsEquivalentTo(new[] { 2, 3 });
@@ -347,14 +347,14 @@ public sealed class CodeExecutorTests
         var ctx = new ExecContext();
 
         Run(scope, exec, ctx, new CodeVarDec { Name = "arr", Value = new CodeArray { Items = [PItem(1), PItem(2)] } });
-        var srcArr = (ExecArray)scope.Items["arr"].Value;
+        var srcArr = (IExecCollection)scope.Items["arr"].Value;
 
         var single = new CodeCall { Fn = Prop(Sym("arr"), "single"), Params = [PredEq(2)] };
         var matched = (ExecObject)exec.ExecuteValue(single, scope, ctx);
 
-        var arrays = (JsonObject)ClientState.Serialize(scope, ctx)["leaves"]!["arrays"]!;
-        await Assert.That(arrays.ContainsKey(srcArr.Id.ToString())).IsTrue(); // membership harvested (was absent before the fix)
-        var shippedIds = ((JsonArray)arrays[srcArr.Id.ToString()]!["items"]!)
+        var collections = (JsonObject)ClientState.Serialize(scope, ctx)["leaves"]!["collections"]!;
+        await Assert.That(collections.ContainsKey(srcArr.Id.ToString())).IsTrue(); // membership harvested (was absent before the fix)
+        var shippedIds = ((JsonArray)collections[srcArr.Id.ToString()]!["items"]!)
             .Select(i => i!["value"]!["id"]!.GetValue<int>()).ToList();
         await Assert.That(shippedIds).Contains(matched.Id); // the matched member ships so the client re-finds it
     }
@@ -369,14 +369,14 @@ public sealed class CodeExecutorTests
         var ctx = new ExecContext();
 
         Run(scope, exec, ctx, new CodeVarDec { Name = "arr", Value = new CodeArray { Items = [PItem(1), PItem(2)] } });
-        var srcArr = (ExecArray)scope.Items["arr"].Value;
+        var srcArr = (IExecCollection)scope.Items["arr"].Value;
 
         var any = new CodeCall { Fn = Prop(Sym("arr"), "any"), Params = [PredEq(2)] };
         await Assert.That(((ExecBool)exec.ExecuteValue(any, scope, ctx)).Value).IsTrue();
 
-        var arrays = (JsonObject)ClientState.Serialize(scope, ctx)["leaves"]!["arrays"]!;
-        await Assert.That(arrays.ContainsKey(srcArr.Id.ToString())).IsTrue();
-        await Assert.That(((JsonArray)arrays[srcArr.Id.ToString()]!["items"]!).Count).IsGreaterThan(0);
+        var collections = (JsonObject)ClientState.Serialize(scope, ctx)["leaves"]!["collections"]!;
+        await Assert.That(collections.ContainsKey(srcArr.Id.ToString())).IsTrue();
+        await Assert.That(((JsonArray)collections[srcArr.Id.ToString()]!["items"]!).Count).IsGreaterThan(0);
     }
 
     // ── memoization (Stage 4) ────────────────────────────────────────────────────────
@@ -400,7 +400,7 @@ public sealed class CodeExecutorTests
 
         Run(scope, exec, ctx, new CodeVarDec { Name = "arr", Value = arr });
         var where = new CodeCall { Fn = Prop(Sym("arr"), "where"), Params = [predicate] };
-        var result = (ExecArray)exec.ExecuteValue(where, scope, ctx);
+        var result = (IExecCollection)exec.ExecuteValue(where, scope, ctx);
 
         var entry = ctx.Memo.Values.Single(e => e.Key.StartsWith("where:"));
         await Assert.That(ReferenceEquals(entry.Result, result)).IsTrue();
@@ -456,8 +456,8 @@ public sealed class CodeExecutorTests
     {
         ExecObject Node(int id, params (string, IExecValue)[] props) =>
             new() { Id = id, Props = props.ToDictionary(p => p.Item1, p => p.Item2) };
-        ExecArray Set(int id, params ExecObject[] members) =>
-            new() { Id = id, Kind = ArrayKind.Set, Items = [.. members.Select(m => new ExecItem { Key = m.Id, Value = m })] };
+        ExecSet Set(int id, params ExecObject[] members) =>
+            new() { Id = id, Items = [.. members.Select(m => new ExecItem { Key = m.Id, Value = m })] };
         ExecText T(string v) => new() { Value = v };
         ExecInt I(int v) => new() { Value = v };
 
@@ -526,10 +526,10 @@ public sealed class CodeExecutorTests
     {
         var child = new ExecObject { Id = 40, Props = new()
             { ["tag"] = new ExecText { Value = "" }, ["expr"] = new ExecText { Value = "\"x\"" }, ["order"] = new ExecInt { Value = 0 } } };
-        var kids = new ExecArray { Id = 41, Kind = ArrayKind.Set, Items = [new ExecItem { Key = 40, Value = child }] };
+        var kids = new ExecSet { Id = 41, Items = [new ExecItem { Key = 40, Value = child }] };
         var root = new ExecObject { Id = 30, Props = new()
             { ["tag"] = new ExecText { Value = "div" }, ["expr"] = new ExecText { Value = "" },
-              ["order"] = new ExecInt { Value = 0 }, ["attrs"] = new ExecArray { Id = 42, Kind = ArrayKind.Set, Items = [] },
+              ["order"] = new ExecInt { Value = 0 }, ["attrs"] = new ExecSet { Id = 42, Items = [] },
               ["children"] = kids } };
 
         var scope = new ExecScope();
@@ -553,10 +553,10 @@ public sealed class CodeExecutorTests
     {
         var attr = new ExecObject { Id = 501, Props = new()
             { ["name"] = new ExecText { Value = "big" }, ["value"] = new ExecText { Value = "2147483648" }, ["order"] = new ExecInt { Value = 0 } } };
-        var attrs = new ExecArray { Id = 502, Kind = ArrayKind.Set, Items = [new ExecItem { Key = 501, Value = attr }] };
+        var attrs = new ExecSet { Id = 502, Items = [new ExecItem { Key = 501, Value = attr }] };
         var node = new ExecObject { Id = 500, Props = new()
             { ["tag"] = new ExecText { Value = "div" }, ["expr"] = new ExecText { Value = "" }, ["order"] = new ExecInt { Value = 0 },
-              ["attrs"] = attrs, ["children"] = new ExecArray { Id = 503, Kind = ArrayKind.Set, Items = [] } } };
+              ["attrs"] = attrs, ["children"] = new ExecSet { Id = 503, Items = [] } } };
         var scope = new ExecScope();
         scope.Items["n"] = new ExecScopeItem { Value = node, IsReadOnly = true };
         var call = new CodeCall { Fn = Prop(Sym("sys"), "renderTree"), Params = [Sym("n")] };
@@ -574,10 +574,10 @@ public sealed class CodeExecutorTests
     {
         var attr = new ExecObject { Id = 601, Props = new()
             { ["name"] = new ExecText { Value = "data-node" }, ["value"] = new ExecText { Value = "\"clobber\"" }, ["order"] = new ExecInt { Value = 0 } } };
-        var attrs = new ExecArray { Id = 602, Kind = ArrayKind.Set, Items = [new ExecItem { Key = 601, Value = attr }] };
+        var attrs = new ExecSet { Id = 602, Items = [new ExecItem { Key = 601, Value = attr }] };
         var node = new ExecObject { Id = 600, Props = new()
             { ["tag"] = new ExecText { Value = "div" }, ["expr"] = new ExecText { Value = "" }, ["order"] = new ExecInt { Value = 0 },
-              ["attrs"] = attrs, ["children"] = new ExecArray { Id = 603, Kind = ArrayKind.Set, Items = [] } } };
+              ["attrs"] = attrs, ["children"] = new ExecSet { Id = 603, Items = [] } } };
         var scope = new ExecScope();
         scope.Items["n"] = new ExecScopeItem { Value = node, IsReadOnly = true };
         var call = new CodeCall { Fn = Prop(Sym("sys"), "renderTree"), Params = [Sym("n")] };
@@ -603,7 +603,7 @@ public sealed class CodeExecutorTests
             .Throws<CodeRuntimeException>();
     }
 
-    // T6b-4b (R7 addressing): a dictionary surfaces as an ExecArray that carries its OWNER's address
+    // T6b-4b (R7 addressing): a dictionary surfaces as an IExecCollection that carries its OWNER's address
     // (OwnerRef = the db object id, DictProp = the dict prop name), and each entry ExecObject carries
     // the same owner address + its Key — so the client can persist through id-addressed dictAdd/dictRemove
     // relations instead of the path-addressed addEntry/removeEntry ops.
@@ -633,7 +633,7 @@ public sealed class CodeExecutorTests
             var db = DbBridge.LoadRoot(store, desc, ctx);
 
             // Scalar dict (settings): the array carries the owner address.
-            var settingsArr = (ExecArray)db.Props["settings"];
+            var settingsArr = (ExecDict)db.Props["settings"];
             await Assert.That(settingsArr.OwnerRef).IsEqualTo(1);
             await Assert.That(settingsArr.DictProp).IsEqualTo("settings");
             var settingsEntry = (ExecObject)settingsArr.Items.Single().Value;
@@ -642,7 +642,7 @@ public sealed class CodeExecutorTests
             await Assert.That(settingsEntry.Key).IsEqualTo("theme");
 
             // Object dict (configs): same addressing on the array + entry.
-            var configsArr = (ExecArray)db.Props["configs"];
+            var configsArr = (ExecDict)db.Props["configs"];
             await Assert.That(configsArr.OwnerRef).IsEqualTo(1);
             await Assert.That(configsArr.DictProp).IsEqualTo("configs");
             var configEntry = (ExecObject)configsArr.Items.Single().Value;

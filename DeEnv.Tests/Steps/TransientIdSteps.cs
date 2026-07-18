@@ -155,7 +155,7 @@ public sealed class TransientIdSteps
         // Reload the root fresh: the remove (sent against the negative id) resolved to the real member, so
         // the set is empty and the now-unreferenced object was collected.
         var db = DbBridge.LoadRoot(_store, _desc, new ExecContext());
-        await Assert.That(((ExecArray)db.Props["items"]).Items.Count).IsEqualTo(0);
+        await Assert.That(((IExecCollection)db.Props["items"]).Items.Count).IsEqualTo(0);
     }
 
     // ── helpers / teardown ────────────────────────────────────────────────────────
@@ -163,7 +163,7 @@ public sealed class TransientIdSteps
     // The intrinsic id of the root's `items` set — discovered the way the renderer does (load the root
     // through DbBridge, read the array's id), so the arrayAdd targets the real set.
     private int ItemsSetId() =>
-        ((ExecArray)DbBridge.LoadRoot(_store, _desc, new ExecContext()).Props["items"]).Id;
+        ((IExecCollection)DbBridge.LoadRoot(_store, _desc, new ExecContext()).Props["items"]).Id;
 
     [AfterScenario]
     public void Cleanup()

@@ -37,6 +37,9 @@
     <!-- The compiled TypeScript twin interpreter, run against the same cases by TsConformanceTests
          (a build output of DeEnv's TS compile — present after DeEnv builds). -->
     <Content Include="..\DeEnv\Instance\codeExec.js" Link="codeExec.js" CopyToOutputDirectory="PreserveNewest" />
+    <!-- DT merge twin (ClientState ↔ mergeState) — CollectionDtRoundTripTests loads it with a minimal
+         uiStatic shell to prove set|dict|list collection tags round-trip. -->
+    <Content Include="..\DeEnv\Instance\dt.js" Link="dt.js" CopyToOutputDirectory="PreserveNewest" />
     <!-- M12 W1a — the component-workbench live-instance driver, unit-tested in isolation (its deep-copy
          re-mint) the same way: loaded on a bare page alongside codeExec.js. -->
     <Content Include="..\DeEnv\Instance\workbench.js" Link="workbench.js" CopyToOutputDirectory="PreserveNewest" />

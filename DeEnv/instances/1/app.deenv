@@ -134,7 +134,7 @@ ui
     var lastMergeFor = 0
     var scalarTypes = ["text", "int", "bool", "decimal", "date", "dateTime", "password", "image"]
     var typeKinds = ["object", "enum"]
-    var cardinalities = ["single", "set", "dictionary"]
+    var cardinalities = ["single", "set", "dictionary", "list"]
 
     fn addType(design)
         design.types.add({ name: "", baseType: "object", values: "", order: 0, props: [] })

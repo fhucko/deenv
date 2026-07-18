@@ -133,7 +133,7 @@ public sealed class ConformanceTests
                 break;
             case "intList":
             {
-                var got = ((ExecArray)result).Items.Select(i => ((ExecInt)i.Value).Value);
+                var got = ((IExecCollection)result).Items.Select(i => ((ExecInt)i.Value).Value);
                 var want = c.Expect.Value.EnumerateArray().Select(e => e.GetInt32());
                 await Assert.That(string.Join(",", got)).IsEqualTo(string.Join(",", want));
                 break;
@@ -165,9 +165,9 @@ public sealed class ConformanceTests
                 .Select(k => " " + k + "=\"" + ScalarText(t.Attributes[k]) + "\""))
             + ">" + string.Concat(t.Children.Select(SerializeTree)) + "</" + t.Name + ">",
         // An ARRAY child splices FLAT (recursively) — the same flattening production does (SsrRenderer
-        // .SerializeChild / ui.ts flatten), so a for/if row's evaluated instances (S6b returns an ExecArray)
+        // .SerializeChild / ui.ts flatten), so a for/if row's evaluated instances (S6b returns an IExecCollection)
         // serialize as if spliced into the parent, with no wrapper. Twin of codeExec.ts serializeTree.
-        ExecArray a => string.Concat(a.Items.Select(i => SerializeTree(i.Value))),
+        IExecCollection a => string.Concat(a.Items.Select(i => SerializeTree(i.Value))),
         ExecText x => x.Value,
         ExecInt i => i.Value.ToString(),
         ExecBool b => b.Value ? "true" : "false",

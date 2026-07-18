@@ -76,13 +76,13 @@ public sealed record CommitIdMapEntry
 }
 
 
-// A collection prop the store minted on a new object: its intrinsic id + element type, so
-// the client re-keys the transient array it created optimistically. Field order: id, then
-// elementTypeName (matching the former literal).
+// A collection prop the store minted on a new object: its intrinsic id + element type + kind
+// (set|dict|list), so the client re-keys the transient collection without assuming set.
 public sealed record CollectionInfo
 {
     public required int Id { get; init; }
     public required string ElementTypeName { get; init; }
+    public required string Kind { get; init; }
 }
 
 public sealed record RefetchResponse
@@ -322,6 +322,16 @@ public sealed class WsHandler
                 ? memberId
                 : null;
         }
+        if (_resolver.ResolveType(parent) is { Cardinality: Cardinality.List })
+        {
+            // List member URL: object id with membership ≥1 (never index). Object slots in ListValue
+            // are ReferenceValue so the id is checkable without a second store walk.
+            return int.TryParse(lastSeg, out var memberId)
+                && _store.ReadNode(parent) is ListValue listVal
+                && listVal.Items.OfType<ReferenceValue>().Any(r => r.TargetId == memberId)
+                ? memberId
+                : null;
+        }
         if (OwnerIdAt(parent) is not { } parentId || _store.ReadById(parentId) is not { } parentHit) return null;
         return parentHit.Fields.Fields.GetValueOrDefault(lastSeg) is ReferenceValue { TargetId: { } tid } ? tid : null;
     }
@@ -361,7 +371,8 @@ public sealed class WsHandler
                 // (kept out of the ParsedRelation union on purpose — unlinks have no typed child). Skip them
                 // here so ParseRelation (which only knows "set"/"ref") does not reject them as malformed.
                 if (relEl.TryGetProperty("kind", out var skipKindEl) && skipKindEl.GetString() is
-                    "setRemove" or "dictRemove" or "dictAdd")
+                    "setRemove" or "dictRemove" or "dictAdd"
+                    or "listReplace" or "listInsert" or "listRemoveAt" or "listMove")
                     continue;
                 if (ParseRelation(relEl, session) is not { } rel)
                     return Error("commit relation is malformed.");
@@ -484,6 +495,14 @@ public sealed class WsHandler
                     continue;
                 }
 
+                if (tpKind is "listReplace" or "listInsert" or "listRemoveAt" or "listMove")
+                {
+                    if (ParseListRelation(relEl, session, floor, createTypeByTempId, out var listMut, out var listErr) is false)
+                        return Error(listErr ?? "commit relation is malformed.");
+                    if (listMut is not null) extraMutations.Add(listMut);
+                    continue;
+                }
+
                 if (tpKind is not "setRemove") continue;
 
                 if (!relEl.TryGetProperty("childId", out var childEl) || childEl.ValueKind != JsonValueKind.Number)
@@ -547,7 +566,7 @@ public sealed class WsHandler
                         var propDef = typeDef.Props?.FirstOrDefault(d => d.Name == p.Name);
                         if (propDef is not { Cardinality: Cardinality.Set }) continue;
                         if (p.Value.ValueKind != JsonValueKind.Object) continue;
-                        if (!p.Value.TryGetProperty("type", out var arrType) || arrType.GetString() != "array") continue;
+                        if (!p.Value.TryGetProperty("type", out var arrType) || arrType.GetString() != "set") continue;
                         if (!p.Value.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array) continue;
                         foreach (var item in items.EnumerateArray())
                         {
@@ -667,7 +686,7 @@ public sealed class WsHandler
             TempId = r.TempId,
             RealId = r.RealId,
             Collections = r.Collections.ToDictionary(
-                kv => kv.Key, kv => new CollectionInfo { Id = kv.Value.Id, ElementTypeName = kv.Value.ElementTypeName }),
+                kv => kv.Key, kv => new CollectionInfo { Id = kv.Value.Id, ElementTypeName = kv.Value.ElementTypeName, Kind = kv.Value.Kind }),
         }).ToList();
 
         // Record every minted object's transient (negative) id → real id in the session so the client's
@@ -697,6 +716,178 @@ public sealed class WsHandler
         DateTimeValue dt => dt.Value.ToString("O"),
         _ => null,
     };
+
+    // Parse a list* commit relation into a CommitMutation. Registers create types for temp object slots
+    // (listInsert / listReplace) into createTypeByTempId so the creates loop can type them. ACL:
+    // membership insert ≈ setAdd create; removeAt object slot ≈ setRemove delete + edit owner; move/replace
+    // ≈ edit owner. No list-version field.
+    private bool ParseListRelation(
+        JsonElement el, ClientSession? session, Code.AccessFloor floor,
+        Dictionary<int, string> createTypeByTempId,
+        out CommitMutation? mutation, out string? error)
+    {
+        mutation = null; error = null;
+        var kind = el.TryGetProperty("kind", out var kindEl) ? kindEl.GetString() : null;
+        if (!el.TryGetProperty("listId", out var listEl) || listEl.ValueKind != JsonValueKind.Number)
+        { error = "commit relation is malformed."; return false; }
+        var listId = Resolve(session, listEl.GetInt32());
+        var elemTypeName = _store.ListElementType(listId);
+        if (elemTypeName is null) { error = $"No list with id {listId}."; return false; }
+
+        // Edit-owner floor for structural list changes (reorder/replace/remove structure).
+        void RequireOwnerEdit()
+        {
+            if (_store.ListOwnerId(listId) is { } ownerId && _store.ReadById(ownerId) is { } owner)
+                RequireWrite(floor, "edit", owner.TypeName,
+                    Code.AccessFloor.ScalarObject(owner.TypeName, ownerId, owner.Fields, _desc));
+        }
+
+        // checkCreateLink: when true, existing object slots get setAdd-style create floor (listInsert).
+        // listReplace diffs multisets instead — see MultisetObjectIdCounts below.
+        StoredValue? ParseListSlot(JsonElement valEl, out string? slotErr, bool checkCreateLink)
+        {
+            slotErr = null;
+            var wireType = valEl.TryGetProperty("type", out var tEl) ? tEl.GetString() : null;
+            if (wireType == "object")
+            {
+                if (!valEl.TryGetProperty("id", out var idEl) || idEl.ValueKind != JsonValueKind.Number)
+                { slotErr = "commit relation is malformed."; return null; }
+                var id = Resolve(session, idEl.GetInt32());
+                var typeName = elemTypeName;
+                if (id < 0)
+                {
+                    // Temp create joined into this list — type from the list's element type (wire asserts none).
+                    if (!createTypeByTempId.TryAdd(id, typeName))
+                    { slotErr = $"Commit create {id} has more than one relation."; return null; }
+                }
+                else if (_store.ReadById(id) is { } existing)
+                {
+                    typeName = existing.TypeName;
+                    if (checkCreateLink)
+                        RequireWrite(floor, "create", existing.TypeName,
+                            Code.AccessFloor.ScalarObject(existing.TypeName, id, existing.Fields, _desc));
+                }
+                else if (id >= 0)
+                { slotErr = $"No object with id {id}."; return null; }
+                return new StoredRef(typeName, id);
+            }
+            // Scalar slot — declared element type must be a scalar base.
+            if (_desc.ScalarBaseOf(elemTypeName) is not { } baseType)
+            { slotErr = $"List {listId} does not accept scalar slots."; return null; }
+            try
+            {
+                var leaf = LeafForType(valEl, baseType);
+                if (leaf is TextValue tv && !_desc.EnumAccepts(elemTypeName, tv.Text))
+                { slotErr = $"'{tv.Text}' is not a value of enum '{elemTypeName}'."; return null; }
+                if (elemTypeName == "password" && HashScalarLeaf(elemTypeName, leaf) is { } hashed)
+                    leaf = hashed;
+                return new StoredLeaf(leaf);
+            }
+            catch (Exception ex)
+            { slotErr = ex.Message; return null; }
+        }
+
+        static Dictionary<int, int> MultisetObjectIdCounts(IEnumerable<StoredValue> slots)
+        {
+            var counts = new Dictionary<int, int>();
+            foreach (var s in slots)
+            {
+                if (s is not StoredRef r) continue;
+                counts[r.Id] = counts.GetValueOrDefault(r.Id) + 1;
+            }
+            return counts;
+        }
+
+        // Object-list ACL for listReplace (removeAll / removeWhere / assign): owner edit already required.
+        // Multiset-aware: create only on net-new ids, delete only on net-removed ids; kept slots structure-only.
+        void RequireReplaceMembershipFloors(IReadOnlyList<StoredValue> newItems)
+        {
+            var oldCounts = new Dictionary<int, int>();
+            for (var i = 0; ; i++)
+            {
+                if (_store.ListObjectIdAt(listId, i) is not { } oid) break;
+                oldCounts[oid] = oldCounts.GetValueOrDefault(oid) + 1;
+            }
+            var newCounts = MultisetObjectIdCounts(newItems);
+            foreach (var (id, newN) in newCounts)
+            {
+                var oldN = oldCounts.GetValueOrDefault(id);
+                if (newN <= oldN) continue; // not newly introduced (extra occurrence counts as introduce)
+                if (id < 0) continue; // temp create — create floor is on the create itself
+                if (_store.ReadById(id) is not { } obj) continue;
+                RequireWrite(floor, "create", obj.TypeName,
+                    Code.AccessFloor.ScalarObject(obj.TypeName, id, obj.Fields, _desc));
+            }
+            foreach (var (id, oldN) in oldCounts)
+            {
+                var newN = newCounts.GetValueOrDefault(id);
+                if (oldN <= newN) continue;
+                if (_store.ReadById(id) is not { } obj) continue;
+                RequireWrite(floor, "delete", obj.TypeName,
+                    Code.AccessFloor.ScalarObject(obj.TypeName, id, obj.Fields, _desc));
+            }
+        }
+
+        switch (kind)
+        {
+            case "listReplace":
+            {
+                if (!el.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array)
+                { error = "commit relation is malformed."; return false; }
+                RequireOwnerEdit();
+                var items = new List<StoredValue>();
+                foreach (var itemEl in itemsEl.EnumerateArray())
+                {
+                    var slot = ParseListSlot(itemEl, out var slotErr, checkCreateLink: false);
+                    if (slot is null) { error = slotErr; return false; }
+                    items.Add(slot);
+                }
+                RequireReplaceMembershipFloors(items);
+                mutation = new ListReplaceMutation(listId, items);
+                return true;
+            }
+            case "listInsert":
+            {
+                if (!el.TryGetProperty("index", out var idxEl) || idxEl.ValueKind != JsonValueKind.Number)
+                { error = "commit relation is malformed."; return false; }
+                if (!el.TryGetProperty("value", out var valEl))
+                { error = "commit relation is malformed."; return false; }
+                var index = idxEl.GetInt32();
+                // Structure change on owner + membership create/link for object slots.
+                RequireOwnerEdit();
+                var slot = ParseListSlot(valEl, out var slotErr, checkCreateLink: true);
+                if (slot is null) { error = slotErr; return false; }
+                mutation = new ListInsertMutation(listId, index, slot);
+                return true;
+            }
+            case "listRemoveAt":
+            {
+                if (!el.TryGetProperty("index", out var idxEl) || idxEl.ValueKind != JsonValueKind.Number)
+                { error = "commit relation is malformed."; return false; }
+                var index = idxEl.GetInt32();
+                RequireOwnerEdit();
+                // Object slot: delete floor on the member (≈ setRemove).
+                if (_store.ListObjectIdAt(listId, index) is { } memberId
+                    && _store.ReadById(memberId) is { } member)
+                    RequireWrite(floor, "delete", member.TypeName,
+                        Code.AccessFloor.ScalarObject(member.TypeName, memberId, member.Fields, _desc));
+                mutation = new ListRemoveAtMutation(listId, index);
+                return true;
+            }
+            case "listMove":
+            {
+                if (!el.TryGetProperty("from", out var fromEl) || fromEl.ValueKind != JsonValueKind.Number
+                    || !el.TryGetProperty("to", out var toEl) || toEl.ValueKind != JsonValueKind.Number)
+                { error = "commit relation is malformed."; return false; }
+                RequireOwnerEdit();
+                mutation = new ListMoveMutation(listId, fromEl.GetInt32(), toEl.GetInt32());
+                return true;
+            }
+            default:
+                error = "commit relation is malformed.";
+                return false;
+        }
+    }
 
     // Parse a commit relation (atomic-commit Step B). A setAdd relation `{ kind:"setAdd", setId, childId }` links a
     // member into a set; a refSet relation `{ kind:"refSet", parentId, prop, childId }` points a single reference at
@@ -932,7 +1123,7 @@ public sealed class WsHandler
                     if (o.Id > 0 && byId.TryAdd(o.Id, o))
                         foreach (var p in o.Props.Values) Walk(p);
                     break;
-                case Code.ExecArray a:
+                case Code.IExecCollection a:
                     foreach (var item in a.Items) Walk(item.Value);
                     break;
             }
@@ -1113,7 +1304,7 @@ public sealed class WsHandler
                 var propDef = type.Props?.FirstOrDefault(d => d.Name == p.Name)
                     ?? throw new InvalidOperationException($"Type '{type.Name}' has no field '{p.Name}'.");
                 if (allowSets && propDef.Cardinality == Cardinality.Set && p.Value.ValueKind == JsonValueKind.Object
-                    && p.Value.TryGetProperty("type", out var setType) && setType.GetString() == "array")
+                    && p.Value.TryGetProperty("type", out var setType) && setType.GetString() == "set")
                     continue;
                 if (propDef.Cardinality != Cardinality.Single || _desc.ScalarBaseOf(propDef.Type) is not { } baseType)
                     throw new InvalidOperationException($"Field '{p.Name}' on '{type.Name}' is not a scalar field.");

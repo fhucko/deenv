@@ -11,7 +11,9 @@ namespace DeEnv.Code;
 // the original item references — preserving object identity for reconciliation.
 public sealed class CodeExecutor
 {
-    private static readonly HashSet<string> CollectionMethods = ["add", "remove", "setEntry", "where", "orderBy", "any", "single"];
+    private static readonly HashSet<string> CollectionMethods =
+        ["add", "remove", "setEntry", "where", "orderBy", "any", "single",
+         "insert", "move", "removeAt", "removeFirst", "removeLast", "removeAll", "removeWhere"];
 
     private readonly IInstanceStore? _store;
 
@@ -209,10 +211,11 @@ public sealed class CodeExecutor
                 else if (obj.Id > 0 && NearestStagingCtx(context) is { } staging)
                 {
                     if (!staging.Staged.TryGetValue(obj, out var fields)) staging.Staged[obj] = fields = [];
-                    fields[member.Name] = value;
+                    // Assigning a list (e.g. where/orderBy result) keeps the durable positive list id.
+                    fields[member.Name] = CoalesceListAssign(obj.Props.GetValueOrDefault(member.Name), value);
                 }
                 else
-                    obj.Props[member.Name] = value;
+                    obj.Props[member.Name] = CoalesceListAssign(obj.Props.GetValueOrDefault(member.Name), value);
                 break;
             }
             default:
@@ -269,12 +272,28 @@ public sealed class CodeExecutor
     private IExecValue ExecuteAssignmentValue(CodeAssignment assignment, ExecScope scope, ExecContext context) =>
         AssignAndReturn(assignment, scope, context);
 
-    private ExecArray ExecuteArray(CodeArray codeArray, ExecScope scope, ExecContext context)
+    // When assigning an ExecList onto a durable list prop, keep the positive list id (ListReplace same id).
+    // Ephemeral where/orderBy results carry a negative id; coalescing rewrites onto the target's id.
+    private static IExecValue CoalesceListAssign(IExecValue? before, IExecValue value)
+    {
+        if (value is not ExecList incoming) return value;
+        if (before is not ExecList { Id: > 0 } durable) return value;
+        // Same positive id, items from the assigned list, ordinal keys.
+        var items = incoming.Items.Select((it, i) => new ExecItem { Key = i, Value = it.Value }).ToList();
+        return new ExecList {
+            Id = durable.Id,
+            Items = items,
+            ElementTypeName = durable.ElementTypeName ?? incoming.ElementTypeName,
+            Constant = durable.Constant,
+        };
+    }
+
+    private IExecCollection ExecuteArray(CodeArray codeArray, ExecScope scope, ExecContext context)
     {
         var items = codeArray.Items
             .Select(p => new ExecItem { Key = --context.LastId.Value, Value = ExecuteValue(p, scope, context) })
             .ToList();
-        return new ExecArray { Items = items, Id = --context.LastId.Value, Kind = ArrayKind.List };
+        return new ExecList { Items = items, Id = --context.LastId.Value,};
     }
 
     private ExecObject ExecuteObject(CodeObject codeObject, ExecScope scope, ExecContext context)
@@ -407,11 +426,11 @@ public sealed class CodeExecutor
         {
             // Inside a computation: a pending leaf — promoted only if the result is tags.
             if (value is ExecObject o) context.LeafStack.Peek().Props.Add((o, null));
-            else if (value is ExecArray c) context.LeafStack.Peek().Items.Add((c, null));
+            else if (value is IExecCollection c) context.LeafStack.Peek().Items.Add((c, null));
             return;
         }
         if (value is ExecObject obj) context.AccessedObjectProps.Add((obj, null));
-        else if (value is ExecArray coll) context.AccessedItems.Add((coll, null));
+        else if (value is IExecCollection coll) context.AccessedItems.Add((coll, null));
     }
 
     private IExecValue ExecuteInfixOp(CodeInfixOp codeInfixOp, ExecScope scope, ExecContext context)
@@ -423,7 +442,7 @@ public sealed class CodeExecutor
             var target = ExecuteValue(codeInfixOp.Left, scope, context);
 
             // A collection method (db.users.add / .where / …) binds to its target.
-            if (target is ExecArray coll && CollectionMethods.Contains(member.Name))
+            if (target is IExecCollection coll && CollectionMethods.Contains(member.Name))
                 return new ExecSysFunction { Target = coll, Method = member.Name };
 
             // A data context: `ctx.dirty` (a bool), `ctx.status` (the form-Save lifecycle), `ctx.conflicts`
@@ -443,7 +462,7 @@ public sealed class CodeExecutor
                     // conflicts: always EMPTY server-side (a conflict is a client-only WS-reply state). An
                     // empty list so `ctx.conflicts.any(...)` is false and `foreach c in ctx.conflicts` is a
                     // no-op — the coarse banner never renders on the SSR paint. Twin of codeExec.ts's read.
-                    "conflicts" => new ExecArray { Items = [], Id = --context.LastId.Value, Kind = ArrayKind.List },
+                    "conflicts" => new ExecList { Items = [], Id = --context.LastId.Value,},
                     _ => new ExecCtxMethod { Ctx = ctx, Method = member.Name },
                 };
 
@@ -822,7 +841,7 @@ public sealed class CodeExecutor
         var ctx = call.Params.Length >= 2 && ExecuteValue(call.Params[1], scope, context) is ExecObject c ? c : null;
         // A non-object 3rd arg is ignored — same as absent, no expansion and no design-var binding.
         var design = call.Params.Length == 3 && ExecuteValue(call.Params[2], scope, context) is ExecObject d ? d : null;
-        var fns = design != null && ReadNodePropOptional(design, "fns", context) is ExecArray f ? f : null;
+        var fns = design != null && ReadNodePropOptional(design, "fns", context) is IExecCollection f ? f : null;
         // M12 V1b — bind design.vars at the walk ROOT, seeding the top-level `bindings` every node inherits
         // (row bindings — for/if loop vars — stack on top and SHADOW a same-named design var, same as any
         // scope binding). Only meaningful with BOTH a design and an eval context (a var's init can't
@@ -842,10 +861,9 @@ public sealed class CodeExecutor
         // invalid — the degrade notice already says fix-then-Refresh, so the stale-fns check below is
         // SKIPPED ENTIRELY on this path (checked FIRST, not just spliced outermost).
         if (ctx != null && HasCtxError(ctx, out var errorMessage))
-            return new ExecArray
-            {
+            return new ExecList {
                 Items = [new ExecItem { Key = 0, Value = EvalDegradeBanner(errorMessage) }, new ExecItem { Key = 1, Value = result }],
-                Id = node.Id, Kind = ArrayKind.List,
+                Id = node.Id,
             };
         // M12 F3b — the staleness banner: ctx.fns is a SNAPSHOT taken at evalContext build time (empty
         // deps, per CANVAS-EVAL-1's deliberate S3a-race inversion), so an edit to a `fns` row's BODY
@@ -856,10 +874,9 @@ public sealed class CodeExecutor
         // Only checked when BOTH ctx and fns were passed (no fns ⇒ nothing live to compare against) AND
         // ctx is NOT degraded (the check above already returned).
         if (ctx != null && fns != null && FnsStale(ctx, fns, context))
-            return new ExecArray
-            {
+            return new ExecList {
                 Items = [new ExecItem { Key = 0, Value = StaleFnsBanner() }, new ExecItem { Key = 1, Value = result }],
-                Id = node.Id, Kind = ArrayKind.List,
+                Id = node.Id,
             };
         return result;
     }
@@ -890,7 +907,7 @@ public sealed class CodeExecutor
     // than by row id, since ctx.fns is keyed by name (the same key EvaluateCtxExpr binds callables under).
     // RecordScannedItem harvests each row for the SSR-then-ship replay (the TS twin has no equivalent —
     // it already holds the full client data, matching ResolveFn's own asymmetry).
-    private bool FnsStale(ExecObject ctx, ExecArray fns, ExecContext context)
+    private bool FnsStale(ExecObject ctx, IExecCollection fns, ExecContext context)
     {
         if (ctx.Props.GetValueOrDefault("fns") is not ExecObject shipped) return false;
         RecordMembership(fns, context);
@@ -941,7 +958,7 @@ public sealed class CodeExecutor
     // enclosing expansion's own params) SHADOWS the fns lookup exactly like a scope binding stops runtime
     // resolution, so a tag bound in `bindings` is never looked up in `fns` at all.
     private IExecValue BuildRenderTree(ExecObject node, ExecContext context, ExecObject? ctx,
-        Dictionary<string, IExecValue>? bindings, ExecArray? fns, ExpansionState expansion)
+        Dictionary<string, IExecValue>? bindings, IExecCollection? fns, ExpansionState expansion)
     {
         var id = node.Id;
         // The node budget (M12 F2 E4) counts every node visited while ALREADY inside an expansion (Depth>0)
@@ -1014,15 +1031,15 @@ public sealed class CodeExecutor
             // plain call syntax — legal at runtime, since a component is just a fn value) can evaluate to a
             // TAG (or an array whose items are all tags — e.g. a helper returning an array literal of tags,
             // which the real runtime already splices generically, SerializeChild/ui.ts flatten-any-array).
-            // That result SPLICES AS CONTENT, not text: ride it on an ExecArray carrying the LEAF row's own
+            // That result SPLICES AS CONTENT, not text: ride it on an IExecCollection carrying the LEAF row's own
             // id (inert, the F2 splice idiom) so its provenance stays this leaf. Any OTHER non-scalar result
             // (an object, a data collection) keeps TODAY'S EXACT behavior via ChildText (empty) — never widened.
             if (ctx != null && EvaluateCtxExpr(expr, ctx, context, bindings) is { } value)
             {
                 if (value is ExecTag tagValue)
-                    return new ExecArray { Items = [new ExecItem { Key = 0, Value = tagValue }], Id = id, Kind = ArrayKind.List };
-                if (value is ExecArray arrValue && arrValue.Items.Count > 0 && arrValue.Items.All(i => i.Value is ExecTag))
-                    return new ExecArray { Items = arrValue.Items, Id = id, Kind = ArrayKind.List };
+                    return new ExecList { Items = [new ExecItem { Key = 0, Value = tagValue }], Id = id,};
+                if (value is IExecCollection arrValue && arrValue.Items.Count > 0 && arrValue.Items.All(i => i.Value is ExecTag))
+                    return new ExecList { Items = arrValue.Items, Id = id,};
                 return new ExecText { Value = ChildText(value) };
             }
             return Chip("expr-chip", expr, id);                                       // an expression placeholder
@@ -1034,7 +1051,7 @@ public sealed class CodeExecutor
     // accumulated row scope (a nested for's collection may reference an outer loop var), then render the body
     // PER ITEM with the loop var bound — the instances REPLACE the template (real content: no badge, no
     // dashed marker, no wrapper element). Each item extends the bindings with {item → its value} and re-walks
-    // the body; the per-item instances are spliced FLAT into an ExecArray (exactly how the real foreach
+    // the body; the per-item instances are spliced FLAT into an IExecCollection (exactly how the real foreach
     // splices rows — SerializeChild/ui.ts flatten an array child, and each body element keeps its OWN
     // MetaNode data-node, so N instances share 1 template row's id — the S6a provenance decision). The array
     // carries the for-row's own id (inert in the display-inert canvas) so the walk mints nothing into
@@ -1042,9 +1059,9 @@ public sealed class CodeExecutor
     // non-collection result — DEGRADES to the S6a template (never guesses). A Set and a List both iterate via
     // .Items, so a synthetic-graph set and a where/orderBy list both instantiate cleanly.
     private IExecValue BuildFor(ExecObject node, int id, ExecContext context, ExecObject? ctx,
-        Dictionary<string, IExecValue>? bindings, ExecArray? fns, ExpansionState expansion)
+        Dictionary<string, IExecValue>? bindings, IExecCollection? fns, ExpansionState expansion)
     {
-        if (ctx != null && EvaluateCtxExpr(ReadNodeText(node, "collection", context), ctx, context, bindings) is ExecArray collection)
+        if (ctx != null && EvaluateCtxExpr(ReadNodeText(node, "collection", context), ctx, context, bindings) is IExecCollection collection)
         {
             var item = ReadNodeText(node, "item", context);
             var body = OrderedMembers(node, "children", context).ToList();
@@ -1057,7 +1074,7 @@ public sealed class CodeExecutor
                 foreach (var b in body)
                     instances.Add(new ExecItem { Key = key++, Value = BuildRenderTree(b, context, ctx, itemBindings, fns, expansion) });
             }
-            return new ExecArray { Items = instances, Id = id, Kind = ArrayKind.List };
+            return new ExecList { Items = instances, Id = id,};
         }
         return BuildForTemplate(node, id, context, ctx, bindings, fns, expansion);
     }
@@ -1066,10 +1083,10 @@ public sealed class CodeExecutor
     // bool — deenv truthiness belongs to the INTERPRETER, not the canvas, so a non-bool result (or any
     // eval failure → null) DEGRADES to the S6a both-branches template rather than inventing truthiness or
     // guessing a branch. A bool renders ONLY the taken branch's children FLAT (no then/else labels — the
-    // taken branch is real content), spliced into an ExecArray exactly like BuildFor. A false condition with
+    // taken branch is real content), spliced into an IExecCollection exactly like BuildFor. A false condition with
     // an empty elseChildren yields an empty array → nothing (correct).
     private IExecValue BuildIf(ExecObject node, int id, ExecContext context, ExecObject? ctx,
-        Dictionary<string, IExecValue>? bindings, ExecArray? fns, ExpansionState expansion)
+        Dictionary<string, IExecValue>? bindings, IExecCollection? fns, ExpansionState expansion)
     {
         if (ctx != null && EvaluateCtxExpr(ReadNodeText(node, "condition", context), ctx, context, bindings) is ExecBool cond)
         {
@@ -1078,7 +1095,7 @@ public sealed class CodeExecutor
             var key = 0;
             foreach (var m in members)
                 items.Add(new ExecItem { Key = key++, Value = BuildRenderTree(m, context, ctx, bindings, fns, expansion) });
-            return new ExecArray { Items = items, Id = id, Kind = ArrayKind.List };
+            return new ExecList { Items = items, Id = id,};
         }
         return BuildIfTemplate(node, id, context, ctx, bindings, fns, expansion);
     }
@@ -1090,7 +1107,7 @@ public sealed class CodeExecutor
     // for nested inside an evaluated outer for). Deterministic + twin-identical (pinned by the conformance
     // case).
     private IExecValue BuildForTemplate(ExecObject node, int id, ExecContext context, ExecObject? ctx,
-        Dictionary<string, IExecValue>? bindings, ExecArray? fns, ExpansionState expansion)
+        Dictionary<string, IExecValue>? bindings, IExecCollection? fns, ExpansionState expansion)
     {
         var item = ReadNodeText(node, "item", context);
         var collection = ReadNodeText(node, "collection", context);
@@ -1125,7 +1142,7 @@ public sealed class CodeExecutor
     // selection is BuildIf); any OUTER row-scope binding still threads through the branch bodies.
     // Deterministic + twin-identical (pinned by the conformance case).
     private IExecValue BuildIfTemplate(ExecObject node, int id, ExecContext context, ExecObject? ctx,
-        Dictionary<string, IExecValue>? bindings, ExecArray? fns, ExpansionState expansion)
+        Dictionary<string, IExecValue>? bindings, IExecCollection? fns, ExpansionState expansion)
     {
         var condition = ReadNodeText(node, "condition", context);
         var thenBody = OrderedMembers(node, "children", context).Select(c => (IExecTagChild)BuildRenderTree(c, context, ctx, bindings, fns, expansion)).ToList();
@@ -1187,7 +1204,7 @@ public sealed class CodeExecutor
     // LAST one in `order` (mirrors DefineFunction's last-wins for the mid-edit window before projection's
     // duplicate refusal fires); `>=` also keeps ties on equal `order` deterministic (last in iteration order
     // wins), twin-identical since both twins iterate `fns.Items` in the same shipped list order.
-    private ExecObject? ResolveFn(ExecArray fns, string tag, ExecContext context)
+    private ExecObject? ResolveFn(IExecCollection fns, string tag, ExecContext context)
     {
         RecordMembership(fns, context);
         ExecObject? best = null;
@@ -1293,7 +1310,7 @@ public sealed class CodeExecutor
     // value). A param literally NAMED "key" always binds ExecNull, NEVER reading a same-named attr (BindParams
     // :2334 excludes it too — `key` is the reserved slot-reset directive, not a real param). The body walks
     // with bindings = the params ONLY — the caller's own bindings do NOT leak in (runtime scoping: a
-    // component sees its params, not the caller's locals). The result rides an ExecArray (ArrayKind.List,
+    // component sees its params, not the caller's locals). The result rides an IExecCollection (ExecList,
     // carrying the INVOCATION row's id, inert) — the exact BuildFor splice idiom — so every expanded element
     // keeps its OWN body-row data-node (S4's future click-to-select spine).
     //
@@ -1312,7 +1329,7 @@ public sealed class CodeExecutor
     // tag-resolution site) renders the SAME component-chip an unnamed/bodyless/depth-capped fn already uses
     // — never guess which binding (or the crash) the runtime would actually produce.
     private IExecValue? ExpandFn(ExecObject fn, ExecObject bodyRoot, ExecObject invocationNode, ExecContext context,
-        ExecObject? ctx, Dictionary<string, IExecValue>? callerBindings, ExecArray fns, ExpansionState expansion)
+        ExecObject? ctx, Dictionary<string, IExecValue>? callerBindings, IExecCollection fns, ExpansionState expansion)
     {
         var paramNames = ReadNodeText(fn, "params", context)
             .Split(',').Select(p => p.Trim()).Where(p => p.Length > 0).ToArray();
@@ -1351,7 +1368,7 @@ public sealed class CodeExecutor
         try
         {
             var result = BuildRenderTree(bodyRoot, context, ctx, bodyBindings, fns, expansion);
-            return new ExecArray { Items = [new ExecItem { Key = 0, Value = result }], Id = invocationNode.Id, Kind = ArrayKind.List };
+            return new ExecList { Items = [new ExecItem { Key = 0, Value = result }], Id = invocationNode.Id,};
         }
         finally { expansion.Depth--; }
     }
@@ -1545,7 +1562,7 @@ public sealed class CodeExecutor
     // replays it, and an add/remove re-renders). Non-object / absent → empty.
     private List<ExecObject> OrderedMembers(ExecObject node, string setProp, ExecContext context)
     {
-        if (ReadNodeProp(node, setProp, context) is not ExecArray set) return [];
+        if (ReadNodeProp(node, setProp, context) is not IExecCollection set) return [];
         RecordMembership(set, context);
         // Read each member's `order` EXPLICITLY (not lazily inside OrderBy's key selector — a single-element
         // OrderBy can elide the selector, which would skip the `order` dep and NOT ship it, breaking the
@@ -1579,7 +1596,7 @@ public sealed class CodeExecutor
     // a fn with no declared `vars` behaves exactly as it always has.
     private List<ExecObject> OrderedMembersOptional(ExecObject node, string setProp, ExecContext context)
     {
-        if (ReadNodePropOptional(node, setProp, context) is not ExecArray set) return [];
+        if (ReadNodePropOptional(node, setProp, context) is not IExecCollection set) return [];
         RecordMembership(set, context);
         var keyed = new List<(ExecObject Obj, int Order)>();
         foreach (var item in set.Items)
@@ -1702,7 +1719,7 @@ public sealed class CodeExecutor
     }
 
     // Mark a freshly-evaluated descriptor tree as Constant — recursively, through every nested
-    // ExecObject and ExecArray. A descriptor is provably constant and user-data-free (built by
+    // ExecObject and IExecCollection. A descriptor is provably constant and user-data-free (built by
     // GenericUi.TypeDescriptor/PropDesc from schema metadata only, evaluated in a fresh empty scope
     // so it cannot reference `db`), so ClientState may ship the WHOLE tree (every prop + item) rather
     // than only the accessed parts. This is what fixes the empty-array bug (a descriptor's nested
@@ -1720,7 +1737,7 @@ public sealed class CodeExecutor
                 o.Constant = true;
                 foreach (var pv in o.Props.Values) MarkConstant(pv);
                 break;
-            case ExecArray a:
+            case IExecCollection a:
                 a.Constant = true;
                 foreach (var item in a.Items) MarkConstant(item.Value);
                 break;
@@ -1838,14 +1855,15 @@ public sealed class CodeExecutor
     private static IExecValue DefaultProp(ExecObject prop) => PropBaseType(prop) switch
     {
         "object" => new ExecNull(),
-        "set" => new ExecArray { Items = [], Id = 0, Kind = ArrayKind.Set, ElementTypeName = PropElement(prop) },
-        "dictionary" => new ExecArray { Items = [], Id = 0, Kind = ArrayKind.Dict, ElementTypeName = PropElement(prop) },
+        "set" => new ExecSet { Items = [], Id = 0, ElementTypeName = PropElement(prop) },
+        "dictionary" => new ExecDict { Items = [], Id = 0, ElementTypeName = PropElement(prop) },
+        "list" => new ExecList { Items = [], Id = 0, ElementTypeName = PropElement(prop) },
         var b => DefaultExec(b),
     };
 
     // A descriptor's prop list (`props` / `valueProps`) — a Code array of prop-descriptor objects.
     private static IEnumerable<ExecObject> DescriptorProps(ExecObject desc, string field) =>
-        desc.Props.TryGetValue(field, out var v) && v is ExecArray arr
+        desc.Props.TryGetValue(field, out var v) && v is IExecCollection arr
             ? arr.Items.Select(i => i.Value).OfType<ExecObject>()
             : [];
 
@@ -1966,6 +1984,8 @@ public sealed class CodeExecutor
         // A set route (object set): owner-bound — bind the OWNER, fetch the ELEMENT type's descriptor.
         if (typeInfo is { Cardinality: Cardinality.Set, Type.BaseType: BaseType.Object })
             return OwnerBound(context, db, path, "set", typeName: typeInfo.Type.Name);
+        if (typeInfo is { Cardinality: Cardinality.List })
+            return OwnerBound(context, db, path, "list", typeName: typeInfo.Type.Name);
 
         // A dictionary route: owner-bound — bind the OWNER; the dict reads sys.schema(parentType, prop),
         // so typeName is "" and parentType carries the owner's type.
@@ -2075,17 +2095,18 @@ public sealed class CodeExecutor
     }
 
     // Walk URL segments through the loaded `db` graph to BIND the routed object — the twin of
-    // SsrRenderer.FindTarget. A set member segment is the member's identity id; a dict entry segment
-    // is its __key; a field segment is a prop. Each step records its read as an accessed leaf
-    // (membership + the descended item + the bound object) so the GRAPH PATH ships — the client's own
-    // resolve walk then re-binds the same nodes on hydrate. Null when anything is missing.
+    // SsrRenderer.FindTarget. A set member segment is the member's identity id; a list member segment
+    // is also an object id (membership ≥1 — never an index; list ExecItem.Key is ordinal); a dict
+    // entry segment is its __key; a field segment is a prop. Each step records its read as an accessed
+    // leaf (membership + the descended item + the bound object) so the GRAPH PATH ships — the client's
+    // own resolve walk then re-binds the same nodes on hydrate. Null when anything is missing.
     private static IExecValue? FindTarget(ExecObject root, NodePath path, ExecContext context)
     {
         IExecValue current = root;
         context.AccessedObjectProps.Add((root, null));
         foreach (var segment in path.Segments)
         {
-            if (current is ExecArray { Kind: ArrayKind.Dict } dict)
+            if (current is ExecDict dict)
             {
                 context.AccessedItems.Add((dict, null));
                 var item = dict.Items.FirstOrDefault(i =>
@@ -2095,7 +2116,16 @@ public sealed class CodeExecutor
                 context.AccessedItems.Add((dict, item));
                 current = item.Value;
             }
-            else if (current is ExecArray arr && int.TryParse(segment, out var id))
+            else if (current is ExecList list && int.TryParse(segment, out var listMemberId))
+            {
+                // List: match by object id (membership ≥1), not by ordinal Key.
+                context.AccessedItems.Add((list, null));
+                var item = list.Items.FirstOrDefault(i => i.Value is ExecObject o && o.Id == listMemberId);
+                if (item == null) return null;
+                context.AccessedItems.Add((list, item));
+                current = item.Value;
+            }
+            else if (current is IExecCollection arr && int.TryParse(segment, out var id))
             {
                 context.AccessedItems.Add((arr, null));
                 var item = arr.Items.FirstOrDefault(i => i.Key == id);
@@ -2428,7 +2458,7 @@ public sealed class CodeExecutor
     private static bool ContainsTags(IExecValue result) => result switch
     {
         ExecTag => true,
-        ExecArray a => a.Items.Any(i => ContainsTags(i.Value)), // nested arrays of tags too
+        IExecCollection a => a.Items.Any(i => ContainsTags(i.Value)), // nested arrays of tags too
         _ => false,
     };
 
@@ -2452,7 +2482,7 @@ public sealed class CodeExecutor
     private static string ArgKey(IExecValue v) => v switch
     {
         ExecObject o => "o" + o.Id,
-        ExecArray a  => "a" + a.Id,
+        IExecCollection a  => "a" + a.Id,
         ExecInt i         => "i" + i.Value,
         ExecBool b   => "b" + (b.Value ? 1 : 0),
         ExecText t   => "t" + t.Value.Length + ":" + t.Value, // length-prefixed: delimiter-safe
@@ -2496,6 +2526,9 @@ public sealed class CodeExecutor
                 AddToCollection(sysFn.Target, ExecuteValue(args[0], scope, context), context);
                 return new ExecNothing();
             case "remove":
+                // Set-only identity remove. List uses removeAt/removeFirst/removeLast/removeAll/removeWhere.
+                if (sysFn.Target is ExecList)
+                    throw new CodeRuntimeException("remove is not valid on a list; use removeAt/removeFirst/removeLast/removeAll/removeWhere.");
                 RemoveFromCollection(sysFn.Target, ExecuteValue(args[0], scope, context), context);
                 return new ExecNothing();
             // setEntry(key, value): a dictionary create/replace. Dict entries persist through
@@ -2503,6 +2536,68 @@ public sealed class CodeExecutor
             // refetch never runs a click handler) it no-ops, like setRef.
             case "setEntry":
                 return new ExecNothing();
+            case "insert":
+            {
+                if (sysFn.Target is not ExecList list)
+                    throw new CodeRuntimeException("insert is only valid on a list.");
+                var index = ExecuteValue(args[0], scope, context) is ExecInt i
+                    ? i.Value : throw new CodeRuntimeException("insert expects an int index.");
+                ListInsert(list, index, ExecuteValue(args[1], scope, context), context);
+                return new ExecNothing();
+            }
+            case "move":
+            {
+                if (sysFn.Target is not ExecList list)
+                    throw new CodeRuntimeException("move is only valid on a list.");
+                var from = ExecuteValue(args[0], scope, context) is ExecInt a
+                    ? a.Value : throw new CodeRuntimeException("move expects int from/to.");
+                var to = ExecuteValue(args[1], scope, context) is ExecInt b
+                    ? b.Value : throw new CodeRuntimeException("move expects int from/to.");
+                ListMove(list, from, to, context);
+                return new ExecNothing();
+            }
+            case "removeAt":
+            {
+                if (sysFn.Target is not ExecList list)
+                    throw new CodeRuntimeException("removeAt is only valid on a list.");
+                var index = ExecuteValue(args[0], scope, context) is ExecInt i
+                    ? i.Value : throw new CodeRuntimeException("removeAt expects an int index.");
+                ListRemoveAt(list, index, context);
+                return new ExecNothing();
+            }
+            case "removeFirst":
+            {
+                if (sysFn.Target is not ExecList list)
+                    throw new CodeRuntimeException("removeFirst is only valid on a list.");
+                if (list.Items.Count > 0) ListRemoveAt(list, 0, context);
+                return new ExecNothing();
+            }
+            case "removeLast":
+            {
+                if (sysFn.Target is not ExecList list)
+                    throw new CodeRuntimeException("removeLast is only valid on a list.");
+                if (list.Items.Count > 0) ListRemoveAt(list, list.Items.Count - 1, context);
+                return new ExecNothing();
+            }
+            case "removeAll":
+            {
+                if (sysFn.Target is not ExecList list)
+                    throw new CodeRuntimeException("removeAll is only valid on a list.");
+                ListReplaceItems(list, [], context);
+                return new ExecNothing();
+            }
+            case "removeWhere":
+            {
+                if (sysFn.Target is not ExecList list)
+                    throw new CodeRuntimeException("removeWhere is only valid on a list.");
+                var lambda = AsLambda(args[0], scope, context);
+                var kept = list.Items
+                    .Where(item => InvokeLambda(lambda, item.Value, context) is not ExecBool { Value: true })
+                    .Select(item => item.Value)
+                    .ToList();
+                ListReplaceItems(list, kept, context);
+                return new ExecNothing();
+            }
             case "where":
             {
                 var lambda = AsLambda(args[0], scope, context);
@@ -2553,18 +2648,25 @@ public sealed class CodeExecutor
         ExecuteValue(arg, scope, context) as ExecFunction
         ?? throw new CodeRuntimeException("Expected a lambda argument.");
 
-    private void AddToCollection(ExecArray coll, IExecValue value, ExecContext context)
+    private void AddToCollection(IExecCollection coll, IExecValue value, ExecContext context)
     {
+        // List append = insert at len (ordinal keys).
+        if (coll is ExecList list)
+        {
+            ListInsert(list, list.Items.Count, value, context);
+            return;
+        }
+
         // Staging branch (atomic-commit Step B): a TRANSIENT (id<0) draft added to a SET under a STAGING ctx
         // STAGES — it joins the ctx's Creates instead of persisting, so the changeset commits all-or-none at
         // the outermost commit. The same id<0 discriminator the object-prop staging gate uses; an EXISTING
         // (id>0) member falls through to the live/store path below. Checked FIRST and gated only on the ctx
         // (not the store), so it runs identically to the client twin — including in the store-less conformance
         // harness, the ONLY place it runs on the server (the live AddToCollection mints in-store, below).
-        if (coll.Kind == ArrayKind.Set && value is ExecObject { Id: < 0 } draft
+        if (coll is ExecSet set && value is ExecObject { Id: < 0 } draft
             && NearestStagingCtx(context) is { } staging)
         {
-            staging.Creates.Add(new StagedCreate(draft, new SetJoin(coll)));
+            staging.Creates.Add(new StagedCreate(draft, new SetJoin(set)));
             coll.Items.Add(new ExecItem { Key = draft.Id, Value = draft }); // optimistic row, local only
             return;
         }
@@ -2583,7 +2685,7 @@ public sealed class CodeExecutor
         // (the only live server-side CodeExecutor with a real store runs exclusively via
         // InvokeHandlerForHarvest, which forces context.ReadOnly = true), kept here only so the AST-level
         // semantics stay honest with the client twin if a future server-side live-execution path reaches it.
-        if (coll is { Kind: ArrayKind.Set, ElementTypeName: { } elemType } && _store != null
+        if (coll is ExecSet { ElementTypeName: { } elemType } && _store != null
             && !context.ReadOnly && value is ExecObject obj)
         {
             if (obj.Id < 0)
@@ -2600,27 +2702,86 @@ public sealed class CodeExecutor
         }
     }
 
-    private void RemoveFromCollection(ExecArray coll, IExecValue value, ExecContext context)
+    private void RemoveFromCollection(IExecCollection coll, IExecValue value, ExecContext context)
     {
         var item = coll.Items.FirstOrDefault(i => ReferenceEquals(i.Value, value)
             || (i.Value is ExecObject a && value is ExecObject b && a.Id == b.Id));
         if (item != null) coll.Items.Remove(item);
 
         // READ-ONLY (slice 4): the in-memory remove stands but the store is left untouched (see AddToCollection).
-        if (coll.Kind == ArrayKind.Set && _store != null && !context.ReadOnly && value is ExecObject obj && obj.Id > 0)
+        if (coll is ExecSet && _store != null && !context.ReadOnly && value is ExecObject obj && obj.Id > 0)
             _store.RemoveFromSet(coll.Id, obj.Id);
     }
 
-    private ExecArray Where(ExecArray coll, ExecFunction predicate, ExecContext context)
+    // ── list mutators (in-memory; durable persist is client unified-commit) ─────────────────
+
+    private void ListInsert(ExecList list, int index, IExecValue value, ExecContext context)
+    {
+        if (index < 0 || index > list.Items.Count)
+            throw new CodeRuntimeException($"List insert index {index} out of range (len {list.Items.Count}).");
+
+        // Staging: transient draft into a list under a staging ctx joins Creates (listInsert join).
+        if (value is ExecObject { Id: < 0 } draft && NearestStagingCtx(context) is { } staging)
+        {
+            staging.Creates.Add(new StagedCreate(draft, new ListInsertJoin(list, index)));
+            list.Items.Insert(index, new ExecItem { Key = index, Value = draft });
+            ReindexList(list);
+            return;
+        }
+
+        list.Items.Insert(index, new ExecItem { Key = index, Value = value });
+        ReindexList(list);
+        // Server-side live persist is client-driven via unified commit; C# twin is in-memory only here
+        // (read-only harvest / conformance). No store touch.
+        _ = context;
+    }
+
+    private void ListRemoveAt(ExecList list, int index, ExecContext context)
+    {
+        if (index < 0 || index >= list.Items.Count)
+            throw new CodeRuntimeException($"List removeAt index {index} out of range (len {list.Items.Count}).");
+        list.Items.RemoveAt(index);
+        ReindexList(list);
+        _ = context;
+    }
+
+    private void ListMove(ExecList list, int from, int to, ExecContext context)
+    {
+        if (from < 0 || from >= list.Items.Count || to < 0 || to >= list.Items.Count)
+            throw new CodeRuntimeException(
+                $"List move from={from} to={to} out of range (len {list.Items.Count}).");
+        if (from == to) return;
+        var item = list.Items[from];
+        list.Items.RemoveAt(from);
+        list.Items.Insert(to, item);
+        ReindexList(list);
+        _ = context;
+    }
+
+    private void ListReplaceItems(ExecList list, IReadOnlyList<IExecValue> values, ExecContext context)
+    {
+        list.Items.Clear();
+        for (var i = 0; i < values.Count; i++)
+            list.Items.Add(new ExecItem { Key = i, Value = values[i] });
+        _ = context;
+    }
+
+    private static void ReindexList(ExecList list)
+    {
+        for (var i = 0; i < list.Items.Count; i++)
+            list.Items[i].Key = i;
+    }
+
+    private IExecCollection Where(IExecCollection coll, ExecFunction predicate, ExecContext context)
     {
         RecordMembership(coll, context);
         var items = coll.Items
             .Where(item => InvokeLambda(predicate, item.Value, context) is ExecBool { Value: true })
             .ToList();
-        return new ExecArray { Items = items, Id = --context.LastId.Value, Kind = ArrayKind.List };
+        return new ExecList { Items = items, Id = --context.LastId.Value,};
     }
 
-    private ExecArray OrderBy(ExecArray coll, ExecFunction keySelector, ExecContext context)
+    private IExecCollection OrderBy(IExecCollection coll, ExecFunction keySelector, ExecContext context)
     {
         RecordMembership(coll, context);
         var items = coll.Items
@@ -2628,15 +2789,15 @@ public sealed class CodeExecutor
             .OrderBy(p => p.key, ExecValueComparer.Instance)
             .Select(p => p.item)
             .ToList();
-        return new ExecArray { Items = items, Id = --context.LastId.Value, Kind = ArrayKind.List };
+        return new ExecList { Items = items, Id = --context.LastId.Value,};
     }
 
-    private static int NextItemId(ExecArray coll) =>
+    private static int NextItemId(IExecCollection coll) =>
         coll.Items.Count == 0 ? 1 : coll.Items.Max(i => i.Key) + 1;
 
     // A where/orderBy observes the source collection's membership: an add/remove to it
     // can change the result, so it is a dependency of the surrounding computation.
-    private static void RecordMembership(ExecArray coll, ExecContext context)
+    private static void RecordMembership(IExecCollection coll, ExecContext context)
     {
         if (context.DepStack.Count > 0) context.DepStack.Peek().Members.Add(new MemberDep(coll.Id));
     }
@@ -2649,7 +2810,7 @@ public sealed class CodeExecutor
     // ships nothing: a set consumed ONLY by single/any (never a foreach) would otherwise ship empty and the
     // client's single/any would return null/false over it (the E1 host-action-repopulated-set bug). Server
     // harvesting only — the TS twin has no client-state to emit, so it records no leaves.
-    private static void RecordScannedItem(ExecArray coll, ExecItem item, ExecContext context)
+    private static void RecordScannedItem(IExecCollection coll, ExecItem item, ExecContext context)
     {
         if (context.DepStack.Count == 0) context.AccessedItems.Add((coll, item));
         else context.LeafStack.Peek().Items.Add((coll, item));
@@ -2805,7 +2966,7 @@ public sealed class CodeExecutor
     // child; an array (a fragment) splices flat.
     private static IExecTagChild[] SpliceView(IExecValue view) => view switch
     {
-        ExecArray arr => [.. arr.Items.Select(i => (IExecTagChild)i.Value)],
+        IExecCollection arr => [.. arr.Items.Select(i => (IExecTagChild)i.Value)],
         _             => [view],
     };
 
@@ -2819,7 +2980,7 @@ public sealed class CodeExecutor
 
     private IExecTagChild[] ExecuteTagForEach(CodeTagForEach codeForEach, ExecScope scope, ExecContext context)
     {
-        var collection = ExecuteValue(codeForEach.Collection, scope, context) as ExecArray
+        var collection = ExecuteValue(codeForEach.Collection, scope, context) as IExecCollection
             ?? throw new CodeRuntimeException("foreach target is not a collection.");
         // Inside a computation, iterating observes membership (an add/remove changes
         // the output) and each item is a pending leaf of the surrounding tag fn.
@@ -2830,11 +2991,11 @@ public sealed class CodeExecutor
             RecordScannedItem(collection, item, context);
             var itemScope = new ExecScope { Parent = scope };
             itemScope.Items[codeForEach.Item.Name] = new ExecScopeItem { Value = item.Value, IsReadOnly = true };
-            // Push a per-row segment onto the slot path so a component inside this row keys on the
-            // member's IDENTITY — its object id (else the item key), the SAME key the DOM
-            // reconciler uses (codeExec.ts) — so each row's component state is independent and moves
-            // with the object across reorder/insert/remove, not with the row position.
-            var rowKey = item.Value is ExecObject o ? o.Id : item.Key;
+            // Slot/DOM row key: list uses ORDINAL item.Key (same object may appear twice → two rows);
+            // set/dict keep identity / entry keys (object id when present).
+            var rowKey = collection is ExecList
+                ? item.Key
+                : item.Value is ExecObject o ? o.Id : item.Key;
             context.SlotPath.Add("row" + rowKey);
             try { children.AddRange(ExecuteTagChildren(codeForEach.Body, itemScope, context)); }
             finally { context.SlotPath.RemoveAt(context.SlotPath.Count - 1); }

@@ -33,16 +33,19 @@ public static class AppParse
 
     // ── types ────────────────────────────────────────────────────────────────────
 
-    // `name type` / `name set of Type` / `name dict of Type by key`, `?` = nullable (no colon —
-    // the name and its type are separated by whitespace; see Prop). A single scalar prop may carry
-    // an optional trailing `multiline` keyword (`notes text multiline`) — a presentation attribute
+    // `name type` / `name set of Type` / `name list of Type` / `name dict of Type by key`, `?` = nullable
+    // (no colon — the name and its type are separated by whitespace; see Prop). A single scalar prop may
+    // carry an optional trailing `multiline` keyword (`notes text multiline`) — a presentation attribute
     // that makes the generic UI render a <textarea>; it is grammatically valid only after a single
-    // prop's type (never on a set/dict — there it simply fails to parse), and the loader further
+    // prop's type (never on a set/dict/list — there it simply fails to parse), and the loader further
     // restricts it to `text` props.
     private static Parser<Func<string, PropDefinition>> PropType => OneOf(
         Seq(Text("set"), Ws1, Text("of"), Ws1, Name,
             (_, _, _, _, elem) => (Func<string, PropDefinition>)(name =>
                 new PropDefinition(name, elem, Cardinality.Set))),
+        Seq(Text("list"), Ws1, Text("of"), Ws1, Name,
+            (_, _, _, _, elem) => (Func<string, PropDefinition>)(name =>
+                new PropDefinition(name, elem, Cardinality.List))),
         Seq(Text("dict"), Ws1, Text("of"), Ws1, Name,
             Optional(Seq(Ws1, Text("by"), Ws1, Name, (_, _, _, k) => k)),
             (_, _, _, _, elem, key) => (Func<string, PropDefinition>)(name =>
@@ -97,19 +100,24 @@ public static class AppParse
 
     // ── initialData ──────────────────────────────────────────────────────────────
     // Seeds parse into the same friendly JSON shapes the store consumes: plain
-    // scalars, sets as arrays of member ids, single refs as bare ids.
+    // scalars, sets/lists-of-objects as arrays of member ids (order significant for
+    // lists; duplicates allowed on lists), lists-of-scalars as arrays of scalars,
+    // single refs as bare ids.
 
-    private static Parser<JsonNode?> SeedValue => OneOf<JsonNode?>(
+    private static Parser<JsonNode?> SeedScalar => OneOf<JsonNode?>(
         CodeParse.TextLiteral.ConvertTo(t => (JsonNode?)JsonValue.Create(t.Value)),
         Regex(@"-?[0-9]+\.[0-9]+").ConvertTo(d => (JsonNode?)JsonValue.Create(
             decimal.Parse(d, System.Globalization.CultureInfo.InvariantCulture))),
         Regex("-?(0|[1-9][0-9]*)").ConvertTo(i => (JsonNode?)JsonValue.Create(int.Parse(i))),
         Text("true").ConvertTo(_ => (JsonNode?)JsonValue.Create(true)),
-        Text("false").ConvertTo(_ => (JsonNode?)JsonValue.Create(false)),
+        Text("false").ConvertTo(_ => (JsonNode?)JsonValue.Create(false)));
+
+    private static Parser<JsonNode?> SeedValue => OneOf<JsonNode?>(
+        SeedScalar,
         Seq(Text("["), Ws0,
-            Many0Separated(Text(","), Seq(Ws0, Regex("[1-9][0-9]*"), Ws0, (_, id, _) => id)),
+            Many0Separated(Text(","), Seq(Ws0, SeedScalar, Ws0, (_, v, _) => v)),
             Text("]"),
-            (_, _, ids, _) => (JsonNode?)new JsonArray(ids.Select(id => (JsonNode?)JsonValue.Create(int.Parse(id))).ToArray())));
+            (_, _, vals, _) => (JsonNode?)new JsonArray(vals.Select(v => v?.DeepClone()).ToArray())));
 
     private static IndentedParser<(string Type, string Id, JsonObject Fields)> SeedEntry => indent =>
         Seq(Name, Ws1, Regex("[1-9][0-9]*"), NlOrEnd,

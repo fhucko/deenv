@@ -28,16 +28,16 @@ public static class ClientState
             if (item != null) accessedItems.Add(item);
 
         var objects = new JsonObject();
-        var arrays = new JsonObject();
+        var collections = new JsonObject();
         var seenObjects = new HashSet<int>();
-        var seenArrays = new HashSet<int>();
+        var seenCollections = new HashSet<int>();
 
         JsonObject Simple(JsonObject value) => new() { ["type"] = "simple", ["value"] = value };
 
         JsonObject DtValue(IExecValue value) => value switch
         {
             ExecObject o => ObjectRef(o),
-            ExecArray a => CollectionRef(a),
+            IExecCollection a => CollectionRef(a),
             ExecInt i => Simple(new JsonObject { ["type"] = "int", ["value"] = i.Value }),
             ExecBool b => Simple(new JsonObject { ["type"] = "bool", ["value"] = b.Value }),
             ExecText t => Simple(new JsonObject { ["type"] = "text", ["value"] = t.Value }),
@@ -84,23 +84,35 @@ public static class ClientState
             return new JsonObject { ["type"] = "object", ["id"] = o.Id };
         }
 
-        JsonObject CollectionRef(ExecArray a)
+        static string CollectionTypeTag(IExecCollection a) => a switch
         {
-            if (seenArrays.Add(a.Id))
+            ExecSet => "set",
+            ExecDict => "dict",
+            ExecList => "list",
+            _ => throw new InvalidOperationException($"Unknown collection type {a.GetType().Name}."),
+        };
+
+        JsonObject CollectionRef(IExecCollection a)
+        {
+            if (seenCollections.Add(a.Id))
             {
                 var items = new JsonArray();
-                arrays[a.Id.ToString()] = new JsonObject
+                var typeTag = CollectionTypeTag(a);
+                var entry = new JsonObject
                 {
-                    ["kind"] = a.Kind.ToString().ToLowerInvariant(),
+                    ["type"] = typeTag,
                     ["elementTypeName"] = a.ElementTypeName,
-                    ["sourcePath"] = a.SourcePath,   // dicts persist via their path (add/removeEntry)
                     ["items"] = items,
                 };
-                // R7 addressing: dict arrays carry ownerRef + dictProp for id-based relations.
-                var dictArrJson = arrays[a.Id.ToString()]!;
-                if (a.OwnerRef is { } arrRef) dictArrJson["ownerRef"] = arrRef;
-                if (a.DictProp is { } arrProp) dictArrJson["dictProp"] = arrProp;
-                // A Constant array (a descriptor's prop list — props/values/valueProps) ships ALL its
+                // Dicts persist via path (add/removeEntry) and carry R7 owner addressing.
+                if (a is ExecDict dict)
+                {
+                    entry["sourcePath"] = dict.SourcePath;
+                    if (dict.OwnerRef is { } arrRef) entry["ownerRef"] = arrRef;
+                    if (dict.DictProp is { } arrProp) entry["dictProp"] = arrProp;
+                }
+                collections[a.Id.ToString()] = entry;
+                // A Constant collection (a descriptor's prop list — props/values/valueProps) ships ALL its
                 // items; its element objects are Constant too, so they recurse whole. Otherwise only the
                 // DISPLAYED items ship — so a where/orderBy result or array literal (negative-id, NOT
                 // Constant) never spills its undisplayed membership, even when nested in a shipped
@@ -109,7 +121,7 @@ public static class ClientState
                     if (a.Constant || accessedItems.Contains(item))
                         items.Add(new JsonObject { ["key"] = item.Key, ["value"] = DtValue(item.Value) });
             }
-            return new JsonObject { ["type"] = "array", ["id"] = a.Id };
+            return new JsonObject { ["type"] = CollectionTypeTag(a), ["id"] = a.Id };
         }
 
         // Register every accessed object/collection as a leaf (incl. derived lists reached
@@ -155,7 +167,7 @@ public static class ClientState
 
         return new JsonObject
         {
-            ["leaves"] = new JsonObject { ["objects"] = objects, ["arrays"] = arrays },
+            ["leaves"] = new JsonObject { ["objects"] = objects, ["collections"] = collections },
             ["scope"] = scope,
             ["cache"] = cache,
         };

@@ -114,6 +114,23 @@ public static class StoredDataValidator
                         }
                         break;
 
+                    case Cardinality.List:
+                        if (node is not StoredList list)
+                        {
+                            Fail($"{where} is declared 'list of {prop.Type}' but is stored as '{KindOf(node)}'.");
+                            break;
+                        }
+                        CollectionId(list.Id, where);
+                        // Duplicate object refs are allowed (same id in two slots is two items).
+                        foreach (var item in list.Items)
+                        {
+                            if (desc.IsObjectType(prop.Type))
+                                Reference(item, prop.Type, where);
+                            else
+                                Scalar(item, prop.Type, where);
+                        }
+                        break;
+
                     default:
                         if (desc.IsObjectType(prop.Type))
                             Reference(node, prop.Type, where);
@@ -194,6 +211,7 @@ public static class StoredDataValidator
             StoredRef => "object",
             StoredSet => "set",
             StoredDict => "dictionary",
+            StoredList => "list",
             StoredLeaf leaf => ScalarTag(leaf.Scalar),
             _ => node.GetType().Name,
         };

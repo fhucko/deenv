@@ -33,7 +33,7 @@ interface CodeTagAttribute { name: string; value: CodeValue; }
 interface CodeTagIf { type: "if"; condition: CodeValue; body: CodeTagChild[]; elseBody: CodeTagChild[] | null; }
 interface CodeTagForEach { type: "foreach"; item: CodeSymbol; collection: CodeValue; body: CodeTagChild[]; }
 
-type ExecValue = ExecFunction | ExecSysFunction | ExecTag | ExecArray | ExecObject |
+type ExecValue = ExecFunction | ExecSysFunction | ExecTag | ExecCollection | ExecObject |
     ExecInt | ExecBool | ExecText | ExecNull | ExecNothing | ExecCtx | ExecCtxMethod;
 type ExecTagChild = ExecValue;
 type ExecResult = { value: ExecValue; setValue?: (value: ExecValue) => void; };
@@ -44,14 +44,23 @@ interface ExecText { type: "text"; value: string; }
 interface ExecNull { type: "null"; }
 interface ExecNothing { type: "nothing"; }
 interface ExecObject { type: "object"; props: { [name: string]: ExecValue }; id: number; sourcePath?: string; scalarEntry?: boolean; ownerRef?: number; dictProp?: string; key?: string; }
-interface ExecArray { type: "array"; kind: "set" | "dict" | "list"; items: ExecArrayItem[]; id: number; elementTypeName?: string; sourcePath?: string; ownerRef?: number; dictProp?: string; }
-interface ExecArrayItem { key: number; value: ExecValue; }
+type ExecCollection = ExecSet | ExecDict | ExecList;
+interface ExecSet  { type: "set";  items: ExecCollectionItem[]; id: number; elementTypeName?: string; constant?: boolean; }
+interface ExecDict { type: "dict"; items: ExecCollectionItem[]; id: number; elementTypeName?: string; sourcePath?: string; ownerRef?: number; dictProp?: string; constant?: boolean; }
+interface ExecList { type: "list"; items: ExecCollectionItem[]; id: number; elementTypeName?: string; constant?: boolean; }
+interface ExecCollectionItem { key: number; value: ExecValue; }
+function isCollection(v: ExecValue | undefined | null): v is ExecCollection {
+    return v != null && (v.type === "set" || v.type === "dict" || v.type === "list");
+}
 interface ExecFunction { type: "fn"; fn: CodeFunction; scope: ExecScope; capturedAmbient?: AmbientFrame | null; handlerSlot?: string; }
 interface ExecSysFunction { type: "sysFn"; fn(args: ExecValue[]): ExecValue; }
 interface ExecCtx { type: "ctx"; id: number; staged: Map<ExecObject, Map<string, ExecValue>>; creates: StagedCreate[]; parent: ExecCtx | null; live: boolean; status: string; pending: number; conflicts: ExecValue[]; notifyChange?: () => void; }
 let currentExecCtx: ExecCtx | null = null;
 interface StagedCreate { draft: ExecObject; join: CreateJoin; }
-type CreateJoin = { kind: "setAdd"; set: ExecArray } | { kind: "refSet"; parent: ExecObject; prop: string };
+type CreateJoin =
+    | { kind: "setAdd"; set: ExecSet }
+    | { kind: "refSet"; parent: ExecObject; prop: string }
+    | { kind: "listInsert"; list: ExecList; index: number };
 let nextCtxId = 1;
 function ctxStatusDep(ctxId: number): string { return "ctxStatus:" + ctxId; }
 function setCtxStatus(ctx: ExecCtx, status: string): void {
@@ -170,12 +179,15 @@ function executeAssignment(assignment: CodeAssignment, scope: ExecScope, context
         if (staging != null) {
             let fields = staging.staged.get(obj);
             if (fields == null) staging.staged.set(obj, fields = new Map());
-            fields.set(prop, value);
+            // List assign keeps the durable positive list id (ListReplace same id).
+            const coalesced = coalesceListAssign(nearestStagedValue(obj, prop, context) ?? obj.props[prop], value);
+            fields.set(prop, coalesced);
             invalidateProp(obj.id, prop);
-            return value;
+            return coalesced;
         }
         const before = obj.props[prop];
-        obj.props[prop] = value;
+        const coalesced = coalesceListAssign(before, value);
+        obj.props[prop] = coalesced;
         invalidateProp(obj.id, prop);
         // S5a review fix: route through the SAME persist logic two-way binding uses (persistFieldEdit),
         // not a bare `if (obj.id > 0)` — that gate silently dropped the send for a JUST-ADDED set member
@@ -184,8 +196,8 @@ function executeAssignment(assignment: CodeAssignment, scope: ExecScope, context
         // can legitimately target a half-second after an add. persistFieldEdit's own pending-id fallback
         // (a documented, already-proven branch) sends by the transient id anyway — the server resolves it
         // through the add's own remap — so the write is no longer silently lost.
-        persistFieldEdit(obj, prop, value, before);
-        return value;
+        persistFieldEdit(obj, prop, coalesced, before);
+        return coalesced;
     }
     throw new Error("Invalid assignment target.");
 }
@@ -228,9 +240,9 @@ function executeValue(value: CodeValue, scope: ExecScope, context: ExecContext):
     }
 }
 
-function executeArray(codeArray: CodeArray, scope: ExecScope, context: ExecContext): ExecArray {
-    const items: ExecArrayItem[] = codeArray.items.map(p => ({ key: --context.lastId.value, value: executeValue(p, scope, context).value }));
-    return { type: "array", kind: "list", items, id: --context.lastId.value };
+function executeArray(codeArray: CodeArray, scope: ExecScope, context: ExecContext): ExecCollection {
+    const items: ExecCollectionItem[] = codeArray.items.map(p => ({ key: --context.lastId.value, value: executeValue(p, scope, context).value }));
+    return { type: "list", items, id: --context.lastId.value };
 }
 
 function executeObject(codeObject: CodeObject, scope: ExecScope, context: ExecContext): ExecObject {
@@ -278,7 +290,8 @@ function executeSymbol(codeSymbol: CodeSymbol, scope: ExecScope, context: ExecCo
     };
 }
 
-const collectionMethods = ["add", "remove", "setEntry", "where", "orderBy", "any", "single"];
+const collectionMethods = ["add", "remove", "setEntry", "where", "orderBy", "any", "single",
+    "insert", "move", "removeAt", "removeFirst", "removeLast", "removeAll", "removeWhere"];
 
 // ── memoization cache (Stage 4) ────────────────────────────────────────────────────
 // Mirrors the server (DeEnv/Code/MemoCache.cs). Computation boundaries (user-fn calls,
@@ -358,7 +371,7 @@ function mergeDeps(into: CacheDeps, from: CacheDeps): void {
 function argKey(v: ExecValue): string {
     switch (v.type) {
         case "object": return "o" + v.id;
-        case "array": return "a" + v.id;
+        case "set": case "dict": case "list": return "a" + v.id;
         case "int": return "i" + v.value;
         case "bool": return "b" + (v.value ? 1 : 0);
         case "text": return "t" + v.value.length + ":" + v.value;
@@ -478,7 +491,7 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
     const right = codeInfixOp.right;
     if (right.type !== "symbol") throw new Error("Object-prop access expects a symbol on the right.");
 
-    if (left.type === "array" && collectionMethods.includes(right.name))
+    if (isCollection(left) && collectionMethods.includes(right.name))
         return { value: collectionSysFunction(left, right.name, context) };
 
     if (left.type === "ctx") {
@@ -497,7 +510,7 @@ function executeInfixOp(codeInfixOp: CodeInfixOp, scope: ExecScope, context: Exe
         if (right.name === "conflicts") {
             recordVar(ctxConflictsDep(left.id));
             conflictSurfacedThisRender.add(left.id); // this render surfaced the conflict → the app owns it (no fallback banner)
-            return { value: { type: "array", kind: "list", items: left.conflicts.map((v, i) => ({ key: i, value: v })), id: --context.lastId.value } };
+            return { value: { type: "list", items: left.conflicts.map((v, i) => ({ key: i, value: v })), id: --context.lastId.value } };
         }
         return { value: { type: "ctxMethod", ctx: left, method: right.name } };
     }
@@ -698,7 +711,7 @@ function defaultValue(baseType: string): ExecValue {
 }
 function descProps(desc: ExecObject, field: string): ExecObject[] {
     const arr = desc.props[field];
-    return arr != null && arr.type === "array"
+    return isCollection(arr)
         ? arr.items.map(i => i.value).filter((v): v is ExecObject => v.type === "object")
         : [];
 }
@@ -712,8 +725,9 @@ function propElement(p: ExecObject): string { const e = p.props["element"]; retu
 function defaultProp(p: ExecObject): ExecValue {
     const bt = propBaseType(p);
     if (bt === "object") return { type: "null" };
-    if (bt === "set") return { type: "array", kind: "set", items: [], id: 0, elementTypeName: propElement(p) };
-    if (bt === "dictionary") return { type: "array", kind: "dict", items: [], id: 0, elementTypeName: propElement(p) };
+    if (bt === "set") return { type: "set", items: [], id: 0, elementTypeName: propElement(p) };
+    if (bt === "dictionary") return { type: "dict", items: [], id: 0, elementTypeName: propElement(p) };
+    if (bt === "list") return { type: "list", items: [], id: 0, elementTypeName: propElement(p) };
     return defaultValue(bt);
 }
 function execNew(codeCall: CodeCall, scope: ExecScope, context: ExecContext): ExecValue {
@@ -774,16 +788,24 @@ function propInt(p: ExecObject, key: string): number {
 }
 
 // Bind a URL segment within the db graph (twin of the C# FindTarget step): a set member by its
-// identity id, a dict entry by its __key, a field by name. Records the read so a re-render's deps
-// match the server. Returns null when the node is missing.
+// identity id, a list member by object id (membership ≥1 — never index; list item.key is ordinal),
+// a dict entry by its __key, a field by name. Records the read so a re-render's deps match the
+// server. Returns null when the node is missing.
 function bindSegment(current: ExecValue, segment: string): ExecValue | null {
-    if (current.type === "array" && current.kind === "dict") {
+    if (current.type === "dict") {
         recordMember(current.id);
         const item = current.items.find(i =>
             i.value.type === "object" && i.value.props["__key"]?.type === "text" && i.value.props["__key"].value === segment);
         return item ? item.value : null;
     }
-    if (current.type === "array" && /^-?\d+$/.test(segment)) {
+    if (current.type === "list" && /^-?\d+$/.test(segment)) {
+        // List: match by object id (membership ≥1), not by ordinal key.
+        recordMember(current.id);
+        const memberId = Number(segment);
+        const item = current.items.find(i => i.value.type === "object" && i.value.id === memberId);
+        return item ? item.value : null;
+    }
+    if (isCollection(current) && /^-?\d+$/.test(segment)) {
         recordMember(current.id);
         const item = current.items.find(i => i.key === Number(segment));
         return item ? item.value : null;
@@ -832,9 +854,10 @@ function execResolve(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
     let bound = true;                 // the graph walk is still binding (a deleted member → notFound)
 
     for (const segment of segments) {
-        if (cardinality === "set" || cardinality === "dict") {
+        if (cardinality === "set" || cardinality === "dict" || cardinality === "list") {
             // The segment addresses a MEMBER: descend into the element. A set element is always an
-            // object; a dict element may be scalar (its descriptor's isScalar) — then the member is a leaf.
+            // object; a list/dict element may be scalar (descriptor isScalar) — then the member is a leaf.
+            // List member segments are object ids (membership ≥1), never indices.
             if (cardinality === "dict") traversedDict = true;
             // element type was recorded when we entered the collection (typeName/isObject already set).
             cardinality = "single";
@@ -850,6 +873,10 @@ function execResolve(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
             if (baseType === "set") {
                 cardinality = "set"; isReference = false;
                 typeName = propText(pd, "element"); isObject = true; // set elements are objects
+            } else if (baseType === "list") {
+                cardinality = "list"; isReference = false;
+                typeName = propText(pd, "element");
+                isObject = !propBool(pd, "isScalar");
             } else if (baseType === "dictionary") {
                 cardinality = "dict"; isReference = false;
                 // The dict's element kind is known now (isScalar); the type for an object element.
@@ -1105,7 +1132,7 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
     const designV = codeCall.params.length === 3 ? executeValue(codeCall.params[2], scope, context).value : null;
     const design = designV != null && designV.type === "object" ? designV : null;
     const fnsRaw = design != null ? readNodePropOptional(design, "fns", context) : null;
-    const fns = fnsRaw != null && fnsRaw.type === "array" ? fnsRaw : null;
+    const fns = isCollection(fnsRaw) ? fnsRaw : null;
     // M12 V1b — bind design.vars at the walk ROOT, seeding the top-level `bindings` every node inherits
     // (row bindings — for/if loop vars — stack on top and SHADOW a same-named design var, same as any scope
     // binding). Only meaningful with BOTH a design and an eval context (a var's init can't evaluate without
@@ -1125,7 +1152,7 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
     // (checked FIRST, not just spliced outermost).
     const errorMessage = ctx != null ? ctxError(ctx) : null;
     if (errorMessage != null) {
-        return { type: "array", kind: "list", items: [{ key: 0, value: evalDegradeBanner(errorMessage) }, { key: 1, value: result }], id: node.id };
+        return { type: "list", items: [{ key: 0, value: evalDegradeBanner(errorMessage) }, { key: 1, value: result }], id: node.id };
     }
     // M12 F3b — the staleness banner: ctx.fns is a SNAPSHOT taken at evalContext build time (empty deps,
     // the deliberate S3a-race inversion), so an edit to a `fns` row's BODY changes no call-site text and a
@@ -1135,7 +1162,7 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
     // riding the root node's own id (inert, the F2 splice idiom). Only checked when BOTH ctx and fns were
     // passed (no fns ⇒ nothing live to compare against) AND ctx is NOT degraded (handled above).
     if (ctx != null && fns != null && fnsStale(ctx, fns, context)) {
-        return { type: "array", kind: "list", items: [{ key: 0, value: staleFnsBanner() }, { key: 1, value: result }], id: node.id };
+        return { type: "list", items: [{ key: 0, value: staleFnsBanner() }, { key: 1, value: result }], id: node.id };
     }
     return result;
 }
@@ -1163,7 +1190,7 @@ function evalDegradeBanner(message: string): ExecTag {
 // M12 F3b — do the shipped ctx.fns fingerprints (keyed by name) still match the LIVE `fns` rows? Compares
 // by NAME (an added/removed/renamed fn is also a mismatch — the length check below), since ctx.fns is
 // keyed by name (the same key evalCtxExpr binds callables under). Twin of CodeExecutor.FnsStale.
-function fnsStale(ctx: ExecObject, fns: ExecArray, context: ExecContext): boolean {
+function fnsStale(ctx: ExecObject, fns: ExecCollection, context: ExecContext): boolean {
     const shipped = ctx.props["fns"];
     if (shipped == null || shipped.type !== "object") return false;
     recordMember(fns.id);
@@ -1222,7 +1249,7 @@ const expansionNodeBudget = 10_000;
 // tryResolveComponent/executeComponentValue: `bindings` (the walk-local scope) SHADOWS the fns lookup
 // exactly like a scope binding stops runtime resolution.
 function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject | null,
-    bindings: { [name: string]: ExecValue } | undefined, fns: ExecArray | null, expansion: ExpansionState): ExecValue {
+    bindings: { [name: string]: ExecValue } | undefined, fns: ExecCollection | null, expansion: ExpansionState): ExecValue {
     const id = node.id;
     // The node budget (M12 F2 E4) counts every node visited while ALREADY inside an expansion (depth>0) —
     // not just the invocations themselves — so a component whose body fans out breadth-wise (not just
@@ -1297,9 +1324,9 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
         if (ctx != null) {
             const v = evalCtxExpr(expr, ctx, bindings);
             if (v != null) {
-                if (v.type === "tag") return { type: "array", kind: "list", items: [{ key: 0, value: v }], id };
-                if (v.type === "array" && v.items.length > 0 && v.items.every(i => i.value.type === "tag"))
-                    return { type: "array", kind: "list", items: v.items, id };
+                if (v.type === "tag") return { type: "list", items: [{ key: 0, value: v }], id };
+                if (isCollection(v) && v.items.length > 0 && v.items.every(i => i.value.type === "tag"))
+                    return { type: "list", items: v.items, id };
                 return { type: "text", value: scalarText(v) };
             }
         }
@@ -1312,7 +1339,7 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
 // read per row, so a rename or reorder re-renders same-frame). Duplicate names tie-break to the LAST one in
 // `order` (mirrors DefineFunction's last-wins); `>=` also keeps ties on equal `order` deterministic (last in
 // iteration order wins), twin-identical since both twins iterate `fns.items` in the same shipped list order.
-function resolveFn(fns: ExecArray, tag: string, context: ExecContext): ExecObject | null {
+function resolveFn(fns: ExecCollection, tag: string, context: ExecContext): ExecObject | null {
     recordMember(fns.id);
     let best: ExecObject | null = null;
     let bestOrder = -Infinity;
@@ -1425,7 +1452,7 @@ function fingerprintNode(node: ExecObject, context: ExecContext): string {
 // SAME component-chip an unnamed/bodyless/depth-capped fn already uses — never guess which binding (or the
 // crash) the runtime would actually produce.
 function expandFn(fn: ExecObject, bodyRoot: ExecObject, invocationNode: ExecObject, context: ExecContext,
-    ctx: ExecObject | null, callerBindings: { [name: string]: ExecValue } | undefined, fns: ExecArray, expansion: ExpansionState): ExecValue | null {
+    ctx: ExecObject | null, callerBindings: { [name: string]: ExecValue } | undefined, fns: ExecCollection, expansion: ExpansionState): ExecValue | null {
     const paramNames = readNodeText(fn, "params", context).split(",").map(p => p.trim()).filter(p => p.length > 0);
     const attrs = orderedMembers(invocationNode, "attrs", context);
     const bodyBindings: { [name: string]: ExecValue } = {};
@@ -1462,7 +1489,7 @@ function expandFn(fn: ExecObject, bodyRoot: ExecObject, invocationNode: ExecObje
     expansion.depth++;
     try {
         const result = renderTreeNode(bodyRoot, context, ctx, bodyBindings, fns, expansion);
-        return { type: "array", kind: "list", items: [{ key: 0, value: result }], id: invocationNode.id };
+        return { type: "list", items: [{ key: 0, value: result }], id: invocationNode.id };
     } finally { expansion.depth--; }
 }
 
@@ -1516,13 +1543,13 @@ function bindVars(vars: ExecObject[], bindings: { [name: string]: ExecValue }, c
 // result — DEGRADES to the S6a template (never guesses). A set and a list both iterate via .items. Twin of
 // CodeExecutor.BuildFor.
 function buildFor(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null,
-    bindings: { [name: string]: ExecValue } | undefined, fns: ExecArray | null, expansion: ExpansionState): ExecValue {
+    bindings: { [name: string]: ExecValue } | undefined, fns: ExecCollection | null, expansion: ExpansionState): ExecValue {
     if (ctx != null) {
         const collection = evalCtxExpr(readNodeText(node, "collection", context), ctx, bindings);
-        if (collection != null && collection.type === "array") {
+        if (isCollection(collection)) {
             const item = readNodeText(node, "item", context);
             const body = orderedMembers(node, "children", context);
-            const instances: ExecArrayItem[] = [];
+            const instances: ExecCollectionItem[] = [];
             let key = 0;
             for (const member of collection.items) {
                 const itemBindings = { ...(bindings ?? {}) };
@@ -1530,7 +1557,7 @@ function buildFor(node: ExecObject, id: number, context: ExecContext, ctx: ExecO
                 for (const b of body)
                     instances.push({ key: key++, value: renderTreeNode(b, context, ctx, itemBindings, fns, expansion) });
             }
-            return { type: "array", kind: "list", items: instances, id };
+            return { type: "list", items: instances, id };
         }
     }
     return buildForTemplate(node, id, context, ctx, bindings, fns, expansion);
@@ -1543,13 +1570,13 @@ function buildFor(node: ExecObject, id: number, context: ExecContext, ctx: ExecO
 // like buildFor. A false condition with an empty elseChildren yields an empty array → nothing. Twin of
 // CodeExecutor.BuildIf.
 function buildIf(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null,
-    bindings: { [name: string]: ExecValue } | undefined, fns: ExecArray | null, expansion: ExpansionState): ExecValue {
+    bindings: { [name: string]: ExecValue } | undefined, fns: ExecCollection | null, expansion: ExpansionState): ExecValue {
     if (ctx != null) {
         const cond = evalCtxExpr(readNodeText(node, "condition", context), ctx, bindings);
         if (cond != null && cond.type === "bool") {
             const members = orderedMembers(node, cond.value ? "children" : "elseChildren", context);
-            const items: ExecArrayItem[] = members.map((m, i) => ({ key: i, value: renderTreeNode(m, context, ctx, bindings, fns, expansion) }));
-            return { type: "array", kind: "list", items, id };
+            const items: ExecCollectionItem[] = members.map((m, i) => ({ key: i, value: renderTreeNode(m, context, ctx, bindings, fns, expansion) }));
+            return { type: "list", items, id };
         }
     }
     return buildIfTemplate(node, id, context, ctx, bindings, fns, expansion);
@@ -1560,7 +1587,7 @@ function buildIf(node: ExecObject, id: number, context: ExecContext, ctx: ExecOb
 // leaves referencing the item var chip (unbound — honest); any OUTER row-scope binding still threads through.
 // Twin of CodeExecutor.BuildForTemplate.
 function buildForTemplate(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null,
-    bindings: { [name: string]: ExecValue } | undefined, fns: ExecArray | null, expansion: ExpansionState): ExecValue {
+    bindings: { [name: string]: ExecValue } | undefined, fns: ExecCollection | null, expansion: ExpansionState): ExecValue {
     const item = readNodeText(node, "item", context);
     const collection = readNodeText(node, "collection", context);
     const badge: ExecTag = {
@@ -1583,7 +1610,7 @@ function buildForTemplate(node: ExecObject, id: number, context: ExecContext, ct
 // is OMITTED when `elseChildren` is empty. Never guesses a taken branch (evaluated selection is buildIf);
 // any OUTER row-scope binding still threads through. Twin of CodeExecutor.BuildIfTemplate.
 function buildIfTemplate(node: ExecObject, id: number, context: ExecContext, ctx: ExecObject | null,
-    bindings: { [name: string]: ExecValue } | undefined, fns: ExecArray | null, expansion: ExpansionState): ExecValue {
+    bindings: { [name: string]: ExecValue } | undefined, fns: ExecCollection | null, expansion: ExpansionState): ExecValue {
     const condition = readNodeText(node, "condition", context);
     const thenBody = orderedMembers(node, "children", context).map(c => renderTreeNode(c, context, ctx, bindings, fns, expansion));
     const elseBody = orderedMembers(node, "elseChildren", context).map(c => renderTreeNode(c, context, ctx, bindings, fns, expansion));
@@ -1752,7 +1779,7 @@ function readNodeTextOptional(node: ExecObject, name: string, context: ExecConte
 // read per member), so an add/remove/reorder re-renders the canvas. Non-object / absent → empty.
 function orderedMembers(node: ExecObject, setProp: string, context: ExecContext): ExecObject[] {
     const setV = readNodeProp(node, setProp, context);
-    if (setV.type !== "array") return [];
+    if (!isCollection(setV)) return [];
     recordMember(setV.id);
     const objs: { o: ExecObject; order: number }[] = [];
     for (const item of setV.items)
@@ -1796,7 +1823,7 @@ function readNodePropOptional(node: ExecObject, name: string, context: ExecConte
 // declared `vars` behaves exactly as it always has. Twin of CodeExecutor.OrderedMembersOptional.
 function orderedMembersOptional(node: ExecObject, setProp: string, context: ExecContext): ExecObject[] {
     const raw = readNodePropOptional(node, setProp, context);
-    if (raw == null || raw.type !== "array") return [];
+    if (raw == null || !isCollection(raw)) return [];
     recordMember(raw.id);
     const objs: { o: ExecObject; order: number }[] = [];
     for (const item of raw.items)
@@ -2147,11 +2174,58 @@ function execLogout(_codeCall: CodeCall, _scope: ExecScope, _context: ExecContex
     return { type: "nothing" };
 }
 
-function collectionSysFunction(arr: ExecArray, method: string, context: ExecContext): ExecSysFunction {
+function collectionSysFunction(arr: ExecCollection, method: string, context: ExecContext): ExecSysFunction {
     switch (method) {
         case "add": return { type: "sysFn", fn: args => { addToCollection(arr, args[0], context); return { type: "nothing" }; } };
-        case "remove": return { type: "sysFn", fn: args => { removeFromCollection(arr, args[0]); return { type: "nothing" }; } };
+        case "remove": return { type: "sysFn", fn: args => {
+            // Set-only identity remove. List uses removeAt/removeFirst/removeLast/removeAll/removeWhere.
+            if (arr.type === "list") throw new Error("remove is not valid on a list; use removeAt/removeFirst/removeLast/removeAll/removeWhere.");
+            removeFromCollection(arr, args[0]); return { type: "nothing" };
+        } };
         case "setEntry": return { type: "sysFn", fn: args => { setDictEntry(arr, args[0], args[1]); return { type: "nothing" }; } };
+        case "insert": return { type: "sysFn", fn: args => {
+            if (arr.type !== "list") throw new Error("insert is only valid on a list.");
+            if (args[0].type !== "int") throw new Error("insert expects an int index.");
+            listInsert(arr, args[0].value, args[1], context);
+            return { type: "nothing" };
+        } };
+        case "move": return { type: "sysFn", fn: args => {
+            if (arr.type !== "list") throw new Error("move is only valid on a list.");
+            if (args[0].type !== "int" || args[1].type !== "int") throw new Error("move expects int from/to.");
+            listMove(arr, args[0].value, args[1].value);
+            return { type: "nothing" };
+        } };
+        case "removeAt": return { type: "sysFn", fn: args => {
+            if (arr.type !== "list") throw new Error("removeAt is only valid on a list.");
+            if (args[0].type !== "int") throw new Error("removeAt expects an int index.");
+            listRemoveAt(arr, args[0].value);
+            return { type: "nothing" };
+        } };
+        case "removeFirst": return { type: "sysFn", fn: args => {
+            if (arr.type !== "list") throw new Error("removeFirst is only valid on a list.");
+            if (arr.items.length > 0) listRemoveAt(arr, 0);
+            return { type: "nothing" };
+        } };
+        case "removeLast": return { type: "sysFn", fn: args => {
+            if (arr.type !== "list") throw new Error("removeLast is only valid on a list.");
+            if (arr.items.length > 0) listRemoveAt(arr, arr.items.length - 1);
+            return { type: "nothing" };
+        } };
+        case "removeAll": return { type: "sysFn", fn: args => {
+            if (arr.type !== "list") throw new Error("removeAll is only valid on a list.");
+            listReplaceItems(arr, []);
+            return { type: "nothing" };
+        } };
+        case "removeWhere": return { type: "sysFn", fn: args => {
+            if (arr.type !== "list") throw new Error("removeWhere is only valid on a list.");
+            const lambda = asLambda(args[0]);
+            const kept = arr.items.filter(item => {
+                const r = invokeLambda(lambda, item.value, context);
+                return !(r.type === "bool" && r.value);
+            }).map(i => i.value);
+            listReplaceItems(arr, kept);
+            return { type: "nothing" };
+        } };
         case "where": return { type: "sysFn", fn: args => {
             const lambda = asLambda(args[0]);
             return memoize(`where:a${arr.id}:fn${lambda.fn.id}${closureKey(lambda)}`, context, () => whereCollection(arr, lambda, context));
@@ -2233,10 +2307,13 @@ function rootAmbient(): AmbientFrame {
     return { name: "ctx", value: rootCtx, parent: null };
 }
 
-function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext): void {
+function addToCollection(arr: ExecCollection, value: ExecValue, context: ExecContext): void {
+    // List append = insert at len (ordinal keys + listInsert wire).
+    if (arr.type === "list") { listInsert(arr, arr.items.length, value, context); return; }
+
     // A set member is keyed by its object identity; other kinds get a transient key.
-    const key = arr.kind === "set" && value.type === "object" ? value.id : --context.lastId.value;
-    const item: ExecArrayItem = { key, value };
+    const key = arr.type === "set" && value.type === "object" ? value.id : --context.lastId.value;
+    const item: ExecCollectionItem = { key, value };
     arr.items.push(item);                 // optimistic row — local, unchanged whether the persist stages or fires
     invalidateMember(arr.id);
     // Staging branch (atomic-commit Step B): a TRANSIENT (id<0) draft added to a SET under a staging ctx
@@ -2244,28 +2321,93 @@ function addToCollection(arr: ExecArray, value: ExecValue, context: ExecContext)
     // persists all-or-none on the outermost commit. An EXISTING (id>0) member stays LIVE (the same id>0
     // discriminator the object-prop staging gate uses): poking an existing collection is immediate, building
     // new graph is transactional. The row already pushed above either way; only the persistence defers.
-    if (arr.kind === "set" && value.type === "object" && value.id < 0) {
+    if (arr.type === "set" && value.type === "object" && value.id < 0) {
         const staging = nearestStagingCtx(context);
-        if (staging != null) { staging.creates.push({ draft: value, join: { kind: "setAdd", set: arr } }); return; }
+        if (staging != null) { staging.creates.push({ draft: value, join: { kind: "setAdd", set: arr as ExecSet } }); return; }
     }
     if (arr.id > 0) sendArrayItemAdd(arr, item);
 }
 
-function removeFromCollection(arr: ExecArray, value: ExecValue): void {
+function removeFromCollection(arr: ExecCollection, value: ExecValue): void {
     const index = arr.items.findIndex(i => i.value === value
         || (i.value.type === "object" && value.type === "object" && i.value.id === value.id));
     if (index < 0) return;
     const item = arr.items.splice(index, 1)[0];
     invalidateMember(arr.id);
-    if (arr.id > 0 && arr.kind === "dict") sendEntryRemove(arr, item, dictEntryKey(item.value), index);
+    if (arr.id > 0 && arr.type === "dict") sendEntryRemove(arr, item, dictEntryKey(item.value), index);
     else if (arr.id > 0) sendArrayItemRemove(arr, item, index);
+}
+
+function reindexList(list: ExecList): void {
+    for (let i = 0; i < list.items.length; i++) list.items[i].key = i;
+}
+
+function listInsert(list: ExecList, index: number, value: ExecValue, context: ExecContext): void {
+    if (index < 0 || index > list.items.length)
+        throw new Error(`List insert index ${index} out of range (len ${list.items.length}).`);
+    const item: ExecCollectionItem = { key: index, value };
+    list.items.splice(index, 0, item);
+    reindexList(list);
+    invalidateMember(list.id);
+    // Staging: transient draft into a list under staging ctx → creates with listInsert join.
+    if (value.type === "object" && value.id < 0) {
+        const staging = nearestStagingCtx(context);
+        if (staging != null) {
+            staging.creates.push({ draft: value, join: { kind: "listInsert", list, index } });
+            return;
+        }
+    }
+    if (list.id > 0) sendListInsert(list, index, item);
+}
+
+function listRemoveAt(list: ExecList, index: number): void {
+    if (index < 0 || index >= list.items.length)
+        throw new Error(`List removeAt index ${index} out of range (len ${list.items.length}).`);
+    const item = list.items.splice(index, 1)[0];
+    reindexList(list);
+    invalidateMember(list.id);
+    if (list.id > 0) sendListRemoveAt(list, index, item);
+}
+
+function listMove(list: ExecList, from: number, to: number): void {
+    if (from < 0 || from >= list.items.length || to < 0 || to >= list.items.length)
+        throw new Error(`List move from=${from} to=${to} out of range (len ${list.items.length}).`);
+    if (from === to) return;
+    const item = list.items[from];
+    list.items.splice(from, 1);
+    list.items.splice(to, 0, item);
+    reindexList(list);
+    invalidateMember(list.id);
+    if (list.id > 0) sendListMove(list, from, to);
+}
+
+function listReplaceItems(list: ExecList, values: ExecValue[]): void {
+    const before = list.items.slice();
+    list.items = values.map((value, i) => ({ key: i, value }));
+    invalidateMember(list.id);
+    if (list.id > 0) sendListReplace(list, before, list.items.slice());
+}
+
+// Assigning a list (where/orderBy result) onto a durable list prop keeps the positive list id.
+function coalesceListAssign(before: ExecValue | undefined, value: ExecValue): ExecValue {
+    if (value.type !== "list") return value;
+    if (before == null || before.type !== "list" || before.id <= 0) return value;
+    const items = value.items.map((it, i) => ({ key: i, value: it.value }));
+    return {
+        type: "list",
+        id: before.id,
+        items,
+        elementTypeName: before.elementTypeName ?? value.elementTypeName,
+        constant: before.constant,
+    };
 }
 
 // setEntry(key, value): create/replace a dictionary entry. The entry surfaces as an object
 // carrying its key in `__key` (object dict: the value's scalar fields; scalar dict: a
 // `{ __key, value }` wrapper). The entry's id is keyHash(dict,key) — deterministic, so the
 // optimistic row and the server's refetched row share an id and dedup on merge.
-function setDictEntry(arr: ExecArray, key: ExecValue, value: ExecValue): void {
+function setDictEntry(arr: ExecCollection, key: ExecValue, value: ExecValue): void {
+    if (arr.type !== "dict") throw new Error("setEntry is only valid on a dictionary.");
     const keyText = scalarText(key);
     const id = keyHash(arr.id, keyText);
     const props: { [name: string]: ExecValue } = {};
@@ -2285,7 +2427,7 @@ function setDictEntry(arr: ExecArray, key: ExecValue, value: ExecValue): void {
     if (arr.dictProp != null) entry.dictProp = arr.dictProp;
     entry.key = keyText;
     const existing = arr.items.findIndex(i => i.key === id);
-    let item: ExecArrayItem;
+    let item: ExecCollectionItem;
     if (existing >= 0) { item = arr.items[existing]; item.value = entry; }
     else { item = { key: id, value: entry }; arr.items.push(item); }
     invalidateMember(arr.id);
@@ -2315,22 +2457,22 @@ function keyHash(dictId: number, keyText: string): number {
     return -((h & 0x3FFFFFFF)) - 1;
 }
 
-function whereCollection(arr: ExecArray, predicate: ExecFunction, context: ExecContext): ExecArray {
+function whereCollection(arr: ExecCollection, predicate: ExecFunction, context: ExecContext): ExecCollection {
     recordMember(arr.id);
     const items = arr.items.filter(item => {
         const r = invokeLambda(predicate, item.value, context);
         return r.type === "bool" && r.value;
     });
-    return { type: "array", kind: "list", items, id: --context.lastId.value };
+    return { type: "list", items, id: --context.lastId.value };
 }
 
-function orderByCollection(arr: ExecArray, keySelector: ExecFunction, context: ExecContext): ExecArray {
+function orderByCollection(arr: ExecCollection, keySelector: ExecFunction, context: ExecContext): ExecCollection {
     recordMember(arr.id);
     const items = arr.items
         .map(item => ({ item, key: invokeLambda(keySelector, item.value, context) }))
         .sort((a, b) => compareExec(a.key, b.key))
         .map(p => p.item);
-    return { type: "array", kind: "list", items, id: --context.lastId.value };
+    return { type: "list", items, id: --context.lastId.value };
 }
 
 function compareExec(x: ExecValue, y: ExecValue): number {
@@ -2343,7 +2485,7 @@ function compareExec(x: ExecValue, y: ExecValue): number {
 function getCompareValue(value: ExecValue): any {
     switch (value.type) {
         case "int": case "bool": case "text": return value.value;
-        case "object": case "array": return value;
+        case "object": case "set": case "dict": case "list": return value;
         // A function compares by reference identity (mirrors C#'s ExecFunction.Value => this,
         // compared via object.Equals): return the function value itself, so `fn == null` is
         // false and `fn != null` / `fn == sameFn` work. Without this the `default` threw.
@@ -2674,7 +2816,7 @@ function invokeFn(fn: ExecFunction, args: ExecValue[], context: ExecContext): Ex
 // A component's view splices into the parent's children: an array (a fragment) splices flat, a
 // single tag/value becomes one child.
 function spliceView(view: ExecValue): ExecTagChild[] {
-    return view.type === "array" ? view.items.map(i => i.value) : [view];
+    return isCollection(view) ? view.items.map(i => i.value) : [view];
 }
 
 function executeTagIf(codeTagIf: CodeTagIf, scope: ExecScope, context: ExecContext): ExecTagChild[] {
@@ -2686,20 +2828,20 @@ function executeTagIf(codeTagIf: CodeTagIf, scope: ExecScope, context: ExecConte
 
 function executeTagForEach(codeTagForEach: CodeTagForEach, scope: ExecScope, context: ExecContext): ExecTagChild[] {
     const array = executeValue(codeTagForEach.collection, scope, context).value;
-    if (array.type !== "array") throw new Error("foreach target is not a collection.");
+    if (!isCollection(array)) throw new Error("foreach target is not a collection.");
     // Inside a computation (a memoized page fn), iterating observes membership:
     // an add/remove to the collection must invalidate the cached result.
     recordMember(array.id);
     const children: ExecTagChild[] = [];
     for (const item of array.items) {
-        // Identity key for DOM reconciliation: the member object's intrinsic id, so a
-        // row's element (and its input focus/state) moves with the object on reorder.
-        const key = item.value.type === "object" ? item.value.id : item.key;
+        // List: ordinal item.key (duplicate object slots → two independent rows). Set/dict: object
+        // id when present (identity-stable across reorder), else entry key. Twin of ExecuteTagForEach.
+        const key = array.type === "list"
+            ? item.key
+            : (item.value.type === "object" ? item.value.id : item.key);
         const itemScope: ExecScope = { parent: scope, items: {} };
         itemScope.items[codeTagForEach.item.name] = { value: item.value, isReadOnly: true };
-        // The SAME identity keys the component slot path (twin of ExecuteTagForEach), so a
-        // component inside this row gets a distinct, identity-stable slot — its state moves with the
-        // member across reorder/remove, not with the row position.
+        // Same key on the component slot path as the DOM reconciler uses.
         slotPath.push("row" + key);
         let produced: ExecTagChild[];
         try { produced = executeTagChildren(codeTagForEach.body, itemScope, context); }
@@ -2837,11 +2979,17 @@ interface WsHooks {
     // go through the commit wire + ambient ctx decision.
     pathWrite(obj: ExecObject, prop: string, path: string, value: ExecValue, before: ExecValue): void;
     setRef(obj: ExecObject, prop: string, value: ExecValue, before: ExecValue): void;
-    arrayAdd(arr: ExecArray, item: ExecArrayItem, typeName: string | undefined): void;
-    arrayRemove(arr: ExecArray, item: ExecArrayItem, index: number): void;
+    arrayAdd(arr: ExecCollection, item: ExecCollectionItem, typeName: string | undefined): void;
+    arrayRemove(arr: ExecCollection, item: ExecCollectionItem, index: number): void;
+    // Durable list mutators → unified-commit relations (no listVersion). Optional so SSR/conformance
+    // hooks without list support stay valid.
+    listInsert?(list: ExecList, index: number, item: ExecCollectionItem): void;
+    listRemoveAt?(list: ExecList, index: number, item: ExecCollectionItem): void;
+    listMove?(list: ExecList, from: number, to: number): void;
+    listReplace?(list: ExecList, before: ExecCollectionItem[], after: ExecCollectionItem[]): void;
     // Dictionary entries persist through the PATH-addressed add/removeEntry ops (arr.sourcePath).
-    entryAdd(arr: ExecArray, item: ExecArrayItem, key: string, value: ExecValue): void;
-    entryRemove(arr: ExecArray, item: ExecArrayItem, key: string, index: number): void;
+    entryAdd(arr: ExecCollection, item: ExecCollectionItem, key: string, value: ExecValue): void;
+    entryRemove(arr: ExecCollection, item: ExecCollectionItem, key: string, index: number): void;
     // A SERVER-ONLY host action (sys.publish): the client fires the action, the server alone runs
     // the effect. Stages nothing in the data model (no optimistic mutation to roll back). `callback`
     // (docs/plans/host-action-success-signal.md — the optional trailing fn arg every host-action
@@ -2906,16 +3054,28 @@ function pathWriteChange(obj: ExecObject, propName: string, path: string, value:
 function referenceChange(obj: ExecObject, prop: string, value: ExecValue, before: ExecValue): void {
     wsHooks?.setRef(obj, prop, value, before);
 }
-function sendArrayItemAdd(arr: ExecArray, item: ExecArrayItem): void {
+function sendArrayItemAdd(arr: ExecCollection, item: ExecCollectionItem): void {
     wsHooks?.arrayAdd(arr, item, arr.elementTypeName);
 }
-function sendArrayItemRemove(arr: ExecArray, item: ExecArrayItem, index: number): void {
+function sendArrayItemRemove(arr: ExecCollection, item: ExecCollectionItem, index: number): void {
     wsHooks?.arrayRemove(arr, item, index);
 }
-function sendEntryAdd(arr: ExecArray, item: ExecArrayItem, key: string, value: ExecValue): void {
+function sendListInsert(list: ExecList, index: number, item: ExecCollectionItem): void {
+    wsHooks?.listInsert?.(list, index, item);
+}
+function sendListRemoveAt(list: ExecList, index: number, item: ExecCollectionItem): void {
+    wsHooks?.listRemoveAt?.(list, index, item);
+}
+function sendListMove(list: ExecList, from: number, to: number): void {
+    wsHooks?.listMove?.(list, from, to);
+}
+function sendListReplace(list: ExecList, before: ExecCollectionItem[], after: ExecCollectionItem[]): void {
+    wsHooks?.listReplace?.(list, before, after);
+}
+function sendEntryAdd(arr: ExecCollection, item: ExecCollectionItem, key: string, value: ExecValue): void {
     wsHooks?.entryAdd(arr, item, key, value);
 }
-function sendEntryRemove(arr: ExecArray, item: ExecArrayItem, key: string, index: number): void {
+function sendEntryRemove(arr: ExecCollection, item: ExecCollectionItem, key: string, index: number): void {
     wsHooks?.entryRemove(arr, item, key, index);
 }
 function sendHostAction(action: string, args: ExecValue[], callback?: ExecFunction): void {
@@ -2997,7 +3157,7 @@ function runConformance(caseJson: string): string {
         case "int": return JSON.stringify({ kind: "int", value: result.value });
         case "text": return JSON.stringify({ kind: "text", value: result.value });
         case "bool": return JSON.stringify({ kind: "bool", value: result.value });
-        // M12 F3 — an ExecArray result is "intList" ONLY when every item is a plain int (a data-collection
+        // M12 F3 — an ExecCollection result is "intList" ONLY when every item is a plain int (a data-collection
         // expr, e.g. `.where()`); otherwise (tags, nested arrays — sys.renderTree's F2 splice / F3
         // tag-splice / F3b staleness-banner wrapper all return a top-level array whose items aren't ints)
         // it's a "tag" tree like any other renderTree result — serializeTree already flattens an array
@@ -3005,7 +3165,7 @@ function runConformance(caseJson: string): string {
         // array is vacuously "every item is int" (matches the two existing empty-intList cases; C#'s
         // equivalent AssertExpectation is driven by the case's DECLARED expect kind, not the runtime
         // type, so it needs no equivalent branch).
-        case "array":
+        case "set": case "dict": case "list":
             if (result.items.every(i => i.value.type === "int"))
                 return JSON.stringify({ kind: "intList", value: result.items.map(i => (i.value as ExecInt).value) });
             return JSON.stringify({ kind: "tag", value: serializeTree(result) });
@@ -3031,7 +3191,7 @@ function serializeTree(node: ExecValue): string {
     // An ARRAY child splices FLAT (recursively) — the same flattening production does (SsrRenderer
     // .SerializeChild / ui.ts flatten), so a for/if row's evaluated instances (S6b returns an array value)
     // serialize as if spliced into the parent, with no wrapper. Twin of ConformanceTests.SerializeTree.
-    if (node.type === "array") return node.items.map(i => serializeTree(i.value)).join("");
+    if (isCollection(node)) return node.items.map(i => serializeTree(i.value)).join("");
     return scalarText(node);
 }
 

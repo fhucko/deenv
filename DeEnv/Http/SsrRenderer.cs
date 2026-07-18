@@ -1134,7 +1134,7 @@ public sealed class SsrRenderer
             case ExecTag tag:
                 SerializeTag(tag, sb, @base, selectValue);
                 break;
-            case ExecArray coll:
+            case IExecCollection coll:
                 // foreach / where / orderBy flatten into the child stream (e.g. a select's options
                 // built by foreach), so the select's value carries through the flattening.
                 foreach (var item in coll.Items) SerializeChild(item.Value, sb, @base, selectValue);
@@ -1275,7 +1275,7 @@ public sealed class SsrRenderer
     // that hosting is by path (no per-instance ports); `designId` is the explicit reference to the IDE
     // design this instance runs (0 = none). clone/delete/publish work on ANY instance, so there is no
     // created/boot flag.
-    private ExecArray BuildRegistry(ExecContext context)
+    private IExecCollection BuildRegistry(ExecContext context)
     {
         var items = new List<ExecItem>();
         foreach (var info in _registry.Current)
@@ -1294,7 +1294,7 @@ public sealed class SsrRenderer
                     },
                 },
             });
-        return new ExecArray { Items = items, Id = --context.LastId.Value, Kind = ArrayKind.List };
+        return new ExecList { Items = items, Id = --context.LastId.Value,};
     }
 
     // The bound principal as a scalar-only ExecObject (M-auth) — see AccessFloor.LoadPrincipal, the single
@@ -1312,7 +1312,7 @@ public sealed class SsrRenderer
     // sys.schema — Memoize's factory guard would refuse a fresh negative-id object), and that cache entry
     // ships it to the client whole.
     //
-    // Reads each commit object's cached `text` (an ExecText) and `idMap` (a Kind=Dict ExecArray of int-by-text
+    // Reads each commit object's cached `text` (an ExecText) and `idMap` (a Kind=Dict IExecCollection of int-by-text
     // entries) off its props, rebuilds each DesignSnapshot, and runs the rename-aware DesignDiffer. The report
     // mirrors PublishReport's vocabulary (renames/adds/removes/conversions/cardinality) but omits the
     // publish-only boundary-apply fields — a pure commit-to-commit diff has no apply result. Every node is
@@ -1328,12 +1328,11 @@ public sealed class SsrRenderer
         // Local constructors that mint a distinct negative id and stamp Constant, so the shipped tree arrives
         // complete AND uniquely-identified on the client (see the id-dedup note above).
         ExecText T(string v) => new() { Value = v };
-        ExecArray Arr(IEnumerable<IExecValue> items)
+        IExecCollection Arr(IEnumerable<IExecValue> items)
         {
             var list = items.ToList();
-            return new ExecArray
-            {
-                Id = --context.LastId.Value, Kind = ArrayKind.List, Constant = true,
+            return new ExecList {
+                Id = --context.LastId.Value, Constant = true,
                 Items = [.. list.Select((v, i) => new ExecItem { Key = i, Value = v })],
             };
         }
@@ -1374,7 +1373,7 @@ public sealed class SsrRenderer
     }
 
     // Rebuild a commit's DesignSnapshot (text + name-path→id map) from the props shipped on the commit object:
-    // `text` is a plain ExecText; `idMap` is a Kind=Dict ExecArray whose entries are scalar dict rows — each an
+    // `text` is a plain ExecText; `idMap` is a Kind=Dict IExecCollection whose entries are scalar dict rows — each an
     // entry object carrying its name-path in the reserved `__key` field and its int id in `value` (see
     // DbBridge's dictionary materialization).
     private static DesignSnapshot SnapshotOf(ExecObject commit)
@@ -1382,7 +1381,7 @@ public sealed class SsrRenderer
         var text = commit.Props.TryGetValue("text", out var t) && t is ExecText et ? et.Value
             : throw new CodeRuntimeException("A commit passed to diffCommits() has no text snapshot.");
         var idMap = new Dictionary<string, int>();
-        if (commit.Props.TryGetValue("idMap", out var m) && m is ExecArray { Kind: ArrayKind.Dict } arr)
+        if (commit.Props.TryGetValue("idMap", out var m) && m is ExecDict arr)
             foreach (var item in arr.Items)
                 if (item.Value is ExecObject entry
                     && entry.Props.TryGetValue("__key", out var k) && k is ExecText key
@@ -1456,7 +1455,7 @@ public sealed class SsrRenderer
         ExecObject Obj(params (string Name, IExecValue Value)[] props) =>
             new() { Id = --context.LastId.Value, Constant = true, Props = props.ToDictionary(p => p.Name, p => p.Value) };
         var empty = Obj();
-        ExecArray EmptyArr() => new() { Items = [], Id = --context.LastId.Value, Kind = ArrayKind.List };
+        ExecList EmptyArr() => new() { Items = [], Id = --context.LastId.Value };
         // M12 S5b review fold #4, widened — the Library group's OWN shape filter (ui-arch's open
         // question, adjudicated, then the "bare single return" predicate widened once it excluded the
         // library's own flagship components): include a lib fn when EVERY return path of the relevant
@@ -1601,7 +1600,7 @@ public sealed class SsrRenderer
             // surface, all COLLECTION-shaped, not object-shaped); inventing one is out of scope for a name
             // list already computable server-side, so this ships the reshaped list instead — zero new Code
             // surface. Sorted for a stable, predictable palette order.
-            var libNamesArr = new ExecArray
+            var libNamesArr = new ExecList
             {
                 Items = (effective.Ui?.Functions ?? [])
                     .Where(fn => fn.Name is { Length: > 0 } && effective.SystemNames.Contains(fn.Name)
@@ -1611,7 +1610,6 @@ public sealed class SsrRenderer
                     .Select((n, i) => new ExecItem { Key = i, Value = new ExecText { Value = n } })
                     .ToList(),
                 Id = --context.LastId.Value,
-                Kind = ArrayKind.List,
             };
 
             return Obj(("db", seedDb), ("exprs", exprsObj), ("fns", fnsObj), ("types", typesObj), ("lib", libObj),
@@ -1639,7 +1637,7 @@ public sealed class SsrRenderer
                     lib[fn.Name] = Obj(("ast", new ExecText { Value = libJson }));
                 }
                 var libObj = new ExecObject { Id = --context.LastId.Value, Constant = true, Props = lib };
-                var libNamesArr = new ExecArray
+                var libNamesArr = new ExecList
                 {
                     Items = (effective.Ui?.Functions ?? [])
                         .Where(fn => fn.Name is { Length: > 0 } && effective.SystemNames.Contains(fn.Name)
@@ -1649,7 +1647,6 @@ public sealed class SsrRenderer
                         .Select((n, i) => new ExecItem { Key = i, Value = new ExecText { Value = n } })
                         .ToList(),
                     Id = --context.LastId.Value,
-                    Kind = ArrayKind.List,
                 };
                 return Obj(("db", empty), ("exprs", empty), ("fns", empty), ("types", empty), ("lib", libObj),
                     ("libNames", libNamesArr), ("ambients", empty), ("params", empty),
@@ -1718,20 +1715,34 @@ public sealed class SsrRenderer
                 foreach (var (k, pv) in o.Props) minted.Props[k] = RemintConstant(pv, context, seen);
                 return minted;
             }
-            case ExecArray a:
+            case IExecCollection a:
             {
                 if (seen.TryGetValue(a, out var existing)) return existing;
-                var minted = new ExecArray
+                IExecCollection minted = a switch
                 {
-                    Id = --context.LastId.Value, Kind = a.Kind, Constant = true, Items = new(),
-                    ElementTypeName = a.ElementTypeName, SourcePath = a.SourcePath,
+                    ExecSet => new ExecSet
+                    {
+                        Id = --context.LastId.Value, Constant = true, Items = new(),
+                        ElementTypeName = a.ElementTypeName,
+                    },
+                    ExecDict d => new ExecDict
+                    {
+                        Id = --context.LastId.Value, Constant = true, Items = new(),
+                        ElementTypeName = a.ElementTypeName, SourcePath = d.SourcePath,
+                        OwnerRef = d.OwnerRef, DictProp = d.DictProp,
+                    },
+                    _ => new ExecList
+                    {
+                        Id = --context.LastId.Value, Constant = true, Items = new(),
+                        ElementTypeName = a.ElementTypeName,
+                    },
                 };
                 seen[a] = minted;
                 foreach (var item in a.Items)
                 {
                     var mv = RemintConstant(item.Value, context, seen);
                     // Keep Key == Value.Id for set/dict (identity-keyed); a list keeps its ordinal key.
-                    var key = a.Kind != ArrayKind.List && mv is ExecObject mo ? mo.Id : item.Key;
+                    var key = a is not ExecList && mv is ExecObject mo ? mo.Id : item.Key;
                     minted.Items.Add(new ExecItem { Key = key, Value = mv });
                 }
                 return minted;

@@ -1351,6 +1351,7 @@ public sealed class KernelHostActions(
     {
         Cardinality.Set => "set",
         Cardinality.Dictionary => "dictionary",
+        Cardinality.List => "list",
         _ => "single",
     };
 

@@ -37,12 +37,11 @@ public static class PublishReportCode
         ExecText T(string v) => new() { Value = v };
         ExecBool B(bool v) => new() { Value = v };
         ExecInt I(int v) => new() { Value = v };
-        ExecArray Arr(IEnumerable<IExecValue> items)
+        IExecCollection Arr(IEnumerable<IExecValue> items)
         {
             var list = items.ToList();
-            return new ExecArray
-            {
-                Id = --context.LastId.Value, Kind = ArrayKind.List, Constant = true,
+            return new ExecList {
+                Id = --context.LastId.Value, Constant = true,
                 Items = [.. list.Select((v, i) => new ExecItem { Key = i, Value = v })],
             };
         }

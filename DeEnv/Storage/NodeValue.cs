@@ -33,6 +33,15 @@ public sealed record SetValue(
     int Id,
     IReadOnlyDictionary<int, NodeValue> Members) : NodeValue;
 
+// List node: ordered sequence of slots. Object slots are fully resolved member
+// objects (the same id may appear at multiple indices); scalar slots are leaf
+// NodeValues. The list itself carries an intrinsic Id like set/dict. Membership
+// URL segments use object id (≥1 occurrence), never index — see TypeResolver /
+// JsonFileInstanceStore.ReadNode.
+public sealed record ListValue(
+    int Id,
+    IReadOnlyList<NodeValue> Items) : NodeValue;
+
 // A single object-typed prop: a reference into an extent. TargetId is null when
 // the reference is unset (nothing chosen yet).
 public sealed record ReferenceValue(int? TargetId, string TypeName) : NodeValue;

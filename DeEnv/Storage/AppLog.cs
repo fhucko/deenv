@@ -99,6 +99,13 @@ public sealed record SetUnlink(int SetId, int MemberId) : LogWrite;
 public sealed record DictSet(int DictId, string Key, StoredValue? Old, StoredValue? New) : LogWrite;
 public sealed record DictRemove(int DictId, string Key, StoredValue Old) : LogWrite;
 
+// List mutations, addressed by the list's own intrinsic id (mirrors set/dict by-id ops). No list-version
+// field — list OCC is deferred. Replay applies these literally (no GC, no re-mint).
+public sealed record ListReplace(int ListId, List<StoredValue> OldItems, List<StoredValue> NewItems) : LogWrite;
+public sealed record ListInsert(int ListId, int Index, StoredValue Item) : LogWrite;
+public sealed record ListRemoveAt(int ListId, int Index, StoredValue OldItem) : LogWrite;
+public sealed record ListMove(int ListId, int From, int To) : LogWrite;
+
 // A write that targets the DOCUMENT ROOT directly — reachable only for a scalar-typed Db (WriteLeafCore's
 // `path.IsRoot` branch: `_db.Root = new StoredLeaf(value)`). An object-typed Db's root is a StoredRef, and
 // every write that could target it (WriteObjectCore's WalkToObject-on-root) actually writes the ROOT
@@ -135,6 +142,10 @@ public sealed class LogWriteConverter : JsonConverter<LogWrite>
             "setUnlink"  => new SetUnlink(Int("setId"), Int("memberId")),
             "dictSet"    => new DictSet(Int("dictId"), Str("key"), Val("old"), Val("new")),
             "dictRemove" => new DictRemove(Int("dictId"), Str("key"), Val("old")!),
+            "listReplace" => new ListReplace(Int("listId"), ReadItemList(root, "oldItems", options), ReadItemList(root, "newItems", options)),
+            "listInsert"  => new ListInsert(Int("listId"), Int("index"), Val("item")!),
+            "listRemoveAt" => new ListRemoveAt(Int("listId"), Int("index"), Val("oldItem")!),
+            "listMove"    => new ListMove(Int("listId"), Int("from"), Int("to")),
             "rootWrite"  => new RootWrite(Val("old"), Val("new")),
             var kind     => throw new JsonException($"Unknown log write kind '{kind}'."),
         };
@@ -188,6 +199,30 @@ public sealed class LogWriteConverter : JsonConverter<LogWrite>
                 writer.WriteString("key", key);
                 WriteVal(writer, "old", old, options);
                 break;
+            case ListReplace(var listId, var oldItems, var newItems):
+                writer.WriteString("kind", "listReplace");
+                writer.WriteNumber("listId", listId);
+                WriteItemList(writer, "oldItems", oldItems, options);
+                WriteItemList(writer, "newItems", newItems, options);
+                break;
+            case ListInsert(var listId, var index, var item):
+                writer.WriteString("kind", "listInsert");
+                writer.WriteNumber("listId", listId);
+                writer.WriteNumber("index", index);
+                WriteVal(writer, "item", item, options);
+                break;
+            case ListRemoveAt(var listId, var index, var oldItem):
+                writer.WriteString("kind", "listRemoveAt");
+                writer.WriteNumber("listId", listId);
+                writer.WriteNumber("index", index);
+                WriteVal(writer, "oldItem", oldItem, options);
+                break;
+            case ListMove(var listId, var from, var to):
+                writer.WriteString("kind", "listMove");
+                writer.WriteNumber("listId", listId);
+                writer.WriteNumber("from", from);
+                writer.WriteNumber("to", to);
+                break;
             case RootWrite(var old, var @new):
                 writer.WriteString("kind", "rootWrite");
                 WriteVal(writer, "old", old, options);
@@ -206,6 +241,25 @@ public sealed class LogWriteConverter : JsonConverter<LogWrite>
         writer.WritePropertyName(prop);
         if (v is null) writer.WriteNullValue();
         else JsonSerializer.Serialize(writer, v, options);
+    }
+
+    private static void WriteItemList(
+        Utf8JsonWriter writer, string prop, List<StoredValue> items, JsonSerializerOptions options)
+    {
+        writer.WritePropertyName(prop);
+        writer.WriteStartArray();
+        foreach (var item in items)
+            JsonSerializer.Serialize(writer, item, options);
+        writer.WriteEndArray();
+    }
+
+    private static List<StoredValue> ReadItemList(JsonElement root, string prop, JsonSerializerOptions options)
+    {
+        var items = new List<StoredValue>();
+        if (root.TryGetProperty(prop, out var el) && el.ValueKind == JsonValueKind.Array)
+            foreach (var item in el.EnumerateArray())
+                items.Add(Reparse(item, options));
+        return items;
     }
 
     private static void WriteFields(

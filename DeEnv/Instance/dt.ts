@@ -4,17 +4,24 @@
 // scope with codeExec.ts (the interpreter) and init.ts (uiStatic). Mirrors the C#
 // emitter DeEnv/Code/ClientState.cs.
 
-type DtValue = DtSimpleValue | DtObjectRef | DtArrayRef;
+type DtValue = DtSimpleValue | DtObjectRef | DtCollectionRef;
 interface DtSimpleValue { type: "simple"; value: ExecInt | ExecBool | ExecText | ExecNull; }
 interface DtObjectRef { type: "object"; id: number; }
-interface DtArrayRef { type: "array"; id: number; }
+interface DtCollectionRef { type: "set" | "dict" | "list"; id: number; }
 
 interface DtScopeValue { isReadOnly: boolean; value: DtValue; }
 interface ServerDtObject { props: { [name: string]: DtValue }; sourcePath?: string; scalarEntry?: boolean; ownerRef?: number; dictProp?: string; key?: string; }
-interface ServerDtArray { kind: "set" | "dict" | "list"; elementTypeName?: string; sourcePath?: string; ownerRef?: number; dictProp?: string; items: { key: number; value: DtValue }[]; }
+interface ServerDtCollection {
+    type: "set" | "dict" | "list";
+    elementTypeName?: string;
+    sourcePath?: string;
+    ownerRef?: number;
+    dictProp?: string;
+    items: { key: number; value: DtValue }[];
+}
 
 interface ServerDtState {
-    leaves: { objects: { [id: number]: ServerDtObject }; arrays: { [id: number]: ServerDtArray } };
+    leaves: { objects: { [id: number]: ServerDtObject }; collections: { [id: number]: ServerDtCollection } };
     scope: { [key: string]: DtScopeValue };
     cache: ServerCacheEntry[];
     // The store's version as of THIS render (optimistic-concurrency anti-clobber — DECISIONS.md "App
@@ -29,7 +36,7 @@ interface ServerCacheEntry { key: string; result: DtValue; deps: CacheDeps; }
 
 interface AppState {
     objects: { [id: number]: ExecObject };
-    arrays: { [id: number]: ExecArray };
+    collections: { [id: number]: ExecCollection };
     scope: ExecScope;
     localToServerIds: { [localId: number]: number };
     serverToLocalIds: { [serverId: number]: number };
@@ -45,10 +52,16 @@ function sameScalar(a: ExecInt | ExecBool | ExecText | ExecNull, b: ExecInt | Ex
     return a.type === b.type && (a.type === "null" || b.type === "null" || a.value === b.value);
 }
 
-// Merge a server state payload into uiStatic.state, resolving object/array refs to
+function emptyCollection(type: "set" | "dict" | "list", id: number, elementTypeName?: string): ExecCollection {
+    if (type === "set") return { type: "set", id, items: [], elementTypeName };
+    if (type === "dict") return { type: "dict", id, items: [], elementTypeName };
+    return { type: "list", id, items: [], elementTypeName };
+}
+
+// Merge a server state payload into uiStatic.state, resolving object/collection refs to
 // shared instances by id (so identity is preserved across the graph).
 function mergeState(dtState: ServerDtState): void {
-    const { objects, arrays, scope } = uiStatic.state;
+    const { objects, collections, scope } = uiStatic.state;
 
     function fromDtValue(value: DtValue): ExecValue {
         switch (value.type) {
@@ -56,15 +69,27 @@ function mergeState(dtState: ServerDtState): void {
                 return value.value;
             case "object":
                 return objects[value.id] ?? (objects[value.id] = { type: "object", id: value.id, props: {} });
-            case "array":
-                return arrays[value.id] ?? (arrays[value.id] = { type: "array", id: value.id, kind: "list", items: [] });
+            case "set":
+            case "dict":
+            case "list":
+                return collections[value.id] ?? (collections[value.id] = emptyCollection(value.type, value.id));
         }
     }
 
     for (const [idText, dtObj] of Object.entries(dtState.leaves.objects)) {
         const id = Number(idText);
         const obj = objects[id] ?? (objects[id] = { type: "object", id, props: {} });
-        for (const [name, value] of Object.entries(dtObj.props)) obj.props[name] = fromDtValue(value);
+        for (const [name, value] of Object.entries(dtObj.props)) {
+            const next = fromDtValue(value);
+            const prev = obj.props[name];
+            obj.props[name] = next;
+            // A collection PROP assign/rebind must stale readers of that prop (first ship of a set that was
+            // VNA-missing, or empty shell → real set id). Membership growth on the collection id alone does
+            // not reach memos that only recorded the object.prop dep. Twin of pathWrite's invalidateProp.
+            if (isCollection(next) && (prev == null || (isCollection(prev) && prev.id !== next.id))
+                && typeof invalidateProp === "function")
+                invalidateProp(id, name);
+        }
         // A dict entry carries its path so a bound field edit persists path-addressed.
         if (dtObj.sourcePath != null) { obj.sourcePath = dtObj.sourcePath; obj.scalarEntry = dtObj.scalarEntry; }
         if (dtObj.ownerRef != null) obj.ownerRef = dtObj.ownerRef;
@@ -72,17 +97,21 @@ function mergeState(dtState: ServerDtState): void {
         if (dtObj.key != null) obj.key = dtObj.key;
     }
 
-    for (const [idText, dtArr] of Object.entries(dtState.leaves.arrays)) {
+    for (const [idText, dtColl] of Object.entries(dtState.leaves.collections)) {
         const id = Number(idText);
-        const arr = arrays[id] ?? (arrays[id] = { type: "array", id, kind: dtArr.kind, items: [], elementTypeName: dtArr.elementTypeName });
-        arr.kind = dtArr.kind;
-        arr.elementTypeName = dtArr.elementTypeName;
-        arr.sourcePath = dtArr.sourcePath;
-        if (dtArr.ownerRef != null) arr.ownerRef = dtArr.ownerRef;
-        if (dtArr.dictProp != null) arr.dictProp = dtArr.dictProp;
-        for (const item of dtArr.items) {
+        const coll = collections[id] ?? (collections[id] = emptyCollection(dtColl.type, id, dtColl.elementTypeName));
+        // Re-tag in place when the shell was minted with a default type before the leaf body arrived.
+        (coll as { type: "set" | "dict" | "list" }).type = dtColl.type;
+        coll.elementTypeName = dtColl.elementTypeName;
+        if (coll.type === "dict") {
+            coll.sourcePath = dtColl.sourcePath;
+            if (dtColl.ownerRef != null) coll.ownerRef = dtColl.ownerRef;
+            if (dtColl.dictProp != null) coll.dictProp = dtColl.dictProp;
+        }
+        let membershipGrew = false;
+        for (const item of dtColl.items) {
             const k = item.key;
-            const has = arr.items.some(p => {
+            const has = coll.items.some(p => {
                 if (p.key === k) return true;
                 const mapped = uiStatic.state.localToServerIds[p.key];
                 if (mapped != null && mapped === k) return true;
@@ -91,16 +120,21 @@ function mergeState(dtState: ServerDtState): void {
                 return false;
             });
             if (!has) {
-                arr.items.push({ key: k, value: fromDtValue(item.value) });
+                coll.items.push({ key: k, value: fromDtValue(item.value) });
+                membershipGrew = true;
             }
         }
+        // A merge that GROWS membership must stale every computation that observed that collection
+        // (convert importing children into an already-indexed empty set, a refetch shipping previously
+        // unaccessed rows). Twin of sendArrayItemAdd's invalidateMember.
+        if (membershipGrew && typeof invalidateMember === "function") invalidateMember(id);
     }
 
-    // Keep client-minted (transient) ids below every shipped id, so a new object/array
+    // Keep client-minted (transient) ids below every shipped id, so a new object/collection
     // can never reuse a server id (intrinsic positive, or server-derived negative).
     let minId = uiStatic.lastId.value;
     for (const id of Object.keys(objects)) minId = Math.min(minId, Number(id));
-    for (const id of Object.keys(arrays)) minId = Math.min(minId, Number(id));
+    for (const id of Object.keys(collections)) minId = Math.min(minId, Number(id));
     uiStatic.lastId.value = minId;
 
     for (const [key, value] of Object.entries(dtState.scope)) {
@@ -130,7 +164,7 @@ function mergeState(dtState: ServerDtState): void {
 }
 
 // Client reachability GC (client data layer, the LAST slice) — the DUAL of the server store GC. mergeState
-// GROWS uiStatic.state.objects/arrays on every refetch (1b merges by id; old views' rows + transient
+// GROWS uiStatic.state.objects/collections on every refetch (1b merges by id; old views' rows + transient
 // extents/where-results/descriptors linger) and nothing ever shrinks it. This mark-and-sweep drops the
 // entries no live root can reach. Called on a NAVIGATION / view-state change (resetViewState, ui.ts) — the
 // point where a whole view's data goes out of scope — NOT on the per-keystroke renderUi (too frequent).
@@ -146,14 +180,14 @@ function mergeState(dtState: ServerDtState): void {
 // captured reference (a DOM handler's `() => f(c)` still holds the same `c`). The only failure mode is the
 // identity split above, which the roots below close:
 //   • SCOPE (uiStatic.state.scope) — every top-scope var: `db` (the entry into the whole live graph — its
-//     props → arrays → items → objects), `currentUser`, the selection, and any live drafts.
-//   • THE MEMO CACHE (uiStatic.cache) — each entry's `result` references the objects/arrays it returned (a
-//     where/orderBy array, an extent list, a render closure). A render closure (`fn`) additionally holds its
+//     props → collections → items → objects), `currentUser`, the selection, and any live drafts.
+//   • THE MEMO CACHE (uiStatic.cache) — each entry's `result` references the objects/collections it returned (a
+//     where/orderBy list, an extent list, a render closure). A render closure (`fn`) additionally holds its
 //     view's data in its CAPTURED SCOPE (its `var state` — the same scope slotState() ships), so the walk
 //     descends a fn's scope too. The LIVE RENDER reach folds in here: the render reads through scope + the
 //     cache, so marking both covers what is on screen (the spec's allowed simplification).
 //   • THE PENDING JOURNAL — an un-acked optimistic mutation must keep its referenced objects alive for a
-//     rollback, INCLUDING an arrayRemove/entryRemove's DETACHED item (no longer in any array, reachable ONLY
+//     rollback, INCLUDING an arrayRemove/entryRemove's DETACHED item (no longer in any collection, reachable ONLY
 //     through the journal entry — the one reference a graph walk cannot otherwise see). Closures are opaque,
 //     so each entry exposes its pinned values as `roots` (ws.ts); we mark those.
 // A `pendingAction` in flight (an action-miss between abandon and re-invoke) holds its handler's captured
@@ -163,9 +197,9 @@ function sweepUnreachable(): void {
     // Conservative: never sweep mid-action-miss (an opaque pending `reinvoke` closure may pin objects).
     if (typeof pendingAction !== "undefined" && pendingAction != null) return;
 
-    const { objects, arrays } = uiStatic.state;
+    const { objects, collections } = uiStatic.state;
     const markedObjects = new Set<number>();
-    const markedArrays = new Set<number>();
+    const markedCollections = new Set<number>();
     const visitedScopes = new Set<ExecScope>(); // a scope is walked once (fns share scopes; the top scope
                                                 // is reached from countless closures — re-walking explodes)
     const stack: ExecValue[] = [];
@@ -184,8 +218,8 @@ function sweepUnreachable(): void {
     if (typeof journal !== "undefined")
         for (const e of journal) for (const r of e.roots ?? []) push(r);
 
-    // Mark: walk object → prop values, array → item values, fn → captured-scope values, tag → attrs +
-    // children. markedObjects/markedArrays dedupe by id (cyclic graph safe) — a value is expanded only the
+    // Mark: walk object → prop values, collection → item values, fn → captured-scope values, tag → attrs +
+    // children. markedObjects/markedCollections dedupe by id (cyclic graph safe) — a value is expanded only the
     // first time its id is seen; visitedScopes dedupes scope walks (a fn has no id, and closures share the
     // top scope, so without this a fn would be re-expanded endlessly until the stack array overflows).
     while (stack.length > 0) {
@@ -196,9 +230,11 @@ function sweepUnreachable(): void {
                 markedObjects.add(v.id);
                 for (const p of Object.values(v.props)) push(p);
                 break;
-            case "array":
-                if (markedArrays.has(v.id)) break;
-                markedArrays.add(v.id);
+            case "set":
+            case "dict":
+            case "list":
+                if (markedCollections.has(v.id)) break;
+                markedCollections.add(v.id);
                 for (const it of v.items) push(it.value);
                 break;
             case "fn":
@@ -206,7 +242,7 @@ function sweepUnreachable(): void {
                 pushScope(v.scope);
                 break;
             case "tag":
-                // A `fn:` page result can be a tag tree holding object/array refs in attribute values + children.
+                // A `fn:` page result can be a tag tree holding object/collection refs in attribute values + children.
                 for (const a of Object.values(v.attributes)) push(a.value);
                 for (const c of v.children) push(c);
                 break;
@@ -216,5 +252,5 @@ function sweepUnreachable(): void {
     // Sweep: drop every index entry whose id was not marked. The objects themselves are untouched — only the
     // id→object lookup shrinks, so a still-live closure reference keeps working and a future re-ship re-indexes.
     for (const id of Object.keys(objects)) if (!markedObjects.has(Number(id))) delete objects[Number(id)];
-    for (const id of Object.keys(arrays)) if (!markedArrays.has(Number(id))) delete arrays[Number(id)];
+    for (const id of Object.keys(collections)) if (!markedCollections.has(Number(id))) delete collections[Number(id)];
 }

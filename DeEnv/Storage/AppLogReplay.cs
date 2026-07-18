@@ -75,6 +75,53 @@ public static class AppLogReplay
                 if (FindDictNode(db, dictId) is { } dict) dict.Entries.Remove(key);
                 break;
             }
+            case ListReplace(var listId, _, var newItems):
+            {
+                var list = FindListNode(db, listId)
+                    ?? throw new StoredDataException(
+                        $"Replay: ListReplace targets list {listId}, which does not exist.");
+                list.Items.Clear();
+                list.Items.AddRange(newItems);
+                break;
+            }
+            case ListInsert(var listId, var index, var item):
+            {
+                var list = FindListNode(db, listId)
+                    ?? throw new StoredDataException(
+                        $"Replay: ListInsert targets list {listId}, which does not exist.");
+                if (index < 0 || index > list.Items.Count)
+                    throw new StoredDataException(
+                        $"Replay: ListInsert index {index} out of range for list {listId} (len {list.Items.Count}).");
+                list.Items.Insert(index, item);
+                break;
+            }
+            case ListRemoveAt(var listId, var index, _):
+            {
+                var list = FindListNode(db, listId)
+                    ?? throw new StoredDataException(
+                        $"Replay: ListRemoveAt targets list {listId}, which does not exist.");
+                if (index < 0 || index >= list.Items.Count)
+                    throw new StoredDataException(
+                        $"Replay: ListRemoveAt index {index} out of range for list {listId} (len {list.Items.Count}).");
+                list.Items.RemoveAt(index);
+                break;
+            }
+            case ListMove(var listId, var from, var to):
+            {
+                var list = FindListNode(db, listId)
+                    ?? throw new StoredDataException(
+                        $"Replay: ListMove targets list {listId}, which does not exist.");
+                if (from < 0 || from >= list.Items.Count || to < 0 || to >= list.Items.Count)
+                    throw new StoredDataException(
+                        $"Replay: ListMove from={from} to={to} out of range for list {listId} (len {list.Items.Count}).");
+                if (from != to)
+                {
+                    var moved = list.Items[from];
+                    list.Items.RemoveAt(from);
+                    list.Items.Insert(to, moved);
+                }
+                break;
+            }
             case RootWrite(_, var @new):
             {
                 db.Root = @new;
@@ -112,6 +159,16 @@ public static class AppLogReplay
                 foreach (var fv in entry.Fields.Values)
                     if (fv is StoredDict dict && dict.Id == dictId)
                         return dict;
+        return null;
+    }
+
+    private static StoredList? FindListNode(Db db, int listId)
+    {
+        foreach (var pool in db.Extents.Values)
+            foreach (var entry in pool.Values)
+                foreach (var fv in entry.Fields.Values)
+                    if (fv is StoredList list && list.Id == listId)
+                        return list;
         return null;
     }
 
@@ -158,6 +215,7 @@ public static class AppLogReplay
             (StoredRef ra, StoredRef rb) => ra.TypeName == rb.TypeName && ra.Id == rb.Id,
             (StoredSet sa, StoredSet sb) => sa.Id == sb.Id && MapEqual(sa.Members, sb.Members),
             (StoredDict da, StoredDict db) => da.Id == db.Id && MapEqual(da.Entries, db.Entries),
+            (StoredList la, StoredList lb) => la.Id == lb.Id && ListEqual(la.Items, lb.Items),
             _ => false, // different concrete kinds
         };
     }
@@ -169,6 +227,14 @@ public static class AppLogReplay
         foreach (var (k, v) in a)
             if (!b.TryGetValue(k, out var v2) || !ValueEqual(v, v2))
                 return false;
+        return true;
+    }
+
+    private static bool ListEqual(List<StoredValue> a, List<StoredValue> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (var i = 0; i < a.Count; i++)
+            if (!ValueEqual(a[i], b[i])) return false;
         return true;
     }
 }

@@ -317,12 +317,14 @@ public static class DesignMerger
     {
         Cardinality.Set => "set",
         Cardinality.Dictionary => "dictionary",
+        Cardinality.List => "list",
         _ => "single",
     };
     private static Cardinality ParseCardinalityWord(string word) => word switch
     {
         "set" => Cardinality.Set,
         "dictionary" => Cardinality.Dictionary,
+        "list" => Cardinality.List,
         _ => Cardinality.Single,
     };
 

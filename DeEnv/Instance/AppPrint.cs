@@ -96,6 +96,7 @@ public static class AppPrint
     private static string TypeExpr(PropDefinition prop) => prop.Cardinality switch
     {
         Cardinality.Set => $"set of {prop.Type}",
+        Cardinality.List => $"list of {prop.Type}",
         Cardinality.Dictionary => prop.KeyType is { } key ? $"dict of {prop.Type} by {key}" : $"dict of {prop.Type}",
         // A single prop: `Type` (+ `?` if nullable), then the optional `multiline` presentation
         // keyword (only ever set on a text prop) — so parse∘print round-trips.

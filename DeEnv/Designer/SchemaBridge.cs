@@ -198,6 +198,7 @@ public static class SchemaBridge
                     {
                         Cardinality.Set => "set",
                         Cardinality.Dictionary => "dictionary",
+                        Cardinality.List => "list",
                         _ => "single",
                     }),
                     ["multiline"] = new BoolValue(prop.Multiline),
@@ -265,6 +266,7 @@ public static class SchemaBridge
                             "" or "single" => Cardinality.Single,
                             "set"          => Cardinality.Set,
                             "dictionary"   => Cardinality.Dictionary,
+                            "list"         => Cardinality.List,
                             var other => throw new SchemaValidationException(
                                 $"Prop on type '{name}' has unknown cardinality '{other}'."),
                         };

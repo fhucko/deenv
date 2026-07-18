@@ -150,7 +150,7 @@ public sealed class WorkbenchDeepCopyTests
                     },
                 };
                 const fn = { type: 'object', id: 6, props: { name: { type: 'text', value: 'Empty' } } };
-                const use = { type: 'object', id: 7, props: { args: { type: 'array', kind: 'set', items: [], id: 0 } } };
+                const use = { type: 'object', id: 7, props: { args: { type: 'set', items: [], id: 0 } } };
                 const result = renderWorkbenchInstance(fn, use, ctx);
                 return JSON.stringify({ errorMessage: result.errorMessage, tagCount: result.tags.length });
             }
@@ -203,7 +203,7 @@ public sealed class WorkbenchDeepCopyTests
                 memoBypass = false;
 
                 const useId = 42;
-                workbenchInstances.set(useId, { argsSignature: '', ctxKey: '', cache: new Map(), lastId: { value: 0 } });
+                workbenchInstances.set(useId, { argsSignature: '', ctxKey: '', cache: new Map(), lastId: { value: 0 }, history: [], cursor: 0 });
                 const container = document.getElementById('c');
 
                 runInstanceHandler(useId, container, () => { throw new Error('boom'); });
@@ -293,7 +293,7 @@ public sealed class WorkbenchDeepCopyTests
                         name: { type: 'text', value: 'Note' },
                         labelProp: { type: 'text', value: 'title' },
                         isPrincipal: { type: 'bool', value: false },
-                        props: { type: 'array', kind: 'list', id: 101, items: [
+                        props: { type: 'list', id: 101, items: [
                             { key: 0, value: { type: 'object', id: 102, props: {
                                 name: { type: 'text', value: 'title' }, baseType: { type: 'text', value: 'text' },
                                 multiline: { type: 'bool', value: false } } } },
@@ -304,7 +304,7 @@ public sealed class WorkbenchDeepCopyTests
                     type: 'object', id: 1,
                     props: {
                         db: { type: 'object', id: 2, props: {
-                            notes: { type: 'array', kind: 'set', id: 3, elementTypeName: 'Note', items: [
+                            notes: { type: 'set', id: 3, elementTypeName: 'Note', items: [
                                 { key: 4, value: { type: 'object', id: 4, props: { title: { type: 'text', value: 'Alpha' } } } },
                             ] },
                         } },
@@ -316,10 +316,10 @@ public sealed class WorkbenchDeepCopyTests
                     },
                 };
                 const fnObj = { type: 'object', id: 20, props: { name: { type: 'text', value: 'AddNote' } } };
-                const use = { type: 'object', id: 21, props: { args: { type: 'array', kind: 'set', items: [], id: 0 } } };
+                const use = { type: 'object', id: 21, props: { args: { type: 'set', items: [], id: 0 } } };
 
                 const instance = { argsSignature: '', ctxKey: '', cache: new Map(), lastId: { value: 0 },
-                    db: deepCopySeed(ctx.props['db'], new Map()) };
+                    db: deepCopySeed(ctx.props['db'], new Map()), history: [], cursor: 0 };
 
                 function renderPass() {
                     seedSandboxCache(instance, ctx); // the driver's OWN call order (runInstanceRenderPass)

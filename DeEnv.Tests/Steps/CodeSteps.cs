@@ -222,7 +222,7 @@ public sealed class CodeSteps(InstanceContext ctx)
         var boxId = state["scope"]!["box"]!["value"]!["id"]!.GetValue<int>();
         var box = state["leaves"]!["objects"]![boxId.ToString()]!;
         var rowsArrayId = box["props"]!["rows"]!["id"]!.GetValue<int>();
-        var rows = state["leaves"]!["arrays"]![rowsArrayId.ToString()]!["items"]!.AsArray();
+        var rows = state["leaves"]!["collections"]![rowsArrayId.ToString()]!["items"]!.AsArray();
 
         // Red under the broad rule (ships the full where-membership), green under the fix.
         await Assert.That(rows.Count).IsEqualTo(displayed);

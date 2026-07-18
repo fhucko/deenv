@@ -5,15 +5,13 @@ namespace DeEnv.Code;
 
 // The boundary between the Code runtime and the M5 store — the *only* place a
 // collection changes shape. Loads the persisted object graph (extents, references,
-// sets) into runtime ExecObjects/ExecArrays, and converts a transient ExecObject
-// back to an ObjectValue when it is persisted.
+// sets, dicts, lists) into runtime ExecObjects/Exec collections, and converts a
+// transient ExecObject back to an ObjectValue when it is persisted.
 //
 // Object identity is preserved: a set member's intrinsic id becomes both the
-// ExecObject.Id and the ExecItem.Key (identity-keyed), and an object reached by
-// two references resolves to one ExecObject (shared via the `loaded` map).
-//
-// Dictionaries are not yet loaded (later slice); scalars, sets, and single object
-// references are.
+// ExecObject.Id and the ExecItem.Key (identity-keyed); a list slot's ExecItem.Key is
+// the ordinal 0..n-1 (so the same object id in two slots yields two items sharing one
+// ExecObject instance via the `loaded` map).
 public static class DbBridge
 {
     // M5 seeds the Db root object at extent id 1. Public so a host action can recognise the
@@ -75,11 +73,53 @@ public static class DbBridge
                                 items.Add(new ExecItem { Key = memberId, Value = member });
                             }
                     }
-                    obj.Props[prop.Name] = new ExecArray
-                    {
+                    obj.Props[prop.Name] = new ExecSet {
                         Items = items,
                         Id = setId,
-                        Kind = ArrayKind.Set,
+                        ElementTypeName = elemType!.Name,
+                    };
+                    break;
+                }
+
+                case Cardinality.List:
+                {
+                    // Durable list: positive stored id; items in order. Object slots share ExecObject
+                    // instances via `loaded` (same id twice → same instance twice in Items). Keys are
+                    // ORDINAL 0..n-1 on the ACL-filtered view (indices renumber when denied slots omit).
+                    // Object slots arrive as ReferenceValue so the member id is preserved (ObjectValue
+                    // alone has no id); BuildListValue emits that shape.
+                    var items = new List<ExecItem>();
+                    var listId = 0;
+                    var elementIsObject = desc.IsObjectType(prop.Type);
+                    if (ov.Fields.TryGetValue(prop.Name, out var listField) && listField is ListValue storedList)
+                    {
+                        listId = storedList.Id;
+                        var ordinal = 0;
+                        foreach (var slot in storedList.Items)
+                        {
+                            if (elementIsObject)
+                            {
+                                if (slot is not ReferenceValue { TargetId: int memberId }) continue;
+                                if (store.ReadById(memberId) is not { } hit) continue;
+                                var member = LoadObject(hit.Fields, ResolveType(hit.TypeName, desc)!,
+                                    memberId, fieldPath.Key(memberId.ToString()), store, desc, loaded, context, floor);
+                                // ACL: omit denied object slots (indices renumber in the filtered view).
+                                if (floor != null && !floor.CanRead(hit.TypeName, member)) continue;
+                                items.Add(new ExecItem { Key = ordinal++, Value = member });
+                            }
+                            else
+                            {
+                                // Scalar slot: password blanks per slot (rule-independent, like single).
+                                IExecValue value = prop.Type == "password"
+                                    ? new ExecText { Value = "" }
+                                    : ScalarToExec(slot);
+                                items.Add(new ExecItem { Key = ordinal++, Value = value });
+                            }
+                        }
+                    }
+                    obj.Props[prop.Name] = new ExecList {
+                        Items = items,
+                        Id = listId,
                         ElementTypeName = elemType!.Name,
                     };
                     break;
@@ -87,7 +127,7 @@ public static class DbBridge
 
                 case Cardinality.Dictionary:
                 {
-                    // A dictionary surfaces as a Kind=Dict ExecArray of ENTRY objects, each
+                    // A dictionary surfaces as a Kind=Dict IExecCollection of ENTRY objects, each
                     // carrying its key in a reserved `__key` field (so the stdlib reads it with
                     // field(entry,"__key") — no foreach-key syntax). An object entry is its
                     // scalar fields + __key; a scalar entry is a synthesized { __key, value }.
@@ -139,11 +179,9 @@ public static class DbBridge
                             items.Add(new ExecItem { Key = entry.Id, Value = entry });
                         }
                     }
-                    obj.Props[prop.Name] = new ExecArray
-                    {
+                    obj.Props[prop.Name] = new ExecDict {
                         Items = items,
                         Id = dictId,
-                        Kind = ArrayKind.Dict,
                         ElementTypeName = elemType!.Name,
                         SourcePath = fieldPath.ToString(),
                         // R7 addressing.
@@ -204,7 +242,7 @@ public static class DbBridge
     // candidate is built SCALAR-only (a password-typed field blanked to "" below), exactly the shape
     // CanRead's condition reads (`object.status`, the row's own fields), so the listing floor decides over
     // the SAME inputs as the graph floor.
-    public static ExecArray LoadExtent(IInstanceStore store, string typeName, ExecContext context,
+    public static IExecCollection LoadExtent(IInstanceStore store, string typeName, ExecContext context,
         AccessFloor? floor = null, InstanceDescription? desc = null)
     {
         var items = new List<ExecItem>();
@@ -225,11 +263,9 @@ public static class DbBridge
             if (floor != null && !floor.CanRead(typeName, obj)) continue;
             items.Add(new ExecItem { Key = id, Value = obj });
         }
-        return new ExecArray
-        {
+        return new ExecList {
             Items = items,
             Id = --context.LastId.Value,
-            Kind = ArrayKind.List,
             ElementTypeName = typeName,
         };
     }

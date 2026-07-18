@@ -16,6 +16,7 @@ namespace DeEnv.Storage;
 //   object reference  { "type":"object", "typeName":T, "id":N }   // no `fields` — that marks an extent entry
 //   set               { "type":"set", "id":N, "members": { "<memberId>": <object-ref> } }
 //   dictionary        { "type":"dictionary", "id":N, "entries": { "<keyString>": <leaf-or-object-ref> } }
+//   list              { "type":"list", "id":N, "items": [ <leaf-or-object-ref>, ... ] }  // order significant; duplicate refs allowed
 //
 // Mutability: minting bumps NextId; writes mutate Extents / Fields / Members / Entries
 // dictionaries in place (the records hold MUTABLE dictionaries, so an in-place edit
@@ -73,13 +74,18 @@ public sealed record StoredSet(int Id, Dictionary<int, StoredValue> Members) : S
 // StoredLeaf or StoredRef).
 public sealed record StoredDict(int Id, Dictionary<string, StoredValue> Entries) : StoredValue;
 
+// A list: intrinsic id + ordered items (StoredLeaf or StoredRef). The same object
+// id may appear in multiple slots. No per-list version field (list OCC deferred).
+public sealed record StoredList(int Id, List<StoredValue> Items) : StoredValue;
+
 // The ONE place the on-disk value shapes are read and written. Switches on the `type`
 // discriminator: scalar tags → StoredLeaf (the matching NodeValue scalar), `object`
-// → StoredRef, `set` → StoredSet, `dictionary` → StoredDict (members/entries read
-// recursively). Deliberately LENIENT about a missing intrinsic `id` (defaults to 0)
-// and a missing members/entries slot (defaults to empty) so a malformed/legacy
-// document still deserializes and is then rejected by StoredDataValidator with a
-// precise message — rather than failing here with a generic deserialization error.
+// → StoredRef, `set` → StoredSet, `dictionary` → StoredDict, `list` → StoredList
+// (members/entries/items read recursively). Deliberately LENIENT about a missing
+// intrinsic `id` (defaults to 0) and a missing members/entries/items slot (defaults
+// to empty) so a malformed/legacy document still deserializes and is then rejected
+// by StoredDataValidator with a precise message — rather than failing here with a
+// generic deserialization error.
 public sealed class StoredValueConverter : JsonConverter<StoredValue>
 {
     public override StoredValue Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
@@ -98,6 +104,7 @@ public sealed class StoredValueConverter : JsonConverter<StoredValue>
                 IdOf(root)),
             "set" => new StoredSet(IdOf(root), ReadIntMap(root, "members", options)),
             "dictionary" => new StoredDict(IdOf(root), ReadStringMap(root, "entries", options)),
+            "list" => new StoredList(IdOf(root), ReadItemList(root, "items", options)),
             _ => new StoredLeaf(LeafFrom(tag, root)),
         };
     }
@@ -130,6 +137,17 @@ public sealed class StoredValueConverter : JsonConverter<StoredValue>
                 writer.WriteNumber("id", d.Id);
                 writer.WritePropertyName("entries");
                 WriteStringMap(writer, d.Entries, options);
+                writer.WriteEndObject();
+                break;
+            case StoredList list:
+                writer.WriteStartObject();
+                writer.WriteString("type", "list");
+                writer.WriteNumber("id", list.Id);
+                writer.WritePropertyName("items");
+                writer.WriteStartArray();
+                foreach (var item in list.Items)
+                    Write(writer, item, options);
+                writer.WriteEndArray();
                 writer.WriteEndObject();
                 break;
             default:
@@ -213,6 +231,15 @@ public sealed class StoredValueConverter : JsonConverter<StoredValue>
             foreach (var prop in slotEl.EnumerateObject())
                 map[prop.Name] = Deserialize(prop.Value, options);
         return map;
+    }
+
+    private List<StoredValue> ReadItemList(JsonElement obj, string slot, JsonSerializerOptions options)
+    {
+        var items = new List<StoredValue>();
+        if (obj.TryGetProperty(slot, out var slotEl) && slotEl.ValueKind == JsonValueKind.Array)
+            foreach (var el in slotEl.EnumerateArray())
+                items.Add(Deserialize(el, options));
+        return items;
     }
 
     private StoredValue Deserialize(JsonElement element, JsonSerializerOptions options)
