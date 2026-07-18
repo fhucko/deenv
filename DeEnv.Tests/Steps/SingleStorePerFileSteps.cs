@@ -4,6 +4,7 @@ using DeEnv.Instance;
 using DeEnv.Kernel;
 using DeEnv.Storage;
 using DeEnv.Tests.TestSupport;
+using DeEnv.Tests.TestSupport;
 using Reqnroll;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -33,13 +34,13 @@ public sealed class SingleStorePerFileSteps
             access text
             common text
             ui text
-            types set of MetaType
+            types list of MetaType
         MetaType
             name text
             baseType text
             values text
             order int
-            props set of MetaProp
+            props list of MetaProp
         MetaProp
             name text
             type text
@@ -132,14 +133,14 @@ public sealed class SingleStorePerFileSteps
         var typesPath = NodePath.Root.Field("designs").Key(_designId.ToString()).Field("types");
         _dbTypeId = designer.CreateObject("MetaType", new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("Db"), ["baseType"] = new TextValue("object"), ["order"] = new IntValue(0),
+            ["name"] = new TextValue("Db"), ["baseType"] = new TextValue("object"),
         }));
-        designer.AddToSet(typesPath, _dbTypeId);
+        DesignerListHelpers.AppendToList(designer, typesPath, _dbTypeId, "MetaType");
         _itemTypeId = designer.CreateObject("MetaType", new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("Item"), ["baseType"] = new TextValue("object"), ["order"] = new IntValue(0),
+            ["name"] = new TextValue("Item"), ["baseType"] = new TextValue("object"),
         }));
-        designer.AddToSet(typesPath, _itemTypeId);
+        DesignerListHelpers.AppendToList(designer, typesPath, _itemTypeId, "MetaType");
 
         AddProp(designer, _itemTypeId, "title", "text", cardinality: "");
         AddProp(designer, _dbTypeId, "items", "Item", cardinality: "set");
@@ -151,11 +152,11 @@ public sealed class SingleStorePerFileSteps
             .Field("types").Key(ownerTypeId.ToString()).Field("props");
         var fields = new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue(name), ["type"] = new TextValue(type), ["order"] = new IntValue(0),
+            ["name"] = new TextValue(name), ["type"] = new TextValue(type),
         };
         if (cardinality.Length > 0) fields["cardinality"] = new TextValue(cardinality);
         var id = designer.CreateObject("MetaProp", new ObjectValue(fields));
-        designer.AddToSet(propsPath, id);
+        DesignerListHelpers.AppendToList(designer, propsPath, id, "MetaProp");
         _propIds[name] = id;
     }
 

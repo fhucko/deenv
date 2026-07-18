@@ -10,7 +10,7 @@ using TUnit.Assertions.Extensions;
 namespace DeEnv.Tests.Steps;
 
 // StructuredRender.feature — M12 S1a. The designer stores render code as a MetaNode tag tree owned by
-// Design.render (a `set of MetaNode` holding exactly one root); SchemaBridge.ProjectDesignDb
+// Design.render (a `list of MetaNode` holding exactly one root); SchemaBridge.ProjectDesignDb
 // projects it to the canonical `fn render()` text. This drives the projection over a REAL designer store
 // (the real instances/1 meta-schema, so the new `render`/MetaNode/MetaAttr types are declared) and proves
 // the artifact by the SAME server-side path a hand-written UI takes (InstanceDescriptionLoader.Load +
@@ -45,14 +45,14 @@ public sealed class StructuredRenderSteps
         // A minimal valid Db root type (a custom-UI app still needs one) — the projected document's `types`.
         var db = _designer.CreateObject("MetaType", new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("Db"), ["baseType"] = new TextValue("object"), ["order"] = new IntValue(0),
+            ["name"] = new TextValue("Db"), ["baseType"] = new TextValue("object"),
         }));
-        _designer.AddToSet(DesignPath.Field("types"), db);
+        DesignerListHelpers.AppendToList(_designer, DesignPath.Field("types"), db, "MetaType");
         var greeting = _designer.CreateObject("MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("greeting"), ["type"] = new TextValue("text"), ["order"] = new IntValue(0),
+            ["name"] = new TextValue("greeting"), ["type"] = new TextValue("text"),
         }));
-        _designer.AddToSet(DesignPath.Field("types").Key(db.ToString()).Field("props"), greeting);
+        DesignerListHelpers.AppendToList(_designer, DesignPath.Field("types").Key(db.ToString()).Field("props"), greeting, "MetaProp");
     }
 
     // Build: main.hello > h1 > "Hi". Built TOP-DOWN, each node linked into its (already-reachable) parent as
@@ -63,7 +63,7 @@ public sealed class StructuredRenderSteps
     public void GivenStructuredRender(string cls, string childText)
     {
         var main = CreateNode(tag: "main");
-        _designer.AddToSet(DesignPath.Field("render"), main);              // main now reachable (the one root)
+        DesignerListHelpers.AppendToList(_designer, DesignPath.Field("render"), main, "MetaNode"); // one root
 
         var mainPath = DesignPath.Field("render").Key(main.ToString());
         // Attribute value + text-leaf expr are EXPRESSION SOURCES: a string value is the QUOTED literal source.
@@ -85,7 +85,7 @@ public sealed class StructuredRenderSteps
         var design = _designer.ReadNode(DesignPath)!;
         // ReadNode resolves `render` (now a set) recursively, along with every descendant's children/attrs
         // sets — exactly like `types` — so no resolver is needed.
-        _projected = SchemaBridge.ProjectDesignDb(design);
+        _projected = SchemaBridge.ProjectDesignDb(design, _designer);
     }
 
     // The `()` in `fn render()` is escaped (`\(\)`) — Cucumber Expressions treat `(…)` as an optional group.
@@ -113,25 +113,21 @@ public sealed class StructuredRenderSteps
     private int CreateNode(string tag, string expr = "") =>
         _designer.CreateObject("MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["tag"]   = new TextValue(tag),
-            ["expr"]  = new TextValue(expr),
-            ["order"] = new IntValue(0),
+            ["tag"]  = new TextValue(tag),
+            ["expr"] = new TextValue(expr),
         }));
 
-    // Add `child` to the `children` set of the MetaNode addressed by `nodePath`.
     private void AddToChildren(NodePath nodePath, int child) =>
-        _designer.AddToSet(nodePath.Field("children"), child);
+        DesignerListHelpers.AppendToList(_designer, nodePath.Field("children"), child, "MetaNode");
 
-    // Add an attribute to the `attrs` set of the MetaNode addressed by `nodePath`.
     private void AddAttr(NodePath nodePath, string name, string value)
     {
         var id = _designer.CreateObject("MetaAttr", new ObjectValue(new Dictionary<string, NodeValue>
         {
             ["name"]  = new TextValue(name),
             ["value"] = new TextValue(value),
-            ["order"] = new IntValue(0),
         }));
-        _designer.AddToSet(nodePath.Field("attrs"), id);
+        DesignerListHelpers.AppendToList(_designer, nodePath.Field("attrs"), id, "MetaAttr");
     }
 
     [AfterScenario]

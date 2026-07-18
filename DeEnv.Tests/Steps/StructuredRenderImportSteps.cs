@@ -2,6 +2,7 @@ using DeEnv.Code;
 using DeEnv.Designer;
 using DeEnv.Instance;
 using DeEnv.Storage;
+using DeEnv.Tests.TestSupport;
 using Reqnroll;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -11,13 +12,13 @@ namespace DeEnv.Tests.Steps;
 // StructuredRenderImport.feature — M12 S1b (SchemaBridge.ImportRender): convert a design authored as
 // `ui` TEXT (a custom `fn render()`) INTO the structured MetaNode tree, then clear the `ui` field. Drives
 // ImportRender directly over a REAL designer store (the same test-local meta-schema shape
-// DesignSnapshotSteps uses, extended with `render set of MetaNode` + MetaNode/MetaAttr), then proves the
+// DesignSnapshotSteps uses, extended with `render list of MetaNode` + MetaNode/MetaAttr), then proves the
 // lossless round-trip through the real ProjectDesignDb. No wire, no WS, no interpreter change.
 [Binding]
 public sealed class StructuredRenderImportSteps
 {
     // The designer meta-schema, mirroring the live designer (instances/1): a Design carries its render as
-    // both a `ui` text field AND a structured `render set of MetaNode` (the S1a shape). A custom-UI design
+    // both a `ui` text field AND a structured `render list of MetaNode` (the S1a shape). A custom-UI design
     // needs a valid Db root type, so Db is seeded too.
     private const string MetaSchema =
         """
@@ -30,10 +31,10 @@ public sealed class StructuredRenderImportSteps
                 access text
                 common text
                 ui text
-                render set of MetaNode
-                fns set of MetaFn
-                vars set of MetaVar
-                types set of MetaType
+                render list of MetaNode
+                fns list of MetaFn
+                vars list of MetaVar
+                types list of MetaType
             MetaNode
                 kind text
                 tag text
@@ -41,9 +42,9 @@ public sealed class StructuredRenderImportSteps
                 item text
                 collection text
                 condition text
-                attrs set of MetaAttr
-                children set of MetaNode
-                elseChildren set of MetaNode
+                attrs list of MetaAttr
+                children list of MetaNode
+                elseChildren list of MetaNode
                 order int
             MetaAttr
                 name text
@@ -52,8 +53,8 @@ public sealed class StructuredRenderImportSteps
             MetaFn
                 name text
                 params text
-                body set of MetaNode
-                vars set of MetaVar
+                body list of MetaNode
+                vars list of MetaVar
                 order int
             MetaVar
                 name text
@@ -64,7 +65,7 @@ public sealed class StructuredRenderImportSteps
                 baseType text
                 values text
                 order int
-                props set of MetaProp
+                props list of MetaProp
             MetaProp
                 name text
                 type text
@@ -251,14 +252,14 @@ public sealed class StructuredRenderImportSteps
         // A custom-UI app still needs a valid Db root type, or the projection's type validation rejects it.
         var dbId = _designer.CreateObject("MetaType", new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("Db"), ["baseType"] = new TextValue("object"), ["order"] = new IntValue(0),
+            ["name"] = new TextValue("Db"), ["baseType"] = new TextValue("object"),
         }));
-        _designer.AddToSet(DesignPath.Field("types"), dbId);
+        DesignerListHelpers.AppendToList(_designer, DesignPath.Field("types"), dbId, "MetaType");
         var greetingId = _designer.CreateObject("MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("greeting"), ["type"] = new TextValue("text"), ["order"] = new IntValue(0),
+            ["name"] = new TextValue("greeting"), ["type"] = new TextValue("text"),
         }));
-        _designer.AddToSet(DesignPath.Field("types").Key(dbId.ToString()).Field("props"), greetingId);
+        DesignerListHelpers.AppendToList(_designer, DesignPath.Field("types").Key(dbId.ToString()).Field("props"), greetingId, "MetaProp");
     }
 
     // ── When: import (and the re-import setup) ───────────────────────────────────────────────────────
@@ -322,7 +323,7 @@ public sealed class StructuredRenderImportSteps
     public async Task ThenProjectsToCanonicalOriginal()
     {
         var design = _designer.ReadNode(DesignPath)!;
-        var projected = SchemaBridge.ProjectDesignDb(design);
+        var projected = SchemaBridge.ProjectDesignDb(design, _designer);
         var expectedUi = AppPrint.PrintUi(CodeParse.ParseUiSection(_originalUi)).TrimEnd('\n');
         await Assert.That(projected).Contains(expectedUi);
     }

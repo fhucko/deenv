@@ -2908,7 +2908,7 @@ public sealed partial class DesignerSteps
                 var design = _designer.Store.ReadNode(DeEnv.Storage.NodePath.Root.Field("designs").Key(designId.ToString()));
                 if (design != null)
                 {
-                    try { DeEnv.Designer.SchemaBridge.ProjectDesignDb(design); return; }
+                    try { DeEnv.Designer.SchemaBridge.ProjectDesignDb(design, _designer.Store); return; }
                     catch (Exception ex) { lastError = ex; }
                 }
             }
@@ -3082,7 +3082,7 @@ public sealed partial class DesignerSteps
             // projectability of the edited render. (We deliberately do NOT then interpreter-LOAD the doc:
             // the imported fixture render references a bare symbol `leaf` that a running app has no binding
             // for — a symbol-resolution concern orthogonal to whether the render tree projects.)
-            var doc = DeEnv.Designer.SchemaBridge.ProjectDesignDb(design);
+            var doc = DeEnv.Designer.SchemaBridge.ProjectDesignDb(design, _designer.Store);
             return doc.Contains("fn render()");
         }
         catch (Exception ex) { _lastProjectError = ex.Message; return false; }
@@ -3412,7 +3412,7 @@ public sealed partial class DesignerSteps
             if (design == null) return false;
             try
             {
-                var projected = DeEnv.Designer.SchemaBridge.ProjectDesignDb(design);
+                var projected = DeEnv.Designer.SchemaBridge.ProjectDesignDb(design, _designer.Store);
                 var i1 = projected.IndexOf("<" + first, StringComparison.Ordinal);
                 var i2 = projected.IndexOf("<" + second, StringComparison.Ordinal);
                 return i1 >= 0 && i2 >= 0 && i1 < i2;
@@ -3917,7 +3917,7 @@ public sealed partial class DesignerSteps
             if (design == null) return false;
             try
             {
-                var projected = DeEnv.Designer.SchemaBridge.ProjectDesignDb(design);
+                var projected = DeEnv.Designer.SchemaBridge.ProjectDesignDb(design, _designer.Store);
                 return projected.Contains(declaration, StringComparison.Ordinal);
             }
             catch { return false; }

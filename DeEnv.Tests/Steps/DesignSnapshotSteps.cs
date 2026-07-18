@@ -1,6 +1,7 @@
 using DeEnv.Designer;
 using DeEnv.Instance;
 using DeEnv.Storage;
+using DeEnv.Tests.TestSupport;
 using Reqnroll;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -31,13 +32,13 @@ public sealed class DesignSnapshotSteps
                 access text
                 common text
                 ui text
-                types set of MetaType
+                types list of MetaType
             MetaType
                 name text
                 baseType text
                 values text
                 order int
-                props set of MetaProp
+                props list of MetaProp
             MetaProp
                 name text
                 type text
@@ -95,7 +96,7 @@ public sealed class DesignSnapshotSteps
     private DesignSnapshot BuildSnapshot()
     {
         var design = _designer.ReadNode(NodePath.Root.Field("designs").Key(_designId.ToString()))!;
-        return SchemaBridge.Snapshot(design);
+        return SchemaBridge.Snapshot(design, _designer);
     }
 
     [Then("building a snapshot fails with a schema validation error")]
@@ -104,7 +105,7 @@ public sealed class DesignSnapshotSteps
         try
         {
             var design = _designer.ReadNode(NodePath.Root.Field("designs").Key(_designId.ToString()))!;
-            SchemaBridge.Snapshot(design);
+            SchemaBridge.Snapshot(design, _designer);
         }
         catch (Exception ex) { _error = ex; }
 
@@ -167,7 +168,7 @@ public sealed class DesignSnapshotSteps
     {
         var propsPath = NodePath.Root.Field("designs").Key(_designId.ToString())
             .Field("types").Key(_noteTypeId.ToString()).Field("props");
-        _designer.RemoveFromSet(propsPath, _titlePropId);
+        DesignerListHelpers.RemoveFromList(_designer, propsPath, _titlePropId);
         _titlePropId = AddProp(_noteTypeId, sameName, "text"); // a FRESH mint — a different id, same name
     }
 
@@ -219,9 +220,9 @@ public sealed class DesignSnapshotSteps
         {
             ["name"]     = new TextValue(name),
             ["baseType"] = new TextValue(baseType),
-            ["order"]    = new IntValue(0),
         }));
-        _designer.AddToSet(NodePath.Root.Field("designs").Key(_designId.ToString()).Field("types"), id);
+        DesignerListHelpers.AppendToList(_designer,
+            NodePath.Root.Field("designs").Key(_designId.ToString()).Field("types"), id, "MetaType");
         return id;
     }
 
@@ -231,11 +232,10 @@ public sealed class DesignSnapshotSteps
             .Field("types").Key(typeId.ToString()).Field("props");
         var id = _designer.CreateObject("MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"]  = new TextValue(name),
-            ["type"]  = new TextValue(type),
-            ["order"] = new IntValue(0),
+            ["name"] = new TextValue(name),
+            ["type"] = new TextValue(type),
         }));
-        _designer.AddToSet(propsPath, id);
+        DesignerListHelpers.AppendToList(_designer, propsPath, id, "MetaProp");
         return id;
     }
 
@@ -248,9 +248,8 @@ public sealed class DesignSnapshotSteps
             ["name"]        = new TextValue(name),
             ["type"]        = new TextValue(elementType),
             ["cardinality"] = new TextValue("set"),
-            ["order"]       = new IntValue(0),
         }));
-        _designer.AddToSet(propsPath, id);
+        DesignerListHelpers.AppendToList(_designer, propsPath, id, "MetaProp");
         return id;
     }
 }

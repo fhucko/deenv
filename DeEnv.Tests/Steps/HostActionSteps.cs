@@ -4,6 +4,7 @@ using DeEnv.Http;
 using DeEnv.Instance;
 using DeEnv.Kernel;
 using DeEnv.Storage;
+using DeEnv.Tests.TestSupport;
 using Reqnroll;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -58,13 +59,13 @@ public sealed class HostActionSteps
                 initialData text
                 common text
                 ui text
-                render set of MetaNode
-                types set of MetaType
+                render list of MetaNode
+                types list of MetaType
             MetaNode
                 tag text
                 expr text
-                attrs set of MetaAttr
-                children set of MetaNode
+                attrs list of MetaAttr
+                children list of MetaNode
                 order int
             MetaAttr
                 name text
@@ -74,7 +75,7 @@ public sealed class HostActionSteps
                 name text
                 baseType text
                 order int
-                props set of MetaProp
+                props list of MetaProp
             MetaProp
                 name text
                 type text
@@ -634,9 +635,9 @@ public sealed class HostActionSteps
     [Then("the design's `render` set now holds the imported tree")]
     public async Task ThenDesignRenderPopulated()
     {
-        var render = FreshDesign().Fields.GetValueOrDefault("render") as SetValue;
+        var render = FreshDesign().Fields.GetValueOrDefault("render") as ListValue;
         await Assert.That(render).IsNotNull();
-        await Assert.That(render!.Members.Count).IsGreaterThan(0);
+        await Assert.That(render!.Items.Count).IsGreaterThan(0);
     }
 
     // The authorization reject teeth for importRender: the design's `ui` text is UNCHANGED (still holds
@@ -647,8 +648,8 @@ public sealed class HostActionSteps
     {
         var design = FreshDesign();
         await Assert.That(((TextValue)design.Fields["ui"]).Text.Length).IsGreaterThan(0);
-        var render = design.Fields.GetValueOrDefault("render") as SetValue;
-        await Assert.That(render is null || render.Members.Count == 0).IsTrue();
+        var render = design.Fields.GetValueOrDefault("render") as ListValue;
+        await Assert.That(render is null || render.Items.Count == 0).IsTrue();
     }
 
     // ── When: commitDesign over the WS (M13 slice 3) ────────────────────────────
@@ -1079,7 +1080,7 @@ public sealed class HostActionSteps
         var commit = CommitByMessage(_lastCommitMessage);
         var text = ((TextValue)commit.Fields.Fields["text"]).Text;
         var design = _designer.ReadNode(NodePath.Root.Field("designs").Key(_designId.ToString()))!;
-        var expected = SchemaBridge.ProjectDesignDb(design);
+        var expected = SchemaBridge.ProjectDesignDb(design, _designer);
         await Assert.That(text).IsEqualTo(expected);
     }
 
@@ -1364,9 +1365,8 @@ public sealed class HostActionSteps
         {
             ["name"]     = new TextValue(name),
             ["baseType"] = new TextValue(baseType),
-            ["order"]    = new IntValue(0)
         }));
-        _designer.AddToSet(DesignTypesPath, id);
+        DesignerListHelpers.AppendToList(_designer, DesignTypesPath, id, "MetaType");
         _typeKeys[name] = id;
         // The first MetaType minted is a convenient non-design object id (a real object that is NOT a
         // member of db.designs) for the "publish/create a non-design id" reject scenarios.
@@ -1384,14 +1384,13 @@ public sealed class HostActionSteps
         var propsPath = DesignTypesPath.Key(_typeKeys[typeName].ToString()).Field("props");
         var fields = new Dictionary<string, NodeValue>
         {
-            ["name"]  = new TextValue(propName),
-            ["type"]  = new TextValue(propType),
-            ["order"] = new IntValue(0)
+            ["name"] = new TextValue(propName),
+            ["type"] = new TextValue(propType),
         };
         if (cardinality.Length > 0)
             fields["cardinality"] = new TextValue(cardinality);
         var id = _designer.CreateObject("MetaProp", new ObjectValue(fields));
-        _designer.AddToSet(propsPath, id);
+        DesignerListHelpers.AppendToList(_designer, propsPath, id, "MetaProp");
     }
 
     // A base-typed scalar NodeValue from its base-type name + text value (for seeding typed fields).

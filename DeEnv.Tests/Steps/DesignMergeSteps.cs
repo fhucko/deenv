@@ -4,6 +4,7 @@ using DeEnv.Http;
 using DeEnv.Instance;
 using DeEnv.Kernel;
 using DeEnv.Storage;
+using DeEnv.Tests.TestSupport;
 using Reqnroll;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -30,14 +31,14 @@ public sealed class DesignMergeSteps
                 access text
                 common text
                 ui text
-                types set of MetaType
+                types list of MetaType
                 origin int
             MetaType
                 name text
                 baseType text
                 values text
                 order int
-                props set of MetaProp
+                props list of MetaProp
                 origin int
             MetaProp
                 name text
@@ -133,16 +134,20 @@ public sealed class DesignMergeSteps
             : throw new InvalidOperationException("createBranch produced a branch with no workingCopy.");
 
         var cloneDesign = fresh.ReadById(_branchDesignId)!.Value.Fields;
-        var cloneTypes = (cloneDesign.Fields.GetValueOrDefault("types") as SetValue)?.Members ?? new Dictionary<int, NodeValue>();
-        foreach (var (id, val) in cloneTypes)
-            if (val is ObjectValue typeObj && typeObj.Fields.GetValueOrDefault("name") is TextValue { Text: var typeName })
+        var typesList = cloneDesign.Fields.GetValueOrDefault("types") as ListValue;
+        foreach (var typeId in typesList != null ? DesignerListHelpers.ObjectMemberIds(typesList) : [])
+        {
+            if (fresh.ReadById(typeId) is not ("MetaType", var typeObj)) continue;
+            if (typeObj.Fields.GetValueOrDefault("name") is not TextValue { Text: var typeName }) continue;
+            _branchTypeIds[typeName] = typeId;
+            if (typeObj.Fields.GetValueOrDefault("props") is not ListValue propsList) continue;
+            foreach (var propId in DesignerListHelpers.ObjectMemberIds(propsList))
             {
-                _branchTypeIds[typeName] = id;
-                var props = (typeObj.Fields.GetValueOrDefault("props") as SetValue)?.Members ?? new Dictionary<int, NodeValue>();
-                foreach (var (propId, propVal) in props)
-                    if (propVal is ObjectValue propObj && propObj.Fields.GetValueOrDefault("name") is TextValue { Text: var propName })
-                        _branchPropIds[(typeName, propName)] = propId;
+                if (fresh.ReadById(propId) is not ("MetaProp", var propObj)) continue;
+                if (propObj.Fields.GetValueOrDefault("name") is TextValue { Text: var propName })
+                    _branchPropIds[(typeName, propName)] = propId;
             }
+        }
     }
 
     // ── authoring on MAIN or the BRANCH (separate id maps) ──────────────────────────────────────────
@@ -188,8 +193,9 @@ public sealed class DesignMergeSteps
     {
         var propId = _branchPropIds[(typeName, field)];
         var typeId = _branchTypeIds[typeName];
-        var propsSetId = (FreshDesigner().ReadById(typeId)!.Value.Fields.Fields.GetValueOrDefault("props") as SetValue)!.Id;
-        FreshDesigner().RemoveFromSet(propsSetId, propId);
+        var store = FreshDesigner();
+        var propsList = (ListValue)store.ReadById(typeId)!.Value.Fields.Fields["props"];
+        DesignerListHelpers.RemoveFromListId(store, propsList, propId);
         _branchPropIds.Remove((typeName, field));
     }
 
@@ -435,8 +441,8 @@ public sealed class DesignMergeSteps
         var fresh = FreshDesigner();
         var mainDesign = fresh.ReadById(_designId)!.Value.Fields;
         var itemTypeId = _mainTypeIds["Item"];
-        var propsSet = (fresh.ReadById(itemTypeId)!.Value.Fields.Fields.GetValueOrDefault("props") as SetValue)!;
-        var hasLabel = propsSet.Members.Keys.Any(id =>
+        var propsList = (ListValue)fresh.ReadById(itemTypeId)!.Value.Fields.Fields["props"];
+        var hasLabel = DesignerListHelpers.ObjectMemberIds(propsList).Any(id =>
             fresh.ReadById(id)!.Value.Fields.Fields.GetValueOrDefault("name") is TextValue { Text: "label" });
         await Assert.That(hasLabel).IsTrue();
         _ = mainDesign;
@@ -455,8 +461,8 @@ public sealed class DesignMergeSteps
     {
         var fresh = FreshDesigner();
         var typeId = _mainTypeIds[typeName];
-        var propsSet = (fresh.ReadById(typeId)!.Value.Fields.Fields.GetValueOrDefault("props") as SetValue)!;
-        return propsSet.Members.Keys.Any(id =>
+        var propsList = (ListValue)fresh.ReadById(typeId)!.Value.Fields.Fields["props"];
+        return DesignerListHelpers.ObjectMemberIds(propsList).Any(id =>
             fresh.ReadById(id)!.Value.Fields.Fields.GetValueOrDefault("name") is TextValue { Text: var n } && n == propName);
     }
 
@@ -465,8 +471,8 @@ public sealed class DesignMergeSteps
     {
         var fresh = FreshDesigner();
         var typeId = _mainTypeIds[typeName];
-        var propsSet = (fresh.ReadById(typeId)!.Value.Fields.Fields.GetValueOrDefault("props") as SetValue)!;
-        var match = propsSet.Members.Keys
+        var propsList = (ListValue)fresh.ReadById(typeId)!.Value.Fields.Fields["props"];
+        var match = DesignerListHelpers.ObjectMemberIds(propsList)
             .Select(id => fresh.ReadById(id)!.Value.Fields)
             .FirstOrDefault(f => f.Fields.GetValueOrDefault("name") is TextValue { Text: var n } && n == propName);
         await Assert.That(match).IsNotNull();
@@ -478,8 +484,8 @@ public sealed class DesignMergeSteps
     {
         var fresh = FreshDesigner();
         var typeId = _mainTypeIds["Item"];
-        var propsSet = (fresh.ReadById(typeId)!.Value.Fields.Fields.GetValueOrDefault("props") as SetValue)!;
-        var match = propsSet.Members.Keys
+        var propsList = (ListValue)fresh.ReadById(typeId)!.Value.Fields.Fields["props"];
+        var match = DesignerListHelpers.ObjectMemberIds(propsList)
             .Select(id => (Id: id, Fields: fresh.ReadById(id)!.Value.Fields))
             .First(x => x.Fields.Fields.GetValueOrDefault("name") is TextValue { Text: var n } && n == propName);
         var sourceRowId = _branchPropIds[("Item", propName)];
@@ -556,50 +562,46 @@ public sealed class DesignMergeSteps
     private void AddType(Dictionary<string, int> typeIds, Dictionary<(string, string), int> propIds, int designId, string name, string baseType)
     {
         _ = propIds;
-        var id = FreshDesigner().CreateObject("MetaType", new ObjectValue(new Dictionary<string, NodeValue>
+        var store = FreshDesigner();
+        var id = store.CreateObject("MetaType", new ObjectValue(new Dictionary<string, NodeValue>
         {
             ["name"]     = new TextValue(name),
             ["baseType"] = new TextValue(baseType),
-            ["order"]    = new IntValue(0),
         }));
-        if (designId == _designId)
-            FreshDesigner().AddToSet(TypesPath(designId), id);
-        else
-        {
-            var typesSetId = (FreshDesigner().ReadById(designId)!.Value.Fields.Fields.GetValueOrDefault("types") as SetValue)!.Id;
-            FreshDesigner().AddToSet(typesSetId, id);
-        }
+        var typesListId = (store.ReadById(designId)!.Value.Fields.Fields.GetValueOrDefault("types") as ListValue)!.Id;
+        var len = ((ListValue)store.ReadById(designId)!.Value.Fields.Fields["types"]).Items.Count;
+        store.CommitBatch([], [new ListInsertMutation(typesListId, len, new StoredRef("MetaType", id))]);
         typeIds[name] = id;
     }
 
     private void AddProp(Dictionary<string, int> typeIds, Dictionary<(string, string), int> propIds, int designId, string typeName, string propName, string propType)
     {
         _ = designId;
+        var store = FreshDesigner();
         var typeId = typeIds[typeName];
-        var propsSetId = (FreshDesigner().ReadById(typeId)!.Value.Fields.Fields.GetValueOrDefault("props") as SetValue)!.Id;
-        var id = FreshDesigner().CreateObject("MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
+        var propsList = (ListValue)store.ReadById(typeId)!.Value.Fields.Fields["props"];
+        var id = store.CreateObject("MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"]  = new TextValue(propName),
-            ["type"]  = new TextValue(propType),
-            ["order"] = new IntValue(0),
+            ["name"] = new TextValue(propName),
+            ["type"] = new TextValue(propType),
         }));
-        FreshDesigner().AddToSet(propsSetId, id);
+        store.CommitBatch([], [new ListInsertMutation(propsList.Id, propsList.Items.Count, new StoredRef("MetaProp", id))]);
         propIds[(typeName, propName)] = id;
     }
 
     private void AddSetProp(Dictionary<string, int> typeIds, Dictionary<(string, string), int> propIds, int designId, string typeName, string propName, string elemType)
     {
         _ = designId;
+        var store = FreshDesigner();
         var typeId = typeIds[typeName];
-        var propsSetId = (FreshDesigner().ReadById(typeId)!.Value.Fields.Fields.GetValueOrDefault("props") as SetValue)!.Id;
-        var id = FreshDesigner().CreateObject("MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
+        var propsList = (ListValue)store.ReadById(typeId)!.Value.Fields.Fields["props"];
+        var id = store.CreateObject("MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
         {
             ["name"]        = new TextValue(propName),
             ["type"]        = new TextValue(elemType),
             ["cardinality"] = new TextValue("set"),
-            ["order"]       = new IntValue(0),
         }));
-        FreshDesigner().AddToSet(propsSetId, id);
+        store.CommitBatch([], [new ListInsertMutation(propsList.Id, propsList.Items.Count, new StoredRef("MetaProp", id))]);
         propIds[(typeName, propName)] = id;
     }
 

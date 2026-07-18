@@ -84,12 +84,12 @@ public sealed class KernelSteps(InstanceContext ctx)
             initialData text
             common text
             ui text
-            types set of MetaType
+            types list of MetaType
         MetaType
             name text
             baseType text
             order int
-            props set of MetaProp
+            props list of MetaProp
         MetaProp
             name text
             type text
@@ -125,12 +125,12 @@ public sealed class KernelSteps(InstanceContext ctx)
             initialData text
             common text
             ui text
-            types set of MetaType
+            types list of MetaType
         MetaType
             name text
             baseType text
             order int
-            props set of MetaProp
+            props list of MetaProp
         MetaProp
             name text
             type text
@@ -158,12 +158,12 @@ public sealed class KernelSteps(InstanceContext ctx)
             initialData text
             common text
             ui text
-            types set of MetaType
+            types list of MetaType
         MetaType
             name text
             baseType text
             order int
-            props set of MetaProp
+            props list of MetaProp
         MetaProp
             name text
             type text

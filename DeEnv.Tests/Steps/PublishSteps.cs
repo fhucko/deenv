@@ -4,6 +4,7 @@ using DeEnv.Http;
 using DeEnv.Instance;
 using DeEnv.Kernel;
 using DeEnv.Storage;
+using DeEnv.Tests.TestSupport;
 using Reqnroll;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -36,13 +37,13 @@ public sealed class PublishSteps
                 access text
                 common text
                 ui text
-                types set of MetaType
+                types list of MetaType
             MetaType
                 name text
                 baseType text
                 values text
                 order int
-                props set of MetaProp
+                props list of MetaProp
             MetaProp
                 name text
                 type text
@@ -285,7 +286,7 @@ public sealed class PublishSteps
         var propId = _propIds[(typeName, field)];
         var propsPath = NodePath.Root.Field("designs").Key(_designId.ToString())
             .Field("types").Key(_typeIds[typeName].ToString()).Field("props");
-        _designer.RemoveFromSet(propsPath, propId);
+        DesignerListHelpers.RemoveFromList(_designer, propsPath, propId);
         _propIds.Remove((typeName, field));
     }
 
@@ -293,7 +294,7 @@ public sealed class PublishSteps
     public void GivenTypeRemoved(string typeName)
     {
         var typeId = _typeIds[typeName];
-        _designer.RemoveFromSet(DesignTypesPath, typeId);
+        DesignerListHelpers.RemoveFromList(_designer, DesignTypesPath, typeId);
         _typeIds.Remove(typeName);
         foreach (var key in _propIds.Keys.Where(k => k.Type == typeName).ToList())
             _propIds.Remove(key);
@@ -1027,9 +1028,8 @@ public sealed class PublishSteps
         {
             ["name"]     = new TextValue(name),
             ["baseType"] = new TextValue(baseType),
-            ["order"]    = new IntValue(0),
         }));
-        _designer.AddToSet(DesignTypesPath, id);
+        DesignerListHelpers.AppendToList(_designer, DesignTypesPath, id, "MetaType");
         _typeIds[name] = id;
         if (name == "Db") _dbTypeId = id;
     }
@@ -1047,14 +1047,13 @@ public sealed class PublishSteps
         {
             ["name"] = new TextValue(propName),
             ["type"] = new TextValue(propType),
-            ["order"] = new IntValue(0),
         };
         if (cardinality.Length > 0)
             fields["cardinality"] = new TextValue(cardinality);
         if (keyType.Length > 0)
             fields["keyType"] = new TextValue(keyType);
         var id = _designer.CreateObject("MetaProp", new ObjectValue(fields));
-        _designer.AddToSet(propsPath, id);
+        DesignerListHelpers.AppendToList(_designer, propsPath, id, "MetaProp");
         _propIds[(typeName, propName)] = id;
     }
 
