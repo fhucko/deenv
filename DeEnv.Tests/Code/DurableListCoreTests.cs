@@ -571,6 +571,45 @@ public sealed class DurableListCoreTests
     }
 
     [Test]
+    public async Task Resolve_list_route_is_owner_bound_with_parentType_and_element_typeName()
+    {
+        // ListTable needs kind=list + parentType for schema(parentType, prop) and typeName=element for canRead.
+        // Regression: missing parentType / TS missing list dispatch → notFound or empty schema.
+        var desc = InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    tasks list of Task
+                Task
+                    title text
+            """);
+        var path = TempPath();
+        try
+        {
+            var store = new JsonFileInstanceStore(path, desc);
+            var (_, _, _, descriptors) = GenericUi.Effective(desc);
+            var exec = new CodeExecutor(store, descriptors, new TypeResolver(desc));
+            var ctx = new ExecContext();
+            exec.PrewarmDescriptors(ctx);
+            var db = DbBridge.LoadRoot(store, desc, ctx);
+            var scope = new ExecScope();
+            scope.Items["db"] = new ExecScopeItem { Value = db, IsReadOnly = true };
+
+            var r = (ExecObject)exec.ExecuteValue(
+                CodeParse.ParseExpression("sys.resolve(\"/tasks\")"), scope, ctx);
+            await Assert.That(((ExecText)r.Props["kind"]).Value).IsEqualTo("list");
+            await Assert.That(((ExecText)r.Props["prop"]).Value).IsEqualTo("tasks");
+            await Assert.That(((ExecText)r.Props["typeName"]).Value).IsEqualTo("Task");
+            await Assert.That(((ExecText)r.Props["parentType"]).Value).IsEqualTo("Db");
+            await Assert.That(r.Props["parent"]).IsTypeOf<ExecObject>();
+
+            var propDesc = (ExecObject)exec.ExecuteValue(
+                CodeParse.ParseExpression("sys.schema(\"Db\", \"tasks\")"), scope, ctx);
+            await Assert.That(((ExecText)propDesc.Props["baseType"]).Value).IsEqualTo("list");
+        }
+        finally { Cleanup(path); }
+    }
+
+    [Test]
     public async Task Sys_schema_and_new_mint_empty_ExecList_for_list_props()
     {
         var desc = InstanceDescriptionLoader.Load("""

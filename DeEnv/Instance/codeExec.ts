@@ -900,9 +900,12 @@ function execResolve(codeCall: CodeCall, scope: ExecScope, context: ExecContext)
         }
     }
 
-    // Dispatch — the faithful port of SsrRenderer.ResolveView.
+    // Dispatch — the faithful port of SsrRenderer.ResolveView / CodeExecutor.Resolve.
     if (cardinality === "set" && isObject)
         return ownerBound(context, db, segments, "set", { typeName });
+    // List route: ListTable uses schema(parentType, prop); typeName = element for canRead.
+    if (cardinality === "list")
+        return ownerBound(context, db, segments, "list", { typeName, parentType: ownerType });
     if (cardinality === "dict")
         return ownerBound(context, db, segments, "dict", { parentType: ownerType });
     if (cardinality === "single" && !isObject && traversedDict)

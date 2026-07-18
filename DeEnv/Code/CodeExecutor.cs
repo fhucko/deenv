@@ -1966,8 +1966,11 @@ public sealed class CodeExecutor
         // A set route (object set): owner-bound — bind the OWNER, fetch the ELEMENT type's descriptor.
         if (typeInfo is { Cardinality: Cardinality.Set, Type.BaseType: BaseType.Object })
             return OwnerBound(context, db, path, "set", typeName: typeInfo.Type.Name);
+        // List route is owner-bound like dict: ListTable needs schema(parentType, prop) for the prop
+        // descriptor; typeName remains the element type for canRead.
         if (typeInfo is { Cardinality: Cardinality.List })
-            return OwnerBound(context, db, path, "list", typeName: typeInfo.Type.Name);
+            return OwnerBound(context, db, path, "list",
+                typeName: typeInfo.Type.Name, parentType: OwnerType(path));
 
         // A dictionary route: owner-bound — bind the OWNER; the dict reads sys.schema(parentType, prop),
         // so typeName is "" and parentType carries the owner's type.
