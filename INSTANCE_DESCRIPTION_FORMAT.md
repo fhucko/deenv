@@ -48,13 +48,15 @@ types
 - A prop is `name type` — a base type, an enum type, or another type's name (a
   single object-typed prop *is* a reference). `set of X` declares a set (X must be
   an object type; members are keyed by their own identity). `dict of X by key`
-  declares a dictionary (`by key` optional, default `text`). A trailing `?` marks
+  declares a dictionary (`by key` optional, default `text`). `list of X` declares
+  an ordered sequence (X may be an object or a scalar; object members are
+  addressed by id + membership, never by index). A trailing `?` marks
   the prop nullable.
 - An **enum-typed prop** is a scalar: its value is one of the enum's value names
   (stored as that name, unset = empty). The generic UI renders it as a `<select>`
   whose options are the values, displayed humanized (`inProgress` → "In Progress").
 - The root type **`Db`** must exist and must be an **object** type (it holds the
-  app's data — props: scalars, references, sets, dictionaries); it is implicitly
+  app's data — props: scalars, references, sets, dictionaries, lists); it is implicitly
   single and non-null. A base-typed root (e.g. `Db bool`) is rejected at load.
 
 ## initialData
@@ -74,7 +76,9 @@ initialData
 
 - Each entry is `TypeName id` (authored positive ids, globally unique) with
   indented `field: value` lines. Scalars are literals; a **set** is an array
-  of member ids; a **single reference** is a bare id. Omitted scalars default;
+  of member ids (order insignificant); a **list** is an array of member ids or
+  scalar literals (**order significant**; duplicate object ids allowed); a
+  **dict** is a map; a **single reference** is a bare id. Omitted scalars default;
   omitted references stay unset. Exactly one `Db` entry — the root.
 - The id counter starts above the highest authored id.
 
@@ -236,7 +240,7 @@ A malformed document is rejected at load with a clear, specific error
 - Type names are unique; a root type `Db` exists.
 - Every prop's type resolves to a base type or a declared type; a set's
   element type is an object type; prop names are unique within a type.
-- `initialData`: known types and fields, globally-unique positive ids, set
+- `initialData`: known types and fields, globally-unique positive ids, set/list
   members and references point at existing entries of the right type, exactly
   one `Db` entry.
 - Code is structurally validated: symbols resolve, assignments target

@@ -22,24 +22,28 @@ A type is one of:
 - **reference to <type>** — a single field whose value is an object that
   lives in its type's extent (not owned inline). Declared `propName TypeName`.
 - **set of <type>** — a collection keyed by **member identity**. Declared
-  `propName set of TypeName`. Members live in their type's extent; the set
-  holds references. Addressed as `/setField/memberId`.
+  `propName set of TypeName`. Element type must be an **object** type. Members
+  live in their type's extent; the set holds unique references. Addressed as
+  `/setField/memberId`.
 - **dictionary of <type>** — a collection keyed by a **user-chosen stable
-  key** (text or int). Declared `propName dictionary of TypeName`. Addressed
-  as `/dictField/key`.
+  key** (text or int). Declared `propName dict of TypeName by keyType` (app
+  syntax) / `dictionary of` in older prose. Addressed as `/dictField/key`.
+- **list of <type>** — an **ordered sequence** of slots. Declared
+  `propName list of TypeName`. Element type may be an **object or a scalar**
+  (including password/image with existing leaf write/read rules per slot).
+  Sequence is authoritative (no position field on members). The same object
+  id may appear at more than one index. Object members are addressed as
+  `/listField/memberId` (**entity id + membership ≥ 1**, never an index).
+  Non-object members have **no** member URL.
 
-All non-constant values (objects, sets, dictionaries) carry an **intrinsic
+All non-constant values (objects, sets, dictionaries, lists) carry an **intrinsic
 `id`** (monotonic int, stored separately from props) — identity is intrinsic
 to being a non-constant. Objects live in per-type **extents** (flat id-keyed
-pools); sets and references point into extents, not own their targets.
+pools); sets, lists, and references point into extents, not own their targets.
 
 Everything below (addressing, rendering, breadcrumbs) is a recursion over
 this definition. The bool-root case is simply the recursion bottoming out
 immediately.
-
-(There is no `list`. Positional addressing is unstable under deletion/reordering;
-sets and dictionaries cover all real use cases with stable identity — see
-"Why dictionaries only" and "Ordering".)
 
 ## URL = navigation into the data
 
@@ -47,32 +51,35 @@ Every node is addressable by URL; the path walks the data tree from `Db`:
 - `/` — the root value.
 - `/field` — a field of the current object.
 - `/dictField/42` — the entry with **key** 42 of a dictionary.
+- `/setField/7` — the set member with **object id** 7.
+- `/listField/7` — an object that appears in the list (membership ≥ 1); **not**
+  `/listField/0` (index is never a URL segment).
 - nests arbitrarily: `/customers/42/orders/7/total`.
 
 A URL addresses a node; reading returns that node's data; writes target the
 URL of the thing changed (read/write addressing is symmetric).
 
-## Why stable-keyed collections only (no positional lists)
+## Stable addressing (no index URLs)
 
-Both collection kinds (sets and dictionaries) use **stable identity as the key** —
-sets by member id, dictionaries by user-chosen key — so **every node in the whole
-tree is addressed by stable identity**. There
-is no positional addressing anywhere, so a URL always means the same node
-until that exact node is deleted. This removes the entire class of "the
-thing under my URL silently changed" problems that positional lists have.
+**URLs never use list indices.** Sets address by member id; dictionaries by
+user key; lists of objects by member id + membership check. A URL always means
+the same object until that object is deleted (or unlinked from every path),
+not "whatever is currently at position N."
 
-Lists are dropped — not deferred. Positional addressing is unstable under
-deletion/reordering, and their use cases are covered without them:
+**Ordering.**
+- **List** — authored order **is** the collection: sequence is truth. Reorder
+  mutates the list (insert/move/removeAt), not a position field on members.
+- **Set / dictionary** — no inherent order. Derived display order uses
+  `orderBy` / ordinary fields on members when order is an **attribute of the
+  entity** (priority, due date). Prefer a **list** when order is arrangement
+  **in this collection** (menu, children tree, steps).
 
-**Ordering.** Order is provided by a per-dictionary **ordering function**.
-Derivable orders sort by real fields. If a user wants explicit/arbitrary
-order, they add a **position prop** (e.g. a decimal, so values can sit
-between others) and the ordering function sorts by it. Order is therefore
-just ordinary data on the entry — editable, versioned, and addressable like
-any field, with no special collection behavior. Trade: the user manages
-position values themselves; the model does not auto-shift entries to make
-room (that auto-management, if ever wanted, is a later feature on top, not a
-model change).
+**Runtime.** `where` / `orderBy` always mint a **new list** (ephemeral until
+assigned to a durable list prop and committed). Durable and ephemeral lists
+share the same runtime type (`ExecList`); positive id = in db, negative = local.
+
+**Concurrency.** Per-node optimistic concurrency for non-scalar mutables
+(object, set, dict, list, …) is a later multi-user track — not list-only.
 
 ## Rendering: one form per type
 
@@ -81,28 +88,27 @@ Traversal granularity is **one form per type instance**:
   a single **checkbox**/input plus a Save button. The bool root is the
   simplest valid instance.
 - An **object** renders as a form of its fields.
-- A field that is a **dictionary** renders as an **HTML table**; each row
-  links to that entry's form by key, with a **New** control to create entries
-  and a per-row **delete** control.
+- A field that is a **dictionary**, **set**, or **list** renders as an **HTML
+  table**; object rows link by stable id/key; lists also expose reorder
+  controls. Scalar list slots edit inline on the table (no member page).
 - Leaf fields render as form inputs.
 
-The whole app is: forms for objects, tables for dictionaries, click a row to
-descend.
+The whole app is: forms for objects, tables for collections, click a row to
+descend (where the element is an object).
 
-## Navigation granularity: the dictionary is the only boundary
+## Navigation granularity: collections are the boundary
 
 A single page shows one node and **everything reachable from it except
-across a dictionary.** Concretely:
+across a collection.** Concretely:
 - **Single-valued nested objects render inline**, however deep. A customer
   with an address (and whatever the address nests) is all on one page,
   edited together. No depth limit, no inline-vs-link judgment.
-- **Dictionaries are the only navigation boundary.** A dictionary field
-  renders as a table; you navigate (new page) only by clicking a row into an
-  entry, or by following a field that is a dictionary.
-- **A set is a dictionary keyed by member identity** — so it is one such
-  boundary. A set renders as a table whose rows link to the member by its
-  identity key (`/notes/3`), and the URL is *stable* precisely because the key
-  is identity, not a position (this is why the model has no positional arrays).
+- **Sets, dictionaries, and lists are navigation boundaries.** Each renders
+  as a table; you navigate (new page) by clicking an object row — set/list by
+  member id, dict by key — never by list index.
+- **A set is identity-keyed unique membership**; a **list is ordered sequence**
+  (duplicates of the same object id allowed; URL still uses entity id +
+  membership, not which occurrence).
 
 The self-hosted generic UI (Milestone 9) follows this exactly: it is
 **path-walk** — an object page renders its scalars and single references inline,
@@ -111,7 +117,7 @@ and each set as an inline table whose member rows link to the nested member URL
 fallback, not something the generic UI generates.
 
 This is deliberately the simplest consistent rule: the page boundary is
-predictable — follow the data from this node, stop at every dictionary.
+predictable — follow the data from this node, stop at every collection.
 
 Accepted consequence: a type with deep single-valued nesting produces a
 large page. Fine for the eshop/CRM "edit the whole record in one place"

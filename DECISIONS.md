@@ -208,23 +208,29 @@ references to objects on the heap. So:
   object — that shared-object identity is the proof the model works.
 
 **Sets — and auto-int dictionaries of objects retire.** With intrinsic identity,
-a `dict<Object> auto-int` key is a redundant surrogate id. Three collection
-shapes, split by *what supplies the key*:
-- **set** — objects keyed by their **own identity** (no surrogate). Replaces
+a `dict<Object> auto-int` key is a redundant surrogate id. Collection shapes,
+split by *what supplies structure*:
+- **set** — objects keyed by their **own identity** (unique membership). Replaces
   every auto-int dict-of-objects. URL segment = the object's id.
 - **dictionary** — a genuine map where the **key is meaningful data you chose**
   (e.g. `settings`, scalar values). **Kept.** `keyGeneration: auto` largely
   retires.
+- **list** — **ordered sequence** of object refs and/or scalars. Sequence is
+  truth; the same object id may appear more than once. Object member URL =
+  entity id + membership (never index). Set remains object-only; list accepts
+  all model value types. See INSTANCE_MODEL "list of" and plan
+  `docs/plans/2026-07-17-durable-lists-and-exec-collections.md`.
 - **single** — one.
 
 **Addressing keeps today's navigation.** A URL is a **walk through the graph
 from the root**, not an ownership path. Each collection addresses a slot by what
 identifies it there: **set → member identity** (`/customers/7`), **dictionary →
-key** (`/settings/europe`), **single → field name**. The same object may be
-reachable by multiple routes (it's a graph) — there is no single canonical URL;
-an **id-route fallback** (`/~/42`) follows a bare reference not reached through a
-named collection. A dict-of-objects entry is addressed by its key; the object's
-identity stays internal.
+key** (`/settings/europe`), **list → member identity** (`/steps/7` if 7 ∈ list),
+**single → field name**. The same object may be reachable by multiple routes
+(it's a graph) — there is no single canonical URL; an **id-route fallback**
+(`/~/42`) follows a bare reference not reached through a named collection. A
+dict-of-objects entry is addressed by its key; the object's identity stays
+internal.
 
 **Lifetime by GC** (chosen over explicit-destroy + dangling). No owner ⇒ delete
 splits into *unlink* (drop a reference) vs *destroy*. Lifetime is **mark-sweep
@@ -233,6 +239,14 @@ collected.
 
 **UI: pick-existing-or-create-new.** A reference field / set "New" lets the user
 pick an existing object of the type or mint a new one into the extent.
+
+**Lists (2026-07-17).** Durable `list of T` landed after M5/M6 as sequenced slices
+(rename ExecSet/Dict/List → storage → ops → generic ListTable + designer order
+collapse → docs): plan
+`docs/plans/2026-07-17-durable-lists-and-exec-collections.md`. Sequence is truth;
+no index URLs; set stays object-only; list-level OCC deferred to general multi-user
+concurrency for all non-scalar mutables. Designer position-bearing trees are lists
+(not set + member `order`).
 
 **Scope honesty (ground rule 10).** This grew from "a reference feature" into a
 **storage reconception** — normalized per-type extents, an identity-addressed
@@ -601,11 +615,15 @@ the milestone lands. Key decisions made while landing it:
   (`DeEnv/Code/CodeExecutor.cs`) and the TS client twin
   (`DeEnv/Instance/codeExec.ts`) are hand-maintained; a shared suite
   (`DeEnv/Code/conformance.json`) runs through both, so drift fails a test.
-- **One Code array.** A single kind-tagged runtime collection
-  (`ExecArray { id, kind: set|dict|list, items: [{key, value}] }`) is used
-  byte-for-byte the same on the server, the wire, and the client; the
-  storage↔runtime bridge (DbBridge) is the only shape boundary. "In db" is the
-  id sign (positive = persisted, negative = transient) — no flag.
+- **Three sealed Code collections.** Runtime types are **`ExecSet` / `ExecDict` /
+  `ExecList`** (thin shared `IExecCollection`; no residual `ExecArray` / `ArrayKind`).
+  Wire/DT tags are `set` | `dict` | `list`. Used byte-for-byte the same on the
+  server, the wire, and the client; the storage↔runtime bridge (DbBridge) is the
+  only shape boundary. "In db" is the id sign (positive = persisted, negative =
+  transient) — no flag. Durable lists are schema `list of T` + `StoredList`;
+  `where`/`orderBy` mint ephemeral `ExecList`s that may be assigned and committed
+  via list replace. List-level OCC is deferred to general multi-user concurrency
+  for all non-scalar mutables (object + set + dict + list).
 - **Privacy is structural — the memo cache.** Every computation boundary
   (fn call, where/orderBy) is memoized by (function id, argument identities)
   with its result and dependency REFS (object props, set membership, UI-state

@@ -1,7 +1,7 @@
 # Durable lists + ExecSet / ExecDict / ExecList
 
 **Date:** 2026-07-17  
-**Status:** ready to implement (reviewer blockers applied 2026-07-17; **list-level OCC deferred** 2026-07-17)  
+**Status:** **DONE** (slices 1–5 landed 2026-07-17; commits through docs). List-level OCC deferred to general multi-user concurrency.  
 **Scope authority:** product + technical resolutions in the durable-lists decision package (do not re-litigate).  
 **Builds on:** M5 object model, M6 twin interpreters, unified-commit wire (`docs/plans/2026-07-12_220000-unified-commit-all-ops.md`).
 
