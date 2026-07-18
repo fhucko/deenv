@@ -1519,12 +1519,12 @@ public sealed class SsrRenderer
             var designNode = _store.ReadNode(NodePath.Root.Field("designs").Key(design.Id.ToString())) as ObjectValue
                 ?? throw new CodeRuntimeException($"No design with id {design.Id}.");
             // Project (validates — throws SchemaValidationException on an invalid design) → load → seed graph.
-            var appDb = SchemaBridge.ProjectDesignDb(designNode);
+            var appDb = SchemaBridge.ProjectDesignDb(designNode, _store);
             var desc = InstanceDescriptionLoader.Load(appDb);
             var seedDb = LoadSeedGraph(desc, context);
             // exprs: every parseable render-tree leaf/attr source → { text, ast:serialized-JSON }.
             var exprs = new Dictionary<string, IExecValue>();
-            foreach (var text in SchemaBridge.RenderExprSources(designNode))
+            foreach (var text in SchemaBridge.RenderExprSources(designNode, _store))
             {
                 if (exprs.ContainsKey(text)) continue;
                 try
@@ -1538,7 +1538,7 @@ public sealed class SsrRenderer
             var exprsObj = new ExecObject { Id = --context.LastId.Value, Constant = true, Props = exprs };
             // fns: each design fn (already projected by ProjectDesignDb above, reused here) → its
             // CodeFunction AST + a raw-row content fingerprint (M12 F3 / F3b).
-            var fingerprints = SchemaBridge.FnFingerprints(designNode);
+            var fingerprints = SchemaBridge.FnFingerprints(designNode, _store);
             var fns = new Dictionary<string, IExecValue>();
             foreach (var fn in desc.Ui?.Functions ?? [])
             {

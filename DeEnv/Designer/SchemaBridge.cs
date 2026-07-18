@@ -53,13 +53,13 @@ public static class SchemaBridge
     // that validate-or-throw behavior; how a future sys.commitDesign surfaces "can't commit an invalid
     // design" to the caller is that slice's decision, not this one's.) Same design state → byte-identical
     // Text on every call: the printer is canonical and the verbatim sections are passed through unchanged.
-    public static DesignSnapshot Snapshot(NodeValue design)
+    public static DesignSnapshot Snapshot(NodeValue design, IInstanceStore? store = null)
     {
-        var text = ProjectDesignDb(design); // throws on an invalid design — before the map is built
+        var text = ProjectDesignDb(design, store); // throws on an invalid design — before the map is built
         var idMap = new Dictionary<string, int>();
 
         if (design is ObjectValue d && d.Fields.TryGetValue("types", out var typesNode))
-            foreach (var (typeId, type) in OrderedMembers(typesNode))
+            foreach (var (typeId, type) in OrderedMembers(typesNode, store))
             {
                 var typeName = TextField(type, "name");
                 idMap[typeName] = typeId;
@@ -72,7 +72,7 @@ public static class SchemaBridge
                 // misclassify a prop the document has no trace of. Every other base (object, and the scalar
                 // BaseTypes.IsName aliases) carries its props through the projection — keep walking those.
                 if (TextField(type, "baseType") != "enum" && type.Fields.TryGetValue("props", out var propsNode))
-                    foreach (var (propId, prop) in OrderedMembers(propsNode))
+                    foreach (var (propId, prop) in OrderedMembers(propsNode, store))
                         idMap[$"{typeName}.{TextField(prop, "name")}"] = propId;
             }
 
@@ -84,7 +84,7 @@ public static class SchemaBridge
     // published/created instance keeps its custom UI (`fn render()`), seed data, and shared
     // functions. Throws SchemaValidationException on an invalid design (the same validation
     // pipeline as any hand-written document), so a bad design yields no document.
-    public static string ProjectDesignDb(NodeValue design)
+    public static string ProjectDesignDb(NodeValue design, IInstanceStore? store = null)
     {
         // M12 S1a — a structured render tree (Design.render, a `set of MetaNode` holding exactly one root)
         // projects to a canonical `ui` section, the same authority-inversion the `types` set already uses
@@ -94,7 +94,7 @@ public static class SchemaBridge
         // `ui` text field, unchanged). The gate: a structured render is valid ONLY when the `ui` text field
         // is empty; if BOTH are present, refuse (the user-decided precedence) rather than silently pick one.
         var renderRoot = design is ObjectValue dr && dr.Fields.TryGetValue("render", out var r)
-            ? OrderedObjects(r).ToList() : [];
+            ? OrderedObjects(r, store).ToList() : [];
         if (renderRoot.Count > 1)
             throw new SchemaValidationException("A design's `render` tree may have only one root, but more than one was found.");
         if (renderRoot.Count == 1 && design is ObjectValue dt && TextField(dt, "ui") is { Length: > 0 })
@@ -109,7 +109,7 @@ public static class SchemaBridge
         // Today this state is reachable only by hand-editing storage (the "+ Component" button lives INSIDE
         // the render section, gated the same as the render tree itself), so refusing it here is enough.
         var fnsCount = design is ObjectValue df && df.Fields.TryGetValue("fns", out var fnsNode)
-            ? OrderedObjects(fnsNode).Count() : 0;
+            ? OrderedObjects(fnsNode, store).Count() : 0;
         if (fnsCount > 0 && renderRoot.Count == 0)
             throw new SchemaValidationException(
                 "A design's `fns` (structured components/helpers) require a structured `render` root to project " +
@@ -119,7 +119,7 @@ public static class SchemaBridge
         // (e.g. an object Db with no props) surfaces as its precise semantic message ("…has baseType
         // 'object' but no props") rather than the parse error that printing-then-reparsing such an
         // invalid shape would raise (the printer can emit a propless object the parser won't accept).
-        var typed = Project(design);
+        var typed = Project(design, store);
         InstanceDescriptionLoader.ValidateDescription(typed); // throws on invalid types
 
         // The `types` section, printed from the (now-validated) structured types via the canonical
@@ -143,7 +143,7 @@ public static class SchemaBridge
                 // as the canonicalize-on-project path below does — never hand-emitting text.
                 if (name == "ui" && renderRoot.Count == 1)
                 {
-                    sections.Add(AppPrint.PrintUi(ProjectRenderUi((ObjectValue)design, renderRoot[0])).TrimEnd('\n'));
+                    sections.Add(AppPrint.PrintUi(ProjectRenderUi((ObjectValue)design, renderRoot[0], store)).TrimEnd('\n'));
                     continue;
                 }
                 if (TextField(d, name) is { Length: > 0 } section)
@@ -181,11 +181,11 @@ public static class SchemaBridge
         var desc = AppParse.Parse(appText);
         var sections = DesignerSeed.SplitSections(appText);
 
-        var metaTypes = new Dictionary<int, NodeValue>();
+        var metaTypes = new List<NodeValue>();
         int typeOrder = 1;
         foreach (var type in desc.AllTypes())
         {
-            var metaProps = new Dictionary<int, NodeValue>();
+            var metaProps = new List<NodeValue>();
             int propOrder = 1;
             foreach (var prop in type.Props ?? [])
             {
@@ -193,7 +193,6 @@ public static class SchemaBridge
                 {
                     ["name"] = new TextValue(prop.Name),
                     ["type"] = new TextValue(prop.Type),
-                    ["order"] = new IntValue(propOrder * 10),
                     ["cardinality"] = new TextValue(prop.Cardinality switch
                     {
                         Cardinality.Set => "set",
@@ -206,11 +205,11 @@ public static class SchemaBridge
                 if (prop.Cardinality == Cardinality.Dictionary)
                     propFields["keyType"] = new TextValue(prop.KeyType ?? "text");
 
-                metaProps[propOrder] = new ObjectValue(propFields);
+                metaProps.Add(new ObjectValue(propFields));
                 propOrder++;
             }
 
-            var propsSet = new SetValue(9000 + typeOrder, metaProps);
+            var propsList = new ListValue(9000 + typeOrder, metaProps);
 
             string baseStr = type.BaseType == BaseType.Object ? "object"
                 : type.BaseType == BaseType.Enum ? "enum"
@@ -221,15 +220,14 @@ public static class SchemaBridge
                 ["name"] = new TextValue(type.Name),
                 ["baseType"] = new TextValue(baseStr),
                 ["values"] = new TextValue(string.Join(", ", type.Values ?? [])),
-                ["order"] = new IntValue(typeOrder * 10),
-                ["props"] = propsSet,
+                ["props"] = propsList,
             };
 
-            metaTypes[typeOrder] = new ObjectValue(mtFields);
+            metaTypes.Add(new ObjectValue(mtFields));
             typeOrder++;
         }
 
-        var typesSet = new SetValue(999, metaTypes);
+        var typesList = new ListValue(999, metaTypes);
 
         var designFields = new Dictionary<string, NodeValue>
         {
@@ -238,28 +236,29 @@ public static class SchemaBridge
             ["access"] = new TextValue(sections.GetValueOrDefault("access", "")),
             ["common"] = new TextValue(sections.GetValueOrDefault("common", "")),
             ["ui"] = new TextValue(sections.GetValueOrDefault("ui", "")),
-            ["types"] = typesSet,
+            ["types"] = typesList,
         };
 
         return new ObjectValue(designFields);
     }
 
-    // Pure projection: a Design (or legacy Db) node's `types` set → the typed description (types
+    // Pure projection: a Design (or legacy Db) node's `types` list → the typed description (types
     // only). Shared by ProjectDesignDb (which adds the other sections) and the M4 tests.
-    public static InstanceDescription Project(NodeValue designerDb)
+    // `store` resolves list ReferenceValue slots from a live ReadById graph (BuildListValue shape).
+    public static InstanceDescription Project(NodeValue designerDb, IInstanceStore? store = null)
     {
         var types = new List<TypeDefinition>();
 
         if (designerDb is ObjectValue db && db.Fields.TryGetValue("types", out var typesNode))
         {
-            foreach (var type in OrderedObjects(typesNode))
+            foreach (var type in OrderedObjects(typesNode, store))
             {
                 var name = TextField(type, "name");
                 var baseName = TextField(type, "baseType");
 
                 var props = new List<PropDefinition>();
                 if (type.Fields.TryGetValue("props", out var propsNode))
-                    foreach (var prop in OrderedObjects(propsNode))
+                    foreach (var prop in OrderedObjects(propsNode, store))
                     {
                         var cardinality = TextField(prop, "cardinality") switch
                         {
@@ -341,7 +340,7 @@ public static class SchemaBridge
     //     and GenericUi's ConfirmButton/KebabMenu/… — ALL twelve stateful library components use this exact
     //     shape): `var v1 = …` … `fn render() return <view>` `return render`. A fn with an EMPTY `vars` set
     //     keeps projecting the plain single-`return` shape (byte-identical to before this slice).
-    private static InstanceUi ProjectRenderUi(ObjectValue design, ObjectValue root)
+    private static InstanceUi ProjectRenderUi(ObjectValue design, ObjectValue root, IInstanceStore? store = null)
     {
         if (TextField(root, "tag") is not { Length: > 0 })
             throw new SchemaValidationException(
@@ -349,7 +348,7 @@ public static class SchemaBridge
 
         var functions = new List<CodeFunction>();
         var seenNames = new HashSet<string>();
-        foreach (var fn in OrderedObjects(design.Fields.GetValueOrDefault("fns")))
+        foreach (var fn in OrderedObjects(design.Fields.GetValueOrDefault("fns"), store))
         {
             var name = TextField(fn, "name");
             if (name is not { Length: > 0 })
@@ -371,7 +370,7 @@ public static class SchemaBridge
                     $"Two structured functions are both named \"{name}\" — rename one; every resolution site " +
                     "silently keeps only the last-declared function with a given name.");
 
-            var body = OrderedObjects(fn.Fields.GetValueOrDefault("body")).ToList();
+            var body = OrderedObjects(fn.Fields.GetValueOrDefault("body"), store).ToList();
             if (body.Count == 0)
                 throw new SchemaValidationException($"Structured function \"{name}\" has no body.");
             if (body.Count > 1)
@@ -399,7 +398,7 @@ public static class SchemaBridge
             // nested view fn is defined right after it.
             var varDecs = new List<CodeVarDec>();
             var seenVarNames = new HashSet<string>();
-            foreach (var v in OrderedObjects(fn.Fields.GetValueOrDefault("vars")))
+            foreach (var v in OrderedObjects(fn.Fields.GetValueOrDefault("vars"), store))
             {
                 var varName = TextField(v, "name");
                 if (varName is not { Length: > 0 })
@@ -446,7 +445,7 @@ public static class SchemaBridge
         // that fn's binding, the same silent-last-wins class the fn-name-collision refusals above guard.
         var vars = new List<UiVar>();
         var seenTopVarNames = new HashSet<string>();
-        foreach (var v in OrderedObjects(design.Fields.GetValueOrDefault("vars")))
+        foreach (var v in OrderedObjects(design.Fields.GetValueOrDefault("vars"), store))
         {
             var varName = TextField(v, "name");
             if (varName is not { Length: > 0 })
@@ -469,7 +468,7 @@ public static class SchemaBridge
             Params = [],
             // The root is guaranteed an element (the tag guard above), so ProjectNode yields a CodeTag,
             // which is an ICodeValue — the value a `return` carries.
-            Body = new CodeBlock { Statements = [new CodeReturn { Value = (ICodeValue)ProjectNode(root) }] },
+            Body = new CodeBlock { Statements = [new CodeReturn { Value = (ICodeValue)ProjectNode(root, store) }] },
         };
         return new InstanceUi(
             Vars: vars.Count > 0 ? vars : null,
@@ -485,7 +484,7 @@ public static class SchemaBridge
     // to CodeText, so a text child is just an expr). Every projected form flows through the UNCHANGED print
     // → parse pipeline (CodePrint emits the canonical `foreach`/`if` text the existing parser accepts — no
     // grammar/printer change). Recurses directly on child ObjectValues — already resolved inline by the store.
-    private static ICodeTagChild ProjectNode(ObjectValue node)
+    private static ICodeTagChild ProjectNode(ObjectValue node, IInstanceStore? store = null)
     {
         switch (TextField(node, "kind"))
         {
@@ -505,7 +504,7 @@ public static class SchemaBridge
                 {
                     Item = new CodeSymbol { Name = item },
                     Collection = CodeParse.ParseExpression(collection),
-                    Body = ProjectChildren(node, "children"),
+                    Body = ProjectChildren(node, "children", store),
                 };
             }
             case "if":
@@ -517,9 +516,9 @@ public static class SchemaBridge
                 return new CodeTagIf
                 {
                     Condition = CodeParse.ParseExpression(condition),
-                    Body = ProjectChildren(node, "children"),
+                    Body = ProjectChildren(node, "children", store),
                     // An empty `elseChildren` set projects to an empty ElseBody — the printer emits no `else`.
-                    ElseBody = ProjectChildren(node, "elseChildren"),
+                    ElseBody = ProjectChildren(node, "elseChildren", store),
                 };
             }
         }
@@ -536,7 +535,7 @@ public static class SchemaBridge
             return CodeParse.ParseExpression(expr);
         }
 
-        var attrs = OrderedObjects(node.Fields.GetValueOrDefault("attrs")).Select(a =>
+        var attrs = OrderedObjects(node.Fields.GetValueOrDefault("attrs"), store).Select(a =>
         {
             var attrName = TextField(a, "name");
             // An attribute value is an expression source; empty ⇒ refuse with a clear message, not a raw
@@ -548,12 +547,12 @@ public static class SchemaBridge
             return new CodeTagAttribute { Name = attrName, Value = CodeParse.ParseExpression(value) };
         }).ToArray();
 
-        return new CodeTag { Name = tag, Attributes = attrs, Children = ProjectChildren(node, "children") };
+        return new CodeTag { Name = tag, Attributes = attrs, Children = ProjectChildren(node, "children", store) };
     }
 
     // Project a MetaNode's child set (`children` or `elseChildren`) → an ordered ICodeTagChild array.
-    private static ICodeTagChild[] ProjectChildren(ObjectValue node, string setProp) =>
-        OrderedObjects(node.Fields.GetValueOrDefault(setProp)).Select(ProjectNode).ToArray();
+    private static ICodeTagChild[] ProjectChildren(ObjectValue node, string setProp, IInstanceStore? store = null) =>
+        OrderedObjects(node.Fields.GetValueOrDefault(setProp), store).Select(c => ProjectNode(c, store)).ToArray();
 
     // ── M12 CANVAS-EVAL-1: collect the render tree's expression sources ───────────
     //
@@ -589,30 +588,30 @@ public static class SchemaBridge
     // (tier-3, chip) until an edit re-triggers the client-side auto-live parse-op. WITHOUT this the initial
     // ship would ALWAYS miss every non-literal use-arg — forever, until the operator edits it — so this is
     // load-bearing, not "harmless either way" like the literal-source over-collection elsewhere in this walk.
-    public static List<string> RenderExprSources(NodeValue design)
+    public static List<string> RenderExprSources(NodeValue design, IInstanceStore? store = null)
     {
         var sources = new List<string>();
         if (design is not ObjectValue d) return sources;
-        if (d.Fields.TryGetValue("render", out var r) && OrderedObjects(r).FirstOrDefault() is { } root)
-            CollectExprSources(root, sources);
+        if (d.Fields.TryGetValue("render", out var r) && OrderedObjects(r, store).FirstOrDefault() is { } root)
+            CollectExprSources(root, sources, store);
         if (d.Fields.TryGetValue("fns", out var fnsField))
-            foreach (var fn in OrderedObjects(fnsField))
+            foreach (var fn in OrderedObjects(fnsField, store))
             {
-                if (fn.Fields.TryGetValue("body", out var bodyField) && OrderedObjects(bodyField).FirstOrDefault() is { } bodyRoot)
-                    CollectExprSources(bodyRoot, sources);
-                CollectVarInitSources(fn, sources);
-                CollectUseArgSources(fn, sources);
-                CollectUseAmbientSources(fn, sources);
+                if (fn.Fields.TryGetValue("body", out var bodyField) && OrderedObjects(bodyField, store).FirstOrDefault() is { } bodyRoot)
+                    CollectExprSources(bodyRoot, sources, store);
+                CollectVarInitSources(fn, sources, store);
+                CollectUseArgSources(fn, sources, store);
+                CollectUseAmbientSources(fn, sources, store);
             }
-        CollectVarInitSources(d, sources);
+        CollectVarInitSources(d, sources, store);
         return sources;
     }
 
     // The `init` source of every MetaVar in `owner.vars` (a Design or a MetaFn — both carry a `vars` set),
     // in walk order. Shared by RenderExprSources' two call sites (design-level + per-fn).
-    private static void CollectVarInitSources(ObjectValue owner, List<string> into)
+    private static void CollectVarInitSources(ObjectValue owner, List<string> into, IInstanceStore? store = null)
     {
-        foreach (var v in OrderedObjects(owner.Fields.GetValueOrDefault("vars")))
+        foreach (var v in OrderedObjects(owner.Fields.GetValueOrDefault("vars"), store))
             if (TextField(v, "init") is { Length: > 0 } init) into.Add(init);
     }
 
@@ -620,10 +619,10 @@ public static class SchemaBridge
     // U1). Each MetaUse's args are ordinary MetaAttr rows — same shape, same collection rule as an
     // invocation row's `attrs` — so this is a flat one-level walk, no recursion needed (a use's args never
     // nest further).
-    private static void CollectUseArgSources(ObjectValue fn, List<string> into)
+    private static void CollectUseArgSources(ObjectValue fn, List<string> into, IInstanceStore? store = null)
     {
-        foreach (var use in OrderedObjects(fn.Fields.GetValueOrDefault("uses")))
-            foreach (var a in OrderedObjects(use.Fields.GetValueOrDefault("args")))
+        foreach (var use in OrderedObjects(fn.Fields.GetValueOrDefault("uses"), store))
+            foreach (var a in OrderedObjects(use.Fields.GetValueOrDefault("args"), store))
                 if (TextField(a, "value") is { Length: > 0 } value) into.Add(value);
     }
 
@@ -631,10 +630,10 @@ public static class SchemaBridge
     // sources (e.g. `{ role: "Admin" }`, `"/items/1"`) must ship in ctx.exprs so workbench/expandFn can
     // eval them on first paint. A use never appears in a render/fn-body tree, so CollectExprSources never
     // sees these rows.
-    private static void CollectUseAmbientSources(ObjectValue fn, List<string> into)
+    private static void CollectUseAmbientSources(ObjectValue fn, List<string> into, IInstanceStore? store = null)
     {
-        foreach (var use in OrderedObjects(fn.Fields.GetValueOrDefault("uses")))
-            foreach (var a in OrderedObjects(use.Fields.GetValueOrDefault("ambients")))
+        foreach (var use in OrderedObjects(fn.Fields.GetValueOrDefault("uses"), store))
+            foreach (var a in OrderedObjects(use.Fields.GetValueOrDefault("ambients"), store))
                 if (TextField(a, "value") is { Length: > 0 } value) into.Add(value);
     }
 
@@ -657,30 +656,30 @@ public static class SchemaBridge
     // changes, change this in the SAME slice (S6a lifted the for/if rows here in lockstep with the canvas
     // walk; F2 pointed the caller at every `fns` body root too, in lockstep with the canvas's own expansion;
     // U1 added the sibling use-args walk for the same reason).
-    private static void CollectExprSources(ObjectValue node, List<string> into)
+    private static void CollectExprSources(ObjectValue node, List<string> into, IInstanceStore? store = null)
     {
         switch (TextField(node, "kind"))
         {
             case "for":
                 if (TextField(node, "collection") is { Length: > 0 } coll) into.Add(coll);
-                foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children")))
-                    CollectExprSources(c, into);
+                foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children"), store))
+                    CollectExprSources(c, into, store);
                 return;
             case "if":
                 if (TextField(node, "condition") is { Length: > 0 } cond) into.Add(cond);
-                foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children")))
-                    CollectExprSources(c, into);
-                foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("elseChildren")))
-                    CollectExprSources(c, into);
+                foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children"), store))
+                    CollectExprSources(c, into, store);
+                foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("elseChildren"), store))
+                    CollectExprSources(c, into, store);
                 return;
         }
 
         if (TextField(node, "tag") is { Length: > 0 })
         {
-            foreach (var a in OrderedObjects(node.Fields.GetValueOrDefault("attrs")))
+            foreach (var a in OrderedObjects(node.Fields.GetValueOrDefault("attrs"), store))
                 if (TextField(a, "value") is { Length: > 0 } value) into.Add(value);
-            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children")))
-                CollectExprSources(c, into);
+            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children"), store))
+                CollectExprSources(c, into, store);
         }
         else if (TextField(node, "expr") is { Length: > 0 } expr)
             into.Add(expr);
@@ -729,24 +728,23 @@ public static class SchemaBridge
     // comparison would mismatch on EVERY render (including right after Refresh, since a rebuilt ctx
     // still can't ship the unnamed row) — a staleness banner Refresh can never clear, contradicting the
     // affordance's own contract.
-    public static Dictionary<string, string> FnFingerprints(NodeValue design)
+    public static Dictionary<string, string> FnFingerprints(NodeValue design, IInstanceStore? store = null)
     {
         var result = new Dictionary<string, string>();
         if (design is not ObjectValue d) return result;
-        foreach (var fn in OrderedObjects(d.Fields.GetValueOrDefault("fns")))
+        foreach (var fn in OrderedObjects(d.Fields.GetValueOrDefault("fns"), store))
         {
             var name = TextField(fn, "name");
             if (name.Length == 0) continue;
-            var body = OrderedObjects(fn.Fields.GetValueOrDefault("body")).FirstOrDefault();
-            // M12 V1 — fold `vars` (name/init/order) in right after `params`, mirroring an element node's own
-            // attrs segment below. A fn with NO vars contributes NOTHING here, so this is byte-identical to
-            // the pre-V1 fingerprint for every existing (vars-less) fn.
+            var body = OrderedObjects(fn.Fields.GetValueOrDefault("body"), store).FirstOrDefault();
+            // M12 V1 — fold `vars` (name/init) in right after `params`. List order is the identity of
+            // position (Slice 4); no member `order` field. A fn with NO vars contributes NOTHING here.
             var varsPart = new StringBuilder();
-            foreach (var v in OrderedObjects(fn.Fields.GetValueOrDefault("vars")))
+            foreach (var v in OrderedObjects(fn.Fields.GetValueOrDefault("vars"), store))
                 varsPart.Append(FpNodeSep).Append("V:").Append(TextField(v, "name")).Append(FpFieldSep)
-                    .Append(TextField(v, "init")).Append(FpFieldSep).Append(IntField(v, "order"));
+                    .Append(TextField(v, "init"));
             result[name] = name + FpFieldSep + TextField(fn, "params") + varsPart + FpFieldSep +
-                (body != null ? FingerprintNode(body) : "");
+                (body != null ? FingerprintNode(body, store) : "");
         }
         return result;
     }
@@ -754,7 +752,7 @@ public static class SchemaBridge
     // The per-node half of FnFingerprints — twin of CodeExecutor.FingerprintNode / codeExec.ts
     // fingerprintNode. Dispatches on `kind` FIRST (mirroring the canvas walk's own dispatch) so it never
     // reads a field a for/if/element/leaf row doesn't carry.
-    private static string FingerprintNode(ObjectValue node)
+    private static string FingerprintNode(ObjectValue node, IInstanceStore? store = null)
     {
         var kind = TextField(node, "kind");
         var sb = new StringBuilder();
@@ -762,28 +760,28 @@ public static class SchemaBridge
         {
             sb.Append("for").Append(FpFieldSep).Append(TextField(node, "item")).Append(FpFieldSep)
               .Append(TextField(node, "collection"));
-            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children")))
-                sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c));
+            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children"), store))
+                sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c, store));
             return sb.ToString();
         }
         if (kind == "if")
         {
             sb.Append("if").Append(FpFieldSep).Append(TextField(node, "condition"));
-            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children")))
-                sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c));
-            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("elseChildren")))
-                sb.Append(FpNodeSep).Append("E:").Append(FingerprintNode(c));
+            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children"), store))
+                sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c, store));
+            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("elseChildren"), store))
+                sb.Append(FpNodeSep).Append("E:").Append(FingerprintNode(c, store));
             return sb.ToString();
         }
         var tag = TextField(node, "tag");
         if (tag.Length > 0)
         {
             sb.Append("E:").Append(tag);
-            foreach (var a in OrderedObjects(node.Fields.GetValueOrDefault("attrs")))
+            foreach (var a in OrderedObjects(node.Fields.GetValueOrDefault("attrs"), store))
                 sb.Append(FpNodeSep).Append("A:").Append(TextField(a, "name")).Append(FpFieldSep)
-                  .Append(TextField(a, "value")).Append(FpFieldSep).Append(IntField(a, "order"));
-            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children")))
-                sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c));
+                  .Append(TextField(a, "value"));
+            foreach (var c in OrderedObjects(node.Fields.GetValueOrDefault("children"), store))
+                sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c, store));
             return sb.ToString();
         }
         return "L:" + TextField(node, "expr");
@@ -982,13 +980,16 @@ public static class SchemaBridge
         var nextTempId = -1;
         // Link a body of tag children into `owner.setProp` in `order`, minting each child first (top-down:
         // the parent is already minted, so the store's GC never sweeps a transiently-unlinked child).
-        void LinkBody(int owner, string setProp, IEnumerable<ICodeTagChild> body)
+        void LinkBody(int owner, string listProp, IEnumerable<ICodeTagChild> body)
         {
-            var order = 0;
+            var index = 0;
             foreach (var c in body)
-                mutations.Add(new SetLinkByPropMutation(owner, setProp, ImportNode(c, order++)));
+            {
+                mutations.Add(new ListInsertByPropMutation(owner, listProp, index, ImportNode(c)));
+                index++;
+            }
         }
-        int ImportNode(ICodeTagChild child, int order)
+        int ImportNode(ICodeTagChild child)
         {
             var tempId = nextTempId--;
             switch (child)
@@ -996,26 +997,23 @@ public static class SchemaBridge
                 case CodeTagForEach forEach:
                     // A `for` row: kind="for" + the loop var + the collection source (CodePrint.Value is the
                     // printer's canonical fixpoint, so it round-trips through ParseExpression on projection).
-                    // Its body is the `children` set. Unset tag/expr default to "" — a for row is neither an
+                    // Its body is the `children` list. Unset tag/expr default to "" — a for row is neither an
                     // element nor a leaf.
                     creates.Add(new CommitCreate(tempId, "MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
                     {
                         ["kind"] = new TextValue("for"),
                         ["item"] = new TextValue(forEach.Item.Name),
                         ["collection"] = new TextValue(CodePrint.Value(forEach.Collection)),
-                        ["order"] = new IntValue(order),
                     })));
                     LinkBody(tempId, "children", forEach.Body);
                     return tempId;
                 case CodeTagIf tagIf:
                     // An `if` row: kind="if" + the condition source; the then-branch is `children`, the
-                    // else-branch is `elseChildren` (a SECOND semantic child-order set — empty ElseBody links
-                    // nothing, so the row projects back with no `else`).
+                    // else-branch is `elseChildren` (empty ElseBody links nothing).
                     creates.Add(new CommitCreate(tempId, "MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
                     {
                         ["kind"] = new TextValue("if"),
                         ["condition"] = new TextValue(CodePrint.Value(tagIf.Condition)),
-                        ["order"] = new IntValue(order),
                     })));
                     LinkBody(tempId, "children", tagIf.Body);
                     LinkBody(tempId, "elseChildren", tagIf.ElseBody);
@@ -1026,7 +1024,7 @@ public static class SchemaBridge
                     var leaf = (ICodeValue)child;
                     creates.Add(new CommitCreate(tempId, "MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
                     {
-                        ["tag"] = new TextValue(""), ["expr"] = new TextValue(CodePrint.Value(leaf)), ["order"] = new IntValue(order),
+                        ["tag"] = new TextValue(""), ["expr"] = new TextValue(CodePrint.Value(leaf)),
                     })));
                     return tempId;
             }
@@ -1034,10 +1032,10 @@ public static class SchemaBridge
             var tag = (CodeTag)child;
             creates.Add(new CommitCreate(tempId, "MetaNode", new ObjectValue(new Dictionary<string, NodeValue>
             {
-                ["tag"] = new TextValue(tag.Name), ["expr"] = new TextValue(""), ["order"] = new IntValue(order),
+                ["tag"] = new TextValue(tag.Name), ["expr"] = new TextValue(""),
             })));
 
-            var attrOrder = 0;
+            var attrIndex = 0;
             foreach (var attr in tag.Attributes)
             {
                 var attrTempId = nextTempId--;
@@ -1045,23 +1043,22 @@ public static class SchemaBridge
                 {
                     ["name"] = new TextValue(attr.Name),
                     ["value"] = new TextValue(CodePrint.Value(attr.Value)),
-                    ["order"] = new IntValue(attrOrder++),
                 })));
-                mutations.Add(new SetLinkByPropMutation(tempId, "attrs", attrTempId));
+                mutations.Add(new ListInsertByPropMutation(tempId, "attrs", attrIndex++, attrTempId));
             }
 
             LinkBody(tempId, "children", tag.Children);
             return tempId;
         }
 
-        var rootTempId = ImportNode(root, order: 0);
-        mutations.Add(new SetLinkByPropMutation(designId, "render", rootTempId));
+        var rootTempId = ImportNode(root);
+        mutations.Add(new ListInsertByPropMutation(designId, "render", 0, rootTempId));
 
         // M12 V1 — mint a MetaVar per state var, linked into `owner.vars` in order. Shared by both the
         // top-level `ui var`s (owner = the design) and a stateful fn's own vars (owner = its MetaFn) below.
         void LinkVars(int owner, IEnumerable<CodeVarDec> varDecs)
         {
-            var order = 0;
+            var index = 0;
             foreach (var v in varDecs)
             {
                 var varTempId = nextTempId--;
@@ -1072,9 +1069,8 @@ public static class SchemaBridge
                     // defaults it to ExecNull) — its init prints as "" (ProjectRenderUi's mirror: an empty
                     // init projects back to a bare `var x`, no `= …`).
                     ["init"] = new TextValue(v.Value != null ? CodePrint.Value(v.Value) : ""),
-                    ["order"] = new IntValue(order++),
                 })));
-                mutations.Add(new SetLinkByPropMutation(owner, "vars", varTempId));
+                mutations.Add(new ListInsertByPropMutation(owner, "vars", index++, varTempId));
             }
         }
 
@@ -1089,7 +1085,6 @@ public static class SchemaBridge
         // render fn's view value (not the outer `return render` symbol — that symbol is a projection
         // artifact ProjectRenderUi re-synthesizes, never stored). Top-down: the MetaFn is created before its
         // body/vars are linked in, same GC law as the render tree.
-        var fnOrder = 0;
         for (var fi = 0; fi < fns.Count; fi++)
         {
             var fn = fns[fi];
@@ -1098,7 +1093,6 @@ public static class SchemaBridge
             {
                 ["name"] = new TextValue(fn.Name ?? ""),
                 ["params"] = new TextValue(string.Join(", ", fn.Params.Select(p => p.Name))),
-                ["order"] = new IntValue(fnOrder++),
             })));
 
             ICodeValue view;
@@ -1110,8 +1104,8 @@ public static class SchemaBridge
             else
                 view = ((CodeReturn)fn.Body.Statements[0]).Value; // shape validated above: [CodeReturn]
 
-            mutations.Add(new SetLinkByPropMutation(fnTempId, "body", ImportNode(view, order: 0)));
-            mutations.Add(new SetLinkByPropMutation(designId, "fns", fnTempId));
+            mutations.Add(new ListInsertByPropMutation(fnTempId, "body", 0, ImportNode(view)));
+            mutations.Add(new ListInsertByPropMutation(designId, "fns", fi, fnTempId));
         }
 
         // Clear the `ui` text field so the S1a gate accepts the structured render as the authority — in the
@@ -1180,16 +1174,29 @@ public static class SchemaBridge
 
     // ── helpers ─────────────────────────────────────────────────────────────────
 
-    // Member objects of a set node, sorted by the `order` field then by identity
-    // (identity as a stable tiebreak / fallback when order is absent or equal).
-    private static IEnumerable<ObjectValue> OrderedObjects(NodeValue? set) =>
-        OrderedMembers(set).Select(m => m.Obj);
+    // Member objects of a position-bearing collection in STORED list order (Slice 4). Residual sets
+    // (fixtures / pre-migration) still sort by member `order` then identity. Live store graphs expose
+    // list object slots as ReferenceValue (BuildListValue) — pass `store` to resolve them.
+    private static IEnumerable<ObjectValue> OrderedObjects(NodeValue? coll, IInstanceStore? store = null) =>
+        OrderedMembers(coll, store).Select(m => m.Obj);
 
-    // Same ordering as OrderedObjects (by `order` then by identity), but keeping each member's intrinsic
-    // set-key id alongside its object — what Snapshot's id-map walk needs and OrderedObjects discards.
-    private static IEnumerable<(int Id, ObjectValue Obj)> OrderedMembers(NodeValue? set)
+    // Same ordering as OrderedObjects, keeping each member's intrinsic object id (set key or list ref id).
+    private static IEnumerable<(int Id, ObjectValue Obj)> OrderedMembers(NodeValue? coll, IInstanceStore? store = null)
     {
-        if (set is not SetValue sv)
+        if (coll is ListValue lv)
+        {
+            var result = new List<(int Id, ObjectValue Obj)>();
+            foreach (var item in lv.Items)
+            {
+                if (item is ObjectValue ov)
+                    result.Add((result.Count + 1, ov)); // synthetic in-memory graph (DesignFromText)
+                else if (item is ReferenceValue { TargetId: int id } && store != null
+                         && store.ReadById(id) is (_, ObjectValue fields))
+                    result.Add((id, fields));
+            }
+            return result;
+        }
+        if (coll is not SetValue sv)
             return [];
 
         return sv.Members

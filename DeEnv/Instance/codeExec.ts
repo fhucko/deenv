@@ -290,7 +290,7 @@ function executeSymbol(codeSymbol: CodeSymbol, scope: ExecScope, context: ExecCo
     };
 }
 
-const collectionMethods = ["add", "remove", "setEntry", "where", "orderBy", "any", "single",
+const collectionMethods = ["add", "remove", "setEntry", "where", "orderBy", "any", "single", "count", "at",
     "insert", "move", "removeAt", "removeFirst", "removeLast", "removeAll", "removeWhere"];
 
 // ── memoization cache (Stage 4) ────────────────────────────────────────────────────
@@ -1377,14 +1377,12 @@ const fpNodeSep = String.fromCharCode(2);
 // (the collector-law pattern).
 function fnFingerprint(fn: ExecObject, context: ExecContext): string {
     const name = readNodeText(fn, "name", context);
-    // M12 V1 — fold `vars` (name/init/order) in right after `params`, mirroring an element node's own
-    // attrs segment below. A fn with NO vars contributes NOTHING here, so this is byte-identical to the
-    // pre-V1 fingerprint for every existing (vars-less) fn.
+    // M12 V1 — fold `vars` (name/init) in right after `params`. List order is position identity
+    // (Slice 4); no member `order` field. A fn with NO vars contributes NOTHING here.
     let varsPart = "";
     for (const v of orderedMembersOptional(fn, "vars", context)) {
-        const ord = readNodeProp(v, "order", context);
         varsPart += fpNodeSep + "V:" + readNodeText(v, "name", context) + fpFieldSep +
-            readNodeText(v, "init", context) + fpFieldSep + String(ord.type === "int" ? ord.value : 0);
+            readNodeText(v, "init", context);
     }
     const bodyRoot = orderedMembers(fn, "body", context)[0];
     return name + fpFieldSep + readNodeText(fn, "params", context) + varsPart + fpFieldSep +
@@ -1411,9 +1409,7 @@ function fingerprintNode(node: ExecObject, context: ExecContext): string {
     if (tag.length > 0) {
         let s = "E:" + tag;
         for (const a of orderedMembers(node, "attrs", context)) {
-            const ord = readNodeProp(a, "order", context);
-            s += fpNodeSep + "A:" + readNodeText(a, "name", context) + fpFieldSep + readNodeText(a, "value", context) +
-                fpFieldSep + String(ord.type === "int" ? ord.value : 0);
+            s += fpNodeSep + "A:" + readNodeText(a, "name", context) + fpFieldSep + readNodeText(a, "value", context);
         }
         for (const c of orderedMembers(node, "children", context)) s += fpNodeSep + "C:" + fingerprintNode(c, context);
         return s;
@@ -1774,34 +1770,15 @@ function readNodeTextOptional(node: ExecObject, name: string, context: ExecConte
     return value.type === "text" ? value.value : "";
 }
 
-// The members of a node's attrs/children SET, ordered by each member's `order` — observed through the same
-// reads a `node.children.orderBy(order)` foreach makes (a prop dep on the set, a membership dep, an order
-// read per member), so an add/remove/reorder re-renders the canvas. Non-object / absent → empty.
+// Members of a node's position-bearing collection prop. Durable designer trees are lists without a
+// member `order` field — iteration order IS visual order (Slice 4). Fixtures that still stamp `order`
+// sort by that field. Observed via prop + membership so an add/remove/reorder re-renders the canvas.
 function orderedMembers(node: ExecObject, setProp: string, context: ExecContext): ExecObject[] {
-    const setV = readNodeProp(node, setProp, context);
-    if (!isCollection(setV)) return [];
-    recordMember(setV.id);
-    const objs: { o: ExecObject; order: number }[] = [];
-    for (const item of setV.items)
-        if (item.value.type === "object") {
-            const ord = readNodeProp(item.value, "order", context);
-            objs.push({ o: item.value, order: ord.type === "int" ? ord.value : 0 });
-        }
-    // Array.prototype.sort is a STABLE sort (twin of C#'s OrderBy) — an ORDER TIE keeps setV.items' own
-    // iteration order, UNLIKE SchemaBridge.OrderedObjects (the server-ship walk), which explicitly
-    // tie-breaks by Id. Not reachable today — M12 F1/F2 mint distinct `order` values, `items` builds in
-    // id order anyway, and the ONE app-level op that COULD mint a same-order tie (M12 S5c unwrap's
-    // spliceChild, which gives every spliced child the wrapped element's own order) immediately
-    // renumbers the whole parent collection densely (0..n-1 by current visual order) right after
-    // splicing — restoring the distinct-order invariant before any read of this walk could observe the
-    // tie. A future same-order pair built out of id order (bypassing that renumber) could still disagree
-    // between this walk and SchemaBridge's — the visible symptom would be a PERSISTENT spurious M12 F3b
-    // staleness banner (the two fingerprint walks over the SAME data producing different strings).
-    // Flagged, not fixed — no reachable case exists yet (the renumber is the guard, not a proof no
-    // future op can reintroduce this).
-    return objs.sort((a, b) => a.order - b.order).map(p => p.o);
+    const coll = readNodeProp(node, setProp, context);
+    if (!isCollection(coll)) return [];
+    recordMember(coll.id);
+    return membersInVisualOrder(coll, context);
 }
-
 // Like readNodeProp, but tolerant of an ABSENT prop — returns undefined instead of throwing (the
 // readNodeTextOptional precedent, generalized to any value type). M12 V1b's ONE new caller: a `design`
 // row's `fns`/`vars` props, which a hand-built conformance fixture predating V1b may omit entirely (a real
@@ -1816,24 +1793,26 @@ function readNodePropOptional(node: ExecObject, name: string, context: ExecConte
     return value;
 }
 
-// Like orderedMembers, but tolerant of an ABSENT set prop — returns empty instead of throwing (the same
-// "kind" precedent readNodeTextOptional sets, M12 V1). A real MetaFn/Design row always carries `vars` (M5
-// defaults an empty set on load), so this only matters for a hand-built conformance fixture that predates
-// V1 and omits the field entirely — reading it as "no state vars" (not an error) is correct: a fn with no
-// declared `vars` behaves exactly as it always has. Twin of CodeExecutor.OrderedMembersOptional.
+// Like orderedMembers, but tolerant of an ABSENT collection prop — returns empty instead of throwing.
+// Twin of CodeExecutor.OrderedMembersOptional.
 function orderedMembersOptional(node: ExecObject, setProp: string, context: ExecContext): ExecObject[] {
     const raw = readNodePropOptional(node, setProp, context);
     if (raw == null || !isCollection(raw)) return [];
     recordMember(raw.id);
-    const objs: { o: ExecObject; order: number }[] = [];
-    for (const item of raw.items)
-        if (item.value.type === "object") {
-            const ord = readNodeProp(item.value, "order", context);
-            objs.push({ o: item.value, order: ord.type === "int" ? ord.value : 0 });
-        }
-    return objs.sort((a, b) => a.order - b.order).map(p => p.o);
+    return membersInVisualOrder(raw, context);
 }
 
+function membersInVisualOrder(coll: ExecCollection, context: ExecContext): ExecObject[] {
+    const keyed: { o: ExecObject; order: number; hasOrder: boolean }[] = [];
+    for (const item of coll.items) {
+        if (item.value.type !== "object") continue;
+        const ord = readNodePropOptional(item.value, "order", context);
+        if (ord != null && ord.type === "int") keyed.push({ o: item.value, order: ord.value, hasOrder: true });
+        else keyed.push({ o: item.value, order: 0, hasOrder: false });
+    }
+    if (keyed.some(k => k.hasOrder)) return keyed.sort((a, b) => a.order - b.order).map(p => p.o);
+    return keyed.map(p => p.o);
+}
 // ── render-tree literal rules (twin-identical with CodeExecutor.cs; pinned by the conformance case) ──────
 // A leaf/attr value source is a LITERAL when it is ONE complete quoted string, an int, or a bool. Anything
 // else (`a + b`, a bare symbol, `"a" + b`) is non-literal → a chip (leaf) or a skip (attr). A manual
@@ -2253,6 +2232,19 @@ function collectionSysFunction(arr: ExecCollection, method: string, context: Exe
                 if (r.type === "bool" && r.value) return item.value;
             }
             return { type: "null" };
+        } };
+        case "count": return { type: "sysFn", fn: () => {
+            recordMember(arr.id);
+            return { type: "int", value: arr.items.length };
+        } };
+        case "at": return { type: "sysFn", fn: args => {
+            if (arr.type !== "list") throw new Error("at is only valid on a list.");
+            if (args[0].type !== "int") throw new Error("at expects an int index.");
+            recordMember(arr.id);
+            const index = args[0].value;
+            if (index < 0 || index >= arr.items.length)
+                throw new Error(`List at index ${index} out of range (len ${arr.items.length}).`);
+            return arr.items[index].value;
         } };
         default: throw new Error(`Unknown collection method '${method}'.`);
     }

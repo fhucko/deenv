@@ -57,7 +57,7 @@ public static class PublishReportComputer
             // project the CURRENT working copy and apply by name. Not reported as a "fallback" (that term
             // is reserved for an unstamped TARGET against a design that DOES have commits) — there is no
             // identity diff possible here at all.
-            var workingDesign = SchemaBridge.ProjectDesignDb(design); // throws on an invalid design
+            var workingDesign = SchemaBridge.ProjectDesignDb(design, store); // throws on an invalid design
             var noHeadReport = new PublishReport
             {
                 Applied = !dryRun, DryRun = dryRun, BaseCommit = null, TargetCommit = 0,
@@ -75,7 +75,7 @@ public static class PublishReportComputer
         // Uncommitted working-copy drift: the design's LIVE state may have moved past its own head commit
         // (an edit made after the last commit) — Snapshot(workingCopy).Text != head.text. Reported, never
         // published: publish always deploys the committed head, never the working copy.
-        var workingSnapshot = SchemaBridge.Snapshot(design); // throws on an invalid design
+        var workingSnapshot = SchemaBridge.Snapshot(design, store); // throws on an invalid design
         var uncommittedDrift = workingSnapshot.Text != headText;
 
         var stampedFields = stampedCommitId is { } stamped ? KernelHostActions.FindCommit(store, stamped) : null;

@@ -84,11 +84,14 @@ public static class DesignerSeed
             ["common"]      = new TextValue(sections.GetValueOrDefault("common", "")),
             ["ui"]          = new TextValue(sections.GetValueOrDefault("ui", "")),
         }));
-        var typesSetId = SetIdOf(store, designId, "types");
+        var typesListId = ListIdOf(store, designId, "types");
 
-        var typeOrder = 1;
+        var typeIndex = 0;
         foreach (var type in desc.AllTypes())
-            store.AddToSet(typesSetId, AdoptType(store, type, typeOrder++ * 10));
+        {
+            store.CommitBatch([], [new ListInsertMutation(typesListId, typeIndex, new StoredRef("MetaType", AdoptType(store, type)))]);
+            typeIndex++;
+        }
 
         store.AddToSet(NodePath.Root.Field("designs"), designId);
         return designId;
@@ -96,7 +99,7 @@ public static class DesignerSeed
 
     // Adopt one MetaType (+ its MetaProps) live, mirroring SeedBuilder.AddType's field shape. Returns the
     // newly-minted MetaType id (not yet linked into any design's `types` set — the caller links it).
-    private static int AdoptType(IInstanceStore store, TypeDefinition type, int order)
+    private static int AdoptType(IInstanceStore store, TypeDefinition type)
     {
         var typeId = store.CreateObject("MetaType", new ObjectValue(new Dictionary<string, NodeValue>
         {
@@ -105,26 +108,27 @@ public static class DesignerSeed
                 : type.BaseType == BaseType.Enum ? "enum"
                 : BaseTypes.NameOf(type.BaseType)),
             ["values"]   = new TextValue(string.Join(", ", type.Values ?? [])),
-            ["order"]    = new IntValue(order),
         }));
-        var propsSetId = SetIdOf(store, typeId, "props");
+        var propsListId = ListIdOf(store, typeId, "props");
 
-        var propOrder = 1;
+        var propIndex = 0;
         foreach (var prop in type.Props ?? [])
-            store.AddToSet(propsSetId, AdoptProp(store, prop, propOrder++ * 10));
+        {
+            store.CommitBatch([], [new ListInsertMutation(propsListId, propIndex, new StoredRef("MetaProp", AdoptProp(store, prop)))]);
+            propIndex++;
+        }
 
         return typeId;
     }
 
     // Adopt one MetaProp live, mirroring SeedBuilder.AddProp's field shape (cardinality always explicit;
     // keyType only for a dictionary — see SeedBuilder.AddProp's own doc for why).
-    private static int AdoptProp(IInstanceStore store, PropDefinition prop, int order)
+    private static int AdoptProp(IInstanceStore store, PropDefinition prop)
     {
         var fields = new Dictionary<string, NodeValue>
         {
             ["name"]        = new TextValue(prop.Name),
             ["type"]        = new TextValue(prop.Type),
-            ["order"]       = new IntValue(order),
             ["cardinality"] = new TextValue(prop.Cardinality switch
             {
                 Cardinality.Set => "set",
@@ -139,15 +143,15 @@ public static class DesignerSeed
         return store.CreateObject("MetaProp", new ObjectValue(fields));
     }
 
-    // The intrinsic id of a just-created object's named SET prop (every declared set prop starts as an
-    // EMPTY StoredSet with its own minted id — see JsonFileInstanceStore.BuildFields), read back through
+    // The intrinsic id of a just-created object's named LIST prop (every declared list prop starts as an
+    // EMPTY StoredList with its own minted id — see JsonFileInstanceStore.BuildFields), read back through
     // ReadById since the object is not yet linked anywhere a NodePath could reach it.
-    private static int SetIdOf(IInstanceStore store, int objectId, string setProp)
+    private static int ListIdOf(IInstanceStore store, int objectId, string listProp)
     {
         var hit = store.ReadById(objectId)
             ?? throw new InvalidOperationException($"Object {objectId} vanished immediately after creation.");
-        return hit.Fields.Fields.GetValueOrDefault(setProp) is SetValue sv ? sv.Id
-            : throw new InvalidOperationException($"'{hit.TypeName}' has no set prop '{setProp}'.");
+        return hit.Fields.Fields.GetValueOrDefault(listProp) is ListValue lv ? lv.Id
+            : throw new InvalidOperationException($"'{hit.TypeName}' has no list prop '{listProp}'.");
     }
 
     // Split an app document into its top-level sections, keyed by section keyword (types / initialData /
@@ -216,9 +220,8 @@ public static class DesignerSeed
             var sections = SplitSections(appText);
 
             var typeIds = new List<int>();
-            var typeOrder = 1;
             foreach (var type in desc.AllTypes())
-                typeIds.Add(AddType(type, typeOrder++ * 10));
+                typeIds.Add(AddType(type));
 
             var fields = new JsonObject
             {
@@ -275,12 +278,11 @@ public static class DesignerSeed
         // TypeDefinition the same way the type editor / SchemaBridge.Project round-trip it. An enum's
         // value list is seeded into the comma-separated `values` field (the always-rendered enum-values
         // input the type editor edits + SchemaBridge.Project reads back); object/leaf types carry "".
-        private int AddType(TypeDefinition type, int order)
+        private int AddType(TypeDefinition type)
         {
             var propIds = new List<int>();
-            var propOrder = 1;
             foreach (var prop in type.Props ?? [])
-                propIds.Add(AddProp(prop, propOrder++ * 10));
+                propIds.Add(AddProp(prop));
 
             var fields = new JsonObject
             {
@@ -291,7 +293,6 @@ public static class DesignerSeed
                     : type.BaseType == BaseType.Enum ? "enum"
                     : BaseTypes.NameOf(type.BaseType),
                 ["values"] = string.Join(", ", type.Values ?? []),
-                ["order"] = order,
                 ["props"] = IdArray(propIds),
             };
             return Add("MetaType", fields);
@@ -302,13 +303,12 @@ public static class DesignerSeed
         // leave that bound <select> with no selected option after hydration). SchemaBridge.Project reads
         // "single" and "" alike as Single, so this changes nothing about what projects back. keyType is
         // emitted only for a dictionary (the one cardinality it is meaningful for).
-        private int AddProp(PropDefinition prop, int order)
+        private int AddProp(PropDefinition prop)
         {
             var fields = new JsonObject
             {
                 ["name"] = prop.Name,
                 ["type"] = prop.Type,
-                ["order"] = order,
                 ["cardinality"] = prop.Cardinality switch
                 {
                     Cardinality.Set => "set",

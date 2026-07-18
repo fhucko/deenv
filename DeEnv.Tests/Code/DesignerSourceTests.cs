@@ -123,31 +123,32 @@ public sealed class DesignerSourceTests
 
     // ── Pure in-memory design construction (no store, no files) for fast projection tests ─────
 
-    private static ObjectValue MakeMetaType(string name, string baseType, int order, ObjectValue[]? props = null)
+    private static ObjectValue MakeMetaType(string name, string baseType, int order = 0, ObjectValue[]? props = null)
     {
         var fields = new Dictionary<string, NodeValue>
         {
             ["name"] = new TextValue(name),
             ["baseType"] = new TextValue(baseType),
-            ["order"] = new IntValue(order),
             ["values"] = new TextValue(""),
         };
         if (props != null && props.Length > 0)
-            fields["props"] = MakeSet(props);
+            fields["props"] = MakeList(props);
         return new ObjectValue(fields);
     }
 
-    private static ObjectValue MakeMetaProp(string name, string type, int order)
+    private static ObjectValue MakeMetaProp(string name, string type, int order = 0)
     {
         return new ObjectValue(new Dictionary<string, NodeValue>
         {
             ["name"] = new TextValue(name),
             ["type"] = new TextValue(type),
-            ["order"] = new IntValue(order),
             ["cardinality"] = new TextValue("single"),
             ["multiline"] = new BoolValue(false),
         });
     }
+
+    private static ListValue MakeList(params ObjectValue[] members) =>
+        new(500, members.Cast<NodeValue>().ToList());
 
     private static SetValue MakeSet(params ObjectValue[] members)
     {
@@ -165,15 +166,14 @@ public sealed class DesignerSourceTests
         {
             ["tag"] = new TextValue(tag),
             ["expr"] = new TextValue(expr),
-            ["order"] = new IntValue(order),
-        };
+                    };
         if (!string.IsNullOrEmpty(kind)) d["kind"] = new TextValue(kind);
         if (!string.IsNullOrEmpty(item)) d["item"] = new TextValue(item);
         if (!string.IsNullOrEmpty(collection)) d["collection"] = new TextValue(collection);
         if (!string.IsNullOrEmpty(condition)) d["condition"] = new TextValue(condition);
-        if (attrs != null && attrs.Length > 0) d["attrs"] = MakeSet(attrs);
-        if (children != null && children.Length > 0) d["children"] = MakeSet(children);
-        if (elseChildren != null && elseChildren.Length > 0) d["elseChildren"] = MakeSet(elseChildren);
+        if (attrs != null && attrs.Length > 0) d["attrs"] = MakeList(attrs);
+        if (children != null && children.Length > 0) d["children"] = MakeList(children);
+        if (elseChildren != null && elseChildren.Length > 0) d["elseChildren"] = MakeList(elseChildren);
         return new ObjectValue(d);
     }
 
@@ -183,11 +183,10 @@ public sealed class DesignerSourceTests
         {
             ["name"] = new TextValue(name),
             ["value"] = new TextValue(value),
-            ["order"] = new IntValue(order),
-        });
+                    });
     }
 
-    private static ObjectValue MakeDesign(string label, string ui = "", SetValue? types = null, SetValue? render = null, SetValue? fns = null, SetValue? vars = null)
+    private static ObjectValue MakeDesign(string label, string ui = "", ListValue? types = null, ListValue? render = null, ListValue? fns = null, ListValue? vars = null)
     {
         var fields = new Dictionary<string, NodeValue>
         {
@@ -212,19 +211,18 @@ public sealed class DesignerSourceTests
         return new ObjectValue(d);
     }
 
-    private static (SetValue types, ObjectValue db) MinimalDbTypes()
+    private static (ListValue types, ObjectValue db) MinimalDbTypes()
     {
         var greeting = MakeMetaProp("greeting", "text", 0);
         var db = MakeMetaType("Db", "object", 0, new[] { greeting });
-        var types = MakeSet(db);
+        var types = MakeList(db);
         return (types, db);
     }
 
     private static ObjectValue Var(string name, string init, int order = 0) =>
         new(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue(name), ["init"] = new TextValue(init), ["order"] = new IntValue(order),
-        });
+            ["name"] = new TextValue(name), ["init"] = new TextValue(init),         });
 
     // Pure in-memory minimal design (Db type + bare main render root). Used by ProjectDesignDb var/fn
     // refusal tests and the stateful projection test.
@@ -232,7 +230,7 @@ public sealed class DesignerSourceTests
     {
         var (types, _) = MinimalDbTypes();
         var main = MakeNode("main", order: 0);
-        return MakeDesign(label, ui: "", types: types, render: MakeSet(main));
+        return MakeDesign(label, ui: "", types: types, render: MakeList(main));
     }
 
     // Encapsulates the (still necessary) store usage ONLY for tests that exercise ImportRender's
@@ -252,12 +250,37 @@ public sealed class DesignerSourceTests
             store.AddToSet(NodePath.Root.Field("designs"), designId);
             AddDbType(store, designId);
             SchemaBridge.ImportRender(store, designId);
-            return (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+            var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
+            return ResolveLists(design, store);
         }
         finally
         {
             File.Delete(storePath);
         }
+    }
+
+    // Resolve list ReferenceValue slots to nested ObjectValues for assertion/projection walks.
+    private static ObjectValue ResolveLists(ObjectValue obj, IInstanceStore store)
+    {
+        var map = new Dictionary<string, NodeValue>();
+        foreach (var (name, val) in obj.Fields)
+        {
+            if (val is ListValue lv)
+            {
+                var items = new List<NodeValue>();
+                foreach (var item in lv.Items)
+                {
+                    if (item is ReferenceValue { TargetId: int id } && store.ReadById(id) is (_, ObjectValue nested))
+                        items.Add(ResolveLists(nested, store));
+                    else
+                        items.Add(item);
+                }
+                map[name] = new ListValue(lv.Id, items);
+            }
+            else
+                map[name] = val;
+        }
+        return new ObjectValue(map);
     }
 
     // ── M12 S1a: structured render tree → canonical fn render() ───────────────────
@@ -274,7 +297,7 @@ public sealed class DesignerSourceTests
         var hi = MakeNode(expr: "\"Hi\"", order: 0);
         var h1 = MakeNode("h1", children: new[] { hi }, order: 0);
         var main = MakeNode("main", attrs: new[] { cls }, children: new[] { h1 }, order: 0);
-        var render = MakeSet(main);
+        var render = MakeList(main);
         var design = MakeDesign("hello-app", ui: "", types: types, render: render);
 
         var projected = SchemaBridge.ProjectDesignDb(design);
@@ -300,7 +323,7 @@ public sealed class DesignerSourceTests
     {
         var (types, _) = MinimalDbTypes();
         var main = MakeNode("main");
-        var render = MakeSet(main);
+        var render = MakeList(main);
         var design = MakeDesign("clash",
             ui: """
                 ui
@@ -344,18 +367,18 @@ public sealed class DesignerSourceTests
 
         // Root: <main> with two attrs in order (class, id) and two children (the <h1> element, then the
         // db.greeting leaf).
-        var root = OrderedByOrder((SetValue)design.Fields["render"]).Single();
+        var root = OrderedByOrder(design.Fields["render"]).Single();
         await Assert.That(Text(root, "tag")).IsEqualTo("main");
-        var attrs = OrderedByOrder((SetValue)root.Fields["attrs"]).ToList();
+        var attrs = OrderedByOrder(root.Fields["attrs"]).ToList();
         await Assert.That(attrs.Select(a => Text(a, "name")).ToList()).IsEquivalentTo(new[] { "class", "id" });
         await Assert.That(Text(attrs[0], "value")).IsEqualTo("\"hello\"");
         await Assert.That(Text(attrs[1], "value")).IsEqualTo("\"root\"");
 
-        var children = OrderedByOrder((SetValue)root.Fields["children"]).ToList();
+        var children = OrderedByOrder(root.Fields["children"]).ToList();
         await Assert.That(children.Count).IsEqualTo(2);
         // Child 0: the nested <h1> element carrying a text leaf.
         await Assert.That(Text(children[0], "tag")).IsEqualTo("h1");
-        var h1Kids = OrderedByOrder((SetValue)children[0].Fields["children"]).Single();
+        var h1Kids = OrderedByOrder(children[0].Fields["children"]).Single();
         await Assert.That(Text(h1Kids, "tag")).IsEqualTo("");            // a leaf: empty tag
         await Assert.That(Text(h1Kids, "expr")).IsEqualTo("\"Hi\"");    // the text leaf's source
         // Child 1: the expression leaf `db.greeting` (empty tag, expr carries the source).
@@ -397,23 +420,23 @@ public sealed class DesignerSourceTests
 
         await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
 
-        var root = OrderedByOrder((SetValue)design.Fields["render"]).Single();
-        var children = OrderedByOrder((SetValue)root.Fields["children"]).ToList();
+        var root = OrderedByOrder(design.Fields["render"]).Single();
+        var children = OrderedByOrder(root.Fields["children"]).ToList();
         await Assert.That(children.Count).IsEqualTo(2);
 
         var forRow = children[0];
         await Assert.That(Text(forRow, "kind")).IsEqualTo("for");
         await Assert.That(Text(forRow, "item")).IsEqualTo("note");
         await Assert.That(Text(forRow, "collection")).IsEqualTo("db.notes");
-        var forBody = OrderedByOrder((SetValue)forRow.Fields["children"]).Single();
+        var forBody = OrderedByOrder(forRow.Fields["children"]).Single();
         await Assert.That(Text(forBody, "tag")).IsEqualTo("li");
 
         var ifRow = children[1];
         await Assert.That(Text(ifRow, "kind")).IsEqualTo("if");
         await Assert.That(Text(ifRow, "condition")).IsEqualTo("db.greeting == \"hi\"");
-        var thenBody = OrderedByOrder((SetValue)ifRow.Fields["children"]).Single();
+        var thenBody = OrderedByOrder(ifRow.Fields["children"]).Single();
         await Assert.That(Text(thenBody, "tag")).IsEqualTo("p");
-        var elseBody = OrderedByOrder((SetValue)ifRow.Fields["elseChildren"]).Single();
+        var elseBody = OrderedByOrder(ifRow.Fields["elseChildren"]).Single();
         await Assert.That(Text(elseBody, "tag")).IsEqualTo("p");
 
         // The round-trip: projecting the imported design yields the canonical form of the original render.
@@ -450,23 +473,23 @@ public sealed class DesignerSourceTests
 
         await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
 
-        var root = OrderedByOrder((SetValue)design.Fields["render"]).Single();
-        var outerIf = OrderedByOrder((SetValue)root.Fields["children"]).Single();
+        var root = OrderedByOrder(design.Fields["render"]).Single();
+        var outerIf = OrderedByOrder(root.Fields["children"]).Single();
         await Assert.That(Text(outerIf, "kind")).IsEqualTo("if");
         await Assert.That(Text(outerIf, "condition")).IsEqualTo("db.a");
-        var outerThen = OrderedByOrder((SetValue)outerIf.Fields["children"]).Single();
+        var outerThen = OrderedByOrder(outerIf.Fields["children"]).Single();
         await Assert.That(Text(outerThen, "tag")).IsEqualTo("p");
 
             // The outer if's elseChildren holds EXACTLY ONE row, and it is itself a NESTED kind="if" row —
             // not two flat sibling rows — the shape the printer's else-if collapse depends on.
-            var outerElse = OrderedByOrder((SetValue)outerIf.Fields["elseChildren"]).ToList();
+            var outerElse = OrderedByOrder(outerIf.Fields["elseChildren"]).ToList();
             await Assert.That(outerElse.Count).IsEqualTo(1);
             var nestedIf = outerElse[0];
             await Assert.That(Text(nestedIf, "kind")).IsEqualTo("if");
             await Assert.That(Text(nestedIf, "condition")).IsEqualTo("db.b");
-            var nestedThen = OrderedByOrder((SetValue)nestedIf.Fields["children"]).Single();
+            var nestedThen = OrderedByOrder(nestedIf.Fields["children"]).Single();
             await Assert.That(Text(nestedThen, "tag")).IsEqualTo("p");
-            var nestedElse = OrderedByOrder((SetValue)nestedIf.Fields["elseChildren"]).Single();
+            var nestedElse = OrderedByOrder(nestedIf.Fields["elseChildren"]).Single();
             await Assert.That(Text(nestedElse, "tag")).IsEqualTo("p");
 
             // The round-trip: projecting the imported design yields the canonical form of the original
@@ -497,7 +520,7 @@ public sealed class DesignerSourceTests
         var ifRow = MakeNode(kind: "if", condition: "db.flag", order: 1, children: new[] { thenLeaf }, elseChildren: new[] { elseLeaf });
 
         var main = MakeNode("main", children: new[] { forRow, ifRow }, order: 0);
-        var render = MakeSet(main);
+        var render = MakeList(main);
         var design = MakeDesign("collect", ui: "", types: types, render: render);
 
         var sources = SchemaBridge.RenderExprSources(design);
@@ -527,14 +550,13 @@ public sealed class DesignerSourceTests
         {
             ["name"] = new TextValue("NoteCard"),
             ["params"] = new TextValue("note"),
-            ["order"] = new IntValue(0),
-            ["body"] = MakeSet(fnBody),
-            ["vars"] = MakeSet(Var("localFlag", "note.done == false")),
+                        ["body"] = MakeList(fnBody),
+            ["vars"] = MakeList(Var("localFlag", "note.done == false")),
         });
 
         var main = MakeNode("main", order: 0);
-        var design = MakeDesign("collectfn", ui: "", types: types, render: MakeSet(main), fns: MakeSet(fn),
-            vars: MakeSet(Var("topCount", "db.total + 1")));
+        var design = MakeDesign("collectfn", ui: "", types: types, render: MakeList(main), fns: MakeList(fn),
+            vars: MakeList(Var("topCount", "db.total + 1")));
 
         var sources = SchemaBridge.RenderExprSources(design);
 
@@ -559,19 +581,17 @@ public sealed class DesignerSourceTests
         var use = new ObjectValue(new Dictionary<string, NodeValue>
         {
             ["name"] = new TextValue("sample"),
-            ["order"] = new IntValue(0),
-            ["args"] = MakeSet(useArg),
+                        ["args"] = MakeList(useArg),
         });
         var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
             ["name"] = new TextValue("NoteCard"),
             ["params"] = new TextValue("note"),
-            ["order"] = new IntValue(0),
-            ["body"] = MakeSet(fnBody),
-            ["uses"] = MakeSet(use),
+                        ["body"] = MakeList(fnBody),
+            ["uses"] = MakeList(use),
         });
         var main = MakeNode("main", order: 0);
-        var design = MakeDesign("collectuse", ui: "", types: types, render: MakeSet(main), fns: MakeSet(fn));
+        var design = MakeDesign("collectuse", ui: "", types: types, render: MakeList(main), fns: MakeList(fn));
 
         var sources = SchemaBridge.RenderExprSources(design);
 
@@ -590,20 +610,18 @@ public sealed class DesignerSourceTests
         var use = new ObjectValue(new Dictionary<string, NodeValue>
         {
             ["name"] = new TextValue("sample"),
-            ["order"] = new IntValue(0),
-            ["args"] = MakeSet(),
-            ["ambients"] = MakeSet(useAmbient),
+                        ["args"] = MakeList(),
+            ["ambients"] = MakeList(useAmbient),
         });
         var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
             ["name"] = new TextValue("Greeter"),
             ["params"] = new TextValue(""),
-            ["order"] = new IntValue(0),
-            ["body"] = MakeSet(fnBody),
-            ["uses"] = MakeSet(use),
+                        ["body"] = MakeList(fnBody),
+            ["uses"] = MakeList(use),
         });
         var main = MakeNode("main", order: 0);
-        var design = MakeDesign("collectambient", ui: "", types: types, render: MakeSet(main), fns: MakeSet(fn));
+        var design = MakeDesign("collectambient", ui: "", types: types, render: MakeList(main), fns: MakeList(fn));
 
         var sources = SchemaBridge.RenderExprSources(design);
 
@@ -629,7 +647,7 @@ public sealed class DesignerSourceTests
 
         await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
 
-        var vars = OrderedByOrder((SetValue)design.Fields["vars"]).ToList();
+        var vars = OrderedByOrder(design.Fields["vars"]).ToList();
         await Assert.That(vars.Count).IsEqualTo(1);
         await Assert.That(Text(vars[0], "name")).IsEqualTo("count");
         await Assert.That(Text(vars[0], "init")).IsEqualTo("0");
@@ -663,17 +681,17 @@ public sealed class DesignerSourceTests
 
         await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
 
-        var fns = OrderedByOrder((SetValue)design.Fields["fns"]).ToList();
+        var fns = OrderedByOrder(design.Fields["fns"]).ToList();
         await Assert.That(fns.Count).IsEqualTo(2);
         await Assert.That(Text(fns[0], "name")).IsEqualTo("helperLabel");
         await Assert.That(Text(fns[0], "params")).IsEqualTo("active");
-        var helperBody = OrderedByOrder((SetValue)fns[0].Fields["body"]).Single();
+        var helperBody = OrderedByOrder(fns[0].Fields["body"]).Single();
         await Assert.That(Text(helperBody, "tag")).IsEqualTo("");             // a leaf: the ternary source
         await Assert.That(Text(helperBody, "expr")).IsEqualTo("active ? \"Yes\" : \"No\"");
 
         await Assert.That(Text(fns[1], "name")).IsEqualTo("NoteCard");
         await Assert.That(Text(fns[1], "params")).IsEqualTo("note");
-        var cardBody = OrderedByOrder((SetValue)fns[1].Fields["body"]).Single();
+        var cardBody = OrderedByOrder(fns[1].Fields["body"]).Single();
         await Assert.That(Text(cardBody, "tag")).IsEqualTo("li");
 
         // The round-trip: projecting the imported design reproduces the canonical original — render AND
@@ -715,7 +733,7 @@ public sealed class DesignerSourceTests
             await Assert.That(ex!.Message).Contains("server-only");
 
             var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0);
+            await Assert.That(((ListValue)design.Fields["render"]).Items.Count).IsEqualTo(0);
             await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);
         }
         finally
@@ -755,7 +773,7 @@ public sealed class DesignerSourceTests
             await Assert.That(ex!.Message).Contains("lambda");
 
             var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0);
+            await Assert.That(((ListValue)design.Fields["render"]).Items.Count).IsEqualTo(0);
             await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);
         }
         finally
@@ -796,7 +814,7 @@ public sealed class DesignerSourceTests
             await Assert.That(ex!.Message).Contains("single");
 
             var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0);
+            await Assert.That(((ListValue)design.Fields["render"]).Items.Count).IsEqualTo(0);
             await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);
         }
         finally
@@ -840,7 +858,7 @@ public sealed class DesignerSourceTests
             await Assert.That(ex!.Message).Contains("helperLabel");
 
             var design = (ObjectValue)store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()))!;
-            await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0); // nothing minted
+            await Assert.That(((ListValue)design.Fields["render"]).Items.Count).IsEqualTo(0); // nothing minted
             await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(ui);            // ui untouched
         }
         finally
@@ -858,10 +876,9 @@ public sealed class DesignerSourceTests
         var badFnBody = MakeNode(expr: "\"x\"", order: 0);
         var badFn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("render"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            ["body"] = MakeSet(badFnBody),
+            ["name"] = new TextValue("render"), ["params"] = new TextValue(""),             ["body"] = MakeList(badFnBody),
         });
-        var design = WithField(baseDesign, "fns", MakeSet(badFn));
+        var design = WithField(baseDesign, "fns", MakeList(badFn));
 
         var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
             .Throws<SchemaValidationException>();
@@ -878,15 +895,14 @@ public sealed class DesignerSourceTests
         var body = MakeNode(expr: "\"x\"", order: 0);
         var fn0 = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("dup"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            ["body"] = MakeSet(body),
+            ["name"] = new TextValue("dup"), ["params"] = new TextValue(""),             ["body"] = MakeList(body),
         });
         var fn1 = new ObjectValue(new Dictionary<string, NodeValue>
         {
             ["name"] = new TextValue("dup"), ["params"] = new TextValue(""), ["order"] = new IntValue(1),
-            ["body"] = MakeSet(body),
+            ["body"] = MakeList(body),
         });
-        var design = WithField(baseDesign, "fns", MakeSet(fn0, fn1));
+        var design = WithField(baseDesign, "fns", MakeList(fn0, fn1));
 
         var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
             .Throws<SchemaValidationException>();
@@ -903,10 +919,9 @@ public sealed class DesignerSourceTests
         var fnBody = MakeNode(expr: "\"x\"", order: 0);
         var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("helper"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            ["body"] = MakeSet(fnBody),
+            ["name"] = new TextValue("helper"), ["params"] = new TextValue(""),             ["body"] = MakeList(fnBody),
         });
-        var design = MakeDesign("fnsnorender", ui: "", types: types, render: MakeSet(), fns: MakeSet(fn));
+        var design = MakeDesign("fnsnorender", ui: "", types: types, render: MakeList(), fns: MakeList(fn));
 
         var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
             .Throws<SchemaValidationException>();
@@ -923,7 +938,7 @@ public sealed class DesignerSourceTests
         var baseDesign = MinimalDesignForVars("emptyvarname");
         // Attach an empty-named var directly (immutable: construct augmented design)
         var badVar = Var("", "0");
-        var vars = MakeSet(badVar);
+        var vars = MakeList(badVar);
         var design = new ObjectValue(baseDesign.Fields.ToDictionary(kv => kv.Key, kv => kv.Value)
             .Concat(new[] { new KeyValuePair<string, NodeValue>("vars", vars) }).ToDictionary(kv => kv.Key, kv => kv.Value));
 
@@ -938,7 +953,7 @@ public sealed class DesignerSourceTests
         var baseDesign = MinimalDesignForVars("dupvarname");
         var v0 = Var("count", "0", 0);
         var v1 = Var("count", "1", 1);
-        var vars = MakeSet(v0, v1);
+        var vars = MakeList(v0, v1);
         var design = new ObjectValue(baseDesign.Fields.ToDictionary(kv => kv.Key, kv => kv.Value)
             .Concat(new[] { new KeyValuePair<string, NodeValue>("vars", vars) }).ToDictionary(kv => kv.Key, kv => kv.Value));
 
@@ -957,11 +972,10 @@ public sealed class DesignerSourceTests
         var fnBody = MakeNode(expr: "\"x\"", order: 0);
         var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("helper"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            ["body"] = MakeSet(fnBody),
+            ["name"] = new TextValue("helper"), ["params"] = new TextValue(""),             ["body"] = MakeList(fnBody),
         });
         var v = Var("helper", "0");
-        var design = WithField(WithField(baseDesign, "fns", MakeSet(fn)), "vars", MakeSet(v));
+        var design = WithField(WithField(baseDesign, "fns", MakeList(fn)), "vars", MakeList(v));
 
         var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
             .Throws<SchemaValidationException>();
@@ -975,11 +989,10 @@ public sealed class DesignerSourceTests
         var fnBody = MakeNode(expr: "\"x\"", order: 0);
         var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            ["body"] = MakeSet(fnBody),
-            ["vars"] = MakeSet(Var("", "0")),
+            ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""),             ["body"] = MakeList(fnBody),
+            ["vars"] = MakeList(Var("", "0")),
         });
-        var design = WithField(baseDesign, "fns", MakeSet(fn));
+        var design = WithField(baseDesign, "fns", MakeList(fn));
 
         var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
             .Throws<SchemaValidationException>();
@@ -993,11 +1006,10 @@ public sealed class DesignerSourceTests
         var fnBody = MakeNode(expr: "\"x\"", order: 0);
         var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            ["body"] = MakeSet(fnBody),
-            ["vars"] = MakeSet(Var("count", "0", 0), Var("count", "1", 1)),
+            ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""),             ["body"] = MakeList(fnBody),
+            ["vars"] = MakeList(Var("count", "0", 0), Var("count", "1", 1)),
         });
-        var design = WithField(baseDesign, "fns", MakeSet(fn));
+        var design = WithField(baseDesign, "fns", MakeList(fn));
 
         var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
             .Throws<SchemaValidationException>();
@@ -1014,11 +1026,10 @@ public sealed class DesignerSourceTests
         var fnBody = MakeNode(expr: "\"x\"", order: 0);
         var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            ["body"] = MakeSet(fnBody),
-            ["vars"] = MakeSet(Var("render", "0")),
+            ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""),             ["body"] = MakeList(fnBody),
+            ["vars"] = MakeList(Var("render", "0")),
         });
-        var design = WithField(baseDesign, "fns", MakeSet(fn));
+        var design = WithField(baseDesign, "fns", MakeList(fn));
 
         var ex = await Assert.That(() => SchemaBridge.ProjectDesignDb(design))
             .Throws<SchemaValidationException>();
@@ -1036,11 +1047,10 @@ public sealed class DesignerSourceTests
         var fnBody = MakeNode(expr: "count", order: 0);
         var fn = new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""), ["order"] = new IntValue(0),
-            ["body"] = MakeSet(fnBody),
-            ["vars"] = MakeSet(Var("count", "0", 0), Var("uninitialized", "", 1)),
+            ["name"] = new TextValue("Counter"), ["params"] = new TextValue(""),             ["body"] = MakeList(fnBody),
+            ["vars"] = MakeList(Var("count", "0", 0), Var("uninitialized", "", 1)),
         });
-        var design = WithField(baseDesign, "fns", MakeSet(fn));
+        var design = WithField(baseDesign, "fns", MakeList(fn));
 
         var projected = SchemaBridge.ProjectDesignDb(design);
         await Assert.That(projected).Contains(
@@ -1063,7 +1073,7 @@ public sealed class DesignerSourceTests
         var design = ImportRenderForTest("handler", ui);
 
         await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo(""); // cleared
-        var onClick = OrderedByOrder((SetValue)OrderedByOrder((SetValue)design.Fields["render"]).Single().Fields["attrs"]).Single();
+        var onClick = OrderedByOrder(OrderedByOrder(design.Fields["render"]).Single().Fields["attrs"]).Single();
         await Assert.That(Text(onClick, "name")).IsEqualTo("onClick");
 
         // The lossless proof: projecting the imported design reproduces the canonical original render,
@@ -1073,9 +1083,12 @@ public sealed class DesignerSourceTests
         await Assert.That(projected).Contains(expectedUi);
     }
 
-    private static IEnumerable<ObjectValue> OrderedByOrder(SetValue set) =>
-        set.Members.Values.OfType<ObjectValue>()
-            .OrderBy(o => o.Fields.GetValueOrDefault("order") is IntValue i ? i.Value : 0);
+    private static IEnumerable<ObjectValue> OrderedByOrder(NodeValue coll) => coll switch
+    {
+        ListValue lv => lv.Items.OfType<ObjectValue>(),
+        SetValue sv => sv.Members.Values.OfType<ObjectValue>(),
+        _ => [],
+    };
 
     private static string Text(ObjectValue o, string name) =>
         o.Fields.GetValueOrDefault(name) is TextValue t ? t.Text : "";
@@ -1083,22 +1096,27 @@ public sealed class DesignerSourceTests
     private static ObjectValue Node(string tag, string expr = "") =>
         new(new Dictionary<string, NodeValue>
         {
-            ["tag"] = new TextValue(tag), ["expr"] = new TextValue(expr), ["order"] = new IntValue(0),
-        });
+            ["tag"] = new TextValue(tag), ["expr"] = new TextValue(expr),         });
 
     private static void AddDbType(JsonFileInstanceStore store, int designId)
     {
-        var typesPath = NodePath.Root.Field("designs").Key(designId.ToString()).Field("types");
+        var design = store.ReadById(designId)!.Value.Fields;
+        var typesListId = design.Fields.GetValueOrDefault("types") is ListValue tlv ? tlv.Id
+            : throw new InvalidOperationException("design.types is not a list");
         var db = store.CreateObject("MetaType", new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("Db"), ["baseType"] = new TextValue("object"), ["order"] = new IntValue(0),
+            ["name"] = new TextValue("Db"), ["baseType"] = new TextValue("object"),
         }));
-        store.AddToSet(typesPath, db);
+        store.CommitBatch([], [new ListInsertMutation(typesListId, 0, new StoredRef("MetaType", db))]);
+        var typeFields = store.ReadById(db)!.Value.Fields;
+        var propsListId = typeFields.Fields.GetValueOrDefault("props") is ListValue plv ? plv.Id
+            : throw new InvalidOperationException("MetaType.props is not a list");
         var greeting = store.CreateObject("MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
         {
-            ["name"] = new TextValue("greeting"), ["type"] = new TextValue("text"), ["order"] = new IntValue(0),
+            ["name"] = new TextValue("greeting"), ["type"] = new TextValue("text"),
+            ["cardinality"] = new TextValue("single"), ["multiline"] = new BoolValue(false),
         }));
-        store.AddToSet(typesPath.Key(db.ToString()).Field("props"), greeting);
+        store.CommitBatch([], [new ListInsertMutation(propsListId, 0, new StoredRef("MetaProp", greeting))]);
     }
 
     // ── M12 S0: canonicalize-on-project for the `ui` section ──────────────────────

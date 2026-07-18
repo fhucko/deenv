@@ -660,6 +660,18 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         if (FindListNode(listId) is null) throw new InvalidOperationException($"No list with id {listId}.");
                         if (item is StoredRef ir) RequireResolvable(ir.Id);
                         break;
+                    case ListInsertByPropMutation(var listOwnerRef, var listProp, _, var listMemberRef):
+                    {
+                        RequireResolvable(listOwnerRef);
+                        RequireResolvable(listMemberRef);
+                        var listOwnerType = listOwnerRef < 0
+                            ? creates.First(c => c.TempId == listOwnerRef).TypeName
+                            : ExtentEntryById(listOwnerRef)!.TypeName;
+                        if (_desc.FindType(listOwnerType)?.Props?.FirstOrDefault(p => p.Name == listProp)
+                            is not { Cardinality: Cardinality.List })
+                            throw new InvalidOperationException($"'{listOwnerType}' has no list prop '{listProp}'.");
+                        break;
+                    }
                     case ListRemoveAtMutation(var listId, _):
                         if (FindListNode(listId) is null) throw new InvalidOperationException($"No list with id {listId}.");
                         break;
@@ -859,6 +871,25 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                         var typeName = ExtentEntryById(memberId)?.TypeName
                             ?? throw new InvalidOperationException($"No object with id {memberId}.");
                         LinkMember(set, memberId, typeName);
+                        break;
+                    }
+                    case ListInsertByPropMutation(var ownerRef, var prop, var index, var memberRef):
+                    {
+                        var ownerId = ResolveRefId(ownerRef);
+                        var owner = ExtentEntryById(ownerId)
+                            ?? throw new InvalidOperationException($"No object with id {ownerRef}.");
+                        if (owner.Fields.GetValueOrDefault(prop) is not StoredList list)
+                            throw new InvalidOperationException($"'{owner.TypeName}' has no list prop '{prop}'.");
+                        var memberId = ResolveRefId(memberRef);
+                        var typeName = ExtentEntryById(memberId)?.TypeName
+                            ?? throw new InvalidOperationException($"No object with id {memberId}.");
+                        if (index < 0 || index > list.Items.Count)
+                            throw new InvalidOperationException(
+                                $"List insert index {index} out of range for '{owner.TypeName}'.{prop} (len {list.Items.Count}).");
+                        var resolved = (StoredValue)new StoredRef(typeName, memberId);
+                        _pending.Add(new ListInsert(list.Id, index, resolved));
+                        list.Items.Insert(index, resolved);
+                        BumpVersion(ownerId);
                         break;
                     }
                 }
@@ -1447,6 +1478,26 @@ public sealed class JsonFileInstanceStore : IInstanceStore
     // Returns the cells whose value could not be converted and were defaulted (the caller surfaces them).
     // OFFLINE pass — assumes no live writer on the file (the same single-process assumption as the rest
     // of the store); call it during apply, not against a running store.
+
+    // set → list: prefer member `order` then id when member objects still carry an order field
+    // (designer set+order collapse). Falls back to id-only when order is absent.
+    private static List<StoredValue> OrderSetRefsForList(Db db, StoredSet set)
+    {
+        int OrderOf(StoredRef r)
+        {
+            foreach (var pool in db.Extents.Values)
+                if (pool.TryGetValue(r.Id, out var obj)
+                    && obj.Fields.TryGetValue("order", out var ov)
+                    && ov is StoredLeaf { Scalar: IntValue iv })
+                    return iv.Value;
+            return 0;
+        }
+        return set.Members.Values.OfType<StoredRef>()
+            .OrderBy(OrderOf).ThenBy(r => r.Id)
+            .Select(r => (StoredValue)r)
+            .ToList();
+    }
+
     internal static IReadOnlyList<string> MigrateTowardSchema(string dataPath, InstanceDescription desc)
     {
         var unconvertible = new List<string>();
@@ -1511,10 +1562,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                              && desc.IsObjectType(prop.Type)
                              && obj.Fields[name] is StoredSet fromSet)
                     {
-                        var ordered = fromSet.Members.Values.OfType<StoredRef>()
-                            .OrderBy(r => r.Id)
-                            .Select(r => (StoredValue)r)
-                            .ToList();
+                        // Prefer member `order` then id (designer trees); id-only when order absent.
+                        var ordered = OrderSetRefsForList(db, fromSet);
                         obj.Fields[name] = new StoredList(MintCollectionId(db), ordered);
                         changed = true;
                     }
@@ -1709,11 +1758,8 @@ public sealed class JsonFileInstanceStore : IInstanceStore
                 else if (card.FromCardinality == Cardinality.Set && card.ToCardinality == Cardinality.List
                     && obj.Fields.GetValueOrDefault(card.PropName) is StoredSet setForList)
                 {
-                    // set → list: synthetic order by member id (no authored migration).
-                    var ordered = setForList.Members.Values.OfType<StoredRef>()
-                        .OrderBy(r => r.Id)
-                        .Select(r => (StoredValue)r)
-                        .ToList();
+                    // set → list: member `order` then id when present (designer semantic path), else id.
+                    var ordered = OrderSetRefsForList(db, setForList);
                     var newList = new StoredList(MintCollectionId(db), ordered);
                     writes.Add(new FieldWrite(obj.Id, card.PropName, setForList, newList));
                     obj.Fields[card.PropName] = newList;

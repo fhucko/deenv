@@ -166,6 +166,8 @@ public static class GenericUi
                     return <ObjectForm obj={r.target} meta={sys.schema(r.typeName)} base={path}>
                 else if r.kind == "set" && sys.canRead(r.typeName)
                     return <SetTable set={sys.field(r.parent, r.prop)} desc={sys.schema(r.typeName)} setPath={path}>
+                else if r.kind == "list" && sys.canRead(r.typeName)
+                    return <ListTable list={sys.field(r.parent, r.prop)} desc={sys.schema(r.parentType, r.prop)} listPath={path}>
                 else if r.kind == "ref" && sys.canRead(r.typeName)
                     return <RefEditor parent={r.parent} prop={r.prop} target={sys.schema(r.typeName)}>
                 else if r.kind == "dict"
@@ -368,6 +370,15 @@ public static class GenericUi
                                             <span class="list-title">
                                                 sys.humanize(p.name)
                                         <DictTable dict={sys.field(obj, p.name)} desc={p} base={sys.nest(base, p.name)} linked={isGeneric}>
+                                else if p.baseType == "list"
+                                    <div class="field">
+                                        if isGeneric
+                                            <a class="list-title" href={sys.nest(base, p.name)}>
+                                                sys.humanize(p.name)
+                                        else
+                                            <span class="list-title">
+                                                sys.humanize(p.name)
+                                        <ListTable list={sys.field(obj, p.name)} desc={p} listPath={sys.nest(base, p.name)} linked={isGeneric}>
                                 else
                                     <Field obj={obj} desc={p} readonly={!canEdit}>
                             if autosave != true && canEdit && hasFields && !ctx.conflicts.any(c => true)
@@ -637,6 +648,79 @@ public static class GenericUi
                             <button class="new-btn" onClick={startCreate}>
                                 "New "
                                 sys.humanize(desc.name)
+                return render
+
+            fn ListTable(list, desc, listPath, linked)
+                var state = { draft: desc.isScalar == true ? "" : sys.new(sys.schema(desc.element)), creating: false }
+                fn startCreate()
+                    state.creating = true
+                fn closeCreate()
+                    state.draft = desc.isScalar == true ? "" : sys.new(sys.schema(desc.element))
+                    state.creating = false
+                fn addScalar()
+                    list.add(state.draft)
+                    closeCreate()
+                fn ListRows(i)
+                    fn render()
+                        if i >= list.count()
+                            return <span class="list-rows-end">
+                        var m = list.at(i)
+                        return <div class="list-rows-tail">
+                            <tr class="list-row">
+                                if desc.isScalar == true
+                                    <td class="row-id">
+                                        m
+                                else
+                                    <td class="row-id">
+                                        if linked != false
+                                            <a class="row-link" href={sys.nest(listPath, m)}>
+                                                sys.field(m, sys.schema(desc.element).labelProp) == "" ? "(no " + sys.humanize(sys.schema(desc.element).labelProp) + ")" : sys.field(m, sys.schema(desc.element).labelProp)
+                                        else
+                                            <span class="row-link">
+                                                sys.field(m, sys.schema(desc.element).labelProp)
+                                <td class="row-action">
+                                    <button class="move-up" disabled={i == 0} onClick={() => list.move(i, i - 1)}>
+                                        "▲"
+                                    <button class="move-down" disabled={i + 1 >= list.count()} onClick={() => list.move(i, i + 1)}>
+                                        "▼"
+                                    <button class="list-remove" onClick={() => list.removeAt(i)}>
+                                        "Remove"
+                            <ListRows i={i + 1}>
+                    return render
+                fn render()
+                    var elemDesc = desc.isScalar == true ? null : sys.schema(desc.element)
+                    return <div class="list-table">
+                        <table>
+                            <tr class="list-head">
+                                <th>
+                                    if desc.isScalar == true
+                                        "Value"
+                                    else
+                                        sys.humanize(elemDesc.labelProp)
+                                <th>
+                            <ListRows i={0}>
+                        if list.count() == 0
+                            <p class="list-empty">
+                                "No items yet"
+                        if state.creating
+                            if desc.isScalar == true
+                                <div class="create-form">
+                                    <h3>
+                                        "New item"
+                                    <div class="field">
+                                        <label class="value">
+                                            "Value"
+                                        <input type={InputType(desc.element)} class="value" value={state.draft}>
+                                    <div class="create-actions">
+                                        <button class="create-save" onClick={addScalar}>
+                                            "Save"
+                                        <button class="cancel" onClick={closeCreate}>
+                                            "Cancel"
+                            else
+                                <ObjectForm obj={state.draft} meta={elemDesc} join={d => list.add(d)} onSave={closeCreate} onCancel={closeCreate}>
+                        else if desc.isScalar == true || sys.canWrite(desc.element, "create")
+                            <button class="new-btn" onClick={startCreate}>
+                                "New"
                 return render
 
             fn LeafForm(entry, base)

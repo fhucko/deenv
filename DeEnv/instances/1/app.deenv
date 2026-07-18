@@ -15,10 +15,10 @@ types
         access text
         common text
         ui text
-        render set of MetaNode
-        fns set of MetaFn
-        vars set of MetaVar
-        types set of MetaType
+        render list of MetaNode
+        fns list of MetaFn
+        vars list of MetaVar
+        types list of MetaType
         origin int
     MetaNode
         kind text
@@ -27,36 +27,30 @@ types
         item text
         collection text
         condition text
-        attrs set of MetaAttr
-        children set of MetaNode
-        elseChildren set of MetaNode
-        order int
+        attrs list of MetaAttr
+        children list of MetaNode
+        elseChildren list of MetaNode
     MetaAttr
         name text
         value text
-        order int
     MetaFn
         name text
         params text
-        body set of MetaNode
-        vars set of MetaVar
-        uses set of MetaUse
-        order int
+        body list of MetaNode
+        vars list of MetaVar
+        uses list of MetaUse
     MetaVar
         name text
         init text
-        order int
     MetaUse
         name text
-        args set of MetaAttr
-        ambients set of MetaAttr
-        order int
+        args list of MetaAttr
+        ambients list of MetaAttr
     MetaType
         name text
         baseType text
         values text
-        order int
-        props set of MetaProp
+        props list of MetaProp
         origin int
     MetaProp
         name text
@@ -64,7 +58,6 @@ types
         cardinality text
         keyType text
         multiline bool
-        order int
         origin int
     Commit
         message text
@@ -137,10 +130,10 @@ ui
     var cardinalities = ["single", "set", "dictionary", "list"]
 
     fn addType(design)
-        design.types.add({ name: "", baseType: "object", values: "", order: 0, props: [] })
+        design.types.add({ name: "", baseType: "object", values: "", props: [] })
 
     fn addProp(type)
-        type.props.add({ name: "", type: "text", cardinality: "single", keyType: "", multiline: false, order: 0 })
+        type.props.add({ name: "", type: "text", cardinality: "single", keyType: "", multiline: false })
 
     fn propRowClass(prop)
         if prop.cardinality == "dictionary"
@@ -154,50 +147,50 @@ ui
             return "needs at least one field"
         return ""
 
-    fn orderForAppend(coll)
-        if coll.any(c => true) == false
-            return 0
-        var top = coll.orderBy(c => 0 - c.order).single(c => true)
-        return top.order + 1
+    fn indexOf(coll, node)
+        return indexOfFrom(coll, sys.id(node), 0)
 
-    fn newNode(kind, tag, order)
-        return { kind: kind, tag: tag, expr: "", item: "", collection: "", condition: "", order: order, attrs: [], children: [], elseChildren: [] }
+    fn indexOfFrom(coll, id, i)
+        if i >= coll.count()
+            return 0 - 1
+        if sys.id(coll.at(i)) == id
+            return i
+        return indexOfFrom(coll, id, i + 1)
+
+    fn newNode(kind, tag)
+        return { kind: kind, tag: tag, expr: "", item: "", collection: "", condition: "", attrs: [], children: [], elseChildren: [] }
 
     fn isFirstSibling(coll, node)
-        var first = coll.orderBy(c => c.order).single(c => true)
-        return first != null && sys.id(first) == sys.id(node)
+        return indexOf(coll, node) == 0
 
     fn isLastSibling(coll, node)
-        var last = coll.orderBy(c => 0 - c.order).single(c => true)
-        return last != null && sys.id(last) == sys.id(node)
+        var i = indexOf(coll, node)
+        return i >= 0 && i + 1 >= coll.count()
 
     fn moveRow(coll, node, dir)
-        if dir < 0
-            var neighbor = coll.where(c => c.order < node.order).orderBy(c => 0 - c.order).single(c => true)
-            if neighbor != null
-                var tmp = node.order
-                node.order = neighbor.order
-                neighbor.order = tmp
-        else
-            var neighbor = coll.where(c => c.order > node.order).orderBy(c => c.order).single(c => true)
-            if neighbor != null
-                var tmp = node.order
-                node.order = neighbor.order
-                neighbor.order = tmp
+        var from = indexOf(coll, node)
+        if from < 0
+            return null
+        var to = from + dir
+        if to < 0
+            return null
+        if to >= coll.count()
+            return null
+        coll.move(from, to)
 
     fn addElement(coll)
-        coll.add(newNode("", "div", orderForAppend(coll)))
+        coll.add(newNode("", "div"))
 
     fn addText(coll)
-        coll.add(newNode("", "", orderForAppend(coll)))
+        coll.add(newNode("", ""))
 
     fn addFor(coll)
-        var node = newNode("for", "", orderForAppend(coll))
+        var node = newNode("for", "")
         node.item = "row"
         coll.add(node)
 
     fn addIf(coll)
-        var node = newNode("if", "", orderForAppend(coll))
+        var node = newNode("if", "")
         node.condition = "true"
         coll.add(node)
 
@@ -205,10 +198,10 @@ ui
         addText(node.elseChildren)
 
     fn addAttr(node)
-        node.attrs.add({ name: "class", value: "\"\"", order: orderForAppend(node.attrs) })
+        node.attrs.add({ name: "class", value: "\"\"" })
 
     fn addFn(design)
-        design.fns.add({ name: "", params: "", order: orderForAppend(design.fns), body: [], vars: [], uses: [] })
+        design.fns.add({ name: "", params: "", body: [], vars: [], uses: [] })
 
     fn fnNameHint(design, f)
         if f.name == ""
@@ -220,7 +213,7 @@ ui
         return ""
 
     fn addVar(coll)
-        coll.add({ name: "", init: "", order: orderForAppend(coll) })
+        coll.add({ name: "", init: "" })
 
     fn fnVarNameHint(f, v)
         if v.name == ""
@@ -243,13 +236,13 @@ ui
         return ""
 
     fn addUse(f)
-        f.uses.add({ name: "", args: [], ambients: [], order: orderForAppend(f.uses) })
+        f.uses.add({ name: "", args: [], ambients: [] })
 
     fn addUseArg(u)
-        u.args.add({ name: "", value: "", order: orderForAppend(u.args) })
+        u.args.add({ name: "", value: "" })
 
     fn addUseAmbient(u)
-        u.ambients.add({ name: "", value: "", order: orderForAppend(u.ambients) })
+        u.ambients.add({ name: "", value: "" })
 
     fn useNameHint(u)
         if u.name == ""
@@ -296,7 +289,7 @@ ui
                 "▲"
             <button class="move-down" disabled={isLastSibling(coll, a)} onClick={() => moveRow(coll, a, 1)}>
                 "▼"
-            <button class="remove-attr" onClick={() => coll.remove(a)}>
+            <button class="remove-attr" onClick={() => coll.removeWhere(c => sys.id(c) == sys.id(a))}>
                 "×"
 
     fn nodeClass(node, base)
@@ -324,8 +317,8 @@ ui
                         <button class="remove-node" onClick={onRemove}>
                             "×"
                 <div class="node-children">
-                    foreach child in node.children.orderBy(c => c.order)
-                        <renderNodeEditor node={child} design={design} coll={node.children} onRemove={() => node.children.remove(child)}>
+                    foreach child in node.children
+                        <renderNodeEditor node={child} design={design} coll={node.children} onRemove={() => node.children.removeWhere(c => sys.id(c) == sys.id(child))}>
                 addRow(node.children)
         if node.kind == "if"
             return <div class={nodeClass(node, "node-if")} onClick={() => selectNode(node)}>
@@ -345,16 +338,16 @@ ui
                     <span class="branch-label">
                         "then"
                     <div class="node-children">
-                        foreach child in node.children.orderBy(c => c.order)
-                            <renderNodeEditor node={child} design={design} coll={node.children} onRemove={() => node.children.remove(child)}>
+                        foreach child in node.children
+                            <renderNodeEditor node={child} design={design} coll={node.children} onRemove={() => node.children.removeWhere(c => sys.id(c) == sys.id(child))}>
                     addRow(node.children)
                 if node.elseChildren.any(c => true)
                     <div class="node-branch node-else">
                         <span class="branch-label">
                             "else"
                         <div class="node-children">
-                            foreach child in node.elseChildren.orderBy(c => c.order)
-                                <renderNodeEditor node={child} design={design} coll={node.elseChildren} onRemove={() => node.elseChildren.remove(child)}>
+                            foreach child in node.elseChildren
+                                <renderNodeEditor node={child} design={design} coll={node.elseChildren} onRemove={() => node.elseChildren.removeWhere(c => sys.id(c) == sys.id(child))}>
                         addRow(node.elseChildren)
                 else
                     <button class="add-else" onClick={() => addElse(node)}>
@@ -389,12 +382,12 @@ ui
                 if onRemove != null
                     <button class="remove-node" onClick={onRemove}>
                         "×"
-            foreach attr in node.attrs.orderBy(a => a.order)
+            foreach attr in node.attrs
                 attrRow(node.attrs, attr)
             if node.children.any(c => true)
                 <div class="node-children">
-                    foreach child in node.children.orderBy(c => c.order)
-                        <renderNodeEditor node={child} design={design} coll={node.children} onRemove={() => node.children.remove(child)}>
+                    foreach child in node.children
+                        <renderNodeEditor node={child} design={design} coll={node.children} onRemove={() => node.children.removeWhere(c => sys.id(c) == sys.id(child))}>
             <div class="node-add-row">
                 <button class="add-element" onClick={() => addElement(node.children)}>
                     "+ element"
@@ -499,9 +492,10 @@ ui
         var site = locateNode(design, sys.id(node))
         if site == null
             return null
-        var wrapper = { kind: "", tag: "div", expr: "", item: "", collection: "", condition: "", order: site.node.order, attrs: [], children: [site.node], elseChildren: [] }
-        site.parentSet.add(wrapper)
-        site.parentSet.remove(site.node)
+        var idx = indexOf(site.parentSet, site.node)
+        var wrapper = { kind: "", tag: "div", expr: "", item: "", collection: "", condition: "", attrs: [], children: [site.node], elseChildren: [] }
+        site.parentSet.removeAt(idx)
+        site.parentSet.insert(idx, wrapper)
         selectNode(wrapper)
         revealSelected = revealSelected + 1
 
@@ -516,31 +510,21 @@ ui
             return "the root can only unwrap with exactly one element child"
         return "unwrap: splice this element's children into its place"
 
-    fn spliceChild(coll, node, child)
-        child.order = node.order
-        coll.add(child)
-
-    fn spliceChildren(coll, node, kids)
-        var next = kids.single(c => true)
-        if next != null
-            spliceChild(coll, node, next)
-            spliceChildren(coll, node, kids.where(c => sys.id(c) != sys.id(next)))
-
-    fn renumberFrom(sorted, index)
-        var next = sorted.single(c => true)
-        if next != null
-            next.order = index
-            renumberFrom(sorted.where(c => sys.id(c) != sys.id(next)), index + 1)
+    fn insertAllAt(coll, index, kids, ki)
+        if ki >= kids.count()
+            return null
+        coll.insert(index + ki, kids.at(ki))
+        insertAllAt(coll, index, kids, ki + 1)
 
     fn unwrapNode(design, node)
         var site = locateNode(design, sys.id(node))
         if site == null
             return null
-        var kids = site.node.children.orderBy(c => c.order)
+        var kids = site.node.children
         var first = kids.single(c => true)
-        spliceChildren(site.parentSet, site.node, kids)
-        site.parentSet.remove(site.node)
-        renumberFrom(site.parentSet.orderBy(c => c.order), 0)
+        var idx = indexOf(site.parentSet, site.node)
+        site.parentSet.removeAt(idx)
+        insertAllAt(site.parentSet, idx, kids, 0)
         if first != null
             selectNode(first)
         revealSelected = revealSelected + 1
@@ -585,7 +569,7 @@ ui
     fn insertComponent(target, tag)
         if target == null || target.mode == "none"
             return null
-        var newRow = newNode("", tag, orderForAppend(target.intoSet))
+        var newRow = newNode("", tag)
         target.intoSet.add(newRow)
         selectNode(newRow)
         revealSelected = revealSelected + 1
@@ -713,7 +697,7 @@ ui
                                 foreach k in typeKinds
                                     <option value={k}>
                                         sys.humanize(k)
-                            <button class="remove-type" onClick={() => design.types.remove(type)}>
+                            <button class="remove-type" onClick={() => design.types.removeWhere(c => sys.id(c) == sys.id(type))}>
                                 "×"
                         if typeHint(type) != ""
                             <span class="type-hint">
@@ -747,7 +731,7 @@ ui
                                             <option value={c}>
                                                 sys.humanize(c)
                                     <input class="prop-keytype" value={prop.keyType}>
-                                    <button class="remove-prop" onClick={() => type.props.remove(prop)}>
+                                    <button class="remove-prop" onClick={() => type.props.removeWhere(c => sys.id(c) == sys.id(prop))}>
                                         "×"
                                     <label class="multiline-toggle">
                                         <input type="checkbox" class="prop-multiline" checked={prop.multiline}>
@@ -781,7 +765,7 @@ ui
                                     <span class="var-eq">
                                         "="
                                     <input class="var-init" value={v.init} placeholder={"\"value\" or expression"}>
-                                    <button class="remove-var" onClick={() => design.vars.remove(v)}>
+                                    <button class="remove-var" onClick={() => design.vars.removeWhere(c => sys.id(c) == sys.id(v))}>
                                         "×"
                                     if designVarNameHint(design, v) != ""
                                         <span class="var-name-hint">
@@ -802,7 +786,7 @@ ui
                                         <input class="fn-params" value={f.params} placeholder={"param1, param2"}>
                                         <span class="fn-paren">
                                             ")"
-                                        <button class="remove-fn" onClick={() => design.fns.remove(f)}>
+                                        <button class="remove-fn" onClick={() => design.fns.removeWhere(c => sys.id(c) == sys.id(f))}>
                                             "×"
                                     if fnNameHint(design, f) != ""
                                         <span class="fn-name-hint">
@@ -816,7 +800,7 @@ ui
                                                 <span class="var-eq">
                                                     "="
                                                 <input class="var-init" value={v.init} placeholder={"\"value\" or expression"}>
-                                                <button class="remove-var" onClick={() => f.vars.remove(v)}>
+                                                <button class="remove-var" onClick={() => f.vars.removeWhere(c => sys.id(c) == sys.id(v))}>
                                                     "×"
                                                 if fnVarNameHint(f, v) != ""
                                                     <span class="var-name-hint">
@@ -834,20 +818,20 @@ ui
                                             "Configurations"
                                         <p class="render-caption">
                                             "Named example setups — each previews this component with args and ambient fakes bound against seed data."
-                                        foreach u in f.uses.orderBy(u => u.order)
+                                        foreach u in f.uses
                                             <div class="use-row">
                                                 <input class="use-name" value={u.name} placeholder={"e.g. empty, long list"}>
                                                 <button class="move-up" disabled={isFirstSibling(f.uses, u)} onClick={() => moveRow(f.uses, u, -1)}>
                                                     "▲"
                                                 <button class="move-down" disabled={isLastSibling(f.uses, u)} onClick={() => moveRow(f.uses, u, 1)}>
                                                     "▼"
-                                                <button class="remove-use" onClick={() => f.uses.remove(u)}>
+                                                <button class="remove-use" onClick={() => f.uses.removeWhere(c => sys.id(c) == sys.id(u))}>
                                                     "×"
                                                 if useNameHint(u) != ""
                                                     <span class="use-name-hint">
                                                         useNameHint(u)
                                                 <div class="use-args">
-                                                    foreach a in u.args.orderBy(a => a.order)
+                                                    foreach a in u.args
                                                         attrRow(u.args, a)
                                                         if useArgNameHint(f, a) != ""
                                                             <span class="attr-name-hint">
@@ -856,7 +840,7 @@ ui
                                                         <button class="add-attr" onClick={() => addUseArg(u)}>
                                                             "+ arg"
                                                 <div class="use-ambients">
-                                                    foreach a in u.ambients.orderBy(a => a.order)
+                                                    foreach a in u.ambients
                                                         attrRow(u.ambients, a)
                                                         if useAmbientNameHint(a) != ""
                                                             <span class="attr-name-hint ambient-name-hint">

@@ -995,10 +995,9 @@ public sealed class KernelSteps(InstanceContext ctx)
 
     private List<string> SeededDesignTypeNames(int id)
     {
+        var store = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store;
         var design = SeededDesigns()[id];
-        var types = (SetValue)design.Fields["types"];
-        return types.Members.Values
-            .OfType<ObjectValue>()
+        return ListMemberObjects(store, design.Fields.GetValueOrDefault("types"))
             .Select(t => t.Fields.TryGetValue("name", out var v) && v is TextValue n ? n.Text : "")
             .ToList();
     }
@@ -1090,16 +1089,17 @@ public sealed class KernelSteps(InstanceContext ctx)
         var store = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store;
         var todoDesignId = SeededDesigns().Single(d => LabelOf(d.Value) == "todo").Key;
         var typesPath = NodePath.Root.Field("designs").Key(todoDesignId.ToString()).Field("types");
-        var typesSet = (SetValue)store.ReadNode(typesPath)!;
-        var typeId = typesSet.Members
-            .Where(m => m.Value is ObjectValue)
-            .Single(m => ((ObjectValue)m.Value).Fields.GetValueOrDefault("name") is TextValue t && t.Text == typeName)
-            .Key;
-        var propsSet = (SetValue)store.ReadNode(typesPath.Key(typeId.ToString()).Field("props"))!;
-        var propId = propsSet.Members
-            .Where(m => m.Value is ObjectValue)
-            .Single(m => ((ObjectValue)m.Value).Fields.GetValueOrDefault("name") is TextValue t && t.Text == oldPropName)
-            .Key;
+        // Designer position-bearing collections are lists (Slice 4): ReadNode yields ReferenceValue slots.
+        var typesList = (ListValue)store.ReadNode(typesPath)!;
+        var typeId = typesList.Items.OfType<ReferenceValue>()
+            .Select(r => r.TargetId!.Value)
+            .Single(id => store.ReadById(id) is ("MetaType", var fields)
+                && fields.Fields.GetValueOrDefault("name") is TextValue t && t.Text == typeName);
+        var propsList = (ListValue)store.ReadNode(typesPath.Key(typeId.ToString()).Field("props"))!;
+        var propId = propsList.Items.OfType<ReferenceValue>()
+            .Select(r => r.TargetId!.Value)
+            .Single(id => store.ReadById(id) is ("MetaProp", var fields)
+                && fields.Fields.GetValueOrDefault("name") is TextValue t && t.Text == oldPropName);
         store.WriteField(propId, "name", new TextValue(newPropName));
     }
 
@@ -1169,12 +1169,11 @@ public sealed class KernelSteps(InstanceContext ctx)
     [Then("the design-host's todo design's {string} has a prop named {string}")]
     public async Task ThenTodoDesignTypeHasPropAsync(string typeName, string propName)
     {
+        var store = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store;
         var todoDesign = SeededDesigns().Single(d => LabelOf(d.Value) == "todo").Value;
-        var types = (SetValue)todoDesign.Fields["types"];
-        var type = types.Members.Values.OfType<ObjectValue>()
+        var type = ListMemberObjects(store, todoDesign.Fields.GetValueOrDefault("types"))
             .Single(t => t.Fields.GetValueOrDefault("name") is TextValue n && n.Text == typeName);
-        var props = (SetValue)type.Fields["props"];
-        var propNames = props.Members.Values.OfType<ObjectValue>()
+        var propNames = ListMemberObjects(store, type.Fields.GetValueOrDefault("props"))
             .Select(p => p.Fields.TryGetValue("name", out var v) && v is TextValue n ? n.Text : "")
             .ToList();
         await Assert.That(propNames).Contains(propName);
@@ -1273,10 +1272,30 @@ public sealed class KernelSteps(InstanceContext ctx)
         await Assert.That(SeededDesigns().ContainsKey(_adoptedNewDesignId)).IsTrue();
     }
 
-    private static bool DesignHasType(ObjectValue design, string typeName) =>
-        design.Fields.GetValueOrDefault("types") is SetValue types
-        && types.Members.Values.OfType<ObjectValue>()
+    private bool DesignHasType(ObjectValue design, string typeName)
+    {
+        var store = ctx.Kernel!.Instances.Single(i => i.Spec.Id == 1).Store;
+        return ListMemberObjects(store, design.Fields.GetValueOrDefault("types"))
             .Any(t => t.Fields.GetValueOrDefault("name") is TextValue n && n.Text == typeName);
+    }
+
+    // Designer trees are lists of ReferenceValue slots (BuildListValue); resolve for assertions.
+    private static IEnumerable<ObjectValue> ListMemberObjects(IInstanceStore store, NodeValue? coll)
+    {
+        if (coll is ListValue lv)
+        {
+            foreach (var item in lv.Items)
+                if (item is ReferenceValue { TargetId: int id } && store.ReadById(id) is (_, ObjectValue ov))
+                    yield return ov;
+                else if (item is ObjectValue nested)
+                    yield return nested;
+        }
+        else if (coll is SetValue sv)
+        {
+            foreach (var v in sv.Members.Values.OfType<ObjectValue>())
+                yield return v;
+        }
+    }
 
     // ── helpers ───────────────────────────────────────────────────────────────
 

@@ -314,9 +314,69 @@ public sealed class DurableListCoreTests
     }
 
     [Test]
+    public async Task Set_to_list_reshape_orders_by_member_order_field_then_id()
+    {
+        // Designer set+order collapse: members carrying `order` sort by that field, not bare id.
+        var targetDesc = InstanceDescriptionLoader.Load("""
+            types
+                Db
+                    kids list of MetaNode
+                MetaNode
+                    tag text
+            """);
+        var db = new Db
+        {
+            NextId = 30,
+            Root = new StoredRef("Db", 1),
+            Extents =
+            {
+                ["Db"] = new()
+                {
+                    [1] = new StoredObject("Db", 1, new()
+                    {
+                        ["kids"] = new StoredSet(2, new()
+                        {
+                            [10] = new StoredRef("MetaNode", 10),
+                            [11] = new StoredRef("MetaNode", 11),
+                            [12] = new StoredRef("MetaNode", 12),
+                        }),
+                    }),
+                },
+                ["MetaNode"] = new()
+                {
+                    // id order would be 10,11,12 but order fields want 12,10,11
+                    [10] = new StoredObject("MetaNode", 10, new()
+                    {
+                        ["tag"] = new StoredLeaf(new TextValue("mid")),
+                        ["order"] = new StoredLeaf(new IntValue(20)),
+                    }),
+                    [11] = new StoredObject("MetaNode", 11, new()
+                    {
+                        ["tag"] = new StoredLeaf(new TextValue("last")),
+                        ["order"] = new StoredLeaf(new IntValue(30)),
+                    }),
+                    [12] = new StoredObject("MetaNode", 12, new()
+                    {
+                        ["tag"] = new StoredLeaf(new TextValue("first")),
+                        ["order"] = new StoredLeaf(new IntValue(10)),
+                    }),
+                },
+            },
+        };
+        var diff = new DesignDiff(
+            TypeRenames: [], PropRenames: [], TypeAdds: [], Adds: [], Removes: [], TypeRemoves: [],
+            Conversions: [],
+            CardinalityChanges: [new CardinalityChange("Db", "kids", Cardinality.Set, Cardinality.List)]);
+        var writes = new List<LogWrite>();
+        JsonFileInstanceStore.TransformDb(db, diff, targetDesc, writes);
+        var kids = (StoredList)db.Extents["Db"][1].Fields["kids"];
+        await Assert.That(kids.Items.Select(i => ((StoredRef)i).Id).ToArray()).IsEquivalentTo(new[] { 12, 10, 11 });
+    }
+
+    [Test]
     public async Task Thin_publish_reshapes_single_set_list()
     {
-        // single → list, set → list (order-by-id), list → set (dedupe).
+        // single → list, set → list (order-by-id when no member order), list → set (dedupe).
         var targetDesc = InstanceDescriptionLoader.Load("""
             types
                 Db
@@ -376,7 +436,7 @@ public sealed class DurableListCoreTests
         await Assert.That(((StoredRef)lead.Items[0]).Id).IsEqualTo(5);
 
         var bag = (StoredList)root.Fields["bag"];
-        // order-by-id: 5 then 7
+        // No member `order` field → synthetic order-by-id: 5 then 7
         await Assert.That(bag.Items.Select(i => ((StoredRef)i).Id).ToArray()).IsEquivalentTo(new[] { 5, 7 });
 
         var queue = (StoredSet)root.Fields["queue"];

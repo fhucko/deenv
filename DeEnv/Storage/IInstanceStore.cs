@@ -256,6 +256,10 @@ public sealed record DictRemoveMutation(int OwnerRef, string Prop, NodeValue Key
 public sealed record ListReplaceMutation(int ListId, IReadOnlyList<StoredValue> Items) : CommitMutation;
 // Insert one slot at Index (append = Index == current length). Item is StoredRef or StoredLeaf as above.
 public sealed record ListInsertMutation(int ListId, int Index, StoredValue Item) : CommitMutation;
+// Insert into OwnerRef's list prop by (owner, prop) — list analog of SetLinkByPropMutation so a
+// just-created parent's list id need not be known yet (ImportRender / designer restore). Index is the
+// insert position (append = current length). MemberRef is an object ref (positive or temp).
+public sealed record ListInsertByPropMutation(int OwnerRef, string Prop, int Index, int MemberRef) : CommitMutation;
 // Drop the slot at Index (order of remaining slots preserved).
 public sealed record ListRemoveAtMutation(int ListId, int Index) : CommitMutation;
 // Reorder: take the slot at From and place it at final index To.

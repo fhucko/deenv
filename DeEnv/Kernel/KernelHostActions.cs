@@ -304,7 +304,7 @@ public sealed class KernelHostActions(
             ?? throw new InvalidOperationException(
                 $"No instance with id {targetId} to set a design on.");
 
-        var appDb = SchemaBridge.ProjectDesignDb(design); // throws on an invalid design
+        var appDb = SchemaBridge.ProjectDesignDb(design, resolveStore()); // throws on an invalid design
         recordDesign(targetId, designId).GetAwaiter().GetResult();
         SchemaBridge.WriteDesign(appDb, target.SchemaPath, target.DataPath);
         _ = restartInstance(targetId);
@@ -325,7 +325,7 @@ public sealed class KernelHostActions(
         var design = ResolveDesign(designId);
         var name = ArgText(args, 1);
 
-        var appDb = SchemaBridge.ProjectDesignDb(design); // throws on an invalid design
+        var appDb = SchemaBridge.ProjectDesignDb(design, resolveStore()); // throws on an invalid design
         createInstance(appDb, name, designId).GetAwaiter().GetResult();
         return null;
     }
@@ -491,7 +491,7 @@ public sealed class KernelHostActions(
             // own FindBranchByWorkingCopy already enforced it IS a working copy of some branch).
             if (store.ReadById(designId) is not (var tn, var design) || tn != "Design")
                 throw new InvalidOperationException($"No design with id {designId} to commit.");
-            snap = SchemaBridge.Snapshot(design); // throws SchemaValidationException on an invalid design
+            snap = SchemaBridge.Snapshot(design, store); // throws SchemaValidationException on an invalid design
             ValidateMigration(migration, snap.Text);
             if (!string.IsNullOrWhiteSpace(revertMigration))
             {
@@ -550,64 +550,74 @@ public sealed class KernelHostActions(
         return result.Creates.First(c => c.TempId == commitTemp).RealId;
     }
 
+
+    // Slice 4: designer position-bearing collections are lists (ReferenceValue slots from ReadById).
+    private static int ListIdOf(ObjectValue owner, string prop) =>
+        owner.Fields.GetValueOrDefault(prop) is ListValue lv ? lv.Id
+        : throw new InvalidOperationException($"Expected list prop '{prop}'.");
+
+    private static List<int> ListMemberIds(NodeValue? node) => node switch
+    {
+        ListValue lv => lv.Items.OfType<ReferenceValue>().Where(r => r.TargetId is int).Select(r => r.TargetId!.Value).ToList(),
+        SetValue sv => sv.Members.Keys.ToList(), // residual pre-migration
+        _ => [],
+    };
+
+    private static void ListReplaceMembers(IInstanceStore store, int listId, IReadOnlyList<int> memberIds, string elementType) =>
+        store.CommitBatch([], [new ListReplaceMutation(listId,
+            memberIds.Select(id => (StoredValue)new StoredRef(elementType, id)).ToList())]);
+
+    private static void ListAppendMember(IInstanceStore store, int listId, int memberId, string elementType, int index) =>
+        store.CommitBatch([], [new ListInsertMutation(listId, index, new StoredRef(elementType, memberId))]);
+
     private static void RestoreWorkingCopyToCommit(IInstanceStore store, int designId, ObjectValue targetCommit)
     {
         var targetText = TextOf(targetCommit, "text");
         var targetDesc = InstanceDescriptionLoader.Load(targetText);
         var idMap = IdMapOf(targetCommit);
         var design = ReadDesign(store, designId);
-        var typesSet = design.Fields.GetValueOrDefault("types") as SetValue
-            ?? throw new InvalidOperationException($"Design {designId} has no `types` set.");
+        var typesListId = ListIdOf(design, "types");
         var typeIds = idMap.Where(kv => !kv.Key.Contains('.')).ToDictionary(kv => kv.Key, kv => kv.Value);
         var propIds = idMap.Where(kv => kv.Key.Contains('.')).ToDictionary(kv => kv.Key, kv => kv.Value);
 
-        foreach (var currentTypeId in typesSet.Members.Keys.ToList())
-            if (!typeIds.ContainsValue(currentTypeId))
-                store.RemoveFromSet(typesSet.Id, currentTypeId);
-
         var typeCreates = new List<CommitCreate>();
         var typeMutations = new List<CommitMutation>();
-        foreach (var (index, type) in targetDesc.AllTypes().Select((t, i) => (i, t)))
+        var orderedTypeIds = new List<int>();
+        foreach (var type in targetDesc.AllTypes())
         {
             if (BaseTypes.IsName(type.Name)) continue;
             var id = typeIds[type.Name];
+            orderedTypeIds.Add(id);
             var fields = new ObjectValue(new Dictionary<string, NodeValue>
             {
                 ["name"] = new TextValue(type.Name),
                 ["baseType"] = new TextValue(BaseTypeWordOf(type.BaseType)),
                 ["values"] = new TextValue(string.Join(",", type.Values ?? [])),
-                ["order"] = new IntValue(index * 10),
             });
             if (store.ReadById(id) is ("MetaType", _))
             {
                 typeMutations.Add(new FieldSetMutation(id, "name", new TextValue(type.Name)));
                 typeMutations.Add(new FieldSetMutation(id, "baseType", new TextValue(BaseTypeWordOf(type.BaseType))));
                 typeMutations.Add(new FieldSetMutation(id, "values", new TextValue(string.Join(",", type.Values ?? []))));
-                typeMutations.Add(new FieldSetMutation(id, "order", new IntValue(index * 10)));
             }
             else
                 typeCreates.Add(new CommitCreate(-id, "MetaType", fields, id));
         }
-        var typeResult = store.CommitBatch(typeCreates, typeMutations);
-        foreach (var created in typeResult.Creates)
-            store.AddToSet(typesSet.Id, created.RealId);
+        store.CommitBatch(typeCreates, typeMutations);
+        ListReplaceMembers(store, typesListId, orderedTypeIds, "MetaType");
 
         foreach (var type in targetDesc.AllTypes().Where(t => !BaseTypes.IsName(t.Name)))
         {
             var typeId = typeIds[type.Name];
             if (store.ReadById(typeId) is not ("MetaType", var typeFields)) continue;
-            var propsSet = typeFields.Fields.GetValueOrDefault("props") as SetValue
-                ?? throw new InvalidOperationException($"MetaType {typeId} has no `props` set.");
-            var wantedPropIds = (type.Props ?? []).Select(p => propIds[$"{type.Name}.{p.Name}"]).ToHashSet();
-            foreach (var currentPropId in propsSet.Members.Keys.ToList())
-                if (!wantedPropIds.Contains(currentPropId))
-                    store.RemoveFromSet(propsSet.Id, currentPropId);
-
+            var propsListId = ListIdOf(typeFields, "props");
+            var orderedPropIds = new List<int>();
             var propCreates = new List<CommitCreate>();
             var propMutations = new List<CommitMutation>();
-            foreach (var (index, prop) in (type.Props ?? []).Select((p, i) => (i, p)))
+            foreach (var prop in type.Props ?? [])
             {
                 var id = propIds[$"{type.Name}.{prop.Name}"];
+                orderedPropIds.Add(id);
                 var fields = new ObjectValue(new Dictionary<string, NodeValue>
                 {
                     ["name"] = new TextValue(prop.Name),
@@ -615,7 +625,6 @@ public sealed class KernelHostActions(
                     ["cardinality"] = new TextValue(CardinalityWordOf(prop.Cardinality)),
                     ["keyType"] = new TextValue(prop.KeyType ?? ""),
                     ["multiline"] = new BoolValue(prop.Multiline),
-                    ["order"] = new IntValue(index * 10),
                 });
                 if (store.ReadById(id) is ("MetaProp", _))
                 {
@@ -624,14 +633,12 @@ public sealed class KernelHostActions(
                     propMutations.Add(new FieldSetMutation(id, "cardinality", new TextValue(CardinalityWordOf(prop.Cardinality))));
                     propMutations.Add(new FieldSetMutation(id, "keyType", new TextValue(prop.KeyType ?? "")));
                     propMutations.Add(new FieldSetMutation(id, "multiline", new BoolValue(prop.Multiline)));
-                    propMutations.Add(new FieldSetMutation(id, "order", new IntValue(index * 10)));
                 }
                 else
                     propCreates.Add(new CommitCreate(-id, "MetaProp", fields, id));
             }
-            var propResult = store.CommitBatch(propCreates, propMutations);
-            foreach (var created in propResult.Creates)
-                store.AddToSet(propsSet.Id, created.RealId);
+            store.CommitBatch(propCreates, propMutations);
+            ListReplaceMembers(store, propsListId, orderedPropIds, "MetaProp");
         }
 
         var sections = DesignerSeed.SplitSections(targetText);
@@ -713,54 +720,52 @@ public sealed class KernelHostActions(
         var typeTempToProps = new List<(int TypeTemp, List<int> PropTemps)>();
         var nextTemp = -2;
 
-        if (sourceDesign.Fields.GetValueOrDefault("types") is SetValue sourceTypesSet)
-            foreach (var (typeId, typeVal) in sourceTypesSet.Members)
-                if (typeVal is ObjectValue typeObj)
+        foreach (var typeId in ListMemberIds(sourceDesign.Fields.GetValueOrDefault("types")))
+            if (store.ReadById(typeId) is ("MetaType", var typeObj))
+            {
+                var typeTemp = nextTemp--;
+                creates.Add(new CommitCreate(typeTemp, "MetaType", new ObjectValue(new Dictionary<string, NodeValue>
                 {
-                    var typeTemp = nextTemp--;
-                    creates.Add(new CommitCreate(typeTemp, "MetaType", new ObjectValue(new Dictionary<string, NodeValue>
-                    {
-                        ["name"]     = new TextValue(TextOf(typeObj, "name")),
-                        ["baseType"] = new TextValue(TextOf(typeObj, "baseType")),
-                        ["values"]   = new TextValue(TextOf(typeObj, "values")),
-                        ["order"]    = new IntValue(IntOf(typeObj, "order")),
-                        ["origin"]   = new IntValue(LineageOf(typeObj, typeId)),
-                    })));
+                    ["name"]     = new TextValue(TextOf(typeObj, "name")),
+                    ["baseType"] = new TextValue(TextOf(typeObj, "baseType")),
+                    ["values"]   = new TextValue(TextOf(typeObj, "values")),
+                    ["origin"]   = new IntValue(LineageOf(typeObj, typeId)),
+                })));
 
-                    var propTemps = new List<int>();
-                    if (typeObj.Fields.GetValueOrDefault("props") is SetValue propsSet)
-                        foreach (var (propId, propVal) in propsSet.Members)
-                            if (propVal is ObjectValue propObj)
-                            {
-                                var propTemp = nextTemp--;
-                                creates.Add(new CommitCreate(propTemp, "MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
-                                {
-                                    ["name"]        = new TextValue(TextOf(propObj, "name")),
-                                    ["type"]        = new TextValue(TextOf(propObj, "type")),
-                                    ["cardinality"] = new TextValue(TextOf(propObj, "cardinality")),
-                                    ["keyType"]     = new TextValue(TextOf(propObj, "keyType")),
-                                    ["multiline"]   = new BoolValue(BoolOf(propObj, "multiline")),
-                                    ["order"]       = new IntValue(IntOf(propObj, "order")),
-                                    ["origin"]      = new IntValue(LineageOf(propObj, propId)),
-                                })));
-                                propTemps.Add(propTemp);
-                            }
-                    typeTempToProps.Add((typeTemp, propTemps));
-                }
+                var propTemps = new List<int>();
+                foreach (var propId in ListMemberIds(typeObj.Fields.GetValueOrDefault("props")))
+                    if (store.ReadById(propId) is ("MetaProp", var propObj))
+                    {
+                        var propTemp = nextTemp--;
+                        creates.Add(new CommitCreate(propTemp, "MetaProp", new ObjectValue(new Dictionary<string, NodeValue>
+                        {
+                            ["name"]        = new TextValue(TextOf(propObj, "name")),
+                            ["type"]        = new TextValue(TextOf(propObj, "type")),
+                            ["cardinality"] = new TextValue(TextOf(propObj, "cardinality")),
+                            ["keyType"]     = new TextValue(TextOf(propObj, "keyType")),
+                            ["multiline"]   = new BoolValue(BoolOf(propObj, "multiline")),
+                            ["origin"]      = new IntValue(LineageOf(propObj, propId)),
+                        })));
+                        propTemps.Add(propTemp);
+                    }
+                typeTempToProps.Add((typeTemp, propTemps));
+            }
 
         var mintResult = store.CommitBatch(creates, []);
         var byTemp = mintResult.Creates.ToDictionary(c => c.TempId);
         var designRealId = byTemp[designTemp].RealId;
-        var typesSetId = byTemp[designTemp].Collections["types"].Id;
+        var typesListId = byTemp[designTemp].Collections["types"].Id;
 
-        // ── batch 2: link every minted row into its owner's freshly-known collection + the new Branch ──
+        // ── batch 2: link every minted row into its owner's freshly-known list + the new Branch ──
         var linkMutations = new List<CommitMutation>();
+        var typeIndex = 0;
         foreach (var (typeTemp, propTemps) in typeTempToProps)
         {
-            linkMutations.Add(new SetAddMutation(typesSetId, byTemp[typeTemp].RealId));
-            var propsSetId = byTemp[typeTemp].Collections["props"].Id;
+            linkMutations.Add(new ListInsertMutation(typesListId, typeIndex++, new StoredRef("MetaType", byTemp[typeTemp].RealId)));
+            var propsListId = byTemp[typeTemp].Collections["props"].Id;
+            var propIndex = 0;
             foreach (var propTemp in propTemps)
-                linkMutations.Add(new SetAddMutation(propsSetId, byTemp[propTemp].RealId));
+                linkMutations.Add(new ListInsertMutation(propsListId, propIndex++, new StoredRef("MetaProp", byTemp[propTemp].RealId)));
         }
 
         const int branchTemp = -1;
@@ -883,12 +888,12 @@ public sealed class KernelHostActions(
         var targetHeadFields = FindCommit(store, targetHeadId)!;
 
         // Drift refusal: the working copy's CURRENT text must equal its own branch head's cached text.
-        var sourceWorking = SchemaBridge.Snapshot(sourceDesign).Text;
+        var sourceWorking = SchemaBridge.Snapshot(sourceDesign, store).Text;
         if (sourceWorking != TextOf(sourceHeadFields, "text"))
             return Refused(new MergeReport { Merged = false, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
                 BaseCommit = 0, SourceCommit = sourceHeadId, TargetCommit = targetHeadId,
                 Conflicts = [], AccessChanges = [], DriftRefusal = "source" });
-        var targetWorking = SchemaBridge.Snapshot(targetDesign).Text;
+        var targetWorking = SchemaBridge.Snapshot(targetDesign, store).Text;
         if (targetWorking != TextOf(targetHeadFields, "text"))
             return Refused(new MergeReport { Merged = false, NoOp = false, SourceBranch = sourceBranchName, TargetBranch = targetBranchName,
                 BaseCommit = 0, SourceCommit = sourceHeadId, TargetCommit = targetHeadId,
@@ -956,40 +961,36 @@ public sealed class KernelHostActions(
     //      common/ui/access) and write all four Design text fields via WriteField.
     private static void ApplyMergeToTarget(JsonFileInstanceStore store, int targetDesignId, MergeComputation computation)
     {
-        var targetTypesSet = store.ReadNode(NodePath.Root.Field("designs").Key(targetDesignId.ToString()).Field("types")) as SetValue
-            ?? (ReadDesign(store, targetDesignId).Fields.GetValueOrDefault("types") as SetValue)
-            ?? throw new InvalidOperationException($"Design {targetDesignId} has no `types` set.");
-        var typesSetId = targetTypesSet.Id;
+        var targetDesign = ReadDesign(store, targetDesignId);
+        var typesListId = ListIdOf(targetDesign, "types");
 
-        // The target's OWN MetaType rows (this design's live `types` set membership), keyed by lineage —
-        // "does the target already have a row for lineage L" must be scoped to THIS design's own set (a
+        // The target's OWN MetaType rows (this design's live `types` list membership), keyed by lineage —
+        // "does the target already have a row for lineage L" must be scoped to THIS design's own list (a
         // MetaType extent is shared across every design/branch in the store).
         var existingTypesByLineage = new Dictionary<int, int>(); // lineage -> row id
-        foreach (var memberId in targetTypesSet.Members.Keys)
+        foreach (var memberId in ListMemberIds(targetDesign.Fields.GetValueOrDefault("types")))
         {
             var fields = store.ReadById(memberId)!.Value.Fields;
             existingTypesByLineage[LineageOf(fields, memberId)] = memberId;
         }
         var mergedTypeLineages = computation.Types.Types.Select(t => t.Lineage).ToHashSet();
-        var toRemoveTypeIds = existingTypesByLineage
-            .Where(kv => !mergedTypeLineages.Contains(kv.Key)).Select(kv => kv.Value).ToList();
 
         // ── pass 1: mint every NEW type in one batch (+ field-write EXISTING ones' meta-fields) ──
         var typeCreates = new List<CommitCreate>();
         var typeMutations = new List<CommitMutation>();
         var typeTempByLineage = new Dictionary<int, int>();
         var typeNextTemp = -1;
+        var orderedTypeIds = new List<int>();
 
         for (var i = 0; i < computation.Types.Types.Count; i++)
         {
             var mt = computation.Types.Types[i];
-            var order = i * 10;
             if (existingTypesByLineage.TryGetValue(mt.Lineage, out var existingId))
             {
+                orderedTypeIds.Add(existingId);
                 typeMutations.Add(new FieldSetMutation(existingId, "name", new TextValue(mt.Type.Name)));
                 typeMutations.Add(new FieldSetMutation(existingId, "baseType", new TextValue(BaseTypeWordOf(mt.Type.BaseType))));
                 typeMutations.Add(new FieldSetMutation(existingId, "values", new TextValue(string.Join(",", mt.Type.Values ?? []))));
-                typeMutations.Add(new FieldSetMutation(existingId, "order", new IntValue(order)));
             }
             else
             {
@@ -999,10 +1000,10 @@ public sealed class KernelHostActions(
                     ["name"]     = new TextValue(mt.Type.Name),
                     ["baseType"] = new TextValue(BaseTypeWordOf(mt.Type.BaseType)),
                     ["values"]   = new TextValue(string.Join(",", mt.Type.Values ?? [])),
-                    ["order"]    = new IntValue(order),
                     ["origin"]   = new IntValue(mt.Lineage),
                 })));
                 typeTempByLineage[mt.Lineage] = temp;
+                orderedTypeIds.Add(temp); // placeholder; remapped below
             }
         }
 
@@ -1010,51 +1011,48 @@ public sealed class KernelHostActions(
         {
             var typeMintResult = store.CommitBatch(typeCreates, typeMutations);
             var typeByTemp = typeMintResult.Creates.ToDictionary(c => c.TempId);
-            foreach (var (lineage, temp) in typeTempByLineage)
-            {
-                var realId = typeByTemp[temp].RealId;
-                store.AddToSet(typesSetId, realId);
-                existingTypesByLineage[lineage] = realId;
-            }
+            for (var i = 0; i < orderedTypeIds.Count; i++)
+                if (orderedTypeIds[i] < 0)
+                {
+                    var realId = typeByTemp[orderedTypeIds[i]].RealId;
+                    var lineage = typeTempByLineage.First(kv => kv.Value == orderedTypeIds[i]).Key;
+                    existingTypesByLineage[lineage] = realId;
+                    orderedTypeIds[i] = realId;
+                }
         }
-        foreach (var removeId in toRemoveTypeIds)
-            store.RemoveFromSet(typesSetId, removeId); // GC then collects the row and its own props set
+        ListReplaceMembers(store, typesListId, orderedTypeIds, "MetaType");
 
-        // ── pass 2: per SURVIVING merged type, mint/update/remove its OWN `props` set the same way ──
+        // ── pass 2: per SURVIVING merged type, mint/update/remove its OWN `props` list the same way ──
         foreach (var mt in computation.Types.Types)
         {
             var ownerId = existingTypesByLineage[mt.Lineage];
             var ownerFields = store.ReadById(ownerId)!.Value.Fields;
-            var propsSet = ownerFields.Fields.GetValueOrDefault("props") as SetValue
-                ?? throw new InvalidOperationException($"MetaType {ownerId} has no `props` set.");
+            var propsListId = ListIdOf(ownerFields, "props");
 
             var existingPropsByLineage = new Dictionary<int, int>();
-            foreach (var memberId in propsSet.Members.Keys)
+            foreach (var memberId in ListMemberIds(ownerFields.Fields.GetValueOrDefault("props")))
             {
                 var fields = store.ReadById(memberId)!.Value.Fields;
                 existingPropsByLineage[LineageOf(fields, memberId)] = memberId;
             }
-            var mergedPropLineages = mt.Props.Select(p => p.Lineage).ToHashSet();
-            var toRemovePropIds = existingPropsByLineage
-                .Where(kv => !mergedPropLineages.Contains(kv.Key)).Select(kv => kv.Value).ToList();
 
             var propCreates = new List<CommitCreate>();
             var propMutations = new List<CommitMutation>();
             var propTempByLineage = new Dictionary<int, int>();
             var propNextTemp = -1;
+            var orderedPropIds = new List<int>();
 
             for (var i = 0; i < mt.Props.Count; i++)
             {
                 var mp = mt.Props[i];
-                var order = i * 10;
                 if (existingPropsByLineage.TryGetValue(mp.Lineage, out var existingPropId))
                 {
+                    orderedPropIds.Add(existingPropId);
                     propMutations.Add(new FieldSetMutation(existingPropId, "name", new TextValue(mp.Prop.Name)));
                     propMutations.Add(new FieldSetMutation(existingPropId, "type", new TextValue(mp.Prop.Type)));
                     propMutations.Add(new FieldSetMutation(existingPropId, "cardinality", new TextValue(CardinalityWordOf(mp.Prop.Cardinality))));
                     propMutations.Add(new FieldSetMutation(existingPropId, "keyType", new TextValue(mp.Prop.KeyType ?? "")));
                     propMutations.Add(new FieldSetMutation(existingPropId, "multiline", new BoolValue(mp.Prop.Multiline)));
-                    propMutations.Add(new FieldSetMutation(existingPropId, "order", new IntValue(order)));
                 }
                 else
                 {
@@ -1066,10 +1064,10 @@ public sealed class KernelHostActions(
                         ["cardinality"] = new TextValue(CardinalityWordOf(mp.Prop.Cardinality)),
                         ["keyType"]     = new TextValue(mp.Prop.KeyType ?? ""),
                         ["multiline"]   = new BoolValue(mp.Prop.Multiline),
-                        ["order"]       = new IntValue(order),
                         ["origin"]      = new IntValue(mp.Lineage),
                     })));
                     propTempByLineage[mp.Lineage] = temp;
+                    orderedPropIds.Add(temp);
                 }
             }
 
@@ -1077,11 +1075,11 @@ public sealed class KernelHostActions(
             {
                 var propMintResult = store.CommitBatch(propCreates, propMutations);
                 var propByTemp = propMintResult.Creates.ToDictionary(c => c.TempId);
-                foreach (var (_, temp) in propTempByLineage)
-                    store.AddToSet(propsSet.Id, propByTemp[temp].RealId);
+                for (var i = 0; i < orderedPropIds.Count; i++)
+                    if (orderedPropIds[i] < 0)
+                        orderedPropIds[i] = propByTemp[orderedPropIds[i]].RealId;
             }
-            foreach (var removeId in toRemovePropIds)
-                store.RemoveFromSet(propsSet.Id, removeId);
+            ListReplaceMembers(store, propsListId, orderedPropIds, "MetaProp");
         }
 
         // ── code/access/initialData: reprint the merged Common/Ui/Rules, write the four Design text fields ──

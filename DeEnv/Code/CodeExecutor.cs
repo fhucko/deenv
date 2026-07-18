@@ -12,7 +12,7 @@ namespace DeEnv.Code;
 public sealed class CodeExecutor
 {
     private static readonly HashSet<string> CollectionMethods =
-        ["add", "remove", "setEntry", "where", "orderBy", "any", "single",
+        ["add", "remove", "setEntry", "where", "orderBy", "any", "single", "count", "at",
          "insert", "move", "removeAt", "removeFirst", "removeLast", "removeAll", "removeWhere"];
 
     private readonly IInstanceStore? _store;
@@ -1244,14 +1244,12 @@ public sealed class CodeExecutor
     private string FnFingerprint(ExecObject fn, ExecContext context)
     {
         var name = ReadNodeText(fn, "name", context);
-        // M12 V1 — fold `vars` (name/init/order) in right after `params`, mirroring an element node's own
-        // attrs segment below. A fn with NO vars contributes NOTHING here, so this is byte-identical to
-        // the pre-V1 fingerprint for every existing (vars-less) fn.
+        // M12 V1 — fold `vars` (name/init) in right after `params`. List order is position identity
+        // (Slice 4); no member `order` field. A fn with NO vars contributes NOTHING here.
         var varsPart = new System.Text.StringBuilder();
         foreach (var v in OrderedMembersOptional(fn, "vars", context))
             varsPart.Append(FpNodeSep).Append("V:").Append(ReadNodeText(v, "name", context)).Append(FpFieldSep)
-                .Append(ReadNodeText(v, "init", context)).Append(FpFieldSep)
-                .Append(ReadNodeProp(v, "order", context) is ExecInt vo ? vo.Value : 0);
+                .Append(ReadNodeText(v, "init", context));
         var body = OrderedMembers(fn, "body", context).FirstOrDefault();
         return name + FpFieldSep + ReadNodeText(fn, "params", context) + varsPart + FpFieldSep +
             (body != null ? FingerprintNode(body, context) : "");
@@ -1288,8 +1286,7 @@ public sealed class CodeExecutor
             sb.Append("E:").Append(tag);
             foreach (var a in OrderedMembers(node, "attrs", context))
                 sb.Append(FpNodeSep).Append("A:").Append(ReadNodeText(a, "name", context)).Append(FpFieldSep)
-                  .Append(ReadNodeText(a, "value", context)).Append(FpFieldSep)
-                  .Append(ReadNodeProp(a, "order", context) is ExecInt ao ? ao.Value : 0);
+                  .Append(ReadNodeText(a, "value", context));
             foreach (var c in OrderedMembers(node, "children", context))
                 sb.Append(FpNodeSep).Append("C:").Append(FingerprintNode(c, context));
             return sb.ToString();
@@ -1556,56 +1553,41 @@ public sealed class CodeExecutor
         return value;
     }
 
-    // The members of a node's `attrs`/`children` SET, ordered by each member's `order` field — observed
-    // through the same reads a `node.children.orderBy(order)` foreach makes: a prop dep on the set, a
-    // membership dep, and each scanned item recorded (so the server harvests the membership and the client
-    // replays it, and an add/remove re-renders). Non-object / absent → empty.
+    // Members of a node's position-bearing collection prop (`attrs`/`children`/…).
+    // Durable designer trees are lists without a member `order` field — iteration order IS visual order
+    // (Slice 4). Conformance / residual fixtures that still stamp `order` on members sort by that field
+    // so older graphs keep working. Observed via prop + membership + scanned items (harvest).
     private List<ExecObject> OrderedMembers(ExecObject node, string setProp, ExecContext context)
     {
-        if (ReadNodeProp(node, setProp, context) is not IExecCollection set) return [];
-        RecordMembership(set, context);
-        // Read each member's `order` EXPLICITLY (not lazily inside OrderBy's key selector — a single-element
-        // OrderBy can elide the selector, which would skip the `order` dep and NOT ship it, breaking the
-        // client replay) — the same explicit per-member read the TS twin makes. RecordScannedItem harvests
-        // the membership. OrderBy over the precomputed keys is a STABLE sort (twin of the TS Array.sort) —
-        // an ORDER TIE keeps `set.Items`' own iteration order, UNLIKE SchemaBridge.OrderedObjects (the
-        // server-ship walk), which explicitly tie-breaks by Id. Not reachable today — M12 F1/F2 mint
-        // distinct `order` values, `Items` builds in id order anyway, and the ONE app-level op that COULD
-        // mint a same-order tie (M12 S5c unwrap's spliceChild, which gives every spliced child the
-        // wrapped element's own order) immediately renumbers the whole parent collection densely (0..n-1
-        // by current visual order) right after splicing — restoring the distinct-order invariant before
-        // any read of this walk could observe the tie. A future same-order pair built out of id order
-        // (bypassing that renumber) could still disagree between this walk and SchemaBridge's — the
-        // visible symptom would be a PERSISTENT spurious M12 F3b staleness banner (the two fingerprint
-        // walks over the SAME data producing different strings). Flagged, not fixed — no reachable case
-        // exists yet (the renumber is the guard, not a proof no future op can reintroduce this).
-        var keyed = new List<(ExecObject Obj, int Order)>();
-        foreach (var item in set.Items)
-        {
-            RecordScannedItem(set, item, context);
-            if (item.Value is ExecObject o)
-                keyed.Add((o, ReadNodeProp(o, "order", context) is ExecInt n ? n.Value : 0));
-        }
-        return keyed.OrderBy(p => p.Order).Select(p => p.Obj).ToList();
+        if (ReadNodeProp(node, setProp, context) is not IExecCollection coll) return [];
+        RecordMembership(coll, context);
+        return MembersInVisualOrder(coll, context);
     }
 
-    // Like OrderedMembers, but tolerant of an ABSENT set prop — returns empty instead of throwing (the same
-    // "kind" precedent ReadNodeTextOptional sets, M12 V1). A real MetaFn/Design row always carries `vars`
-    // (M5 defaults an empty set on load), so this only matters for a hand-built conformance fixture that
-    // predates V1 and omits the field entirely — reading it as "no state vars" (not an error) is correct:
-    // a fn with no declared `vars` behaves exactly as it always has.
+    // Like OrderedMembers, but tolerant of an ABSENT collection prop — returns empty instead of throwing.
     private List<ExecObject> OrderedMembersOptional(ExecObject node, string setProp, ExecContext context)
     {
-        if (ReadNodePropOptional(node, setProp, context) is not IExecCollection set) return [];
-        RecordMembership(set, context);
-        var keyed = new List<(ExecObject Obj, int Order)>();
-        foreach (var item in set.Items)
+        if (ReadNodePropOptional(node, setProp, context) is not IExecCollection coll) return [];
+        RecordMembership(coll, context);
+        return MembersInVisualOrder(coll, context);
+    }
+
+    private List<ExecObject> MembersInVisualOrder(IExecCollection coll, ExecContext context)
+    {
+        var keyed = new List<(ExecObject Obj, int Order, bool HasOrder)>();
+        foreach (var item in coll.Items)
         {
-            RecordScannedItem(set, item, context);
-            if (item.Value is ExecObject o)
-                keyed.Add((o, ReadNodeProp(o, "order", context) is ExecInt n ? n.Value : 0));
+            RecordScannedItem(coll, item, context);
+            if (item.Value is not ExecObject o) continue;
+            // Optional: fixtures may still carry `order`; live designer lists do not (Slice 4).
+            if (ReadNodePropOptional(o, "order", context) is ExecInt n)
+                keyed.Add((o, n.Value, true));
+            else
+                keyed.Add((o, 0, false));
         }
-        return keyed.OrderBy(p => p.Order).Select(p => p.Obj).ToList();
+        if (keyed.Any(k => k.HasOrder))
+            return keyed.OrderBy(k => k.Order).Select(k => k.Obj).ToList();
+        return keyed.Select(k => k.Obj).ToList();
     }
 
     // ── render-tree literal rules (twin-identical with codeExec.ts; pinned by the conformance case) ──────
@@ -2638,6 +2620,24 @@ public sealed class CodeExecutor
                         return item.Value;
                 }
                 return new ExecNull();
+            }
+            case "count":
+            {
+                RecordMembership(sysFn.Target, context);
+                return new ExecInt { Value = sysFn.Target.Items.Count };
+            }
+            case "at":
+            {
+                if (sysFn.Target is not ExecList list)
+                    throw new CodeRuntimeException("at is only valid on a list.");
+                var index = ExecuteValue(args[0], scope, context) is ExecInt i
+                    ? i.Value : throw new CodeRuntimeException("at expects an int index.");
+                RecordMembership(list, context);
+                if (index < 0 || index >= list.Items.Count)
+                    throw new CodeRuntimeException($"List at index {index} out of range (len {list.Items.Count}).");
+                var item = list.Items[index];
+                RecordScannedItem(list, item, context);
+                return item.Value;
             }
             default:
                 throw new CodeRuntimeException($"Unknown collection method '{sysFn.Method}'.");

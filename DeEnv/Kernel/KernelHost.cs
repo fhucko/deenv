@@ -677,7 +677,7 @@ public sealed class KernelHost(
             var design = store.ReadNode(NodePath.Root.Field("designs").Key(designId.ToString()));
             if (design is null) continue; // defensive — designs came from ReadExtent moments ago
             DesignSnapshot snapshot;
-            try { snapshot = SchemaBridge.Snapshot(design); }
+            try { snapshot = SchemaBridge.Snapshot(design, store); }
             catch (SchemaValidationException) { continue; } // an invalid design mints no baseline (nothing to commit)
 
             // ONE atomic changeset — the Commit row + its design ref + the db.commits link + every idMap

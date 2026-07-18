@@ -456,8 +456,8 @@ public sealed class CodeExecutorTests
     {
         ExecObject Node(int id, params (string, IExecValue)[] props) =>
             new() { Id = id, Props = props.ToDictionary(p => p.Item1, p => p.Item2) };
-        ExecSet Set(int id, params ExecObject[] members) =>
-            new() { Id = id, Items = [.. members.Select(m => new ExecItem { Key = m.Id, Value = m })] };
+        ExecList Set(int id, params ExecObject[] members) =>
+            new() { Id = id, Items = [.. members.Select((m, i) => new ExecItem { Key = i, Value = m })] };
         ExecText T(string v) => new() { Value = v };
         ExecInt I(int v) => new() { Value = v };
 
@@ -471,8 +471,8 @@ public sealed class CodeExecutorTests
             ("attrs", Set(330)), ("children", Set(331)));
 
         var root = Node(100, ("tag", T("div")), ("expr", T("")), ("order", I(0)),
-            ("attrs", Set(210, attrExpr, attrClass, attrEvent)),          // inserted OUT of order
-            ("children", Set(220, textLeaf, chipLeaf, childEl)));         // inserted OUT of order
+            ("attrs", Set(210, attrClass, attrEvent, attrExpr)),          // list order (class first for assert)
+            ("children", Set(220, chipLeaf, textLeaf, childEl)));         // list order is visual order
 
         var scope = new ExecScope();
         scope.Items["root"] = new ExecScopeItem { Value = root, IsReadOnly = true };
