@@ -421,7 +421,7 @@ public static class SchemaBridge
 
             // body[0]'s kind is "" (guarded above), so ProjectNode yields either a CodeTag or a parsed
             // expression — both ICodeValue, the value a `return` carries.
-            var view = (ICodeValue)ProjectNode(body[0]);
+            var view = (ICodeValue)ProjectNode(body[0], store);
             ICodeStatement[] bodyStatements;
             if (varDecs.Count > 0)
             {

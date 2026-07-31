@@ -15,14 +15,14 @@ Feature: Import a text-authored render into structured rows (M12 S1b, extended S
     Given a design whose `ui` text is a fn render() returning <main class="hello"> containing an <h1> whose child is the text "Hi"
     When the design's render is imported to structured rows
     Then the design's `ui` text field is empty
-    And the design's `render` set holds the structured tree
+    And the design's `render` list holds the structured tree
     And projecting the design yields a `ui` section equal to the canonical form of the original render
 
   Scenario: Import converts a foreach loop and an if with an else into structured for/if rows and projects back unchanged
     Given a design whose `ui` text is a fn render() whose body has a foreach loop and an if with an else branch
     When the design's render is imported to structured rows
     Then the design's `ui` text field is empty
-    And the design's `render` set holds the structured tree
+    And the design's `render` list holds the structured tree
     And the imported for row has item "note" and collection "db.notes"
     And the imported if row has an else branch
     And projecting the design yields a `ui` section equal to the canonical form of the original render
@@ -39,8 +39,8 @@ Feature: Import a text-authored render into structured rows (M12 S1b, extended S
     Given a design whose `ui` text is a fn render() plus a scalar helper function and a component function with a param
     When the design's render is imported to structured rows
     Then the design's `ui` text field is empty
-    And the design's `render` set holds the structured tree
-    And the design's `fns` set holds 2 structured functions
+    And the design's `render` list holds the structured tree
+    And the design's `fns` list holds 2 structured functions
     And the imported function "helperLabel" has params "active" and a body root
     And the imported function "NoteCard" has params "note" and a body root
     And projecting the design yields a `ui` section equal to the canonical form of the original render
@@ -49,21 +49,21 @@ Feature: Import a text-authored render into structured rows (M12 S1b, extended S
     Given a design whose `ui` text is a fn render() plus a server-only function
     When the design's render is imported to structured rows
     Then the import fails with a schema validation error
-    And the design's `render` set is empty
+    And the design's `render` list is empty
     And the design's `ui` text field is unchanged
 
   Scenario: Import refuses a design whose ui has a function returning a lambda
     Given a design whose `ui` text is a fn render() plus a function returning a lambda
     When the design's render is imported to structured rows
     Then the import fails with a schema validation error
-    And the design's `render` set is empty
+    And the design's `render` list is empty
     And the design's `ui` text field is unchanged
 
   Scenario: Import refuses a design whose ui has a function with multiple statements
     Given a design whose `ui` text is a fn render() plus a function with multiple statements
     When the design's render is imported to structured rows
     Then the import fails with a schema validation error
-    And the design's `render` set is empty
+    And the design's `render` list is empty
     And the design's `ui` text field is unchanged
 
   # ── M12 V1 — MetaVar rows: component state + top-level ui vars ─────────────────────────────────────
@@ -72,9 +72,9 @@ Feature: Import a text-authored render into structured rows (M12 S1b, extended S
     Given a design whose `ui` text has a top-level var, a stateless component, and a stateful Counter component
     When the design's render is imported to structured rows
     Then the design's `ui` text field is empty
-    And the design's `render` set holds the structured tree
-    And the design's `vars` set holds 1 design-level state variable(s)
-    And the design's `fns` set holds 2 structured functions
+    And the design's `render` list holds the structured tree
+    And the design's `vars` list holds 1 design-level state variable(s)
+    And the design's `fns` list holds 2 structured functions
     And the imported function "NoteCard" has 0 state variable(s)
     And the imported function "Counter" has 1 state variable(s)
     And projecting the design yields a `ui` section equal to the canonical form of the original render
@@ -83,12 +83,12 @@ Feature: Import a text-authored render into structured rows (M12 S1b, extended S
     Given a design whose `ui` text is a fn render() plus a stateful component with an extra helper function
     When the design's render is imported to structured rows
     Then the import fails with a schema validation error
-    And the design's `render` set is empty
+    And the design's `render` list is empty
     And the design's `ui` text field is unchanged
 
   Scenario: Import refuses a design whose ui has a function with a state var and a direct lambda return
     Given a design whose `ui` text is a fn render() plus a function with a state var and a direct lambda return
     When the design's render is imported to structured rows
     Then the import fails with a schema validation error
-    And the design's `render` set is empty
+    And the design's `render` list is empty
     And the design's `ui` text field is unchanged

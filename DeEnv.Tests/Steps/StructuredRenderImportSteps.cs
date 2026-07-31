@@ -274,6 +274,14 @@ public sealed class StructuredRenderImportSteps
     [Given("the design's render has already been imported to structured rows")]
     public void GivenAlreadyImported() => SchemaBridge.ImportRender(_designer, _designId);
 
+    // A Meta* collection prop is a `list of …`: ReadNode leaves its slots as references, so resolve each
+    // through the store to the row object (position IS the order).
+    private List<ObjectValue> Rows(NodeValue coll) =>
+        ((ListValue)coll).Items.OfType<ReferenceValue>()
+            .Where(r => r.TargetId is int)
+            .Select(r => _designer.ReadById(r.TargetId!.Value)!.Value.Fields)
+            .ToList();
+
     // ── Then ─────────────────────────────────────────────────────────────────────────────────────────
 
     [Then("the design's `ui` text field is empty")]
@@ -283,11 +291,11 @@ public sealed class StructuredRenderImportSteps
         await Assert.That(((TextValue)design.Fields["ui"]).Text).IsEqualTo("");
     }
 
-    [Then("the design's `render` set holds the structured tree")]
+    [Then("the design's `render` list holds the structured tree")]
     public async Task ThenRenderPopulated()
     {
         var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
-        await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(1);
+        await Assert.That(Rows(design.Fields["render"]).Count).IsEqualTo(1);
     }
 
     // The imported `main` root's `children` set holds, in order, the for-row and the if-row this design's
@@ -295,9 +303,8 @@ public sealed class StructuredRenderImportSteps
     private ObjectValue RowOfKind(string kind)
     {
         var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
-        var root = (ObjectValue)((SetValue)design.Fields["render"]).Members.Single().Value;
-        var children = (SetValue)root.Fields["children"];
-        return children.Members.Select(m => (ObjectValue)m.Value)
+        var root = Rows(design.Fields["render"]).Single();
+        return Rows(root.Fields["children"])
             .Single(n => ((TextValue)n.Fields["kind"]).Text == kind);
     }
 
@@ -313,7 +320,7 @@ public sealed class StructuredRenderImportSteps
     public async Task ThenIfRowHasElse()
     {
         var row = RowOfKind("if");
-        await Assert.That(((SetValue)row.Fields["elseChildren"]).Members.Count).IsGreaterThan(0);
+        await Assert.That(Rows(row.Fields["elseChildren"]).Count).IsGreaterThan(0);
     }
 
     // The heart of the slice: import then project is the IDENTITY on the render. The projected document's
@@ -337,28 +344,28 @@ public sealed class StructuredRenderImportSteps
 
     // ── M12 F1: structured fns ──────────────────────────────────────────────────────────────────────
 
-    [Then("the design's `fns` set holds {int} structured functions")]
+    [Then("the design's `fns` list holds {int} structured functions")]
     public async Task ThenFnsCount(int count)
     {
         var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
-        await Assert.That(((SetValue)design.Fields["fns"]).Members.Count).IsEqualTo(count);
+        await Assert.That(Rows(design.Fields["fns"]).Count).IsEqualTo(count);
     }
 
     [Then("the imported function {string} has params {string} and a body root")]
     public async Task ThenImportedFunctionShape(string name, string paramsText)
     {
         var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
-        var fns = ((SetValue)design.Fields["fns"]).Members.Select(m => (ObjectValue)m.Value).ToList();
+        var fns = Rows(design.Fields["fns"]);
         var fn = fns.Single(f => ((TextValue)f.Fields["name"]).Text == name);
         await Assert.That(((TextValue)fn.Fields["params"]).Text).IsEqualTo(paramsText);
-        await Assert.That(((SetValue)fn.Fields["body"]).Members.Count).IsEqualTo(1);
+        await Assert.That(Rows(fn.Fields["body"]).Count).IsEqualTo(1);
     }
 
-    [Then("the design's `render` set is empty")]
+    [Then("the design's `render` list is empty")]
     public async Task ThenRenderEmpty()
     {
         var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
-        await Assert.That(((SetValue)design.Fields["render"]).Members.Count).IsEqualTo(0);
+        await Assert.That(Rows(design.Fields["render"]).Count).IsEqualTo(0);
     }
 
     [Then("the design's `ui` text field is unchanged")]
@@ -370,19 +377,19 @@ public sealed class StructuredRenderImportSteps
 
     // ── M12 V1: MetaVar rows ────────────────────────────────────────────────────────────────────────
 
-    [Then("the design's `vars` set holds {int} design-level state variable\\(s\\)")]
+    [Then("the design's `vars` list holds {int} design-level state variable\\(s\\)")]
     public async Task ThenDesignVarsCount(int count)
     {
         var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
-        await Assert.That(((SetValue)design.Fields["vars"]).Members.Count).IsEqualTo(count);
+        await Assert.That(Rows(design.Fields["vars"]).Count).IsEqualTo(count);
     }
 
     [Then("the imported function {string} has {int} state variable\\(s\\)")]
     public async Task ThenImportedFunctionVarCount(string name, int count)
     {
         var design = (ObjectValue)_designer.ReadNode(DesignPath)!;
-        var fns = ((SetValue)design.Fields["fns"]).Members.Select(m => (ObjectValue)m.Value).ToList();
+        var fns = Rows(design.Fields["fns"]);
         var fn = fns.Single(f => ((TextValue)f.Fields["name"]).Text == name);
-        await Assert.That(((SetValue)fn.Fields["vars"]).Members.Count).IsEqualTo(count);
+        await Assert.That(Rows(fn.Fields["vars"]).Count).IsEqualTo(count);
     }
 }
