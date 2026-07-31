@@ -36,11 +36,15 @@ function stageTopLevel(stage: () => void, liveSend: () => void): void {
 }
 interface CommitEdit { obj: ExecObject; prop: string; value: ExecValue; before: ExecValue; wire: object }
 let commitEdits: CommitEdit[] | null = null;
-interface StagedCreate { draft: ExecObject; join: CreateJoin }
+// `afterRelations` = how many relations were already buffered when this create was staged. endCommit uses
+// it to re-interleave the create's own join with the buffered relations in HANDLER order: `wrapNode` does
+// `removeAt(i)` then `insert(i, wrapper)`, and emitting every create-join first would apply the insert
+// before the remove — removing the wrapper it had just spliced in.
+interface BufferedCreate { draft: ExecObject; join: CreateJoin; afterRelations: number }
 // `edits` array in the commit wire: the scalar field changes on existing objects (objectId + prop + value).
 // Populated by propChange hook (for normal object scalars) when a bracket is open. Distinct from
 // `relations` (structural links).
-let commitCreates: StagedCreate[] | null = null;
+let commitCreates: BufferedCreate[] | null = null;
 // `creates` + their `join`s: when creating a fresh draft (id<0) and linking it in same op (add to set or
 // setRef), we buffer as StagedCreate {draft, join: CreateJoin}. CreateJoin tells the server how/where to
 // attach the new object on apply (so it also infers type). endCommit emits creates[] (the scalar props of
@@ -524,16 +528,19 @@ function flushHandlerTx(): void {
     const editSnapshots = (edits ?? []).map(e => ({ obj: e.obj, prop: e.prop, before: e.before, after: e.value }));
     const wireCreates: object[] = [];
     const wireRelations: object[] = [];
+    // Creates' joins merge back into the buffered relations in HANDLER order (see BufferedCreate).
+    let relIdx = 0;
     if (creates != null) for (const c of creates) {
         pendingCommitCreates.set(c.draft.id, { join: c.join, obj: c.draft });
         wireCreates.push({ tempId: c.draft.id, value: objectOf(c.draft) });
+        while (relations != null && relIdx < c.afterRelations) wireRelations.push(relations[relIdx++].wire);
         if (c.join.kind === "setAdd") wireRelations.push({ kind: "setAdd", setId: c.join.set.id, childId: c.draft.id });
         else if (c.join.kind === "listInsert")
             wireRelations.push({ kind: "listInsert", listId: c.join.list.id, index: c.join.index,
                 value: { type: "object", id: c.draft.id } });
         else wireRelations.push({ kind: "refSet", parentId: c.join.parent.id, prop: c.join.prop, childId: c.draft.id });
     }
-    if (relations != null) for (const r of relations) wireRelations.push(r.wire);
+    if (relations != null) while (relIdx < relations.length) wireRelations.push(relations[relIdx++].wire);
     const msgId = nextWsMsgId++;
     const prevCommitting = committingCtx;
     committingCtx = currentExecCtx;   // tag the Save-lifecycle entry on the handler's ctx
@@ -626,7 +633,7 @@ const pendingAdds = new Map<number, number>();
 // Drop a staged create's optimistic row (atomic-commit Step B): the commit journal entry's undo reverts
 // it on a server reject — remove the draft from the set it was added to (set join) or unset the reference
 // it was pointed at (ref join), so a denied changeset leaves NO orphan row. invalidateMember/Prop re-renders.
-function dropStagedCreate(c: StagedCreate): void {
+function dropStagedCreate(c: StagedCreate | BufferedCreate): void {
     if (c.join.kind === "setAdd") {
         const i = c.join.set.items.findIndex(it => it.value === c.draft);
         if (i >= 0) c.join.set.items.splice(i, 1);
@@ -644,7 +651,7 @@ function dropStagedCreate(c: StagedCreate): void {
 
 // Re-apply a staged create's optimistic row (atomic-commit Step B): the commit journal entry's redo, used
 // when an EARLIER entry's rollback reverse-replayed this one. The mirror of dropStagedCreate.
-function restageCreate(c: StagedCreate): void {
+function restageCreate(c: StagedCreate | BufferedCreate): void {
     if (c.join.kind === "setAdd") {
         if (!c.join.set.items.some(it => it.value === c.draft))
             c.join.set.items.push({ key: c.draft.id, value: c.draft });
@@ -1218,7 +1225,9 @@ function connectWs(): void {
         // A staged create in a final commit (atomic-commit Step B): buffer the draft + its join. endCommit
         // turns each into a `creates` entry (the draft's scalar props) + a `relations` entry (the set/ref the
         // server links it into — which is ALSO how the server resolves the create's TYPE, so no type is sent).
-        commitCreate: (draft, join) => { commitCreates?.push({ draft, join }); },
+        commitCreate: (draft, join) => {
+            commitCreates?.push({ draft, join, afterRelations: commitRelations?.length ?? 0 });
+        },
         endCommit: () => {
             const edits = commitEdits ?? [];
             const creates = commitCreates ?? [];
@@ -1234,11 +1243,18 @@ function connectWs(): void {
             const editSnapshots = edits.map(e => ({ obj: e.obj, prop: e.prop, before: e.before, after: e.value }));
             const wireCreates: object[] = [];
             const wireRelations: object[] = [];
+            // The buffered set links/unlinks (and dicts) fold into the SAME wire `relations` the creates' joins
+            // use, MERGED back into handler order via each create's `afterRelations` mark (both sequences are
+            // already in staging order, so one pass interleaves them). The array*/entry hooks already
+            // recordMutation'd each intent; splice those per-op entries out — the consolidated commit entry
+            // below (which replays every relation's undo/redo) replaces them.
+            let relIdx = 0;
             for (const c of creates) {
                 pendingCommitCreates.set(c.draft.id, { join: c.join, obj: c.draft });
                 // `value` carries the draft's scalar props in the SAME tagged { props: { name: leaf } } shape
                 // an arrayAdd ships (objectOf), so the server reads it with the SAME ExecObjectValue.
                 wireCreates.push({ tempId: c.draft.id, value: objectOf(c.draft) });
+                while (relIdx < c.afterRelations) wireRelations.push(relations[relIdx++].wire);
                 if (c.join.kind === "setAdd")
                     wireRelations.push({ kind: "setAdd", setId: c.join.set.id, childId: c.draft.id });
                 else if (c.join.kind === "listInsert")
@@ -1247,10 +1263,7 @@ function connectWs(): void {
                 else
                     wireRelations.push({ kind: "refSet", parentId: c.join.parent.id, prop: c.join.prop, childId: c.draft.id });
             }
-            // The buffered set links/unlinks (and dicts) fold into the SAME wire `relations` the creates' joins use.
-            // The array*/entry hooks already recordMutation'd each intent; splice those per-op entries out
-            // — the consolidated commit entry below (which replays every relation's undo/redo) replaces them.
-            for (const r of relations) wireRelations.push(r.wire);
+            while (relIdx < relations.length) wireRelations.push(relations[relIdx++].wire);
             spliceJournalEntries(new Set(relations.map(r => r.journalMsgId)));
             // The committing ctx (form-Save lifecycle + M13 slice 6 conflict resolution). Read BEFORE clearing
             // committingCtx (the only reference to which ctx this bracket belongs to).

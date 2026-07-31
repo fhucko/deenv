@@ -554,20 +554,25 @@ public sealed class WsHandler
                 // a staged `User` create can never skip hashing (a SECURITY must), same as every other create path.
                 createBatch.Add(new CommitCreate(tempId, typeName, HashPasswordFields(typeName, fields)));
 
-                // Nested set links from the create value (wrapNode ships children:[{refId}] via objectOf).
-                // ExecObjectValue(allowSets:true) skips nested collections for scalar field storage; rehydrate
-                // them here as SetLinkByPropMutation so an existing node lands inside the fresh owner in the
-                // SAME CommitBatch. Without this, wrap's parentSet.remove GCs the node (unlink with no
-                // surviving parent) while the client still shows the optimistic tree.
+                // Nested collection links from the create value (wrapNode ships children:[{refId}] via
+                // objectOf). ExecObjectValue(allowSets:true) skips nested collections for scalar field
+                // storage; rehydrate them here so an existing node lands inside the fresh owner in the SAME
+                // CommitBatch. Without this, wrap's parentSet.remove GCs the node (unlink with no surviving
+                // parent) while the client still shows the optimistic tree. A set links unordered; a list
+                // keeps the shipped slot order (position IS the order). A dict cannot round-trip this way
+                // (the wire carries no keys) and no caller ships one.
                 if (valueEl.TryGetProperty("props", out var nestProps) && nestProps.ValueKind == JsonValueKind.Object)
                 {
                     foreach (var p in nestProps.EnumerateObject())
                     {
                         var propDef = typeDef.Props?.FirstOrDefault(d => d.Name == p.Name);
-                        if (propDef is not { Cardinality: Cardinality.Set }) continue;
+                        if (propDef is not { Cardinality: Cardinality.Set or Cardinality.List }) continue;
+                        var isList = propDef.Cardinality == Cardinality.List;
                         if (p.Value.ValueKind != JsonValueKind.Object) continue;
-                        if (!p.Value.TryGetProperty("type", out var arrType) || arrType.GetString() != "set") continue;
+                        if (!p.Value.TryGetProperty("type", out var arrType)
+                            || arrType.GetString() != (isList ? "list" : "set")) continue;
                         if (!p.Value.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array) continue;
+                        var slot = 0;
                         foreach (var item in items.EnumerateArray())
                         {
                             if (!item.TryGetProperty("refId", out var refEl) || refEl.ValueKind != JsonValueKind.Number)
@@ -576,7 +581,9 @@ public sealed class WsHandler
                             if (memberRef >= 0 && _store.ReadById(memberRef) is { } linked)
                                 RequireWrite(floor, "create", linked.TypeName,
                                     Code.AccessFloor.ScalarObject(linked.TypeName, memberRef, linked.Fields, _desc));
-                            extraMutations.Add(new SetLinkByPropMutation(tempId, p.Name, memberRef));
+                            extraMutations.Add(isList
+                                ? new ListInsertByPropMutation(tempId, p.Name, slot++, memberRef)
+                                : new SetLinkByPropMutation(tempId, p.Name, memberRef));
                         }
                     }
                 }
