@@ -26,3 +26,6 @@ artifacts/
 *.log
 *.tar.gz
 kernel-smoke.*
+
+## pi-subagents session artifacts (local tooling state — never tracked)
+.pi-subagents/
