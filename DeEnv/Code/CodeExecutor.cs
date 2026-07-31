@@ -1199,23 +1199,21 @@ public sealed class CodeExecutor
         public int Used;
     }
 
-    // Resolve a tag NAME against the `fns` rows (ordinary dep-recorded reads — RecordMembership + a `name`/
-    // `order` read per row, so a rename or reorder re-renders same-frame). Duplicate names tie-break to the
-    // LAST one in `order` (mirrors DefineFunction's last-wins for the mid-edit window before projection's
-    // duplicate refusal fires); `>=` also keeps ties on equal `order` deterministic (last in iteration order
-    // wins), twin-identical since both twins iterate `fns.Items` in the same shipped list order.
+    // Resolve a tag NAME against the `fns` rows (ordinary dep-recorded reads — RecordMembership + a `name`
+    // read per row, so a rename or reorder re-renders same-frame). `fns` is a LIST, so position is the order:
+    // duplicate names tie-break to the LAST matching row (mirrors DefineFunction's last-wins for the mid-edit
+    // window before projection's duplicate refusal fires), twin-identical since both twins iterate
+    // `fns.Items` in the same shipped list order.
     private ExecObject? ResolveFn(IExecCollection fns, string tag, ExecContext context)
     {
         RecordMembership(fns, context);
         ExecObject? best = null;
-        var bestOrder = int.MinValue;
         foreach (var item in fns.Items)
         {
             RecordScannedItem(fns, item, context);
             if (item.Value is not ExecObject fn) continue;
             if (ReadNodeText(fn, "name", context) != tag) continue;
-            var order = ReadNodeProp(fn, "order", context) is ExecInt n ? n.Value : 0;
-            if (best == null || order >= bestOrder) { best = fn; bestOrder = order; }
+            best = fn;
         }
         return best;
     }

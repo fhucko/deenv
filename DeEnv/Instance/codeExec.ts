@@ -1338,21 +1338,18 @@ function renderTreeNode(node: ExecObject, context: ExecContext, ctx: ExecObject 
     return chip("expr-chip is-empty", "(empty)", id);
 }
 
-// Resolve a tag NAME against the `fns` rows (ordinary dep-recorded reads — recordMember + a `name`/`order`
-// read per row, so a rename or reorder re-renders same-frame). Duplicate names tie-break to the LAST one in
-// `order` (mirrors DefineFunction's last-wins); `>=` also keeps ties on equal `order` deterministic (last in
-// iteration order wins), twin-identical since both twins iterate `fns.items` in the same shipped list order.
+// Resolve a tag NAME against the `fns` rows (ordinary dep-recorded reads — recordMember + a `name` read per
+// row, so a rename or reorder re-renders same-frame). `fns` is a LIST, so position is the order: duplicate
+// names tie-break to the LAST matching row (mirrors DefineFunction's last-wins), twin-identical since both
+// twins iterate `fns.items` in the same shipped list order.
 function resolveFn(fns: ExecCollection, tag: string, context: ExecContext): ExecObject | null {
     recordMember(fns.id);
     let best: ExecObject | null = null;
-    let bestOrder = -Infinity;
     for (const item of fns.items) {
         if (item.value.type !== "object") continue;
         const fn = item.value;
         if (readNodeText(fn, "name", context) !== tag) continue;
-        const ord = readNodeProp(fn, "order", context);
-        const order = ord.type === "int" ? ord.value : 0;
-        if (best == null || order >= bestOrder) { best = fn; bestOrder = order; }
+        best = fn;
     }
     return best;
 }
