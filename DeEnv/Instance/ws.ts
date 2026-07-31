@@ -807,12 +807,14 @@ function connectWs(): void {
 
     setWsHooks({
         propChange: (obj, prop, value, before) => {
-            // A negative id that is NOT a pending set add is a transient DRAFT (a `{ … }` never added to a
-            // set): it has no server object, so skip it — its fields ship with its own eventual arrayAdd,
-            // and sending now would be a "no such object" reject. A pending add (negative id IN pendingAdds)
-            // IS sent: the server resolves the transient id through the add's remap, so a field edited
-            // before the round-trip returns still saves.
-            if (obj.id <= 0 && !pendingAdds.has(obj.id)) return;
+            // A negative id whose create is NOT yet on the wire is a transient DRAFT (a `{ … }` never added
+            // to a collection): it has no server object, so skip it — its fields ship with its own eventual
+            // create, and sending now would be a "no such object" reject. Once the create HAS been sent —
+            // a live set arrayAdd (`pendingAdds`) or a commit batch's create, set- or list-joined
+            // (`pendingCommitCreates`) — the edit IS sent: ordered delivery puts the create first and the
+            // server resolves the transient id through its remap, so a field edited before the round-trip
+            // returns still saves.
+            if (obj.id <= 0 && !pendingAdds.has(obj.id) && !pendingCommitCreates.has(obj.id)) return;
             // List-prop assign (where/orderBy result or whole-list rebuild) → listReplace same positive id.
             // value was coalesced onto the durable list id in codeExec; before holds the prior list snapshot.
             if (value.type === "list" && before != null && before.type === "list" && before.id > 0) {

@@ -44,6 +44,7 @@ public sealed partial class DesignerSteps
         // over the warm session; a full SSR still happens on a DIRECT GET of the URL, e.g. a refresh).
         // Wait for the editor SECTION (always present once the design resolves) rather than a type row —
         // a freshly-added design has no types yet, so .type-name would never appear for it.
+        _editedDesignLabel = label;
         await DesignRowFor(label).Locator("a.edit-design").ClickAsync();
         await ctx.Page!.WaitForSelectorAsync("main.ide-design-edit .design-editor");
         await ctx.Page.Locator("main.ide-design-edit .design-editor .add-type").WaitForAsync();
@@ -3092,6 +3093,7 @@ public sealed partial class DesignerSteps
     }
 
     private string _lastProjectError = "";
+    private string _editedDesignLabel = "";
 
     // ──── M12 S5a — reorder (▲/▼ per row, swapping `order` with the neighbor sibling) ────────────────────────────────
     //
@@ -3116,27 +3118,32 @@ public sealed partial class DesignerSteps
     }
 
     // The DOM-order assertion above only proves the tree editor's OWN optimistic client state; a move's
-    // `order` writes are ordinary ctx-staged field assignments that reach the server over the warm WS
-    // session ASYNCHRONOUSLY (the WhenRenameDesignLabel precedent) — so a reload fired right after a click
-    // can race ahead of the autosave and observe the OLD order. This polls the real SERVER STORE (not the
-    // DOM) for the swap, the same "wait for the write to land" step every persistence proof in this file
-    // takes before reloading.
+    // writes reach the server over the warm WS session ASYNCHRONOUSLY (the WhenRenameDesignLabel
+    // precedent) — so a reload fired right after a click can race ahead of the autosave and observe the
+    // OLD order. This polls the real SERVER STORE (not the DOM) for the swap, the same "wait for the write
+    // to land" step every persistence proof in this file takes before reloading. `children` is a
+    // `list of MetaNode`, so POSITION is the order — walk the stored list itself.
     [Then("the root node's children are persisted in order: {string}")]
     public async Task ThenRootChildrenPersistedOrder(string csv)
     {
         var expected = csv.Split(',').Select(s => s.Trim()).ToArray();
-        await EventuallyAsync(() =>
-        {
-            var nodes = _designer.Store.ReadExtent("MetaNode").Values
-                .Where(o => o.Fields.TryGetValue("tag", out var tv) && tv is DeEnv.Storage.TextValue t && expected.Contains(t.Text))
-                .Select(o => (
-                    tag: ((DeEnv.Storage.TextValue)o.Fields["tag"]).Text,
-                    order: o.Fields.TryGetValue("order", out var ov) && ov is DeEnv.Storage.IntValue iv ? iv.Value : 0))
-                .ToList();
-            if (nodes.Count != expected.Length) return false;
-            var actual = nodes.OrderBy(n => n.order).Select(n => n.tag).ToArray();
-            return actual.SequenceEqual(expected);
-        });
+        await EventuallyAsync(() => PersistedRootChildTags().SequenceEqual(expected));
+    }
+
+    // The render root's children, in their persisted list order (position IS the order).
+    private List<string> PersistedRootChildTags()
+    {
+        var designId = DesignIdByLabel(_editedDesignLabel);
+        if (designId == 0) return [];
+        if (_designer.Store.ReadNode(DeEnv.Storage.NodePath.Root.Field("designs")
+            .Key(designId.ToString()).Field("render")) is not DeEnv.Storage.ListValue render) return [];
+        var rootId = DesignerListHelpers.ObjectMemberIds(render).FirstOrDefault();
+        if (rootId == 0 || _designer.Store.ReadById(rootId) is not { } root) return [];
+        if (root.Fields.Fields.GetValueOrDefault("children") is not DeEnv.Storage.ListValue children) return [];
+        return DesignerListHelpers.ObjectMemberIds(children)
+            .Select(id => _designer.Store.ReadById(id))
+            .Select(child => child?.Fields.Fields.GetValueOrDefault("tag") is DeEnv.Storage.TextValue t ? t.Text : "")
+            .ToList();
     }
 
     // The canvas's root element (`<main data-node>`) holds the same children directly, rendered with their
