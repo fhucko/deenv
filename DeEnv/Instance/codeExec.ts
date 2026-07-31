@@ -1130,7 +1130,13 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
     // Present ⇒ non-literal leaf/attr expressions EVALUATE against the seed graph; absent ⇒ today's exact chip
     // behavior (the no-ctx conformance case stays byte-identical). A non-object 2nd arg is ignored.
     const ctxV = codeCall.params.length >= 2 ? executeValue(codeCall.params[1], scope, context).value : null;
-    const ctx = ctxV != null && ctxV.type === "object" ? ctxV : null;
+    const shippedCtx = ctxV != null && ctxV.type === "object" ? ctxV : null;
+    // A DEGRADED ctx (BuildEvalContext's catch arm — the design does not load, so db/exprs/fns are empty)
+    // carries no data to evaluate against. Walking with it would render every non-literal leaf as the empty
+    // scalar its map-miss produces — a canvas that LIES about the design. Drop it and take the no-ctx path
+    // (the honest source chip); the banner below still explains why values are missing.
+    const errorMessage = shippedCtx != null ? ctxError(shippedCtx) : null;
+    const ctx = errorMessage != null ? null : shippedCtx;
     // A non-object 3rd arg is ignored — same as absent, no expansion and no design-var binding.
     const designV = codeCall.params.length === 3 ? executeValue(codeCall.params[2], scope, context).value : null;
     const design = designV != null && designV.type === "object" ? designV : null;
@@ -1153,7 +1159,6 @@ function execRenderTree(codeCall: CodeCall, scope: ExecScope, context: ExecConte
     // "Components changed" is FALSE when nothing changed and the design is simply invalid — the degrade
     // notice already says fix-then-Refresh, so the stale-fns check below is SKIPPED ENTIRELY on this path
     // (checked FIRST, not just spliced outermost).
-    const errorMessage = ctx != null ? ctxError(ctx) : null;
     if (errorMessage != null) {
         return { type: "list", items: [{ key: 0, value: evalDegradeBanner(errorMessage) }, { key: 1, value: result }], id: node.id };
     }

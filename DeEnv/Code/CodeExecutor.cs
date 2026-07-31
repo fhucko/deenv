@@ -838,7 +838,14 @@ public sealed class CodeExecutor
         // The optional eval context (M12 CANVAS-EVAL-1): a { db, exprs, … } payload (from sys.evalContext).
         // Present ⇒ non-literal leaf/attr expressions EVALUATE against the seed graph; absent ⇒ today's exact
         // chip behavior (the no-ctx conformance case stays byte-identical). A non-object 2nd arg is ignored.
-        var ctx = call.Params.Length >= 2 && ExecuteValue(call.Params[1], scope, context) is ExecObject c ? c : null;
+        var shippedCtx = call.Params.Length >= 2 && ExecuteValue(call.Params[1], scope, context) is ExecObject c ? c : null;
+        // A DEGRADED ctx (BuildEvalContext's catch arm — the design does not load, so db/exprs/fns are
+        // empty) carries no data to evaluate against. Walking with it would render every non-literal leaf
+        // as the empty scalar its map-miss produces — a canvas that LIES about the design. Drop it and take
+        // the no-ctx path (the honest source chip); the banner below still explains why values are missing.
+        var errorMessage = "";
+        var degraded = shippedCtx != null && HasCtxError(shippedCtx, out errorMessage);
+        var ctx = degraded ? null : shippedCtx;
         // A non-object 3rd arg is ignored — same as absent, no expansion and no design-var binding.
         var design = call.Params.Length == 3 && ExecuteValue(call.Params[2], scope, context) is ExecObject d ? d : null;
         var fns = design != null && ReadNodePropOptional(design, "fns", context) is IExecCollection f ? f : null;
@@ -860,7 +867,7 @@ public sealed class CodeExecutor
         // operator's seat "Components changed" is FALSE when nothing changed and the design is simply
         // invalid — the degrade notice already says fix-then-Refresh, so the stale-fns check below is
         // SKIPPED ENTIRELY on this path (checked FIRST, not just spliced outermost).
-        if (ctx != null && HasCtxError(ctx, out var errorMessage))
+        if (degraded)
             return new ExecList {
                 Items = [new ExecItem { Key = 0, Value = EvalDegradeBanner(errorMessage) }, new ExecItem { Key = 1, Value = result }],
                 Id = node.Id,
