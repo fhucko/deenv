@@ -17,6 +17,7 @@ Do not `@import` these. Read the matching doc or skill when the task needs it.
 
 | Doc / skill | Use when |
 |---|---|
+| [PRIORITIES.md](PRIORITIES.md) | goals, the two views, the first version: what matters most |
 | [VISION.md](VISION.md) | mission / north star, not the task list |
 | [ROADMAP.md](ROADMAP.md) | sequenced milestones and what is current |
 | [STAGES.md](STAGES.md) | product-stage lens |
@@ -32,8 +33,8 @@ Do not `@import` these. Read the matching doc or skill when the task needs it.
 ## Ground rules
 
 1. **Build the current milestone only.** Milestones 1-11, **M-auth**, and the
-   **client data layer** are done. Current focus is the usable-MVP gates (see
-   below). Cross-machine/multi-kernel, distributed ACID, fault/resource
+   **client data layer** are done. Current focus is planning the first version
+   (see below). Cross-machine/multi-kernel, distributed ACID, fault/resource
    isolation, real-time, and the custom render-coupled storage engine stay out
    of scope unless explicitly asked. Schema versioning is M13 and sits on
    instance management.
@@ -133,6 +134,8 @@ Browser-facing steps, when reached, use Playwright. See
 
 ## Current focus
 
-Usable-MVP gate #3 (dogfood one real app) is in progress. M13 core is
-complete. M12 (visual component designer) stays deferred until after the
-MVP. Details: [ROADMAP.md](ROADMAP.md) and [DECISIONS.md](DECISIONS.md).
+Planning the first version: [PRIORITIES.md](PRIORITIES.md) says what matters
+most, and the wayfinder map [#22](https://github.com/fhucko/deenv/issues/22)
+is the route to it. M13 core is complete. M12 (visual component designer)
+stays deferred until after the MVP. Details: [ROADMAP.md](ROADMAP.md) and
+[DECISIONS.md](DECISIONS.md).

@@ -1,8 +1,8 @@
 # Vision
 
 This is the long-term mission. It is intentionally large. Nothing here is
-cut. This document is the destination, not the next task — see ROADMAP.md
-for what is actually being built now.
+cut. This document is the destination, not the next task — see PRIORITIES.md
+for what matters most and ROADMAP.md for what is actually being built now.
 
 ## The mission
 
@@ -23,7 +23,7 @@ thesis is that operating the system collapses toward a single act.
 
 ## Radical liveness — nothing is fixed
 
-The original and enduring ambition is a system (initially an environment for applications, later potentially an operating system itself) in which **anything can be changed at runtime, without restart, in both the OS layer and the applications**. Nothing is permanently fixed ("nic není napevno").
+A long-term ambition is a system (initially an environment for applications, later potentially an operating system itself) in which **anything can be changed at runtime, without restart, in both the OS layer and the applications**. Nothing is permanently fixed ("nic není napevno"). No restart is a means, not the goal: what counts is what the app's user and developer notice (PRIORITIES.md).
 
 This principle includes **total reducibility**. A running full instance of the system can be transformed live into a completely different, minimal one. For example: from a rich deenv environment running on a conventional host OS (Linux + .NET process) into a primitive system whose only capability is to display the current time and which occupies only a few bytes of memory.
 
@@ -35,7 +35,7 @@ When sufficiently powerful constructs are added inside the system — whether th
 
 Historically, certain architectural choices (in particular the split between a thin trusted kernel implemented in a host language and a malleable image living in data + Code) were made because full runtime redefinition of the substrate was difficult to envision in detail. With AI as a collaborator and force multiplier, deeper self-redefinition of the runtime itself is now considered reachable in the long term. The kernel/image distinction remains a useful pragmatic description of the current implementation approach, but it is not a permanent limitation on what can be changed live.
 
-This principle of radical liveness informs the pillars, the stages, and the north star. It does not relax the sequencing discipline (see ROADMAP.md and AGENTS.md): near-term work continues to focus on the usable-MVP gates and current milestones, while long-term seams and ambitions are documented here so that they are not accidentally foreclosed.
+This principle of radical liveness informs the pillars, the stages, and the north star. It does not relax the sequencing discipline (see ROADMAP.md and AGENTS.md): near-term work follows PRIORITIES.md, while long-term seams and ambitions are documented here so that they are not accidentally foreclosed.
 
 ## Who uses this
 

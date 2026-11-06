@@ -13,7 +13,10 @@ The milestones below run in order down to a single **Future work** divider: ever
 it is done or in progress, everything below is future and out of scope. When a milestone is
 completed, move its entry above the divider.
 
-**Current focus (2026-06-21).** Milestones 1–11 are done. The active phase is the
+**Current focus (2026-11-05).** Planning the first version: see [PRIORITIES.md](PRIORITIES.md)
+and the wayfinder map [#22](https://github.com/fhucko/deenv/issues/22).
+
+**State of the milestones (2026-06-21).** Milestones 1–11 are done. The active phase is the
 **usable-MVP gates**: (1) non-destructive apply — data survives a schema change — ✅ done;
 (2) a minimal real deploy (a self-contained build as a systemd service behind nginx) ✅
 done; (3) dogfood one real app — in progress (`instances/5`, `devlog`). The visual

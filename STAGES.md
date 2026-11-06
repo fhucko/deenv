@@ -20,11 +20,10 @@ A stage is defined by *what an operator can do*, not by which code exists.
 and run a small database-backed web app, hand-authored, and it persists and
 reacts. This is the "build simple apps for one or few users" tier.
 
-**Single operator, small data.** The operator builds the app *and* is its user;
-the built app is **not** concurrent multi-user. No live cross-user updates, no
-per-user permissions, no concurrent-write safety. The moment "a few users" means
-*simultaneous, live, per-user* access, that is Stage 3 territory (the real-time /
-multi-user pillar), not Stage 1.
+**A few users, small data.** Several people may use the app at once. It protects
+only what would break a booking or an order (see PRIORITIES.md). No live
+cross-user updates: one user's edit showing on another user's open screen is
+Stage 3 territory (the real-time / multi-user pillar), not Stage 1.
 
 **Capability bar** — the MVP must express these with **zero config in the common
 case** (minimal by default):
@@ -52,7 +51,7 @@ photographer, freelance CRM + invoicing, recipe box, small eshop + orders, class
 roster + attendance, vehicle-maintenance log, home inventory, gym membership.
 These map to VISION.md operator situations 1, 2, 3, 5.
 
-**Explicitly out of Stage 1** (so scope stays honest): concurrent/multi-user,
+**Explicitly out of Stage 1** (so scope stays honest): live cross-user updates,
 operator self-service schema editing, git-style versioning, live preview / test
 instances, crash durability. These are Stage 2+ and are real future milestones —
 not details to bolt on (AGENTS.md rules 2 + 10).
